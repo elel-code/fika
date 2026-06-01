@@ -3819,6 +3819,14 @@ mod tests {
             recursive_search_cancelled_status("report", 12, 4),
             "Recursive search for 'report' cancelled after 12 folder(s); 4 result(s) discarded"
         );
+        assert_eq!(
+            recursive_search_cancelled_status("report", 3, 0),
+            "Recursive search for 'report' cancelled after 3 folder(s); 0 result(s) discarded"
+        );
+        assert_eq!(
+            recursive_search_cancelled_status("report", 0, 0),
+            "Recursive search for 'report' cancelled"
+        );
     }
 
     #[test]
