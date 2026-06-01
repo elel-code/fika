@@ -30,7 +30,8 @@ DESTDIR=/tmp/fika-root PREFIX=/usr BINDIR=/usr/lib/fika \
 ```
 
 After a real install, run `scripts/check-runtime-integration.sh` to verify the
-installed system-bus helper, Polkit action, and portal backend metadata. Add
+installed system-bus helper, Polkit action, and portal backend metadata. The
+script also prints a runtime context summary for distro/desktop comparison. Add
 `--activate-system-helper` to confirm D-Bus activation of the privileged helper
 without invoking a privileged file-operation method.
 

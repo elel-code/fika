@@ -390,7 +390,7 @@ system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privi
 
 `scripts/install-data.sh` 是当前打包入口：它展开 service / policy 模板中的 `@bindir@`，并安装 system bus service、D-Bus policy、polkit action、interface XML、portal backend service 和 portal descriptor。脚本支持 `DESTDIR`、`PREFIX`、`BINDIR`、`DATADIR` 和 `SYSCONFDIR`，便于本机安装和 distro packaging 共用。`scripts/check-install-data.sh` 会用临时 `DESTDIR` 做非 root 安装自检，验证所有 metadata 文件位置、模板展开结果、root system-bus activation、D-Bus send policy、导出的 privileged methods、polkit 默认授权策略、polkit 认证提示文案、portal backend metadata，以及安装产物不含 `@bindir@` / `example.invalid` 这类占位内容。
 
-`scripts/check-runtime-integration.sh` 是安装后的诊断入口。`--metadata-only` 可用于 `DESTDIR` staged package 检查；普通模式会检查 helper / portal backend 可执行文件、system/session bus activatable name 和已安装 polkit action；`--activate-system-helper` 会额外通过 D-Bus introspection 激活并检查 `org.fika.FileManager1.Privileged`，但不会调用 CreateFolder / Transfer 等任何受保护文件操作方法。
+`scripts/check-runtime-integration.sh` 是安装后的诊断入口。`--metadata-only` 可用于 `DESTDIR` staged package 检查；普通模式会先输出 OS、session、systemd user、xdg-desktop-portal、polkit agent 和 D-Bus/polkit 诊断工具摘要，再检查 helper / portal backend 可执行文件、system/session bus activatable name 和已安装 polkit action；`--activate-system-helper` 会额外通过 D-Bus introspection 激活并检查 `org.fika.FileManager1.Privileged`，但不会调用 CreateFolder / Transfer 等任何受保护文件操作方法。
 
 脚本自检只能证明安装产物内容一致，不能替代真实系统验证。发行版包或本机安装后还需要在目标桌面环境中确认：system bus 能激活 `org.fika.FileManager1.Privileged`，polkit agent 能弹出 `org.fika.FileManager.privileged-helper` 的认证，授权后 protected operation 成功返回，拒绝授权时 GUI 显示带 action id 的错误，portal backend 能被 xdg-desktop-portal 枚举并启动 `fika-xdp-filechooser`。
 

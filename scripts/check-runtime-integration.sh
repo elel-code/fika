@@ -86,6 +86,118 @@ fail() {
     failures=$((failures + 1))
 }
 
+first_line() {
+    local text="$1"
+    printf '%s' "${text%%$'\n'*}"
+}
+
+command_probe() {
+    local tool="$1"
+    shift
+
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        printf 'missing'
+        return
+    fi
+
+    local output
+    if output="$("$tool" "$@" 2>&1)"; then
+        printf 'available'
+        local line
+        line="$(first_line "$output")"
+        if [[ -n "$line" ]]; then
+            printf ' (%s)' "$line"
+        fi
+    else
+        printf 'available, probe failed (%s)' "$(first_line "$output")"
+    fi
+}
+
+env_state() {
+    local name="$1"
+    if [[ -n "${!name:-}" ]]; then
+        printf 'set'
+    else
+        printf '<unset>'
+    fi
+}
+
+systemctl_user_probe() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        printf 'missing'
+        return
+    fi
+
+    local output
+    if output="$(systemctl --user is-system-running 2>&1)"; then
+        printf '%s' "$(first_line "$output")"
+    else
+        printf 'not-ready (%s)' "$(first_line "$output")"
+    fi
+}
+
+systemctl_user_service_probe() {
+    local service="$1"
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        printf 'systemctl missing'
+        return
+    fi
+
+    local output
+    if output="$(systemctl --user is-active "$service" 2>&1)"; then
+        printf '%s' "$(first_line "$output")"
+    else
+        printf '%s' "$(first_line "$output")"
+    fi
+}
+
+polkit_agent_probe() {
+    if ! command -v pgrep >/dev/null 2>&1; then
+        printf 'unknown (pgrep missing)'
+        return
+    fi
+
+    local pattern
+    pattern='polkit.*agent|polkit-kde-authentication-agent|polkit-gnome-authentication-agent|lxqt-policykit-agent|mate-polkit|xfce-polkit|pantheon-agent-polkit'
+    local output
+    if output="$(pgrep -a -f "$pattern" 2>/dev/null)"; then
+        printf 'detected (%s)' "$(first_line "$output")"
+    else
+        printf 'not detected'
+    fi
+}
+
+print_runtime_context() {
+    echo "Runtime context"
+
+    if [[ -r /etc/os-release ]]; then
+        (
+            # shellcheck disable=SC1091
+            . /etc/os-release
+            echo "  os:         ${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}"
+        )
+    else
+        echo "  os:         <unknown>"
+    fi
+
+    echo "  kernel:     $(uname -srmo 2>/dev/null || uname -a)"
+    echo "  desktop:    ${XDG_CURRENT_DESKTOP:-<unset>}"
+    echo "  session:    ${XDG_SESSION_TYPE:-<unset>}"
+    echo "  wayland:    ${WAYLAND_DISPLAY:-<unset>}"
+    echo "  display:    ${DISPLAY:-<unset>}"
+    echo "  runtime:    ${XDG_RUNTIME_DIR:-<unset>}"
+    echo "  session dbus: $(env_state DBUS_SESSION_BUS_ADDRESS)"
+    echo "  systemd user: $(systemctl_user_probe)"
+    echo "  xdp service:  $(systemctl_user_service_probe xdg-desktop-portal.service)"
+    echo "  polkit agent: $(polkit_agent_probe)"
+    echo "  tool dbus-send: $(command_probe dbus-send --version)"
+    echo "  tool busctl:    $(command_probe busctl --version)"
+    echo "  tool gdbus:     $(command_probe gdbus --version)"
+    echo "  tool pkaction:  $(command_probe pkaction --version)"
+    echo
+}
+
 staged_path() {
     printf '%s%s' "$destdir" "$1"
 }
@@ -212,6 +324,11 @@ echo "  bindir:     $bindir"
 echo "  datadir:    $datadir"
 echo "  sysconfdir: $sysconfdir"
 echo "  destdir:    ${destdir:-<none>}"
+echo
+
+if [[ "$metadata_only" == false ]]; then
+    print_runtime_context
+fi
 
 require_file "$privileged_service"
 require_file "$privileged_policy"
