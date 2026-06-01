@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+set -u
+
+usage() {
+    cat <<'EOF'
+Usage: check-runtime-integration.sh [--metadata-only] [--activate-system-helper]
+
+Checks an installed Fika desktop integration setup.
+
+Environment:
+  PREFIX       Installation prefix, default /usr/local
+  BINDIR       Binary directory, default $PREFIX/bin
+  DATADIR      Data directory, default $PREFIX/share
+  SYSCONFDIR   System config directory, default /etc
+  DESTDIR      Optional staging root for metadata-only package checks
+
+Options:
+  --metadata-only
+      Check installed metadata files only. This is safe for DESTDIR package
+      checks and skips live D-Bus, polkit, portal, and binary checks.
+
+  --activate-system-helper
+      Also introspect org.fika.FileManager1.Privileged on the system bus.
+      This may start the root D-Bus activated helper, but does not call any
+      privileged file-operation method.
+EOF
+}
+
+metadata_only=false
+activate_system_helper=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --metadata-only)
+            metadata_only=true
+            ;;
+        --activate-system-helper)
+            activate_system_helper=true
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+prefix="${PREFIX:-/usr/local}"
+bindir="${BINDIR:-$prefix/bin}"
+datadir="${DATADIR:-$prefix/share}"
+sysconfdir="${SYSCONFDIR:-/etc}"
+destdir="${DESTDIR:-}"
+
+privileged_bus_name="org.fika.FileManager1.Privileged"
+privileged_object_path="/org/fika/FileManager1/Privileged"
+privileged_interface="org.fika.FileManager1.Privileged"
+polkit_action="org.fika.FileManager.privileged-helper"
+portal_bus_name="org.freedesktop.impl.portal.desktop.fika"
+
+privileged_service="$datadir/dbus-1/system-services/$privileged_bus_name.service"
+privileged_policy="$sysconfdir/dbus-1/system.d/$privileged_bus_name.conf"
+polkit_policy="$datadir/polkit-1/actions/org.fika.FileManager.policy"
+privileged_interface_xml="$datadir/dbus-1/interfaces/$privileged_bus_name.xml"
+portal_service="$datadir/dbus-1/services/$portal_bus_name.service"
+portal_descriptor="$datadir/xdg-desktop-portal/portals/fika.portal"
+
+failures=0
+warnings=0
+
+ok() {
+    printf 'ok: %s\n' "$*"
+}
+
+warn() {
+    printf 'warn: %s\n' "$*" >&2
+    warnings=$((warnings + 1))
+}
+
+fail() {
+    printf 'fail: %s\n' "$*" >&2
+    failures=$((failures + 1))
+}
+
+staged_path() {
+    printf '%s%s' "$destdir" "$1"
+}
+
+require_file() {
+    local path="$1"
+    local full_path
+    full_path="$(staged_path "$path")"
+    if [[ -f "$full_path" ]]; then
+        ok "found $path"
+    else
+        fail "missing $path"
+    fi
+}
+
+require_contains() {
+    local path="$1"
+    local text="$2"
+    local full_path
+    full_path="$(staged_path "$path")"
+    if [[ ! -f "$full_path" ]]; then
+        fail "cannot inspect missing $path"
+    elif grep -Fq "$text" "$full_path"; then
+        ok "$path contains $text"
+    else
+        fail "$path does not contain $text"
+    fi
+}
+
+require_not_contains_tree() {
+    local path="$1"
+    local text="$2"
+    local full_path
+    full_path="$(staged_path "$path")"
+    if [[ ! -e "$full_path" ]]; then
+        return
+    fi
+    if grep -R -Fq "$text" "$full_path"; then
+        fail "$path still contains $text"
+    else
+        ok "$path does not contain $text"
+    fi
+}
+
+check_executable() {
+    local path="$1"
+    if [[ -x "$path" ]]; then
+        ok "executable $path"
+    else
+        fail "missing executable $path"
+    fi
+}
+
+dbus_list_activatable_contains() {
+    local bus="$1"
+    local name="$2"
+
+    if ! command -v dbus-send >/dev/null 2>&1; then
+        warn "dbus-send is not available; cannot query $bus bus activatable names"
+        return
+    fi
+
+    local output
+    if ! output="$(dbus-send "--$bus" --dest=org.freedesktop.DBus --print-reply \
+        /org/freedesktop/DBus org.freedesktop.DBus.ListActivatableNames 2>&1)"; then
+        warn "cannot query $bus bus activatable names: $output"
+        return
+    fi
+
+    if grep -Fq "$name" <<<"$output"; then
+        ok "$name is activatable on the $bus bus"
+    else
+        fail "$name is not activatable on the $bus bus"
+    fi
+}
+
+check_polkit_action() {
+    if ! command -v pkaction >/dev/null 2>&1; then
+        warn "pkaction is not available; cannot query installed polkit actions"
+        return
+    fi
+
+    local output
+    if output="$(pkaction --verbose --action-id "$polkit_action" 2>&1)"; then
+        ok "polkit action $polkit_action is visible"
+        if grep -Fq "auth_admin_keep" <<<"$output"; then
+            ok "polkit action advertises auth_admin_keep"
+        else
+            warn "polkit action output did not mention auth_admin_keep"
+        fi
+    else
+        fail "polkit action $polkit_action is not visible: $output"
+    fi
+}
+
+activate_system_helper() {
+    if command -v busctl >/dev/null 2>&1; then
+        local output
+        if output="$(busctl --system introspect "$privileged_bus_name" \
+            "$privileged_object_path" "$privileged_interface" 2>&1)"; then
+            ok "system helper activated and exposes $privileged_interface"
+        else
+            fail "cannot introspect system helper with busctl: $output"
+        fi
+        return
+    fi
+
+    if command -v gdbus >/dev/null 2>&1; then
+        local output
+        if output="$(gdbus introspect --system --dest "$privileged_bus_name" \
+            --object-path "$privileged_object_path" 2>&1)"; then
+            ok "system helper activated and exposes $privileged_object_path"
+        else
+            fail "cannot introspect system helper with gdbus: $output"
+        fi
+        return
+    fi
+
+    fail "neither busctl nor gdbus is available; cannot activate-check system helper"
+}
+
+echo "Checking Fika integration metadata"
+echo "  bindir:     $bindir"
+echo "  datadir:    $datadir"
+echo "  sysconfdir: $sysconfdir"
+echo "  destdir:    ${destdir:-<none>}"
+
+require_file "$privileged_service"
+require_file "$privileged_policy"
+require_file "$polkit_policy"
+require_file "$privileged_interface_xml"
+require_file "$portal_service"
+require_file "$portal_descriptor"
+
+require_contains "$privileged_service" "Name=$privileged_bus_name"
+require_contains "$privileged_service" "Exec=$bindir/fika-privileged-helper --system-bus"
+require_contains "$privileged_service" "User=root"
+require_contains "$privileged_policy" '<policy user="root">'
+require_contains "$privileged_policy" "<allow own=\"$privileged_bus_name\"/>"
+require_contains "$privileged_policy" '<policy context="default">'
+require_contains "$privileged_policy" "<allow send_destination=\"$privileged_bus_name\"/>"
+require_contains "$polkit_policy" "$polkit_action"
+require_contains "$polkit_policy" "<allow_active>auth_admin_keep</allow_active>"
+require_contains "$portal_service" "Name=$portal_bus_name"
+require_contains "$portal_service" "Exec=$bindir/fika-xdp-filechooser"
+require_contains "$portal_descriptor" "DBusName=$portal_bus_name"
+require_contains "$portal_descriptor" "Interfaces=org.freedesktop.impl.portal.FileChooser;"
+
+for method in CreateFolder Rename Trash Transfer PrepareExternalEdit CommitExternalEdit DiscardExternalEdit AssociateExternalEditUnit; do
+    require_contains "$privileged_interface_xml" "<method name=\"$method\">"
+done
+
+if [[ -n "$destdir" ]]; then
+    require_not_contains_tree "/" "@bindir@"
+    require_not_contains_tree "/" "example.invalid"
+fi
+
+if [[ "$metadata_only" == false ]]; then
+    check_executable "$bindir/fika-privileged-helper"
+    check_executable "$bindir/fika-xdp-filechooser"
+    dbus_list_activatable_contains system "$privileged_bus_name"
+    dbus_list_activatable_contains session "$portal_bus_name"
+    check_polkit_action
+fi
+
+if [[ "$activate_system_helper" == true ]]; then
+    activate_system_helper
+fi
+
+if [[ "$failures" -gt 0 ]]; then
+    echo "Fika integration check failed: $failures failure(s), $warnings warning(s)" >&2
+    exit 1
+fi
+
+if [[ "$warnings" -gt 0 ]]; then
+    echo "Fika integration check completed with $warnings warning(s)"
+else
+    echo "Fika integration check passed"
+fi

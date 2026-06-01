@@ -20,6 +20,20 @@ cargo run
 cargo run -- --chooser ~/Downloads
 ```
 
+Packaged desktop integration installs D-Bus, Polkit, and portal metadata in
+addition to the binaries. The metadata can be staged and checked without root:
+
+```sh
+DESTDIR=/tmp/fika-root PREFIX=/usr BINDIR=/usr/lib/fika scripts/install-data.sh
+DESTDIR=/tmp/fika-root PREFIX=/usr BINDIR=/usr/lib/fika \
+  scripts/check-runtime-integration.sh --metadata-only
+```
+
+After a real install, run `scripts/check-runtime-integration.sh` to verify the
+installed system-bus helper, Polkit action, and portal backend metadata. Add
+`--activate-system-helper` to confirm D-Bus activation of the privileged helper
+without invoking a privileged file-operation method.
+
 The UI is defined in `ui/app.slint` and compiled from `build.rs` with
 `slint-build`. Both `slint` and `slint-build` are pinned to `1.16.1`.
 Default application launching is implemented locally: Fika guesses the MIME

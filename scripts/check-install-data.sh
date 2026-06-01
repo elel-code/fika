@@ -15,6 +15,8 @@ DATADIR=/usr/share \
 SYSCONFDIR=/etc \
     "$root_dir/scripts/install-data.sh" >/dev/null
 
+bash -n "$root_dir/scripts/check-runtime-integration.sh"
+
 require_file() {
     local path="$1"
     if [[ ! -f "$tmpdir$path" ]]; then
@@ -118,5 +120,12 @@ require_not_contains \
 require_not_contains \
     /usr/share/polkit-1/actions/org.fika.FileManager.policy \
     "example.invalid"
+
+DESTDIR="$tmpdir" \
+PREFIX=/usr \
+BINDIR=/usr/lib/fika \
+DATADIR=/usr/share \
+SYSCONFDIR=/etc \
+    "$root_dir/scripts/check-runtime-integration.sh" --metadata-only >/dev/null
 
 echo "install-data check passed"

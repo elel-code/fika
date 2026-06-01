@@ -399,6 +399,11 @@ Acceptance for all:
   - Current: `scripts/install-data.sh` expands `@bindir@` and installs system bus service, bus policy, polkit action, D-Bus interface XML, portal service, and portal descriptor under `DESTDIR` / `PREFIX` aware paths.
   - Current: `scripts/check-install-data.sh` performs a non-root install into a temporary `DESTDIR` and verifies expected file locations, `@bindir@` expansion, root system-bus activation, D-Bus send policy, exported privileged methods, polkit defaults, polkit prompt text, portal backend metadata, and absence of placeholder metadata such as `example.invalid`.
 
+- [x] Runtime integration diagnostic helper.
+  - Acceptance: installed packages have a repeatable check for D-Bus activation metadata, Polkit action visibility, portal backend metadata, and helper binary placement.
+  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, validates installed helper/portal executables and D-Bus activatable names when run normally, queries the installed polkit action when `pkaction` is available, and can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method.
+  - Remaining: run this diagnostic on target distributions/desktops and record any polkit/systemd/dbus activation differences.
+
 - [x] External editor writeback flow.
   - Acceptance: protected files open as ordinary scratch paths under `/run/user/$UID/fika-edit`.
   - Acceptance: writeback uses `CommitExternalEdit`, not a root editor or user-visible admin URI.
