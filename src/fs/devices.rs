@@ -10,17 +10,22 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
     let roots = mount_roots();
-    let mounted = mounted_devices_from_mountinfo(&roots, "/proc/self/mountinfo")
-        .inspect(|devices| {
+    let (mounted, mount_source) = mounted_devices_from_mountinfo(&roots, "/proc/self/mountinfo")
+        .map(|devices| {
             device_debug_log(&format!(
                 "mountinfo discovered {} mounted device row(s)",
                 devices.len().saturating_sub(1)
             ));
+            (devices, DeviceMountSource::Mountinfo)
         })
         .unwrap_or_else(|| {
             device_debug_log("mountinfo unavailable; falling back to mount-root directory scan");
-            mounted_devices_from_roots(roots)
+            (
+                mounted_devices_from_roots(roots),
+                DeviceMountSource::RootScan,
+            )
         });
+    let mounted_rows = mounted.len().saturating_sub(1);
     let discovered = match udisks2_removable_devices() {
         Ok(devices) => {
             device_debug_log(&format!(
@@ -34,7 +39,14 @@ pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
             Vec::new()
         }
     };
+    let udisks_rows = discovered.len();
     let devices = merge_device_entries(mounted, discovered);
+    device_debug_log(&device_discovery_summary(
+        mount_source,
+        mounted_rows,
+        udisks_rows,
+        &devices,
+    ));
     device_debug_log_devices("merged", &devices);
     devices
 }
@@ -110,6 +122,53 @@ fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
     existing.can_mount |= discovered.can_mount;
     existing.can_unmount |= discovered.can_unmount;
     existing.mounted |= discovered.mounted;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeviceMountSource {
+    Mountinfo,
+    RootScan,
+}
+
+impl DeviceMountSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Mountinfo => "mountinfo",
+            Self::RootScan => "root-scan",
+        }
+    }
+}
+
+fn device_discovery_summary(
+    mount_source: DeviceMountSource,
+    mounted_rows: usize,
+    udisks_rows: usize,
+    devices: &[DeviceEntry],
+) -> String {
+    let final_rows = devices.len().saturating_sub(1);
+    let mounted_final = devices
+        .iter()
+        .filter(|device| device.path.as_str() != "/" && device.mounted)
+        .count();
+    let unmounted_final = devices
+        .iter()
+        .filter(|device| device.path.as_str() != "/" && !device.mounted)
+        .count();
+    let mountable = devices.iter().filter(|device| device.can_mount).count();
+    let unmountable = devices.iter().filter(|device| device.can_unmount).count();
+    let ejectable = devices.iter().filter(|device| device.can_eject).count();
+    format!(
+        "summary mount_source={} mounted_rows={} udisks_rows={} final_rows={} mounted={} unmounted={} mountable={} unmountable={} ejectable={}",
+        mount_source.as_str(),
+        mounted_rows,
+        udisks_rows,
+        final_rows,
+        mounted_final,
+        unmounted_final,
+        mountable,
+        unmountable,
+        ejectable
+    )
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1295,6 +1354,45 @@ mod tests {
                 "unexpected failure",
             ),
             None
+        );
+    }
+
+    #[test]
+    fn device_discovery_summary_counts_final_rows_and_capabilities() {
+        let devices = vec![
+            filesystem_entry(),
+            device_entry(
+                "Mounted USB".into(),
+                "/run/media/yk/USB".into(),
+                "/dev/sdb1".into(),
+                "M".into(),
+                true,
+                DeviceCapabilities {
+                    can_unmount: true,
+                    ..DeviceCapabilities::default()
+                },
+            ),
+            device_entry(
+                "Unmounted Card".into(),
+                "/dev/sdc1".into(),
+                "/dev/sdc1".into(),
+                "U".into(),
+                false,
+                DeviceCapabilities {
+                    can_mount: true,
+                    can_eject: true,
+                    ..DeviceCapabilities::default()
+                },
+            ),
+        ];
+
+        assert_eq!(
+            device_discovery_summary(DeviceMountSource::Mountinfo, 1, 2, &devices),
+            "summary mount_source=mountinfo mounted_rows=1 udisks_rows=2 final_rows=2 mounted=1 unmounted=1 mountable=1 unmountable=1 ejectable=1"
+        );
+        assert_eq!(
+            device_discovery_summary(DeviceMountSource::RootScan, 0, 0, &[filesystem_entry()]),
+            "summary mount_source=root-scan mounted_rows=0 udisks_rows=0 final_rows=0 mounted=0 unmounted=0 mountable=0 unmountable=0 ejectable=0"
         );
     }
 
