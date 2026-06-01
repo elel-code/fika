@@ -531,10 +531,11 @@ fn udisks2_removable_device_from_interfaces(
     }
     let drive = drive_for_block(objects, block)?;
 
-    let mount_points = interfaces
-        .get("org.freedesktop.UDisks2.Filesystem")
-        .and_then(|filesystem| mount_points_property(filesystem, "MountPoints"))
-        .unwrap_or_default();
+    let Some(filesystem) = interfaces.get("org.freedesktop.UDisks2.Filesystem") else {
+        device_debug_log(&format!("UDisks2 skip {device}: no filesystem interface"));
+        return None;
+    };
+    let mount_points = mount_points_property(filesystem, "MountPoints").unwrap_or_default();
     let mounted = !mount_points.is_empty();
     let mount_point = mount_points.into_iter().next();
     let label = udisks2_display_label(block, drive, mount_point.as_deref(), &device);
@@ -1052,7 +1053,7 @@ mod tests {
                 "FIKA USB",
                 false,
             ),
-            None,
+            Some(filesystem_object(Vec::new())),
         );
 
         let devices = udisks2_removable_devices_from_objects(&objects);
@@ -1145,6 +1146,22 @@ mod tests {
         assert!(udisks2_removable_devices_from_objects(&ignored).is_empty());
         assert!(udisks2_removable_devices_from_objects(&fixed).is_empty());
         assert!(udisks2_removable_devices_from_objects(&empty).is_empty());
+    }
+
+    #[test]
+    fn udisks2_filters_removable_blocks_without_filesystem_interface() {
+        let objects = udisks_objects(
+            drive_object(true, true, "Framework", "USB-C Storage"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "FIKA USB",
+                false,
+            ),
+            None,
+        );
+
+        assert!(udisks2_removable_devices_from_objects(&objects).is_empty());
     }
 
     #[test]
