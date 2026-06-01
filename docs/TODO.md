@@ -38,7 +38,8 @@
   - Current: discovery is now mount-table-first via `/proc/self/mountinfo`, closer to Dolphin's KMountPoint/Solid and cosmic-files' mounter-item model than raw directory scanning. Mountinfo parsing keeps source and filesystem type so pseudo filesystems such as `tmpfs` do not appear as removable devices. Directory scanning remains only as a fallback when mountinfo is unavailable.
   - Current: UDisks2 system-bus `ObjectManager` discovery is used as a best-effort enhancement for removable media, including unmounted drives. Mounted mountinfo entries stay first and win duplicate paths; UDisks2 failures fall back silently to mountinfo/directory discovery.
   - Current: clicking an unmounted UDisks2 filesystem device starts an async `Filesystem.Mount({})`; success refreshes Devices and opens the returned mount point, while failures are shown in the status bar.
-  - Remaining: add UDisks2 unmount/eject actions and clearer device error reporting.
+  - Current: device rows have a right-click menu with Mount for unmounted media, Open/Unmount for mounted media, and Eject when UDisks2 reports an ejectable drive. These actions run off the UI thread and refresh Devices after completion.
+  - Remaining: clearer device error reporting, busy-device guidance, and distro validation for UDisks2/polkit edge cases.
 - [x] Internal drop transfer menu with Move / Copy / Link actions.
 - [x] F5 active refresh; toolbar refresh button removed.
 - [x] Mouse Back/Forward navigation with history stacks.

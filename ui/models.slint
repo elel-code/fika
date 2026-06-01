@@ -23,8 +23,10 @@ export struct PlaceEntry {
 export struct DeviceEntry {
     label: string,
     path: string,
+    device_path: string,
     marker: string,
     mounted: bool,
+    can_eject: bool,
 }
 
 export struct DesktopApp {

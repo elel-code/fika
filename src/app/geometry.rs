@@ -299,6 +299,15 @@ pub(crate) fn context_menu_metrics(input: MenuMetricsInput) -> MenuMetrics {
             open_with_row_y_offset: 0.0,
             create_new_row_y_offset: 0.0,
         },
+        5 => MenuMetrics {
+            height: title
+                + item
+                + separator
+                + if input.is_dir { item } else { 0.0 }
+                + if input.place_builtin { item } else { 0.0 },
+            open_with_row_y_offset: 0.0,
+            create_new_row_y_offset: 0.0,
+        },
         _ => MenuMetrics {
             height: 0.0,
             open_with_row_y_offset: 0.0,
@@ -732,6 +741,23 @@ mod tests {
         assert_eq!(
             places_blank_with_add_current.height,
             title_height + 2.0 * item_height + separator_height
+        );
+
+        let mounted_ejectable_device = context_menu_metrics(MenuMetricsInput {
+            kind: 5,
+            selected_count: 0,
+            is_dir: true,
+            default_open_visible: false,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            place_builtin: true,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(
+            mounted_ejectable_device.height,
+            title_height + 3.0 * item_height + separator_height
         );
     }
 

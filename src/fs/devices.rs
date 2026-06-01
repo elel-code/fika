@@ -45,9 +45,11 @@ fn mounted_devices_from_paths(paths: Vec<PathBuf>) -> Vec<DeviceEntry> {
         }
         devices.push(device_entry(
             mount_label(&path),
+            path_text.clone(),
             path_text,
             mount_marker(&path),
             true,
+            false,
         ));
     }
 
@@ -71,15 +73,31 @@ fn merge_device_entries(
 }
 
 fn filesystem_entry() -> DeviceEntry {
-    device_entry("Filesystem".into(), "/".into(), "/".into(), true)
+    device_entry(
+        "Filesystem".into(),
+        "/".into(),
+        "/".into(),
+        "/".into(),
+        true,
+        false,
+    )
 }
 
-fn device_entry(label: String, path: String, marker: String, mounted: bool) -> DeviceEntry {
+fn device_entry(
+    label: String,
+    path: String,
+    device_path: String,
+    marker: String,
+    mounted: bool,
+    can_eject: bool,
+) -> DeviceEntry {
     DeviceEntry {
         label: label.into(),
         path: path.into(),
+        device_path: device_path.into(),
         marker: marker.into(),
         mounted,
+        can_eject,
     }
 }
 
@@ -138,6 +156,16 @@ pub(crate) fn mount_device(device_path: &str) -> Result<PathBuf, String> {
     mount_device_with_connection(&connection, device_path)
 }
 
+pub(crate) fn unmount_device(device_path: &str) -> Result<(), String> {
+    let connection = system_bus_connection(Duration::from_secs(120))?;
+    unmount_device_with_connection(&connection, device_path)
+}
+
+pub(crate) fn eject_device(device_path: &str) -> Result<(), String> {
+    let connection = system_bus_connection(Duration::from_secs(120))?;
+    eject_device_with_connection(&connection, device_path)
+}
+
 fn system_bus_connection(timeout: Duration) -> Result<Connection, String> {
     zbus::blocking::connection::Builder::system()
         .map_err(|err| format!("cannot create system bus builder: {err}"))?
@@ -187,6 +215,48 @@ fn mount_device_with_connection(
     Ok(PathBuf::from(mount_point))
 }
 
+fn unmount_device_with_connection(
+    connection: &Connection,
+    device_path: &str,
+) -> Result<(), String> {
+    let objects = udisks2_managed_objects(connection)?;
+    let target = udisks2_device_target_from_objects(&objects, device_path)?;
+    if !target.mounted {
+        return Ok(());
+    }
+
+    let proxy = Proxy::new(
+        connection,
+        "org.freedesktop.UDisks2",
+        target.block_path.as_str(),
+        "org.freedesktop.UDisks2.Filesystem",
+    )
+    .map_err(|err| format!("cannot create UDisks2 Filesystem proxy: {err}"))?;
+    let options: HashMap<&str, Value<'_>> = HashMap::new();
+    let _: () = proxy
+        .call("Unmount", &(options))
+        .map_err(|err| format!("UDisks2 Unmount failed: {err}"))?;
+    Ok(())
+}
+
+fn eject_device_with_connection(connection: &Connection, device_path: &str) -> Result<(), String> {
+    let objects = udisks2_managed_objects(connection)?;
+    let target = udisks2_device_target_from_objects(&objects, device_path)?;
+
+    let proxy = Proxy::new(
+        connection,
+        "org.freedesktop.UDisks2",
+        target.drive_path.as_str(),
+        "org.freedesktop.UDisks2.Drive",
+    )
+    .map_err(|err| format!("cannot create UDisks2 Drive proxy: {err}"))?;
+    let options: HashMap<&str, Value<'_>> = HashMap::new();
+    let _: () = proxy
+        .call("Eject", &(options))
+        .map_err(|err| format!("UDisks2 Eject failed: {err}"))?;
+    Ok(())
+}
+
 fn udisks2_managed_objects(connection: &Connection) -> Result<ManagedObjects, String> {
     let proxy = Proxy::new(
         connection,
@@ -207,10 +277,40 @@ struct UDisks2MountTarget {
     mounted_at: Option<PathBuf>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct UDisks2DeviceTarget {
+    block_path: OwnedObjectPath,
+    drive_path: OwnedObjectPath,
+    mounted: bool,
+    can_eject: bool,
+}
+
 fn udisks2_mount_target_from_objects(
     objects: &ManagedObjects,
     device_path: &str,
 ) -> Result<UDisks2MountTarget, String> {
+    let target = udisks2_device_target_from_objects(objects, device_path)?;
+    let interfaces = objects
+        .get(&target.block_path)
+        .ok_or_else(|| "device is no longer available".to_string())?;
+    let filesystem = interfaces
+        .get("org.freedesktop.UDisks2.Filesystem")
+        .ok_or_else(|| "device has no mountable filesystem".to_string())?;
+    let mounted_at = mount_points_property(filesystem, "MountPoints")
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+        .map(PathBuf::from);
+    Ok(UDisks2MountTarget {
+        block_path: target.block_path,
+        mounted_at,
+    })
+}
+
+fn udisks2_device_target_from_objects(
+    objects: &ManagedObjects,
+    device_path: &str,
+) -> Result<UDisks2DeviceTarget, String> {
     for (object_path, interfaces) in objects {
         let Some(block) = interfaces.get("org.freedesktop.UDisks2.Block") else {
             continue;
@@ -230,14 +330,25 @@ fn udisks2_mount_target_from_objects(
         let Some(filesystem) = interfaces.get("org.freedesktop.UDisks2.Filesystem") else {
             return Err("device has no mountable filesystem".to_string());
         };
-        let mounted_at = mount_points_property(filesystem, "MountPoints")
+        let Some(drive_path) = owned_object_path_property(block, "Drive") else {
+            return Err("device has no drive object".to_string());
+        };
+        let Some(drive) = objects
+            .get(&drive_path)
+            .and_then(|interfaces| interfaces.get("org.freedesktop.UDisks2.Drive"))
+        else {
+            return Err("device drive is no longer available".to_string());
+        };
+        let mounted = mount_points_property(filesystem, "MountPoints")
             .unwrap_or_default()
             .into_iter()
             .next()
-            .map(PathBuf::from);
-        return Ok(UDisks2MountTarget {
+            .is_some();
+        return Ok(UDisks2DeviceTarget {
             block_path: object_path.clone(),
-            mounted_at,
+            drive_path,
+            mounted,
+            can_eject: bool_property(drive, "Ejectable"),
         });
     }
 
@@ -277,12 +388,15 @@ fn udisks2_removable_device_from_interfaces(
         .filter(|label| !label.is_empty())
         .or_else(|| drive_label(drive))
         .unwrap_or_else(|| mount_label(Path::new(&device)));
-    let path = mount_points.into_iter().next().unwrap_or(device);
+    let path = mount_points.into_iter().next().unwrap_or(device.clone());
+    let can_eject = bool_property(drive, "Ejectable");
     Some(device_entry(
         label.clone(),
-        path,
+        path.clone(),
+        device,
         marker_from_label(&label),
         mounted,
+        can_eject,
     ))
 }
 
@@ -661,6 +775,7 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].label, "FIKA USB");
         assert_eq!(devices[0].path, "/dev/sdb1");
+        assert_eq!(devices[0].device_path, "/dev/sdb1");
         assert_eq!(devices[0].marker, "F");
         assert!(!devices[0].mounted);
     }
@@ -683,6 +798,7 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].label, "Framework USB-C Storage");
         assert_eq!(devices[0].path, "/run/media/yk/FIKA USB");
+        assert_eq!(devices[0].device_path, "/dev/sdb1");
         assert!(devices[0].mounted);
     }
 
@@ -731,18 +847,29 @@ mod tests {
             device_entry(
                 "Mounted USB".into(),
                 "/run/media/yk/USB".into(),
+                "/run/media/yk/USB".into(),
                 "M".into(),
                 true,
+                false,
             ),
         ];
         let discovered = vec![
             device_entry(
                 "Duplicate".into(),
                 "/run/media/yk/USB".into(),
+                "/dev/sdb1".into(),
                 "D".into(),
                 true,
+                true,
             ),
-            device_entry("Unmounted".into(), "/dev/sdc1".into(), "U".into(), false),
+            device_entry(
+                "Unmounted".into(),
+                "/dev/sdc1".into(),
+                "/dev/sdc1".into(),
+                "U".into(),
+                false,
+                true,
+            ),
         ];
 
         let devices = merge_device_entries(mounted, discovered);

@@ -208,6 +208,56 @@ export component PlaceContextMenu inherits Rectangle {
     }
 }
 
+export component DeviceContextMenu inherits Rectangle {
+    in property <string> title;
+    in property <bool> dark;
+    in property <bool> mounted;
+    in property <bool> can-eject;
+    callback open_requested();
+    callback mount_requested();
+    callback unmount_requested();
+    callback eject_requested();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        MenuTitle {
+            label: root.title;
+            dark: root.dark;
+        }
+
+        if (root.mounted): MenuItem {
+            label: "Open";
+            dark: root.dark;
+            clicked => { root.open_requested(); }
+        }
+
+        if (!root.mounted): MenuItem {
+            label: "Mount";
+            dark: root.dark;
+            clicked => { root.mount_requested(); }
+        }
+
+        MenuSeparator {
+            dark: root.dark;
+        }
+
+        if (root.mounted): MenuItem {
+            label: "Unmount";
+            dark: root.dark;
+            clicked => { root.unmount_requested(); }
+        }
+
+        if (root.can-eject): MenuItem {
+            label: "Eject";
+            dark: root.dark;
+            clicked => { root.eject_requested(); }
+        }
+    }
+}
+
 export component PlacesBlankMenu inherits Rectangle {
     in property <bool> dark;
     in property <bool> add-current-visible;

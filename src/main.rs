@@ -23,9 +23,9 @@ mod support;
 
 use app::async_bridge::{AsyncBridge, build_async_runtime, send_async_event};
 use app::events::{
-    AsyncEvent, DeviceMountResult, DirectoryLoadResult, ExternalEditResult, ExternalFileDrop,
-    FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult, FileUndoResult,
-    RecursiveSearchProgress, RecursiveSearchResult,
+    AsyncEvent, DeviceActionResult, DeviceMountResult, DirectoryLoadResult, ExternalEditResult,
+    ExternalFileDrop, FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult,
+    FileUndoResult, RecursiveSearchProgress, RecursiveSearchResult,
 };
 use app::file_clipboard::sync_clipboard_ui;
 use app::geometry::{
@@ -58,7 +58,7 @@ use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::settings::{AppSettings, load_settings, save_settings};
 use desktop::{mime_open, open_with, terminal};
-use fs::devices::{mount_device, mounted_devices};
+use fs::devices::{eject_device, mount_device, mounted_devices, unmount_device};
 use fs::entries::{read_entries_async, to_file_entry};
 use fs::places::default_places;
 use fs::{file_actions, privilege, search, thumbnails};
@@ -278,6 +278,28 @@ fn main() -> Result<(), slint::PlatformError> {
                 } else {
                     set_status(&ui, "Device is not available");
                 }
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let bridge = bridge.clone();
+        ui.on_unmount_device(move |device_path| {
+            if let Some(ui) = ui_weak.upgrade() {
+                set_status(&ui, "Unmounting device...");
+                device_action_async(&bridge, "unmount", device_path.to_string());
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let bridge = bridge.clone();
+        ui.on_eject_device(move |device_path| {
+            if let Some(ui) = ui_weak.upgrade() {
+                set_status(&ui, "Ejecting device...");
+                device_action_async(&bridge, "eject", device_path.to_string());
             }
         });
     }
@@ -1687,6 +1709,30 @@ fn mount_device_async(bridge: &AsyncBridge, device_path: String) {
     });
 }
 
+fn device_action_async(bridge: &AsyncBridge, action: &'static str, device_path: String) {
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let task_device_path = device_path.clone();
+        let result = tokio::task::spawn_blocking(move || match action {
+            "unmount" => unmount_device(&task_device_path),
+            "eject" => eject_device(&task_device_path),
+            _ => Err(format!("unknown device action: {action}")),
+        })
+        .await
+        .unwrap_or_else(|err| Err(format!("{action} task failed: {err}")));
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::DeviceActionFinished(DeviceActionResult {
+                action: action.to_string(),
+                device_path,
+                result,
+            }),
+        );
+    });
+}
+
 fn watch_current_directory(path: &Path, generation: u64, bridge: &AsyncBridge) {
     use notify::Watcher;
 
@@ -1788,6 +1834,9 @@ fn apply_async_event(
         }
         AsyncEvent::DeviceMountFinished(result) => {
             apply_device_mount_result(ui, state, bridge, result);
+        }
+        AsyncEvent::DeviceActionFinished(result) => {
+            apply_device_action_result(ui, state, bridge, result);
         }
         AsyncEvent::PrivilegedOperationFinished(result) => {
             apply_privileged_operation_result(ui, state, bridge, result);
@@ -2531,6 +2580,40 @@ fn apply_device_mount_result(
             );
         }
         Err(err) => set_status(ui, &format!("Cannot mount {}: {err}", result.device_path)),
+    }
+}
+
+fn apply_device_action_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: DeviceActionResult,
+) {
+    sync_devices(ui);
+    match result.result {
+        Ok(()) => {
+            refresh_directory(ui, state, bridge);
+            set_status(
+                ui,
+                &format!(
+                    "{} complete: {}",
+                    title_case_action(&result.action),
+                    result.device_path
+                ),
+            );
+        }
+        Err(err) => set_status(
+            ui,
+            &format!("Cannot {} {}: {err}", result.action, result.device_path),
+        ),
+    }
+}
+
+fn title_case_action(action: &str) -> Cow<'static, str> {
+    match action {
+        "unmount" => Cow::Borrowed("Unmount"),
+        "eject" => Cow::Borrowed("Eject"),
+        other => Cow::Owned(other.to_string()),
     }
 }
 

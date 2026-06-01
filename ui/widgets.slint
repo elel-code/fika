@@ -66,7 +66,7 @@ export component PlaceButton inherits Rectangle {
     in property <bool> drop-target;
     in property <bool> available: true;
     callback clicked();
-    callback context_requested(int, string, bool, length, length);
+    callback context_requested(int, string, bool, string, length, length);
     callback drag_cancelled();
 
     height: 34px;
@@ -86,7 +86,7 @@ export component PlaceButton inherits Rectangle {
                 if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                     root.drag_cancelled();
                 } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                    root.context_requested(root.index, root.label, root.builtin, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    root.context_requested(root.index, root.label, root.builtin, root.path, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                 }
             }
         }

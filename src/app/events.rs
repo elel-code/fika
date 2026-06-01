@@ -82,6 +82,13 @@ pub(crate) struct DeviceMountResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct DeviceActionResult {
+    pub(crate) action: String,
+    pub(crate) device_path: String,
+    pub(crate) result: Result<(), String>,
+}
+
+#[derive(Debug)]
 pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
     FileOpened(FileOpenResult),
@@ -95,6 +102,7 @@ pub(crate) enum AsyncEvent {
     FileOperationFinished(FileOperationResult),
     FileUndoFinished(FileUndoResult),
     DeviceMountFinished(DeviceMountResult),
+    DeviceActionFinished(DeviceActionResult),
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),
     ThumbnailLoaded {
