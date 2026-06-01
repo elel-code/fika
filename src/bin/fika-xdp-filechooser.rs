@@ -39,10 +39,39 @@ enum ParentWindowStatus {
     UnsupportedScheme,
 }
 
+impl ParentWindowStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Empty => "empty",
+            Self::Malformed => "malformed",
+            Self::EmptyHandle => "empty-handle",
+            Self::UnsupportedScheme => "unsupported-scheme",
+        }
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct ParentWindowDecision {
     handle: Option<String>,
     status: ParentWindowStatus,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PortalRequestDebug<'a> {
+    method: &'a str,
+    handle: &'a str,
+    start_dir: Option<&'a Path>,
+    directory: bool,
+    multiple: bool,
+    save_kind: &'a str,
+    save_files: usize,
+    portal_filters: usize,
+    chooser_filters: usize,
+    initial_filter_index: Option<usize>,
+    portal_choices: usize,
+    parent_status: ParentWindowStatus,
+    parent_forwarded: bool,
 }
 
 #[derive(Debug, Default)]
@@ -122,8 +151,24 @@ impl FileChooser {
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
         let parent_window = portal_parent_window(parent_window);
+        let start_dir = current_folder(&options);
+        portal_debug_log_request(PortalRequestDebug {
+            method: "OpenFile",
+            handle: handle.as_str(),
+            start_dir: start_dir.as_deref(),
+            directory,
+            multiple,
+            save_kind: "none",
+            save_files: 0,
+            portal_filters: filter_map.portal_filters.len(),
+            chooser_filters: filter_map.chooser_specs.len(),
+            initial_filter_index: filter_map.initial_chooser_index,
+            portal_choices: choices.len(),
+            parent_status: parent_window.status,
+            parent_forwarded: parent_window.handle.is_some(),
+        });
         let args = chooser_args(ChooserArgs {
-            start_dir: current_folder(&options),
+            start_dir,
             directory,
             multiple,
             title: portal_title(title),
@@ -163,6 +208,21 @@ impl FileChooser {
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
         let parent_window = portal_parent_window(parent_window);
+        portal_debug_log_request(PortalRequestDebug {
+            method: "SaveFile",
+            handle: handle.as_str(),
+            start_dir: start_dir.as_deref(),
+            directory: false,
+            multiple: false,
+            save_kind: "file",
+            save_files: 0,
+            portal_filters: filter_map.portal_filters.len(),
+            chooser_filters: filter_map.chooser_specs.len(),
+            initial_filter_index: filter_map.initial_chooser_index,
+            portal_choices: choices.len(),
+            parent_status: parent_window.status,
+            parent_forwarded: parent_window.handle.is_some(),
+        });
         let args = chooser_args(ChooserArgs {
             start_dir,
             title: portal_title(title),
@@ -203,8 +263,24 @@ impl FileChooser {
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
         let parent_window = portal_parent_window(parent_window);
+        let start_dir = current_folder(&options);
+        portal_debug_log_request(PortalRequestDebug {
+            method: "SaveFiles",
+            handle: handle.as_str(),
+            start_dir: start_dir.as_deref(),
+            directory: true,
+            multiple: false,
+            save_kind: "files",
+            save_files: files.len(),
+            portal_filters: filter_map.portal_filters.len(),
+            chooser_filters: filter_map.chooser_specs.len(),
+            initial_filter_index: filter_map.initial_chooser_index,
+            portal_choices: choices.len(),
+            parent_status: parent_window.status,
+            parent_forwarded: parent_window.handle.is_some(),
+        });
         let args = chooser_args(ChooserArgs {
-            start_dir: current_folder(&options),
+            start_dir,
             directory: true,
             title: portal_title(title),
             save_files: Some(files),
@@ -535,6 +611,39 @@ fn option_string(options: &HashMap<String, OwnedValue>, key: &str) -> Option<Str
         .filter(|value| !value.is_empty())
 }
 
+fn portal_debug_log_request(request: PortalRequestDebug<'_>) {
+    if !portal_debug_enabled() {
+        return;
+    }
+
+    eprintln!("[fika portal] {}", portal_request_summary(request));
+}
+
+fn portal_request_summary(request: PortalRequestDebug<'_>) -> String {
+    format!(
+        "request method={} handle={} start_dir={} directory={} multiple={} save_kind={} save_files={} portal_filters={} chooser_filters={} initial_filter={} portal_choices={} parent_status={} parent_forwarded={} native_transient=false",
+        request.method,
+        request.handle,
+        request
+            .start_dir
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
+        request.directory,
+        request.multiple,
+        request.save_kind,
+        request.save_files,
+        request.portal_filters,
+        request.chooser_filters,
+        request
+            .initial_filter_index
+            .map(|index| index.to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
+        request.portal_choices,
+        request.parent_status.as_str(),
+        request.parent_forwarded,
+    )
+}
+
 fn portal_parent_window(parent_window: String) -> ParentWindowDecision {
     let parent_window = parent_window.trim();
     if parent_window.is_empty() {
@@ -580,10 +689,7 @@ fn portal_parent_window(parent_window: String) -> ParentWindowDecision {
 }
 
 fn portal_debug_log_parent(decision: &ParentWindowDecision) {
-    static DEBUG_PORTAL: OnceLock<bool> = OnceLock::new();
-    if !*DEBUG_PORTAL.get_or_init(|| {
-        env::var("FIKA_DEBUG_PORTAL").is_ok_and(|value| env_flag_is_truthy(value.as_str()))
-    }) {
+    if !portal_debug_enabled() {
         return;
     }
 
@@ -592,6 +698,13 @@ fn portal_debug_log_parent(decision: &ParentWindowDecision) {
         decision.status,
         decision.handle.as_deref().unwrap_or("")
     );
+}
+
+fn portal_debug_enabled() -> bool {
+    static DEBUG_PORTAL: OnceLock<bool> = OnceLock::new();
+    *DEBUG_PORTAL.get_or_init(|| {
+        env::var("FIKA_DEBUG_PORTAL").is_ok_and(|value| env_flag_is_truthy(value.as_str()))
+    })
 }
 
 fn env_flag_is_truthy(value: &str) -> bool {
@@ -824,6 +937,54 @@ mod tests {
                 handle: None,
                 status: ParentWindowStatus::UnsupportedScheme,
             }
+        );
+    }
+
+    #[test]
+    fn portal_request_summary_reports_request_shape() {
+        let summary = portal_request_summary(PortalRequestDebug {
+            method: "OpenFile",
+            handle: "/org/freedesktop/portal/desktop/request/1_42/fika",
+            start_dir: Some(Path::new("/home/yk")),
+            directory: true,
+            multiple: true,
+            save_kind: "none",
+            save_files: 0,
+            portal_filters: 2,
+            chooser_filters: 1,
+            initial_filter_index: Some(0),
+            portal_choices: 1,
+            parent_status: ParentWindowStatus::Accepted,
+            parent_forwarded: true,
+        });
+
+        assert_eq!(
+            summary,
+            "request method=OpenFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=/home/yk directory=true multiple=true save_kind=none save_files=0 portal_filters=2 chooser_filters=1 initial_filter=0 portal_choices=1 parent_status=accepted parent_forwarded=true native_transient=false"
+        );
+    }
+
+    #[test]
+    fn portal_request_summary_reports_missing_optional_state() {
+        let summary = portal_request_summary(PortalRequestDebug {
+            method: "SaveFile",
+            handle: "/org/freedesktop/portal/desktop/request/1_42/fika",
+            start_dir: None,
+            directory: false,
+            multiple: false,
+            save_kind: "file",
+            save_files: 0,
+            portal_filters: 0,
+            chooser_filters: 0,
+            initial_filter_index: None,
+            portal_choices: 0,
+            parent_status: ParentWindowStatus::Empty,
+            parent_forwarded: false,
+        });
+
+        assert_eq!(
+            summary,
+            "request method=SaveFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=<none> directory=false multiple=false save_kind=file save_files=0 portal_filters=0 chooser_filters=0 initial_filter=<none> portal_choices=0 parent_status=empty parent_forwarded=false native_transient=false"
         );
     }
 
