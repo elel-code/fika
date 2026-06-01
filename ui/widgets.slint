@@ -65,15 +65,16 @@ export component PlaceButton inherits Rectangle {
     in property <bool> builtin;
     in property <bool> drop-target;
     in property <bool> available: true;
+    in property <string> pending-action: "";
     in property <string> error: "";
     callback clicked();
     callback context_requested(int, string, bool, string, length, length);
     callback drag_cancelled();
 
     height: 34px;
-    border-width: dragged || drop-target || error != "" ? 1px : 0px;
-    border-color: error != "" ? (dark ? #ef4444 : #dc2626) : (drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #4d5962 : #b9c7d3));
-    background: error != "" ? (dark ? #351b1f : #fff1f2) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1f23 : #e8eef4) : (selected ? (dark ? #214f67 : #dceeff) : (touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent))));
+    border-width: dragged || drop-target || error != "" || pending-action != "" ? 1px : 0px;
+    border-color: error != "" ? (dark ? #ef4444 : #dc2626) : (pending-action != "" ? (dark ? #38bdf8 : #0284c7) : (drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #4d5962 : #b9c7d3)));
+    background: error != "" ? (dark ? #351b1f : #fff1f2) : (pending-action != "" ? (dark ? #122d3a : #e0f2fe) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1f23 : #e8eef4) : (selected ? (dark ? #214f67 : #dceeff) : (touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent)))));
     opacity: dragged ? 0.45 : (available ? 1 : 0.68);
 
     drag-area := DragArea {
@@ -107,11 +108,11 @@ export component PlaceButton inherits Rectangle {
                     width: 24px;
                     height: 22px;
                     border-radius: 3px;
-                    background: root.error != "" ? (root.dark ? #ef4444 : #dc2626) : (root.available ? (root.dark ? #4f93d9 : #4f94dc) : (root.dark ? #3f464d : #cbd5e1));
+                    background: root.error != "" ? (root.dark ? #ef4444 : #dc2626) : (root.pending-action != "" ? (root.dark ? #38bdf8 : #0284c7) : (root.available ? (root.dark ? #4f93d9 : #4f94dc) : (root.dark ? #3f464d : #cbd5e1)));
 
                     Text {
-                        text: root.error != "" ? "!" : root.marker;
-                        color: root.error != "" ? #ffffff : #102033;
+                        text: root.error != "" ? "!" : (root.pending-action != "" ? "..." : root.marker);
+                        color: root.error != "" || root.pending-action != "" ? #ffffff : #102033;
                         font-size: 11px;
                         font-weight: 800;
                         horizontal-alignment: center;
@@ -122,7 +123,7 @@ export component PlaceButton inherits Rectangle {
 
             Text {
                 text: root.label;
-                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.available ? (root.dark ? #eeeeee : #17212b) : (root.dark ? #8b949e : #64748b));
+                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.pending-action != "" ? (root.dark ? #bae6fd : #075985) : (root.available ? (root.dark ? #eeeeee : #17212b) : (root.dark ? #8b949e : #64748b)));
                 font-size: 14px;
                 overflow: elide;
                 vertical-alignment: center;
@@ -266,6 +267,7 @@ export component MenuItem inherits Rectangle {
     in property <string> label;
     in property <bool> dark;
     in property <bool> submenu: false;
+    in property <bool> enabled: true;
     callback clicked();
     callback hovered(bool);
 
@@ -273,7 +275,8 @@ export component MenuItem inherits Rectangle {
     background: transparent;
 
     touch-area := TouchArea {
-        changed has-hover => { root.hovered(self.has-hover); }
+        enabled: root.enabled;
+        changed has-hover => { root.hovered(self.has-hover && root.enabled); }
         clicked => { root.clicked(); }
     }
 
@@ -283,14 +286,14 @@ export component MenuItem inherits Rectangle {
         width: parent.width - 8px;
         height: parent.height - 6px;
         border-radius: 4px;
-        background: touch-area.has-hover ? (root.dark ? #343a40 : #edf3f8) : transparent;
+        background: root.enabled && touch-area.has-hover ? (root.dark ? #343a40 : #edf3f8) : transparent;
     }
 
     Text {
         text: root.label;
         x: 12px;
         width: parent.width - (root.submenu ? 34px : 24px);
-        color: root.dark ? #f1f1f1 : #17212b;
+        color: root.enabled ? (root.dark ? #f1f1f1 : #17212b) : (root.dark ? #717b84 : #94a3b8);
         font-size: 13px;
         overflow: elide;
         vertical-alignment: center;
@@ -300,7 +303,7 @@ export component MenuItem inherits Rectangle {
         text: ">";
         x: parent.width - 24px;
         width: 12px;
-        color: root.dark ? #b8c0c8 : #64748b;
+        color: root.enabled ? (root.dark ? #b8c0c8 : #64748b) : (root.dark ? #5f6871 : #cbd5e1);
         font-size: 13px;
         font-weight: 700;
         horizontal-alignment: center;

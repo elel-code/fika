@@ -200,6 +200,7 @@ export component DeviceContextMenu inherits PopupSurface {
     in property <string> title;
     in property <bool> mounted;
     in property <bool> can-eject;
+    in property <string> pending-action: "";
     callback open_requested();
     callback mount_requested();
     callback unmount_requested();
@@ -213,29 +214,36 @@ export component DeviceContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.mounted): MenuItem {
+        if (root.pending-action != ""): MenuItem {
+            label: root.pending-action == "mount" ? "Mounting..." : (root.pending-action == "unmount" ? "Unmounting..." : (root.pending-action == "eject" ? "Ejecting..." : "Working..."));
+            dark: root.dark;
+            enabled: false;
+            clicked => { }
+        }
+
+        if (root.pending-action == "" && root.mounted): MenuItem {
             label: "Open";
             dark: root.dark;
             clicked => { root.open_requested(); }
         }
 
-        if (!root.mounted): MenuItem {
+        if (root.pending-action == "" && !root.mounted): MenuItem {
             label: "Mount";
             dark: root.dark;
             clicked => { root.mount_requested(); }
         }
 
-        MenuSeparator {
+        if (root.pending-action == ""): MenuSeparator {
             dark: root.dark;
         }
 
-        if (root.mounted): MenuItem {
+        if (root.pending-action == "" && root.mounted): MenuItem {
             label: "Unmount";
             dark: root.dark;
             clicked => { root.unmount_requested(); }
         }
 
-        if (root.can-eject): MenuItem {
+        if (root.pending-action == "" && root.can-eject): MenuItem {
             label: "Eject";
             dark: root.dark;
             clicked => { root.eject_requested(); }

@@ -293,6 +293,7 @@ pub(crate) struct MenuMetricsInput {
     pub(crate) add_to_places_visible: bool,
     pub(crate) clipboard_has_paths: bool,
     pub(crate) place_builtin: bool,
+    pub(crate) device_pending: bool,
     pub(crate) item_height: f32,
     pub(crate) separator_height: f32,
     pub(crate) title_height: f32,
@@ -336,11 +337,15 @@ pub(crate) fn context_menu_metrics(input: MenuMetricsInput) -> MenuMetrics {
             create_new_row_y_offset: 0.0,
         },
         5 => MenuMetrics {
-            height: title
-                + item
-                + separator
-                + if input.is_dir { item } else { 0.0 }
-                + if input.place_builtin { item } else { 0.0 },
+            height: if input.device_pending {
+                title + item
+            } else {
+                title
+                    + item
+                    + separator
+                    + if input.is_dir { item } else { 0.0 }
+                    + if input.place_builtin { item } else { 0.0 }
+            },
             open_with_row_y_offset: 0.0,
             create_new_row_y_offset: 0.0,
         },
@@ -759,6 +764,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: false,
+            device_pending: false,
             item_height,
             separator_height,
             title_height,
@@ -777,6 +783,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: true,
             place_builtin: false,
+            device_pending: false,
             item_height,
             separator_height,
             title_height,
@@ -798,6 +805,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: true,
+            device_pending: false,
             item_height,
             separator_height,
             title_height,
@@ -812,6 +820,7 @@ mod tests {
             add_to_places_visible: true,
             clipboard_has_paths: false,
             place_builtin: false,
+            device_pending: false,
             item_height,
             separator_height,
             title_height,
@@ -829,6 +838,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: true,
+            device_pending: false,
             item_height,
             separator_height,
             title_height,
@@ -837,6 +847,21 @@ mod tests {
             mounted_ejectable_device.height,
             title_height + 3.0 * item_height + separator_height
         );
+
+        let pending_device = context_menu_metrics(MenuMetricsInput {
+            kind: 5,
+            selected_count: 0,
+            is_dir: true,
+            default_open_visible: false,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            place_builtin: true,
+            device_pending: true,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(pending_device.height, title_height + item_height);
     }
 
     #[test]

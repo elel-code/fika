@@ -136,6 +136,7 @@ fn device_entry(
         marker: marker.into(),
         mounted,
         can_eject,
+        pending_action: String::new().into(),
         error: String::new().into(),
     }
 }

@@ -1101,6 +1101,7 @@ fn main() -> Result<(), slint::PlatformError> {
          add_to_places_visible,
          clipboard_has_paths,
          place_builtin,
+         device_pending,
          item_height,
          separator_height,
          title_height| {
@@ -1112,6 +1113,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 add_to_places_visible,
                 clipboard_has_paths,
                 place_builtin,
+                device_pending,
                 item_height,
                 separator_height,
                 title_height,
@@ -1128,6 +1130,7 @@ fn main() -> Result<(), slint::PlatformError> {
          add_to_places_visible,
          clipboard_has_paths,
          place_builtin,
+         device_pending,
          item_height,
          separator_height,
          title_height| {
@@ -1139,6 +1142,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 add_to_places_visible,
                 clipboard_has_paths,
                 place_builtin,
+                device_pending,
                 item_height,
                 separator_height,
                 title_height,
@@ -1155,6 +1159,7 @@ fn main() -> Result<(), slint::PlatformError> {
          add_to_places_visible,
          clipboard_has_paths,
          place_builtin,
+         device_pending,
          item_height,
          separator_height,
          title_height| {
@@ -1166,6 +1171,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 add_to_places_visible,
                 clipboard_has_paths,
                 place_builtin,
+                device_pending,
                 item_height,
                 separator_height,
                 title_height,
@@ -1744,8 +1750,9 @@ fn load_directory_with_preservation(
 
 fn sync_devices(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let state = state.borrow();
-    ui.set_devices(ModelRc::new(Rc::new(VecModel::from(devices_with_errors(
+    ui.set_devices(ModelRc::new(Rc::new(VecModel::from(devices_with_status(
         state.devices.clone(),
+        &state.pending_device_actions,
         &state.device_errors,
     )))));
 }
@@ -1769,11 +1776,18 @@ fn refresh_devices_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     });
 }
 
-fn devices_with_errors(
+fn devices_with_status(
     mut devices: Vec<DeviceEntry>,
+    pending_actions: &[DeviceAction],
     errors: &std::collections::HashMap<String, String>,
 ) -> Vec<DeviceEntry> {
     for device in &mut devices {
+        if let Some(pending) = pending_actions
+            .iter()
+            .find(|pending| pending.device_path == device.device_path.as_str())
+        {
+            device.pending_action = pending.action.as_str().into();
+        }
         if let Some(error) = errors.get(device.device_path.as_str()) {
             device.error = error.as_str().into();
         }
@@ -4413,7 +4427,7 @@ mod tests {
     }
 
     #[test]
-    fn devices_with_errors_marks_only_matching_device_path() {
+    fn devices_with_status_marks_matching_pending_action_and_error() {
         let devices = vec![
             DeviceEntry {
                 label: "USB".into(),
@@ -4422,6 +4436,7 @@ mod tests {
                 marker: "U".into(),
                 mounted: true,
                 can_eject: true,
+                pending_action: "".into(),
                 error: "".into(),
             },
             DeviceEntry {
@@ -4431,18 +4446,25 @@ mod tests {
                 marker: "O".into(),
                 mounted: false,
                 can_eject: false,
+                pending_action: "".into(),
                 error: "".into(),
             },
         ];
+        let pending_actions = vec![DeviceAction {
+            device_path: "/dev/sdc1".to_string(),
+            action: "mount".to_string(),
+        }];
         let errors = std::collections::HashMap::from([(
             "/dev/sdb1".to_string(),
             "Cannot unmount /dev/sdb1: device is busy".to_string(),
         )]);
 
-        let devices = devices_with_errors(devices, &errors);
+        let devices = devices_with_status(devices, &pending_actions, &errors);
 
         assert_eq!(devices[0].error, "Cannot unmount /dev/sdb1: device is busy");
+        assert_eq!(devices[0].pending_action, "");
         assert_eq!(devices[1].error, "");
+        assert_eq!(devices[1].pending_action, "mount");
     }
 
     fn test_entry(name: &str, path: &str) -> FileEntry {
