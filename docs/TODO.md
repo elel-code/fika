@@ -222,7 +222,7 @@
 - [x] First-pass conflict handling.
   - Acceptance: copy/move/link transfers do not silently pick a conflict policy when the destination name exists.
   - Current: transfer conflicts prompt for Overwrite, Keep Both, Rename, or Skip before an operation enters the queue.
-  - Current: Apply-to-remaining is limited to Skip, Keep Both, and Overwrite; Rename remains a single-conflict choice because one explicit target name is not safely reusable across unrelated conflicts.
+  - Current: Apply-to-remaining is limited to Skip, Keep Both, and Overwrite; Rename remains a single-conflict choice because one explicit target name is not safely reusable across unrelated conflicts. The conflict dialog calls this out when Apply-to-remaining is enabled.
 
 - [x] First-pass operation undo.
   - Acceptance: completed copy/link operations can be undone by removing the created target.

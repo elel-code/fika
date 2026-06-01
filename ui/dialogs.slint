@@ -357,6 +357,12 @@ export component TransferConflictDialog inherits Rectangle {
             checked <=> root.apply-all;
         }
 
+        if (root.apply-all): Text {
+            text: "Rename applies only to this conflict.";
+            color: root.dark ? #a8b2bd : #64748b;
+            font-size: 12px;
+        }
+
         Rectangle { vertical-stretch: 1; }
 
         HorizontalLayout {
