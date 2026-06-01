@@ -1,3 +1,4 @@
+use futures_lite::StreamExt;
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -5,7 +6,9 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use tokio::process::Command;
 use zbus::fdo;
+use zbus::message::Type;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+use zbus::{Connection, MatchRule, MessageStream};
 
 const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.fika";
 const OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -106,11 +109,12 @@ impl FileChooser {
     #[zbus(out_args("response", "results"))]
     async fn open_file(
         &self,
-        _handle: OwnedObjectPath,
+        handle: OwnedObjectPath,
         _app_id: String,
         parent_window: String,
         title: String,
         options: HashMap<String, OwnedValue>,
+        #[zbus(connection)] connection: &Connection,
     ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         let directory = option_bool(&options, "directory").unwrap_or(false);
         let multiple = option_bool(&options, "multiple").unwrap_or(false);
@@ -132,7 +136,7 @@ impl FileChooser {
             parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
-        match run_chooser(args).await {
+        match run_chooser_for_request(connection, &handle, args).await {
             Ok(ChooserRun::Selected(result)) => {
                 Ok((0, results_for_paths(result, &options, &filter_map)))
             }
@@ -144,11 +148,12 @@ impl FileChooser {
     #[zbus(out_args("response", "results"))]
     async fn save_file(
         &self,
-        _handle: OwnedObjectPath,
+        handle: OwnedObjectPath,
         _app_id: String,
         parent_window: String,
         title: String,
         options: HashMap<String, OwnedValue>,
+        #[zbus(connection)] connection: &Connection,
     ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         let (start_dir, name) = save_file_start_and_name(&options);
         let Some(name) = name else {
@@ -171,7 +176,7 @@ impl FileChooser {
             parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
-        match run_chooser(args).await {
+        match run_chooser_for_request(connection, &handle, args).await {
             Ok(ChooserRun::Selected(result)) => {
                 Ok((0, results_for_paths(result, &options, &filter_map)))
             }
@@ -183,11 +188,12 @@ impl FileChooser {
     #[zbus(out_args("response", "results"))]
     async fn save_files(
         &self,
-        _handle: OwnedObjectPath,
+        handle: OwnedObjectPath,
         _app_id: String,
         parent_window: String,
         title: String,
         options: HashMap<String, OwnedValue>,
+        #[zbus(connection)] connection: &Connection,
     ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         let files = save_files(&options);
         if files.is_empty() {
@@ -211,7 +217,7 @@ impl FileChooser {
             parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
-        match run_chooser(args).await {
+        match run_chooser_for_request(connection, &handle, args).await {
             Ok(ChooserRun::Selected(result)) => {
                 Ok((0, results_for_paths(result, &options, &filter_map)))
             }
@@ -298,6 +304,47 @@ async fn run_chooser(args: Vec<String>) -> Result<ChooserRun, String> {
     } else {
         Ok(ChooserRun::Selected(result))
     }
+}
+
+async fn run_chooser_for_request(
+    connection: &Connection,
+    handle: &OwnedObjectPath,
+    args: Vec<String>,
+) -> Result<ChooserRun, String> {
+    let mut close_stream = request_close_stream(connection, handle).await?;
+    tokio::select! {
+        result = run_chooser(args) => result,
+        close = close_stream.next() => {
+            match close {
+                Some(Ok(_)) => Ok(ChooserRun::Cancelled),
+                Some(Err(err)) => Err(format!("portal request Close signal failed: {err}")),
+                None => Ok(ChooserRun::Cancelled),
+            }
+        }
+    }
+}
+
+async fn request_close_stream(
+    connection: &Connection,
+    handle: &OwnedObjectPath,
+) -> Result<MessageStream, String> {
+    let rule = request_close_match_rule(handle.as_str())?;
+    MessageStream::for_match_rule(rule, connection, Some(1))
+        .await
+        .map_err(|err| format!("cannot subscribe to portal request Close signal: {err}"))
+}
+
+fn request_close_match_rule(handle: &str) -> Result<zbus::OwnedMatchRule, String> {
+    Ok(MatchRule::builder()
+        .msg_type(Type::Signal)
+        .interface("org.freedesktop.impl.portal.Request")
+        .map_err(|err| format!("cannot build portal request Close interface match: {err}"))?
+        .member("Close")
+        .map_err(|err| format!("cannot build portal request Close member match: {err}"))?
+        .path(handle)
+        .map_err(|err| format!("cannot build portal request Close path match: {err}"))?
+        .build()
+        .into())
 }
 
 fn chooser_command(program: PathBuf, args: Vec<String>) -> Command {
@@ -1024,5 +1071,16 @@ mod tests {
     fn chooser_process_is_killed_if_portal_request_is_dropped() {
         let command = chooser_command(PathBuf::from("/bin/true"), vec!["--chooser".to_string()]);
         assert!(command.get_kill_on_drop());
+    }
+
+    #[test]
+    fn portal_request_close_match_targets_exact_request_handle() {
+        let rule =
+            request_close_match_rule("/org/freedesktop/portal/desktop/request/1_42/fika").unwrap();
+
+        assert_eq!(
+            rule.to_string(),
+            "type='signal',interface='org.freedesktop.impl.portal.Request',member='Close',path='/org/freedesktop/portal/desktop/request/1_42/fika'"
+        );
     }
 }

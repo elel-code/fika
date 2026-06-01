@@ -329,7 +329,7 @@ Acceptance for all:
   - Current: MIME-only portal filters are not exposed as empty chooser filters because the current Fika chooser UI can only express glob-pattern filtering.
   - Current: portal choices are exposed as chooser footer controls; clicking a choice opens a small option menu instead of blindly cycling, and the selected choices are returned with the result.
   - Current: recognized `wayland:` / `x11:` `parent_window` handles are preserved and forwarded to `fika --chooser --chooser-parent-window`; empty, malformed, or unknown handles are dropped. `FIKA_DEBUG_PORTAL=1` logs the backend parse decision and the chooser-side received handle, and both diagnostics explicitly report that native transient binding is still disabled. Native transient parent binding remains platform/window-backend work.
-  - Current: the backend launches `fika --chooser` with `kill_on_drop`, so a cancelled portal request terminates the child chooser process instead of leaving it behind.
+  - Current: the backend subscribes to the portal request handle's `org.freedesktop.impl.portal.Request.Close` signal while `fika --chooser` is running; request Close maps to portal response `1` and drops the chooser wait future. The chooser process is also launched with `kill_on_drop`, so Close, backend-side cancellation, or connection teardown do not leave an orphan chooser window.
   - Current: closing the chooser window exits with a dedicated cancel code that maps to portal response `1`; unexpected chooser failures now return a D-Bus error with exit status and stderr instead of being silently treated as user cancellation.
 
 - [x] Design Polkit helper protocol.

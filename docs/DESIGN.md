@@ -434,7 +434,7 @@ system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privi
 - `wayland:` / `x11:` `parent_window` 会通过 `--chooser-parent-window` 传给 `fika --chooser` 并保存在 chooser 状态中；空值、格式错误或未知 scheme 会被 backend 丢弃。设置 `FIKA_DEBUG_PORTAL=1` 时，backend 会打印 `parent_window` 解析结果，chooser 进程也会打印收到的 handle，两侧都会标明 `native_transient=false`。当前 Slint 集成尚未把已保存 handle 绑定为原生 transient parent。
 - 返回 URI 统一为 `file://`，路径中的空格和非 ASCII 字节按百分号编码。
 - 用户关闭 chooser 时，`fika --chooser` 以专用取消码退出，backend 返回 response `1`；chooser 成功退出但无路径输出也按取消处理。其它非零退出会返回 D-Bus error，并带上 exit status 和 stderr，避免把崩溃或启动后异常静默伪装成用户取消。
-- backend 以 `kill_on_drop` 启动 `fika --chooser`。如果 portal 请求 future 被取消或连接断开，未完成的 chooser 子进程会随 drop 被终止，避免留下孤儿选择器窗口。
+- backend 在每个 FileChooser 请求期间订阅对应 request handle 上的 `org.freedesktop.impl.portal.Request.Close` signal。Close 先到时 backend 返回 response `1`，并 drop 掉正在等待的 chooser 进程；`fika --chooser` 同时以 `kill_on_drop` 启动，所以 request Close、backend future 被取消或连接断开时，未完成的 chooser 子进程都会随 drop 被终止，避免留下孤儿选择器窗口。
 - `options["current_folder"]` 会作为 chooser 起始目录。
 - `data/dbus-1/services/org.freedesktop.impl.portal.desktop.fika.service.in` 提供 D-Bus activation 模板。
 - `data/xdg-desktop-portal/portals/fika.portal` 提供 xdg-desktop-portal backend 描述文件。
