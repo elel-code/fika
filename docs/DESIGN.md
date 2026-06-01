@@ -96,12 +96,13 @@ Rust 代码当前按低耦合职责拆分为嵌套模块：
 - 当 mountinfo 不可用时，才回退扫描这些目录下的一级目录。
 - 作为增强层，Fika 会 best-effort 查询 system bus 上的 UDisks2 `ObjectManager`，从 `Block` -> `Drive` 关系识别用户可见的外置介质。已插入介质且 `Drive.Removable`、`Drive.Ejectable` 或 `Drive.ConnectionBus=usb` 任一成立时会列出，这覆盖许多不标记为 removable 的 USB 外置硬盘；同时继续尊重 `Block.HintIgnore` / `Block.HintSystem`，避免系统分区进入侧栏。设备模型同时保存显示/打开用的 `path` 和 UDisks2 操作用的 `device_path`：未挂载设备二者通常都是 `/dev/...`；已挂载设备的 `path` 使用第一个 `MountPoints`，`device_path` 继续保留底层 `/dev/...`。当 mountinfo 和 UDisks2 发现同一个挂载点时，mountinfo 行保留显示顺序和标签，但会从 UDisks2 补充底层 `device_path` 和 eject 支持。UDisks2 不可用、超时或返回错误时，不影响 mountinfo 结果。
 - Devices 发现通过统一 async event bridge 后台运行，`/proc/self/mountinfo` 解析和 UDisks2 system-bus 查询都不会阻塞 UI 线程。`AppState` 保存最近一次设备列表和独立的 `device_generation`；过期的 `DevicesLoaded` 事件会被丢弃。
+- 启动后会创建轻量设备 monitor。它订阅 UDisks2 system bus 上 `/org/freedesktop/UDisks2` 命名空间的信号，收到设备对象、属性或挂载状态变化后只向 UI 线程投递 `DevicesChanged`，再由主线程复用现有 `refresh_devices_async()` 刷新流程。为了覆盖桌面后端漏信号、挂载表变化或 UDisks2 不可用的情况，monitor 还会低频比对 Devices 快照；只有快照真实变化时才触发刷新。连续信号会经过 debounce 合并，避免一次插拔造成侧栏多次重建。
 - 点击未挂载的 UDisks2 filesystem 设备时，UI 线程只发起后台任务；后台通过 system bus 反查对应 `Block` object 并调用 `org.freedesktop.UDisks2.Filesystem.Mount({})`。成功后刷新 Devices 并打开返回的挂载点；失败信息写入状态栏。
 - Devices 行右键菜单复用普通菜单定位和 PopupSurface。已挂载设备提供 Open / Unmount；未挂载设备提供 Mount；当 Drive `Ejectable=true` 时额外显示 Eject。Unmount 调用 `org.freedesktop.UDisks2.Filesystem.Unmount({})`，Eject 调用对应 Drive object 上的 `org.freedesktop.UDisks2.Drive.Eject({})`。这些调用全部通过 Tokio `spawn_blocking()` 离开 UI 线程，完成后刷新 Devices 和当前目录。发起动作前，`AppState` 会按 `device_path` 登记 pending action；同一设备已有 Mount/Unmount/Eject 未完成时，新动作只更新状态栏，不会重复排队 D-Bus 调用。
 - UDisks2 方法调用失败时，后端会识别常见 D-Bus error name：busy device、authorization denied / missing polkit agent、already mounted、not mounted、cancelled、timed out。状态栏优先显示可操作 guidance，同时保留原始 error name 和 detail，便于后续真实发行版排查。
 - 最近一次设备动作失败会按 `device_path` 记录到 `AppState::device_errors`，`sync_devices()` 刷新侧栏时把该错误叠加到对应 `DeviceEntry.error`。`PlaceButton` 会用红色细边、淡红底和 `!` 标记渲染失败设备；同一设备后续 Mount/Unmount/Eject 成功会清除这个视觉错误状态。
 - Unmount/Eject 发起时会把当时的挂载点路径随后台任务一起保存。动作成功后，如果主视图当前目录仍在该挂载点下，Fika 会切回 Home，并清掉 back/forward history 中同一挂载点下的条目。这参考了 Dolphin `setViewsToHomeIfMountPathOpen()` 和 cosmic-files 对已卸载 location 的处理，避免停留或回退到失效路径。
-- 设置 `FIKA_DEBUG_DEVICES=1` 启动 Fika 时，会把设备发现诊断输出到 stderr，包括 mountinfo 是否可用、UDisks2 接受的设备、被过滤设备的原因，以及最终合并后的 Devices 侧栏列表。这用于真实 U 盘、外置硬盘、polkit/UDisks2 发行版差异验证。
+- 设置 `FIKA_DEBUG_DEVICES=1` 启动 Fika 时，会把设备发现和 monitor 诊断输出到 stderr，包括 mountinfo 是否可用、UDisks2 接受的设备、被过滤设备的原因、monitor 刷新原因，以及最终合并后的 Devices 侧栏列表。这用于真实 U 盘、外置硬盘、polkit/UDisks2 发行版差异验证。
 
 这能覆盖常见桌面环境已经自动挂载的 U 盘路径，也能提前显示并挂载部分未挂载 U 盘。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应继续基于 UDisks2 system bus D-Bus，并在真实发行版上验证 UDisks2 / polkit 边界情况。
 

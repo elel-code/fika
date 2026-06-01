@@ -111,6 +111,7 @@ pub(crate) enum AsyncEvent {
     FileUndoFinished(FileUndoResult),
     DeviceMountFinished(DeviceMountResult),
     DeviceActionFinished(DeviceActionResult),
+    DevicesChanged,
     DevicesLoaded(DevicesLoadedResult),
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),

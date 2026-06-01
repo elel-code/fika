@@ -13,6 +13,7 @@ pub(crate) struct AsyncBridge {
     pub(crate) ui_weak: slint::Weak<AppWindow>,
     pub(crate) directory_watcher: Rc<RefCell<Option<notify::RecommendedWatcher>>>,
     pub(crate) directory_watch_debounce: Arc<AtomicU64>,
+    pub(crate) device_watch_debounce: Arc<AtomicU64>,
 }
 
 pub(crate) fn build_async_runtime() -> tokio::runtime::Runtime {
