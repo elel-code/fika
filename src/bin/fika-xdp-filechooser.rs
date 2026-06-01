@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use tokio::process::Command;
 use zbus::fdo;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
@@ -24,6 +25,21 @@ struct ChooserResult {
     paths: Vec<PathBuf>,
     filter_index: Option<usize>,
     choices: Vec<(String, String)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ParentWindowStatus {
+    Accepted,
+    Empty,
+    Malformed,
+    EmptyHandle,
+    UnsupportedScheme,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ParentWindowDecision {
+    handle: Option<String>,
+    status: ParentWindowStatus,
 }
 
 #[derive(Debug, Default)]
@@ -101,6 +117,7 @@ impl FileChooser {
         let filters = portal_filters(&options);
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
+        let parent_window = portal_parent_window(parent_window);
         let args = chooser_args(ChooserArgs {
             start_dir: current_folder(&options),
             directory,
@@ -112,7 +129,7 @@ impl FileChooser {
             return_filter: !filter_map.chooser_specs.is_empty(),
             choices: chooser_choice_specs(&choices),
             return_choices: !choices.is_empty(),
-            parent_window: portal_parent_window(parent_window),
+            parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
         match run_chooser(args).await {
@@ -140,6 +157,7 @@ impl FileChooser {
         let filters = portal_filters(&options);
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
+        let parent_window = portal_parent_window(parent_window);
         let args = chooser_args(ChooserArgs {
             start_dir,
             title: portal_title(title),
@@ -150,7 +168,7 @@ impl FileChooser {
             return_filter: !filter_map.chooser_specs.is_empty(),
             choices: chooser_choice_specs(&choices),
             return_choices: !choices.is_empty(),
-            parent_window: portal_parent_window(parent_window),
+            parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
         match run_chooser(args).await {
@@ -178,6 +196,7 @@ impl FileChooser {
         let filters = portal_filters(&options);
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
+        let parent_window = portal_parent_window(parent_window);
         let args = chooser_args(ChooserArgs {
             start_dir: current_folder(&options),
             directory: true,
@@ -189,7 +208,7 @@ impl FileChooser {
             return_filter: !filter_map.chooser_specs.is_empty(),
             choices: chooser_choice_specs(&choices),
             return_choices: !choices.is_empty(),
-            parent_window: portal_parent_window(parent_window),
+            parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
         match run_chooser(args).await {
@@ -469,13 +488,70 @@ fn option_string(options: &HashMap<String, OwnedValue>, key: &str) -> Option<Str
         .filter(|value| !value.is_empty())
 }
 
-fn portal_parent_window(parent_window: String) -> Option<String> {
+fn portal_parent_window(parent_window: String) -> ParentWindowDecision {
     let parent_window = parent_window.trim();
-    let (scheme, handle) = parent_window.split_once(':')?;
-    if handle.is_empty() {
-        return None;
+    if parent_window.is_empty() {
+        let decision = ParentWindowDecision {
+            handle: None,
+            status: ParentWindowStatus::Empty,
+        };
+        portal_debug_log_parent(&decision);
+        return decision;
     }
-    matches!(scheme, "wayland" | "x11").then(|| parent_window.to_string())
+
+    let Some((scheme, handle)) = parent_window.split_once(':') else {
+        let decision = ParentWindowDecision {
+            handle: None,
+            status: ParentWindowStatus::Malformed,
+        };
+        portal_debug_log_parent(&decision);
+        return decision;
+    };
+
+    if handle.is_empty() {
+        let decision = ParentWindowDecision {
+            handle: None,
+            status: ParentWindowStatus::EmptyHandle,
+        };
+        portal_debug_log_parent(&decision);
+        return decision;
+    }
+
+    let decision = if matches!(scheme, "wayland" | "x11") {
+        ParentWindowDecision {
+            handle: Some(parent_window.to_string()),
+            status: ParentWindowStatus::Accepted,
+        }
+    } else {
+        ParentWindowDecision {
+            handle: None,
+            status: ParentWindowStatus::UnsupportedScheme,
+        }
+    };
+    portal_debug_log_parent(&decision);
+    decision
+}
+
+fn portal_debug_log_parent(decision: &ParentWindowDecision) {
+    static DEBUG_PORTAL: OnceLock<bool> = OnceLock::new();
+    if !*DEBUG_PORTAL.get_or_init(|| {
+        env::var("FIKA_DEBUG_PORTAL").is_ok_and(|value| env_flag_is_truthy(value.as_str()))
+    }) {
+        return;
+    }
+
+    eprintln!(
+        "[fika portal] parent_window status={:?} handle={} native_transient=false",
+        decision.status,
+        decision.handle.as_deref().unwrap_or("")
+    );
+}
+
+fn env_flag_is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn portal_title(title: String) -> Option<String> {
@@ -640,11 +716,17 @@ mod tests {
 
     #[test]
     fn empty_portal_parent_window_is_not_forwarded() {
-        assert_eq!(portal_parent_window(String::new()), None);
+        assert_eq!(
+            portal_parent_window(String::new()),
+            ParentWindowDecision {
+                handle: None,
+                status: ParentWindowStatus::Empty,
+            }
+        );
         assert_eq!(portal_title(String::new()), None);
         assert_eq!(
             chooser_args(ChooserArgs {
-                parent_window: portal_parent_window(String::new()),
+                parent_window: portal_parent_window(String::new()).handle,
                 title: portal_title(String::new()),
                 ..ChooserArgs::default()
             }),
@@ -655,17 +737,47 @@ mod tests {
     #[test]
     fn portal_parent_window_accepts_only_known_platform_handles() {
         assert_eq!(
-            portal_parent_window("wayland:1_42".to_string()).as_deref(),
-            Some("wayland:1_42")
+            portal_parent_window("wayland:1_42".to_string()),
+            ParentWindowDecision {
+                handle: Some("wayland:1_42".to_string()),
+                status: ParentWindowStatus::Accepted,
+            }
         );
         assert_eq!(
-            portal_parent_window(" x11:0x4600007 ".to_string()).as_deref(),
-            Some("x11:0x4600007")
+            portal_parent_window(" x11:0x4600007 ".to_string()),
+            ParentWindowDecision {
+                handle: Some("x11:0x4600007".to_string()),
+                status: ParentWindowStatus::Accepted,
+            }
         );
-        assert_eq!(portal_parent_window("wayland:".to_string()), None);
-        assert_eq!(portal_parent_window("x11:".to_string()), None);
-        assert_eq!(portal_parent_window("malformed".to_string()), None);
-        assert_eq!(portal_parent_window("unsupported:window".to_string()), None);
+        assert_eq!(
+            portal_parent_window("wayland:".to_string()),
+            ParentWindowDecision {
+                handle: None,
+                status: ParentWindowStatus::EmptyHandle,
+            }
+        );
+        assert_eq!(
+            portal_parent_window("x11:".to_string()),
+            ParentWindowDecision {
+                handle: None,
+                status: ParentWindowStatus::EmptyHandle,
+            }
+        );
+        assert_eq!(
+            portal_parent_window("malformed".to_string()),
+            ParentWindowDecision {
+                handle: None,
+                status: ParentWindowStatus::Malformed,
+            }
+        );
+        assert_eq!(
+            portal_parent_window("unsupported:window".to_string()),
+            ParentWindowDecision {
+                handle: None,
+                status: ParentWindowStatus::UnsupportedScheme,
+            }
+        );
     }
 
     #[test]

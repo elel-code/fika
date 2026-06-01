@@ -324,7 +324,7 @@ Acceptance for all:
   - Current: the portal request title is passed to the chooser window title and accept_label is passed to the chooser confirmation button; portal glob filters are exposed as a chooser filter button, current_filter chooses the initial filter when it matches the supported glob filter list, and the selected filter is returned with the result.
   - Current: MIME-only portal filters are not exposed as empty chooser filters because the current Fika chooser UI can only express glob-pattern filtering.
   - Current: portal choices are exposed as chooser footer controls; clicking a choice opens a small option menu instead of blindly cycling, and the selected choices are returned with the result.
-  - Current: recognized `wayland:` / `x11:` `parent_window` handles are preserved and forwarded to `fika --chooser --chooser-parent-window`; empty, malformed, or unknown handles are dropped. Native transient parent binding remains platform/window-backend work.
+  - Current: recognized `wayland:` / `x11:` `parent_window` handles are preserved and forwarded to `fika --chooser --chooser-parent-window`; empty, malformed, or unknown handles are dropped. `FIKA_DEBUG_PORTAL=1` logs the parse decision and explicitly reports that native transient binding is still disabled. Native transient parent binding remains platform/window-backend work.
   - Current: the backend launches `fika --chooser` with `kill_on_drop`, so a cancelled portal request terminates the child chooser process instead of leaving it behind.
   - Current: closing the chooser window exits with a dedicated cancel code that maps to portal response `1`; unexpected chooser failures now return a D-Bus error with exit status and stderr instead of being silently treated as user cancellation.
 
