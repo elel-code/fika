@@ -566,19 +566,30 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                LineEdit {
+                Rectangle {
                     horizontal-stretch: 1;
                     min-width: 260px;
                     height: 40px;
-                    text <=> root.path_input_text;
-                    placeholder-text: "/path/to/folder";
-                    accepted => { root.path_submitted(self.text); }
-                    changed has-focus => {
-                        root.path-input-focused = self.has-focus;
-                        if (!self.has-focus) {
-                            self.text = root.current_path;
-                        } else if (self.text == "") {
-                            self.text = root.current_path;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: root.path-input-focused ? (root.dark_mode ? #38bdf8 : #0284c7) : (root.dark_mode ? #56616b : #94a3b8);
+                    background: root.dark_mode ? #161a1d : #ffffff;
+
+                    LineEdit {
+                        x: 4px;
+                        y: 3px;
+                        width: parent.width - 8px;
+                        height: 34px;
+                        text <=> root.path_input_text;
+                        placeholder-text: "/path/to/folder";
+                        accepted => { root.path_submitted(self.text); }
+                        changed has-focus => {
+                            root.path-input-focused = self.has-focus;
+                            if (!self.has-focus) {
+                                self.text = root.current_path;
+                            } else if (self.text == "") {
+                                self.text = root.current_path;
+                            }
                         }
                     }
                 }
