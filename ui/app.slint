@@ -65,7 +65,7 @@ export component AppWindow inherits Window {
     in-out property <length> main_viewport_offset: 0px;
     private property <bool> search-filters-active: root.search_kind_filter != 0 || root.search_modified_filter != 0 || root.search_size_filter != 0;
     private property <bool> search-panel-visible: root.search_bar_open || root.search_query != "" || root.search-filters-active;
-    private property <length> search-panel-height: root.search-panel-visible ? 92px : 0px;
+    private property <length> search-panel-height: root.search-panel-visible ? 134px : 0px;
     private property <string> search-kind-filter-label: root.search_kind_filter == 1 ? "Type: Folders" : (root.search_kind_filter == 2 ? "Type: Files" : (root.search_kind_filter == 3 ? "Type: Images" : "Type: All"));
     private property <string> search-modified-filter-label: root.search_modified_filter == 1 ? "Modified: Today" : (root.search_modified_filter == 2 ? "Modified: 7 days" : (root.search_modified_filter == 3 ? "Modified: 30 days" : "Modified: Any"));
     private property <string> search-size-filter-label: root.search_size_filter == 1 ? "Size: < 1 MB" : (root.search_size_filter == 2 ? "Size: 1-100 MB" : (root.search_size_filter == 3 ? "Size: > 100 MB" : "Size: Any"));
@@ -877,20 +877,11 @@ export component AppWindow inherits Window {
                             spacing: 6px;
 
                             HorizontalLayout {
-                                spacing: 10px;
-
-                                Text {
-                                    text: "Search";
-                                    color: root.dark_mode ? #d8dee5 : #334155;
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    min-width: 52px;
-                                    vertical-alignment: center;
-                                }
+                                spacing: 8px;
 
                                 LineEdit {
                                     horizontal-stretch: 1;
-                                    min-width: 180px;
+                                    min-width: 120px;
                                     height: 34px;
                                     text <=> root.search_query;
                                     placeholder-text: "Search in current folder";
@@ -940,7 +931,7 @@ export component AppWindow inherits Window {
                                 spacing: 8px;
 
                                 CheckOption {
-                                    width: 150px;
+                                    width: 156px;
                                     label: "Search subfolders";
                                     dark: root.dark_mode;
                                     checked <=> root.recursive_search;
@@ -952,7 +943,7 @@ export component AppWindow inherits Window {
                                 }
 
                                 FilterButton {
-                                    width: 90px;
+                                    width: 126px;
                                     label: root.search-kind-filter-label;
                                     dark: root.dark_mode;
                                     clicked => {
@@ -960,9 +951,13 @@ export component AppWindow inherits Window {
                                         root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
                                     }
                                 }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
 
                                 FilterButton {
-                                    width: 96px;
+                                    width: 154px;
                                     label: root.search-modified-filter-label;
                                     dark: root.dark_mode;
                                     clicked => {
@@ -972,7 +967,7 @@ export component AppWindow inherits Window {
                                 }
 
                                 FilterButton {
-                                    width: 90px;
+                                    width: 144px;
                                     label: root.search-size-filter-label;
                                     dark: root.dark_mode;
                                     clicked => {

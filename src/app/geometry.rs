@@ -240,7 +240,7 @@ pub(crate) fn search_panel_height(
     let filters_active =
         search_kind_filter != 0 || search_modified_filter != 0 || search_size_filter != 0;
     if search_bar_open || !search_query.is_empty() || filters_active {
-        92.0
+        134.0
     } else {
         0.0
     }
@@ -664,11 +664,11 @@ mod tests {
     #[test]
     fn search_panel_height_matches_slint_visibility_rules() {
         assert_eq!(search_panel_height(false, "", 0, 0, 0), 0.0);
-        assert_eq!(search_panel_height(true, "", 0, 0, 0), 92.0);
-        assert_eq!(search_panel_height(false, "png", 0, 0, 0), 92.0);
-        assert_eq!(search_panel_height(false, "", 1, 0, 0), 92.0);
-        assert_eq!(search_panel_height(false, "", 0, 2, 0), 92.0);
-        assert_eq!(search_panel_height(false, "", 0, 0, 3), 92.0);
+        assert_eq!(search_panel_height(true, "", 0, 0, 0), 134.0);
+        assert_eq!(search_panel_height(false, "png", 0, 0, 0), 134.0);
+        assert_eq!(search_panel_height(false, "", 1, 0, 0), 134.0);
+        assert_eq!(search_panel_height(false, "", 0, 2, 0), 134.0);
+        assert_eq!(search_panel_height(false, "", 0, 0, 3), 134.0);
     }
 
     #[test]
