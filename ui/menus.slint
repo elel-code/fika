@@ -543,3 +543,149 @@ export component ViewportContextMenu inherits PopupSurface {
         }
     }
 }
+
+export component RootContextMenuLayer inherits Rectangle {
+    in property <bool> menu-open;
+    in property <int> menu-kind;
+    in property <length> menu-left;
+    in property <length> menu-top;
+    in property <length> menu-height;
+    in property <length> file-menu-width;
+    in property <length> place-menu-width;
+    in property <length> blank-menu-width;
+    in property <bool> dark;
+    in property <int> selected-count;
+    in property <string> selected-status;
+    in property <bool> is-dir;
+    in property <bool> default-open-visible;
+    in property <string> default-open-app-name;
+    in property <bool> clipboard-has-paths;
+    in property <bool> clipboard-cut;
+    in property <bool> add-to-places-visible;
+    in property <string> place-title;
+    in property <bool> place-builtin;
+    in property <string> device-title;
+    in property <bool> device-mounted;
+    in property <bool> device-can-mount;
+    in property <bool> device-can-unmount;
+    in property <bool> device-can-eject;
+    in property <string> device-pending-action: "";
+    callback file_open_folder_with_hover(bool);
+    callback file_open_folder_with_clicked();
+    callback file_default_open_requested();
+    callback file_open_with_hover(bool);
+    callback file_open_with_clicked();
+    callback file_paste_into_folder();
+    callback file_add_to_places();
+    callback file_rename_requested();
+    callback file_duplicate_requested();
+    callback file_cut_requested();
+    callback file_copy_requested();
+    callback file_copy_location_requested();
+    callback file_properties_requested();
+    callback file_trash_requested();
+    callback place_open_new_window();
+    callback place_rename_requested();
+    callback place_remove_requested();
+    callback device_open_requested();
+    callback device_mount_requested();
+    callback device_unmount_requested();
+    callback device_eject_requested();
+    callback places_blank_add_current_folder();
+    callback places_blank_restore_defaults();
+    callback viewport_create_new_hover(bool);
+    callback viewport_create_new_clicked();
+    callback viewport_paste_requested();
+    callback viewport_open_folder_with_hover(bool);
+    callback viewport_open_folder_with_clicked();
+    callback viewport_open_terminal_here();
+
+    background: transparent;
+
+    if (root.menu-open && root.menu-kind == 1): FileContextMenu {
+        x: root.menu-left;
+        y: root.menu-top;
+        width: root.file-menu-width;
+        height: root.menu-height;
+        dark: root.dark;
+        selected-count: root.selected-count;
+        selected-status: root.selected-status;
+        is-dir: root.is-dir;
+        default-open-visible: root.default-open-visible;
+        default-open-app-name: root.default-open-app-name;
+        clipboard-has-paths: root.clipboard-has-paths;
+        add-to-places-visible: root.add-to-places-visible;
+        open_folder_with_hover(is-hovered) => { root.file_open_folder_with_hover(is-hovered); }
+        open_folder_with_clicked => { root.file_open_folder_with_clicked(); }
+        default_open_requested => { root.file_default_open_requested(); }
+        open_with_hover(is-hovered) => { root.file_open_with_hover(is-hovered); }
+        open_with_clicked => { root.file_open_with_clicked(); }
+        paste_into_folder => { root.file_paste_into_folder(); }
+        add_to_places => { root.file_add_to_places(); }
+        rename_requested => { root.file_rename_requested(); }
+        duplicate_requested => { root.file_duplicate_requested(); }
+        cut_requested => { root.file_cut_requested(); }
+        copy_requested => { root.file_copy_requested(); }
+        copy_location_requested => { root.file_copy_location_requested(); }
+        properties_requested => { root.file_properties_requested(); }
+        trash_requested => { root.file_trash_requested(); }
+    }
+
+    if (root.menu-open && root.menu-kind == 2): PlaceContextMenu {
+        x: root.menu-left;
+        y: root.menu-top;
+        width: root.place-menu-width;
+        height: root.menu-height;
+        title: root.place-title;
+        dark: root.dark;
+        builtin: root.place-builtin;
+        open_new_window => { root.place_open_new_window(); }
+        rename_requested => { root.place_rename_requested(); }
+        remove_requested => { root.place_remove_requested(); }
+    }
+
+    if (root.menu-open && root.menu-kind == 5): DeviceContextMenu {
+        x: root.menu-left;
+        y: root.menu-top;
+        width: root.place-menu-width;
+        height: root.menu-height;
+        title: root.device-title;
+        dark: root.dark;
+        mounted: root.device-mounted;
+        can-mount: root.device-can-mount;
+        can-unmount: root.device-can-unmount;
+        can-eject: root.device-can-eject;
+        pending-action: root.device-pending-action;
+        open_requested => { root.device_open_requested(); }
+        mount_requested => { root.device_mount_requested(); }
+        unmount_requested => { root.device_unmount_requested(); }
+        eject_requested => { root.device_eject_requested(); }
+    }
+
+    if (root.menu-open && root.menu-kind == 4): PlacesBlankMenu {
+        x: root.menu-left;
+        y: root.menu-top;
+        width: root.blank-menu-width;
+        height: root.menu-height;
+        dark: root.dark;
+        add-current-visible: root.add-to-places-visible;
+        add_current_folder => { root.places_blank_add_current_folder(); }
+        restore_defaults => { root.places_blank_restore_defaults(); }
+    }
+
+    if (root.menu-open && root.menu-kind == 3): ViewportContextMenu {
+        x: root.menu-left;
+        y: root.menu-top;
+        width: root.blank-menu-width;
+        height: root.menu-height;
+        dark: root.dark;
+        clipboard-has-paths: root.clipboard-has-paths;
+        clipboard-cut: root.clipboard-cut;
+        create_new_hover(is-hovered) => { root.viewport_create_new_hover(is-hovered); }
+        create_new_clicked => { root.viewport_create_new_clicked(); }
+        paste_requested => { root.viewport_paste_requested(); }
+        open_folder_with_hover(is-hovered) => { root.viewport_open_folder_with_hover(is-hovered); }
+        open_folder_with_clicked => { root.viewport_open_folder_with_clicked(); }
+        open_terminal_here => { root.viewport_open_terminal_here(); }
+    }
+}

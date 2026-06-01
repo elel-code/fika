@@ -11,7 +11,7 @@ import {
 } from "widgets.slint";
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
-import { ChildSubmenuLayer, ChooserChoicePopup, DeviceContextMenu, FileContextMenu, PlaceContextMenu, PlacesBlankMenu, TransferMenu, ViewportContextMenu } from "menus.slint";
+import { ChildSubmenuLayer, ChooserChoicePopup, RootContextMenuLayer, TransferMenu } from "menus.slint";
 import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
 export component AppWindow inherits Window {
@@ -575,13 +575,28 @@ export component AppWindow inherits Window {
                     border-color: root.path-input-focused ? (root.dark_mode ? #38bdf8 : #0284c7) : (root.dark_mode ? #56616b : #64748b);
                     background: root.path-input-focused ? (root.dark_mode ? #161a1d : #ffffff) : (root.dark_mode ? #161a1d : #e8eef5);
 
-                    LineEdit {
-                        x: 4px;
-                        y: 3px;
-                        width: parent.width - 8px;
-                        height: 34px;
+                    Text {
+                        visible: root.path_input_text == "";
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height;
+                        text: "/path/to/folder";
+                        color: root.dark_mode ? #6f7a84 : #64748b;
+                        font-size: 14px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+
+                    TextInput {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height;
                         text <=> root.path_input_text;
-                        placeholder-text: "/path/to/folder";
+                        single-line: true;
+                        font-size: 14px;
+                        color: root.dark_mode ? #f8fafc : #17212b;
+                        selection-background-color: root.dark_mode ? #38bdf8 : #0284c7;
+                        selection-foreground-color: root.dark_mode ? #0f172a : #ffffff;
                         accepted => { root.path_submitted(self.text); }
                         changed has-focus => {
                             root.path-input-focused = self.has-focus;
@@ -1467,11 +1482,17 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.context-menu-open && root.context-menu-kind == 1): FileContextMenu {
-        x: root.context-menu-left;
-        y: root.context-menu-top;
-        width: root.context-file-menu-width;
-        height: root.active-context-menu-height;
+    RootContextMenuLayer {
+        width: parent.width;
+        height: parent.height;
+        menu-open: root.context-menu-open;
+        menu-kind: root.context-menu-kind;
+        menu-left: root.context-menu-left;
+        menu-top: root.context-menu-top;
+        menu-height: root.active-context-menu-height;
+        file-menu-width: root.context-file-menu-width;
+        place-menu-width: root.context-place-menu-width;
+        blank-menu-width: root.context-blank-menu-width;
         dark: root.dark_mode;
         selected-count: root.selected_count;
         selected-status: root.selected_status;
@@ -1479,54 +1500,63 @@ export component AppWindow inherits Window {
         default-open-visible: root.context-default-open-visible;
         default-open-app-name: root.default_open_app_name;
         clipboard-has-paths: root.clipboard_has_paths;
+        clipboard-cut: root.clipboard_cut;
         add-to-places-visible: root.context-add-place-visible;
-        open_folder_with_hover(is-hovered) => {
+        place-title: root.rename-place-label;
+        place-builtin: root.context-menu-place-builtin;
+        device-title: root.rename-place-label;
+        device-mounted: root.context-menu-device-mounted;
+        device-can-mount: root.context-menu-device-can-mount;
+        device-can-unmount: root.context-menu-device-can-unmount;
+        device-can-eject: root.context-menu-device-can-eject;
+        device-pending-action: root.context-menu-device-pending-action;
+        file_open_folder_with_hover(is-hovered) => {
             root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top, is-hovered);
         }
-        open_folder_with_clicked => {
+        file_open_folder_with_clicked => {
             root.show-open-with-submenu(root.context-menu-path, root.context-menu-top);
         }
-        default_open_requested => {
+        file_default_open_requested => {
             root.open_path(root.context-menu-path);
             root.close-context-popups();
         }
-        open_with_hover(is-hovered) => {
+        file_open_with_hover(is-hovered) => {
             root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
         }
-        open_with_clicked => {
+        file_open_with_clicked => {
             root.show-open-with-submenu(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset);
         }
-        paste_into_folder => {
+        file_paste_into_folder => {
             root.paste_into(root.context-menu-path);
             root.close-context-popups();
         }
-        add_to_places => {
+        file_add_to_places => {
             root.add_place(root.context-menu-path);
             root.close-context-popups();
         }
-        rename_requested => {
+        file_rename_requested => {
             root.rename-entry-path = root.context-menu-path;
             root.rename-entry-name = root.context-menu-name;
             root.rename-entry-open = true;
             root.close-context-popups();
         }
-        duplicate_requested => {
+        file_duplicate_requested => {
             root.duplicate_path(root.context-menu-path);
             root.close-context-popups();
         }
-        cut_requested => {
+        file_cut_requested => {
             root.copy_paths(root.context-menu-path, true);
             root.close-context-popups();
         }
-        copy_requested => {
+        file_copy_requested => {
             root.copy_paths(root.context-menu-path, false);
             root.close-context-popups();
         }
-        copy_location_requested => {
+        file_copy_location_requested => {
             root.copy_location(root.context-menu-path);
             root.close-context-popups();
         }
-        properties_requested => {
+        file_properties_requested => {
             root.properties-name = root.context-menu-name;
             root.properties-path = root.context-menu-path;
             root.properties-kind = root.context-menu-is-dir ? "Folder" : "File";
@@ -1535,7 +1565,7 @@ export component AppWindow inherits Window {
             root.properties-open = true;
             root.close-context-popups();
         }
-        trash_requested => {
+        file_trash_requested => {
             if (root.selected_count > 1) {
                 root.trash_selected();
             } else {
@@ -1543,103 +1573,60 @@ export component AppWindow inherits Window {
             }
             root.close-context-popups();
         }
-    }
-
-    if (root.context-menu-open && root.context-menu-kind == 2): PlaceContextMenu {
-        x: root.context-menu-left;
-        y: root.context-menu-top;
-        width: root.context-place-menu-width;
-        height: root.active-context-menu-height;
-        title: root.rename-place-label;
-        dark: root.dark_mode;
-        builtin: root.context-menu-place-builtin;
-        open_new_window => {
+        place_open_new_window => {
             root.open_place_new_window(root.context-menu-place-index);
             root.close-context-popups();
         }
-        rename_requested => {
+        place_rename_requested => {
             root.rename-place-index = root.context-menu-place-index;
             root.rename-place-open = true;
             root.close-context-popups();
         }
-        remove_requested => {
+        place_remove_requested => {
             root.remove_place(root.context-menu-place-index);
             root.close-context-popups();
         }
-    }
-
-    if (root.context-menu-open && root.context-menu-kind == 5): DeviceContextMenu {
-        x: root.context-menu-left;
-        y: root.context-menu-top;
-        width: root.context-place-menu-width;
-        height: root.active-context-menu-height;
-        title: root.rename-place-label;
-        dark: root.dark_mode;
-        mounted: root.context-menu-device-mounted;
-        can-mount: root.context-menu-device-can-mount;
-        can-unmount: root.context-menu-device-can-unmount;
-        can-eject: root.context-menu-device-can-eject;
-        pending-action: root.context-menu-device-pending-action;
-        open_requested => {
+        device_open_requested => {
             root.open_device(root.context-menu-device-open-path, true);
             root.close-context-popups();
         }
-        mount_requested => {
+        device_mount_requested => {
             root.open_device(root.context-menu-device-path, false);
             root.close-context-popups();
         }
-        unmount_requested => {
+        device_unmount_requested => {
             root.unmount_device(root.context-menu-device-path, root.context-menu-device-open-path);
             root.close-context-popups();
         }
-        eject_requested => {
+        device_eject_requested => {
             root.eject_device(root.context-menu-device-path, root.context-menu-device-open-path);
             root.close-context-popups();
         }
-    }
-
-    if (root.context-menu-open && root.context-menu-kind == 4): PlacesBlankMenu {
-        x: root.context-menu-left;
-        y: root.context-menu-top;
-        width: root.context-blank-menu-width;
-        height: root.active-context-menu-height;
-        dark: root.dark_mode;
-        add-current-visible: root.context-add-place-visible;
-        add_current_folder => {
+        places_blank_add_current_folder => {
             root.add_place(root.current_path);
             root.close-context-popups();
         }
-        restore_defaults => {
+        places_blank_restore_defaults => {
             root.restore_default_places();
             root.close-context-popups();
         }
-    }
-
-    if (root.context-menu-open && root.context-menu-kind == 3): ViewportContextMenu {
-        x: root.context-menu-left;
-        y: root.context-menu-top;
-        width: root.context-blank-menu-width;
-        height: root.active-context-menu-height;
-        dark: root.dark_mode;
-        clipboard-has-paths: root.clipboard_has_paths;
-        clipboard-cut: root.clipboard_cut;
-        create_new_hover(is-hovered) => {
+        viewport_create_new_hover(is-hovered) => {
             root.create-new-submenu-hover(root.context-menu-top, is-hovered);
         }
-        create_new_clicked => {
+        viewport_create_new_clicked => {
             root.show-create-new-submenu(root.context-menu-top);
         }
-        paste_requested => {
+        viewport_paste_requested => {
             root.paste_into(root.current_path);
             root.close-context-popups();
         }
-        open_folder_with_hover(is-hovered) => {
+        viewport_open_folder_with_hover(is-hovered) => {
             root.open-with-submenu-hover(root.current_path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
         }
-        open_folder_with_clicked => {
+        viewport_open_folder_with_clicked => {
             root.show-open-with-submenu(root.current_path, root.context-menu-top + root.context-open-with-row-offset);
         }
-        open_terminal_here => {
+        viewport_open_terminal_here => {
             root.open_terminal_here();
             root.close-context-popups();
         }
