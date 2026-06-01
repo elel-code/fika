@@ -1,6 +1,6 @@
 use crate::app::async_bridge::AsyncBridge;
 use crate::app::state::AppState;
-use crate::app::transfer::start_transfer_operation;
+use crate::app::transfer::{TransferStart, clear_accepted_cut_source, start_transfer_operation};
 use crate::desktop::clipboard;
 use crate::{AppWindow, set_status};
 use slint::ComponentHandle;
@@ -128,13 +128,14 @@ fn paste_into(
         sync_clipboard_ui(ui, state);
     }
 
-    let mut queued = 0usize;
+    let mut accepted = 0usize;
+    let mut cut_clipboard_changed = false;
     for path in &paths {
         if would_paste_into_itself(path, &target_dir) {
             set_status(ui, "Cannot paste an item into itself");
             continue;
         }
-        if start_transfer_operation(
+        match start_transfer_operation(
             ui,
             state,
             bridge,
@@ -142,20 +143,24 @@ fn paste_into(
             path.to_string_lossy().as_ref(),
             target_dir.to_string_lossy().as_ref(),
         ) {
-            queued += 1;
+            TransferStart::Queued => {
+                accepted += 1;
+                cut_clipboard_changed |=
+                    clear_accepted_cut_source(&mut state.borrow_mut(), operation, path);
+            }
+            TransferStart::NeedsDecision => {
+                accepted += 1;
+            }
+            TransferStart::Rejected => {}
         }
     }
 
-    if operation == "move" && queued > 0 {
-        let mut state_ref = state.borrow_mut();
-        state_ref.clipboard_paths.clear();
-        state_ref.clipboard_cut = false;
-        drop(state_ref);
+    if cut_clipboard_changed {
         sync_clipboard_ui(ui, state);
     }
 
-    if queued > 1 {
-        set_status(ui, &format!("Queued {queued} paste operation(s)"));
+    if accepted > 1 {
+        set_status(ui, &format!("Queued {accepted} paste operation(s)"));
     }
 }
 

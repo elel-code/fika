@@ -1,4 +1,5 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
+use crate::app::file_clipboard::sync_clipboard_ui;
 use crate::app::geometry::{MainGridLayout, PopupPlacement, PopupPoint};
 use crate::app::selection::filtered_entry_at;
 use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
@@ -235,6 +236,13 @@ pub(crate) fn transfer_target_rejection(source: &Path, target_dir: &Path) -> Opt
     None
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TransferStart {
+    Rejected,
+    Queued,
+    NeedsDecision,
+}
+
 pub(crate) fn start_transfer_operation(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -242,28 +250,32 @@ pub(crate) fn start_transfer_operation(
     operation: &str,
     source: &str,
     target_dir: &str,
-) -> bool {
+) -> TransferStart {
     let source = PathBuf::from(source);
     let target_dir = PathBuf::from(target_dir);
     if let Some(reason) = transfer_start_rejection(&source, &target_dir) {
         set_status(ui, reason);
-        return false;
+        return TransferStart::Rejected;
     }
 
-    queue_transfer_operation(
-        ui,
-        state,
-        bridge,
-        FileOperationRequest {
-            id: 0,
-            operation: operation.to_string(),
-            source,
-            target_dir,
-            conflict_policy: "ask".to_string(),
-        },
-        QueuePosition::Back,
-    );
-    true
+    let request = FileOperationRequest {
+        id: 0,
+        operation: operation.to_string(),
+        source,
+        target_dir,
+        conflict_policy: "ask".to_string(),
+    };
+    let start = if transfer_request_conflict_destination(&request)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        TransferStart::NeedsDecision
+    } else {
+        TransferStart::Queued
+    };
+    queue_transfer_operation(ui, state, bridge, request, QueuePosition::Back);
+    start
 }
 
 fn transfer_start_rejection(source: &Path, target_dir: &Path) -> Option<&'static str> {
@@ -274,6 +286,27 @@ fn transfer_start_rejection(source: &Path, target_dir: &Path) -> Option<&'static
         return Some("Target is not a folder");
     }
     transfer_target_rejection(source, target_dir)
+}
+
+pub(crate) fn clear_accepted_cut_source(
+    state: &mut AppState,
+    operation: &str,
+    source: &Path,
+) -> bool {
+    if operation != "move" || !state.clipboard_cut {
+        return false;
+    }
+
+    let previous_len = state.clipboard_paths.len();
+    state.clipboard_paths.retain(|path| path != source);
+    if state.clipboard_paths.len() == previous_len {
+        return false;
+    }
+
+    if state.clipboard_paths.is_empty() {
+        state.clipboard_cut = false;
+    }
+    true
 }
 
 pub(crate) fn resolve_transfer_conflict(
@@ -317,6 +350,19 @@ pub(crate) fn resolve_transfer_conflict(
                 set_status(ui, "Cannot overwrite an item with itself");
                 return;
             }
+            let clipboard_changed = {
+                let mut state_ref = state.borrow_mut();
+                let mut clipboard_changed = clear_accepted_cut_source(
+                    &mut state_ref,
+                    conflict.operation.as_str(),
+                    &conflict.source,
+                );
+                if apply_to_remaining {
+                    clipboard_changed |=
+                        clear_cut_sources_for_remaining_conflicts(&mut state_ref, decision);
+                }
+                clipboard_changed
+            };
             queue_transfer_operation(
                 ui,
                 state,
@@ -330,6 +376,9 @@ pub(crate) fn resolve_transfer_conflict(
                 },
                 QueuePosition::Front,
             );
+            if clipboard_changed {
+                sync_clipboard_ui(ui, state);
+            }
             if apply_to_remaining {
                 let applied = apply_conflict_decision_to_queue(
                     &mut state.borrow_mut().operation_queue,
@@ -353,6 +402,14 @@ pub(crate) fn resolve_transfer_conflict(
                 set_status(ui, &format!("Cannot rename transfer target: {err}"));
                 return;
             }
+            let clipboard_changed = {
+                let mut state_ref = state.borrow_mut();
+                clear_accepted_cut_source(
+                    &mut state_ref,
+                    conflict.operation.as_str(),
+                    &conflict.source,
+                )
+            };
             queue_transfer_operation(
                 ui,
                 state,
@@ -366,9 +423,44 @@ pub(crate) fn resolve_transfer_conflict(
                 },
                 QueuePosition::Front,
             );
+            if clipboard_changed {
+                sync_clipboard_ui(ui, state);
+            }
         }
         _ => set_status(ui, "Unknown conflict decision"),
     }
+}
+
+fn clear_cut_sources_for_remaining_conflicts(state: &mut AppState, decision: &str) -> bool {
+    if !matches!(decision, "keep-both" | "overwrite") || !state.clipboard_cut {
+        return false;
+    }
+
+    let accepted_sources = accepted_remaining_conflict_sources(&state.operation_queue, decision);
+    let mut changed = false;
+    for source in accepted_sources {
+        changed |= clear_accepted_cut_source(state, "move", &source);
+    }
+    changed
+}
+
+fn accepted_remaining_conflict_sources(
+    queue: &VecDeque<FileOperationRequest>,
+    decision: &str,
+) -> Vec<PathBuf> {
+    queue
+        .iter()
+        .filter(|request| request.operation == "move" && request.conflict_policy == "ask")
+        .filter_map(|request| {
+            let destination = transfer_request_conflict_destination(request)
+                .ok()
+                .flatten()?;
+            if decision == "overwrite" && destination == request.source {
+                return None;
+            }
+            Some(request.source.clone())
+        })
+        .collect()
 }
 
 fn decision_label(decision: &str) -> &'static str {
@@ -695,11 +787,12 @@ fn display_location_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_conflict_decision_to_queue, default_rename_suggestion, transfer_menu_position,
-        transfer_request_conflict_destination, transfer_start_rejection,
+        apply_conflict_decision_to_queue, clear_accepted_cut_source,
+        clear_cut_sources_for_remaining_conflicts, default_rename_suggestion,
+        transfer_menu_position, transfer_request_conflict_destination, transfer_start_rejection,
     };
     use crate::app::geometry::PopupPoint;
-    use crate::app::state::FileOperationRequest;
+    use crate::app::state::{AppState, FileOperationRequest};
     use std::collections::VecDeque;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -881,6 +974,126 @@ mod tests {
             0
         );
         assert_eq!(queue[0].conflict_policy, "ask");
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn accepted_cut_source_removes_matching_path_only() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")];
+
+        assert!(clear_accepted_cut_source(
+            &mut state,
+            "move",
+            Path::new("/tmp/a")
+        ));
+
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/b")]);
+        assert!(state.clipboard_cut);
+    }
+
+    #[test]
+    fn accepted_cut_source_clears_cut_when_last_path_is_removed() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![PathBuf::from("/tmp/a")];
+
+        assert!(clear_accepted_cut_source(
+            &mut state,
+            "move",
+            Path::new("/tmp/a")
+        ));
+
+        assert!(state.clipboard_paths.is_empty());
+        assert!(!state.clipboard_cut);
+    }
+
+    #[test]
+    fn accepted_cut_source_ignores_copy_and_non_cut_clipboards() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![PathBuf::from("/tmp/a")];
+
+        assert!(!clear_accepted_cut_source(
+            &mut state,
+            "copy",
+            Path::new("/tmp/a")
+        ));
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/a")]);
+        assert!(state.clipboard_cut);
+
+        state.clipboard_cut = false;
+        assert!(!clear_accepted_cut_source(
+            &mut state,
+            "move",
+            Path::new("/tmp/a")
+        ));
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/a")]);
+    }
+
+    #[test]
+    fn apply_to_remaining_acceptance_clears_only_conflicted_move_cut_sources() {
+        let temp = test_dir("clear-remaining-cut");
+        let conflicted_move = temp.join("sources").join("conflicted-move.txt");
+        let free_move = temp.join("sources").join("free-move.txt");
+        let conflicted_copy = temp.join("sources").join("conflicted-copy.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(conflicted_move.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&conflicted_move, "move").unwrap();
+        fs::write(&free_move, "move").unwrap();
+        fs::write(&conflicted_copy, "copy").unwrap();
+        fs::write(target_dir.join("conflicted-move.txt"), "old").unwrap();
+        fs::write(target_dir.join("conflicted-copy.txt"), "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![
+            conflicted_move.clone(),
+            free_move.clone(),
+            conflicted_copy.clone(),
+        ];
+        state.operation_queue = VecDeque::from([
+            transfer_request("move", &conflicted_move, &target_dir, "ask"),
+            transfer_request("move", &free_move, &target_dir, "ask"),
+            transfer_request("copy", &conflicted_copy, &target_dir, "ask"),
+        ]);
+
+        assert!(clear_cut_sources_for_remaining_conflicts(
+            &mut state,
+            "keep-both"
+        ));
+
+        assert_eq!(state.clipboard_paths, vec![free_move, conflicted_copy]);
+        assert!(state.clipboard_cut);
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn skip_remaining_conflicts_does_not_clear_cut_sources() {
+        let temp = test_dir("skip-remaining-cut");
+        let source = temp.join("sources").join("conflicted.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&source, "new").unwrap();
+        fs::write(target_dir.join("conflicted.txt"), "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![source.clone()];
+        state.operation_queue =
+            VecDeque::from([transfer_request("move", &source, &target_dir, "ask")]);
+
+        assert!(!clear_cut_sources_for_remaining_conflicts(
+            &mut state, "skip"
+        ));
+
+        assert_eq!(state.clipboard_paths, vec![source]);
+        assert!(state.clipboard_cut);
 
         let _ = fs::remove_dir_all(temp);
     }
