@@ -3790,6 +3790,54 @@ mod tests {
     }
 
     #[test]
+    fn recursive_search_groups_are_recomputed_after_filters_hide_first_match() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let mut old_file = test_entry("old.txt", "/tmp/docs/old.txt");
+        old_file.location = "docs".into();
+        old_file.modified_age_days = 20;
+        let mut visible_file = test_entry("visible.txt", "/tmp/docs/visible.txt");
+        visible_file.location = "docs".into();
+        visible_file.modified_age_days = 0;
+        state.entries = vec![old_file, visible_file];
+        state.search_modified_filter = 1;
+
+        let summary = rebuild_visible_entry_index(&mut state, false);
+
+        assert_eq!(summary.count, 1);
+        assert_eq!(
+            filtered_entries_range(&state, 0..1)
+                .into_iter()
+                .map(|entry| (entry.group.to_string(), entry.path.to_string()))
+                .collect::<Vec<_>>(),
+            vec![("docs".to_string(), "/tmp/docs/visible.txt".to_string())]
+        );
+    }
+
+    #[test]
+    fn recursive_search_groups_are_not_repeated_inside_same_visible_location() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let mut first = test_entry("first.txt", "/tmp/docs/first.txt");
+        first.location = "docs".into();
+        let mut second = test_entry("second.txt", "/tmp/docs/second.txt");
+        second.location = "docs".into();
+        let mut third = test_entry("third.txt", "/tmp/docs/third.txt");
+        third.location = "docs".into();
+        state.entries = vec![first, second, third];
+        rebuild_visible_entry_index(&mut state, false);
+
+        assert_eq!(
+            filtered_entries_range(&state, 1..3)
+                .into_iter()
+                .map(|entry| (entry.group.to_string(), entry.path.to_string()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("".to_string(), "/tmp/docs/second.txt".to_string()),
+                ("".to_string(), "/tmp/docs/third.txt".to_string())
+            ]
+        );
+    }
+
+    #[test]
     fn recursive_search_status_keeps_query_visible_during_background_scan() {
         assert_eq!(
             recursive_search_status("report"),

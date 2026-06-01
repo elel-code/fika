@@ -181,22 +181,71 @@ pub(crate) fn filtered_entries_range(state: &AppState, range: Range<usize>) -> V
         return Vec::new();
     }
 
-    if let Some(indices) = state.visible_entry_indices.as_ref() {
-        return indices
+    let mut entries = if let Some(indices) = state.visible_entry_indices.as_ref() {
+        indices
             .get(range.start..range.end.min(indices.len()))
             .unwrap_or(&[])
             .iter()
             .filter_map(|index| state.entries.get(*index))
             .cloned()
-            .collect();
+            .collect()
+    } else if filters_are_identity(state) {
+        state
+            .entries
+            .get(range.start..range.end.min(state.entries.len()))
+            .unwrap_or(&[])
+            .to_vec()
+    } else {
+        let query = state.search_query.to_ascii_lowercase();
+        state
+            .entries
+            .iter()
+            .filter(|entry| matches_entry_filters(entry, state, &query))
+            .skip(range.start)
+            .take(range.end.saturating_sub(range.start))
+            .cloned()
+            .collect()
+    };
+
+    annotate_visible_location_groups(state, range.start, &mut entries);
+    entries
+}
+
+fn annotate_visible_location_groups(
+    state: &AppState,
+    start_visible_index: usize,
+    entries: &mut [FileEntry],
+) {
+    if !state.entries.iter().any(|entry| !entry.location.is_empty()) {
+        return;
+    }
+
+    let mut previous_location = start_visible_index
+        .checked_sub(1)
+        .and_then(|index| visible_entry_location_at(state, index));
+    for entry in entries {
+        if previous_location.as_deref() != Some(entry.location.as_str()) {
+            entry.group = search_group_label(entry.location.as_str()).into();
+        } else {
+            entry.group = String::new().into();
+        }
+        previous_location = Some(entry.location.to_string());
+    }
+}
+
+fn visible_entry_location_at(state: &AppState, visible_index: usize) -> Option<String> {
+    if let Some(indices) = state.visible_entry_indices.as_ref() {
+        return indices
+            .get(visible_index)
+            .and_then(|entry_index| state.entries.get(*entry_index))
+            .map(|entry| entry.location.to_string());
     }
 
     if filters_are_identity(state) {
         return state
             .entries
-            .get(range.start..range.end.min(state.entries.len()))
-            .unwrap_or(&[])
-            .to_vec();
+            .get(visible_index)
+            .map(|entry| entry.location.to_string());
     }
 
     let query = state.search_query.to_ascii_lowercase();
@@ -204,10 +253,18 @@ pub(crate) fn filtered_entries_range(state: &AppState, range: Range<usize>) -> V
         .entries
         .iter()
         .filter(|entry| matches_entry_filters(entry, state, &query))
-        .skip(range.start)
-        .take(range.end.saturating_sub(range.start))
-        .cloned()
-        .collect()
+        .nth(visible_index)
+        .map(|entry| entry.location.to_string())
+}
+
+fn search_group_label(location: &str) -> String {
+    if location == "." {
+        "Current folder".to_string()
+    } else if location.is_empty() {
+        "Unknown location".to_string()
+    } else {
+        location.to_string()
+    }
 }
 
 fn filters_are_identity(state: &AppState) -> bool {
