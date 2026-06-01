@@ -1558,62 +1558,50 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.context-menu-open && root.context-menu-kind == 4): PopupSurface {
+    if (root.context-menu-open && root.context-menu-kind == 4): PlacesBlankMenu {
         x: root.context-menu-left;
         y: root.context-menu-top;
         width: root.context-blank-menu-width;
         height: root.active-context-menu-height;
         dark: root.dark_mode;
-
-        PlacesBlankMenu {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            add-current-visible: root.context-add-place-visible;
-            add_current_folder => {
-                root.add_place(root.current_path);
-                root.close-context-popups();
-            }
-            restore_defaults => {
-                root.restore_default_places();
-                root.close-context-popups();
-            }
+        add-current-visible: root.context-add-place-visible;
+        add_current_folder => {
+            root.add_place(root.current_path);
+            root.close-context-popups();
+        }
+        restore_defaults => {
+            root.restore_default_places();
+            root.close-context-popups();
         }
     }
 
-    if (root.context-menu-open && root.context-menu-kind == 3): PopupSurface {
+    if (root.context-menu-open && root.context-menu-kind == 3): ViewportContextMenu {
         x: root.context-menu-left;
         y: root.context-menu-top;
         width: root.context-blank-menu-width;
         height: root.active-context-menu-height;
         dark: root.dark_mode;
-
-        ViewportContextMenu {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            clipboard-has-paths: root.clipboard_has_paths;
-            clipboard-cut: root.clipboard_cut;
-            create_new_hover(is-hovered) => {
-                root.create-new-submenu-hover(root.context-menu-top, is-hovered);
-            }
-            create_new_clicked => {
-                root.show-create-new-submenu(root.context-menu-top);
-            }
-            paste_requested => {
-                root.paste_into(root.current_path);
-                root.close-context-popups();
-            }
-            open_folder_with_hover(is-hovered) => {
-                root.open-with-submenu-hover(root.current_path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
-            }
-            open_folder_with_clicked => {
-                root.show-open-with-submenu(root.current_path, root.context-menu-top + root.context-open-with-row-offset);
-            }
-            open_terminal_here => {
-                root.open_terminal_here();
-                root.close-context-popups();
-            }
+        clipboard-has-paths: root.clipboard_has_paths;
+        clipboard-cut: root.clipboard_cut;
+        create_new_hover(is-hovered) => {
+            root.create-new-submenu-hover(root.context-menu-top, is-hovered);
+        }
+        create_new_clicked => {
+            root.show-create-new-submenu(root.context-menu-top);
+        }
+        paste_requested => {
+            root.paste_into(root.current_path);
+            root.close-context-popups();
+        }
+        open_folder_with_hover(is-hovered) => {
+            root.open-with-submenu-hover(root.current_path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
+        }
+        open_folder_with_clicked => {
+            root.show-open-with-submenu(root.current_path, root.context-menu-top + root.context-open-with-row-offset);
+        }
+        open_terminal_here => {
+            root.open_terminal_here();
+            root.close-context-popups();
         }
     }
 

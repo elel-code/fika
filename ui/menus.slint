@@ -252,13 +252,10 @@ export component DeviceContextMenu inherits PopupSurface {
     }
 }
 
-export component PlacesBlankMenu inherits Rectangle {
-    in property <bool> dark;
+export component PlacesBlankMenu inherits PopupSurface {
     in property <bool> add-current-visible;
     callback add_current_folder();
     callback restore_defaults();
-
-    background: transparent;
 
     VerticalLayout {
         spacing: 0px;
@@ -422,8 +419,7 @@ export component FileContextMenu inherits Rectangle {
     }
 }
 
-export component ViewportContextMenu inherits Rectangle {
-    in property <bool> dark;
+export component ViewportContextMenu inherits PopupSurface {
     in property <bool> clipboard-has-paths;
     in property <bool> clipboard-cut;
     callback create_new_hover(bool);
@@ -432,8 +428,6 @@ export component ViewportContextMenu inherits Rectangle {
     callback open_folder_with_hover(bool);
     callback open_folder_with_clicked();
     callback open_terminal_here();
-
-    background: transparent;
 
     VerticalLayout {
         spacing: 0px;
