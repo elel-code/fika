@@ -68,7 +68,7 @@ Rust 侧核心状态在 `AppState`：
 - `search_query`: 当前过滤关键字。
 - `selected_paths`: 当前选中项。
 - `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。
-- `view_state_cache`: 每个目录的主栏 viewport 坐标缓存，用于返回目录时恢复滚动位置。
+- `view_state_cache`: 每个目录的主栏 viewport 坐标缓存，用于返回目录时恢复滚动位置；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留每个路径的视图状态。
 - `thumbnail_cache`: 按路径、mtime 和目标尺寸缓存缩略图像素。
 - `thumbnail_failures`: 按路径、mtime 和目标尺寸缓存缩略图失败结果，避免坏图或不支持格式在大目录滚动时反复排队解码；文件修改后 key 变化，会重新尝试。
 - 缩略图完成事件只更新成功/失败缓存和 pending 状态，不扫描或改写完整 `entries`；如果结果落在当前虚拟切片内，Slint 模型通过缓存装饰重新同步可见项。

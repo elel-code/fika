@@ -1533,7 +1533,7 @@ fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 fn remember_current_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let mut state = state.borrow_mut();
     let current_dir = state.current_dir.clone();
-    state.view_state_cache.insert(
+    state.insert_view_state_cache(
         current_dir,
         DirectoryViewState {
             viewport_x: ui.get_main_viewport_x(),
@@ -1543,10 +1543,8 @@ fn remember_current_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 fn restore_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path) {
     let view_state = state
-        .borrow()
-        .view_state_cache
-        .get(path)
-        .copied()
+        .borrow_mut()
+        .cached_view_state(path)
         .unwrap_or_default();
     ui.set_main_viewport_x(view_state.viewport_x);
     ui.set_main_viewport_offset(-view_state.viewport_x);

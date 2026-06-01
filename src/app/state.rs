@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 pub(crate) const MAX_DIRECTORY_CACHE_ENTRIES: usize = 64;
+pub(crate) const MAX_VIEW_STATE_CACHE_ENTRIES: usize = 128;
 
 #[derive(Debug)]
 pub(crate) struct AppState {
@@ -36,6 +37,7 @@ pub(crate) struct AppState {
     pub(crate) directory_cache: HashMap<PathBuf, Vec<FileEntry>>,
     pub(crate) directory_cache_order: VecDeque<PathBuf>,
     pub(crate) view_state_cache: HashMap<PathBuf, DirectoryViewState>,
+    pub(crate) view_state_cache_order: VecDeque<PathBuf>,
     pub(crate) thumbnail_cache: HashMap<thumbnails::ThumbnailKey, thumbnails::ThumbnailData>,
     pub(crate) thumbnail_cache_order: VecDeque<thumbnails::ThumbnailKey>,
     pub(crate) thumbnail_failures: HashMap<thumbnails::ThumbnailKey, String>,
@@ -86,6 +88,7 @@ impl AppState {
             directory_cache: HashMap::new(),
             directory_cache_order: VecDeque::new(),
             view_state_cache: HashMap::new(),
+            view_state_cache_order: VecDeque::new(),
             thumbnail_cache: HashMap::new(),
             thumbnail_cache_order: VecDeque::new(),
             thumbnail_failures: HashMap::new(),
@@ -137,6 +140,32 @@ impl AppState {
         self.directory_cache_order
             .retain(|cached| cached.as_path() != path);
         self.directory_cache_order.push_back(path.to_path_buf());
+    }
+
+    pub(crate) fn cached_view_state(&mut self, path: &Path) -> Option<DirectoryViewState> {
+        let view_state = self.view_state_cache.get(path).copied()?;
+        self.refresh_view_state_cache_order(path);
+        Some(view_state)
+    }
+
+    pub(crate) fn insert_view_state_cache(
+        &mut self,
+        path: PathBuf,
+        view_state: DirectoryViewState,
+    ) {
+        self.view_state_cache.insert(path.clone(), view_state);
+        self.refresh_view_state_cache_order(&path);
+        while self.view_state_cache_order.len() > MAX_VIEW_STATE_CACHE_ENTRIES {
+            if let Some(oldest) = self.view_state_cache_order.pop_front() {
+                self.view_state_cache.remove(&oldest);
+            }
+        }
+    }
+
+    fn refresh_view_state_cache_order(&mut self, path: &Path) {
+        self.view_state_cache_order
+            .retain(|cached| cached.as_path() != path);
+        self.view_state_cache_order.push_back(path.to_path_buf());
     }
 }
 
@@ -279,6 +308,59 @@ mod tests {
 
         assert!(!state.directory_cache.contains_key(&path));
         assert!(!state.directory_cache_order.contains(&path));
+    }
+
+    #[test]
+    fn view_state_cache_evicts_oldest_entries() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        for index in 0..(MAX_VIEW_STATE_CACHE_ENTRIES + 2) {
+            state.insert_view_state_cache(
+                PathBuf::from(format!("/tmp/view-{index}")),
+                DirectoryViewState {
+                    viewport_x: index as f32,
+                },
+            );
+        }
+
+        assert_eq!(state.view_state_cache.len(), MAX_VIEW_STATE_CACHE_ENTRIES);
+        assert_eq!(
+            state.view_state_cache_order.len(),
+            MAX_VIEW_STATE_CACHE_ENTRIES
+        );
+        assert!(
+            !state
+                .view_state_cache
+                .contains_key(Path::new("/tmp/view-0"))
+        );
+        assert!(
+            !state
+                .view_state_cache
+                .contains_key(Path::new("/tmp/view-1"))
+        );
+        assert!(
+            state
+                .view_state_cache
+                .contains_key(Path::new("/tmp/view-2"))
+        );
+    }
+
+    #[test]
+    fn view_state_cache_hit_refreshes_lru_order() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let first = PathBuf::from("/tmp/first-view");
+        let second = PathBuf::from("/tmp/second-view");
+
+        state.insert_view_state_cache(first.clone(), DirectoryViewState { viewport_x: 10.0 });
+        state.insert_view_state_cache(second.clone(), DirectoryViewState { viewport_x: 20.0 });
+
+        assert_eq!(
+            state
+                .cached_view_state(&first)
+                .map(|state| state.viewport_x),
+            Some(10.0)
+        );
+        assert_eq!(state.view_state_cache_order.pop_back(), Some(first));
+        assert_eq!(state.view_state_cache_order.pop_front(), Some(second));
     }
 
     fn test_entry(index: usize) -> FileEntry {

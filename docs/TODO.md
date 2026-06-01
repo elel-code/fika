@@ -53,6 +53,7 @@
   - Current: directory entries are cached with an LRU cap so long browsing sessions cannot keep every visited directory's full entry list forever.
 - [x] Dolphin-style delayed main-view clearing for uncached directory navigation.
 - [x] Per-directory main-view scroll position memory.
+  - Current: remembered view states are cached with an LRU cap so long browsing sessions cannot keep every visited path's viewport state forever.
 - [x] Patched non-fatal ICU4X CJK segmentation warning from `icu_segmenter 2.2.0`.
 - [x] Mouse Back/Forward scoped to the right-side main pane only.
 - [x] Adaptive Open With hover submenu placement.
