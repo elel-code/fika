@@ -729,6 +729,47 @@ mod tests {
     }
 
     #[test]
+    fn portal_result_filter_maps_only_supported_chooser_indices() {
+        let filters = vec![
+            ("MIME only".to_string(), vec![(1, "image/png".to_string())]),
+            (
+                "Text".to_string(),
+                vec![(0, "*.txt".to_string()), (1, "text/plain".to_string())],
+            ),
+            ("Images".to_string(), vec![(0, "*.png".to_string())]),
+        ];
+        let filter_map = chooser_filter_map(&HashMap::new(), filters.clone());
+        assert_eq!(
+            filter_map.chooser_specs,
+            vec!["Text\t*.txt".to_string(), "Images\t*.png".to_string()]
+        );
+        assert_eq!(filter_map.portal_indices, vec![1, 2]);
+
+        let result = results_for_paths(
+            ChooserResult {
+                paths: vec![PathBuf::from("/tmp/a.txt")],
+                filter_index: Some(0),
+                choices: Vec::new(),
+            },
+            &HashMap::new(),
+            &filter_map,
+        );
+        let current_filter = result.get("current_filter").cloned().unwrap();
+        assert_eq!(PortalFilter::try_from(current_filter).unwrap(), filters[1]);
+
+        let out_of_range = results_for_paths(
+            ChooserResult {
+                paths: vec![PathBuf::from("/tmp/a.txt")],
+                filter_index: Some(99),
+                choices: Vec::new(),
+            },
+            &HashMap::new(),
+            &filter_map,
+        );
+        assert!(!out_of_range.contains_key("current_filter"));
+    }
+
+    #[test]
     fn portal_choices_map_to_specs_and_result_choices() {
         let choices: Vec<PortalChoice> = vec![(
             "encoding".to_string(),
