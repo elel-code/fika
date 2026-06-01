@@ -1474,13 +1474,15 @@ fn select_winit_backend_for_external_drops(
     async_tx: mpsc::Sender<AsyncEvent>,
     ui_weak: Rc<RefCell<Option<slint::Weak<AppWindow>>>>,
 ) -> Result<(), slint::PlatformError> {
+    let file_drop_fallback_enabled = winit_file_drop_fallback_enabled_from_env();
+    dnd_log_startup(file_drop_fallback_enabled);
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .with_winit_custom_application_handler(ExternalDropHandler {
             async_tx,
             ui_weak,
             last_cursor_position: None,
-            file_drop_fallback_enabled: winit_file_drop_fallback_enabled_from_env(),
+            file_drop_fallback_enabled,
         })
         .select()
 }
@@ -1596,6 +1598,32 @@ fn winit_file_drop_fallback_enabled_from_env() -> bool {
     env::var("FIKA_DISABLE_WINIT_DROP_FALLBACK")
         .map(|value| !env_flag_is_truthy(&value))
         .unwrap_or(true)
+}
+
+fn dnd_debug_enabled_from_env() -> bool {
+    env::var("FIKA_DEBUG_DND").is_ok_and(|value| env_flag_is_truthy(&value))
+}
+
+fn dnd_log_startup(winit_fallback_enabled: bool) {
+    if !dnd_debug_enabled_from_env() {
+        return;
+    }
+
+    eprintln!(
+        "[fika dnd] startup {}",
+        dnd_startup_summary(winit_fallback_enabled)
+    );
+}
+
+fn dnd_startup_summary(winit_fallback_enabled: bool) -> String {
+    format!(
+        "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-place-path winit_fallback={} disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK",
+        if winit_fallback_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    )
 }
 
 fn env_flag_is_truthy(value: &str) -> bool {
@@ -3801,10 +3829,7 @@ struct PlacesDndTrace<'a> {
 }
 
 fn dnd_log_places_event(trace: PlacesDndTrace<'_>) {
-    static DEBUG_DND: OnceLock<bool> = OnceLock::new();
-    if !*DEBUG_DND
-        .get_or_init(|| env::var("FIKA_DEBUG_DND").is_ok_and(|value| env_flag_is_truthy(&value)))
-    {
+    if !dnd_debug_enabled() {
         return;
     }
 
@@ -3821,6 +3846,11 @@ fn dnd_log_places_event(trace: PlacesDndTrace<'_>) {
         trace.over_item,
         dnd_payload_summary(trace.payload)
     );
+}
+
+fn dnd_debug_enabled() -> bool {
+    static DEBUG_DND: OnceLock<bool> = OnceLock::new();
+    *DEBUG_DND.get_or_init(dnd_debug_enabled_from_env)
 }
 
 fn dnd_payload_summary(payload: &str) -> String {
@@ -4374,6 +4404,18 @@ mod tests {
         for value in ["", "0", "false", "no", "off", "anything-else"] {
             assert!(!env_flag_is_truthy(value));
         }
+    }
+
+    #[test]
+    fn dnd_startup_summary_reports_drop_backends() {
+        assert_eq!(
+            dnd_startup_summary(true),
+            "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-place-path winit_fallback=enabled disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK"
+        );
+        assert!(
+            dnd_startup_summary(false).contains("winit_fallback=disabled"),
+            "disabled fallback state should be visible in startup diagnostics"
+        );
     }
 
     #[test]
