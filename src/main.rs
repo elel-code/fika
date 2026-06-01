@@ -265,6 +265,26 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
+        ui.on_open_device(move |path, mounted| {
+            if let Some(ui) = ui_weak.upgrade() {
+                if !mounted {
+                    set_status(&ui, "Device is not mounted yet");
+                    return;
+                }
+                let requested = expand_user_path(path.as_str());
+                if requested.is_dir() {
+                    navigate_to(&ui, &state, &bridge, requested);
+                } else {
+                    set_status(&ui, "Device is not available");
+                }
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_search_submitted(move |query| {
             if let Some(ui) = ui_weak.upgrade() {
                 submit_search(&ui, &state, &bridge, query.as_str());

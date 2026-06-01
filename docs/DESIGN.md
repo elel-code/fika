@@ -89,13 +89,14 @@ Rust 代码当前按低耦合职责拆分为嵌套模块：
 
 ### Devices
 
-侧栏 Devices 现在由 Rust 模型驱动，而不是在 Slint 中硬编码。当前实现保守地只列出已经挂载的本地目录：
+侧栏 Devices 现在由 Rust 模型驱动，而不是在 Slint 中硬编码。当前实现优先保持已挂载目录稳定，同时开始接入 UDisks2 的只读设备发现：
 
 - 固定包含 `Filesystem`，路径为 `/`。
 - 优先解析 `/proc/self/mountinfo`，只显示挂载点位于 `/run/media/$USER`、`/media/$USER`、`/media` 和 `/mnt` 下、且 source / filesystem type 看起来像真实本地设备的路径。`tmpfs`、`proc`、`sysfs` 等伪文件系统会被过滤掉，避免把运行时目录误显示成 Devices。
 - 当 mountinfo 不可用时，才回退扫描这些目录下的一级目录。
+- 作为增强层，Fika 会 best-effort 查询 system bus 上的 UDisks2 `ObjectManager`，从 `Block` -> `Drive` 关系识别可移动且已有介质的设备。未挂载设备显示为 `mounted=false`，路径暂时保留为 `/dev/...`；已挂载设备使用第一个 `MountPoints` 路径。UDisks2 不可用、超时或返回错误时，不影响 mountinfo 结果。
 
-这能覆盖常见桌面环境已经自动挂载的 U 盘路径，同时避免在 UI 阶段引入 mount/eject 权限语义。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应接入 UDisks2 system bus D-Bus，识别未挂载块设备，并提供 mount、unmount、eject 和错误状态同步。
+这能覆盖常见桌面环境已经自动挂载的 U 盘路径，也能提前显示部分未挂载 U 盘；未挂载项点击时只提示尚未挂载，不会尝试打开 `/dev/...`。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应继续基于 UDisks2 system bus D-Bus，提供 mount、unmount、eject 和错误状态同步。
 
 ### Async Runtime
 

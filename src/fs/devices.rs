@@ -1,12 +1,16 @@
 use crate::DeviceEntry;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+use zbus::blocking::{Connection, Proxy};
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
-    mounted_devices_from_mountinfo(&mount_roots(), "/proc/self/mountinfo")
-        .unwrap_or_else(|| mounted_devices_from_roots(mount_roots()))
+    let mounted = mounted_devices_from_mountinfo(&mount_roots(), "/proc/self/mountinfo")
+        .unwrap_or_else(|| mounted_devices_from_roots(mount_roots()));
+    merge_device_entries(mounted, udisks2_removable_devices().unwrap_or_default())
 }
 
 fn mounted_devices_from_roots(roots: Vec<PathBuf>) -> Vec<DeviceEntry> {
@@ -45,6 +49,22 @@ fn mounted_devices_from_paths(paths: Vec<PathBuf>) -> Vec<DeviceEntry> {
             mount_marker(&path),
             true,
         ));
+    }
+
+    devices
+}
+
+fn merge_device_entries(
+    mounted_devices: Vec<DeviceEntry>,
+    discovered_devices: Vec<DeviceEntry>,
+) -> Vec<DeviceEntry> {
+    let mut devices = Vec::new();
+    let mut seen = HashSet::new();
+
+    for device in mounted_devices.into_iter().chain(discovered_devices) {
+        if seen.insert(device.path.to_string()) {
+            devices.push(device);
+        }
     }
 
     devices
@@ -102,6 +122,139 @@ fn mounted_children(root: &Path) -> Vec<PathBuf> {
         .collect::<Vec<_>>();
     children.sort_by_key(|path| mount_label(path).to_lowercase());
     children
+}
+
+type Properties = HashMap<String, OwnedValue>;
+type InterfaceMap = HashMap<String, Properties>;
+type ManagedObjects = HashMap<OwnedObjectPath, InterfaceMap>;
+
+fn udisks2_removable_devices() -> Result<Vec<DeviceEntry>, String> {
+    let connection = zbus::blocking::connection::Builder::system()
+        .map_err(|err| format!("cannot create system bus builder: {err}"))?
+        .method_timeout(Duration::from_millis(750))
+        .build()
+        .map_err(|err| format!("cannot connect to system bus: {err}"))?;
+    udisks2_removable_devices_with_connection(&connection)
+}
+
+fn udisks2_removable_devices_with_connection(
+    connection: &Connection,
+) -> Result<Vec<DeviceEntry>, String> {
+    let proxy = Proxy::new(
+        connection,
+        "org.freedesktop.UDisks2",
+        "/org/freedesktop/UDisks2",
+        "org.freedesktop.DBus.ObjectManager",
+    )
+    .map_err(|err| format!("cannot create UDisks2 ObjectManager proxy: {err}"))?;
+
+    let objects: ManagedObjects = proxy
+        .call("GetManagedObjects", &())
+        .map_err(|err| format!("GetManagedObjects failed: {err}"))?;
+    Ok(udisks2_removable_devices_from_objects(&objects))
+}
+
+fn udisks2_removable_devices_from_objects(objects: &ManagedObjects) -> Vec<DeviceEntry> {
+    let mut devices = objects
+        .values()
+        .filter_map(|interfaces| udisks2_removable_device_from_interfaces(objects, interfaces))
+        .collect::<Vec<_>>();
+    devices.sort_by_key(|device| device.label.to_string().to_lowercase());
+    devices
+}
+
+fn udisks2_removable_device_from_interfaces(
+    objects: &ManagedObjects,
+    interfaces: &InterfaceMap,
+) -> Option<DeviceEntry> {
+    let block = interfaces.get("org.freedesktop.UDisks2.Block")?;
+    if bool_property(block, "HintIgnore") {
+        return None;
+    }
+
+    let drive_path = owned_object_path_property(block, "Drive")?;
+    let drive = objects
+        .get(&drive_path)?
+        .get("org.freedesktop.UDisks2.Drive")?;
+    if !bool_property(drive, "Removable") || !bool_property(drive, "MediaAvailable") {
+        return None;
+    }
+
+    let device = byte_string_property(block, "Device")?;
+    let mount_points = interfaces
+        .get("org.freedesktop.UDisks2.Filesystem")
+        .and_then(|filesystem| mount_points_property(filesystem, "MountPoints"))
+        .unwrap_or_default();
+    let mounted = !mount_points.is_empty();
+    let label = string_property(block, "IdLabel")
+        .filter(|label| !label.is_empty())
+        .or_else(|| drive_label(drive))
+        .unwrap_or_else(|| mount_label(Path::new(&device)));
+    let path = mount_points.into_iter().next().unwrap_or(device);
+    Some(device_entry(
+        label.clone(),
+        path,
+        marker_from_label(&label),
+        mounted,
+    ))
+}
+
+fn bool_property(properties: &Properties, name: &str) -> bool {
+    properties
+        .get(name)
+        .and_then(|value| bool::try_from(value).ok())
+        .unwrap_or(false)
+}
+
+fn string_property(properties: &Properties, name: &str) -> Option<String> {
+    properties
+        .get(name)
+        .and_then(|value| <&str>::try_from(value).ok())
+        .map(str::to_string)
+}
+
+fn owned_object_path_property(properties: &Properties, name: &str) -> Option<OwnedObjectPath> {
+    properties
+        .get(name)
+        .and_then(|value| OwnedObjectPath::try_from(value.clone()).ok())
+}
+
+fn byte_string_property(properties: &Properties, name: &str) -> Option<String> {
+    properties
+        .get(name)
+        .and_then(|value| Vec::<u8>::try_from(value.clone()).ok())
+        .and_then(byte_string_from_udisks)
+}
+
+fn mount_points_property(properties: &Properties, name: &str) -> Option<Vec<String>> {
+    properties.get(name).and_then(|value| {
+        Vec::<Vec<u8>>::try_from(value.clone())
+            .ok()
+            .map(|mount_points| {
+                mount_points
+                    .into_iter()
+                    .filter_map(byte_string_from_udisks)
+                    .collect()
+            })
+    })
+}
+
+fn byte_string_from_udisks(bytes: Vec<u8>) -> Option<String> {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    if end == 0 {
+        return None;
+    }
+    String::from_utf8(bytes[..end].to_vec()).ok()
+}
+
+fn drive_label(drive: &Properties) -> Option<String> {
+    let vendor = string_property(drive, "Vendor").unwrap_or_default();
+    let model = string_property(drive, "Model").unwrap_or_default();
+    let label = format!("{vendor} {model}").trim().to_string();
+    (!label.is_empty()).then_some(label)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,7 +382,11 @@ fn mount_label(path: &Path) -> String {
 }
 
 fn mount_marker(path: &Path) -> String {
-    mount_label(path)
+    marker_from_label(&mount_label(path))
+}
+
+fn marker_from_label(label: &str) -> String {
+    label
         .chars()
         .find(|ch| ch.is_alphanumeric())
         .map(|ch| ch.to_uppercase().collect())
@@ -239,6 +396,7 @@ fn mount_marker(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zbus::zvariant::{DynamicType, Value};
 
     fn test_dir(name: &str) -> PathBuf {
         let path = env::temp_dir().join(format!("fika-devices-{name}-{}", std::process::id()));
@@ -383,5 +541,194 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn udisks2_lists_unmounted_removable_media() {
+        let objects = udisks_objects(
+            drive_object(true, true, "Framework", "USB-C Storage"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "FIKA USB",
+                false,
+            ),
+            None,
+        );
+
+        let devices = udisks2_removable_devices_from_objects(&objects);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].label, "FIKA USB");
+        assert_eq!(devices[0].path, "/dev/sdb1");
+        assert_eq!(devices[0].marker, "F");
+        assert!(!devices[0].mounted);
+    }
+
+    #[test]
+    fn udisks2_prefers_mount_point_for_mounted_media() {
+        let objects = udisks_objects(
+            drive_object(true, true, "Framework", "USB-C Storage"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "",
+                false,
+            ),
+            Some(filesystem_object(vec!["/run/media/yk/FIKA USB"])),
+        );
+
+        let devices = udisks2_removable_devices_from_objects(&objects);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].label, "Framework USB-C Storage");
+        assert_eq!(devices[0].path, "/run/media/yk/FIKA USB");
+        assert!(devices[0].mounted);
+    }
+
+    #[test]
+    fn udisks2_filters_ignored_nonremovable_and_empty_media() {
+        let ignored = udisks_objects(
+            drive_object(true, true, "Ignored", "Disk"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Ignored",
+                true,
+            ),
+            None,
+        );
+        let fixed = udisks_objects(
+            drive_object(false, true, "Fixed", "Disk"),
+            block_object(
+                "/dev/nvme0n1p1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Fixed",
+                false,
+            ),
+            None,
+        );
+        let empty = udisks_objects(
+            drive_object(true, false, "Empty", "Reader"),
+            block_object(
+                "/dev/sdc1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Empty",
+                false,
+            ),
+            None,
+        );
+
+        assert!(udisks2_removable_devices_from_objects(&ignored).is_empty());
+        assert!(udisks2_removable_devices_from_objects(&fixed).is_empty());
+        assert!(udisks2_removable_devices_from_objects(&empty).is_empty());
+    }
+
+    #[test]
+    fn device_merge_keeps_mountinfo_entry_before_udisks_duplicate() {
+        let mounted = vec![
+            filesystem_entry(),
+            device_entry(
+                "Mounted USB".into(),
+                "/run/media/yk/USB".into(),
+                "M".into(),
+                true,
+            ),
+        ];
+        let discovered = vec![
+            device_entry(
+                "Duplicate".into(),
+                "/run/media/yk/USB".into(),
+                "D".into(),
+                true,
+            ),
+            device_entry("Unmounted".into(), "/dev/sdc1".into(), "U".into(), false),
+        ];
+
+        let devices = merge_device_entries(mounted, discovered);
+
+        assert_eq!(devices.len(), 3);
+        assert_eq!(devices[1].label, "Mounted USB");
+        assert_eq!(devices[2].label, "Unmounted");
+    }
+
+    fn udisks_objects(
+        drive: Properties,
+        block: Properties,
+        filesystem: Option<Properties>,
+    ) -> ManagedObjects {
+        let mut objects = ManagedObjects::new();
+        objects.insert(
+            OwnedObjectPath::try_from("/org/freedesktop/UDisks2/drives/test").unwrap(),
+            HashMap::from([("org.freedesktop.UDisks2.Drive".to_string(), drive)]),
+        );
+        let mut block_interfaces =
+            HashMap::from([("org.freedesktop.UDisks2.Block".to_string(), block)]);
+        if let Some(filesystem) = filesystem {
+            block_interfaces.insert("org.freedesktop.UDisks2.Filesystem".to_string(), filesystem);
+        }
+        objects.insert(
+            OwnedObjectPath::try_from("/org/freedesktop/UDisks2/block_devices/sdb1").unwrap(),
+            block_interfaces,
+        );
+        objects
+    }
+
+    fn drive_object(
+        removable: bool,
+        media_available: bool,
+        vendor: &str,
+        model: &str,
+    ) -> Properties {
+        HashMap::from([
+            ("Removable".to_string(), value(removable)),
+            ("MediaAvailable".to_string(), value(media_available)),
+            ("Vendor".to_string(), value(vendor.to_string())),
+            ("Model".to_string(), value(model.to_string())),
+        ])
+    }
+
+    fn block_object(device: &str, drive: &str, label: &str, hint_ignore: bool) -> Properties {
+        HashMap::from([
+            (
+                "Device".to_string(),
+                value(
+                    device
+                        .as_bytes()
+                        .iter()
+                        .copied()
+                        .chain([0])
+                        .collect::<Vec<_>>(),
+                ),
+            ),
+            (
+                "Drive".to_string(),
+                value(OwnedObjectPath::try_from(drive).unwrap()),
+            ),
+            ("IdLabel".to_string(), value(label.to_string())),
+            ("HintIgnore".to_string(), value(hint_ignore)),
+        ])
+    }
+
+    fn filesystem_object(mount_points: Vec<&str>) -> Properties {
+        let mount_points = mount_points
+            .into_iter()
+            .map(|mount_point| {
+                mount_point
+                    .as_bytes()
+                    .iter()
+                    .copied()
+                    .chain([0])
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        HashMap::from([("MountPoints".to_string(), value(mount_points))])
+    }
+
+    fn value<T>(value: T) -> OwnedValue
+    where
+        T: Into<Value<'static>> + DynamicType,
+    {
+        OwnedValue::try_from(Value::new(value)).unwrap()
     }
 }

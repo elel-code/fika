@@ -237,6 +237,7 @@ export component AppWindow inherits Window {
     callback set_default_app(string, string);
     callback open_with_custom_command(string, string);
     callback open_place(string);
+    callback open_device(string, bool);
     callback path_submitted(string);
     callback search_submitted(string);
     callback cancel_search();
@@ -689,7 +690,7 @@ export component AppWindow inherits Window {
                         dragged: false;
                         drop-target: false;
                         builtin: true;
-                        clicked => { root.open_place(device.path); }
+                        clicked => { root.open_device(device.path, device.mounted); }
                     }
 
                     Rectangle { vertical-stretch: 1; }
