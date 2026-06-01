@@ -4,7 +4,6 @@ import {
     CheckOption,
     FilterButton,
     MenuDismissLayer,
-    MenuHoverBridge,
     PlaceButton,
     SidebarAction,
     SidebarSection,
@@ -12,7 +11,7 @@ import {
 } from "widgets.slint";
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
-import { ChooserChoicePopup, CreateNewMenu, DeviceContextMenu, FileContextMenu, OpenWithMenu, PlaceContextMenu, PlacesBlankMenu, TransferMenu, ViewportContextMenu } from "menus.slint";
+import { ChildSubmenuLayer, ChooserChoicePopup, DeviceContextMenu, FileContextMenu, PlaceContextMenu, PlacesBlankMenu, TransferMenu, ViewportContextMenu } from "menus.slint";
 import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
 export component AppWindow inherits Window {
@@ -436,6 +435,14 @@ export component AppWindow inherits Window {
 
     changed width => { root.main_view_changed(); }
     changed height => { root.main_view_changed(); }
+    changed sidebar_width_px => {
+        root.sync-main-viewport();
+        root.main_view_changed();
+    }
+    changed search-panel-height => {
+        root.sync-main-viewport();
+        root.main_view_changed();
+    }
     changed main_viewport_x => { root.main_view_changed(); }
     changed icon_zoom_level => { root.main_view_changed(); }
     changed transfer_conflict_open => {
@@ -864,6 +871,7 @@ export component AppWindow inherits Window {
                     spacing: 0px;
 
                     if (root.search-panel-visible) : Rectangle {
+                        horizontal-stretch: 1;
                         height: root.search-panel-height;
                         background: root.dark_mode ? #171b1f : #f8fafc;
                         border-color: root.dark_mode ? #343a40 : #d6dce2;
@@ -980,6 +988,7 @@ export component AppWindow inherits Window {
                     }
 
                     if (root.entry_count == 0) : Rectangle {
+                        horizontal-stretch: 1;
                         vertical-stretch: 1;
                         background: root.dark_mode ? #101314 : #ffffff;
 
@@ -1005,6 +1014,7 @@ export component AppWindow inherits Window {
                     }
 
                     if (root.entry_count > 0) : grid := ScrollView {
+                        horizontal-stretch: 1;
                         vertical-stretch: 1;
                         horizontal-scrollbar-policy: as-needed;
                         vertical-scrollbar-policy: always-off;
@@ -1172,6 +1182,7 @@ export component AppWindow inherits Window {
                     }
 
                     Rectangle {
+                        horizontal-stretch: 1;
                         height: 36px;
                         background: root.dark_mode ? #111416 : #ffffff;
                         border-color: root.dark_mode ? #454a50 : #d6dce2;
@@ -1618,58 +1629,49 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.active-child-menu-kind != 0 && root.context-menu-open): MenuHoverBridge {
-        x: root.active-child-bridge-left;
-        y: root.active-child-bridge-top;
-        width: root.active-child-bridge-width;
-        height: root.active-child-bridge-height;
-        hovered(is-hovered) => {
-            root.set-child-submenu-hover(root.active-child-menu-kind, is-hovered);
-        }
-    }
-
-    if (root.create-new-menu-open): CreateNewMenu {
-        x: root.active-child-menu-left;
-        y: root.active-child-menu-top;
-        width: root.create-new-menu-width;
-        height: root.create-new-menu-height;
+    ChildSubmenuLayer {
+        width: parent.width;
+        height: parent.height;
+        context-menu-open: root.context-menu-open;
+        active-kind: root.active-child-menu-kind;
+        bridge-left: root.active-child-bridge-left;
+        bridge-top: root.active-child-bridge-top;
+        bridge-width: root.active-child-bridge-width;
+        bridge-height: root.active-child-bridge-height;
+        create-new-open: root.create-new-menu-open;
+        create-new-left: root.active-child-menu-left;
+        create-new-top: root.active-child-menu-top;
+        create-new-width: root.create-new-menu-width;
+        create-new-height: root.create-new-menu-height;
+        open-with-open: root.open-with-menu-open;
+        open-with-left: root.active-child-menu-left;
+        open-with-top: root.active-child-menu-top;
+        open-with-width: root.open-with-menu-width;
+        open-with-height: root.open-with-menu-height;
+        open-with-title: root.open_with_mime == "" ? "Open With" : "Open With - " + root.open_with_mime;
+        open-with-apps: root.open_with_apps;
+        open-with-item-height: root.menu-item-height;
         dark: root.dark_mode;
-        keep_alive(is-hovered) => {
-            root.set-child-submenu-hover(2, is-hovered);
+        child_hovered(kind, is-hovered) => {
+            root.set-child-submenu-hover(kind, is-hovered);
         }
-        folder_selected => {
+        create_folder_selected => {
             root.new-folder-name = "New Folder";
             root.new-folder-open = true;
             root.close-context-popups();
         }
-    }
-
-    if (root.rename-place-open): TextInputPopup {
-        width: parent.width;
-        height: parent.height;
-        dark: root.dark_mode;
-        title: "Rename Place";
-        accept-label: "Rename";
-        value <=> root.rename-place-label;
-        accepted(value) => {
-            root.rename_place(root.rename-place-index, value);
-            root.rename-place-open = false;
+        open_with_app_selected(app-id) => {
+            root.open_with_app(root.open_with_path, app-id);
+            root.close-context-popups();
         }
-        cancelled => { root.rename-place-open = false; }
-    }
-
-    if (root.new-folder-open): TextInputPopup {
-        width: parent.width;
-        height: parent.height;
-        dark: root.dark_mode;
-        title: "New Folder";
-        accept-label: "Create";
-        value <=> root.new-folder-name;
-        accepted(value) => {
-            root.create_folder(value);
-            root.new-folder-open = false;
+        other_applications => {
+            root.prepare_other_applications(root.open_with_path);
+            root.custom_open_command = "";
+            root.other_application_filter = "";
+            root.other_application_set_default = false;
+            root.custom-open-with-open = true;
+            root.close-context-popups();
         }
-        cancelled => { root.new-folder-open = false; }
     }
 
     if (root.rename-entry-open): TextInputPopup {
@@ -1737,30 +1739,32 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.open-with-menu-open): OpenWithMenu {
-        x: root.active-child-menu-left;
-        y: root.active-child-menu-top;
-        width: root.open-with-menu-width;
-        height: root.open-with-menu-height;
-        title: root.open_with_mime == "" ? "Open With" : "Open With - " + root.open_with_mime;
+    if (root.rename-place-open): TextInputPopup {
+        width: parent.width;
+        height: parent.height;
         dark: root.dark_mode;
-        apps: root.open_with_apps;
-        item-height: root.menu-item-height;
-        keep_alive(is-hovered) => {
-            root.set-child-submenu-hover(1, is-hovered);
+        title: "Rename Place";
+        accept-label: "Rename";
+        value <=> root.rename-place-label;
+        accepted(value) => {
+            root.rename_place(root.rename-place-index, value);
+            root.rename-place-open = false;
         }
-        app_selected(app-id) => {
-            root.open_with_app(root.open_with_path, app-id);
-            root.close-context-popups();
+        cancelled => { root.rename-place-open = false; }
+    }
+
+    if (root.new-folder-open): TextInputPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        title: "New Folder";
+        accept-label: "Create";
+        value <=> root.new-folder-name;
+        accepted(value) => {
+            root.create_folder(value);
+            root.new-folder-open = false;
         }
-        other_applications => {
-            root.prepare_other_applications(root.open_with_path);
-            root.custom_open_command = "";
-            root.other_application_filter = "";
-            root.other_application_set_default = false;
-            root.custom-open-with-open = true;
-            root.close-context-popups();
-        }
+        cancelled => { root.new-folder-open = false; }
     }
 
     for choice[index] in root.chooser_choices: ChooserChoicePopup {

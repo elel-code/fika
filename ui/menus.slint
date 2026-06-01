@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { ChooserChoiceOption, DesktopApp } from "models.slint";
-import { MenuHoverTitle, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
+import { MenuHoverBridge, MenuHoverTitle, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
 
 export component OpenWithMenu inherits PopupSurface {
     in property <string> title;
@@ -65,6 +65,79 @@ export component CreateNewMenu inherits PopupSurface {
         dark: root.dark;
         hovered(is-hovered) => { root.keep_alive(is-hovered); }
         clicked => { root.folder_selected(); }
+    }
+}
+
+export component ChildSubmenuLayer inherits Rectangle {
+    in property <bool> context-menu-open;
+    in property <int> active-kind;
+    in property <length> bridge-left;
+    in property <length> bridge-top;
+    in property <length> bridge-width;
+    in property <length> bridge-height;
+    in property <bool> create-new-open;
+    in property <length> create-new-left;
+    in property <length> create-new-top;
+    in property <length> create-new-width;
+    in property <length> create-new-height;
+    in property <bool> open-with-open;
+    in property <length> open-with-left;
+    in property <length> open-with-top;
+    in property <length> open-with-width;
+    in property <length> open-with-height;
+    in property <string> open-with-title;
+    in property <[DesktopApp]> open-with-apps;
+    in property <length> open-with-item-height: 38px;
+    in property <bool> dark;
+    callback child_hovered(int, bool);
+    callback create_folder_selected();
+    callback open_with_app_selected(string);
+    callback other_applications();
+
+    background: transparent;
+
+    if (root.active-kind != 0 && root.context-menu-open): MenuHoverBridge {
+        x: root.bridge-left;
+        y: root.bridge-top;
+        width: root.bridge-width;
+        height: root.bridge-height;
+        hovered(is-hovered) => {
+            root.child_hovered(root.active-kind, is-hovered);
+        }
+    }
+
+    if (root.create-new-open): CreateNewMenu {
+        x: root.create-new-left;
+        y: root.create-new-top;
+        width: root.create-new-width;
+        height: root.create-new-height;
+        dark: root.dark;
+        keep_alive(is-hovered) => {
+            root.child_hovered(2, is-hovered);
+        }
+        folder_selected => {
+            root.create_folder_selected();
+        }
+    }
+
+    if (root.open-with-open): OpenWithMenu {
+        x: root.open-with-left;
+        y: root.open-with-top;
+        width: root.open-with-width;
+        height: root.open-with-height;
+        title: root.open-with-title;
+        dark: root.dark;
+        apps: root.open-with-apps;
+        item-height: root.open-with-item-height;
+        keep_alive(is-hovered) => {
+            root.child_hovered(1, is-hovered);
+        }
+        app_selected(app-id) => {
+            root.open_with_app_selected(app-id);
+        }
+        other_applications => {
+            root.other_applications();
+        }
     }
 }
 
