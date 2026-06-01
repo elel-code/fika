@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { ChooserChoiceOption, DesktopApp } from "models.slint";
-import { MenuHoverTitle, MenuItem, MenuSeparator, MenuTitle } from "widgets.slint";
+import { MenuHoverTitle, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
 
 export component OpenWithMenu inherits Rectangle {
     in property <string> title;
@@ -96,6 +96,27 @@ export component ChooserChoiceMenu inherits Rectangle {
             dark: root.dark;
             clicked => { root.option_selected(index); }
         }
+    }
+}
+
+export component ChooserChoicePopup inherits PopupSurface {
+    in property <string> title;
+    in property <[ChooserChoiceOption]> options;
+    in property <int> selected-index;
+    in property <length> title-height: 30px;
+    in property <length> item-height: 38px;
+    callback option_selected(int);
+
+    height: root.title-height + max(1, root.options.length) * root.item-height;
+
+    ChooserChoiceMenu {
+        width: parent.width;
+        height: parent.height;
+        title: root.title;
+        dark: root.dark;
+        options: root.options;
+        selected-index: root.selected-index;
+        option_selected(index) => { root.option_selected(index); }
     }
 }
 

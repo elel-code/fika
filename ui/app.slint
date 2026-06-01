@@ -13,7 +13,7 @@ import {
 } from "widgets.slint";
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
-import { ChooserChoiceMenu, CreateNewMenu, FileContextMenu, OpenWithMenu, PlaceContextMenu, PlacesBlankMenu, TransferMenu, ViewportContextMenu } from "menus.slint";
+import { ChooserChoicePopup, CreateNewMenu, FileContextMenu, OpenWithMenu, PlaceContextMenu, PlacesBlankMenu, TransferMenu, ViewportContextMenu } from "menus.slint";
 import { OtherApplicationsDialog, PrivilegedPromptDialog, PropertiesDialog, TextInputDialog, TransferConflictDialog } from "dialogs.slint";
 
 export component AppWindow inherits Window {
@@ -1797,25 +1797,20 @@ export component AppWindow inherits Window {
         }
     }
 
-    for choice[index] in root.chooser_choices: PopupSurface {
+    for choice[index] in root.chooser_choices: ChooserChoicePopup {
         visible: root.chooser-choice-menu-open && root.chooser-choice-menu-index == index;
         x: root.anchored_menu_left(root.width / 1px, root.height / 1px, root.chooser-choice-menu-x / 1px, root.chooser-choice-menu-y / 1px, root.chooser-choice-menu-width / 1px, (root.menu-title-height + max(1, choice.options.length) * root.menu-item-height) / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
         y: root.anchored_menu_top(root.width / 1px, root.height / 1px, root.chooser-choice-menu-x / 1px, root.chooser-choice-menu-y / 1px, root.chooser-choice-menu-width / 1px, (root.menu-title-height + max(1, choice.options.length) * root.menu-item-height) / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
         width: root.chooser-choice-menu-width;
-        height: root.menu-title-height + max(1, choice.options.length) * root.menu-item-height;
         dark: root.dark_mode;
-
-        ChooserChoiceMenu {
-            width: parent.width;
-            height: parent.height;
-            title: choice.label;
-            dark: root.dark_mode;
-            options: choice.options;
-            selected-index: choice.selected_index;
-            option_selected(option-index) => {
-                root.chooser_select_choice(index, option-index);
-                root.chooser-choice-menu-open = false;
-            }
+        title: choice.label;
+        options: choice.options;
+        selected-index: choice.selected_index;
+        title-height: root.menu-title-height;
+        item-height: root.menu-item-height;
+        option_selected(option-index) => {
+            root.chooser_select_choice(index, option-index);
+            root.chooser-choice-menu-open = false;
         }
     }
 
