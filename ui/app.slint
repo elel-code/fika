@@ -123,6 +123,7 @@ export component AppWindow inherits Window {
     private property <length> open-with-menu-height: min(360px, root.menu-title-height + max(1, root.open_with_apps.length) * root.menu-item-height + root.menu-separator-height + root.menu-item-height);
     private property <length> create-new-menu-width: 180px;
     private property <length> create-new-menu-height: root.menu-item-height;
+    private property <int> active-child-menu-kind: root.open-with-menu-open ? 1 : (root.create-new-menu-open ? 2 : 0);
     private property <length> active-child-menu-width: root.open-with-menu-open ? root.open-with-menu-width : root.create-new-menu-width;
     private property <length> active-child-menu-height: root.open-with-menu-open ? root.open-with-menu-height : root.create-new-menu-height;
     private property <length> active-child-menu-y: root.open-with-menu-open ? root.open-with-menu-y : root.create-new-menu-y;
@@ -1614,13 +1615,13 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.create-new-menu-open && root.context-menu-open): MenuHoverBridge {
+    if (root.active-child-menu-kind != 0 && root.context-menu-open): MenuHoverBridge {
         x: root.active-child-bridge-left;
         y: root.active-child-bridge-top;
         width: root.active-child-bridge-width;
         height: root.active-child-bridge-height;
         hovered(is-hovered) => {
-            root.set-child-submenu-hover(2, is-hovered);
+            root.set-child-submenu-hover(root.active-child-menu-kind, is-hovered);
         }
     }
 
@@ -1730,16 +1731,6 @@ export component AppWindow inherits Window {
         }
         cancelled => {
             root.transfer-menu-open = false;
-        }
-    }
-
-    if (root.open-with-menu-open && root.context-menu-open): MenuHoverBridge {
-        x: root.active-child-bridge-left;
-        y: root.active-child-bridge-top;
-        width: root.active-child-bridge-width;
-        height: root.active-child-bridge-height;
-        hovered(is-hovered) => {
-            root.set-child-submenu-hover(1, is-hovered);
         }
     }
 
