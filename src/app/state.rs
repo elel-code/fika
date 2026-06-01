@@ -5,9 +5,11 @@ use crate::support::generation::GenerationCounter;
 use crate::{DesktopApp, FileEntry, PlaceEntry};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
+pub(crate) const MAX_DIRECTORY_CACHE_ENTRIES: usize = 64;
 
 #[derive(Debug)]
 pub(crate) struct AppState {
@@ -32,6 +34,7 @@ pub(crate) struct AppState {
     pub(crate) chooser_return_choices: bool,
     pub(crate) chooser_parent_window: Option<String>,
     pub(crate) directory_cache: HashMap<PathBuf, Vec<FileEntry>>,
+    pub(crate) directory_cache_order: VecDeque<PathBuf>,
     pub(crate) view_state_cache: HashMap<PathBuf, DirectoryViewState>,
     pub(crate) thumbnail_cache: HashMap<thumbnails::ThumbnailKey, thumbnails::ThumbnailData>,
     pub(crate) thumbnail_cache_order: VecDeque<thumbnails::ThumbnailKey>,
@@ -81,6 +84,7 @@ impl AppState {
             chooser_return_choices: false,
             chooser_parent_window: None,
             directory_cache: HashMap::new(),
+            directory_cache_order: VecDeque::new(),
             view_state_cache: HashMap::new(),
             thumbnail_cache: HashMap::new(),
             thumbnail_cache_order: VecDeque::new(),
@@ -105,6 +109,34 @@ impl AppState {
             search_generation: GenerationCounter::default(),
             thumbnail_generation: GenerationCounter::default(),
         }
+    }
+
+    pub(crate) fn cached_directory_entries(&mut self, path: &Path) -> Option<Vec<FileEntry>> {
+        let entries = self.directory_cache.get(path).cloned()?;
+        self.refresh_directory_cache_order(path);
+        Some(entries)
+    }
+
+    pub(crate) fn insert_directory_cache(&mut self, path: PathBuf, entries: Vec<FileEntry>) {
+        self.directory_cache.insert(path.clone(), entries);
+        self.refresh_directory_cache_order(&path);
+        while self.directory_cache_order.len() > MAX_DIRECTORY_CACHE_ENTRIES {
+            if let Some(oldest) = self.directory_cache_order.pop_front() {
+                self.directory_cache.remove(&oldest);
+            }
+        }
+    }
+
+    pub(crate) fn remove_directory_cache(&mut self, path: &Path) {
+        self.directory_cache.remove(path);
+        self.directory_cache_order
+            .retain(|cached| cached.as_path() != path);
+    }
+
+    fn refresh_directory_cache_order(&mut self, path: &Path) {
+        self.directory_cache_order
+            .retain(|cached| cached.as_path() != path);
+        self.directory_cache_order.push_back(path.to_path_buf());
     }
 }
 
@@ -190,4 +222,79 @@ pub(crate) struct FileUndo {
 pub(crate) struct FileUndoItem {
     pub(crate) original_source: PathBuf,
     pub(crate) destination: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slint::Image;
+
+    #[test]
+    fn directory_cache_evicts_oldest_entries() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        for index in 0..(MAX_DIRECTORY_CACHE_ENTRIES + 3) {
+            let path = PathBuf::from(format!("/tmp/dir-{index}"));
+            state.insert_directory_cache(path.clone(), vec![test_entry(index)]);
+        }
+
+        assert_eq!(state.directory_cache.len(), MAX_DIRECTORY_CACHE_ENTRIES);
+        assert_eq!(
+            state.directory_cache_order.len(),
+            MAX_DIRECTORY_CACHE_ENTRIES
+        );
+        assert!(!state.directory_cache.contains_key(Path::new("/tmp/dir-0")));
+        assert!(!state.directory_cache.contains_key(Path::new("/tmp/dir-2")));
+        assert!(state.directory_cache.contains_key(Path::new("/tmp/dir-3")));
+    }
+
+    #[test]
+    fn directory_cache_hit_refreshes_lru_order() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let first = PathBuf::from("/tmp/first");
+        let second = PathBuf::from("/tmp/second");
+
+        state.insert_directory_cache(first.clone(), vec![test_entry(1)]);
+        state.insert_directory_cache(second.clone(), vec![test_entry(2)]);
+
+        assert_eq!(
+            state.cached_directory_entries(&first).map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| entry.path.to_string())
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec!["/tmp/file-1".to_string()])
+        );
+        assert_eq!(state.directory_cache_order.pop_back(), Some(first));
+        assert_eq!(state.directory_cache_order.pop_front(), Some(second));
+    }
+
+    #[test]
+    fn directory_cache_remove_clears_lru_order() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let path = PathBuf::from("/tmp/remove-me");
+
+        state.insert_directory_cache(path.clone(), vec![test_entry(1)]);
+        state.remove_directory_cache(&path);
+
+        assert!(!state.directory_cache.contains_key(&path));
+        assert!(!state.directory_cache_order.contains(&path));
+    }
+
+    fn test_entry(index: usize) -> FileEntry {
+        FileEntry {
+            name: format!("file-{index}").into(),
+            path: format!("/tmp/file-{index}").into(),
+            group: String::new().into(),
+            location: String::new().into(),
+            kind: "File".into(),
+            size: "1 KB".into(),
+            size_bytes: 1024.0,
+            modified: "Today".into(),
+            modified_age_days: 0,
+            is_dir: false,
+            thumbnail_state: 0,
+            thumbnail: Image::default(),
+        }
+    }
 }

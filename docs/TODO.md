@@ -50,6 +50,7 @@
 - [x] ICU4X locale workaround for Slint 1.16.1 segmentation data limitations.
 - [x] Split Rust code into focused nested modules for config, desktop integration, filesystem logic, and support helpers.
 - [x] Directory cache for instant redraw on previously visited folders.
+  - Current: directory entries are cached with an LRU cap so long browsing sessions cannot keep every visited directory's full entry list forever.
 - [x] Dolphin-style delayed main-view clearing for uncached directory navigation.
 - [x] Per-directory main-view scroll position memory.
 - [x] Patched non-fatal ICU4X CJK segmentation warning from `icu_segmenter 2.2.0`.

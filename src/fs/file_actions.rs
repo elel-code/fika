@@ -262,8 +262,7 @@ pub(crate) fn apply_file_action_result(
 ) -> FileActionApplyResult {
     state
         .borrow_mut()
-        .directory_cache
-        .remove(&result.affected_dir);
+        .remove_directory_cache(&result.affected_dir);
     match result.result {
         Ok(message) => FileActionApplyResult {
             status: Some(format!("{} complete: {message}", result.action)),

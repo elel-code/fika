@@ -1589,7 +1589,7 @@ fn load_directory_with_preservation(
             state.selection_anchor = None;
         }
         let current_dir = state.current_dir.clone();
-        let cached_entries = state.directory_cache.get(&current_dir).cloned();
+        let cached_entries = state.cached_directory_entries(&current_dir);
         (current_dir, generation, cached_entries)
     };
     debug_log(&format!(
@@ -1802,9 +1802,7 @@ fn apply_directory_result(
                 state.entries = entries.into_iter().map(to_file_entry).collect();
                 let cache_entries = state.entries.clone();
                 state.virtual_view.invalidate();
-                state
-                    .directory_cache
-                    .insert(result.path.clone(), cache_entries);
+                state.insert_directory_cache(result.path.clone(), cache_entries);
                 if !result.preserve_view {
                     state.search_query.clear();
                     state.search_kind_filter = 0;
@@ -2026,7 +2024,8 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         state.search_generation.next();
         let query = state.search_query.clone();
         let progress = state.search_progress;
-        if let Some(entries) = state.directory_cache.get(&state.current_dir).cloned() {
+        let current_dir = state.current_dir.clone();
+        if let Some(entries) = state.cached_directory_entries(&current_dir) {
             state.entries = entries;
             state.virtual_view.invalidate();
         }
@@ -2270,9 +2269,9 @@ fn apply_file_operation_result(
             state.active_operation = None;
             state.active_operation_cancel = None;
         }
-        state.directory_cache.remove(&result.target_dir);
+        state.remove_directory_cache(&result.target_dir);
         if let Some(source_parent) = &source_parent {
-            state.directory_cache.remove(source_parent);
+            state.remove_directory_cache(source_parent);
         }
         let refresh_current_dir = source_parent
             .as_ref()
@@ -2451,17 +2450,17 @@ fn apply_file_undo_result(
     {
         let mut state = state.borrow_mut();
         if let Some(parent) = result.undo.original_source.parent() {
-            state.directory_cache.remove(parent);
+            state.remove_directory_cache(parent);
         }
         if let Some(parent) = result.undo.destination.parent() {
-            state.directory_cache.remove(parent);
+            state.remove_directory_cache(parent);
         }
         for item in &result.undo.items {
             if let Some(parent) = item.original_source.parent() {
-                state.directory_cache.remove(parent);
+                state.remove_directory_cache(parent);
             }
             if let Some(parent) = item.destination.parent() {
-                state.directory_cache.remove(parent);
+                state.remove_directory_cache(parent);
             }
         }
     }
@@ -2516,7 +2515,7 @@ fn apply_privileged_operation_result(
     let refresh_current_dir = {
         let mut state = state.borrow_mut();
         for dir in &result.affected_dirs {
-            state.directory_cache.remove(dir);
+            state.remove_directory_cache(dir);
         }
         result
             .affected_dirs
