@@ -92,7 +92,7 @@ Rust 代码当前按低耦合职责拆分为嵌套模块：
 侧栏 Devices 现在由 Rust 模型驱动，而不是在 Slint 中硬编码。当前实现保守地只列出已经挂载的本地目录：
 
 - 固定包含 `Filesystem`，路径为 `/`。
-- 优先解析 `/proc/self/mountinfo`，只显示挂载点位于 `/run/media/$USER`、`/media/$USER`、`/media` 和 `/mnt` 下的路径。
+- 优先解析 `/proc/self/mountinfo`，只显示挂载点位于 `/run/media/$USER`、`/media/$USER`、`/media` 和 `/mnt` 下、且 source / filesystem type 看起来像真实本地设备的路径。`tmpfs`、`proc`、`sysfs` 等伪文件系统会被过滤掉，避免把运行时目录误显示成 Devices。
 - 当 mountinfo 不可用时，才回退扫描这些目录下的一级目录。
 
 这能覆盖常见桌面环境已经自动挂载的 U 盘路径，同时避免在 UI 阶段引入 mount/eject 权限语义。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应接入 UDisks2 system bus D-Bus，识别未挂载块设备，并提供 mount、unmount、eject 和错误状态同步。

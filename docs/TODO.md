@@ -35,7 +35,7 @@
 - [x] Internal folder drag from main view into Places.
 - [~] Devices sidebar.
   - Current: Devices is Rust-driven rather than hard-coded in Slint, and lists `Filesystem` plus mounted paths under `/run/media/$USER`, `/media/$USER`, `/media`, and `/mnt`.
-  - Current: discovery is now mount-table-first via `/proc/self/mountinfo`, closer to Dolphin's KMountPoint/Solid and cosmic-files' mounter-item model than raw directory scanning. Directory scanning remains only as a fallback when mountinfo is unavailable.
+  - Current: discovery is now mount-table-first via `/proc/self/mountinfo`, closer to Dolphin's KMountPoint/Solid and cosmic-files' mounter-item model than raw directory scanning. Mountinfo parsing keeps source and filesystem type so pseudo filesystems such as `tmpfs` do not appear as removable devices. Directory scanning remains only as a fallback when mountinfo is unavailable.
   - Remaining: integrate UDisks2 over D-Bus for unmounted removable drives, mount/unmount/eject actions, and clearer device error reporting.
 - [x] Internal drop transfer menu with Move / Copy / Link actions.
 - [x] F5 active refresh; toolbar refresh button removed.

@@ -18,9 +18,10 @@ fn mounted_devices_from_mountinfo(
     mountinfo_path: &str,
 ) -> Option<Vec<DeviceEntry>> {
     let contents = fs::read_to_string(mountinfo_path).ok()?;
-    let mount_points = parse_mountinfo_mount_points(&contents)
+    let mount_points = parse_mountinfo_records(&contents)
         .into_iter()
-        .filter(|path| is_device_mount_point(path, roots))
+        .filter(|record| is_device_mount_record(record, roots))
+        .map(|record| record.mount_point)
         .collect::<Vec<_>>();
 
     Some(mounted_devices_from_paths(mount_points))
@@ -103,22 +104,38 @@ fn mounted_children(root: &Path) -> Vec<PathBuf> {
     children
 }
 
-fn parse_mountinfo_mount_points(contents: &str) -> Vec<PathBuf> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MountRecord {
+    mount_point: PathBuf,
+    source: String,
+    fs_type: String,
+}
+
+fn parse_mountinfo_records(contents: &str) -> Vec<MountRecord> {
     contents
         .lines()
-        .filter_map(parse_mountinfo_mount_point)
+        .filter_map(parse_mountinfo_record)
         .collect()
 }
 
-fn parse_mountinfo_mount_point(line: &str) -> Option<PathBuf> {
-    let mut fields = line.split_whitespace();
+fn parse_mountinfo_record(line: &str) -> Option<MountRecord> {
+    let (mount_fields, fs_fields) = line.split_once(" - ")?;
+    let mut fields = mount_fields.split_whitespace();
     fields.next()?;
     fields.next()?;
     fields.next()?;
     fields.next()?;
-    fields
-        .next()
-        .map(|field| PathBuf::from(unescape_mountinfo_field(field)))
+    let mount_point = fields.next()?;
+
+    let mut fields = fs_fields.split_whitespace();
+    let fs_type = fields.next()?;
+    let source = fields.next()?;
+
+    Some(MountRecord {
+        mount_point: PathBuf::from(unescape_mountinfo_field(mount_point)),
+        source: unescape_mountinfo_field(source),
+        fs_type: fs_type.to_string(),
+    })
 }
 
 fn unescape_mountinfo_field(field: &str) -> String {
@@ -147,15 +164,56 @@ fn unescape_mountinfo_field(field: &str) -> String {
     String::from_utf8_lossy(&output).into_owned()
 }
 
+fn is_device_mount_record(record: &MountRecord, roots: &[PathBuf]) -> bool {
+    is_device_mount_point(&record.mount_point, roots)
+        && is_real_device_filesystem(&record.source, &record.fs_type)
+}
+
 fn is_device_mount_point(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| {
-        if path == root {
-            return true;
-        }
-        path.strip_prefix(root)
-            .ok()
-            .is_some_and(|relative| relative.components().count() > 0)
+        path == root
+            || path
+                .strip_prefix(root)
+                .ok()
+                .is_some_and(|relative| relative.components().count() > 0)
     })
+}
+
+fn is_real_device_filesystem(source: &str, fs_type: &str) -> bool {
+    if is_pseudo_filesystem(fs_type) {
+        return false;
+    }
+
+    source.starts_with("/dev/")
+        || source.starts_with("UUID=")
+        || source.starts_with("LABEL=")
+        || fs_type == "fuseblk"
+}
+
+fn is_pseudo_filesystem(fs_type: &str) -> bool {
+    matches!(
+        fs_type,
+        "autofs"
+            | "bpf"
+            | "binfmt_misc"
+            | "cgroup"
+            | "cgroup2"
+            | "configfs"
+            | "debugfs"
+            | "devpts"
+            | "devtmpfs"
+            | "fusectl"
+            | "hugetlbfs"
+            | "mqueue"
+            | "nsfs"
+            | "proc"
+            | "pstore"
+            | "rpc_pipefs"
+            | "securityfs"
+            | "sysfs"
+            | "tmpfs"
+            | "tracefs"
+    )
 }
 
 fn mount_label(path: &Path) -> String {
@@ -258,6 +316,55 @@ mod tests {
         assert_eq!(devices[0].path, "/");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mounted_devices_ignores_pseudo_filesystems_in_mountinfo() {
+        let root = test_dir("mountinfo-pseudo");
+        let real_mount = root.join("USB Disk");
+        let pseudo_mount = root.join("runtime");
+        fs::create_dir_all(&real_mount).unwrap();
+        fs::create_dir_all(&pseudo_mount).unwrap();
+        let mountinfo = format!(
+            "42 24 8:1 / {} rw,nosuid,nodev - ext4 /dev/sdb1 rw\n\
+             43 24 0:42 / {} rw,nosuid,nodev - tmpfs tmpfs rw\n",
+            real_mount.display().to_string().replace(' ', "\\040"),
+            pseudo_mount.display()
+        );
+        let mountinfo_path = root.join("mountinfo");
+        fs::write(&mountinfo_path, mountinfo).unwrap();
+
+        let devices = mounted_devices_from_mountinfo(
+            std::slice::from_ref(&root),
+            mountinfo_path.to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[1].label, "USB Disk");
+        assert!(
+            !devices
+                .iter()
+                .any(|device| device.label.as_str() == "runtime")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mountinfo_records_decode_mount_point_and_source() {
+        let records = parse_mountinfo_records(
+            "42 24 8:1 / /run/media/yk/USB\\040Disk rw,nosuid,nodev - ext4 /dev/disk/by-label/USB\\040Disk rw\n",
+        );
+
+        assert_eq!(
+            records,
+            vec![MountRecord {
+                mount_point: PathBuf::from("/run/media/yk/USB Disk"),
+                source: "/dev/disk/by-label/USB Disk".to_string(),
+                fs_type: "ext4".to_string(),
+            }]
+        );
     }
 
     #[test]

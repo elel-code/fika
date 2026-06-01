@@ -109,6 +109,27 @@ pub(crate) fn point_in_main_pane(
     x >= bounds.left && x < bounds.right && y >= bounds.top && y < bounds.bottom
 }
 
+pub(crate) fn side_button_should_navigate_main_pane(
+    sidebar_width_px: f32,
+    window_width: f32,
+    window_height: f32,
+    last_cursor_position: Option<(f32, f32)>,
+    scale_factor: f32,
+) -> Option<(f32, f32)> {
+    let (x, y) = last_cursor_position?;
+    let scale_factor = scale_factor.max(1.0);
+    let logical_x = x / scale_factor;
+    let logical_y = y / scale_factor;
+    point_in_main_pane(
+        sidebar_width_px,
+        window_width,
+        window_height,
+        logical_x,
+        logical_y,
+    )
+    .then_some((logical_x, logical_y))
+}
+
 pub(crate) fn virtual_grid_plan(
     entry_count: usize,
     rows_per_column: usize,
@@ -563,8 +584,8 @@ mod tests {
     use super::{
         ChildPopupInput, HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement,
         PopupPoint, PopupRect, context_menu_metrics, main_pane_bounds, main_scroll_max_x,
-        place_drop_geometry, point_in_main_pane, search_panel_height, virtual_entry_range,
-        virtual_grid_plan,
+        place_drop_geometry, point_in_main_pane, search_panel_height,
+        side_button_should_navigate_main_pane, virtual_entry_range, virtual_grid_plan,
     };
 
     #[test]
@@ -604,6 +625,22 @@ mod tests {
         assert_eq!(bounds.left, bounds.right);
         assert_eq!(bounds.top, bounds.bottom);
         assert!(!point_in_main_pane(320.0, 100.0, 20.0, 328.0, 64.0));
+    }
+
+    #[test]
+    fn side_button_navigation_requires_main_pane_cursor() {
+        assert_eq!(
+            side_button_should_navigate_main_pane(320.0, 1100.0, 760.0, None, 1.0),
+            None
+        );
+        assert_eq!(
+            side_button_should_navigate_main_pane(320.0, 1100.0, 760.0, Some((200.0, 300.0)), 1.0),
+            None
+        );
+        assert_eq!(
+            side_button_should_navigate_main_pane(320.0, 1100.0, 760.0, Some((700.0, 300.0)), 2.0),
+            Some((350.0, 150.0))
+        );
     }
 
     #[test]

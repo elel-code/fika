@@ -31,7 +31,7 @@ use app::file_clipboard::sync_clipboard_ui;
 use app::geometry::{
     ChildPopupInput, HoverBridgeInput, MainGridLayout, MenuMetricsInput, PopupPlacement,
     PopupPoint, PopupRect, SelectionRect, context_menu_metrics, place_drop_geometry,
-    point_in_main_pane, virtual_grid_plan,
+    side_button_should_navigate_main_pane, virtual_grid_plan,
 };
 use app::places::{
     add_place, add_place_at_slot, add_place_at_slot_from_external_payload,
@@ -1406,12 +1406,6 @@ impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
                 button,
                 ..
             } if matches!(button, MouseButton::Back | MouseButton::Forward) => {
-                let scale = _winit_window.map_or(1.0, |window| window.scale_factor()) as f32;
-                let Some((x, y)) = self.last_cursor_position else {
-                    return slint::winit_030::EventResult::Propagate;
-                };
-                let logical_x = x / scale;
-                let logical_y = y / scale;
                 let Some(ui_weak) = self.ui_weak.borrow().clone() else {
                     return slint::winit_030::EventResult::Propagate;
                 };
@@ -1419,18 +1413,19 @@ impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
                     return slint::winit_030::EventResult::Propagate;
                 };
                 let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-                if !point_in_main_pane(
+                let scale = _winit_window.map_or(1.0, |window| window.scale_factor()) as f32;
+                let Some((logical_x, logical_y)) = side_button_should_navigate_main_pane(
                     ui.get_sidebar_width_px(),
                     window_size.width,
                     window_size.height,
-                    logical_x,
-                    logical_y,
-                ) {
+                    self.last_cursor_position,
+                    scale,
+                ) else {
                     debug_log(&format!(
-                        "winit side button ignored outside main pane button={button:?} x={logical_x:.1} y={logical_y:.1}"
+                        "winit side button ignored outside main pane button={button:?}"
                     ));
                     return slint::winit_030::EventResult::Propagate;
-                }
+                };
 
                 let ui_weak_for_event_loop = ui.as_weak();
                 let button = *button;
