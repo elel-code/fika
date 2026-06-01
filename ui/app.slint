@@ -744,7 +744,7 @@ export component AppWindow inherits Window {
                             root.folder_drag_y = self.absolute-position.y + event.position.y;
                             root.place_drag_x = root.folder_drag_x;
                             root.place_drag_y = root.folder_drag_y;
-                            root.folder_drag_active = event.mime-type == "application/x-fika-folder-path" || root.places_drop_force_gap(event.mime-type);
+                            root.folder_drag_active = event.mime-type == "application/x-fika-folder-path" || event.mime-type == "application/x-fika-file-path" || root.places_drop_force_gap(event.mime-type);
                             root.place_drag_active = event.mime-type == "application/x-fika-place-path";
                             root.place_drag_label = event.data;
                             root.place_drag_marker = "P";
@@ -756,8 +756,15 @@ export component AppWindow inherits Window {
                             root.place_drag_rejected = root.folder_drag_over_place_item && !root.place_drop_allowed(event.data, root.folder_drag_place_target);
                             root.folder_drag_slot = root.place_drop_slot((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
                             root.place_drag_slot = root.folder_drag_slot;
-                            root.trace_places_drop("can-drop-accepted", event.mime-type, event.data, root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
-                            true
+                            if (event.mime-type == "application/x-fika-file-path" && !root.folder_drag_over_place_item) {
+                                root.folder_drag_active = false;
+                                root.place_drag_rejected = false;
+                                root.trace_places_drop("can-drop-rejected:file-gap", event.mime-type, event.data, root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                                false
+                            } else {
+                                root.trace_places_drop("can-drop-accepted", event.mime-type, event.data, root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                                true
+                            }
                         } else {
                             root.folder_drag_active = false;
                             root.folder_drag_over_place_item = false;
@@ -774,7 +781,7 @@ export component AppWindow inherits Window {
                                     root.reorder_place_path(event.data, root.folder_drag_slot);
                                 } else if (root.places_drop_force_gap(event.mime-type)) {
                                     root.add_external_place_at_slot(event.data, root.folder_drag_slot, event.mime-type);
-                                } else {
+                                } else if (event.mime-type == "application/x-fika-folder-path") {
                                     root.add_place_at_slot(event.data, root.folder_drag_slot);
                                 }
                             } else {
@@ -1031,7 +1038,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                             can-drop(event) => {
-                                if (event.mime-type == "application/x-fika-folder-path" || event.mime-type == "application/x-fika-place-path") {
+                                if (event.mime-type == "application/x-fika-folder-path" || event.mime-type == "application/x-fika-file-path" || event.mime-type == "application/x-fika-place-path") {
                                     root.main_drag_active = true;
                                     root.main_drag_rejected = !root.main_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data);
                                     root.place_drag_target_path = root.main_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data);

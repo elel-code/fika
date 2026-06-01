@@ -167,7 +167,9 @@ pub(crate) fn is_external_place_drop_mime(mime_type: &str) -> bool {
 pub(crate) fn is_supported_places_drop_mime(mime_type: &str) -> bool {
     matches!(
         mime_type,
-        "application/x-fika-folder-path" | "application/x-fika-place-path"
+        "application/x-fika-folder-path"
+            | "application/x-fika-file-path"
+            | "application/x-fika-place-path"
     ) || is_external_place_drop_mime(mime_type)
 }
 
@@ -489,9 +491,13 @@ mod tests {
             "application/x-fika-folder-path"
         ));
         assert!(is_supported_places_drop_mime(
+            "application/x-fika-file-path"
+        ));
+        assert!(is_supported_places_drop_mime(
             "application/x-fika-place-path"
         ));
         assert!(!places_drop_force_gap("application/x-fika-folder-path"));
+        assert!(!places_drop_force_gap("application/x-fika-file-path"));
         assert!(!places_drop_force_gap("application/x-fika-place-path"));
         assert!(!is_supported_places_drop_mime("application/octet-stream"));
 

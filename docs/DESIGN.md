@@ -208,9 +208,9 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 
 Slint experimental `DragArea` / `DropArea` 引入策略：
 
-- 主栏目录 tile 已使用 `DragArea` 发出 `application/x-fika-folder-path` payload，`data = entry.path`。
+- 主栏 tile 已使用 `DragArea` 发出内部路径 payload：目录使用 `application/x-fika-folder-path`，普通文件使用 `application/x-fika-file-path`，`data = entry.path`。
 - Places 项也已使用 `DragArea` 发出 `application/x-fika-place-path` payload。
-- Places sidebar、主栏空白和主栏目录 tile 已使用 `DropArea` 接收主栏目录和 Places 项 drop，并根据目标区域决定 reorder、add place 或弹出 Move / Copy / Link 菜单。
+- Places sidebar、主栏空白和主栏目录 tile 已使用 `DropArea` 接收主栏条目和 Places 项 drop，并根据目标区域决定 reorder、add place 或弹出 Move / Copy / Link 菜单。
 - 拖到 Places 缝隙时显示插入线；拖到 Places 项或主栏目录时高亮目标项，颜色与普通选中态区分。
 - Places DropArea 的 hover target、gap/item 判定和插入 slot 通过 Rust `PlaceDropGeometry` 计算；winit fallback 复用同一 helper，避免滚动后的视觉反馈和松手提交规则漂移。
 - Places DropArea 已接受 `text/uri-list` / `text/plain` payload，并按缝隙插入为 Place；平台 `DroppedFile` 事件仍作为 fallback 保留。
@@ -223,8 +223,11 @@ Slint experimental `DragArea` / `DropArea` 引入策略：
 
 - 主栏文件夹拖到 Places 项之间的缝隙：按缝隙位置插入为新的 Place。
 - 主栏文件夹拖到 Places 项本体：弹出 Move / Copy / Link 菜单，目标为该 Place。
+- 主栏普通文件拖到 Places 项本体：弹出 Move / Copy / Link 菜单，目标为该 Place。
+- 主栏普通文件拖到 Places 项之间的缝隙：不作为 Place 添加，避免把不可打开为目录的文件写入 Places。
 - 主栏文件夹拖到主栏文件夹：弹出 Move / Copy / Link 菜单，目标为该文件夹。
 - 主栏文件夹拖到主栏空白处：弹出 Move / Copy / Link 菜单，目标为当前目录。
+- 主栏普通文件拖到主栏文件夹或空白处：弹出 Move / Copy / Link 菜单，目标分别为该文件夹或当前目录。
 - Places 项拖到主栏空白处：弹出 Move / Copy / Link 菜单，目标为当前目录。
 - Places 项拖到主栏文件夹：根据松手坐标和列优先网格几何计算目标 tile；如果命中目录则以该目录为目标，否则退回当前目录。
 - 拖到自身或自身子目录不会打开 transfer 菜单；Rust 侧准备菜单和执行操作都会拒绝这类目标并在状态栏提示。

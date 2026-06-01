@@ -1622,7 +1622,7 @@ fn dnd_log_startup(winit_fallback_enabled: bool) {
 
 fn dnd_startup_summary(winit_fallback_enabled: bool) -> String {
     format!(
-        "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-place-path winit_fallback={} disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK",
+        "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path winit_fallback={} disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK",
         if winit_fallback_enabled {
             "enabled"
         } else {
@@ -4415,7 +4415,7 @@ mod tests {
     fn dnd_startup_summary_reports_drop_backends() {
         assert_eq!(
             dnd_startup_summary(true),
-            "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-place-path winit_fallback=enabled disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK"
+            "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path winit_fallback=enabled disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK"
         );
         assert!(
             dnd_startup_summary(false).contains("winit_fallback=disabled"),

@@ -22,8 +22,8 @@ export component FileTile inherits Rectangle {
     background: drop-target ? (dark ? #3a2a12 : #fff7dd) : (selected ? (dark ? #132b3a : #e6f4ff) : (touch-area.has-hover ? (dark ? #191e23 : #f3f7fb) : transparent));
 
     drag-area := DragArea {
-        enabled: root.entry.is_dir;
-        mime-type: "application/x-fika-folder-path";
+        enabled: root.entry.path != "";
+        mime-type: root.entry.is_dir ? "application/x-fika-folder-path" : "application/x-fika-file-path";
         data: root.entry.path;
 
         touch-area := TouchArea {
