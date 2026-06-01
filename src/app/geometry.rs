@@ -30,6 +30,19 @@ pub(crate) struct MainPaneBounds {
     pub(crate) bottom: f32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SideButtonDirection {
+    Back,
+    Forward,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SideButtonNavigation {
+    pub(crate) direction: SideButtonDirection,
+    pub(crate) logical_x: f32,
+    pub(crate) logical_y: f32,
+}
+
 impl MainGridLayout {
     pub(crate) fn from_ui(ui: &AppWindow) -> Self {
         let cell_width = icon_cell_width(ui.get_icon_zoom_level());
@@ -128,6 +141,29 @@ pub(crate) fn side_button_should_navigate_main_pane(
         logical_y,
     )
     .then_some((logical_x, logical_y))
+}
+
+pub(crate) fn side_button_navigation_in_main_pane(
+    direction: Option<SideButtonDirection>,
+    sidebar_width_px: f32,
+    window_width: f32,
+    window_height: f32,
+    last_cursor_position: Option<(f32, f32)>,
+    scale_factor: f32,
+) -> Option<SideButtonNavigation> {
+    let direction = direction?;
+    let (logical_x, logical_y) = side_button_should_navigate_main_pane(
+        sidebar_width_px,
+        window_width,
+        window_height,
+        last_cursor_position,
+        scale_factor,
+    )?;
+    Some(SideButtonNavigation {
+        direction,
+        logical_x,
+        logical_y,
+    })
 }
 
 pub(crate) fn virtual_grid_plan(
@@ -592,8 +628,9 @@ pub(crate) fn clamp_popup(position: f32, popup_size: f32, safe_min: f32, safe_ma
 mod tests {
     use super::{
         ChildPopupInput, HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement,
-        PopupPoint, PopupRect, context_menu_metrics, main_pane_bounds, main_scroll_max_x,
-        place_drop_geometry, point_in_main_pane, search_panel_height,
+        PopupPoint, PopupRect, SideButtonDirection, SideButtonNavigation, context_menu_metrics,
+        main_pane_bounds, main_scroll_max_x, place_drop_geometry, point_in_main_pane,
+        search_panel_height, side_button_navigation_in_main_pane,
         side_button_should_navigate_main_pane, virtual_entry_range, virtual_grid_plan,
     };
 
@@ -649,6 +686,47 @@ mod tests {
         assert_eq!(
             side_button_should_navigate_main_pane(320.0, 1100.0, 760.0, Some((700.0, 300.0)), 2.0),
             Some((350.0, 150.0))
+        );
+    }
+
+    #[test]
+    fn side_button_navigation_carries_direction_and_scaled_position() {
+        assert_eq!(
+            side_button_navigation_in_main_pane(
+                None,
+                320.0,
+                1100.0,
+                760.0,
+                Some((700.0, 300.0)),
+                2.0,
+            ),
+            None
+        );
+        assert_eq!(
+            side_button_navigation_in_main_pane(
+                Some(SideButtonDirection::Back),
+                320.0,
+                1100.0,
+                760.0,
+                Some((200.0, 300.0)),
+                1.0,
+            ),
+            None
+        );
+        assert_eq!(
+            side_button_navigation_in_main_pane(
+                Some(SideButtonDirection::Forward),
+                320.0,
+                1100.0,
+                760.0,
+                Some((700.0, 300.0)),
+                2.0,
+            ),
+            Some(SideButtonNavigation {
+                direction: SideButtonDirection::Forward,
+                logical_x: 350.0,
+                logical_y: 150.0,
+            })
         );
     }
 

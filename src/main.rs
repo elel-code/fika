@@ -30,8 +30,8 @@ use app::events::{
 use app::file_clipboard::sync_clipboard_ui;
 use app::geometry::{
     ChildPopupInput, HoverBridgeInput, MainGridLayout, MenuMetricsInput, PopupPlacement,
-    PopupPoint, PopupRect, SelectionRect, context_menu_metrics, place_drop_geometry,
-    side_button_should_navigate_main_pane, virtual_grid_plan,
+    PopupPoint, PopupRect, SelectionRect, SideButtonDirection, context_menu_metrics,
+    place_drop_geometry, side_button_navigation_in_main_pane, virtual_grid_plan,
 };
 use app::places::{
     add_place, add_place_at_slot, add_place_at_slot_from_external_payload,
@@ -1493,7 +1493,13 @@ impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
                 };
                 let window_size = ui.window().size().to_logical(ui.window().scale_factor());
                 let scale = _winit_window.map_or(1.0, |window| window.scale_factor()) as f32;
-                let Some((logical_x, logical_y)) = side_button_should_navigate_main_pane(
+                let direction = match button {
+                    MouseButton::Back => Some(SideButtonDirection::Back),
+                    MouseButton::Forward => Some(SideButtonDirection::Forward),
+                    _ => None,
+                };
+                let Some(navigation) = side_button_navigation_in_main_pane(
+                    direction,
                     ui.get_sidebar_width_px(),
                     window_size.width,
                     window_size.height,
@@ -1507,14 +1513,15 @@ impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
                 };
 
                 let ui_weak_for_event_loop = ui.as_weak();
-                let button = *button;
                 debug_log(&format!(
-                    "winit side button accepted button={button:?} x={logical_x:.1} y={logical_y:.1}"
+                    "winit side button accepted direction={:?} x={:.1} y={:.1}",
+                    navigation.direction, navigation.logical_x, navigation.logical_y
                 ));
-                let _ = ui_weak_for_event_loop.upgrade_in_event_loop(move |ui| match button {
-                    MouseButton::Back => ui.invoke_go_back(),
-                    MouseButton::Forward => ui.invoke_go_forward(),
-                    _ => {}
+                let _ = ui_weak_for_event_loop.upgrade_in_event_loop(move |ui| {
+                    match navigation.direction {
+                        SideButtonDirection::Back => ui.invoke_go_back(),
+                        SideButtonDirection::Forward => ui.invoke_go_forward(),
+                    }
                 });
                 return slint::winit_030::EventResult::PreventDefault;
             }
