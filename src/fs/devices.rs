@@ -496,6 +496,7 @@ fn removable_media_rejection(objects: &ManagedObjects, block: &Properties) -> Op
         return Some("media unavailable");
     }
     if bool_property(drive, "Removable")
+        || bool_property(drive, "MediaRemovable")
         || bool_property(drive, "Ejectable")
         || string_property(drive, "ConnectionBus").as_deref() == Some("usb")
     {
@@ -580,7 +581,9 @@ fn udisks2_display_label(
     mount_point: Option<&str>,
     device: &str,
 ) -> String {
-    string_property(block, "IdLabel")
+    string_property(block, "HintName")
+        .filter(|label| !label.is_empty())
+        .or_else(|| string_property(block, "IdLabel"))
         .filter(|label| !label.is_empty())
         .or_else(|| {
             mount_point
@@ -1039,6 +1042,47 @@ mod tests {
     }
 
     #[test]
+    fn udisks2_lists_media_removable_drives() {
+        let objects = udisks_objects(
+            drive_object_with_media_options(false, true, true, false, "", "Card", "Reader"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Camera Card",
+                false,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+
+        let devices = udisks2_removable_devices_from_objects(&objects);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].label, "Camera Card");
+        assert_eq!(devices[0].device_path, "/dev/sdb1");
+    }
+
+    #[test]
+    fn udisks2_prefers_hint_name_for_display_label() {
+        let objects = udisks_objects(
+            drive_object(true, true, "Framework", "USB-C Storage"),
+            block_object_with_hint_name(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Volume Label",
+                "Desktop Name",
+                false,
+            ),
+            Some(filesystem_object(vec!["/run/media/yk/Volume Label"])),
+        );
+
+        let devices = udisks2_removable_devices_from_objects(&objects);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].label, "Desktop Name");
+        assert_eq!(devices[0].marker, "D");
+    }
+
+    #[test]
     fn udisks2_filters_system_hint_blocks_even_on_usb_media() {
         let objects = udisks_objects(
             drive_object_with_options(false, true, false, "usb", "System", "Disk"),
@@ -1289,9 +1333,30 @@ mod tests {
         vendor: &str,
         model: &str,
     ) -> Properties {
+        drive_object_with_media_options(
+            removable,
+            media_available,
+            false,
+            ejectable,
+            connection_bus,
+            vendor,
+            model,
+        )
+    }
+
+    fn drive_object_with_media_options(
+        removable: bool,
+        media_available: bool,
+        media_removable: bool,
+        ejectable: bool,
+        connection_bus: &str,
+        vendor: &str,
+        model: &str,
+    ) -> Properties {
         HashMap::from([
             ("Removable".to_string(), value(removable)),
             ("MediaAvailable".to_string(), value(media_available)),
+            ("MediaRemovable".to_string(), value(media_removable)),
             ("Ejectable".to_string(), value(ejectable)),
             (
                 "ConnectionBus".to_string(),
@@ -1303,13 +1368,48 @@ mod tests {
     }
 
     fn block_object(device: &str, drive: &str, label: &str, hint_ignore: bool) -> Properties {
-        block_object_with_system_hint(device, drive, label, hint_ignore, false)
+        block_object_with_hint_name_and_system_hint(device, drive, label, "", hint_ignore, false)
     }
 
     fn block_object_with_system_hint(
         device: &str,
         drive: &str,
         label: &str,
+        hint_ignore: bool,
+        hint_system: bool,
+    ) -> Properties {
+        block_object_with_hint_name_and_system_hint(
+            device,
+            drive,
+            label,
+            "",
+            hint_ignore,
+            hint_system,
+        )
+    }
+
+    fn block_object_with_hint_name(
+        device: &str,
+        drive: &str,
+        label: &str,
+        hint_name: &str,
+        hint_ignore: bool,
+    ) -> Properties {
+        block_object_with_hint_name_and_system_hint(
+            device,
+            drive,
+            label,
+            hint_name,
+            hint_ignore,
+            false,
+        )
+    }
+
+    fn block_object_with_hint_name_and_system_hint(
+        device: &str,
+        drive: &str,
+        label: &str,
+        hint_name: &str,
         hint_ignore: bool,
         hint_system: bool,
     ) -> Properties {
@@ -1330,6 +1430,7 @@ mod tests {
                 value(OwnedObjectPath::try_from(drive).unwrap()),
             ),
             ("IdLabel".to_string(), value(label.to_string())),
+            ("HintName".to_string(), value(hint_name.to_string())),
             ("HintIgnore".to_string(), value(hint_ignore)),
             ("HintSystem".to_string(), value(hint_system)),
         ])
