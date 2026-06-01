@@ -1,0 +1,45 @@
+export struct FileEntry {
+    name: string,
+    path: string,
+    group: string,
+    location: string,
+    kind: string,
+    size: string,
+    size_bytes: float,
+    modified: string,
+    modified_age_days: int,
+    is_dir: bool,
+    thumbnail_state: int,
+    thumbnail: image,
+}
+
+export struct PlaceEntry {
+    label: string,
+    path: string,
+    marker: string,
+    is_builtin: bool,
+}
+
+export struct DeviceEntry {
+    label: string,
+    path: string,
+    marker: string,
+    mounted: bool,
+}
+
+export struct DesktopApp {
+    id: string,
+    name: string,
+    is_default: bool,
+}
+
+export struct ChooserChoiceOption {
+    label: string,
+}
+
+export struct ChooserChoice {
+    label: string,
+    selected_label: string,
+    selected_index: int,
+    options: [ChooserChoiceOption],
+}

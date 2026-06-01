@@ -1,0 +1,1 @@
+pub const CHOOSER_CANCEL_EXIT_CODE: i32 = 75;

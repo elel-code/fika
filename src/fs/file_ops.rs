@@ -1,0 +1,1032 @@
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TransferProgress {
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct TransferOutcome {
+    pub destination: PathBuf,
+    pub overwritten_backup: Option<PathBuf>,
+}
+
+pub fn perform_transfer_with_progress(
+    operation: &str,
+    source: &Path,
+    target_dir: &Path,
+    conflict_policy: &str,
+    cancel: Option<Arc<AtomicBool>>,
+    progress: impl FnMut(TransferProgress),
+) -> Result<PathBuf, String> {
+    let outcome = perform_transfer_with_progress_outcome(
+        operation,
+        source,
+        target_dir,
+        conflict_policy,
+        cancel,
+        progress,
+    )?;
+    if let Some(backup) = outcome.overwritten_backup {
+        remove_path(&backup).map_err(|err| err.to_string())?;
+    }
+    Ok(outcome.destination)
+}
+
+pub fn perform_transfer_with_progress_outcome(
+    operation: &str,
+    source: &Path,
+    target_dir: &Path,
+    conflict_policy: &str,
+    cancel: Option<Arc<AtomicBool>>,
+    mut progress: impl FnMut(TransferProgress),
+) -> Result<TransferOutcome, String> {
+    if !source.exists() {
+        return Err("source no longer exists".to_string());
+    }
+    if !target_dir.is_dir() {
+        return Err("target is not a folder".to_string());
+    }
+
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "source has no file name".to_string())?;
+    let destination = transfer_destination(source, target_dir, file_name, conflict_policy)?;
+
+    if !matches!(operation, "move" | "copy" | "link") {
+        return Err(format!("unknown operation: {operation}"));
+    }
+
+    let overwrite_backup = if conflict_policy == "overwrite" && destination.exists() {
+        Some(backup_existing_destination(&destination)?)
+    } else {
+        None
+    };
+
+    let result = match operation {
+        "move" => move_path(source, &destination, cancel.as_ref(), &mut progress),
+        "copy" => copy_path(source, &destination, cancel.as_ref(), &mut progress),
+        "link" => link_path(source, &destination),
+        _ => unreachable!("operation was validated before dispatch"),
+    };
+
+    match result {
+        Ok(()) => {
+            // Keep the backup in the richer outcome so callers that expose Undo can restore it.
+            // The compatibility wrapper removes it immediately for one-shot operations.
+        }
+        Err(err) => {
+            if let Some(backup) = overwrite_backup {
+                restore_overwrite_backup(&destination, &backup)?;
+            } else if err.kind() == io::ErrorKind::Interrupted {
+                let _ = remove_path(&destination);
+            }
+            return Err(err.to_string());
+        }
+    }
+
+    Ok(TransferOutcome {
+        destination,
+        overwritten_backup: overwrite_backup,
+    })
+}
+
+pub fn base_destination(source: &Path, target_dir: &Path) -> Result<PathBuf, String> {
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "source has no file name".to_string())?;
+    Ok(target_dir.join(file_name))
+}
+
+pub fn renamed_destination(target_dir: &Path, name: &str) -> Result<PathBuf, String> {
+    if !target_dir.is_dir() {
+        return Err("target is not a folder".to_string());
+    }
+    let name = sanitize_child_name(name)?;
+    let destination = target_dir.join(name);
+    if destination.exists() {
+        return Err("an item with that name already exists".to_string());
+    }
+    Ok(destination)
+}
+
+pub fn undo_transfer(
+    operation: &str,
+    original_source: &Path,
+    destination: &Path,
+) -> Result<String, String> {
+    undo_transfer_with_backup(operation, original_source, destination, None)
+}
+
+pub fn undo_transfer_with_backup(
+    operation: &str,
+    original_source: &Path,
+    destination: &Path,
+    overwritten_backup: Option<&Path>,
+) -> Result<String, String> {
+    if let Some(backup) = overwritten_backup {
+        return undo_overwrite_transfer(operation, original_source, destination, backup);
+    }
+
+    match operation {
+        "copy" | "link" => {
+            if !destination.exists() {
+                return Err("undo target no longer exists".to_string());
+            }
+            remove_path(destination).map_err(|err| err.to_string())?;
+            Ok(format!("removed {}", destination.display()))
+        }
+        "move" => {
+            if !destination.exists() {
+                return Err("moved item no longer exists".to_string());
+            }
+            if original_source.exists() {
+                return Err("original location is already occupied".to_string());
+            }
+            if let Some(parent) = original_source.parent() {
+                fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            match fs::rename(destination, original_source) {
+                Ok(()) => Ok(format!("restored {}", original_source.display())),
+                Err(err) if err.raw_os_error() == Some(18) => {
+                    copy_path(destination, original_source, None, &mut |_| {})
+                        .map_err(|err| err.to_string())?;
+                    remove_path(destination).map_err(|err| err.to_string())?;
+                    Ok(format!("restored {}", original_source.display()))
+                }
+                Err(err) => Err(err.to_string()),
+            }
+        }
+        _ => Err(format!("cannot undo operation: {operation}")),
+    }
+}
+
+fn undo_overwrite_transfer(
+    operation: &str,
+    original_source: &Path,
+    destination: &Path,
+    backup: &Path,
+) -> Result<String, String> {
+    if !backup.exists() {
+        return Err("overwritten item backup no longer exists".to_string());
+    }
+
+    match operation {
+        "copy" | "link" => {
+            if destination.exists() {
+                remove_path(destination).map_err(|err| err.to_string())?;
+            }
+            fs::rename(backup, destination).map_err(|err| err.to_string())?;
+            Ok(format!("restored overwritten {}", destination.display()))
+        }
+        "move" => {
+            if !destination.exists() {
+                return Err("moved item no longer exists".to_string());
+            }
+            if original_source.exists() {
+                return Err("original location is already occupied".to_string());
+            }
+            if let Some(parent) = original_source.parent() {
+                fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            match fs::rename(destination, original_source) {
+                Ok(()) => {}
+                Err(err) if err.raw_os_error() == Some(18) => {
+                    copy_path(destination, original_source, None, &mut |_| {})
+                        .map_err(|err| err.to_string())?;
+                    remove_path(destination).map_err(|err| err.to_string())?;
+                }
+                Err(err) => return Err(err.to_string()),
+            }
+            fs::rename(backup, destination).map_err(|err| err.to_string())?;
+            Ok(format!(
+                "restored {} and overwritten {}",
+                original_source.display(),
+                destination.display()
+            ))
+        }
+        _ => Err(format!("cannot undo operation: {operation}")),
+    }
+}
+
+pub fn create_folder(parent: &Path, name: &str) -> Result<PathBuf, String> {
+    if !parent.is_dir() {
+        return Err("current location is not a folder".to_string());
+    }
+    let name = sanitize_child_name(name)?;
+    let destination = unique_destination(parent, name.as_ref());
+    fs::create_dir(&destination).map_err(|err| err.to_string())?;
+    Ok(destination)
+}
+
+pub fn rename_path(path: &Path, new_name: &str) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Err("item no longer exists".to_string());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "item has no parent folder".to_string())?;
+    let new_name = sanitize_child_name(new_name)?;
+    let destination = parent.join(new_name);
+    if destination == path {
+        return Ok(destination);
+    }
+    if destination.exists() {
+        return Err("an item with that name already exists".to_string());
+    }
+    fs::rename(path, &destination).map_err(|err| err.to_string())?;
+    Ok(destination)
+}
+
+pub fn undo_create_folder(path: &Path) -> Result<String, String> {
+    if !path.exists() {
+        return Err("created folder no longer exists".to_string());
+    }
+    if !path.is_dir() {
+        return Err("created item is no longer a folder".to_string());
+    }
+    fs::remove_dir(path).map_err(|err| err.to_string())?;
+    Ok(format!("removed {}", path.display()))
+}
+
+pub fn undo_rename(original_path: &Path, renamed_path: &Path) -> Result<String, String> {
+    if !renamed_path.exists() {
+        return Err("renamed item no longer exists".to_string());
+    }
+    if original_path.exists() {
+        return Err("original name is already occupied".to_string());
+    }
+    fs::rename(renamed_path, original_path).map_err(|err| err.to_string())?;
+    Ok(format!("restored {}", original_path.display()))
+}
+
+pub fn trash_paths(paths: &[PathBuf]) -> FileActionSummary {
+    let mut summary = FileActionSummary::default();
+    for path in paths {
+        match trash_path(path) {
+            Ok(destination) => summary.successes.push(TrashRecord {
+                original_path: path.clone(),
+                trash_path: destination,
+            }),
+            Err(err) => summary.failures.push(format!("{}: {err}", path.display())),
+        }
+    }
+    summary
+}
+
+pub fn trash_path(path: &Path) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Err("item no longer exists".to_string());
+    }
+
+    let trash_home = trash_home();
+    let files_dir = trash_home.join("files");
+    let info_dir = trash_home.join("info");
+    fs::create_dir_all(&files_dir).map_err(|err| err.to_string())?;
+    fs::create_dir_all(&info_dir).map_err(|err| err.to_string())?;
+
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "item has no file name".to_string())?;
+    let destination = unique_destination(&files_dir, file_name);
+    move_path(path, &destination, None, &mut |_| {}).map_err(|err| err.to_string())?;
+
+    let info_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "trash destination has invalid name".to_string())?;
+    fs::write(
+        info_dir.join(format!("{info_name}.trashinfo")),
+        trashinfo(path),
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(destination)
+}
+
+pub fn undo_trash(items: &[(PathBuf, PathBuf)]) -> Result<String, String> {
+    if items.is_empty() {
+        return Err("no trash entries to restore".to_string());
+    }
+
+    for (original_path, trash_path) in items {
+        if !trash_path.exists() {
+            return Err(format!(
+                "trash item no longer exists: {}",
+                trash_path.display()
+            ));
+        }
+        if original_path.exists() {
+            return Err(format!(
+                "original location is already occupied: {}",
+                original_path.display()
+            ));
+        }
+    }
+
+    for (original_path, trash_path) in items {
+        if let Some(parent) = original_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        fs::rename(trash_path, original_path).map_err(|err| err.to_string())?;
+        let _ = remove_trashinfo(trash_path);
+    }
+
+    Ok(format!("restored {} item(s)", items.len()))
+}
+
+#[derive(Debug, Default)]
+pub struct FileActionSummary {
+    pub successes: Vec<TrashRecord>,
+    pub failures: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TrashRecord {
+    pub original_path: PathBuf,
+    pub trash_path: PathBuf,
+}
+
+fn move_path(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    ensure_not_cancelled(cancel)?;
+    let bytes_total = path_size(source).unwrap_or_default();
+    match fs::rename(source, destination) {
+        Ok(()) => {
+            progress(TransferProgress {
+                bytes_done: bytes_total,
+                bytes_total,
+            });
+            Ok(())
+        }
+        Err(err) if err.raw_os_error() == Some(18) => {
+            let result = copy_path(source, destination, cancel, progress);
+            if let Err(err) = &result
+                && err.kind() == io::ErrorKind::Interrupted
+            {
+                let _ = remove_path(destination);
+            }
+            result?;
+            ensure_not_cancelled(cancel)?;
+            if let Err(err) = remove_path(source) {
+                let _ = remove_path(destination);
+                Err(err)
+            } else {
+                Ok(())
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn copy_path(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    ensure_not_cancelled(cancel)?;
+    let bytes_total = path_size(source)?;
+    let mut bytes_done = 0;
+    copy_path_inner(
+        source,
+        destination,
+        cancel,
+        &mut bytes_done,
+        bytes_total,
+        progress,
+    )
+}
+
+fn copy_path_inner(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    bytes_done: &mut u64,
+    bytes_total: u64,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(source)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        copy_directory(
+            source,
+            destination,
+            cancel,
+            bytes_done,
+            bytes_total,
+            progress,
+        )
+    } else {
+        copy_file(
+            source,
+            destination,
+            cancel,
+            bytes_done,
+            bytes_total,
+            progress,
+        )
+    }
+}
+
+fn copy_directory(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    bytes_done: &mut u64,
+    bytes_total: u64,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    fs::create_dir(destination)?;
+    let metadata = fs::metadata(source)?;
+    fs::set_permissions(destination, metadata.permissions())?;
+
+    for entry in fs::read_dir(source)? {
+        ensure_not_cancelled(cancel)?;
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        copy_path_inner(
+            &source_path,
+            &destination_path,
+            cancel,
+            bytes_done,
+            bytes_total,
+            progress,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn copy_file(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    bytes_done: &mut u64,
+    bytes_total: u64,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    let mut reader = fs::File::open(source)?;
+    let mut writer = fs::File::create(destination)?;
+    let mut buffer = [0_u8; 64 * 1024];
+
+    loop {
+        ensure_not_cancelled(cancel)?;
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read])?;
+        *bytes_done = bytes_done.saturating_add(read as u64);
+        progress(TransferProgress {
+            bytes_done: *bytes_done,
+            bytes_total,
+        });
+    }
+
+    if let Ok(metadata) = fs::metadata(source) {
+        let _ = fs::set_permissions(destination, metadata.permissions());
+    }
+    Ok(())
+}
+
+fn link_path(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, destination)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let metadata = fs::metadata(source)?;
+        if metadata.is_dir() {
+            std::os::windows::fs::symlink_dir(source, destination)
+        } else {
+            std::os::windows::fs::symlink_file(source, destination)
+        }
+    }
+}
+
+fn path_size(path: &Path) -> io::Result<u64> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        let mut total: u64 = 0;
+        for entry in fs::read_dir(path)? {
+            total = total.saturating_add(path_size(&entry?.path())?);
+        }
+        Ok(total)
+    } else {
+        Ok(metadata.len())
+    }
+}
+
+fn ensure_not_cancelled(cancel: Option<&Arc<AtomicBool>>) -> io::Result<()> {
+    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "operation cancelled",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn remove_path(path: &Path) -> io::Result<()> {
+    if fs::symlink_metadata(path)?.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+fn transfer_destination(
+    source: &Path,
+    target_dir: &Path,
+    file_name: &std::ffi::OsStr,
+    conflict_policy: &str,
+) -> Result<PathBuf, String> {
+    if let Some(name) = conflict_policy.strip_prefix("rename:") {
+        return renamed_destination(target_dir, name);
+    }
+
+    let base = target_dir.join(file_name);
+    match conflict_policy {
+        "keep-both" => Ok(unique_destination(target_dir, file_name)),
+        "overwrite" => {
+            if base == source {
+                return Err("cannot overwrite an item with itself".to_string());
+            }
+            Ok(base)
+        }
+        _ => Err(format!("unknown conflict policy: {conflict_policy}")),
+    }
+}
+
+fn backup_existing_destination(destination: &Path) -> Result<PathBuf, String> {
+    let backup = overwrite_backup_path(destination)?;
+    fs::rename(destination, &backup).map_err(|err| err.to_string())?;
+    Ok(backup)
+}
+
+pub fn cleanup_overwrite_backup(backup: &Path) -> Result<(), String> {
+    if backup.exists() {
+        remove_path(backup).map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn restore_overwrite_backup(destination: &Path, backup: &Path) -> Result<(), String> {
+    if destination.exists() {
+        remove_path(destination).map_err(|err| err.to_string())?;
+    }
+    fs::rename(backup, destination).map_err(|err| err.to_string())
+}
+
+fn remove_trashinfo(trash_path: &Path) -> Result<(), String> {
+    let Some(name) = trash_path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(());
+    };
+    let trash_home = trash_home();
+    let info_path = trash_home.join("info").join(format!("{name}.trashinfo"));
+    if info_path.exists() {
+        fs::remove_file(info_path).map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn overwrite_backup_path(destination: &Path) -> Result<PathBuf, String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "overwrite target has no parent folder".to_string())?;
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("item");
+    let pid = std::process::id();
+    for index in 0.. {
+        let candidate = parent.join(format!(".{name}.fika-overwrite-backup-{pid}-{index}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("unbounded overwrite backup search should always return")
+}
+
+fn sanitize_child_name(name: &str) -> Result<std::ffi::OsString, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("name cannot be empty".to_string());
+    }
+    if name.contains('/') || name == "." || name == ".." {
+        return Err("name must not contain path separators".to_string());
+    }
+    Ok(name.into())
+}
+
+fn trash_home() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("Trash")
+}
+
+fn trashinfo(path: &Path) -> String {
+    format!(
+        "[Trash Info]\nPath={}\nDeletionDate={}\n",
+        percent_encode_path(path),
+        current_trash_time()
+    )
+}
+
+fn current_trash_time() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let days = secs / 86_400;
+    let seconds_of_day = secs % 86_400;
+    let (year, month, day) = civil_from_days(days as i64);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year, m as u32, d as u32)
+}
+
+fn percent_encode_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'-' | b'_' | b'~' => {
+                vec![byte as char]
+            }
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
+}
+
+pub fn unique_destination(target_dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
+    let initial = target_dir.join(file_name);
+    if !initial.exists() {
+        return initial;
+    }
+
+    let source_name = Path::new(file_name);
+    let stem = source_name
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("item");
+    let extension = source_name
+        .extension()
+        .and_then(|extension| extension.to_str());
+
+    for index in 1.. {
+        let suffix = if index == 1 {
+            "copy".to_string()
+        } else {
+            format!("copy {index}")
+        };
+        let candidate_name = match extension {
+            Some(extension) if !extension.is_empty() => format!("{stem} {suffix}.{extension}"),
+            _ => format!("{stem} {suffix}"),
+        };
+        let candidate = target_dir.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded destination search should always return")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn copy_reports_progress() {
+        let temp = test_dir("progress");
+        fs::create_dir_all(&temp).unwrap();
+        let source = temp.join("source.bin");
+        let target = temp.join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(&source, vec![7_u8; 128 * 1024]).unwrap();
+
+        let mut progress_events = Vec::new();
+        let destination = perform_transfer_with_progress(
+            "copy",
+            &source,
+            &target,
+            "keep-both",
+            None,
+            |progress| {
+                progress_events.push(progress);
+            },
+        )
+        .unwrap();
+
+        assert!(destination.exists());
+        assert_eq!(fs::metadata(destination).unwrap().len(), 128 * 1024);
+        assert!(progress_events.last().is_some_and(
+            |progress| progress.bytes_done == 128 * 1024 && progress.bytes_total == 128 * 1024
+        ));
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn copy_can_be_cancelled() {
+        let temp = test_dir("cancel");
+        fs::create_dir_all(&temp).unwrap();
+        let source = temp.join("source.bin");
+        let target = temp.join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(&source, vec![11_u8; 256 * 1024]).unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_from_progress = Arc::clone(&cancel);
+        let result = perform_transfer_with_progress(
+            "copy",
+            &source,
+            &target,
+            "keep-both",
+            Some(cancel),
+            move |_| cancel_from_progress.store(true, Ordering::Relaxed),
+        );
+
+        assert!(result.is_err());
+        assert!(!target.join("source.bin").exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn transfer_conflict_policy_can_keep_both_overwrite_or_rename() {
+        let temp = test_dir("conflict");
+        fs::create_dir_all(&temp).unwrap();
+        let source_dir = temp.join("source");
+        let target = temp.join("target");
+        fs::create_dir(&source_dir).unwrap();
+        fs::create_dir(&target).unwrap();
+        let source = source_dir.join("note.txt");
+        fs::write(&source, b"new").unwrap();
+        fs::write(target.join("note.txt"), b"old").unwrap();
+
+        let kept =
+            perform_transfer_with_progress("copy", &source, &target, "keep-both", None, |_| {})
+                .unwrap();
+        assert_eq!(
+            kept.file_name().and_then(|name| name.to_str()),
+            Some("note copy.txt")
+        );
+        assert_eq!(fs::read_to_string(target.join("note.txt")).unwrap(), "old");
+
+        let overwritten =
+            perform_transfer_with_progress("copy", &source, &target, "overwrite", None, |_| {})
+                .unwrap();
+        assert_eq!(overwritten, target.join("note.txt"));
+        assert_eq!(fs::read_to_string(target.join("note.txt")).unwrap(), "new");
+
+        let renamed = perform_transfer_with_progress(
+            "copy",
+            &source,
+            &target,
+            "rename:custom-note.txt",
+            None,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(renamed, target.join("custom-note.txt"));
+        assert_eq!(
+            fs::read_to_string(target.join("custom-note.txt")).unwrap(),
+            "new"
+        );
+
+        let rejected_existing = perform_transfer_with_progress(
+            "copy",
+            &source,
+            &target,
+            "rename:note.txt",
+            None,
+            |_| {},
+        );
+        assert!(rejected_existing.is_err());
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn overwrite_replaces_existing_directory_atomically() {
+        let temp = test_dir("overwrite-dir");
+        fs::create_dir_all(&temp).unwrap();
+        let source_parent = temp.join("source-parent");
+        let target = temp.join("target");
+        let source = source_parent.join("project");
+        let existing = target.join("project");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&existing).unwrap();
+        fs::write(source.join("new.txt"), "new").unwrap();
+        fs::write(existing.join("old.txt"), "old").unwrap();
+
+        let overwritten =
+            perform_transfer_with_progress("copy", &source, &target, "overwrite", None, |_| {})
+                .unwrap();
+
+        assert_eq!(overwritten, existing);
+        assert_eq!(fs::read_to_string(existing.join("new.txt")).unwrap(), "new");
+        assert!(!existing.join("old.txt").exists());
+        assert!(!fs::read_dir(&target).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("fika-overwrite-backup")
+        }));
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn overwrite_outcome_can_restore_replaced_item_on_undo() {
+        let temp = test_dir("overwrite-undo");
+        fs::create_dir_all(&temp).unwrap();
+        let source_dir = temp.join("source");
+        let target = temp.join("target");
+        fs::create_dir(&source_dir).unwrap();
+        fs::create_dir(&target).unwrap();
+        let source = source_dir.join("note.txt");
+        let destination = target.join("note.txt");
+        fs::write(&source, "new").unwrap();
+        fs::write(&destination, "old").unwrap();
+
+        let outcome = perform_transfer_with_progress_outcome(
+            "copy",
+            &source,
+            &target,
+            "overwrite",
+            None,
+            |_| {},
+        )
+        .unwrap();
+        let backup = outcome.overwritten_backup.clone().unwrap();
+
+        assert_eq!(outcome.destination, destination);
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "new");
+        assert!(backup.exists());
+
+        undo_transfer_with_backup("copy", &source, &destination, Some(&backup)).unwrap();
+
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "old");
+        assert!(!backup.exists());
+        assert!(source.exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn undo_transfer_removes_copy_and_restores_move() {
+        let temp = test_dir("undo");
+        fs::create_dir_all(&temp).unwrap();
+        let source_dir = temp.join("source");
+        let target = temp.join("target");
+        fs::create_dir(&source_dir).unwrap();
+        fs::create_dir(&target).unwrap();
+
+        let copy_source = source_dir.join("copy.txt");
+        fs::write(&copy_source, b"copy").unwrap();
+        let copied = perform_transfer_with_progress(
+            "copy",
+            &copy_source,
+            &target,
+            "keep-both",
+            None,
+            |_| {},
+        )
+        .unwrap();
+        undo_transfer("copy", &copy_source, &copied).unwrap();
+        assert!(!copied.exists());
+        assert!(copy_source.exists());
+
+        let move_source = source_dir.join("move.txt");
+        fs::write(&move_source, b"move").unwrap();
+        let moved = perform_transfer_with_progress(
+            "move",
+            &move_source,
+            &target,
+            "keep-both",
+            None,
+            |_| {},
+        )
+        .unwrap();
+        assert!(!move_source.exists());
+        undo_transfer("move", &move_source, &moved).unwrap();
+        assert!(move_source.exists());
+        assert!(!moved.exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn undo_create_folder_removes_empty_created_folder() {
+        let temp = test_dir("undo-create-folder");
+        fs::create_dir_all(&temp).unwrap();
+        let created = create_folder(&temp, "New Folder").unwrap();
+
+        undo_create_folder(&created).unwrap();
+
+        assert!(!created.exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn undo_rename_restores_original_name() {
+        let temp = test_dir("undo-rename");
+        fs::create_dir_all(&temp).unwrap();
+        let original = temp.join("old.txt");
+        fs::write(&original, "contents").unwrap();
+
+        let renamed = rename_path(&original, "new.txt").unwrap();
+        undo_rename(&original, &renamed).unwrap();
+
+        assert!(original.exists());
+        assert!(!renamed.exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn undo_trash_restores_original_paths() {
+        let temp = test_dir("undo-trash");
+        let original_dir = temp.join("originals");
+        let trash_dir = temp.join("trash");
+        fs::create_dir_all(&original_dir).unwrap();
+        fs::create_dir_all(&trash_dir).unwrap();
+        let first = original_dir.join("first.txt");
+        let second = original_dir.join("second.txt");
+        let trashed_first = trash_dir.join("first.txt");
+        let trashed_second = trash_dir.join("second.txt");
+        fs::write(&trashed_first, "first").unwrap();
+        fs::write(&trashed_second, "second").unwrap();
+
+        let items = vec![
+            (first.clone(), trashed_first.clone()),
+            (second.clone(), trashed_second.clone()),
+        ];
+
+        undo_trash(&items).unwrap();
+
+        assert_eq!(fs::read_to_string(&first).unwrap(), "first");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "second");
+        assert!(!trashed_first.exists());
+        assert!(!trashed_second.exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn trash_paths_records_original_and_trash_destinations() {
+        let temp = test_dir("trash-records");
+        fs::create_dir_all(&temp).unwrap();
+        let first = temp.join("first.txt");
+        fs::write(&first, "first").unwrap();
+
+        let summary = trash_paths(std::slice::from_ref(&first));
+
+        if summary.failures.is_empty() {
+            assert_eq!(summary.successes.len(), 1);
+            assert_eq!(summary.successes[0].original_path, first);
+            assert!(summary.successes[0].trash_path.exists());
+            let _ = undo_trash(&[(
+                summary.successes[0].original_path.clone(),
+                summary.successes[0].trash_path.clone(),
+            )]);
+        }
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "fika-file-ops-{name}-{}-{}",
+            std::process::id(),
+            current_trash_time()
+        ))
+    }
+}

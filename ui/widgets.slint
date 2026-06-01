@@ -1,0 +1,444 @@
+export component ToolButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    callback clicked();
+
+    width: 34px;
+    height: 40px;
+    border-radius: 6px;
+    background: touch-area.has-hover ? (dark ? #33383d : #edf3f8) : transparent;
+
+    touch-area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        color: root.dark ? #f5f5f5 : #17212b;
+        font-size: 17px;
+        font-weight: 700;
+    }
+}
+
+export component ActionButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: 92px;
+    height: 28px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.enabled ? (root.dark ? #5b6670 : #b8c7d4) : (root.dark ? #3b4248 : #d6dce2);
+    background: !root.enabled ? (root.dark ? #1b2024 : #f1f5f9) : (touch-area.has-hover ? (root.dark ? #2f6f8e : #dbeafe) : (root.dark ? #285a73 : #e0f2fe));
+
+    touch-area := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        color: root.enabled ? (root.dark ? #f8fafc : #0f172a) : (root.dark ? #6b7280 : #94a3b8);
+        font-size: 12px;
+        font-weight: 700;
+        overflow: elide;
+    }
+}
+
+export component PlaceButton inherits Rectangle {
+    in property <string> label;
+    in property <string> path;
+    in property <string> marker;
+    in property <bool> selected;
+    in property <bool> dark;
+    in property <int> index;
+    in property <length> list_y;
+    in property <bool> reorderable;
+    in property <bool> dragged;
+    in property <int> place_count;
+    in property <bool> builtin;
+    in property <bool> drop-target;
+    callback clicked();
+    callback context_requested(int, string, bool, length, length);
+    callback drag_cancelled();
+
+    height: 34px;
+    border-width: dragged || drop-target ? 1px : 0px;
+    border-color: drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #4d5962 : #b9c7d3);
+    background: drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1f23 : #e8eef4) : (selected ? (dark ? #214f67 : #dceeff) : (touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent)));
+    opacity: dragged ? 0.45 : 1;
+
+    drag-area := DragArea {
+        enabled: root.reorderable && root.path != "";
+        mime-type: "application/x-fika-place-path";
+        data: root.path;
+
+        touch-area := TouchArea {
+            clicked => { root.clicked(); }
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    root.drag_cancelled();
+                } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                    root.context_requested(root.index, root.label, root.builtin, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 10px;
+            spacing: 10px;
+
+            Rectangle {
+                width: 24px;
+                height: root.height;
+                background: transparent;
+
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 24px;
+                    height: 22px;
+                    border-radius: 3px;
+                    background: root.dark ? #4f93d9 : #4f94dc;
+
+                    Text {
+                        text: root.marker;
+                        color: #102033;
+                        font-size: 11px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Text {
+                text: root.label;
+                color: root.dark ? #eeeeee : #17212b;
+                font-size: 14px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component SidebarAction inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 6px;
+    background: touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent;
+
+    touch-area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        x: 12px;
+        width: parent.width - 24px;
+        color: root.dark ? #cfd6dd : #475569;
+        font-size: 13px;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
+export component SidebarSection inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+
+    height: 30px;
+    background: transparent;
+
+    Text {
+        x: 12px;
+        text: root.label;
+        color: root.dark ? #a8a8a8 : #6b7280;
+        font-size: 13px;
+        font-weight: 700;
+        vertical-alignment: center;
+    }
+}
+
+export component CheckOption inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    in-out property <bool> checked;
+    callback toggled(bool);
+
+    height: 32px;
+    border-radius: 6px;
+    background: touch-area.has-hover ? (dark ? #33383d : #edf3f8) : transparent;
+
+    touch-area := TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: root.dark ? #64748b : #94a3b8;
+            background: root.checked ? (root.dark ? #38bdf8 : #0284c7) : transparent;
+
+            Text {
+                text: root.checked ? "X" : "";
+                color: root.dark ? #0f172a : #ffffff;
+                font-size: 11px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: root.label;
+            color: root.dark ? #f1f1f1 : #17212b;
+            font-size: 13px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component FilterButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.dark ? #47515a : #cbd5e1;
+    background: touch-area.has-hover ? (root.dark ? #33383d : #edf3f8) : (root.dark ? #20252a : #ffffff);
+
+    touch-area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: 6px;
+
+        Text {
+            text: root.label;
+            color: root.dark ? #f1f5f9 : #17212b;
+            font-size: 12px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: "v";
+            color: root.dark ? #aeb8c2 : #64748b;
+            font-size: 11px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component MenuItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    in property <bool> submenu: false;
+    callback clicked();
+    callback hovered(bool);
+
+    height: 38px;
+    background: transparent;
+
+    touch-area := TouchArea {
+        changed has-hover => { root.hovered(self.has-hover); }
+        clicked => { root.clicked(); }
+    }
+
+    Rectangle {
+        x: 4px;
+        y: 3px;
+        width: parent.width - 8px;
+        height: parent.height - 6px;
+        border-radius: 4px;
+        background: touch-area.has-hover ? (root.dark ? #343a40 : #edf3f8) : transparent;
+    }
+
+    Text {
+        text: root.label;
+        x: 12px;
+        width: parent.width - (root.submenu ? 34px : 24px);
+        color: root.dark ? #f1f1f1 : #17212b;
+        font-size: 13px;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    if (root.submenu): Text {
+        text: ">";
+        x: parent.width - 24px;
+        width: 12px;
+        color: root.dark ? #b8c0c8 : #64748b;
+        font-size: 13px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component MenuSeparator inherits Rectangle {
+    in property <bool> dark;
+
+    height: 8px;
+    background: transparent;
+
+    Rectangle {
+        x: 8px;
+        y: 4px;
+        width: parent.width - 16px;
+        height: 1px;
+        background: root.dark ? #3a4147 : #e2e8f0;
+    }
+}
+
+export component MenuTitle inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+
+    height: 30px;
+    background: transparent;
+
+    Text {
+        text: root.label;
+        x: 12px;
+        width: parent.width - 24px;
+        color: root.dark ? #a8a8a8 : #64748b;
+        font-size: 12px;
+        font-weight: 700;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
+export component MenuHoverTitle inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    callback hovered(bool);
+
+    height: 30px;
+    background: transparent;
+
+    touch-area := TouchArea {
+        changed has-hover => { root.hovered(self.has-hover); }
+    }
+
+    Text {
+        text: root.label;
+        x: 12px;
+        width: parent.width - 24px;
+        color: root.dark ? #a8a8a8 : #64748b;
+        font-size: 12px;
+        font-weight: 700;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
+export component PopupSurface inherits Rectangle {
+    in property <bool> dark;
+    in property <length> radius: 6px;
+
+    border-radius: root.radius;
+    background: root.dark ? #24292d : #ffffff;
+    border-width: 1px;
+    border-color: root.dark ? #4b5258 : #cbd5e1;
+}
+
+export component MenuDismissLayer inherits TouchArea {
+    callback dismissed();
+
+    clicked => { root.dismissed(); }
+}
+
+export component MenuHoverBridge inherits Rectangle {
+    callback hovered(bool);
+
+    background: transparent;
+
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+
+        changed has-hover => { root.hovered(self.has-hover); }
+    }
+}
+
+export component FolderGlyph inherits Rectangle {
+    in property <bool> dir;
+    in property <bool> dark;
+    in property <int> zoom-level;
+
+    width: root.zoom-level == 0 ? 52px : (root.zoom-level == 1 ? 64px : (root.zoom-level == 2 ? 80px : (root.zoom-level == 3 ? 96px : 112px)));
+    height: root.zoom-level == 0 ? 46px : (root.zoom-level == 1 ? 58px : (root.zoom-level == 2 ? 70px : (root.zoom-level == 3 ? 84px : 98px)));
+    background: transparent;
+
+    Rectangle {
+        x: 0px;
+        y: root.height * 0.14;
+        width: root.width * 0.475;
+        height: root.height * 0.257;
+        border-radius: 5px;
+        background: root.dir ? (root.dark ? #345b84 : #67a6e8) : (root.dark ? #858585 : #a4a4a4);
+    }
+
+    Rectangle {
+        x: 0px;
+        y: root.height * 0.286;
+        width: root.width;
+        height: root.height * 0.686;
+        border-radius: 4px;
+        background: root.dir ? (root.dark ? #37608d : #5a9be3) : (root.dark ? #8a8a8a : #a6a6a6);
+    }
+
+    Rectangle {
+        visible: root.dir;
+        x: root.width * 0.075;
+        y: root.height * 0.357;
+        width: root.width * 0.825;
+        height: max(5px, root.height * 0.1);
+        border-radius: 2px;
+        background: root.dark ? #9aa7b2 : #e8eef5;
+    }
+
+    Text {
+        visible: !root.dir;
+        text: "doc";
+        x: root.width * 0.1875;
+        y: root.height * 0.543;
+        width: root.width * 0.625;
+        color: root.dark ? #303030 : #555555;
+        font-size: root.zoom-level < 2 ? 10px : (root.zoom-level == 2 ? 12px : 13px);
+        font-weight: 700;
+        horizontal-alignment: center;
+    }
+}

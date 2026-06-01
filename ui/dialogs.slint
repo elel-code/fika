@@ -1,0 +1,395 @@
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { DesktopApp } from "models.slint";
+import { CheckOption, MenuItem } from "widgets.slint";
+
+export component TextInputDialog inherits Rectangle {
+    in property <bool> dark;
+    in property <string> title;
+    in property <string> accept-label;
+    in-out property <string> value;
+    callback accepted(string);
+    callback cancelled();
+
+    border-radius: 8px;
+    background: root.dark ? #24292d : #ffffff;
+    border-width: 1px;
+    border-color: root.dark ? #4b5258 : #cbd5e1;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+
+        Text {
+            text: root.title;
+            color: root.dark ? #f1f1f1 : #17212b;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        LineEdit {
+            text <=> root.value;
+            accepted => { root.accepted(self.text); }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle { horizontal-stretch: 1; }
+
+            MenuItem {
+                width: 82px;
+                label: "Cancel";
+                dark: root.dark;
+                clicked => { root.cancelled(); }
+            }
+
+            MenuItem {
+                width: 82px;
+                label: root.accept-label;
+                dark: root.dark;
+                clicked => { root.accepted(root.value); }
+            }
+        }
+    }
+}
+
+export component PropertiesDialog inherits Rectangle {
+    in property <bool> dark;
+    in property <string> name;
+    in property <string> kind;
+    in property <string> size;
+    in property <string> modified;
+    in property <string> path;
+    callback closed();
+
+    border-radius: 8px;
+    background: root.dark ? #24292d : #ffffff;
+    border-width: 1px;
+    border-color: root.dark ? #4b5258 : #cbd5e1;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+
+        Text {
+            text: "Properties";
+            color: root.dark ? #f8fafc : #17212b;
+            font-size: 15px;
+            font-weight: 700;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.name;
+            color: root.dark ? #f1f5f9 : #17212b;
+            font-size: 14px;
+            font-weight: 700;
+            overflow: elide;
+        }
+
+        Text {
+            text: "Type: " + root.kind;
+            color: root.dark ? #d8dee5 : #334155;
+            font-size: 13px;
+            overflow: elide;
+        }
+
+        Text {
+            text: "Size: " + root.size;
+            color: root.dark ? #d8dee5 : #334155;
+            font-size: 13px;
+            overflow: elide;
+        }
+
+        Text {
+            text: "Modified: " + root.modified;
+            color: root.dark ? #d8dee5 : #334155;
+            font-size: 13px;
+            overflow: elide;
+        }
+
+        Text {
+            text: "Location: " + root.path;
+            color: root.dark ? #a8a8a8 : #64748b;
+            font-size: 12px;
+            wrap: word-wrap;
+            max-height: 50px;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; }
+
+            MenuItem {
+                width: 82px;
+                label: "Close";
+                dark: root.dark;
+                clicked => { root.closed(); }
+            }
+        }
+    }
+}
+
+export component PrivilegedPromptDialog inherits Rectangle {
+    in property <bool> dark;
+    in property <string> title;
+    in property <string> message;
+    in property <string> detail;
+    callback cancelled();
+    callback accepted();
+
+    border-radius: 8px;
+    background: root.dark ? #24292d : #ffffff;
+    border-width: 1px;
+    border-color: root.dark ? #4b5258 : #cbd5e1;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+
+        Text {
+            text: root.title;
+            color: root.dark ? #f8fafc : #17212b;
+            font-size: 15px;
+            font-weight: 700;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.message;
+            color: root.dark ? #d8dee5 : #334155;
+            font-size: 13px;
+            wrap: word-wrap;
+            max-height: 44px;
+        }
+
+        Text {
+            text: root.detail;
+            color: root.dark ? #a8a8a8 : #64748b;
+            font-size: 12px;
+            wrap: word-wrap;
+            max-height: 36px;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle { horizontal-stretch: 1; }
+
+            MenuItem {
+                width: 92px;
+                label: "Cancel";
+                dark: root.dark;
+                clicked => { root.cancelled(); }
+            }
+
+            MenuItem {
+                width: 118px;
+                label: "Authenticate";
+                dark: root.dark;
+                clicked => { root.accepted(); }
+            }
+        }
+    }
+}
+
+export component OtherApplicationsDialog inherits Rectangle {
+    in property <bool> dark;
+    in property <[DesktopApp]> apps;
+    in-out property <string> filter;
+    in-out property <string> custom-command;
+    in-out property <bool> set-default;
+    callback filter_changed(string);
+    callback app_selected(string, bool);
+    callback custom_open(string);
+    callback cancelled();
+
+    border-radius: 8px;
+    background: root.dark ? #24292d : #ffffff;
+    border-width: 1px;
+    border-color: root.dark ? #4b5258 : #cbd5e1;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+
+        Text {
+            text: "Other Applications";
+            color: root.dark ? #f1f1f1 : #17212b;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        CheckOption {
+            label: "Set selected application as default";
+            dark: root.dark;
+            checked <=> root.set-default;
+        }
+
+        LineEdit {
+            text <=> root.filter;
+            height: 34px;
+            placeholder-text: "Filter applications";
+            changed text => { root.filter_changed(self.text); }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: as-needed;
+            vertical-scrollbar-policy: as-needed;
+            viewport-width: parent.width;
+            viewport-height: max(38px, root.apps.length * 38px);
+
+            if (root.apps.length == 0): Text {
+                text: "Loading applications...";
+                height: 38px;
+                x: 12px;
+                width: parent.width - 24px;
+                color: root.dark ? #d8d8d8 : #475569;
+                font-size: 13px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
+            for app[index] in root.apps: MenuItem {
+                y: index * 38px;
+                height: 38px;
+                width: parent.width;
+                label: (app.is_default ? "Default: " : "Open: ") + app.name;
+                dark: root.dark;
+                clicked => { root.app_selected(app.id, root.set-default); }
+            }
+        }
+
+        LineEdit {
+            text <=> root.custom-command;
+            height: 36px;
+            placeholder-text: "Custom command...";
+            accepted => { root.custom_open(self.text); }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle { horizontal-stretch: 1; }
+
+            MenuItem {
+                width: 82px;
+                label: "Cancel";
+                dark: root.dark;
+                clicked => { root.cancelled(); }
+            }
+
+            MenuItem {
+                width: 82px;
+                label: "Open";
+                dark: root.dark;
+                clicked => { root.custom_open(root.custom-command); }
+            }
+        }
+    }
+}
+
+export component TransferConflictDialog inherits Rectangle {
+    in property <bool> dark;
+    in property <string> source;
+    in property <string> target;
+    in-out property <string> rename-name;
+    in-out property <bool> apply-all;
+    callback choice(string);
+
+    border-radius: 8px;
+    background: root.dark ? #24292d : #ffffff;
+    border-width: 1px;
+    border-color: root.dark ? #4b5258 : #cbd5e1;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+
+        Text {
+            text: "File Already Exists";
+            color: root.dark ? #f8fafc : #17212b;
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        Text {
+            text: "A file or folder named \"" + root.target + "\" already exists.";
+            color: root.dark ? #d8dee5 : #334155;
+            font-size: 13px;
+            wrap: word-wrap;
+            max-height: 42px;
+        }
+
+        Text {
+            text: "Source: " + root.source;
+            color: root.dark ? #a8a8a8 : #64748b;
+            font-size: 12px;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            Text {
+                text: "Rename to";
+                color: root.dark ? #d8dee5 : #334155;
+                font-size: 13px;
+                min-width: 74px;
+                vertical-alignment: center;
+            }
+
+            LineEdit {
+                horizontal-stretch: 1;
+                height: 34px;
+                text <=> root.rename-name;
+                accepted => {
+                    root.choice("rename:" + self.text);
+                }
+            }
+        }
+
+        CheckOption {
+            width: 300px;
+            label: "Apply Skip / Keep Both / Overwrite to remaining conflicts";
+            dark: root.dark;
+            checked <=> root.apply-all;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle { horizontal-stretch: 1; }
+
+            MenuItem {
+                width: 74px;
+                label: "Skip";
+                dark: root.dark;
+                clicked => { root.choice(root.apply-all ? "all:skip" : "skip"); }
+            }
+
+            MenuItem {
+                width: 86px;
+                label: "Rename";
+                dark: root.dark;
+                clicked => { root.choice("rename:" + root.rename-name); }
+            }
+
+            MenuItem {
+                width: 88px;
+                label: "Keep Both";
+                dark: root.dark;
+                clicked => { root.choice(root.apply-all ? "all:keep-both" : "keep-both"); }
+            }
+
+            MenuItem {
+                width: 92px;
+                label: "Overwrite";
+                dark: root.dark;
+                clicked => { root.choice(root.apply-all ? "all:overwrite" : "overwrite"); }
+            }
+        }
+    }
+}

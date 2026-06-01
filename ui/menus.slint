@@ -1,0 +1,408 @@
+import { ScrollView } from "std-widgets.slint";
+import { ChooserChoiceOption, DesktopApp } from "models.slint";
+import { MenuHoverTitle, MenuItem, MenuSeparator, MenuTitle } from "widgets.slint";
+
+export component OpenWithMenu inherits Rectangle {
+    in property <string> title;
+    in property <bool> dark;
+    in property <[DesktopApp]> apps;
+    in property <length> item-height: 38px;
+    callback keep_alive(bool);
+    callback app_selected(string);
+    callback other_applications();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        MenuHoverTitle {
+            label: root.title;
+            dark: root.dark;
+            hovered(is-hovered) => { root.keep_alive(is-hovered); }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: as-needed;
+            vertical-scrollbar-policy: as-needed;
+            viewport-width: parent.width;
+            viewport-height: max(root.item-height, root.apps.length * root.item-height);
+
+            if (root.apps.length == 0): MenuItem {
+                label: "Loading applications...";
+                dark: root.dark;
+                hovered(is-hovered) => { root.keep_alive(is-hovered); }
+                clicked => { }
+            }
+
+            for app[index] in root.apps: MenuItem {
+                y: index * root.item-height;
+                width: parent.width;
+                label: (app.is_default ? "Default: " : "") + app.name;
+                dark: root.dark;
+                hovered(is-hovered) => { root.keep_alive(is-hovered); }
+                clicked => { root.app_selected(app.id); }
+            }
+        }
+
+        MenuSeparator {
+            dark: root.dark;
+        }
+
+        MenuItem {
+            label: "Other Applications...";
+            dark: root.dark;
+            hovered(is-hovered) => { root.keep_alive(is-hovered); }
+            clicked => { root.other_applications(); }
+        }
+    }
+}
+
+export component CreateNewMenu inherits Rectangle {
+    in property <bool> dark;
+    callback keep_alive(bool);
+    callback folder_selected();
+
+    background: transparent;
+
+    MenuItem {
+        label: "Folder";
+        dark: root.dark;
+        hovered(is-hovered) => { root.keep_alive(is-hovered); }
+        clicked => { root.folder_selected(); }
+    }
+}
+
+export component ChooserChoiceMenu inherits Rectangle {
+    in property <string> title;
+    in property <bool> dark;
+    in property <[ChooserChoiceOption]> options;
+    in property <int> selected-index;
+    callback option_selected(int);
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        MenuTitle {
+            label: root.title;
+            dark: root.dark;
+        }
+
+        for option[index] in root.options: MenuItem {
+            label: (index == root.selected-index ? "✓ " : "  ") + option.label;
+            dark: root.dark;
+            clicked => { root.option_selected(index); }
+        }
+    }
+}
+
+export component TransferMenu inherits Rectangle {
+    in property <string> title;
+    in property <bool> dark;
+    callback operation_selected(string);
+    callback cancelled();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        MenuTitle {
+            label: root.title;
+            dark: root.dark;
+        }
+
+        MenuItem {
+            label: "Move Here";
+            dark: root.dark;
+            clicked => { root.operation_selected("move"); }
+        }
+
+        MenuItem {
+            label: "Copy Here";
+            dark: root.dark;
+            clicked => { root.operation_selected("copy"); }
+        }
+
+        MenuItem {
+            label: "Link Here";
+            dark: root.dark;
+            clicked => { root.operation_selected("link"); }
+        }
+
+        MenuSeparator {
+            dark: root.dark;
+        }
+
+        MenuItem {
+            label: "Cancel";
+            dark: root.dark;
+            clicked => { root.cancelled(); }
+        }
+    }
+}
+
+export component PlaceContextMenu inherits Rectangle {
+    in property <string> title;
+    in property <bool> dark;
+    in property <bool> builtin;
+    callback open_new_window();
+    callback rename_requested();
+    callback remove_requested();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        MenuTitle {
+            label: root.title;
+            dark: root.dark;
+        }
+
+        MenuItem {
+            label: "Open in New Window";
+            dark: root.dark;
+            clicked => { root.open_new_window(); }
+        }
+
+        if (!root.builtin): MenuSeparator {
+            dark: root.dark;
+        }
+
+        if (!root.builtin): MenuItem {
+            label: "Rename";
+            dark: root.dark;
+            clicked => { root.rename_requested(); }
+        }
+
+        if (!root.builtin): MenuItem {
+            label: "Remove";
+            dark: root.dark;
+            clicked => { root.remove_requested(); }
+        }
+    }
+}
+
+export component PlacesBlankMenu inherits Rectangle {
+    in property <bool> dark;
+    in property <bool> add-current-visible;
+    callback add_current_folder();
+    callback restore_defaults();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        MenuTitle {
+            label: "Places";
+            dark: root.dark;
+        }
+
+        if (root.add-current-visible): MenuItem {
+            label: "Add Current Folder";
+            dark: root.dark;
+            clicked => { root.add_current_folder(); }
+        }
+
+        if (root.add-current-visible): MenuSeparator {
+            dark: root.dark;
+        }
+
+        MenuItem {
+            label: "Restore Defaults";
+            dark: root.dark;
+            clicked => { root.restore_defaults(); }
+        }
+    }
+}
+
+export component FileContextMenu inherits Rectangle {
+    in property <bool> dark;
+    in property <int> selected-count;
+    in property <string> selected-status;
+    in property <bool> is-dir;
+    in property <bool> default-open-visible;
+    in property <string> default-open-app-name;
+    in property <bool> clipboard-has-paths;
+    in property <bool> add-to-places-visible;
+    callback open_folder_with_hover(bool);
+    callback open_folder_with_clicked();
+    callback default_open_requested();
+    callback open_with_hover(bool);
+    callback open_with_clicked();
+    callback paste_into_folder();
+    callback add_to_places();
+    callback rename_requested();
+    callback duplicate_requested();
+    callback cut_requested();
+    callback copy_requested();
+    callback copy_location_requested();
+    callback properties_requested();
+    callback trash_requested();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        if (root.selected-count > 1): MenuTitle {
+            label: root.selected-status;
+            dark: root.dark;
+        }
+
+        if (root.selected-count <= 1 && root.is-dir): MenuItem {
+            label: "Open Folder With";
+            dark: root.dark;
+            submenu: true;
+            hovered(is-hovered) => { root.open_folder_with_hover(is-hovered); }
+            clicked => { root.open_folder_with_clicked(); }
+        }
+
+        if (root.selected-count <= 1 && !root.is-dir && root.default-open-visible): MenuItem {
+            label: "Open With " + root.default-open-app-name;
+            dark: root.dark;
+            clicked => { root.default_open_requested(); }
+        }
+
+        if (root.selected-count <= 1 && !root.is-dir): MenuItem {
+            label: "Open With";
+            dark: root.dark;
+            submenu: true;
+            hovered(is-hovered) => { root.open_with_hover(is-hovered); }
+            clicked => { root.open_with_clicked(); }
+        }
+
+        if (root.selected-count <= 1): MenuSeparator {
+            dark: root.dark;
+        }
+
+        if (root.selected-count <= 1 && root.is-dir && root.clipboard-has-paths): MenuItem {
+            label: "Paste Into Folder";
+            dark: root.dark;
+            clicked => { root.paste_into_folder(); }
+        }
+
+        if (root.selected-count <= 1 && root.is-dir && root.add-to-places-visible): MenuItem {
+            label: "Add to Places";
+            dark: root.dark;
+            clicked => { root.add_to_places(); }
+        }
+
+        if (root.selected-count <= 1): MenuItem {
+            label: "Rename";
+            dark: root.dark;
+            clicked => { root.rename_requested(); }
+        }
+
+        if (root.selected-count <= 1): MenuItem {
+            label: "Duplicate Here";
+            dark: root.dark;
+            clicked => { root.duplicate_requested(); }
+        }
+
+        if (root.selected-count <= 1): MenuItem {
+            label: "Cut";
+            dark: root.dark;
+            clicked => { root.cut_requested(); }
+        }
+
+        if (root.selected-count <= 1): MenuItem {
+            label: "Copy";
+            dark: root.dark;
+            clicked => { root.copy_requested(); }
+        }
+
+        if (root.selected-count <= 1): MenuItem {
+            label: "Copy Location";
+            dark: root.dark;
+            clicked => { root.copy_location_requested(); }
+        }
+
+        if (root.selected-count <= 1): MenuItem {
+            label: "Properties";
+            dark: root.dark;
+            clicked => { root.properties_requested(); }
+        }
+
+        if (root.selected-count <= 1): MenuSeparator {
+            dark: root.dark;
+        }
+
+        if (root.selected-count > 1): MenuItem {
+            label: "Cut";
+            dark: root.dark;
+            clicked => { root.cut_requested(); }
+        }
+
+        if (root.selected-count > 1): MenuItem {
+            label: "Copy";
+            dark: root.dark;
+            clicked => { root.copy_requested(); }
+        }
+
+        if (root.selected-count > 1): MenuSeparator {
+            dark: root.dark;
+        }
+
+        MenuItem {
+            label: root.selected-count > 1 ? "Move Selected to Trash" : "Move to Trash";
+            dark: root.dark;
+            clicked => { root.trash_requested(); }
+        }
+    }
+}
+
+export component ViewportContextMenu inherits Rectangle {
+    in property <bool> dark;
+    in property <bool> clipboard-has-paths;
+    in property <bool> clipboard-cut;
+    callback create_new_hover(bool);
+    callback create_new_clicked();
+    callback paste_requested();
+    callback open_folder_with_hover(bool);
+    callback open_folder_with_clicked();
+    callback open_terminal_here();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        MenuItem {
+            label: "Create New";
+            dark: root.dark;
+            submenu: true;
+            hovered(is-hovered) => { root.create_new_hover(is-hovered); }
+            clicked => { root.create_new_clicked(); }
+        }
+
+        MenuSeparator {
+            dark: root.dark;
+        }
+
+        if (root.clipboard-has-paths): MenuItem {
+            label: root.clipboard-cut ? "Paste Moved Items" : "Paste";
+            dark: root.dark;
+            clicked => { root.paste_requested(); }
+        }
+
+        MenuItem {
+            label: "Open Folder With";
+            dark: root.dark;
+            submenu: true;
+            hovered(is-hovered) => { root.open_folder_with_hover(is-hovered); }
+            clicked => { root.open_folder_with_clicked(); }
+        }
+
+        MenuItem {
+            label: "Open Terminal Here";
+            dark: root.dark;
+            clicked => { root.open_terminal_here(); }
+        }
+    }
+}

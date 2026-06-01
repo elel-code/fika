@@ -1,0 +1,1852 @@
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import {
+    ActionButton,
+    CheckOption,
+    FilterButton,
+    MenuDismissLayer,
+    MenuHoverBridge,
+    PlaceButton,
+    PopupSurface,
+    SidebarAction,
+    SidebarSection,
+    ToolButton,
+} from "widgets.slint";
+import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
+import { FileTile } from "file_tile.slint";
+import { ChooserChoiceMenu, CreateNewMenu, FileContextMenu, OpenWithMenu, PlaceContextMenu, PlacesBlankMenu, TransferMenu, ViewportContextMenu } from "menus.slint";
+import { OtherApplicationsDialog, PrivilegedPromptDialog, PropertiesDialog, TextInputDialog, TransferConflictDialog } from "dialogs.slint";
+
+export component AppWindow inherits Window {
+    in-out property <string> current_path;
+    in-out property <string> path_input_text;
+    in property <string> current_name;
+    in property <string> status;
+    in property <bool> chooser_mode;
+    in property <bool> chooser_select_directories;
+    in property <bool> chooser_multiple;
+    in property <bool> chooser_save_mode;
+    in-out property <string> chooser_title;
+    in property <string> chooser_accept_label;
+    in-out property <int> chooser_filter_count: 0;
+    in-out property <int> chooser_filter_index: 0;
+    in-out property <string> chooser_filter_label;
+    in property <[ChooserChoice]> chooser_choices;
+    in-out property <int> entry_count: 0;
+    in property <[FileEntry]> virtual_entries;
+    in-out property <int> virtual_start_index: 0;
+    in-out property <int> virtual_start_column: 0;
+    in property <[PlaceEntry]> places;
+    in property <[DeviceEntry]> devices;
+    in-out property <string> selected_path;
+    in-out property <int> selected_count;
+    in-out property <string> selected_status;
+    in-out property <string> chooser_save_name;
+    in-out property <bool> external_edit_active: false;
+    in-out property <string> external_edit_status;
+    in-out property <bool> undo_available: false;
+    in-out property <string> undo_label;
+    in-out property <int> selection_revision;
+    in-out property <string> search_query;
+    in-out property <bool> dark_mode;
+    in-out property <bool> recursive_search: false;
+    in-out property <int> search_kind_filter: 0;
+    in-out property <int> search_modified_filter: 0;
+    in-out property <int> search_size_filter: 0;
+    in-out property <bool> search_bar_open: false;
+    in-out property <bool> search_loading: false;
+    in-out property <bool> clipboard_has_paths: false;
+    in-out property <bool> clipboard_cut: false;
+
+    in-out property <int> icon_zoom_level: 2;
+    in-out property <float> sidebar_width_px: 320;
+    in-out property <float> places_list_y_px: 108;
+    in-out property <float> places_row_stride_px: 38;
+    in-out property <bool> directory_loading: false;
+    in-out property <float> main_viewport_x: 0;
+    in-out property <length> main_viewport_offset: 0px;
+    private property <bool> search-filters-active: root.search_kind_filter != 0 || root.search_modified_filter != 0 || root.search_size_filter != 0;
+    private property <bool> search-panel-visible: root.search_bar_open || root.search_query != "" || root.search-filters-active;
+    private property <length> search-panel-height: root.search-panel-visible ? 92px : 0px;
+    private property <string> search-kind-filter-label: root.search_kind_filter == 1 ? "Type: Folders" : (root.search_kind_filter == 2 ? "Type: Files" : (root.search_kind_filter == 3 ? "Type: Images" : "Type: All"));
+    private property <string> search-modified-filter-label: root.search_modified_filter == 1 ? "Modified: Today" : (root.search_modified_filter == 2 ? "Modified: 7 days" : (root.search_modified_filter == 3 ? "Modified: 30 days" : "Modified: Any"));
+    private property <string> search-size-filter-label: root.search_size_filter == 1 ? "Size: < 1 MB" : (root.search_size_filter == 2 ? "Size: 1-100 MB" : (root.search_size_filter == 3 ? "Size: > 100 MB" : "Size: Any"));
+    private property <length> main-pane-width: max(1px, root.width - root.sidebar_width_px * 1px - 8px);
+    private property <length> main-available-grid-height: max(root.icon-row-height, root.height - 64px - 36px - root.search-panel-height - 2 * root.icon-grid-padding);
+    private property <int> main-rows-per-column: max(1, floor(root.main-available-grid-height / root.icon-row-height));
+    private property <int> main-column-count: max(1, ceil(root.entry_count / root.main-rows-per-column));
+    private property <length> main-viewport-width: 2 * root.icon-grid-padding + root.main-column-count * root.icon-cell-width;
+    private property <float> main-scroll-max-x: max(0, (root.main-viewport-width - root.main-pane-width) / 1px);
+
+    private property <length> icon-cell-width: root.icon_zoom_level == 0 ? 172px : (root.icon_zoom_level == 1 ? 208px : (root.icon_zoom_level == 2 ? 248px : (root.icon_zoom_level == 3 ? 292px : 340px)));
+    private property <length> icon-row-height: root.icon_zoom_level == 0 ? 78px : (root.icon_zoom_level == 1 ? 90px : (root.icon_zoom_level == 2 ? 104px : (root.icon_zoom_level == 3 ? 124px : 146px)));
+    private property <length> icon-grid-padding: 14px;
+    private property <float> sidebar-resize-start-width-px: 320;
+    private property <length> sidebar-resize-press-x: 0px;
+    private property <bool> context-menu-open: false;
+    private property <int> context-menu-kind: 0;
+    private property <string> context-menu-path;
+    private property <string> context-menu-name;
+    private property <string> context-menu-properties-size;
+    private property <string> context-menu-properties-modified;
+    private property <bool> context-menu-is-dir: false;
+    private property <int> context-menu-place-index: -1;
+    private property <bool> context-menu-place-builtin: false;
+    private property <length> context-menu-x: 0px;
+    private property <length> context-menu-y: 0px;
+    private property <length> menu-pointer-gap: 8px;
+    private property <length> menu-screen-margin: 12px;
+    private property <length> menu-item-height: 38px;
+    private property <length> menu-separator-height: 8px;
+    private property <length> menu-title-height: 30px;
+    private property <length> context-file-menu-width: 220px;
+    private property <length> context-place-menu-width: 220px;
+    private property <length> context-blank-menu-width: 220px;
+    private property <bool> context-default-open-visible: root.default_open_app_name != "" && root.open_with_path == root.context-menu-path;
+    private property <bool> context-add-place-visible: root.context-menu-kind == 4 ? (root.current_path != "" && !root.is_place(root.current_path)) : (root.context-menu-is-dir && !root.is_place(root.context-menu-path));
+    private property <length> active-context-menu-width: root.context-menu-kind == 2 ? root.context-place-menu-width : ((root.context-menu-kind == 3 || root.context-menu-kind == 4) ? root.context-blank-menu-width : root.context-file-menu-width);
+    private property <length> active-context-menu-height: root.context_menu_height(root.context-menu-kind, root.selected_count, root.context-menu-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-menu-place-builtin, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
+    private property <length> context-open-with-row-offset: root.context_menu_open_with_row_offset(root.context-menu-kind, root.selected_count, root.context-menu-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-menu-place-builtin, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
+    private property <length> context-create-new-row-offset: root.context_menu_create_new_row_offset(root.context-menu-kind, root.selected_count, root.context-menu-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-menu-place-builtin, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
+    private property <length> context-menu-left: root.root_menu_left(root.width / 1px, root.height / 1px, root.context-menu-x / 1px, root.context-menu-y / 1px, root.active-context-menu-width / 1px, root.active-context-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px) * 1px;
+    private property <length> context-menu-top: root.root_menu_top(root.width / 1px, root.height / 1px, root.context-menu-x / 1px, root.context-menu-y / 1px, root.active-context-menu-width / 1px, root.active-context-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px) * 1px;
+    private property <length> child-menu-gap: 3px;
+    private property <length> open-with-menu-width: 260px;
+    private property <length> open-with-menu-height: min(360px, root.menu-title-height + max(1, root.open_with_apps.length) * root.menu-item-height + root.menu-separator-height + root.menu-item-height);
+    private property <length> create-new-menu-width: 180px;
+    private property <length> create-new-menu-height: root.menu-item-height;
+    private property <length> active-child-menu-width: root.open-with-menu-open ? root.open-with-menu-width : root.create-new-menu-width;
+    private property <length> active-child-menu-height: root.open-with-menu-open ? root.open-with-menu-height : root.create-new-menu-height;
+    private property <length> active-child-menu-y: root.open-with-menu-open ? root.open-with-menu-y : root.create-new-menu-y;
+    private property <length> active-child-menu-title-height: root.open-with-menu-open ? root.menu-title-height : 0px;
+    private property <length> active-child-menu-left: root.child_menu_left(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-width / 1px, root.active-child-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+    private property <length> active-child-menu-top: root.child_menu_top(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-width / 1px, root.active-child-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+    private property <length> active-child-bridge-left: root.child_bridge_left(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-left / 1px, root.active-child-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-top / 1px, root.menu-item-height / 1px, root.active-child-menu-title-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+    private property <length> active-child-bridge-top: root.child_bridge_top(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-left / 1px, root.active-child-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-top / 1px, root.menu-item-height / 1px, root.active-child-menu-title-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+    private property <length> active-child-bridge-width: root.child_bridge_width(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-left / 1px, root.active-child-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-top / 1px, root.menu-item-height / 1px, root.active-child-menu-title-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+    private property <length> active-child-bridge-height: root.child_bridge_height(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-left / 1px, root.active-child-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-top / 1px, root.menu-item-height / 1px, root.active-child-menu-title-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+    private property <bool> rename-place-open: false;
+    private property <int> rename-place-index: -1;
+    private property <string> rename-place-label;
+    in-out property <bool> privileged_prompt_open: false;
+    in-out property <string> privileged_prompt_title;
+    in-out property <string> privileged_prompt_message;
+    in-out property <string> privileged_prompt_detail;
+    private property <bool> new-folder-open: false;
+    private property <string> new-folder-name: "New Folder";
+    private property <bool> rename-entry-open: false;
+    private property <string> rename-entry-path;
+    private property <string> rename-entry-name;
+    private property <bool> properties-open: false;
+    private property <string> properties-name;
+    private property <string> properties-path;
+    private property <string> properties-kind;
+    private property <string> properties-size;
+    private property <string> properties-modified;
+    private property <bool> open-with-menu-open: false;
+    private property <length> open-with-menu-y: 0px;
+    private property <bool> create-new-menu-open: false;
+    private property <length> create-new-menu-y: 0px;
+    private property <bool> chooser-choice-menu-open: false;
+    private property <int> chooser-choice-menu-index: -1;
+    private property <length> chooser-choice-menu-x: 0px;
+    private property <length> chooser-choice-menu-y: 0px;
+    private property <length> chooser-choice-menu-width: 220px;
+    private property <bool> custom-open-with-open: false;
+    in property <[DesktopApp]> open_with_apps;
+    in property <[DesktopApp]> other_application_apps;
+    in-out property <string> open_with_path;
+    in-out property <string> open_with_mime;
+    in-out property <string> default_open_app_name;
+    in-out property <string> custom_open_command;
+    in-out property <string> other_application_filter;
+    private property <bool> other_application_set_default: false;
+    private property <bool> folder_drag_active: false;
+    private property <string> folder_drag_path;
+    private property <string> folder_drag_label;
+    private property <length> folder_drag_x: 0px;
+    private property <length> folder_drag_y: 0px;
+    private property <int> folder_drag_slot: 0;
+    private property <int> folder_drag_place_target: -1;
+    private property <bool> folder_drag_over_place_gap: false;
+    private property <bool> folder_drag_over_place_item: false;
+    private property <bool> transfer-menu-open: false;
+    in-out property <bool> transfer_conflict_open: false;
+    in-out property <string> transfer_conflict_source;
+    in-out property <string> transfer_conflict_target;
+    in-out property <string> transfer_conflict_rename_name;
+    private property <bool> transfer-conflict-apply-all: false;
+    in-out property <string> transfer_source_path;
+    in-out property <string> transfer_source_label;
+    in-out property <string> transfer_target_path;
+    in-out property <string> transfer_target_label;
+    in-out property <float> transfer_menu_x: 0;
+    in-out property <float> transfer_menu_y: 0;
+    private property <length> transfer-menu-width: 240px;
+    private property <length> transfer-menu-height: root.menu-title-height + 4 * root.menu-item-height + root.menu-separator-height;
+    private property <length> transfer-menu-left: root.transfer_menu_x * 1px;
+    private property <length> transfer-menu-top: root.transfer_menu_y * 1px;
+    private property <bool> place_drag_active: false;
+    private property <int> place_drag_from: -1;
+    private property <int> place_drag_slot: 0;
+    private property <string> place_drag_label;
+    private property <string> place_drag_marker;
+    private property <string> place_drag_target_path;
+    private property <string> place_drag_target_label;
+    private property <bool> place_drag_rejected: false;
+    private property <length> place_drag_x: 0px;
+    private property <length> place_drag_y: 0px;
+    private property <length> place_list_y: 0px;
+    private property <bool> main_drag_active: false;
+    private property <bool> main_drag_rejected: false;
+    private property <bool> selection_rect_active: false;
+    private property <bool> selection_rect_pending: false;
+    private property <bool> selection_rect_toggle: false;
+    private property <length> selection_rect_start_x: 0px;
+    private property <length> selection_rect_start_y: 0px;
+    private property <length> selection_rect_current_x: 0px;
+    private property <length> selection_rect_current_y: 0px;
+    private property <bool> path-input-focused: false;
+    private property <bool> search-input-focused: false;
+    private property <bool> chooser-save-input-focused: false;
+    private property <bool> file-operation-shortcuts-blocked: root.path-input-focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.chooser-choice-menu-open || root.custom-open-with-open;
+
+    callback go_home();
+    callback go_back();
+    callback go_forward();
+    callback go_parent();
+    callback go_root();
+    callback refresh();
+    callback open_path(string);
+    callback open_terminal_here();
+    callback chooser_accept(string);
+    callback chooser_next_filter();
+    callback chooser_select_choice(int, int);
+    callback create_folder(string);
+    callback duplicate_path(string);
+    callback copy_location(string);
+    callback copy_paths(string, bool);
+    callback paste_into(string);
+    callback refresh_clipboard_availability();
+    callback rename_path(string, string);
+    callback trash_path(string);
+    callback trash_selected();
+    callback prepare_open_with(string);
+    callback prepare_other_applications(string);
+    callback filter_other_applications(string);
+    callback open_with_app(string, string);
+    callback set_default_app(string, string);
+    callback open_with_custom_command(string, string);
+    callback open_place(string);
+    callback path_submitted(string);
+    callback search_submitted(string);
+    callback cancel_search();
+    callback search_filters_changed(int, int, int);
+    callback select_path(string, bool, bool);
+    callback select_rect(float, float, float, float, int, float, float, float, bool);
+    callback select_all_visible();
+    callback clear_selection();
+    callback add_place(string);
+    callback rename_place(int, string);
+    callback remove_place(int);
+    callback restore_default_places();
+    callback open_place_new_window(int);
+    callback reorder_place_path(string, int);
+    callback add_place_at_slot(string, int);
+    callback add_external_place_at_slot(string, int, string);
+    callback prepare_place_transfer(string, int, float, float) -> bool;
+    callback prepare_entry_transfer(string, int, float, float) -> bool;
+    callback prepare_current_dir_transfer(string, string, float, float) -> bool;
+    callback prepare_main_transfer(string, string, float, float) -> bool;
+    callback prepare_path_main_transfer(string, float, float) -> bool;
+    callback main_drop_target_path(float, float, string) -> string;
+    callback main_drop_allowed(float, float, string) -> bool;
+    callback main_view_changed();
+    callback place_drop_allowed(string, int) -> bool;
+    callback place_drop_target(float, bool) -> int;
+    callback place_drop_slot(float, bool) -> int;
+    callback place_drop_over_gap(float, bool) -> bool;
+    callback place_drop_over_item(float, bool) -> bool;
+    callback places_drop_supported(string) -> bool;
+    callback places_drop_force_gap(string) -> bool;
+    pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
+    pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
+    pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
+    pure callback anchored_menu_top(float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_menu_left(float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_menu_top(float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_left(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_top(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_width(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_height(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, float, float, float) -> float;
+    callback transfer_operation(string, string, string);
+    callback transfer_conflict_choice(string);
+    callback privileged_prompt_accept();
+    callback privileged_prompt_dismiss();
+    callback commit_external_edit();
+    callback discard_external_edit();
+    callback undo_last_operation();
+    callback cancel_queued_operations();
+    callback persist_ui_state();
+    callback async_results_ready();
+    pure callback is_selected(string) -> bool;
+    pure callback is_place(string) -> bool;
+
+    function stop-submenu-close-timers() {
+        open-with-close-timer.stop();
+        create-new-close-timer.stop();
+    }
+
+    function set-child-submenu-hover(menu: int, is-hovered: bool) {
+        if (menu == 1) {
+            open-with-close-timer.stop();
+            if (!is-hovered) {
+                open-with-close-timer.start();
+            }
+        } else if (menu == 2) {
+            create-new-close-timer.stop();
+            if (!is-hovered) {
+                create-new-close-timer.start();
+            }
+        }
+    }
+
+    function show-open-with-submenu(path: string, row-y: length) {
+        root.stop-submenu-close-timers();
+        root.prepare_open_with(path);
+        root.open_with_path = path;
+        root.open-with-menu-y = row-y;
+        root.create-new-menu-open = false;
+        root.open-with-menu-open = true;
+    }
+
+    function show-create-new-submenu(row-y: length) {
+        root.stop-submenu-close-timers();
+        root.open-with-menu-open = false;
+        root.create-new-menu-y = row-y;
+        root.create-new-menu-open = true;
+    }
+
+    function close-context-popups() {
+        root.context-menu-open = false;
+        root.open-with-menu-open = false;
+        root.create-new-menu-open = false;
+        root.stop-submenu-close-timers();
+    }
+
+    function show-context-menu(kind: int, x: length, y: length) {
+        root.context-menu-kind = kind;
+        root.context-menu-x = x;
+        root.context-menu-y = y;
+        root.open-with-menu-open = false;
+        root.create-new-menu-open = false;
+        root.stop-submenu-close-timers();
+        root.context-menu-open = true;
+    }
+
+    function sync-main-viewport() {
+        root.main_viewport_x = root.entry_count == 0 ? 0 : max(0, min(root.main-scroll-max-x, root.main_viewport_x));
+        root.main_viewport_offset = -root.main_viewport_x * 1px;
+    }
+
+    function zoom-main-in() {
+        root.icon_zoom_level = min(4, root.icon_zoom_level + 1);
+        root.sync-main-viewport();
+        root.persist_ui_state();
+    }
+
+    function zoom-main-out() {
+        root.icon_zoom_level = max(0, root.icon_zoom_level - 1);
+        root.sync-main-viewport();
+        root.persist_ui_state();
+    }
+
+    function pan-main-horizontal(delta: length) {
+        root.main_viewport_x = root.entry_count == 0 ? 0 : max(0, min(root.main-scroll-max-x, root.main_viewport_x + delta / 1px));
+        root.main_viewport_offset = -root.main_viewport_x * 1px;
+    }
+
+    function handle-main-scroll(delta-x: length, delta-y: length, control: bool) {
+        if (control && delta-y < 0px) {
+            root.zoom-main-out();
+        } else if (control && delta-y > 0px) {
+            root.zoom-main-in();
+        } else {
+            root.pan-main-horizontal(-(delta-y + delta-x));
+        }
+    }
+
+    open-with-close-timer := Timer {
+        running: false;
+        interval: 240ms;
+        triggered => {
+            self.running = false;
+            root.open-with-menu-open = false;
+        }
+    }
+
+    create-new-close-timer := Timer {
+        running: false;
+        interval: 240ms;
+        triggered => {
+            self.running = false;
+            root.create-new-menu-open = false;
+        }
+    }
+
+    title: chooser_mode ? (chooser_title == "" ? "Fika File Chooser" : chooser_title) : "Fika File Manager";
+    preferred-width: 1100px;
+    preferred-height: 760px;
+    min-width: 780px;
+    min-height: 460px;
+    background: dark_mode ? #101314 : #ffffff;
+
+    changed width => { root.main_view_changed(); }
+    changed height => { root.main_view_changed(); }
+    changed main_viewport_x => { root.main_view_changed(); }
+    changed icon_zoom_level => { root.main_view_changed(); }
+    changed transfer_conflict_open => {
+        if (root.transfer_conflict_open) {
+            root.transfer-conflict-apply-all = false;
+        }
+    }
+
+    app-focus := FocusScope {
+        width: parent.width;
+        height: parent.height;
+
+        KeyBinding {
+            keys: @keys(F5);
+            activated => { root.refresh(); }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + A);
+            activated => {
+                if (!root.file-operation-shortcuts-blocked) {
+                    root.select_all_visible();
+                }
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + F);
+            activated => { root.search_bar_open = true; }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + C);
+            activated => {
+                if (!root.file-operation-shortcuts-blocked && root.selected_count > 0) {
+                    root.copy_paths(root.selected_path, false);
+                }
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + X);
+            activated => {
+                if (!root.file-operation-shortcuts-blocked && root.selected_count > 0) {
+                    root.copy_paths(root.selected_path, true);
+                }
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + V);
+            activated => {
+                if (!root.file-operation-shortcuts-blocked) {
+                    root.refresh_clipboard_availability();
+                    root.paste_into(root.current_path);
+                }
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + Z);
+            activated => {
+                if (!root.file-operation-shortcuts-blocked && root.undo_available) {
+                    root.undo_last_operation();
+                }
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Escape);
+            activated => {
+                if (root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open) {
+                    root.close-context-popups();
+                } else if (root.rename-place-open) {
+                    root.rename-place-open = false;
+                } else if (root.privileged_prompt_open) {
+                    root.privileged_prompt_dismiss();
+                } else if (root.search_bar_open || root.search_query != "" || root.search-filters-active) {
+                    root.search_query = "";
+                    root.search_kind_filter = 0;
+                    root.search_modified_filter = 0;
+                    root.search_size_filter = 0;
+                    root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                    root.search_submitted("");
+                    root.search_bar_open = false;
+                } else {
+                    root.clear_selection();
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding: 0px;
+            spacing: 0px;
+
+        Rectangle {
+            height: 64px;
+            background: root.dark_mode ? #25292d : #f8fafc;
+            border-color: root.dark_mode ? #43484d : #d6dce2;
+            border-width: 1px;
+
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 14px;
+
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    ToolButton {
+                        label: "<";
+                        dark: root.dark_mode;
+                        clicked => { root.go_parent(); }
+                    }
+                    ToolButton {
+                        label: "H";
+                        dark: root.dark_mode;
+                        clicked => { root.go_home(); }
+                    }
+                }
+
+                LineEdit {
+                    horizontal-stretch: 1;
+                    min-width: 260px;
+                    height: 40px;
+                    text <=> root.path_input_text;
+                    placeholder-text: "/path/to/folder";
+                    accepted => { root.path_submitted(self.text); }
+                    changed has-focus => {
+                        root.path-input-focused = self.has-focus;
+                        if (!self.has-focus) {
+                            self.text = root.current_path;
+                        } else if (self.text == "") {
+                            self.text = root.current_path;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 16px;
+
+                    Text {
+                        text: "Split";
+                        color: root.dark_mode ? #f1f1f1 : #334155;
+                        font-size: 14px;
+                        font-weight: 500;
+                        height: 40px;
+                        min-width: 34px;
+                        vertical-alignment: center;
+                    }
+
+                    ToolButton {
+                        label: "S";
+                        dark: root.dark_mode;
+                        clicked => { root.search_bar_open = true; }
+                    }
+
+                    ToolButton {
+                        label: root.dark_mode ? "L" : "D";
+                        dark: root.dark_mode;
+                        clicked => {
+                            root.dark_mode = !root.dark_mode;
+                            root.persist_ui_state();
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 0px;
+
+            Rectangle {
+                width: root.sidebar_width_px * 1px;
+                background: root.dark_mode ? #222629 : #f3f6f8;
+                border-color: root.dark_mode ? #454a50 : #d6dce2;
+                border-width: 1px;
+
+                TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                            root.context-menu-place-index = -1;
+                            root.context-menu-place-builtin = false;
+                            root.rename-place-label = "Places";
+                            root.show-context-menu(4, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
+
+                sidebar-scroll := ScrollView {
+                    width: parent.width;
+                    height: parent.height;
+                    horizontal-scrollbar-policy: always-off;
+                    vertical-scrollbar-policy: as-needed;
+                    viewport-width: parent.width;
+                    viewport-height: max(parent.height, 520px + (root.places.length + root.devices.length) * 38px);
+                    changed viewport-y => {
+                        root.places_list_y_px = (self.absolute-position.y + 44px - self.viewport-y) / 1px;
+                    }
+
+                VerticalLayout {
+                    padding-top: 10px;
+                    spacing: 4px;
+                    width: sidebar-scroll.viewport-width;
+                    height: sidebar-scroll.viewport-height;
+
+                    SidebarSection { label: "Places"; dark: root.dark_mode; }
+
+                    for place[index] in root.places: PlaceButton {
+                        label: place.label;
+                        path: place.path;
+                        marker: place.marker;
+                        selected: root.current_path == place.path;
+                        dark: root.dark_mode;
+                        index: index;
+                        place_count: root.places.length;
+                        builtin: place.is_builtin;
+                        list_y: parent.absolute-position.y + 44px - sidebar-scroll.viewport-y;
+                        reorderable: true;
+                        dragged: root.place_drag_active && root.place_drag_from == index;
+                        drop-target: (root.folder_drag_active || root.place_drag_active) && root.folder_drag_over_place_item && !root.place_drag_rejected && root.folder_drag_place_target == index;
+                        clicked => { root.open_place(place.path); }
+                        context_requested(index, label, builtin, x, y) => {
+                            root.context-menu-place-index = index;
+                            root.context-menu-place-builtin = builtin;
+                            root.rename-place-label = label;
+                            root.show-context-menu(2, x, y);
+                        }
+                        drag_cancelled => {
+                            root.place_drag_active = false;
+                            root.place_drag_from = -1;
+                            root.place_drag_target_path = "";
+                            root.place_drag_target_label = "";
+                        }
+                    }
+
+                    SidebarAction {
+                        label: "Cancel Operations";
+                        dark: root.dark_mode;
+                        clicked => { root.cancel_queued_operations(); }
+                    }
+
+                    SidebarSection { label: "Remote"; dark: root.dark_mode; }
+                    PlaceButton {
+                        label: "Network";
+                        path: "";
+                        marker: "N";
+                        selected: false;
+                        dark: root.dark_mode;
+                        clicked => { }
+                    }
+
+                    SidebarSection { label: "Devices"; dark: root.dark_mode; }
+                    for device in root.devices: PlaceButton {
+                        label: device.label;
+                        path: device.path;
+                        marker: device.marker;
+                        selected: root.current_path == device.path;
+                        dark: root.dark_mode;
+                        reorderable: false;
+                        dragged: false;
+                        drop-target: false;
+                        builtin: true;
+                        clicked => { root.open_place(device.path); }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+                }
+
+                places-folder-drop := DropArea {
+                    enabled: true;
+                    changed contains-drag => {
+                        if (!self.contains-drag) {
+                            root.folder_drag_active = false;
+                            root.place_drag_active = false;
+                            root.folder_drag_over_place_item = false;
+                            root.place_drag_rejected = false;
+                        }
+                    }
+                    can-drop(event) => {
+                        if (root.places_drop_supported(event.mime-type)) {
+                            root.folder_drag_path = event.data;
+                            root.folder_drag_label = event.data;
+                            root.folder_drag_x = self.absolute-position.x + event.position.x;
+                            root.folder_drag_y = self.absolute-position.y + event.position.y;
+                            root.place_drag_x = root.folder_drag_x;
+                            root.place_drag_y = root.folder_drag_y;
+                            root.folder_drag_active = event.mime-type == "application/x-fika-folder-path" || root.places_drop_force_gap(event.mime-type);
+                            root.place_drag_active = event.mime-type == "application/x-fika-place-path";
+                            root.place_drag_label = event.data;
+                            root.place_drag_marker = "P";
+                            root.place_list_y = self.absolute-position.y + 44px - sidebar-scroll.viewport-y;
+                            root.places_list_y_px = root.place_list_y / 1px;
+                            root.folder_drag_place_target = root.place_drop_target((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
+                            root.folder_drag_over_place_gap = root.place_drop_over_gap((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
+                            root.folder_drag_over_place_item = root.place_drop_over_item((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
+                            root.place_drag_rejected = root.folder_drag_over_place_item && !root.place_drop_allowed(event.data, root.folder_drag_place_target);
+                            root.folder_drag_slot = root.place_drop_slot((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
+                            root.place_drag_slot = root.folder_drag_slot;
+                            true
+                        } else {
+                            root.folder_drag_active = false;
+                            root.folder_drag_over_place_item = false;
+                            root.place_drag_rejected = false;
+                            false
+                        }
+                    }
+                    dropped(event) => {
+                        root.folder_drag_active = false;
+                        root.place_drag_active = false;
+                        root.folder_drag_over_place_item = false;
+                        root.place_drag_rejected = false;
+                        if (event.position.y + sidebar-scroll.viewport-y >= 44px && event.position.y + sidebar-scroll.viewport-y <= 44px + root.places.length * 38px) {
+                            if (root.folder_drag_over_place_gap || root.folder_drag_slot >= root.places.length) {
+                                if (event.mime-type == "application/x-fika-place-path") {
+                                    root.reorder_place_path(event.data, root.folder_drag_slot);
+                                } else if (root.places_drop_force_gap(event.mime-type)) {
+                                    root.add_external_place_at_slot(event.data, root.folder_drag_slot, event.mime-type);
+                                } else {
+                                    root.add_place_at_slot(event.data, root.folder_drag_slot);
+                                }
+                            } else {
+                                if (root.prepare_place_transfer(event.data, root.folder_drag_place_target, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                                    root.transfer-menu-open = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 8px;
+                background: resize-touch.has-hover || resize-touch.pressed ? (root.dark_mode ? #2f6f91 : #c7ddea) : (root.dark_mode ? #15191c : #edf2f6);
+
+                Rectangle {
+                    x: 3px;
+                    width: 1px;
+                    height: parent.height;
+                    background: root.dark_mode ? #454a50 : #cbd5e1;
+                }
+
+                resize-touch := TouchArea {
+                    mouse-cursor: ew-resize;
+
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                            root.sidebar-resize-start-width-px = root.sidebar_width_px;
+                            root.sidebar-resize-press-x = self.absolute-position.x + self.mouse-x;
+                        } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                            root.persist_ui_state();
+                        }
+                    }
+
+                    moved => {
+                        if (self.pressed) {
+                            root.sidebar_width_px = max(220, min((root.width - 360px) / 1px, root.sidebar-resize-start-width-px + (self.absolute-position.x + self.mouse-x - root.sidebar-resize-press-x) / 1px));
+                        }
+                    }
+                }
+            }
+
+            main-pane := Rectangle {
+                horizontal-stretch: 1;
+                background: root.dark_mode ? #101314 : #ffffff;
+
+                main-focus := FocusScope {
+                    width: 0px;
+                    height: 0px;
+                }
+
+                main-blank-touch := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                            main-focus.focus();
+                            root.clear_selection();
+                        } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                            main-focus.focus();
+                            root.clear_selection();
+                            root.refresh_clipboard_availability();
+                            root.show-context-menu(3, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                    scroll-event(event) => {
+                        root.handle-main-scroll(event.delta-x, event.delta-y, event.modifiers.control);
+                        return accept;
+                    }
+                }
+
+                VerticalLayout {
+                    padding: 0px;
+                    spacing: 0px;
+
+                    if (root.search-panel-visible) : Rectangle {
+                        height: root.search-panel-height;
+                        background: root.dark_mode ? #171b1f : #f8fafc;
+                        border-color: root.dark_mode ? #343a40 : #d6dce2;
+                        border-width: 1px;
+
+                        VerticalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            padding-top: 8px;
+                            padding-bottom: 8px;
+                            spacing: 6px;
+
+                            HorizontalLayout {
+                                spacing: 10px;
+
+                                Text {
+                                    text: "Search";
+                                    color: root.dark_mode ? #d8dee5 : #334155;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    min-width: 52px;
+                                    vertical-alignment: center;
+                                }
+
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    min-width: 180px;
+                                    height: 34px;
+                                    text <=> root.search_query;
+                                    placeholder-text: "Search in current folder";
+                                    accepted => { root.search_submitted(self.text); }
+                                    changed has-focus => {
+                                        root.search-input-focused = self.has-focus;
+                                    }
+                                }
+
+                                if (root.search_loading): SidebarAction {
+                                    width: 70px;
+                                    label: "Cancel";
+                                    dark: root.dark_mode;
+                                    clicked => { root.cancel_search(); }
+                                }
+
+                                if (root.search_query != "" || root.search-filters-active): SidebarAction {
+                                    width: 64px;
+                                    label: "Clear";
+                                    dark: root.dark_mode;
+                                    clicked => {
+                                        root.search_query = "";
+                                        root.search_kind_filter = 0;
+                                        root.search_modified_filter = 0;
+                                        root.search_size_filter = 0;
+                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                                        root.search_submitted("");
+                                    }
+                                }
+
+                                ToolButton {
+                                    label: "X";
+                                    dark: root.dark_mode;
+                                    clicked => {
+                                        root.search_query = "";
+                                        root.search_kind_filter = 0;
+                                        root.search_modified_filter = 0;
+                                        root.search_size_filter = 0;
+                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                                        root.search_submitted("");
+                                        root.search_bar_open = false;
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                CheckOption {
+                                    width: 150px;
+                                    label: "Search subfolders";
+                                    dark: root.dark_mode;
+                                    checked <=> root.recursive_search;
+                                    toggled(_) => {
+                                        if (root.search_query != "") {
+                                            root.search_submitted(root.search_query);
+                                        }
+                                    }
+                                }
+
+                                FilterButton {
+                                    width: 90px;
+                                    label: root.search-kind-filter-label;
+                                    dark: root.dark_mode;
+                                    clicked => {
+                                        root.search_kind_filter = mod(root.search_kind_filter + 1, 4);
+                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                                    }
+                                }
+
+                                FilterButton {
+                                    width: 96px;
+                                    label: root.search-modified-filter-label;
+                                    dark: root.dark_mode;
+                                    clicked => {
+                                        root.search_modified_filter = mod(root.search_modified_filter + 1, 4);
+                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                                    }
+                                }
+
+                                FilterButton {
+                                    width: 90px;
+                                    label: root.search-size-filter-label;
+                                    dark: root.dark_mode;
+                                    clicked => {
+                                        root.search_size_filter = mod(root.search_size_filter + 1, 4);
+                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (root.entry_count == 0) : Rectangle {
+                        vertical-stretch: 1;
+                        background: root.dark_mode ? #101314 : #ffffff;
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 8px;
+
+                            Text {
+                                text: root.directory_loading ? "Loading folder..." : (root.search_loading ? "Searching..." : (root.search_query == "" ? "This folder is empty" : "No matching items"));
+                                color: root.dark_mode ? #e6e6e6 : #334155;
+                                font-size: 15px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: root.directory_loading ? "Preparing the next view." : (root.search_loading ? "Scanning subfolders." : (root.search_query == "" ? "This directory has no visible files." : "Try another search term."));
+                                color: root.dark_mode ? #a8a8a8 : #94a3b8;
+                                font-size: 13px;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    if (root.entry_count > 0) : grid := ScrollView {
+                        vertical-stretch: 1;
+                        horizontal-scrollbar-policy: as-needed;
+                        vertical-scrollbar-policy: always-off;
+
+                        property <int> rows-per-column: root.main-rows-per-column;
+                        property <int> column-count: root.main-column-count;
+                        viewport-width: root.main-viewport-width;
+                        viewport-height: 2 * root.icon-grid-padding + root.main-rows-per-column * root.icon-row-height;
+                        viewport-x <=> root.main_viewport_offset;
+                        viewport-y: 0px;
+
+                        changed viewport-x => {
+                            root.main_viewport_x = max(0, min(root.main-scroll-max-x, -self.viewport-x / 1px));
+                        }
+
+                        DropArea {
+                            width: grid.viewport-width;
+                            height: grid.viewport-height;
+                            enabled: true;
+                            changed contains-drag => {
+                                if (!self.contains-drag) {
+                                    root.main_drag_active = false;
+                                    root.main_drag_rejected = false;
+                                    root.place_drag_target_path = "";
+                                    root.place_drag_target_label = "";
+                                }
+                            }
+                            can-drop(event) => {
+                                if (event.mime-type == "application/x-fika-folder-path" || event.mime-type == "application/x-fika-place-path") {
+                                    root.main_drag_active = true;
+                                    root.main_drag_rejected = !root.main_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data);
+                                    root.place_drag_target_path = root.main_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data);
+                                    true
+                                } else {
+                                    root.main_drag_active = false;
+                                    root.main_drag_rejected = false;
+                                    root.place_drag_target_path = "";
+                                    false
+                                }
+                            }
+                            dropped(event) => {
+                                root.main_drag_active = false;
+                                root.main_drag_rejected = false;
+                                if (root.prepare_path_main_transfer(event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                                    root.transfer-menu-open = true;
+                                }
+                            }
+
+                        TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                    main-focus.focus();
+                                    root.selection_rect_pending = true;
+                                    root.selection_rect_active = false;
+                                    root.selection_rect_toggle = event.modifiers.control;
+                                    root.selection_rect_start_x = self.mouse-x;
+                                    root.selection_rect_start_y = self.mouse-y;
+                                    root.selection_rect_current_x = self.mouse-x;
+                                    root.selection_rect_current_y = self.mouse-y;
+                                } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                                    if (root.selection_rect_active) {
+                                        root.select_rect(
+                                            min(root.selection_rect_start_x, root.selection_rect_current_x) / 1px,
+                                            min(root.selection_rect_start_y, root.selection_rect_current_y) / 1px,
+                                            max(root.selection_rect_start_x, root.selection_rect_current_x) / 1px,
+                                            max(root.selection_rect_start_y, root.selection_rect_current_y) / 1px,
+                                            grid.rows-per-column,
+                                            root.icon-cell-width / 1px,
+                                            root.icon-row-height / 1px,
+                                            root.icon-grid-padding / 1px,
+                                            root.selection_rect_toggle
+                                        );
+                                    } else if (root.selection_rect_pending) {
+                                        root.clear_selection();
+                                    }
+                                    root.selection_rect_active = false;
+                                    root.selection_rect_pending = false;
+                                } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                    main-focus.focus();
+                                    root.clear_selection();
+                                    root.refresh_clipboard_availability();
+                                    root.show-context-menu(3, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                            moved => {
+                                if (self.pressed && root.selection_rect_pending) {
+                                    root.selection_rect_current_x = self.mouse-x;
+                                    root.selection_rect_current_y = self.mouse-y;
+                                    if (!root.selection_rect_active && (self.mouse-x > root.selection_rect_start_x + 5px || self.mouse-x + 5px < root.selection_rect_start_x || self.mouse-y > root.selection_rect_start_y + 5px || self.mouse-y + 5px < root.selection_rect_start_y)) {
+                                        root.selection_rect_active = true;
+                                    }
+                                }
+                            }
+                            scroll-event(event) => {
+                                root.handle-main-scroll(event.delta-x, event.delta-y, event.modifiers.control);
+                                return accept;
+                            }
+                        }
+                        }
+
+                        virtual-layer := Rectangle {
+                            x: root.icon-grid-padding + root.virtual_start_column * root.icon-cell-width;
+                            y: 0px;
+                            width: max(1px, root.main-viewport-width - self.x);
+                            height: grid.viewport-height;
+
+                            for item[index] in root.virtual_entries: FileTile {
+                                property <int> local-index: index + root.virtual_start_index - root.virtual_start_column * grid.rows-per-column;
+                                x: floor(local-index / grid.rows-per-column) * root.icon-cell-width;
+                                y: root.icon-grid-padding + mod(local-index, grid.rows-per-column) * root.icon-row-height;
+                                width: root.icon-cell-width - 12px;
+                                entry: item;
+                                selected: root.selection_revision >= 0 && root.is_selected(item.path);
+                                dark: root.dark_mode;
+                                zoom-level: root.icon_zoom_level;
+                                show-location: root.recursive_search && root.search_query != "";
+                                drop-target: root.main_drag_active && !root.main_drag_rejected && root.place_drag_target_path == item.path;
+                                request_select(path, toggle, range) => {
+                                    main-focus.focus();
+                                    root.select_path(path, toggle, range);
+                                }
+                                request_context_menu(path, name, x, y) => {
+                                    main-focus.focus();
+                                    root.refresh_clipboard_availability();
+                                    if (!root.is_selected(path)) {
+                                        root.select_path(path, false, false);
+                                    }
+                                    root.context-menu-kind = 1;
+                                    root.context-menu-path = path;
+                                    root.context-menu-name = name;
+                                    root.context-menu-properties-size = item.size;
+                                    root.context-menu-properties-modified = item.modified;
+                                    root.context-menu-is-dir = item.is_dir;
+                                    if (!item.is_dir && root.selected_count <= 1) {
+                                        root.open_with_path = path;
+                                        root.default_open_app_name = "";
+                                        root.prepare_open_with(path);
+                                    }
+                                    root.show-context-menu(1, x, y);
+                                }
+                                activated(path) => { root.open_path(path); }
+                                zoom_in => {
+                                    root.zoom-main-in();
+                                }
+                                zoom_out => {
+                                    root.zoom-main-out();
+                                }
+                                pan_horizontal(delta) => {
+                                    root.pan-main-horizontal(delta);
+                                }
+                            }
+                        }
+
+                        if (root.selection_rect_active): Rectangle {
+                            x: min(root.selection_rect_start_x, root.selection_rect_current_x);
+                            y: min(root.selection_rect_start_y, root.selection_rect_current_y);
+                            width: max(1px, max(root.selection_rect_start_x, root.selection_rect_current_x) - min(root.selection_rect_start_x, root.selection_rect_current_x));
+                            height: max(1px, max(root.selection_rect_start_y, root.selection_rect_current_y) - min(root.selection_rect_start_y, root.selection_rect_current_y));
+                            background: root.dark_mode ? #38bdf833 : #0284c733;
+                            border-width: 1px;
+                            border-color: root.dark_mode ? #38bdf8 : #0284c7;
+                        }
+                    }
+
+                    Rectangle {
+                        height: 36px;
+                        background: root.dark_mode ? #111416 : #ffffff;
+                        border-color: root.dark_mode ? #454a50 : #d6dce2;
+                        border-width: 1px;
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 8px;
+
+                            Text {
+                                horizontal-stretch: 1;
+                                text: root.selected_count == 0 ? root.status : root.selected_status;
+                                color: root.dark_mode ? #f1f1f1 : #334155;
+                                font-size: 13px;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+
+                            if (root.external_edit_active): Text {
+                                text: root.external_edit_status;
+                                color: root.dark_mode ? #fbbf24 : #92400e;
+                                font-size: 12px;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+
+                            if (root.external_edit_active): ToolButton {
+                                label: "Save Back";
+                                dark: root.dark_mode;
+                                clicked => { root.commit_external_edit(); }
+                            }
+
+                            if (root.external_edit_active): ToolButton {
+                                label: "Discard";
+                                dark: root.dark_mode;
+                                clicked => { root.discard_external_edit(); }
+                            }
+
+                            if (root.undo_available): ActionButton {
+                                label: root.undo_label == "" ? "Undo" : root.undo_label;
+                                dark: root.dark_mode;
+                                clicked => { root.undo_last_operation(); }
+                            }
+
+                            if (root.chooser_mode && root.chooser_save_mode): LineEdit {
+                                text <=> root.chooser_save_name;
+                                height: 28px;
+                                min-width: 220px;
+                                placeholder-text: "File name";
+                                accepted => { root.chooser_accept(self.text); }
+                                changed has-focus => {
+                                    root.chooser-save-input-focused = self.has-focus;
+                                }
+                            }
+
+                            if (root.chooser_mode && root.chooser_filter_count > 0): ActionButton {
+                                width: 150px;
+                                label: root.chooser_filter_label == "" ? "Filter: All" : ("Filter: " + root.chooser_filter_label);
+                                dark: root.dark_mode;
+                                clicked => { root.chooser_next_filter(); }
+                            }
+
+                            for choice[index] in root.chooser_choices: ActionButton {
+                                width: 180px;
+                                label: choice.label + ": " + choice.selected_label;
+                                dark: root.dark_mode;
+                                clicked => {
+                                    root.chooser-choice-menu-index = index;
+                                    root.chooser-choice-menu-x = self.absolute-position.x;
+                                    root.chooser-choice-menu-y = self.absolute-position.y;
+                                    root.chooser-choice-menu-open = true;
+                                }
+                            }
+
+                            if (root.chooser_mode): ActionButton {
+                                label: root.chooser_accept_label != "" ? root.chooser_accept_label : (root.chooser_save_mode ? "Save" : "Choose");
+                                dark: root.dark_mode;
+                                enabled: root.chooser_save_mode ? root.chooser_save_name != "" : (root.chooser_select_directories || root.selected_path != "");
+                                clicked => { root.chooser_accept(root.chooser_save_name); }
+                            }
+                        }
+                    }
+                }
+
+                if (root.directory_loading && root.entry_count > 0): Rectangle {
+                    width: parent.width;
+                    height: parent.height - 36px;
+                    background: root.dark_mode ? #10131444 : #ffffff66;
+
+                    TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+
+                        pointer-event(event) => {
+                            // Side-button navigation is handled once in the winit event layer,
+                            // scoped to the whole main pane like cosmic-files' mouse area.
+                        }
+                    }
+
+                    Rectangle {
+                        x: 14px;
+                        y: 12px;
+                        width: 170px;
+                        height: 30px;
+                        border-radius: 6px;
+                        background: root.dark_mode ? #25292dcc : #f8fafccc;
+                        border-width: 1px;
+                        border-color: root.dark_mode ? #454a50 : #d6dce2;
+
+                        Text {
+                            text: "Loading folder...";
+                            x: 12px;
+                            width: parent.width - 24px;
+                            color: root.dark_mode ? #f1f1f1 : #334155;
+                            font-size: 12px;
+                            font-weight: 600;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    if (root.place_drag_active && root.folder_drag_over_place_gap && root.place_drag_x < root.sidebar_width_px * 1px && root.place_drag_y >= root.place_list_y && root.place_drag_y <= root.place_list_y + root.places.length * 38px): Rectangle {
+        x: 14px;
+        y: root.place_list_y + root.place_drag_slot * 38px - 2px;
+        width: max(120px, root.sidebar_width_px * 1px - 28px);
+        height: 4px;
+        border-radius: 2px;
+        background: root.dark_mode ? #38bdf8 : #0284c7;
+    }
+
+    if ((root.folder_drag_active || root.place_drag_active) && root.place_drag_rejected && root.place_drag_x < root.sidebar_width_px * 1px && root.place_drag_y >= root.place_list_y && root.place_drag_y <= root.place_list_y + root.places.length * 38px): Rectangle {
+        x: 14px;
+        y: root.place_list_y + root.folder_drag_place_target * 38px + 2px;
+        width: max(120px, root.sidebar_width_px * 1px - 28px);
+        height: 30px;
+        border-radius: 6px;
+        background: root.dark_mode ? #3a1818 : #fee2e2;
+        border-width: 1px;
+        border-color: root.dark_mode ? #ef4444 : #dc2626;
+    }
+
+    if (root.place_drag_active): Rectangle {
+        x: root.place_drag_x + 10px;
+        y: root.place_drag_y + 10px;
+        width: 180px;
+        height: 34px;
+        border-radius: 6px;
+        background: root.dark_mode ? #2c3339 : #ffffff;
+        border-width: 1px;
+        border-color: root.dark_mode ? #5b6670 : #b8c7d4;
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 10px;
+            spacing: 10px;
+
+            Rectangle {
+                width: 24px;
+                height: parent.height;
+                background: transparent;
+
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 24px;
+                    height: 22px;
+                    border-radius: 3px;
+                    background: root.dark_mode ? #4f93d9 : #4f94dc;
+
+                    Text {
+                        text: root.place_drag_marker;
+                        color: #102033;
+                        font-size: 11px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Text {
+                text: root.place_drag_label;
+                color: root.dark_mode ? #f5f5f5 : #17212b;
+                font-size: 14px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    if (root.folder_drag_active): Rectangle {
+        x: root.folder_drag_x + 10px;
+        y: root.folder_drag_y + 10px;
+        width: 180px;
+        height: 34px;
+        border-radius: 6px;
+        background: root.dark_mode ? #2c3339 : #ffffff;
+        border-width: 1px;
+        border-color: root.dark_mode ? #5b6670 : #b8c7d4;
+
+        Text {
+            text: root.folder_drag_label;
+            x: 12px;
+            width: parent.width - 24px;
+            color: root.dark_mode ? #f5f5f5 : #17212b;
+            font-size: 13px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    if (root.main_drag_active && root.main_drag_rejected): Rectangle {
+        x: root.sidebar_width_px * 1px + 20px;
+        y: 84px;
+        width: 250px;
+        height: 32px;
+        border-radius: 6px;
+        background: root.dark_mode ? #3a1818 : #fee2e2;
+        border-width: 1px;
+        border-color: root.dark_mode ? #ef4444 : #dc2626;
+
+        Text {
+            text: "Cannot drop item here";
+            x: 12px;
+            width: parent.width - 24px;
+            color: root.dark_mode ? #fecaca : #991b1b;
+            font-size: 12px;
+            font-weight: 700;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    if (root.folder_drag_active && root.folder_drag_over_place_gap && root.folder_drag_x < root.sidebar_width_px * 1px && root.folder_drag_y >= root.place_list_y && root.folder_drag_y <= root.place_list_y + root.places.length * 38px): Rectangle {
+        x: 14px;
+        y: root.place_list_y + root.folder_drag_slot * 38px - 2px;
+        width: max(120px, root.sidebar_width_px * 1px - 28px);
+        height: 4px;
+        border-radius: 2px;
+        background: root.dark_mode ? #38bdf8 : #0284c7;
+    }
+
+    if (root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.custom-open-with-open || root.new-folder-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open): MenuDismissLayer {
+        width: parent.width;
+        height: parent.height;
+        dismissed => {
+            root.close-context-popups();
+            root.rename-place-open = false;
+            root.transfer-menu-open = false;
+            if (root.transfer_conflict_open) {
+                root.transfer_conflict_choice("skip");
+            }
+            root.chooser-choice-menu-open = false;
+            root.custom-open-with-open = false;
+            root.new-folder-open = false;
+            root.rename-entry-open = false;
+            root.properties-open = false;
+            if (root.privileged_prompt_open) {
+                root.privileged_prompt_dismiss();
+            }
+        }
+    }
+
+    if (root.context-menu-open && root.context-menu-kind == 1): PopupSurface {
+        x: root.context-menu-left;
+        y: root.context-menu-top;
+        width: root.context-file-menu-width;
+        height: root.active-context-menu-height;
+        dark: root.dark_mode;
+
+        FileContextMenu {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            selected-count: root.selected_count;
+            selected-status: root.selected_status;
+            is-dir: root.context-menu-is-dir;
+            default-open-visible: root.context-default-open-visible;
+            default-open-app-name: root.default_open_app_name;
+            clipboard-has-paths: root.clipboard_has_paths;
+            add-to-places-visible: root.context-add-place-visible;
+            open_folder_with_hover(is-hovered) => {
+                if (is-hovered) {
+                    root.show-open-with-submenu(root.context-menu-path, root.context-menu-top);
+                } else {
+                    root.set-child-submenu-hover(1, false);
+                }
+            }
+            open_folder_with_clicked => {
+                root.show-open-with-submenu(root.context-menu-path, root.context-menu-top);
+            }
+            default_open_requested => {
+                root.open_path(root.context-menu-path);
+                root.close-context-popups();
+            }
+            open_with_hover(is-hovered) => {
+                if (is-hovered) {
+                    root.show-open-with-submenu(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset);
+                } else {
+                    root.set-child-submenu-hover(1, false);
+                }
+            }
+            open_with_clicked => {
+                root.show-open-with-submenu(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset);
+            }
+            paste_into_folder => {
+                root.paste_into(root.context-menu-path);
+                root.close-context-popups();
+            }
+            add_to_places => {
+                root.add_place(root.context-menu-path);
+                root.close-context-popups();
+            }
+            rename_requested => {
+                root.rename-entry-path = root.context-menu-path;
+                root.rename-entry-name = root.context-menu-name;
+                root.rename-entry-open = true;
+                root.close-context-popups();
+            }
+            duplicate_requested => {
+                root.duplicate_path(root.context-menu-path);
+                root.close-context-popups();
+            }
+            cut_requested => {
+                root.copy_paths(root.context-menu-path, true);
+                root.close-context-popups();
+            }
+            copy_requested => {
+                root.copy_paths(root.context-menu-path, false);
+                root.close-context-popups();
+            }
+            copy_location_requested => {
+                root.copy_location(root.context-menu-path);
+                root.close-context-popups();
+            }
+            properties_requested => {
+                root.properties-name = root.context-menu-name;
+                root.properties-path = root.context-menu-path;
+                root.properties-kind = root.context-menu-is-dir ? "Folder" : "File";
+                root.properties-size = root.context-menu-properties-size;
+                root.properties-modified = root.context-menu-properties-modified;
+                root.properties-open = true;
+                root.close-context-popups();
+            }
+            trash_requested => {
+                if (root.selected_count > 1) {
+                    root.trash_selected();
+                } else {
+                    root.trash_path(root.context-menu-path);
+                }
+                root.close-context-popups();
+            }
+        }
+    }
+
+    if (root.context-menu-open && root.context-menu-kind == 2): PopupSurface {
+        x: root.context-menu-left;
+        y: root.context-menu-top;
+        width: root.context-place-menu-width;
+        height: root.active-context-menu-height;
+        dark: root.dark_mode;
+
+        PlaceContextMenu {
+            width: parent.width;
+            height: parent.height;
+            title: root.rename-place-label;
+            dark: root.dark_mode;
+            builtin: root.context-menu-place-builtin;
+            open_new_window => {
+                root.open_place_new_window(root.context-menu-place-index);
+                root.close-context-popups();
+            }
+            rename_requested => {
+                root.rename-place-index = root.context-menu-place-index;
+                root.rename-place-open = true;
+                root.close-context-popups();
+            }
+            remove_requested => {
+                root.remove_place(root.context-menu-place-index);
+                root.close-context-popups();
+            }
+        }
+    }
+
+    if (root.context-menu-open && root.context-menu-kind == 4): PopupSurface {
+        x: root.context-menu-left;
+        y: root.context-menu-top;
+        width: root.context-blank-menu-width;
+        height: root.active-context-menu-height;
+        dark: root.dark_mode;
+
+        PlacesBlankMenu {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            add-current-visible: root.context-add-place-visible;
+            add_current_folder => {
+                root.add_place(root.current_path);
+                root.close-context-popups();
+            }
+            restore_defaults => {
+                root.restore_default_places();
+                root.close-context-popups();
+            }
+        }
+    }
+
+    if (root.context-menu-open && root.context-menu-kind == 3): PopupSurface {
+        x: root.context-menu-left;
+        y: root.context-menu-top;
+        width: root.context-blank-menu-width;
+        height: root.active-context-menu-height;
+        dark: root.dark_mode;
+
+        ViewportContextMenu {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            clipboard-has-paths: root.clipboard_has_paths;
+            clipboard-cut: root.clipboard_cut;
+            create_new_hover(is-hovered) => {
+                if (is-hovered) {
+                    root.show-create-new-submenu(root.context-menu-top);
+                } else {
+                    root.set-child-submenu-hover(2, false);
+                }
+            }
+            create_new_clicked => {
+                root.show-create-new-submenu(root.context-menu-top);
+            }
+            paste_requested => {
+                root.paste_into(root.current_path);
+                root.close-context-popups();
+            }
+            open_folder_with_hover(is-hovered) => {
+                if (is-hovered) {
+                    root.show-open-with-submenu(root.current_path, root.context-menu-top + root.context-open-with-row-offset);
+                } else {
+                    root.set-child-submenu-hover(1, false);
+                }
+            }
+            open_folder_with_clicked => {
+                root.show-open-with-submenu(root.current_path, root.context-menu-top + root.context-open-with-row-offset);
+            }
+            open_terminal_here => {
+                root.open_terminal_here();
+                root.close-context-popups();
+            }
+        }
+    }
+
+    if (root.create-new-menu-open && root.context-menu-open): MenuHoverBridge {
+        x: root.active-child-bridge-left;
+        y: root.active-child-bridge-top;
+        width: root.active-child-bridge-width;
+        height: root.active-child-bridge-height;
+        hovered(is-hovered) => {
+            root.set-child-submenu-hover(2, is-hovered);
+        }
+    }
+
+    if (root.create-new-menu-open): PopupSurface {
+        x: root.active-child-menu-left;
+        y: root.active-child-menu-top;
+        width: root.create-new-menu-width;
+        height: root.create-new-menu-height;
+        dark: root.dark_mode;
+
+        CreateNewMenu {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            keep_alive(is-hovered) => {
+                root.set-child-submenu-hover(2, is-hovered);
+            }
+            folder_selected => {
+                root.new-folder-name = "New Folder";
+                root.new-folder-open = true;
+                root.close-context-popups();
+            }
+        }
+    }
+
+    if (root.rename-place-open): Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 360px;
+        height: 132px;
+        background: transparent;
+
+        TextInputDialog {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            title: "Rename Place";
+            accept-label: "Rename";
+            value <=> root.rename-place-label;
+            accepted(value) => {
+                root.rename_place(root.rename-place-index, value);
+                root.rename-place-open = false;
+            }
+            cancelled => { root.rename-place-open = false; }
+        }
+    }
+
+    if (root.new-folder-open): Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 360px;
+        height: 132px;
+        background: transparent;
+
+        TextInputDialog {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            title: "New Folder";
+            accept-label: "Create";
+            value <=> root.new-folder-name;
+            accepted(value) => {
+                root.create_folder(value);
+                root.new-folder-open = false;
+            }
+            cancelled => { root.new-folder-open = false; }
+        }
+    }
+
+    if (root.rename-entry-open): Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 380px;
+        height: 132px;
+        background: transparent;
+
+        TextInputDialog {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            title: "Rename";
+            accept-label: "Rename";
+            value <=> root.rename-entry-name;
+            accepted(value) => {
+                root.rename_path(root.rename-entry-path, value);
+                root.rename-entry-open = false;
+            }
+            cancelled => { root.rename-entry-open = false; }
+        }
+    }
+
+    if (root.properties-open): Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 440px;
+        height: 260px;
+        background: transparent;
+
+        PropertiesDialog {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            name: root.properties-name;
+            kind: root.properties-kind;
+            size: root.properties-size;
+            modified: root.properties-modified;
+            path: root.properties-path;
+            closed => { root.properties-open = false; }
+        }
+    }
+
+    if (root.privileged_prompt_open): Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 430px;
+        height: 190px;
+        background: transparent;
+
+        PrivilegedPromptDialog {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            title: root.privileged_prompt_title;
+            message: root.privileged_prompt_message;
+            detail: root.privileged_prompt_detail;
+            cancelled => { root.privileged_prompt_dismiss(); }
+            accepted => { root.privileged_prompt_accept(); }
+        }
+    }
+
+    if (root.transfer_conflict_open): Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 480px;
+        height: 310px;
+        background: transparent;
+
+        TransferConflictDialog {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            source: root.transfer_conflict_source;
+            target: root.transfer_conflict_target;
+            rename-name <=> root.transfer_conflict_rename_name;
+            apply-all <=> root.transfer-conflict-apply-all;
+            choice(decision) => { root.transfer_conflict_choice(decision); }
+        }
+    }
+
+    if (root.transfer-menu-open): PopupSurface {
+        x: root.transfer-menu-left;
+        y: root.transfer-menu-top;
+        width: root.transfer-menu-width;
+        height: root.transfer-menu-height;
+        dark: root.dark_mode;
+
+        TransferMenu {
+            width: parent.width;
+            height: parent.height;
+            title: root.transfer_source_label + " -> " + root.transfer_target_label;
+            dark: root.dark_mode;
+            operation_selected(operation) => {
+                root.transfer_operation(operation, root.transfer_source_path, root.transfer_target_path);
+                root.transfer-menu-open = false;
+            }
+            cancelled => {
+                root.transfer-menu-open = false;
+            }
+        }
+    }
+
+    if (root.open-with-menu-open && root.context-menu-open): MenuHoverBridge {
+        x: root.active-child-bridge-left;
+        y: root.active-child-bridge-top;
+        width: root.active-child-bridge-width;
+        height: root.active-child-bridge-height;
+        hovered(is-hovered) => {
+            root.set-child-submenu-hover(1, is-hovered);
+        }
+    }
+
+    if (root.open-with-menu-open): PopupSurface {
+        x: root.active-child-menu-left;
+        y: root.active-child-menu-top;
+        width: root.open-with-menu-width;
+        height: root.open-with-menu-height;
+        dark: root.dark_mode;
+
+        OpenWithMenu {
+            width: parent.width;
+            height: parent.height;
+            title: root.open_with_mime == "" ? "Open With" : "Open With - " + root.open_with_mime;
+            dark: root.dark_mode;
+            apps: root.open_with_apps;
+            item-height: root.menu-item-height;
+            keep_alive(is-hovered) => {
+                root.set-child-submenu-hover(1, is-hovered);
+            }
+            app_selected(app-id) => {
+                root.open_with_app(root.open_with_path, app-id);
+                root.close-context-popups();
+            }
+            other_applications => {
+                root.prepare_other_applications(root.open_with_path);
+                root.custom_open_command = "";
+                root.other_application_filter = "";
+                root.other_application_set_default = false;
+                root.custom-open-with-open = true;
+                root.close-context-popups();
+            }
+        }
+    }
+
+    for choice[index] in root.chooser_choices: PopupSurface {
+        visible: root.chooser-choice-menu-open && root.chooser-choice-menu-index == index;
+        x: root.anchored_menu_left(root.width / 1px, root.height / 1px, root.chooser-choice-menu-x / 1px, root.chooser-choice-menu-y / 1px, root.chooser-choice-menu-width / 1px, (root.menu-title-height + max(1, choice.options.length) * root.menu-item-height) / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+        y: root.anchored_menu_top(root.width / 1px, root.height / 1px, root.chooser-choice-menu-x / 1px, root.chooser-choice-menu-y / 1px, root.chooser-choice-menu-width / 1px, (root.menu-title-height + max(1, choice.options.length) * root.menu-item-height) / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+        width: root.chooser-choice-menu-width;
+        height: root.menu-title-height + max(1, choice.options.length) * root.menu-item-height;
+        dark: root.dark_mode;
+
+        ChooserChoiceMenu {
+            width: parent.width;
+            height: parent.height;
+            title: choice.label;
+            dark: root.dark_mode;
+            options: choice.options;
+            selected-index: choice.selected_index;
+            option_selected(option-index) => {
+                root.chooser_select_choice(index, option-index);
+                root.chooser-choice-menu-open = false;
+            }
+        }
+    }
+
+    if (root.custom-open-with-open): Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 460px;
+        height: 460px;
+        background: transparent;
+
+        OtherApplicationsDialog {
+            width: parent.width;
+            height: parent.height;
+            dark: root.dark_mode;
+            apps: root.other_application_apps;
+            filter <=> root.other_application_filter;
+            custom-command <=> root.custom_open_command;
+            set-default <=> root.other_application_set_default;
+            filter_changed(query) => { root.filter_other_applications(query); }
+            app_selected(app-id, set-default) => {
+                if (set-default) {
+                    root.set_default_app(root.open_with_path, app-id);
+                }
+                root.open_with_app(root.open_with_path, app-id);
+                root.custom-open-with-open = false;
+            }
+            custom_open(command) => {
+                root.open_with_custom_command(root.open_with_path, command);
+                root.custom-open-with-open = false;
+            }
+            cancelled => { root.custom-open-with-open = false; }
+        }
+    }
+}
