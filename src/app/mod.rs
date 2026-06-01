@@ -6,4 +6,5 @@ pub(crate) mod geometry;
 pub(crate) mod places;
 pub(crate) mod selection;
 pub(crate) mod state;
+pub(crate) mod thumbnail_pipeline;
 pub(crate) mod transfer;
