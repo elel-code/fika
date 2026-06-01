@@ -391,6 +391,7 @@ Acceptance for all:
   - Acceptance: missing packaged policy gives a clear diagnostic and does not fall back to unsafe writes.
   - Current: system-bus helper uses `org.freedesktop.PolicyKit1.Authority.CheckAuthorization` for every D-Bus method. Polkit authority, check, and denial failures include the action id and `org.fika.FileManager.policy` installation hint. The session-bus pkexec fallback keeps uid matching only for development.
   - Current: privileged helper fallback errors distinguish system-bus activation, development session-bus helper, and pkexec startup failures, and include the policy/polkit-agent installation hint.
+  - Current: `FIKA_DEBUG_PRIVILEGE=1` makes the helper print startup/exit lifecycle summaries with service mode, bus connection source, authorized subject, idle duration, and active external-edit token count.
 
 - [x] Install data helper.
   - Acceptance: packagers can install D-Bus, polkit, and portal metadata without hand-editing template paths.

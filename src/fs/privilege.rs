@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zbus::fdo::{self, DBusProxy};
 use zbus::message::Header;
@@ -539,6 +539,13 @@ pub async fn run_dbus_service(bus: HelperBus) -> Result<(), String> {
             )
         }
     };
+    privileged_debug_log(&helper_lifecycle_summary(
+        "starting",
+        &service_mode,
+        &session_bus_address,
+        0,
+        0,
+    ));
     let service = PrivilegedService::new(service_mode, session_bus_address.clone());
     let service_monitor = service.clone();
     let builder = match bus_connection_address(&session_bus_address, &service_monitor.mode) {
@@ -562,6 +569,14 @@ pub async fn run_dbus_service(bus: HelperBus) -> Result<(), String> {
         tokio::time::sleep(Duration::from_secs(5)).await;
         service_monitor.expire_stale_external_edits();
         if service_monitor.can_exit() {
+            let (idle_for, active_edits) = service_monitor.exit_state();
+            privileged_debug_log(&helper_lifecycle_summary(
+                "exiting",
+                &service_monitor.mode,
+                &service_monitor.session_bus_address,
+                idle_for,
+                active_edits,
+            ));
             break;
         }
     }
@@ -585,6 +600,47 @@ fn bus_connection_address<'a>(
             .map(BusConnection::SessionAddress)
             .unwrap_or(BusConnection::Session),
     }
+}
+
+fn helper_lifecycle_summary(
+    phase: &str,
+    mode: &ServiceMode,
+    session_bus_address: &Option<String>,
+    idle_for: u64,
+    active_edits: usize,
+) -> String {
+    let (mode_label, authorized_subject) = match mode {
+        ServiceMode::System => ("system-bus", "polkit".to_string()),
+        ServiceMode::SessionPkexec { allowed_uid } => {
+            ("session-bus-pkexec", format!("uid:{allowed_uid}"))
+        }
+    };
+    let bus_connection = match bus_connection_address(session_bus_address, mode) {
+        BusConnection::System => "system",
+        BusConnection::SessionAddress(_) => "provided-session",
+        BusConnection::Session => "session",
+    };
+    format!(
+        "phase={phase} mode={mode_label} bus_connection={bus_connection} authorized_subject={authorized_subject} session_address={} idle_for={} active_external_edits={active_edits}",
+        session_bus_address.is_some(),
+        idle_for
+    )
+}
+
+fn privileged_debug_log(message: &str) {
+    static DEBUG_PRIVILEGE: OnceLock<bool> = OnceLock::new();
+    if *DEBUG_PRIVILEGE.get_or_init(|| {
+        env::var("FIKA_DEBUG_PRIVILEGE").is_ok_and(|value| env_flag_is_truthy(value.as_str()))
+    }) {
+        eprintln!("[fika privileged helper] {message}");
+    }
+}
+
+fn env_flag_is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -692,12 +748,14 @@ impl PrivilegedService {
     }
 
     fn can_exit(&self) -> bool {
+        let (idle_for, active_edits) = self.exit_state();
+        idle_for >= HELPER_IDLE_SECONDS && active_edits == 0
+    }
+
+    fn exit_state(&self) -> (u64, usize) {
         let idle_for = now_secs().saturating_sub(self.last_activity_secs.load(Ordering::Relaxed));
-        let has_external_edits = self
-            .external_edits
-            .lock()
-            .is_ok_and(|external_edits| !external_edits.is_empty());
-        idle_for >= HELPER_IDLE_SECONDS && !has_external_edits
+        let active_edits = self.external_edits.lock().map_or(0, |edits| edits.len());
+        (idle_for, active_edits)
     }
 
     fn prepare_external_edit_inner(
@@ -1567,6 +1625,49 @@ mod tests {
             bus_connection_address(&None, &ServiceMode::SessionPkexec { allowed_uid: 1000 }),
             BusConnection::Session
         ));
+    }
+
+    #[test]
+    fn helper_lifecycle_summary_reports_mode_bus_and_activity() {
+        assert_eq!(
+            helper_lifecycle_summary("starting", &ServiceMode::System, &None, 0, 0),
+            "phase=starting mode=system-bus bus_connection=system authorized_subject=polkit session_address=false idle_for=0 active_external_edits=0"
+        );
+
+        let address = Some("unix:path=/run/user/1000/bus".to_string());
+        assert_eq!(
+            helper_lifecycle_summary(
+                "exiting",
+                &ServiceMode::SessionPkexec { allowed_uid: 1000 },
+                &address,
+                180,
+                2,
+            ),
+            "phase=exiting mode=session-bus-pkexec bus_connection=provided-session authorized_subject=uid:1000 session_address=true idle_for=180 active_external_edits=2"
+        );
+
+        assert_eq!(
+            helper_lifecycle_summary(
+                "starting",
+                &ServiceMode::SessionPkexec { allowed_uid: 1000 },
+                &None,
+                0,
+                0,
+            ),
+            "phase=starting mode=session-bus-pkexec bus_connection=session authorized_subject=uid:1000 session_address=false idle_for=0 active_external_edits=0"
+        );
+    }
+
+    #[test]
+    fn privilege_env_flag_truthy_values_are_explicit() {
+        assert!(env_flag_is_truthy("1"));
+        assert!(env_flag_is_truthy(" true "));
+        assert!(env_flag_is_truthy("YES"));
+        assert!(env_flag_is_truthy("on"));
+        assert!(!env_flag_is_truthy(""));
+        assert!(!env_flag_is_truthy("0"));
+        assert!(!env_flag_is_truthy("false"));
+        assert!(!env_flag_is_truthy("disabled"));
     }
 
     #[test]
