@@ -45,7 +45,7 @@ use app::selection::{
     selection_rect_paths_filtered,
 };
 use app::state::{
-    AppState, ChooserChoice as StateChooserChoice, ChooserChoiceItem, ChooserFilter,
+    AppState, ChooserChoice as StateChooserChoice, ChooserChoiceItem, ChooserFilter, DeviceAction,
     DirectoryViewState, FileUndo,
 };
 use app::transfer::{
@@ -268,8 +268,13 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_open_device(move |path, mounted| {
             if let Some(ui) = ui_weak.upgrade() {
                 if !mounted {
-                    set_status(&ui, "Mounting device...");
-                    mount_device_async(&bridge, path.to_string());
+                    let device_path = path.to_string();
+                    if register_pending_device_action(&state, &device_path, "mount") {
+                        set_status(&ui, "Mounting device...");
+                        mount_device_async(&bridge, device_path);
+                    } else {
+                        set_status(&ui, "Device action already in progress");
+                    }
                     return;
                 }
                 let requested = expand_user_path(path.as_str());
@@ -284,22 +289,34 @@ fn main() -> Result<(), slint::PlatformError> {
 
     {
         let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         let bridge = bridge.clone();
         ui.on_unmount_device(move |device_path| {
             if let Some(ui) = ui_weak.upgrade() {
-                set_status(&ui, "Unmounting device...");
-                device_action_async(&bridge, "unmount", device_path.to_string());
+                let device_path = device_path.to_string();
+                if register_pending_device_action(&state, &device_path, "unmount") {
+                    set_status(&ui, "Unmounting device...");
+                    device_action_async(&bridge, "unmount", device_path);
+                } else {
+                    set_status(&ui, "Device action already in progress");
+                }
             }
         });
     }
 
     {
         let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         let bridge = bridge.clone();
         ui.on_eject_device(move |device_path| {
             if let Some(ui) = ui_weak.upgrade() {
-                set_status(&ui, "Ejecting device...");
-                device_action_async(&bridge, "eject", device_path.to_string());
+                let device_path = device_path.to_string();
+                if register_pending_device_action(&state, &device_path, "eject") {
+                    set_status(&ui, "Ejecting device...");
+                    device_action_async(&bridge, "eject", device_path);
+                } else {
+                    set_status(&ui, "Device action already in progress");
+                }
             }
         });
     }
@@ -1709,6 +1726,34 @@ fn mount_device_async(bridge: &AsyncBridge, device_path: String) {
     });
 }
 
+fn register_pending_device_action(
+    state: &Rc<RefCell<AppState>>,
+    device_path: &str,
+    action: &str,
+) -> bool {
+    let mut state = state.borrow_mut();
+    if state
+        .pending_device_actions
+        .iter()
+        .any(|pending| pending.device_path == device_path)
+    {
+        return false;
+    }
+
+    state.pending_device_actions.push(DeviceAction {
+        device_path: device_path.to_string(),
+        action: action.to_string(),
+    });
+    true
+}
+
+fn clear_pending_device_action(state: &Rc<RefCell<AppState>>, device_path: &str, action: &str) {
+    state
+        .borrow_mut()
+        .pending_device_actions
+        .retain(|pending| pending.device_path != device_path || pending.action.as_str() != action);
+}
+
 fn device_action_async(bridge: &AsyncBridge, action: &'static str, device_path: String) {
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -2563,6 +2608,7 @@ fn apply_device_mount_result(
     bridge: &AsyncBridge,
     result: DeviceMountResult,
 ) {
+    clear_pending_device_action(state, &result.device_path, "mount");
     sync_devices(ui);
     match result.result {
         Ok(mount_point) if mount_point.is_dir() => {
@@ -2589,6 +2635,7 @@ fn apply_device_action_result(
     bridge: &AsyncBridge,
     result: DeviceActionResult,
 ) {
+    clear_pending_device_action(state, &result.device_path, &result.action);
     sync_devices(ui);
     match result.result {
         Ok(()) => {
@@ -4597,6 +4644,30 @@ mod tests {
             transfer_target_rejection(Path::new("/tmp/project"), Path::new("/tmp/project-copy")),
             None
         );
+    }
+
+    #[test]
+    fn device_action_pending_guard_blocks_duplicate_device_actions() {
+        let state = Rc::new(RefCell::new(AppState::new(
+            PathBuf::from("/tmp"),
+            Vec::new(),
+        )));
+
+        assert!(register_pending_device_action(&state, "/dev/sdb1", "mount"));
+        assert!(!register_pending_device_action(
+            &state,
+            "/dev/sdb1",
+            "unmount"
+        ));
+        assert!(register_pending_device_action(&state, "/dev/sdc1", "mount"));
+
+        clear_pending_device_action(&state, "/dev/sdb1", "mount");
+
+        assert!(register_pending_device_action(
+            &state,
+            "/dev/sdb1",
+            "unmount"
+        ));
     }
 
     fn test_entry(name: &str, path: &str) -> FileEntry {

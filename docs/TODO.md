@@ -39,7 +39,8 @@
   - Current: UDisks2 system-bus `ObjectManager` discovery is used as a best-effort enhancement for removable media, including unmounted drives. Mounted mountinfo entries stay first and win duplicate paths; UDisks2 failures fall back silently to mountinfo/directory discovery.
   - Current: clicking an unmounted UDisks2 filesystem device starts an async `Filesystem.Mount({})`; success refreshes Devices and opens the returned mount point, while failures are shown in the status bar.
   - Current: device rows have a right-click menu with Mount for unmounted media, Open/Unmount for mounted media, and Eject when UDisks2 reports an ejectable drive. These actions run off the UI thread and refresh Devices after completion.
-  - Remaining: clearer device error reporting, busy-device guidance, and distro validation for UDisks2/polkit edge cases.
+  - Current: pending device actions are tracked per `device_path`, so repeated clicks on the same device do not queue overlapping Mount/Unmount/Eject D-Bus calls.
+  - Remaining: clearer device error reporting, busy-device guidance from UDisks2 error names, and distro validation for UDisks2/polkit edge cases.
 - [x] Internal drop transfer menu with Move / Copy / Link actions.
 - [x] F5 active refresh; toolbar refresh button removed.
 - [x] Mouse Back/Forward navigation with history stacks.

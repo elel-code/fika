@@ -52,6 +52,7 @@ pub(crate) struct AppState {
     pub(crate) last_undo: Option<FileUndo>,
     pub(crate) pending_privileged_command: Option<PrivilegedCommand>,
     pub(crate) external_edits: Vec<ExternalEditSession>,
+    pub(crate) pending_device_actions: Vec<DeviceAction>,
     pub(crate) launched_units: Vec<String>,
     pub(crate) next_operation_id: u64,
     pub(crate) back_stack: Vec<PathBuf>,
@@ -103,6 +104,7 @@ impl AppState {
             last_undo: None,
             pending_privileged_command: None,
             external_edits: Vec::new(),
+            pending_device_actions: Vec::new(),
             launched_units: Vec::new(),
             next_operation_id: 1,
             back_stack: Vec::new(),
@@ -194,6 +196,12 @@ impl VirtualViewCache {
     pub(crate) fn invalidate(&mut self) {
         self.range = 0..0;
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DeviceAction {
+    pub(crate) device_path: String,
+    pub(crate) action: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
