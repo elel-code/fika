@@ -6,7 +6,6 @@ import {
     MenuDismissLayer,
     MenuHoverBridge,
     PlaceButton,
-    PopupSurface,
     SidebarAction,
     SidebarSection,
     ToolButton,
@@ -1609,25 +1608,19 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.create-new-menu-open): PopupSurface {
+    if (root.create-new-menu-open): CreateNewMenu {
         x: root.active-child-menu-left;
         y: root.active-child-menu-top;
         width: root.create-new-menu-width;
         height: root.create-new-menu-height;
         dark: root.dark_mode;
-
-        CreateNewMenu {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            keep_alive(is-hovered) => {
-                root.set-child-submenu-hover(2, is-hovered);
-            }
-            folder_selected => {
-                root.new-folder-name = "New Folder";
-                root.new-folder-open = true;
-                root.close-context-popups();
-            }
+        keep_alive(is-hovered) => {
+            root.set-child-submenu-hover(2, is-hovered);
+        }
+        folder_selected => {
+            root.new-folder-name = "New Folder";
+            root.new-folder-open = true;
+            root.close-context-popups();
         }
     }
 
@@ -1755,25 +1748,19 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.transfer-menu-open): PopupSurface {
+    if (root.transfer-menu-open): TransferMenu {
         x: root.transfer-menu-left;
         y: root.transfer-menu-top;
         width: root.transfer-menu-width;
         height: root.transfer-menu-height;
+        title: root.transfer_source_label + " -> " + root.transfer_target_label;
         dark: root.dark_mode;
-
-        TransferMenu {
-            width: parent.width;
-            height: parent.height;
-            title: root.transfer_source_label + " -> " + root.transfer_target_label;
-            dark: root.dark_mode;
-            operation_selected(operation) => {
-                root.transfer_operation(operation, root.transfer_source_path, root.transfer_target_path);
-                root.transfer-menu-open = false;
-            }
-            cancelled => {
-                root.transfer-menu-open = false;
-            }
+        operation_selected(operation) => {
+            root.transfer_operation(operation, root.transfer_source_path, root.transfer_target_path);
+            root.transfer-menu-open = false;
+        }
+        cancelled => {
+            root.transfer-menu-open = false;
         }
     }
 
@@ -1787,35 +1774,29 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.open-with-menu-open): PopupSurface {
+    if (root.open-with-menu-open): OpenWithMenu {
         x: root.active-child-menu-left;
         y: root.active-child-menu-top;
         width: root.open-with-menu-width;
         height: root.open-with-menu-height;
+        title: root.open_with_mime == "" ? "Open With" : "Open With - " + root.open_with_mime;
         dark: root.dark_mode;
-
-        OpenWithMenu {
-            width: parent.width;
-            height: parent.height;
-            title: root.open_with_mime == "" ? "Open With" : "Open With - " + root.open_with_mime;
-            dark: root.dark_mode;
-            apps: root.open_with_apps;
-            item-height: root.menu-item-height;
-            keep_alive(is-hovered) => {
-                root.set-child-submenu-hover(1, is-hovered);
-            }
-            app_selected(app-id) => {
-                root.open_with_app(root.open_with_path, app-id);
-                root.close-context-popups();
-            }
-            other_applications => {
-                root.prepare_other_applications(root.open_with_path);
-                root.custom_open_command = "";
-                root.other_application_filter = "";
-                root.other_application_set_default = false;
-                root.custom-open-with-open = true;
-                root.close-context-popups();
-            }
+        apps: root.open_with_apps;
+        item-height: root.menu-item-height;
+        keep_alive(is-hovered) => {
+            root.set-child-submenu-hover(1, is-hovered);
+        }
+        app_selected(app-id) => {
+            root.open_with_app(root.open_with_path, app-id);
+            root.close-context-popups();
+        }
+        other_applications => {
+            root.prepare_other_applications(root.open_with_path);
+            root.custom_open_command = "";
+            root.other_application_filter = "";
+            root.other_application_set_default = false;
+            root.custom-open-with-open = true;
+            root.close-context-popups();
         }
     }
 

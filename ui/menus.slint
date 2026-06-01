@@ -2,16 +2,13 @@ import { ScrollView } from "std-widgets.slint";
 import { ChooserChoiceOption, DesktopApp } from "models.slint";
 import { MenuHoverTitle, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
 
-export component OpenWithMenu inherits Rectangle {
+export component OpenWithMenu inherits PopupSurface {
     in property <string> title;
-    in property <bool> dark;
     in property <[DesktopApp]> apps;
     in property <length> item-height: 38px;
     callback keep_alive(bool);
     callback app_selected(string);
     callback other_applications();
-
-    background: transparent;
 
     VerticalLayout {
         spacing: 0px;
@@ -59,12 +56,9 @@ export component OpenWithMenu inherits Rectangle {
     }
 }
 
-export component CreateNewMenu inherits Rectangle {
-    in property <bool> dark;
+export component CreateNewMenu inherits PopupSurface {
     callback keep_alive(bool);
     callback folder_selected();
-
-    background: transparent;
 
     MenuItem {
         label: "Folder";
@@ -120,13 +114,10 @@ export component ChooserChoicePopup inherits PopupSurface {
     }
 }
 
-export component TransferMenu inherits Rectangle {
+export component TransferMenu inherits PopupSurface {
     in property <string> title;
-    in property <bool> dark;
     callback operation_selected(string);
     callback cancelled();
-
-    background: transparent;
 
     VerticalLayout {
         spacing: 0px;
