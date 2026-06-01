@@ -1291,7 +1291,7 @@ fn cleanup_scratch_token_dir(scratch_path: &Path) -> Result<(), String> {
 
 fn polkit_authority_unavailable_message(err: &str) -> String {
     format!(
-        "cannot contact polkit authority: {err}; ensure polkit is running and a desktop polkit agent is available"
+        "cannot contact polkit authority for action {ACTION_ID}: {err}; ensure polkit is running, {POLICY_FILE} is installed, and a desktop polkit agent is available"
     )
 }
 
@@ -1581,6 +1581,9 @@ mod tests {
 
         let unavailable = polkit_authority_unavailable_message("no service");
         assert!(unavailable.contains("polkit"));
+        assert!(unavailable.contains(ACTION_ID));
+        assert!(unavailable.contains(POLICY_FILE));
+        assert!(unavailable.contains("no service"));
         assert!(unavailable.contains("desktop polkit agent"));
     }
 

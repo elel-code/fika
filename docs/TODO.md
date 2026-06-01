@@ -389,7 +389,7 @@ Acceptance for all:
 - [x] Per-method polkit authority check.
   - Acceptance: helper asks polkit authority for `org.fika.FileManager.privileged-helper` per protected operation when the packaged action is installed.
   - Acceptance: missing packaged policy gives a clear diagnostic and does not fall back to unsafe writes.
-  - Current: system-bus helper uses `org.freedesktop.PolicyKit1.Authority.CheckAuthorization` for every D-Bus method. Polkit failures include the action id and `org.fika.FileManager.policy` installation hint. The session-bus pkexec fallback keeps uid matching only for development.
+  - Current: system-bus helper uses `org.freedesktop.PolicyKit1.Authority.CheckAuthorization` for every D-Bus method. Polkit authority, check, and denial failures include the action id and `org.fika.FileManager.policy` installation hint. The session-bus pkexec fallback keeps uid matching only for development.
   - Current: privileged helper fallback errors distinguish system-bus activation, development session-bus helper, and pkexec startup failures, and include the policy/polkit-agent installation hint.
 
 - [x] Install data helper.
