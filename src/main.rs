@@ -28,7 +28,7 @@ use app::file_clipboard::sync_clipboard_ui;
 use app::geometry::{
     ChildPopupInput, HoverBridgeInput, MainGridLayout, MenuMetricsInput, PopupPlacement,
     PopupPoint, PopupRect, SelectionRect, SideButtonDirection, context_menu_metrics,
-    place_drop_geometry, side_button_navigation_in_main_pane, virtual_grid_plan,
+    place_drop_geometry, side_button_navigation_in_main_pane,
 };
 use app::places::{
     add_place, add_place_at_slot, add_place_at_slot_from_external_payload,
@@ -37,9 +37,8 @@ use app::places::{
     restore_default_places, sync_places,
 };
 use app::selection::{
-    append_unique_paths, filtered_entries_range, filtered_entry_count, filtered_entry_paths,
-    rebuild_visible_entry_index, retained_visible_paths, selection_range_paths_filtered,
-    selection_rect_paths_filtered,
+    append_unique_paths, filtered_entry_count, filtered_entry_paths, rebuild_visible_entry_index,
+    retained_visible_paths, selection_range_paths_filtered, selection_rect_paths_filtered,
 };
 use app::state::{
     AppState, ChooserChoice as StateChooserChoice, ChooserChoiceItem, ChooserFilter, DeviceAction,
@@ -55,6 +54,7 @@ use app::transfer::{
     prepare_entry_transfer, prepare_main_transfer, prepare_place_transfer,
     resolve_transfer_conflict, start_next_operation, start_transfer_operation,
 };
+use app::virtual_view::{VirtualViewInput, prepare_virtual_view_update};
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::settings::{AppSettings, load_settings, save_settings};
@@ -3036,54 +3036,39 @@ fn sync_virtual_entries_with_count(
     let layout = MainGridLayout::from_ui(ui);
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let viewport_width = (window_size.width - ui.get_sidebar_width_px() - 8.0).max(1.0);
-    let (range, visible_range, virtual_entries) = {
+    let update = {
         let mut state_ref = state.borrow_mut();
-        let visible_count =
-            visible_count_override.unwrap_or_else(|| filtered_entry_count(&state_ref));
-        let plan = virtual_grid_plan(
-            visible_count,
-            layout.rows_per_column,
-            ui.get_main_viewport_x(),
-            viewport_width,
-            layout.cell_width,
-            layout.padding,
-            2,
-        );
-        if (plan.viewport_x - ui.get_main_viewport_x()).abs() > f32::EPSILON {
-            ui.set_main_viewport_x(plan.viewport_x);
-            ui.set_main_viewport_offset(-plan.viewport_x);
-        }
-        let should_rebuild_model = !schedule_thumbnails
-            || state_ref.virtual_view.range != plan.range
-            || state_ref.virtual_view.entry_count != visible_count
-            || state_ref.virtual_view.rows_per_column != layout.rows_per_column
-            || state_ref.virtual_view.cell_width != layout.cell_width
-            || state_ref.virtual_view.thumbnail_size_px != size_px;
-
-        ui.set_entry_count(visible_count as i32);
-
-        if !should_rebuild_model {
-            return;
-        }
-
-        let mut virtual_entries = filtered_entries_range(&state_ref, plan.range.clone());
-        decorate_entries_with_cached_thumbnails(&state_ref, &mut virtual_entries, size_px);
-        state_ref.virtual_view.range = plan.range.clone();
-        state_ref.virtual_view.entry_count = visible_count;
-        state_ref.virtual_view.rows_per_column = layout.rows_per_column;
-        state_ref.virtual_view.cell_width = layout.cell_width;
-        state_ref.virtual_view.thumbnail_size_px = size_px;
-        ui.set_virtual_start_index(plan.range.start as i32);
-        ui.set_virtual_start_column(plan.start_column as i32);
-        (plan.range, plan.visible_range, virtual_entries)
+        prepare_virtual_view_update(
+            &mut state_ref,
+            VirtualViewInput {
+                layout,
+                requested_viewport_x: ui.get_main_viewport_x(),
+                viewport_width,
+                thumbnail_size_px: size_px,
+                schedule_thumbnails,
+                visible_count_override,
+            },
+        )
     };
+    if update.viewport_clamped {
+        ui.set_main_viewport_x(update.viewport_x);
+        ui.set_main_viewport_offset(-update.viewport_x);
+    }
+    ui.set_entry_count(update.entry_count as i32);
+
+    if !update.rebuild_model {
+        return;
+    }
+
+    ui.set_virtual_start_index(update.range.start as i32);
+    ui.set_virtual_start_column(update.start_column as i32);
     ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(
-        virtual_entries.clone(),
+        update.entries.clone(),
     ))));
 
     if schedule_thumbnails {
         let thumbnail_entries =
-            prioritize_thumbnail_entries(&virtual_entries, range.start, visible_range);
+            prioritize_thumbnail_entries(&update.entries, update.range.start, update.visible_range);
         schedule_visible_thumbnails(ui, state, bridge, &thumbnail_entries, size_px, false);
     }
 }
@@ -3808,8 +3793,8 @@ mod tests {
     use crate::app::geometry::{MainGridLayout, place_drop_geometry, virtual_entry_range};
     use crate::app::places::normalize_dropped_path;
     use crate::app::selection::{
-        filtered_entry_at, filtered_entry_summary, rebuild_visible_entry_index,
-        selection_range_paths, selection_rect_paths,
+        filtered_entries_range, filtered_entry_at, filtered_entry_summary,
+        rebuild_visible_entry_index, selection_range_paths, selection_rect_paths,
     };
     use crate::app::transfer::transfer_target_rejection;
     use slint::Image;

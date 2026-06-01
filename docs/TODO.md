@@ -20,6 +20,7 @@
   - Current: Slint receives only `entry_count` and the visible `virtual_entries` slice, not the full filtered file model.
   - Current: filtering/search rebuilds a lightweight visible-index cache once; normal unfiltered directories use an implicit identity fast path.
   - Current: viewport changes clone only the requested virtual range through that visible-index cache, avoiding repeated full filtered-model allocation during horizontal scrolling.
+  - Current: virtual slice preparation lives in `src/app/virtual_view.rs`, so range planning, viewport clamping, rebuild decisions, filtered slicing, and thumbnail-cache decoration are testable away from Slint property updates.
   - Current: virtual tiles are placed inside a local virtual layer anchored at the first virtualized column, so large directories do not force Slint to maintain huge per-tile global coordinates.
   - Current: virtual range metadata is cached; scrolling inside the same range does not reset the Slint model.
   - Current: Rust uses a tested `VirtualGridPlan` to calculate clamped viewport position, scroll extent, visible range, overscan range, and Slint anchor column from one source of truth.
@@ -362,6 +363,10 @@ Acceptance for all:
 - [x] Split Places UI logic out of `main.rs`.
   - Acceptance: add/rename/remove/restore/reorder/drop handling for Places is grouped away from main callback wiring.
   - Current: `src/app/places.rs` owns Places persistence and drop normalization helpers.
+
+- [x] Split virtual main-view preparation out of `main.rs`.
+  - Acceptance: large-directory viewport slicing and rebuild decisions are testable outside UI callback wiring.
+  - Current: `src/app/virtual_view.rs` prepares clamped viewport state and the current virtual `FileEntry` slice; `main.rs` only applies Slint properties and schedules visible thumbnails.
 
 - [x] Apply Dolphin DnD target validation.
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.
