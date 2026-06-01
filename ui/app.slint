@@ -329,6 +329,22 @@ export component AppWindow inherits Window {
         root.create-new-menu-open = true;
     }
 
+    function open-with-submenu-hover(path: string, row-y: length, is-hovered: bool) {
+        if (is-hovered) {
+            root.show-open-with-submenu(path, row-y);
+        } else {
+            root.set-child-submenu-hover(1, false);
+        }
+    }
+
+    function create-new-submenu-hover(row-y: length, is-hovered: bool) {
+        if (is-hovered) {
+            root.show-create-new-submenu(row-y);
+        } else {
+            root.set-child-submenu-hover(2, false);
+        }
+    }
+
     function close-context-popups() {
         root.context-menu-open = false;
         root.open-with-menu-open = false;
@@ -1408,11 +1424,7 @@ export component AppWindow inherits Window {
             clipboard-has-paths: root.clipboard_has_paths;
             add-to-places-visible: root.context-add-place-visible;
             open_folder_with_hover(is-hovered) => {
-                if (is-hovered) {
-                    root.show-open-with-submenu(root.context-menu-path, root.context-menu-top);
-                } else {
-                    root.set-child-submenu-hover(1, false);
-                }
+                root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top, is-hovered);
             }
             open_folder_with_clicked => {
                 root.show-open-with-submenu(root.context-menu-path, root.context-menu-top);
@@ -1422,11 +1434,7 @@ export component AppWindow inherits Window {
                 root.close-context-popups();
             }
             open_with_hover(is-hovered) => {
-                if (is-hovered) {
-                    root.show-open-with-submenu(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset);
-                } else {
-                    root.set-child-submenu-hover(1, false);
-                }
+                root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
             }
             open_with_clicked => {
                 root.show-open-with-submenu(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset);
@@ -1547,11 +1555,7 @@ export component AppWindow inherits Window {
             clipboard-has-paths: root.clipboard_has_paths;
             clipboard-cut: root.clipboard_cut;
             create_new_hover(is-hovered) => {
-                if (is-hovered) {
-                    root.show-create-new-submenu(root.context-menu-top);
-                } else {
-                    root.set-child-submenu-hover(2, false);
-                }
+                root.create-new-submenu-hover(root.context-menu-top, is-hovered);
             }
             create_new_clicked => {
                 root.show-create-new-submenu(root.context-menu-top);
@@ -1561,11 +1565,7 @@ export component AppWindow inherits Window {
                 root.close-context-popups();
             }
             open_folder_with_hover(is-hovered) => {
-                if (is-hovered) {
-                    root.show-open-with-submenu(root.current_path, root.context-menu-top + root.context-open-with-row-offset);
-                } else {
-                    root.set-child-submenu-hover(1, false);
-                }
+                root.open-with-submenu-hover(root.current_path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
             }
             open_folder_with_clicked => {
                 root.show-open-with-submenu(root.current_path, root.context-menu-top + root.context-open-with-row-offset);
