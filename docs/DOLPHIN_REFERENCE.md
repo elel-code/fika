@@ -92,7 +92,9 @@ Current Fika mapping:
 
 - Fika already preserves old view during uncached navigation, caches directory entries, and remembers per-directory horizontal scroll.
 - Submenu positioning has been changed to anchor to the actual parent menu item and avoid window edges.
-- File item, viewport, Open With, Create New, Transfer, and Places menu content have been split into `ui/menus.slint`. Root context placement, Transfer placement, Open With / Create New child submenu placement, hover bridge geometry, and chooser-choice popup clamping now share Rust-side popup geometry helpers; `AppWindow` still owns menu action wiring and the Slint-side delayed-close timers.
+- File item, viewport, Open With, Create New, Transfer, Places, Devices, and Places blank-area menu content have been split into `ui/menus.slint`.
+- Root file / Places / Devices / blank-area menu hosting now goes through `RootContextMenuLayer`, while `AppWindow` still owns action wiring and delayed-close timers.
+- Root context placement, Transfer placement, Open With / Create New child submenu placement, hover bridge geometry, and chooser-choice popup clamping share Rust-side popup geometry helpers.
 
 ## Search
 

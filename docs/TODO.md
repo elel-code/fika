@@ -386,7 +386,6 @@ Acceptance for all:
   - Acceptance: menus prefer the requested popup point, flip if they would overflow the safe rect, and clamp when the window is too small.
   - Current: context, Open With, Create New, transfer, and chooser-choice popup surfaces use shared Rust `PopupPlacement` geometry, reusable popup surface styling, and a common outside-click dismiss layer.
   - Current: root context placement, Transfer placement, Open With / Create New child placement plus hover bridge geometry, and chooser-choice above-button placement now use Rust helpers, reducing duplicated popup positioning logic in `ui/app.slint`.
-  - Current: helper exits after idle time when no external edit tokens are active.
 
 - [x] Per-method polkit authority check.
   - Acceptance: helper asks polkit authority for `org.fika.FileManager.privileged-helper` per protected operation when the packaged action is installed.
@@ -415,6 +414,7 @@ Acceptance for all:
   - Acceptance: helper can track editor systemd unit lifetime or token expiry and clean scratch files without relying on the GUI.
   - Acceptance: closing Fika windows does not leave unbounded helper lifetime.
   - Current: helper tracks associated systemd unit lifetime and cleans scratch after unit exit; tokens without a unit are expired after a bounded TTL with a final writeback attempt.
+  - Current: helper exits after idle time when no external edit tokens are active.
 
 - [x] Re-evaluate transparent external-editor saves after D-Bus writeback is stable.
   - Acceptance: no FUSE layer is introduced unless scratch/writeback proves insufficient.

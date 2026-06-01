@@ -230,6 +230,31 @@ export component TransferMenu inherits PopupSurface {
     }
 }
 
+export component TransferMenuLayer inherits Rectangle {
+    in property <bool> menu-open;
+    in property <length> menu-left;
+    in property <length> menu-top;
+    in property <length> menu-width;
+    in property <length> menu-height;
+    in property <string> title;
+    in property <bool> dark;
+    callback operation_selected(string);
+    callback cancelled();
+
+    background: transparent;
+
+    if (root.menu-open): TransferMenu {
+        x: root.menu-left;
+        y: root.menu-top;
+        width: root.menu-width;
+        height: root.menu-height;
+        title: root.title;
+        dark: root.dark;
+        operation_selected(operation) => { root.operation_selected(operation); }
+        cancelled => { root.cancelled(); }
+    }
+}
+
 export component PlaceContextMenu inherits PopupSurface {
     in property <string> title;
     in property <bool> builtin;

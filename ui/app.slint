@@ -11,7 +11,7 @@ import {
 } from "widgets.slint";
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
-import { ChildSubmenuLayer, ChooserChoicePopup, RootContextMenuLayer, TransferMenu } from "menus.slint";
+import { ChildSubmenuLayer, ChooserChoicePopup, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
 import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
 export component AppWindow inherits Window {
@@ -1726,11 +1726,14 @@ export component AppWindow inherits Window {
         choice(decision) => { root.transfer_conflict_choice(decision); }
     }
 
-    if (root.transfer-menu-open): TransferMenu {
-        x: root.transfer-menu-left;
-        y: root.transfer-menu-top;
-        width: root.transfer-menu-width;
-        height: root.transfer-menu-height;
+    TransferMenuLayer {
+        width: parent.width;
+        height: parent.height;
+        menu-open: root.transfer-menu-open;
+        menu-left: root.transfer-menu-left;
+        menu-top: root.transfer-menu-top;
+        menu-width: root.transfer-menu-width;
+        menu-height: root.transfer-menu-height;
         title: root.transfer_source_label + " -> " + root.transfer_target_label;
         dark: root.dark_mode;
         operation_selected(operation) => {
