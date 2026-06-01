@@ -54,21 +54,7 @@ pub(crate) fn sync_clipboard_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 fn copy_paths(ui: &AppWindow, state: &Rc<RefCell<AppState>>, context_path: &str, cut: bool) {
     let paths = {
         let state = state.borrow();
-        let paths = if state.selected_paths.len() > 1
-            && state
-                .selected_paths
-                .iter()
-                .any(|selected| selected == context_path)
-        {
-            state
-                .selected_paths
-                .iter()
-                .map(PathBuf::from)
-                .collect::<Vec<_>>()
-        } else {
-            vec![PathBuf::from(context_path)]
-        };
-        unique_paths(paths)
+        clipboard_paths_for_context(&state.selected_paths, context_path)
     };
 
     if paths.is_empty() {
@@ -213,6 +199,19 @@ fn merge_desktop_clipboard(
     missing_count
 }
 
+fn clipboard_paths_for_context(selected_paths: &[String], context_path: &str) -> Vec<PathBuf> {
+    let paths = if selected_paths.len() > 1
+        && selected_paths
+            .iter()
+            .any(|selected| selected.as_str() == context_path)
+    {
+        selected_paths.iter().map(PathBuf::from).collect::<Vec<_>>()
+    } else {
+        vec![PathBuf::from(context_path)]
+    };
+    unique_paths(paths)
+}
+
 fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut unique = Vec::with_capacity(paths.len());
     for path in paths {
@@ -226,7 +225,8 @@ fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        existing_clipboard_paths, merge_desktop_clipboard, unique_paths, would_paste_into_itself,
+        clipboard_paths_for_context, existing_clipboard_paths, merge_desktop_clipboard,
+        unique_paths, would_paste_into_itself,
     };
     use crate::app::state::AppState;
     use crate::desktop::clipboard::FileClipboard;
@@ -266,6 +266,30 @@ mod tests {
             ]
         );
         assert_eq!(missing, 1);
+    }
+
+    #[test]
+    fn clipboard_context_inside_multiselection_copies_all_selected_paths() {
+        let selected = vec![
+            "/tmp/a".to_string(),
+            "/tmp/b".to_string(),
+            "/tmp/a".to_string(),
+        ];
+
+        assert_eq!(
+            clipboard_paths_for_context(&selected, "/tmp/b"),
+            vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]
+        );
+    }
+
+    #[test]
+    fn clipboard_context_outside_multiselection_copies_only_context_path() {
+        let selected = vec!["/tmp/a".to_string(), "/tmp/b".to_string()];
+
+        assert_eq!(
+            clipboard_paths_for_context(&selected, "/tmp/c"),
+            vec![PathBuf::from("/tmp/c")]
+        );
     }
 
     #[test]
