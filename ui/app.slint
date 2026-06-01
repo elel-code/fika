@@ -1508,65 +1508,53 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.context-menu-open && root.context-menu-kind == 2): PopupSurface {
+    if (root.context-menu-open && root.context-menu-kind == 2): PlaceContextMenu {
         x: root.context-menu-left;
         y: root.context-menu-top;
         width: root.context-place-menu-width;
         height: root.active-context-menu-height;
+        title: root.rename-place-label;
         dark: root.dark_mode;
-
-        PlaceContextMenu {
-            width: parent.width;
-            height: parent.height;
-            title: root.rename-place-label;
-            dark: root.dark_mode;
-            builtin: root.context-menu-place-builtin;
-            open_new_window => {
-                root.open_place_new_window(root.context-menu-place-index);
-                root.close-context-popups();
-            }
-            rename_requested => {
-                root.rename-place-index = root.context-menu-place-index;
-                root.rename-place-open = true;
-                root.close-context-popups();
-            }
-            remove_requested => {
-                root.remove_place(root.context-menu-place-index);
-                root.close-context-popups();
-            }
+        builtin: root.context-menu-place-builtin;
+        open_new_window => {
+            root.open_place_new_window(root.context-menu-place-index);
+            root.close-context-popups();
+        }
+        rename_requested => {
+            root.rename-place-index = root.context-menu-place-index;
+            root.rename-place-open = true;
+            root.close-context-popups();
+        }
+        remove_requested => {
+            root.remove_place(root.context-menu-place-index);
+            root.close-context-popups();
         }
     }
 
-    if (root.context-menu-open && root.context-menu-kind == 5): PopupSurface {
+    if (root.context-menu-open && root.context-menu-kind == 5): DeviceContextMenu {
         x: root.context-menu-left;
         y: root.context-menu-top;
         width: root.context-place-menu-width;
         height: root.active-context-menu-height;
+        title: root.rename-place-label;
         dark: root.dark_mode;
-
-        DeviceContextMenu {
-            width: parent.width;
-            height: parent.height;
-            title: root.rename-place-label;
-            dark: root.dark_mode;
-            mounted: root.context-menu-device-mounted;
-            can-eject: root.context-menu-device-can-eject;
-            open_requested => {
-                root.open_device(root.context-menu-device-open-path, true);
-                root.close-context-popups();
-            }
-            mount_requested => {
-                root.open_device(root.context-menu-device-path, false);
-                root.close-context-popups();
-            }
-            unmount_requested => {
-                root.unmount_device(root.context-menu-device-path, root.context-menu-device-open-path);
-                root.close-context-popups();
-            }
-            eject_requested => {
-                root.eject_device(root.context-menu-device-path, root.context-menu-device-open-path);
-                root.close-context-popups();
-            }
+        mounted: root.context-menu-device-mounted;
+        can-eject: root.context-menu-device-can-eject;
+        open_requested => {
+            root.open_device(root.context-menu-device-open-path, true);
+            root.close-context-popups();
+        }
+        mount_requested => {
+            root.open_device(root.context-menu-device-path, false);
+            root.close-context-popups();
+        }
+        unmount_requested => {
+            root.unmount_device(root.context-menu-device-path, root.context-menu-device-open-path);
+            root.close-context-popups();
+        }
+        eject_requested => {
+            root.eject_device(root.context-menu-device-path, root.context-menu-device-open-path);
+            root.close-context-popups();
         }
     }
 

@@ -166,15 +166,12 @@ export component TransferMenu inherits Rectangle {
     }
 }
 
-export component PlaceContextMenu inherits Rectangle {
+export component PlaceContextMenu inherits PopupSurface {
     in property <string> title;
-    in property <bool> dark;
     in property <bool> builtin;
     callback open_new_window();
     callback rename_requested();
     callback remove_requested();
-
-    background: transparent;
 
     VerticalLayout {
         spacing: 0px;
@@ -208,17 +205,14 @@ export component PlaceContextMenu inherits Rectangle {
     }
 }
 
-export component DeviceContextMenu inherits Rectangle {
+export component DeviceContextMenu inherits PopupSurface {
     in property <string> title;
-    in property <bool> dark;
     in property <bool> mounted;
     in property <bool> can-eject;
     callback open_requested();
     callback mount_requested();
     callback unmount_requested();
     callback eject_requested();
-
-    background: transparent;
 
     VerticalLayout {
         spacing: 0px;
