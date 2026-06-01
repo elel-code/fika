@@ -514,17 +514,55 @@ fn removable_media_rejection(objects: &ManagedObjects, block: &Properties) -> Op
     let Some(drive) = drive_for_block(objects, block) else {
         return Some("no drive object");
     };
-    if !bool_property(drive, "MediaAvailable") {
-        return Some("media unavailable");
+    DriveMediaProfile::from_properties(drive).rejection()
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct DriveMediaProfile {
+    removable: bool,
+    media_available: bool,
+    media_removable: bool,
+    ejectable: bool,
+    optical: bool,
+    connection_bus: Option<String>,
+    media_compatibility: Vec<String>,
+}
+
+impl DriveMediaProfile {
+    fn from_properties(drive: &Properties) -> Self {
+        Self {
+            removable: bool_property(drive, "Removable"),
+            media_available: bool_property(drive, "MediaAvailable"),
+            media_removable: bool_property(drive, "MediaRemovable"),
+            ejectable: bool_property(drive, "Ejectable"),
+            optical: bool_property(drive, "Optical"),
+            connection_bus: string_property(drive, "ConnectionBus"),
+            media_compatibility: string_list_property(drive, "MediaCompatibility")
+                .unwrap_or_default(),
+        }
     }
-    if bool_property(drive, "Removable")
-        || bool_property(drive, "MediaRemovable")
-        || bool_property(drive, "Ejectable")
-        || string_property(drive, "ConnectionBus").as_deref() == Some("usb")
-    {
-        None
-    } else {
-        Some("not removable, ejectable, or USB-attached")
+
+    fn rejection(&self) -> Option<&'static str> {
+        if !self.media_available {
+            return Some("media unavailable");
+        }
+        if self.is_user_visible_external_media() {
+            None
+        } else {
+            Some("not removable, ejectable, optical, or USB-attached")
+        }
+    }
+
+    fn is_user_visible_external_media(&self) -> bool {
+        self.removable
+            || self.media_removable
+            || self.ejectable
+            || self.optical
+            || self.connection_bus.as_deref() == Some("usb")
+            || self
+                .media_compatibility
+                .iter()
+                .any(|media| media.starts_with("optical_") || media.starts_with("flash_"))
     }
 }
 
@@ -551,6 +589,12 @@ fn string_property(properties: &Properties, name: &str) -> Option<String> {
         .get(name)
         .and_then(|value| <&str>::try_from(value).ok())
         .map(str::to_string)
+}
+
+fn string_list_property(properties: &Properties, name: &str) -> Option<Vec<String>> {
+    properties
+        .get(name)
+        .and_then(|value| Vec::<String>::try_from(value.clone()).ok())
 }
 
 fn owned_object_path_property(properties: &Properties, name: &str) -> Option<OwnedObjectPath> {
@@ -1086,6 +1130,73 @@ mod tests {
     }
 
     #[test]
+    fn udisks2_lists_media_compatibility_external_media() {
+        let flash = udisks_objects(
+            drive_object_with_media_compatibility(
+                false,
+                true,
+                false,
+                "",
+                ["flash_sd"],
+                "USB",
+                "Reader",
+            ),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Camera Card",
+                false,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+        let optical = udisks_objects(
+            drive_object_with_media_compatibility(
+                false,
+                true,
+                false,
+                "",
+                ["optical_dvd"],
+                "HL-DT-ST",
+                "DVD-RW",
+            ),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Install Disc",
+                false,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+
+        assert_eq!(udisks2_removable_devices_from_objects(&flash).len(), 1);
+        assert_eq!(udisks2_removable_devices_from_objects(&optical).len(), 1);
+    }
+
+    #[test]
+    fn udisks2_filters_empty_optical_drives() {
+        let objects = udisks_objects(
+            drive_object_with_media_compatibility(
+                false,
+                false,
+                true,
+                "",
+                ["optical_dvd"],
+                "HL-DT-ST",
+                "DVD-RW",
+            ),
+            block_object(
+                "/dev/sr0",
+                "/org/freedesktop/UDisks2/drives/test",
+                "",
+                false,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+
+        assert!(udisks2_removable_devices_from_objects(&objects).is_empty());
+    }
+
+    #[test]
     fn udisks2_prefers_hint_name_for_display_label() {
         let objects = udisks_objects(
             drive_object(true, true, "Framework", "USB-C Storage"),
@@ -1385,17 +1496,74 @@ mod tests {
         vendor: &str,
         model: &str,
     ) -> Properties {
+        drive_object_from_fixture(DriveFixture {
+            removable,
+            media_available,
+            media_removable,
+            ejectable,
+            connection_bus,
+            media_compatibility: Vec::new(),
+            vendor,
+            model,
+        })
+    }
+
+    fn drive_object_with_media_compatibility<const N: usize>(
+        removable: bool,
+        media_available: bool,
+        ejectable: bool,
+        connection_bus: &str,
+        media_compatibility: [&str; N],
+        vendor: &str,
+        model: &str,
+    ) -> Properties {
+        drive_object_from_fixture(DriveFixture {
+            removable,
+            media_available,
+            media_removable: false,
+            ejectable,
+            connection_bus,
+            media_compatibility: media_compatibility
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            vendor,
+            model,
+        })
+    }
+
+    struct DriveFixture<'a> {
+        removable: bool,
+        media_available: bool,
+        media_removable: bool,
+        ejectable: bool,
+        connection_bus: &'a str,
+        media_compatibility: Vec<String>,
+        vendor: &'a str,
+        model: &'a str,
+    }
+
+    fn drive_object_from_fixture(fixture: DriveFixture<'_>) -> Properties {
+        let optical = fixture
+            .media_compatibility
+            .iter()
+            .any(|media| media.starts_with("optical_"));
         HashMap::from([
-            ("Removable".to_string(), value(removable)),
-            ("MediaAvailable".to_string(), value(media_available)),
-            ("MediaRemovable".to_string(), value(media_removable)),
-            ("Ejectable".to_string(), value(ejectable)),
+            ("Removable".to_string(), value(fixture.removable)),
+            ("MediaAvailable".to_string(), value(fixture.media_available)),
+            ("MediaRemovable".to_string(), value(fixture.media_removable)),
+            ("Ejectable".to_string(), value(fixture.ejectable)),
+            ("Optical".to_string(), value(optical)),
             (
                 "ConnectionBus".to_string(),
-                value(connection_bus.to_string()),
+                value(fixture.connection_bus.to_string()),
             ),
-            ("Vendor".to_string(), value(vendor.to_string())),
-            ("Model".to_string(), value(model.to_string())),
+            (
+                "MediaCompatibility".to_string(),
+                value(fixture.media_compatibility),
+            ),
+            ("Vendor".to_string(), value(fixture.vendor.to_string())),
+            ("Model".to_string(), value(fixture.model.to_string())),
         ])
     }
 
