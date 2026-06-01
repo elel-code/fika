@@ -509,12 +509,7 @@ fn results_for_paths(
     {
         results.insert("current_filter".to_string(), current_filter);
     }
-    let selected_choices = if result.choices.is_empty() {
-        selected_choice_defaults(options)
-    } else {
-        Some(result.choices)
-    };
-    if let Some(choices) = selected_choices
+    if let Some(choices) = selected_choices_for_options(options, &result.choices)
         && let Ok(value) = OwnedValue::try_from(Value::new(choices))
     {
         results.insert("choices".to_string(), value);
@@ -522,8 +517,9 @@ fn results_for_paths(
     results
 }
 
-fn selected_choice_defaults(
+fn selected_choices_for_options(
     options: &HashMap<String, OwnedValue>,
+    requested_choices: &[(String, String)],
 ) -> Option<Vec<(String, String)>> {
     let choices = options
         .get("choices")
@@ -531,7 +527,22 @@ fn selected_choice_defaults(
     Some(
         choices
             .into_iter()
-            .map(|(id, _label, _items, default)| (id, default))
+            .filter_map(|(id, _label, items, default)| {
+                let selected = requested_choices
+                    .iter()
+                    .find(|(choice_id, selected)| {
+                        choice_id == &id && items.iter().any(|(item_id, _)| item_id == selected)
+                    })
+                    .map(|(_, selected)| selected.clone())
+                    .or_else(|| {
+                        items
+                            .iter()
+                            .any(|(item_id, _)| item_id == &default)
+                            .then_some(default)
+                    })
+                    .or_else(|| items.first().map(|(item_id, _)| item_id.clone()))?;
+                Some((id, selected))
+            })
             .collect(),
     )
 }
@@ -791,7 +802,7 @@ mod tests {
                 filter_index: None,
                 choices: vec![("encoding".to_string(), "latin1".to_string())],
             },
-            &HashMap::new(),
+            &options_with_choices(choices.clone()),
             &ChooserFilterMap::default(),
         );
         let selected =
@@ -824,22 +835,61 @@ mod tests {
 
     #[test]
     fn portal_choices_return_default_selection() {
-        let mut options = HashMap::new();
         let choices: Vec<PortalChoice> = vec![(
             "encoding".to_string(),
             "Encoding".to_string(),
             vec![("utf8".to_string(), "UTF-8".to_string())],
             "utf8".to_string(),
         )];
+
+        assert_eq!(
+            selected_choices_for_options(&options_with_choices(choices), &[]),
+            Some(vec![("encoding".to_string(), "utf8".to_string())])
+        );
+    }
+
+    #[test]
+    fn portal_choices_ignore_unknown_or_invalid_chooser_output() {
+        let choices: Vec<PortalChoice> = vec![
+            (
+                "encoding".to_string(),
+                "Encoding".to_string(),
+                vec![
+                    ("utf8".to_string(), "UTF-8".to_string()),
+                    ("latin1".to_string(), "Latin-1".to_string()),
+                ],
+                "utf8".to_string(),
+            ),
+            (
+                "mode".to_string(),
+                "Mode".to_string(),
+                vec![("read".to_string(), "Read".to_string())],
+                "missing-default".to_string(),
+            ),
+        ];
+
+        assert_eq!(
+            selected_choices_for_options(
+                &options_with_choices(choices),
+                &[
+                    ("encoding".to_string(), "unknown-option".to_string()),
+                    ("unknown-choice".to_string(), "latin1".to_string()),
+                ],
+            ),
+            Some(vec![
+                ("encoding".to_string(), "utf8".to_string()),
+                ("mode".to_string(), "read".to_string())
+            ])
+        );
+    }
+
+    fn options_with_choices(choices: Vec<PortalChoice>) -> HashMap<String, OwnedValue> {
+        let mut options = HashMap::new();
         options.insert(
             "choices".to_string(),
             OwnedValue::try_from(Value::new(choices)).unwrap(),
         );
-
-        assert_eq!(
-            selected_choice_defaults(&options),
-            Some(vec![("encoding".to_string(), "utf8".to_string())])
-        );
+        options
     }
 
     #[test]
