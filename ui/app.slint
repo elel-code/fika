@@ -93,6 +93,8 @@ export component AppWindow inherits Window {
     private property <string> context-menu-device-path;
     private property <string> context-menu-device-open-path;
     private property <bool> context-menu-device-mounted: false;
+    private property <bool> context-menu-device-can-mount: false;
+    private property <bool> context-menu-device-can-unmount: false;
     private property <bool> context-menu-device-can-eject: false;
     private property <string> context-menu-device-pending-action: "";
     private property <length> context-menu-x: 0px;
@@ -108,12 +110,12 @@ export component AppWindow inherits Window {
     private property <bool> context-default-open-visible: root.default_open_app_name != "" && root.open_with_path == root.context-menu-path;
     private property <bool> context-add-place-visible: root.context-menu-kind == 4 ? (root.current_path != "" && !root.is_place(root.current_path)) : (root.context-menu-is-dir && !root.is_place(root.context-menu-path));
     private property <bool> context-metrics-is-dir: root.context-menu-kind == 5 ? root.context-menu-device-mounted : root.context-menu-is-dir;
-    private property <bool> context-metrics-extra-bool: root.context-menu-kind == 5 ? root.context-menu-device-can-eject : root.context-menu-place-builtin;
+    private property <bool> context-metrics-extra-bool: root.context-menu-place-builtin;
     private property <length> active-context-menu-width: (root.context-menu-kind == 2 || root.context-menu-kind == 5) ? root.context-place-menu-width : ((root.context-menu-kind == 3 || root.context-menu-kind == 4) ? root.context-blank-menu-width : root.context-file-menu-width);
     private property <bool> context-metrics-device-pending: root.context-menu-kind == 5 && root.context-menu-device-pending-action != "";
-    private property <length> active-context-menu-height: root.context_menu_height(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
-    private property <length> context-open-with-row-offset: root.context_menu_open_with_row_offset(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
-    private property <length> context-create-new-row-offset: root.context_menu_create_new_row_offset(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
+    private property <length> active-context-menu-height: root.context_menu_height(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.context-menu-device-can-mount, root.context-menu-device-can-unmount, root.context-menu-device-can-eject, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
+    private property <length> context-open-with-row-offset: root.context_menu_open_with_row_offset(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.context-menu-device-can-mount, root.context-menu-device-can-unmount, root.context-menu-device-can-eject, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
+    private property <length> context-create-new-row-offset: root.context_menu_create_new_row_offset(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.context-menu-device-can-mount, root.context-menu-device-can-unmount, root.context-menu-device-can-eject, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
     private property <length> context-menu-left: root.root_menu_left(root.width / 1px, root.height / 1px, root.context-menu-x / 1px, root.context-menu-y / 1px, root.active-context-menu-width / 1px, root.active-context-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px) * 1px;
     private property <length> context-menu-top: root.root_menu_top(root.width / 1px, root.height / 1px, root.context-menu-x / 1px, root.context-menu-y / 1px, root.active-context-menu-width / 1px, root.active-context-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px) * 1px;
     private property <length> child-menu-gap: 3px;
@@ -289,9 +291,9 @@ export component AppWindow inherits Window {
     pure callback child_bridge_top(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
     pure callback child_bridge_width(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
     pure callback child_bridge_height(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
     callback transfer_operation(string, string, string);
     callback transfer_conflict_choice(string);
     callback privileged_prompt_accept();
@@ -708,6 +710,8 @@ export component AppWindow inherits Window {
                             root.context-menu-device-path = device.device_path;
                             root.context-menu-device-open-path = device.path;
                             root.context-menu-device-mounted = device.mounted;
+                            root.context-menu-device-can-mount = device.can_mount;
+                            root.context-menu-device-can-unmount = device.can_unmount;
                             root.context-menu-device-can-eject = device.can_eject;
                             root.context-menu-device-pending-action = device.pending_action;
                             root.rename-place-label = label;
@@ -1541,6 +1545,8 @@ export component AppWindow inherits Window {
         title: root.rename-place-label;
         dark: root.dark_mode;
         mounted: root.context-menu-device-mounted;
+        can-mount: root.context-menu-device-can-mount;
+        can-unmount: root.context-menu-device-can-unmount;
         can-eject: root.context-menu-device-can-eject;
         pending-action: root.context-menu-device-pending-action;
         open_requested => {

@@ -294,6 +294,9 @@ pub(crate) struct MenuMetricsInput {
     pub(crate) clipboard_has_paths: bool,
     pub(crate) place_builtin: bool,
     pub(crate) device_pending: bool,
+    pub(crate) device_can_mount: bool,
+    pub(crate) device_can_unmount: bool,
+    pub(crate) device_can_eject: bool,
     pub(crate) item_height: f32,
     pub(crate) separator_height: f32,
     pub(crate) title_height: f32,
@@ -342,9 +345,14 @@ pub(crate) fn context_menu_metrics(input: MenuMetricsInput) -> MenuMetrics {
             } else {
                 title
                     + item
-                    + separator
-                    + if input.is_dir { item } else { 0.0 }
-                    + if input.place_builtin { item } else { 0.0 }
+                    + if input.device_can_mount { item } else { 0.0 }
+                    + if input.device_can_unmount || input.device_can_eject {
+                        separator
+                    } else {
+                        0.0
+                    }
+                    + if input.device_can_unmount { item } else { 0.0 }
+                    + if input.device_can_eject { item } else { 0.0 }
             },
             open_with_row_y_offset: 0.0,
             create_new_row_y_offset: 0.0,
@@ -765,6 +773,9 @@ mod tests {
             clipboard_has_paths: false,
             place_builtin: false,
             device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
             item_height,
             separator_height,
             title_height,
@@ -784,6 +795,9 @@ mod tests {
             clipboard_has_paths: true,
             place_builtin: false,
             device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
             item_height,
             separator_height,
             title_height,
@@ -806,6 +820,9 @@ mod tests {
             clipboard_has_paths: false,
             place_builtin: true,
             device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
             item_height,
             separator_height,
             title_height,
@@ -821,6 +838,9 @@ mod tests {
             clipboard_has_paths: false,
             place_builtin: false,
             device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
             item_height,
             separator_height,
             title_height,
@@ -830,7 +850,7 @@ mod tests {
             title_height + 2.0 * item_height + separator_height
         );
 
-        let mounted_ejectable_device = context_menu_metrics(MenuMetricsInput {
+        let filesystem_device = context_menu_metrics(MenuMetricsInput {
             kind: 5,
             selected_count: 0,
             is_dir: true,
@@ -839,6 +859,27 @@ mod tests {
             clipboard_has_paths: false,
             place_builtin: true,
             device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(filesystem_device.height, title_height + item_height);
+
+        let mounted_ejectable_device = context_menu_metrics(MenuMetricsInput {
+            kind: 5,
+            selected_count: 0,
+            is_dir: true,
+            default_open_visible: false,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            place_builtin: false,
+            device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: true,
+            device_can_eject: true,
             item_height,
             separator_height,
             title_height,
@@ -857,6 +898,9 @@ mod tests {
             clipboard_has_paths: false,
             place_builtin: true,
             device_pending: true,
+            device_can_mount: false,
+            device_can_unmount: true,
+            device_can_eject: true,
             item_height,
             separator_height,
             title_height,

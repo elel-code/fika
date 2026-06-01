@@ -26,6 +26,8 @@ export struct DeviceEntry {
     device_path: string,
     marker: string,
     mounted: bool,
+    can_mount: bool,
+    can_unmount: bool,
     can_eject: bool,
     pending_action: string,
     error: string,

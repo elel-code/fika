@@ -199,6 +199,8 @@ export component PlaceContextMenu inherits PopupSurface {
 export component DeviceContextMenu inherits PopupSurface {
     in property <string> title;
     in property <bool> mounted;
+    in property <bool> can-mount;
+    in property <bool> can-unmount;
     in property <bool> can-eject;
     in property <string> pending-action: "";
     callback open_requested();
@@ -227,17 +229,17 @@ export component DeviceContextMenu inherits PopupSurface {
             clicked => { root.open_requested(); }
         }
 
-        if (root.pending-action == "" && !root.mounted): MenuItem {
+        if (root.pending-action == "" && !root.mounted && root.can-mount): MenuItem {
             label: "Mount";
             dark: root.dark;
             clicked => { root.mount_requested(); }
         }
 
-        if (root.pending-action == ""): MenuSeparator {
+        if (root.pending-action == "" && (root.can-unmount || root.can-eject)): MenuSeparator {
             dark: root.dark;
         }
 
-        if (root.pending-action == "" && root.mounted): MenuItem {
+        if (root.pending-action == "" && root.can-unmount): MenuItem {
             label: "Unmount";
             dark: root.dark;
             clicked => { root.unmount_requested(); }

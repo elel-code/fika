@@ -75,7 +75,7 @@ fn mounted_devices_from_paths(paths: Vec<PathBuf>) -> Vec<DeviceEntry> {
             path_text,
             mount_marker(&path),
             true,
-            false,
+            DeviceCapabilities::default(),
         ));
     }
 
@@ -107,7 +107,16 @@ fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
         existing.device_path = discovered.device_path.clone();
     }
     existing.can_eject |= discovered.can_eject;
+    existing.can_mount |= discovered.can_mount;
+    existing.can_unmount |= discovered.can_unmount;
     existing.mounted |= discovered.mounted;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DeviceCapabilities {
+    can_mount: bool,
+    can_unmount: bool,
+    can_eject: bool,
 }
 
 fn filesystem_entry() -> DeviceEntry {
@@ -117,7 +126,7 @@ fn filesystem_entry() -> DeviceEntry {
         "/".into(),
         "/".into(),
         true,
-        false,
+        DeviceCapabilities::default(),
     )
 }
 
@@ -127,7 +136,7 @@ fn device_entry(
     device_path: String,
     marker: String,
     mounted: bool,
-    can_eject: bool,
+    capabilities: DeviceCapabilities,
 ) -> DeviceEntry {
     DeviceEntry {
         label: label.into(),
@@ -135,7 +144,9 @@ fn device_entry(
         device_path: device_path.into(),
         marker: marker.into(),
         mounted,
-        can_eject,
+        can_mount: capabilities.can_mount,
+        can_unmount: capabilities.can_unmount,
+        can_eject: capabilities.can_eject,
         pending_action: String::new().into(),
         error: String::new().into(),
     }
@@ -469,18 +480,28 @@ fn udisks2_removable_device_from_interfaces(
     let mount_point = mount_points.into_iter().next();
     let label = udisks2_display_label(block, drive, mount_point.as_deref(), &device);
     let path = mount_point.unwrap_or(device.clone());
-    let can_eject = bool_property(drive, "Ejectable");
+    let capabilities = DeviceCapabilities {
+        can_mount: !mounted,
+        can_unmount: mounted,
+        can_eject: bool_property(drive, "Ejectable"),
+    };
     let entry = device_entry(
         label.clone(),
         path.clone(),
         device,
         marker_from_label(&label),
         mounted,
-        can_eject,
+        capabilities,
     );
     device_debug_log(&format!(
-        "UDisks2 accept label={} path={} device_path={} mounted={} ejectable={}",
-        entry.label, entry.path, entry.device_path, entry.mounted, entry.can_eject
+        "UDisks2 accept label={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={}",
+        entry.label,
+        entry.path,
+        entry.device_path,
+        entry.mounted,
+        entry.can_mount,
+        entry.can_unmount,
+        entry.can_eject
     ));
     Some(entry)
 }
@@ -748,11 +769,13 @@ fn device_debug_log_devices(phase: &str, devices: &[DeviceEntry]) {
     }
     for (index, device) in devices.iter().enumerate() {
         device_debug_log(&format!(
-            "{phase}[{index}] label={} path={} device_path={} mounted={} ejectable={} error={}",
+            "{phase}[{index}] label={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={} error={}",
             device.label,
             device.path,
             device.device_path,
             device.mounted,
+            device.can_mount,
+            device.can_unmount,
             device.can_eject,
             device.error
         ));
@@ -1174,7 +1197,7 @@ mod tests {
                 "/run/media/yk/USB".into(),
                 "M".into(),
                 true,
-                false,
+                DeviceCapabilities::default(),
             ),
         ];
         let discovered = vec![
@@ -1184,7 +1207,11 @@ mod tests {
                 "/dev/sdb1".into(),
                 "D".into(),
                 true,
-                true,
+                DeviceCapabilities {
+                    can_mount: false,
+                    can_unmount: true,
+                    can_eject: true,
+                },
             ),
             device_entry(
                 "Unmounted".into(),
@@ -1192,7 +1219,11 @@ mod tests {
                 "/dev/sdc1".into(),
                 "U".into(),
                 false,
-                true,
+                DeviceCapabilities {
+                    can_mount: true,
+                    can_unmount: false,
+                    can_eject: true,
+                },
             ),
         ];
 
