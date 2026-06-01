@@ -431,7 +431,7 @@ system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privi
 - `SaveFile` 支持 `current_folder`、`current_file` 和 `current_name`，通过 `--chooser-save NAME` 在当前目录下选择保存路径。
 - `SaveFiles` 支持 `current_folder` 和 `files`，通过 `--chooser-save-files` 先选择目标目录，再按 portal 传入的文件名返回完整目标 URI 列表。
 - portal `title` 会传给 chooser 窗口标题，`accept_label` 会传给 chooser 底部确认按钮；portal glob `filters` 会转换成 chooser 底部的过滤按钮，`current_filter` 会在匹配到受支持的 glob filter 时选择初始过滤器，用户切换后的当前过滤器会随结果返回。当前 chooser UI 只能表达 glob 过滤，因此 MIME-only portal filters 不会显示成空过滤器，也不会在未被用户选择时原样回传。portal `choices` 会转换成 chooser 底部的选择控件，点击后展开该 choice 的候选菜单，并随结果返回用户当前选择。
-- `wayland:` / `x11:` `parent_window` 会通过 `--chooser-parent-window` 传给 `fika --chooser` 并保存在 chooser 状态中；空值、格式错误或未知 scheme 会被 backend 丢弃。设置 `FIKA_DEBUG_PORTAL=1` 时，backend 会打印 `parent_window` 解析结果并标明 `native_transient=false`。当前 Slint 集成尚未把已保存 handle 绑定为原生 transient parent。
+- `wayland:` / `x11:` `parent_window` 会通过 `--chooser-parent-window` 传给 `fika --chooser` 并保存在 chooser 状态中；空值、格式错误或未知 scheme 会被 backend 丢弃。设置 `FIKA_DEBUG_PORTAL=1` 时，backend 会打印 `parent_window` 解析结果，chooser 进程也会打印收到的 handle，两侧都会标明 `native_transient=false`。当前 Slint 集成尚未把已保存 handle 绑定为原生 transient parent。
 - 返回 URI 统一为 `file://`，路径中的空格和非 ASCII 字节按百分号编码。
 - 用户关闭 chooser 时，`fika --chooser` 以专用取消码退出，backend 返回 response `1`；chooser 成功退出但无路径输出也按取消处理。其它非零退出会返回 D-Bus error，并带上 exit status 和 stderr，避免把崩溃或启动后异常静默伪装成用户取消。
 - backend 以 `kill_on_drop` 启动 `fika --chooser`。如果 portal 请求 future 被取消或连接断开，未完成的 chooser 子进程会随 drop 被终止，避免留下孤儿选择器窗口。

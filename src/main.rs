@@ -126,6 +126,9 @@ fn main() -> Result<(), slint::PlatformError> {
         state_ref.chooser_return_choices = args.chooser_return_choices;
         state_ref.chooser_parent_window = args.chooser_parent_window.clone();
     }
+    if matches!(args.mode, Mode::Chooser) {
+        log_chooser_parent_window(args.chooser_parent_window.as_deref());
+    }
     sync_chooser_filter_ui(&ui, &state);
     sync_chooser_choices_ui(&ui, &state);
     ui.set_dark_mode(settings.dark_mode.unwrap_or(true));
@@ -1581,6 +1584,24 @@ fn env_flag_is_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
+    )
+}
+
+fn log_chooser_parent_window(parent_window: Option<&str>) {
+    static DEBUG_PORTAL: OnceLock<bool> = OnceLock::new();
+    if !*DEBUG_PORTAL
+        .get_or_init(|| env::var("FIKA_DEBUG_PORTAL").is_ok_and(|value| env_flag_is_truthy(&value)))
+    {
+        return;
+    }
+    eprintln!("{}", chooser_parent_window_log_message(parent_window));
+}
+
+fn chooser_parent_window_log_message(parent_window: Option<&str>) -> String {
+    format!(
+        "[fika chooser] parent_window received={} handle={} native_transient=false",
+        parent_window.is_some(),
+        parent_window.unwrap_or("")
     )
 }
 
@@ -4126,6 +4147,18 @@ mod tests {
         assert_eq!(
             chooser_output_metadata(&state).choices,
             vec![("encoding".to_string(), "utf8".to_string())]
+        );
+    }
+
+    #[test]
+    fn chooser_parent_window_log_reports_native_transient_status() {
+        assert_eq!(
+            chooser_parent_window_log_message(Some("wayland:1_42")),
+            "[fika chooser] parent_window received=true handle=wayland:1_42 native_transient=false"
+        );
+        assert_eq!(
+            chooser_parent_window_log_message(None),
+            "[fika chooser] parent_window received=false handle= native_transient=false"
         );
     }
 
