@@ -571,9 +571,9 @@ export component AppWindow inherits Window {
                     min-width: 260px;
                     height: 40px;
                     border-radius: 6px;
-                    border-width: 1px;
-                    border-color: root.path-input-focused ? (root.dark_mode ? #38bdf8 : #0284c7) : (root.dark_mode ? #56616b : #94a3b8);
-                    background: root.dark_mode ? #161a1d : #ffffff;
+                    border-width: root.path-input-focused ? 1px : 2px;
+                    border-color: root.path-input-focused ? (root.dark_mode ? #38bdf8 : #0284c7) : (root.dark_mode ? #56616b : #64748b);
+                    background: root.path-input-focused ? (root.dark_mode ? #161a1d : #ffffff) : (root.dark_mode ? #161a1d : #e8eef5);
 
                     LineEdit {
                         x: 4px;
