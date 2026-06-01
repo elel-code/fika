@@ -13,7 +13,7 @@ import {
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
 import { ChooserChoicePopup, CreateNewMenu, DeviceContextMenu, FileContextMenu, OpenWithMenu, PlaceContextMenu, PlacesBlankMenu, TransferMenu, ViewportContextMenu } from "menus.slint";
-import { OtherApplicationsDialog, PrivilegedPromptDialog, PropertiesDialog, TextInputDialog, TransferConflictDialog } from "dialogs.slint";
+import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
 export component AppWindow inherits Window {
     in-out property <string> current_path;
@@ -1640,128 +1640,81 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.rename-place-open): Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: 360px;
-        height: 132px;
-        background: transparent;
-
-        TextInputDialog {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            title: "Rename Place";
-            accept-label: "Rename";
-            value <=> root.rename-place-label;
-            accepted(value) => {
-                root.rename_place(root.rename-place-index, value);
-                root.rename-place-open = false;
-            }
-            cancelled => { root.rename-place-open = false; }
+    if (root.rename-place-open): TextInputPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        title: "Rename Place";
+        accept-label: "Rename";
+        value <=> root.rename-place-label;
+        accepted(value) => {
+            root.rename_place(root.rename-place-index, value);
+            root.rename-place-open = false;
         }
+        cancelled => { root.rename-place-open = false; }
     }
 
-    if (root.new-folder-open): Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: 360px;
-        height: 132px;
-        background: transparent;
-
-        TextInputDialog {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            title: "New Folder";
-            accept-label: "Create";
-            value <=> root.new-folder-name;
-            accepted(value) => {
-                root.create_folder(value);
-                root.new-folder-open = false;
-            }
-            cancelled => { root.new-folder-open = false; }
+    if (root.new-folder-open): TextInputPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        title: "New Folder";
+        accept-label: "Create";
+        value <=> root.new-folder-name;
+        accepted(value) => {
+            root.create_folder(value);
+            root.new-folder-open = false;
         }
+        cancelled => { root.new-folder-open = false; }
     }
 
-    if (root.rename-entry-open): Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: 380px;
-        height: 132px;
-        background: transparent;
-
-        TextInputDialog {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            title: "Rename";
-            accept-label: "Rename";
-            value <=> root.rename-entry-name;
-            accepted(value) => {
-                root.rename_path(root.rename-entry-path, value);
-                root.rename-entry-open = false;
-            }
-            cancelled => { root.rename-entry-open = false; }
+    if (root.rename-entry-open): TextInputPopup {
+        width: parent.width;
+        height: parent.height;
+        dialog-width: 380px;
+        dark: root.dark_mode;
+        title: "Rename";
+        accept-label: "Rename";
+        value <=> root.rename-entry-name;
+        accepted(value) => {
+            root.rename_path(root.rename-entry-path, value);
+            root.rename-entry-open = false;
         }
+        cancelled => { root.rename-entry-open = false; }
     }
 
-    if (root.properties-open): Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: 440px;
-        height: 260px;
-        background: transparent;
-
-        PropertiesDialog {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            name: root.properties-name;
-            kind: root.properties-kind;
-            size: root.properties-size;
-            modified: root.properties-modified;
-            path: root.properties-path;
-            closed => { root.properties-open = false; }
-        }
+    if (root.properties-open): PropertiesPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        name: root.properties-name;
+        kind: root.properties-kind;
+        size: root.properties-size;
+        modified: root.properties-modified;
+        path: root.properties-path;
+        closed => { root.properties-open = false; }
     }
 
-    if (root.privileged_prompt_open): Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: 430px;
-        height: 190px;
-        background: transparent;
-
-        PrivilegedPromptDialog {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            title: root.privileged_prompt_title;
-            message: root.privileged_prompt_message;
-            detail: root.privileged_prompt_detail;
-            cancelled => { root.privileged_prompt_dismiss(); }
-            accepted => { root.privileged_prompt_accept(); }
-        }
+    if (root.privileged_prompt_open): PrivilegedPromptPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        title: root.privileged_prompt_title;
+        message: root.privileged_prompt_message;
+        detail: root.privileged_prompt_detail;
+        cancelled => { root.privileged_prompt_dismiss(); }
+        accepted => { root.privileged_prompt_accept(); }
     }
 
-    if (root.transfer_conflict_open): Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: 480px;
-        height: 310px;
-        background: transparent;
-
-        TransferConflictDialog {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            source: root.transfer_conflict_source;
-            target: root.transfer_conflict_target;
-            rename-name <=> root.transfer_conflict_rename_name;
-            apply-all <=> root.transfer-conflict-apply-all;
-            choice(decision) => { root.transfer_conflict_choice(decision); }
-        }
+    if (root.transfer_conflict_open): TransferConflictPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        source: root.transfer_conflict_source;
+        target: root.transfer_conflict_target;
+        rename-name <=> root.transfer_conflict_rename_name;
+        apply-all <=> root.transfer-conflict-apply-all;
+        choice(decision) => { root.transfer_conflict_choice(decision); }
     }
 
     if (root.transfer-menu-open): TransferMenu {
@@ -1833,34 +1786,26 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.custom-open-with-open): Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: 460px;
-        height: 460px;
-        background: transparent;
-
-        OtherApplicationsDialog {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            apps: root.other_application_apps;
-            filter <=> root.other_application_filter;
-            custom-command <=> root.custom_open_command;
-            set-default <=> root.other_application_set_default;
-            filter_changed(query) => { root.filter_other_applications(query); }
-            app_selected(app-id, set-default) => {
-                if (set-default) {
-                    root.set_default_app(root.open_with_path, app-id);
-                }
-                root.open_with_app(root.open_with_path, app-id);
-                root.custom-open-with-open = false;
+    if (root.custom-open-with-open): OtherApplicationsPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        apps: root.other_application_apps;
+        filter <=> root.other_application_filter;
+        custom-command <=> root.custom_open_command;
+        set-default <=> root.other_application_set_default;
+        filter_changed(query) => { root.filter_other_applications(query); }
+        app_selected(app-id, set-default) => {
+            if (set-default) {
+                root.set_default_app(root.open_with_path, app-id);
             }
-            custom_open(command) => {
-                root.open_with_custom_command(root.open_with_path, command);
-                root.custom-open-with-open = false;
-            }
-            cancelled => { root.custom-open-with-open = false; }
+            root.open_with_app(root.open_with_path, app-id);
+            root.custom-open-with-open = false;
         }
+        custom_open(command) => {
+            root.open_with_custom_command(root.open_with_path, command);
+            root.custom-open-with-open = false;
+        }
+        cancelled => { root.custom-open-with-open = false; }
     }
 }
