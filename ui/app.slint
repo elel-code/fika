@@ -690,6 +690,7 @@ export component AppWindow inherits Window {
                         dragged: false;
                         drop-target: false;
                         builtin: true;
+                        available: device.mounted;
                         clicked => { root.open_device(device.path, device.mounted); }
                     }
 

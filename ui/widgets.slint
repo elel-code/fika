@@ -64,6 +64,7 @@ export component PlaceButton inherits Rectangle {
     in property <int> place_count;
     in property <bool> builtin;
     in property <bool> drop-target;
+    in property <bool> available: true;
     callback clicked();
     callback context_requested(int, string, bool, length, length);
     callback drag_cancelled();
@@ -72,7 +73,7 @@ export component PlaceButton inherits Rectangle {
     border-width: dragged || drop-target ? 1px : 0px;
     border-color: drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #4d5962 : #b9c7d3);
     background: drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1f23 : #e8eef4) : (selected ? (dark ? #214f67 : #dceeff) : (touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent)));
-    opacity: dragged ? 0.45 : 1;
+    opacity: dragged ? 0.45 : (available ? 1 : 0.68);
 
     drag-area := DragArea {
         enabled: root.reorderable && root.path != "";
@@ -105,7 +106,7 @@ export component PlaceButton inherits Rectangle {
                     width: 24px;
                     height: 22px;
                     border-radius: 3px;
-                    background: root.dark ? #4f93d9 : #4f94dc;
+                    background: root.available ? (root.dark ? #4f93d9 : #4f94dc) : (root.dark ? #3f464d : #cbd5e1);
 
                     Text {
                         text: root.marker;
@@ -120,7 +121,7 @@ export component PlaceButton inherits Rectangle {
 
             Text {
                 text: root.label;
-                color: root.dark ? #eeeeee : #17212b;
+                color: root.available ? (root.dark ? #eeeeee : #17212b) : (root.dark ? #8b949e : #64748b);
                 font-size: 14px;
                 overflow: elide;
                 vertical-alignment: center;
