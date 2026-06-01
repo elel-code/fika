@@ -784,6 +784,22 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.on_places_drop_supported(|mime_type| is_supported_places_drop_mime(mime_type.as_str()));
     ui.on_places_drop_force_gap(|mime_type| places_drop_force_gap(mime_type.as_str()));
+    ui.on_trace_places_drop(
+        |phase, mime_type, payload, x, y, slot, target, over_gap, over_item| {
+            dnd_log_places_event(PlacesDndTrace {
+                backend: "Slint DropArea",
+                phase: phase.as_str(),
+                mime_type: mime_type.as_str(),
+                payload: payload.as_str(),
+                x,
+                y,
+                slot,
+                target,
+                over_gap,
+                over_item,
+            });
+        },
+    );
 
     ui.on_root_menu_left(
         |view_width,
@@ -1508,6 +1524,18 @@ impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
                 }
                 let scale = _winit_window.map_or(1.0, |window| window.scale_factor()) as f32;
                 let (x, y) = self.last_cursor_position.unwrap_or_default();
+                dnd_log_places_event(PlacesDndTrace {
+                    backend: "winit DroppedFile fallback",
+                    phase: "dropped",
+                    mime_type: "winit/dropped-file",
+                    payload: path.to_string_lossy().as_ref(),
+                    x: x / scale,
+                    y: y / scale,
+                    slot: -1,
+                    target: -1,
+                    over_gap: false,
+                    over_item: false,
+                });
                 let _ = self
                     .async_tx
                     .send(AsyncEvent::ExternalFileDropped(ExternalFileDrop {
@@ -3898,6 +3926,59 @@ fn debug_log(message: &str) {
     }
 }
 
+struct PlacesDndTrace<'a> {
+    backend: &'a str,
+    phase: &'a str,
+    mime_type: &'a str,
+    payload: &'a str,
+    x: f32,
+    y: f32,
+    slot: i32,
+    target: i32,
+    over_gap: bool,
+    over_item: bool,
+}
+
+fn dnd_log_places_event(trace: PlacesDndTrace<'_>) {
+    static DEBUG_DND: OnceLock<bool> = OnceLock::new();
+    if !*DEBUG_DND
+        .get_or_init(|| env::var("FIKA_DEBUG_DND").is_ok_and(|value| env_flag_is_truthy(&value)))
+    {
+        return;
+    }
+
+    eprintln!(
+        "[fika dnd] backend={} phase={} mime={} x={:.1} y={:.1} slot={} target={} gap={} item={} payload={}",
+        trace.backend,
+        trace.phase,
+        trace.mime_type,
+        trace.x,
+        trace.y,
+        trace.slot,
+        trace.target,
+        trace.over_gap,
+        trace.over_item,
+        dnd_payload_summary(trace.payload)
+    );
+}
+
+fn dnd_payload_summary(payload: &str) -> String {
+    const MAX_CHARS: usize = 96;
+    let mut summary = String::new();
+    for ch in payload.chars().take(MAX_CHARS) {
+        match ch {
+            '\n' => summary.push_str("\\n"),
+            '\r' => summary.push_str("\\r"),
+            '\t' => summary.push_str("\\t"),
+            _ => summary.push(ch),
+        }
+    }
+    if payload.chars().count() > MAX_CHARS {
+        summary.push_str("...");
+    }
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4745,6 +4826,19 @@ mod tests {
         for value in ["", "0", "false", "no", "off", "anything-else"] {
             assert!(!env_flag_is_truthy(value));
         }
+    }
+
+    #[test]
+    fn dnd_payload_summary_escapes_control_chars_and_truncates() {
+        assert_eq!(
+            dnd_payload_summary("file:///tmp/A\nfile:///tmp/B\tx"),
+            "file:///tmp/A\\nfile:///tmp/B\\tx"
+        );
+
+        assert_eq!(
+            dnd_payload_summary(&"a".repeat(97)),
+            format!("{}...", "a".repeat(96))
+        );
     }
 
     #[test]

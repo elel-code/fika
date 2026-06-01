@@ -276,6 +276,7 @@ export component AppWindow inherits Window {
     callback place_drop_over_item(float, bool) -> bool;
     callback places_drop_supported(string) -> bool;
     callback places_drop_force_gap(string) -> bool;
+    callback trace_places_drop(string, string, string, float, float, int, int, bool, bool);
     pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
     pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
     pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
@@ -725,6 +726,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     can-drop(event) => {
+                        root.trace_places_drop("can-drop", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
                         if (root.places_drop_supported(event.mime-type)) {
                             root.folder_drag_path = event.data;
                             root.folder_drag_label = event.data;
@@ -744,19 +746,18 @@ export component AppWindow inherits Window {
                             root.place_drag_rejected = root.folder_drag_over_place_item && !root.place_drop_allowed(event.data, root.folder_drag_place_target);
                             root.folder_drag_slot = root.place_drop_slot((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
                             root.place_drag_slot = root.folder_drag_slot;
+                            root.trace_places_drop("can-drop-accepted", event.mime-type, event.data, root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
                             true
                         } else {
                             root.folder_drag_active = false;
                             root.folder_drag_over_place_item = false;
                             root.place_drag_rejected = false;
+                            root.trace_places_drop("can-drop-rejected", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
                             false
                         }
                     }
                     dropped(event) => {
-                        root.folder_drag_active = false;
-                        root.place_drag_active = false;
-                        root.folder_drag_over_place_item = false;
-                        root.place_drag_rejected = false;
+                        root.trace_places_drop("dropped", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
                         if (event.position.y + sidebar-scroll.viewport-y >= 44px && event.position.y + sidebar-scroll.viewport-y <= 44px + root.places.length * 38px) {
                             if (root.folder_drag_over_place_gap || root.folder_drag_slot >= root.places.length) {
                                 if (event.mime-type == "application/x-fika-place-path") {
@@ -772,6 +773,10 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
+                        root.folder_drag_active = false;
+                        root.place_drag_active = false;
+                        root.folder_drag_over_place_item = false;
+                        root.place_drag_rejected = false;
                     }
                 }
             }
