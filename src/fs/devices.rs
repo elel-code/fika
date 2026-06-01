@@ -539,6 +539,7 @@ fn udisks2_removable_device_from_interfaces(
     let mounted = !mount_points.is_empty();
     let mount_point = mount_points.into_iter().next();
     let label = udisks2_display_label(block, drive, mount_point.as_deref(), &device);
+    let marker = udisks2_marker(drive, &label);
     let path = mount_point.unwrap_or(device.clone());
     let capabilities = DeviceCapabilities {
         can_mount: !mounted,
@@ -549,13 +550,14 @@ fn udisks2_removable_device_from_interfaces(
         label.clone(),
         path.clone(),
         device,
-        marker_from_label(&label),
+        marker,
         mounted,
         capabilities,
     );
     device_debug_log(&format!(
-        "UDisks2 accept label={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={}",
+        "UDisks2 accept label={} marker={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={}",
         entry.label,
+        entry.marker,
         entry.path,
         entry.device_path,
         entry.mounted,
@@ -575,6 +577,12 @@ fn removable_media_rejection(objects: &ManagedObjects, block: &Properties) -> Op
         return Some("no drive object");
     };
     DriveMediaProfile::from_properties(drive).rejection()
+}
+
+fn udisks2_marker(drive: &Properties, label: &str) -> String {
+    DriveMediaProfile::from_properties(drive)
+        .marker()
+        .unwrap_or_else(|| marker_from_label(label))
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -623,6 +631,27 @@ impl DriveMediaProfile {
                 .media_compatibility
                 .iter()
                 .any(|media| media.starts_with("optical_") || media.starts_with("flash_"))
+    }
+
+    fn marker(&self) -> Option<String> {
+        if self.optical
+            || self
+                .media_compatibility
+                .iter()
+                .any(|media| media.starts_with("optical_"))
+        {
+            Some("CD".to_string())
+        } else if self
+            .media_compatibility
+            .iter()
+            .any(|media| media.starts_with("flash_sd") || media.starts_with("flash_mmc"))
+        {
+            Some("SD".to_string())
+        } else if self.connection_bus.as_deref() == Some("usb") {
+            Some("USB".to_string())
+        } else {
+            None
+        }
     }
 }
 
@@ -873,8 +902,9 @@ fn device_debug_log_devices(phase: &str, devices: &[DeviceEntry]) {
     }
     for (index, device) in devices.iter().enumerate() {
         device_debug_log(&format!(
-            "{phase}[{index}] label={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={} error={}",
+            "{phase}[{index}] label={} marker={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={} error={}",
             device.label,
+            device.marker,
             device.path,
             device.device_path,
             device.mounted,
@@ -1182,6 +1212,7 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].label, "Backup");
         assert_eq!(devices[0].device_path, "/dev/sdb1");
+        assert_eq!(devices[0].marker, "USB");
         assert!(!devices[0].mounted);
     }
 
@@ -1244,8 +1275,13 @@ mod tests {
             Some(filesystem_object(Vec::new())),
         );
 
-        assert_eq!(udisks2_removable_devices_from_objects(&flash).len(), 1);
-        assert_eq!(udisks2_removable_devices_from_objects(&optical).len(), 1);
+        let flash_devices = udisks2_removable_devices_from_objects(&flash);
+        let optical_devices = udisks2_removable_devices_from_objects(&optical);
+
+        assert_eq!(flash_devices.len(), 1);
+        assert_eq!(flash_devices[0].marker, "SD");
+        assert_eq!(optical_devices.len(), 1);
+        assert_eq!(optical_devices[0].marker, "CD");
     }
 
     #[test]
