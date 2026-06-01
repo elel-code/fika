@@ -11,7 +11,7 @@ import {
 } from "widgets.slint";
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
-import { ChildSubmenuLayer, ChooserChoicePopup, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
+import { ChildSubmenuLayer, ChooserChoicePopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
 import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
 export component AppWindow inherits Window {
@@ -1773,19 +1773,31 @@ export component AppWindow inherits Window {
         cancelled => { root.new-folder-open = false; }
     }
 
-    for choice[index] in root.chooser_choices: ChooserChoicePopup {
-        visible: root.chooser-choice-menu-open && root.chooser-choice-menu-index == index;
-        x: root.anchored_menu_left(root.width / 1px, root.height / 1px, root.chooser-choice-menu-x / 1px, root.chooser-choice-menu-y / 1px, root.chooser-choice-menu-width / 1px, (root.menu-title-height + max(1, choice.options.length) * root.menu-item-height) / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
-        y: root.anchored_menu_top(root.width / 1px, root.height / 1px, root.chooser-choice-menu-x / 1px, root.chooser-choice-menu-y / 1px, root.chooser-choice-menu-width / 1px, (root.menu-title-height + max(1, choice.options.length) * root.menu-item-height) / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
-        width: root.chooser-choice-menu-width;
+    ChooserChoicePopupLayer {
+        width: parent.width;
+        height: parent.height;
+        menu-open: root.chooser-choice-menu-open;
+        menu-index: root.chooser-choice-menu-index;
+        menu-x: root.chooser-choice-menu-x;
+        menu-y: root.chooser-choice-menu-y;
+        menu-width: root.chooser-choice-menu-width;
+        window-width: root.width;
+        window-height: root.height;
+        screen-margin: root.menu-screen-margin;
+        pointer-gap: root.menu-pointer-gap;
+        child-gap: root.child-menu-gap;
         dark: root.dark_mode;
-        title: choice.label;
-        options: choice.options;
-        selected-index: choice.selected_index;
+        choices: root.chooser_choices;
         title-height: root.menu-title-height;
         item-height: root.menu-item-height;
-        option_selected(option-index) => {
-            root.chooser_select_choice(index, option-index);
+        anchored_menu_left(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap) => {
+            root.anchored_menu_left(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap)
+        }
+        anchored_menu_top(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap) => {
+            root.anchored_menu_top(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap)
+        }
+        option_selected(choice-index, option-index) => {
+            root.chooser_select_choice(choice-index, option-index);
             root.chooser-choice-menu-open = false;
         }
     }

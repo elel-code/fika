@@ -1,5 +1,5 @@
 import { ScrollView } from "std-widgets.slint";
-import { ChooserChoiceOption, DesktopApp } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, DesktopApp } from "models.slint";
 import { MenuHoverBridge, MenuHoverTitle, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
 
 export component OpenWithMenu inherits PopupSurface {
@@ -184,6 +184,42 @@ export component ChooserChoicePopup inherits PopupSurface {
         options: root.options;
         selected-index: root.selected-index;
         option_selected(index) => { root.option_selected(index); }
+    }
+}
+
+export component ChooserChoicePopupLayer inherits Rectangle {
+    in property <bool> menu-open;
+    in property <int> menu-index;
+    in property <length> menu-x;
+    in property <length> menu-y;
+    in property <length> menu-width;
+    in property <length> window-width;
+    in property <length> window-height;
+    in property <length> screen-margin;
+    in property <length> pointer-gap;
+    in property <length> child-gap;
+    in property <bool> dark;
+    in property <[ChooserChoice]> choices;
+    in property <length> title-height: 30px;
+    in property <length> item-height: 38px;
+    pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
+    pure callback anchored_menu_top(float, float, float, float, float, float, float, float, float) -> float;
+    callback option_selected(int, int);
+
+    background: transparent;
+
+    for choice[index] in root.choices: ChooserChoicePopup {
+        visible: root.menu-open && root.menu-index == index;
+        x: root.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, choice.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        y: root.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, choice.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        width: root.menu-width;
+        dark: root.dark;
+        title: choice.label;
+        options: choice.options;
+        selected-index: choice.selected_index;
+        title-height: root.title-height;
+        item-height: root.item-height;
+        option_selected(option-index) => { root.option_selected(index, option-index); }
     }
 }
 
