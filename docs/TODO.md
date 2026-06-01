@@ -40,7 +40,8 @@
   - Current: clicking an unmounted UDisks2 filesystem device starts an async `Filesystem.Mount({})`; success refreshes Devices and opens the returned mount point, while failures are shown in the status bar.
   - Current: device rows have a right-click menu with Mount for unmounted media, Open/Unmount for mounted media, and Eject when UDisks2 reports an ejectable drive. These actions run off the UI thread and refresh Devices after completion.
   - Current: pending device actions are tracked per `device_path`, so repeated clicks on the same device do not queue overlapping Mount/Unmount/Eject D-Bus calls.
-  - Remaining: clearer device error reporting, busy-device guidance from UDisks2 error names, and distro validation for UDisks2/polkit edge cases.
+  - Current: common UDisks2 D-Bus errors such as busy devices, authorization failures, already-mounted, not-mounted, cancellation, and timeout are mapped to status-bar guidance while retaining the raw error name/detail for diagnostics.
+  - Remaining: distro validation for UDisks2/polkit edge cases and richer per-device visual error state.
 - [x] Internal drop transfer menu with Move / Copy / Link actions.
 - [x] F5 active refresh; toolbar refresh button removed.
 - [x] Mouse Back/Forward navigation with history stacks.

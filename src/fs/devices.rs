@@ -211,7 +211,7 @@ fn mount_device_with_connection(
     let options: HashMap<&str, Value<'_>> = HashMap::new();
     let mount_point: String = proxy
         .call("Mount", &(options))
-        .map_err(|err| format!("UDisks2 Mount failed: {err}"))?;
+        .map_err(|err| format_udisks2_call_error("Mount", &err))?;
     Ok(PathBuf::from(mount_point))
 }
 
@@ -235,7 +235,7 @@ fn unmount_device_with_connection(
     let options: HashMap<&str, Value<'_>> = HashMap::new();
     let _: () = proxy
         .call("Unmount", &(options))
-        .map_err(|err| format!("UDisks2 Unmount failed: {err}"))?;
+        .map_err(|err| format_udisks2_call_error("Unmount", &err))?;
     Ok(())
 }
 
@@ -253,8 +253,48 @@ fn eject_device_with_connection(connection: &Connection, device_path: &str) -> R
     let options: HashMap<&str, Value<'_>> = HashMap::new();
     let _: () = proxy
         .call("Eject", &(options))
-        .map_err(|err| format!("UDisks2 Eject failed: {err}"))?;
+        .map_err(|err| format_udisks2_call_error("Eject", &err))?;
     Ok(())
+}
+
+fn format_udisks2_call_error(action: &str, err: &zbus::Error) -> String {
+    format!(
+        "UDisks2 {action} failed: {}",
+        udisks2_error_guidance(err).unwrap_or_else(|| err.to_string())
+    )
+}
+
+fn udisks2_error_guidance(err: &zbus::Error) -> Option<String> {
+    let zbus::Error::MethodError(name, detail, _) = err else {
+        return None;
+    };
+    let name = name.to_string();
+    let detail = detail.as_deref().unwrap_or("no details");
+    udisks2_error_guidance_from_parts(&name, detail)
+}
+
+fn udisks2_error_guidance_from_parts(name: &str, detail: &str) -> Option<String> {
+    let lower_detail = detail.to_ascii_lowercase();
+    let guidance = if name.ends_with(".DeviceBusy") || lower_detail.contains("busy") {
+        "device is busy; close files, terminals, or applications using it, then retry"
+    } else if name.ends_with(".NotAuthorized")
+        || name.ends_with(".AccessDenied")
+        || lower_detail.contains("not authorized")
+        || lower_detail.contains("permission denied")
+    {
+        "authorization was denied or no polkit agent handled the request"
+    } else if name.ends_with(".AlreadyMounted") {
+        "device is already mounted; refresh Devices and open the mount point"
+    } else if name.ends_with(".NotMounted") {
+        "device is not mounted; refresh Devices before retrying"
+    } else if name.ends_with(".Cancelled") || lower_detail.contains("cancelled") {
+        "operation was cancelled"
+    } else if name.ends_with(".TimedOut") || lower_detail.contains("timed out") {
+        "operation timed out; check whether the device is responding"
+    } else {
+        return None;
+    };
+    Some(format!("{guidance} ({name}: {detail})"))
 }
 
 fn udisks2_managed_objects(connection: &Connection) -> Result<ManagedObjects, String> {
@@ -838,6 +878,50 @@ mod tests {
         assert!(udisks2_removable_devices_from_objects(&ignored).is_empty());
         assert!(udisks2_removable_devices_from_objects(&fixed).is_empty());
         assert!(udisks2_removable_devices_from_objects(&empty).is_empty());
+    }
+
+    #[test]
+    fn udisks2_error_guidance_explains_common_device_failures() {
+        assert_eq!(
+            udisks2_error_guidance_from_parts(
+                "org.freedesktop.UDisks2.Error.DeviceBusy",
+                "target is busy",
+            ),
+            Some(
+                "device is busy; close files, terminals, or applications using it, then retry \
+                 (org.freedesktop.UDisks2.Error.DeviceBusy: target is busy)"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            udisks2_error_guidance_from_parts(
+                "org.freedesktop.UDisks2.Error.NotAuthorized",
+                "not authorized",
+            ),
+            Some(
+                "authorization was denied or no polkit agent handled the request \
+                 (org.freedesktop.UDisks2.Error.NotAuthorized: not authorized)"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            udisks2_error_guidance_from_parts(
+                "org.freedesktop.UDisks2.Error.NotMounted",
+                "not mounted",
+            ),
+            Some(
+                "device is not mounted; refresh Devices before retrying \
+                 (org.freedesktop.UDisks2.Error.NotMounted: not mounted)"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            udisks2_error_guidance_from_parts(
+                "org.freedesktop.UDisks2.Error.Unknown",
+                "unexpected failure",
+            ),
+            None
+        );
     }
 
     #[test]
