@@ -40,15 +40,16 @@ pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
         }
     };
     let udisks_rows = discovered.len();
-    let devices = merge_device_entries(mounted, discovered);
+    let merged = merge_device_entries_with_stats(mounted, discovered);
+    device_debug_log(&device_merge_summary(&merged.stats));
     device_debug_log(&device_discovery_summary(
         mount_source,
         mounted_rows,
         udisks_rows,
-        &devices,
+        &merged.devices,
     ));
-    device_debug_log_devices("merged", &devices);
-    devices
+    device_debug_log_devices("merged", &merged.devices);
+    merged.devices
 }
 
 fn mounted_devices_from_roots(roots: Vec<PathBuf>) -> Vec<DeviceEntry> {
@@ -94,24 +95,47 @@ fn mounted_devices_from_paths(paths: Vec<PathBuf>) -> Vec<DeviceEntry> {
     devices
 }
 
-fn merge_device_entries(
+fn merge_device_entries_with_stats(
     mounted_devices: Vec<DeviceEntry>,
     discovered_devices: Vec<DeviceEntry>,
-) -> Vec<DeviceEntry> {
+) -> DeviceMergeResult {
     let mut devices = Vec::new();
     let mut seen = HashMap::new();
+    let mut origins = Vec::new();
 
-    for device in mounted_devices.into_iter().chain(discovered_devices) {
+    for device in mounted_devices {
         let path = device.path.to_string();
         if let Some(index) = seen.get(&path).copied() {
             merge_device_metadata(&mut devices[index], &device);
         } else {
             seen.insert(path, devices.len());
             devices.push(device);
+            origins.push(DeviceEntryOrigin {
+                mounted_table: true,
+                udisks: false,
+            });
         }
     }
 
-    devices
+    for device in discovered_devices {
+        let path = device.path.to_string();
+        if let Some(index) = seen.get(&path).copied() {
+            merge_device_metadata(&mut devices[index], &device);
+            origins[index].udisks = true;
+        } else {
+            seen.insert(path, devices.len());
+            devices.push(device);
+            origins.push(DeviceEntryOrigin {
+                mounted_table: false,
+                udisks: true,
+            });
+        }
+    }
+
+    DeviceMergeResult {
+        stats: DeviceMergeStats::from_origins(&devices, &origins),
+        devices,
+    }
 }
 
 fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
@@ -122,6 +146,49 @@ fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
     existing.can_mount |= discovered.can_mount;
     existing.can_unmount |= discovered.can_unmount;
     existing.mounted |= discovered.mounted;
+}
+
+struct DeviceMergeResult {
+    devices: Vec<DeviceEntry>,
+    stats: DeviceMergeStats,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DeviceEntryOrigin {
+    mounted_table: bool,
+    udisks: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DeviceMergeStats {
+    mounted_only: usize,
+    udisks_only: usize,
+    merged: usize,
+}
+
+impl DeviceMergeStats {
+    fn from_origins(devices: &[DeviceEntry], origins: &[DeviceEntryOrigin]) -> Self {
+        let mut stats = Self::default();
+        for (device, origin) in devices.iter().zip(origins) {
+            if device.path.as_str() == "/" {
+                continue;
+            }
+            match (origin.mounted_table, origin.udisks) {
+                (true, true) => stats.merged += 1,
+                (true, false) => stats.mounted_only += 1,
+                (false, true) => stats.udisks_only += 1,
+                (false, false) => {}
+            }
+        }
+        stats
+    }
+}
+
+fn device_merge_summary(stats: &DeviceMergeStats) -> String {
+    format!(
+        "merge mounted_only={} udisks_only={} merged={}",
+        stats.mounted_only, stats.udisks_only, stats.merged
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1489,7 +1556,8 @@ mod tests {
             ),
         ];
 
-        let devices = merge_device_entries(mounted, discovered);
+        let merged = merge_device_entries_with_stats(mounted, discovered);
+        let devices = merged.devices;
 
         assert_eq!(devices.len(), 3);
         assert_eq!(devices[1].label, "Mounted USB");
@@ -1499,6 +1567,18 @@ mod tests {
         assert!(devices[1].mounted);
         assert!(devices[1].can_eject);
         assert_eq!(devices[2].label, "Unmounted");
+        assert_eq!(
+            merged.stats,
+            DeviceMergeStats {
+                mounted_only: 0,
+                udisks_only: 1,
+                merged: 1,
+            }
+        );
+        assert_eq!(
+            device_merge_summary(&merged.stats),
+            "merge mounted_only=0 udisks_only=1 merged=1"
+        );
     }
 
     #[test]
