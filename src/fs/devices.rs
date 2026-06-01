@@ -465,11 +465,9 @@ fn udisks2_removable_device_from_interfaces(
         .and_then(|filesystem| mount_points_property(filesystem, "MountPoints"))
         .unwrap_or_default();
     let mounted = !mount_points.is_empty();
-    let label = string_property(block, "IdLabel")
-        .filter(|label| !label.is_empty())
-        .or_else(|| drive_label(drive))
-        .unwrap_or_else(|| mount_label(Path::new(&device)));
-    let path = mount_points.into_iter().next().unwrap_or(device.clone());
+    let mount_point = mount_points.into_iter().next();
+    let label = udisks2_display_label(block, drive, mount_point.as_deref(), &device);
+    let path = mount_point.unwrap_or(device.clone());
     let can_eject = bool_property(drive, "Ejectable");
     let entry = device_entry(
         label.clone(),
@@ -574,6 +572,24 @@ fn drive_label(drive: &Properties) -> Option<String> {
     let model = string_property(drive, "Model").unwrap_or_default();
     let label = format!("{vendor} {model}").trim().to_string();
     (!label.is_empty()).then_some(label)
+}
+
+fn udisks2_display_label(
+    block: &Properties,
+    drive: &Properties,
+    mount_point: Option<&str>,
+    device: &str,
+) -> String {
+    string_property(block, "IdLabel")
+        .filter(|label| !label.is_empty())
+        .or_else(|| {
+            mount_point
+                .map(Path::new)
+                .map(mount_label)
+                .filter(|label| !label.is_empty())
+        })
+        .or_else(|| drive_label(drive))
+        .unwrap_or_else(|| mount_label(Path::new(device)))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -920,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn udisks2_prefers_mount_point_for_mounted_media() {
+    fn udisks2_prefers_mount_point_label_for_mounted_media_without_volume_label() {
         let objects = udisks_objects(
             drive_object(true, true, "Framework", "USB-C Storage"),
             block_object(
@@ -935,10 +951,32 @@ mod tests {
         let devices = udisks2_removable_devices_from_objects(&objects);
 
         assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].label, "Framework USB-C Storage");
+        assert_eq!(devices[0].label, "FIKA USB");
         assert_eq!(devices[0].path, "/run/media/yk/FIKA USB");
         assert_eq!(devices[0].device_path, "/dev/sdb1");
         assert!(devices[0].mounted);
+    }
+
+    #[test]
+    fn udisks2_uses_drive_label_for_unmounted_media_without_volume_label() {
+        let objects = udisks_objects(
+            drive_object(true, true, "Framework", "USB-C Storage"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "",
+                false,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+
+        let devices = udisks2_removable_devices_from_objects(&objects);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].label, "Framework USB-C Storage");
+        assert_eq!(devices[0].path, "/dev/sdb1");
+        assert_eq!(devices[0].device_path, "/dev/sdb1");
+        assert!(!devices[0].mounted);
     }
 
     #[test]
