@@ -340,20 +340,7 @@ pub(crate) fn context_menu_metrics(input: MenuMetricsInput) -> MenuMetrics {
             create_new_row_y_offset: 0.0,
         },
         5 => MenuMetrics {
-            height: if input.device_pending {
-                title + item
-            } else {
-                title
-                    + item
-                    + if input.device_can_mount { item } else { 0.0 }
-                    + if input.device_can_unmount || input.device_can_eject {
-                        separator
-                    } else {
-                        0.0
-                    }
-                    + if input.device_can_unmount { item } else { 0.0 }
-                    + if input.device_can_eject { item } else { 0.0 }
-            },
+            height: device_context_menu_height(input, item, separator, title),
             open_with_row_y_offset: 0.0,
             create_new_row_y_offset: 0.0,
         },
@@ -363,6 +350,33 @@ pub(crate) fn context_menu_metrics(input: MenuMetricsInput) -> MenuMetrics {
             create_new_row_y_offset: 0.0,
         },
     }
+}
+
+fn device_context_menu_height(
+    input: MenuMetricsInput,
+    item: f32,
+    separator: f32,
+    title: f32,
+) -> f32 {
+    if input.device_pending {
+        return title + item;
+    }
+
+    let open_rows = i32::from(input.is_dir)
+        + i32::from(!input.is_dir && input.device_can_mount)
+        + i32::from(input.device_can_unmount)
+        + i32::from(input.device_can_eject);
+    if open_rows == 0 {
+        return title + item;
+    }
+
+    title
+        + open_rows as f32 * item
+        + if input.device_can_unmount || input.device_can_eject {
+            separator
+        } else {
+            0.0
+        }
 }
 
 fn file_context_menu_metrics(
@@ -867,6 +881,24 @@ mod tests {
             title_height,
         });
         assert_eq!(filesystem_device.height, title_height + item_height);
+
+        let unavailable_device = context_menu_metrics(MenuMetricsInput {
+            kind: 5,
+            selected_count: 0,
+            is_dir: false,
+            default_open_visible: false,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            place_builtin: true,
+            device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(unavailable_device.height, title_height + item_height);
 
         let mounted_ejectable_device = context_menu_metrics(MenuMetricsInput {
             kind: 5,

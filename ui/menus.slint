@@ -250,6 +250,13 @@ export component DeviceContextMenu inherits PopupSurface {
             dark: root.dark;
             clicked => { root.eject_requested(); }
         }
+
+        if (root.pending-action == "" && !root.mounted && !root.can-mount && !root.can-unmount && !root.can-eject): MenuItem {
+            label: "No actions available";
+            dark: root.dark;
+            enabled: false;
+            clicked => { }
+        }
     }
 }
 
