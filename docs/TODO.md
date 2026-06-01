@@ -44,6 +44,7 @@
   - Current: failed device actions are retained per device and rendered as a distinct sidebar error state, so the affected row stays visually marked after the status message changes. A later successful action for that device clears the marker.
   - Current: after a successful Unmount/Eject, if the current main view is inside that device's previous mount point, Fika moves the view back to Home and prunes history entries under the removed mount path, matching Dolphin/cosmic-files' avoid-stale-location behavior.
   - Current: Devices discovery runs through the async event bridge; `/proc/self/mountinfo` parsing and UDisks2 system-bus discovery no longer execute on the UI thread, and stale device-list generations are ignored.
+  - Current: `FIKA_DEBUG_DEVICES=1` prints device discovery diagnostics, including mountinfo/fallback usage, UDisks2 accepted rows, UDisks2 skip reasons, and the final merged sidebar device list.
   - Remaining: distro validation for UDisks2/polkit edge cases.
 - [x] Internal drop transfer menu with Move / Copy / Link actions.
 - [x] F5 active refresh; toolbar refresh button removed.

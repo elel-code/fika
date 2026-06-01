@@ -3,14 +3,40 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
-    let mounted = mounted_devices_from_mountinfo(&mount_roots(), "/proc/self/mountinfo")
-        .unwrap_or_else(|| mounted_devices_from_roots(mount_roots()));
-    merge_device_entries(mounted, udisks2_removable_devices().unwrap_or_default())
+    let roots = mount_roots();
+    let mounted = mounted_devices_from_mountinfo(&roots, "/proc/self/mountinfo")
+        .inspect(|devices| {
+            device_debug_log(&format!(
+                "mountinfo discovered {} mounted device row(s)",
+                devices.len().saturating_sub(1)
+            ));
+        })
+        .unwrap_or_else(|| {
+            device_debug_log("mountinfo unavailable; falling back to mount-root directory scan");
+            mounted_devices_from_roots(roots)
+        });
+    let discovered = match udisks2_removable_devices() {
+        Ok(devices) => {
+            device_debug_log(&format!(
+                "UDisks2 discovered {} external media row(s)",
+                devices.len()
+            ));
+            devices
+        }
+        Err(err) => {
+            device_debug_log(&format!("UDisks2 discovery unavailable: {err}"));
+            Vec::new()
+        }
+    };
+    let devices = merge_device_entries(mounted, discovered);
+    device_debug_log_devices("merged", &devices);
+    devices
 }
 
 fn mounted_devices_from_roots(roots: Vec<PathBuf>) -> Vec<DeviceEntry> {
@@ -422,16 +448,18 @@ fn udisks2_removable_device_from_interfaces(
     interfaces: &InterfaceMap,
 ) -> Option<DeviceEntry> {
     let block = interfaces.get("org.freedesktop.UDisks2.Block")?;
+    let device = byte_string_property(block, "Device").unwrap_or_else(|| "<unknown>".to_string());
     if block_is_hidden(block) {
+        device_debug_log(&format!("UDisks2 skip {device}: hidden/system block hint"));
         return None;
     }
 
-    if !is_removable_media_object(objects, block) {
+    if let Some(reason) = removable_media_rejection(objects, block) {
+        device_debug_log(&format!("UDisks2 skip {device}: {reason}"));
         return None;
     }
     let drive = drive_for_block(objects, block)?;
 
-    let device = byte_string_property(block, "Device")?;
     let mount_points = interfaces
         .get("org.freedesktop.UDisks2.Filesystem")
         .and_then(|filesystem| mount_points_property(filesystem, "MountPoints"))
@@ -443,23 +471,40 @@ fn udisks2_removable_device_from_interfaces(
         .unwrap_or_else(|| mount_label(Path::new(&device)));
     let path = mount_points.into_iter().next().unwrap_or(device.clone());
     let can_eject = bool_property(drive, "Ejectable");
-    Some(device_entry(
+    let entry = device_entry(
         label.clone(),
         path.clone(),
         device,
         marker_from_label(&label),
         mounted,
         can_eject,
-    ))
+    );
+    device_debug_log(&format!(
+        "UDisks2 accept label={} path={} device_path={} mounted={} ejectable={}",
+        entry.label, entry.path, entry.device_path, entry.mounted, entry.can_eject
+    ));
+    Some(entry)
 }
 
 fn is_removable_media_object(objects: &ManagedObjects, block: &Properties) -> bool {
-    drive_for_block(objects, block).is_some_and(|drive| {
-        bool_property(drive, "MediaAvailable")
-            && (bool_property(drive, "Removable")
-                || bool_property(drive, "Ejectable")
-                || string_property(drive, "ConnectionBus").as_deref() == Some("usb"))
-    })
+    removable_media_rejection(objects, block).is_none()
+}
+
+fn removable_media_rejection(objects: &ManagedObjects, block: &Properties) -> Option<&'static str> {
+    let Some(drive) = drive_for_block(objects, block) else {
+        return Some("no drive object");
+    };
+    if !bool_property(drive, "MediaAvailable") {
+        return Some("media unavailable");
+    }
+    if bool_property(drive, "Removable")
+        || bool_property(drive, "Ejectable")
+        || string_property(drive, "ConnectionBus").as_deref() == Some("usb")
+    {
+        None
+    } else {
+        Some("not removable, ejectable, or USB-attached")
+    }
 }
 
 fn block_is_hidden(block: &Properties) -> bool {
@@ -665,6 +710,40 @@ fn marker_from_label(label: &str) -> String {
         .find(|ch| ch.is_alphanumeric())
         .map(|ch| ch.to_uppercase().collect())
         .unwrap_or_else(|| "D".into())
+}
+
+fn device_debug_log(message: &str) {
+    static DEBUG_DEVICES: OnceLock<bool> = OnceLock::new();
+    if *DEBUG_DEVICES.get_or_init(|| {
+        env::var("FIKA_DEBUG_DEVICES").is_ok_and(|value| env_flag_is_truthy(value.as_str()))
+    }) {
+        eprintln!("[fika devices] {message}");
+    }
+}
+
+fn device_debug_log_devices(phase: &str, devices: &[DeviceEntry]) {
+    if devices.is_empty() {
+        device_debug_log(&format!("{phase}: no device rows"));
+        return;
+    }
+    for (index, device) in devices.iter().enumerate() {
+        device_debug_log(&format!(
+            "{phase}[{index}] label={} path={} device_path={} mounted={} ejectable={} error={}",
+            device.label,
+            device.path,
+            device.device_path,
+            device.mounted,
+            device.can_eject,
+            device.error
+        ));
+    }
+}
+
+fn env_flag_is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[cfg(test)]
@@ -933,6 +1012,26 @@ mod tests {
                 true,
             ),
             Some(filesystem_object(Vec::new())),
+        );
+
+        assert!(udisks2_removable_devices_from_objects(&objects).is_empty());
+    }
+
+    #[test]
+    fn udisks2_filters_blocks_without_drive_objects() {
+        let mut objects = ManagedObjects::new();
+        let block_interfaces = HashMap::from([(
+            "org.freedesktop.UDisks2.Block".to_string(),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/missing",
+                "Missing",
+                false,
+            ),
+        )]);
+        objects.insert(
+            OwnedObjectPath::try_from("/org/freedesktop/UDisks2/block_devices/sdb1").unwrap(),
+            block_interfaces,
         );
 
         assert!(udisks2_removable_devices_from_objects(&objects).is_empty());
