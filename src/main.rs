@@ -23,8 +23,8 @@ mod support;
 
 use app::async_bridge::{AsyncBridge, build_async_runtime, send_async_event};
 use app::events::{
-    AsyncEvent, DirectoryLoadResult, ExternalEditResult, ExternalFileDrop, FileOpenResult,
-    FileOpenSuccess, FileOperationProgress, FileOperationResult, FileUndoResult,
+    AsyncEvent, DeviceMountResult, DirectoryLoadResult, ExternalEditResult, ExternalFileDrop,
+    FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult, FileUndoResult,
     RecursiveSearchProgress, RecursiveSearchResult,
 };
 use app::file_clipboard::sync_clipboard_ui;
@@ -58,7 +58,7 @@ use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::settings::{AppSettings, load_settings, save_settings};
 use desktop::{mime_open, open_with, terminal};
-use fs::devices::mounted_devices;
+use fs::devices::{mount_device, mounted_devices};
 use fs::entries::{read_entries_async, to_file_entry};
 use fs::places::default_places;
 use fs::{file_actions, privilege, search, thumbnails};
@@ -268,7 +268,8 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_open_device(move |path, mounted| {
             if let Some(ui) = ui_weak.upgrade() {
                 if !mounted {
-                    set_status(&ui, "Device is not mounted yet");
+                    set_status(&ui, "Mounting device...");
+                    mount_device_async(&bridge, path.to_string());
                     return;
                 }
                 let requested = expand_user_path(path.as_str());
@@ -1667,6 +1668,25 @@ fn sync_devices(ui: &AppWindow) {
     ui.set_devices(ModelRc::new(Rc::new(VecModel::from(mounted_devices()))));
 }
 
+fn mount_device_async(bridge: &AsyncBridge, device_path: String) {
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let task_device_path = device_path.clone();
+        let result = tokio::task::spawn_blocking(move || mount_device(&task_device_path))
+            .await
+            .unwrap_or_else(|err| Err(format!("mount task failed: {err}")));
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::DeviceMountFinished(DeviceMountResult {
+                device_path,
+                result,
+            }),
+        );
+    });
+}
+
 fn watch_current_directory(path: &Path, generation: u64, bridge: &AsyncBridge) {
     use notify::Watcher;
 
@@ -1765,6 +1785,9 @@ fn apply_async_event(
         }
         AsyncEvent::FileUndoFinished(result) => {
             apply_file_undo_result(ui, state, bridge, result);
+        }
+        AsyncEvent::DeviceMountFinished(result) => {
+            apply_device_mount_result(ui, state, bridge, result);
         }
         AsyncEvent::PrivilegedOperationFinished(result) => {
             apply_privileged_operation_result(ui, state, bridge, result);
@@ -2482,6 +2505,32 @@ fn apply_file_undo_result(
     match result.result {
         Ok(message) => set_status(ui, &format!("Undo complete: {message}")),
         Err(err) => set_status(ui, &format!("Undo failed: {err}")),
+    }
+}
+
+fn apply_device_mount_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: DeviceMountResult,
+) {
+    sync_devices(ui);
+    match result.result {
+        Ok(mount_point) if mount_point.is_dir() => {
+            set_status(ui, &format!("Mounted {}", result.device_path));
+            navigate_to(ui, state, bridge, mount_point);
+        }
+        Ok(mount_point) => {
+            set_status(
+                ui,
+                &format!(
+                    "Mounted {}, but mount point is not readable: {}",
+                    result.device_path,
+                    mount_point.display()
+                ),
+            );
+        }
+        Err(err) => set_status(ui, &format!("Cannot mount {}: {err}", result.device_path)),
     }
 }
 

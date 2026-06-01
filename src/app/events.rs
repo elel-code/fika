@@ -76,6 +76,12 @@ pub(crate) struct FileUndoResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct DeviceMountResult {
+    pub(crate) device_path: String,
+    pub(crate) result: Result<PathBuf, String>,
+}
+
+#[derive(Debug)]
 pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
     FileOpened(FileOpenResult),
@@ -88,6 +94,7 @@ pub(crate) enum AsyncEvent {
     FileOperationProgress(FileOperationProgress),
     FileOperationFinished(FileOperationResult),
     FileUndoFinished(FileUndoResult),
+    DeviceMountFinished(DeviceMountResult),
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),
     ThumbnailLoaded {

@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use zbus::blocking::{Connection, Proxy};
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
     let mounted = mounted_devices_from_mountinfo(&mount_roots(), "/proc/self/mountinfo")
@@ -129,12 +129,21 @@ type InterfaceMap = HashMap<String, Properties>;
 type ManagedObjects = HashMap<OwnedObjectPath, InterfaceMap>;
 
 fn udisks2_removable_devices() -> Result<Vec<DeviceEntry>, String> {
-    let connection = zbus::blocking::connection::Builder::system()
-        .map_err(|err| format!("cannot create system bus builder: {err}"))?
-        .method_timeout(Duration::from_millis(750))
-        .build()
-        .map_err(|err| format!("cannot connect to system bus: {err}"))?;
+    let connection = system_bus_connection(Duration::from_millis(750))?;
     udisks2_removable_devices_with_connection(&connection)
+}
+
+pub(crate) fn mount_device(device_path: &str) -> Result<PathBuf, String> {
+    let connection = system_bus_connection(Duration::from_secs(120))?;
+    mount_device_with_connection(&connection, device_path)
+}
+
+fn system_bus_connection(timeout: Duration) -> Result<Connection, String> {
+    zbus::blocking::connection::Builder::system()
+        .map_err(|err| format!("cannot create system bus builder: {err}"))?
+        .method_timeout(timeout)
+        .build()
+        .map_err(|err| format!("cannot connect to system bus: {err}"))
 }
 
 fn udisks2_removable_devices_with_connection(
@@ -152,6 +161,87 @@ fn udisks2_removable_devices_with_connection(
         .call("GetManagedObjects", &())
         .map_err(|err| format!("GetManagedObjects failed: {err}"))?;
     Ok(udisks2_removable_devices_from_objects(&objects))
+}
+
+fn mount_device_with_connection(
+    connection: &Connection,
+    device_path: &str,
+) -> Result<PathBuf, String> {
+    let objects = udisks2_managed_objects(connection)?;
+    let target = udisks2_mount_target_from_objects(&objects, device_path)?;
+    if let Some(mount_point) = target.mounted_at {
+        return Ok(mount_point);
+    }
+
+    let proxy = Proxy::new(
+        connection,
+        "org.freedesktop.UDisks2",
+        target.block_path.as_str(),
+        "org.freedesktop.UDisks2.Filesystem",
+    )
+    .map_err(|err| format!("cannot create UDisks2 Filesystem proxy: {err}"))?;
+    let options: HashMap<&str, Value<'_>> = HashMap::new();
+    let mount_point: String = proxy
+        .call("Mount", &(options))
+        .map_err(|err| format!("UDisks2 Mount failed: {err}"))?;
+    Ok(PathBuf::from(mount_point))
+}
+
+fn udisks2_managed_objects(connection: &Connection) -> Result<ManagedObjects, String> {
+    let proxy = Proxy::new(
+        connection,
+        "org.freedesktop.UDisks2",
+        "/org/freedesktop/UDisks2",
+        "org.freedesktop.DBus.ObjectManager",
+    )
+    .map_err(|err| format!("cannot create UDisks2 ObjectManager proxy: {err}"))?;
+
+    proxy
+        .call("GetManagedObjects", &())
+        .map_err(|err| format!("GetManagedObjects failed: {err}"))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct UDisks2MountTarget {
+    block_path: OwnedObjectPath,
+    mounted_at: Option<PathBuf>,
+}
+
+fn udisks2_mount_target_from_objects(
+    objects: &ManagedObjects,
+    device_path: &str,
+) -> Result<UDisks2MountTarget, String> {
+    for (object_path, interfaces) in objects {
+        let Some(block) = interfaces.get("org.freedesktop.UDisks2.Block") else {
+            continue;
+        };
+        let Some(device) = byte_string_property(block, "Device") else {
+            continue;
+        };
+        if device != device_path {
+            continue;
+        }
+        if bool_property(block, "HintIgnore") {
+            return Err("device is hidden by UDisks2".to_string());
+        }
+        if !is_removable_media_object(objects, block) {
+            return Err("device is not removable media".to_string());
+        }
+        let Some(filesystem) = interfaces.get("org.freedesktop.UDisks2.Filesystem") else {
+            return Err("device has no mountable filesystem".to_string());
+        };
+        let mounted_at = mount_points_property(filesystem, "MountPoints")
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .map(PathBuf::from);
+        return Ok(UDisks2MountTarget {
+            block_path: object_path.clone(),
+            mounted_at,
+        });
+    }
+
+    Err("device is no longer available".to_string())
 }
 
 fn udisks2_removable_devices_from_objects(objects: &ManagedObjects) -> Vec<DeviceEntry> {
@@ -172,13 +262,10 @@ fn udisks2_removable_device_from_interfaces(
         return None;
     }
 
-    let drive_path = owned_object_path_property(block, "Drive")?;
-    let drive = objects
-        .get(&drive_path)?
-        .get("org.freedesktop.UDisks2.Drive")?;
-    if !bool_property(drive, "Removable") || !bool_property(drive, "MediaAvailable") {
+    if !is_removable_media_object(objects, block) {
         return None;
     }
+    let drive = drive_for_block(objects, block)?;
 
     let device = byte_string_property(block, "Device")?;
     let mount_points = interfaces
@@ -197,6 +284,19 @@ fn udisks2_removable_device_from_interfaces(
         marker_from_label(&label),
         mounted,
     ))
+}
+
+fn is_removable_media_object(objects: &ManagedObjects, block: &Properties) -> bool {
+    drive_for_block(objects, block).is_some_and(|drive| {
+        bool_property(drive, "Removable") && bool_property(drive, "MediaAvailable")
+    })
+}
+
+fn drive_for_block<'a>(objects: &'a ManagedObjects, block: &Properties) -> Option<&'a Properties> {
+    let drive_path = owned_object_path_property(block, "Drive")?;
+    objects
+        .get(&drive_path)?
+        .get("org.freedesktop.UDisks2.Drive")
 }
 
 fn bool_property(properties: &Properties, name: &str) -> bool {
@@ -650,6 +750,93 @@ mod tests {
         assert_eq!(devices.len(), 3);
         assert_eq!(devices[1].label, "Mounted USB");
         assert_eq!(devices[2].label, "Unmounted");
+    }
+
+    #[test]
+    fn udisks2_mount_target_finds_unmounted_filesystem_device() {
+        let objects = udisks_objects(
+            drive_object(true, true, "Framework", "USB-C Storage"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "FIKA USB",
+                false,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+
+        assert_eq!(
+            udisks2_mount_target_from_objects(&objects, "/dev/sdb1").unwrap(),
+            UDisks2MountTarget {
+                block_path: OwnedObjectPath::try_from(
+                    "/org/freedesktop/UDisks2/block_devices/sdb1"
+                )
+                .unwrap(),
+                mounted_at: None,
+            }
+        );
+    }
+
+    #[test]
+    fn udisks2_mount_target_returns_existing_mount_point() {
+        let objects = udisks_objects(
+            drive_object(true, true, "Framework", "USB-C Storage"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "FIKA USB",
+                false,
+            ),
+            Some(filesystem_object(vec!["/run/media/yk/FIKA USB"])),
+        );
+
+        assert_eq!(
+            udisks2_mount_target_from_objects(&objects, "/dev/sdb1").unwrap(),
+            UDisks2MountTarget {
+                block_path: OwnedObjectPath::try_from(
+                    "/org/freedesktop/UDisks2/block_devices/sdb1"
+                )
+                .unwrap(),
+                mounted_at: Some(PathBuf::from("/run/media/yk/FIKA USB")),
+            }
+        );
+    }
+
+    #[test]
+    fn udisks2_mount_target_rejects_unmountable_devices() {
+        let fixed = udisks_objects(
+            drive_object(false, true, "Fixed", "Disk"),
+            block_object(
+                "/dev/nvme0n1p1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Fixed",
+                false,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+        let no_filesystem = udisks_objects(
+            drive_object(true, true, "Framework", "USB-C Storage"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "FIKA USB",
+                false,
+            ),
+            None,
+        );
+
+        assert_eq!(
+            udisks2_mount_target_from_objects(&fixed, "/dev/nvme0n1p1").unwrap_err(),
+            "device is not removable media"
+        );
+        assert_eq!(
+            udisks2_mount_target_from_objects(&no_filesystem, "/dev/sdb1").unwrap_err(),
+            "device has no mountable filesystem"
+        );
+        assert_eq!(
+            udisks2_mount_target_from_objects(&no_filesystem, "/dev/missing").unwrap_err(),
+            "device is no longer available"
+        );
     }
 
     fn udisks_objects(
