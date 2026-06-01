@@ -32,9 +32,9 @@ use app::geometry::{
 };
 use app::places::{
     add_place, add_place_at_slot, add_place_at_slot_from_external_payload,
-    apply_external_file_drop, contains_place_path, is_supported_places_drop_mime,
-    open_place_new_window, places_drop_force_gap, remove_place, rename_place, reorder_place_path,
-    restore_default_places, sync_places,
+    apply_external_file_drop, contains_place_path, external_place_drop_rejection_reason,
+    is_supported_places_drop_mime, open_place_new_window, places_drop_force_gap, remove_place,
+    rename_place, reorder_place_path, restore_default_places, sync_places,
 };
 use app::selection::{
     append_unique_paths, filtered_entry_count, filtered_entry_paths, rebuild_visible_entry_index,
@@ -787,6 +787,11 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.on_places_drop_supported(|mime_type| is_supported_places_drop_mime(mime_type.as_str()));
     ui.on_places_drop_force_gap(|mime_type| places_drop_force_gap(mime_type.as_str()));
+    ui.on_places_drop_rejection_reason(|payload, mime_type| {
+        external_place_drop_rejection_reason(payload.as_str(), mime_type.as_str())
+            .unwrap_or_else(|| "none".to_string())
+            .into()
+    });
     ui.on_trace_places_drop(
         |phase, mime_type, payload, x, y, slot, target, over_gap, over_item| {
             dnd_log_places_event(PlacesDndTrace {

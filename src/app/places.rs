@@ -49,11 +49,10 @@ pub(crate) fn add_place_at_slot_from_external_payload(
     slot: i32,
     mime_type: &str,
 ) {
-    let Some(drop) = external_place_drop_from_payload(payload, mime_type) else {
-        ui.set_status("External drop did not contain a file path".into());
-        return;
-    };
-    add_place_at_slot_inner(ui, state, drop.path, slot, Some(drop.source.as_str()));
+    match external_place_drop_from_payload(payload, mime_type) {
+        Ok(drop) => add_place_at_slot_inner(ui, state, drop.path, slot, Some(drop.source.as_str())),
+        Err(rejection) => ui.set_status(rejection.status_message().into()),
+    }
 }
 
 fn add_place_at_slot_inner(
@@ -109,18 +108,56 @@ pub(crate) struct ExternalPlaceDrop {
     pub(crate) source: String,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ExternalPlaceDropRejection {
+    UnsupportedMime(String),
+    EmptyPayload,
+    NoLocalFilePath,
+}
+
+impl ExternalPlaceDropRejection {
+    pub(crate) fn status_message(&self) -> String {
+        match self {
+            Self::UnsupportedMime(mime_type) => {
+                format!("External drop MIME is not supported: {mime_type}")
+            }
+            Self::EmptyPayload => "External drop payload was empty".to_string(),
+            Self::NoLocalFilePath => "External drop did not contain a local file path".to_string(),
+        }
+    }
+
+    pub(crate) fn debug_reason(&self) -> String {
+        match self {
+            Self::UnsupportedMime(mime_type) => format!("unsupported-mime:{mime_type}"),
+            Self::EmptyPayload => "empty-payload".to_string(),
+            Self::NoLocalFilePath => "no-local-file-path".to_string(),
+        }
+    }
+}
+
 pub(crate) fn external_place_drop_from_payload(
     payload: &str,
     mime_type: &str,
-) -> Option<ExternalPlaceDrop> {
+) -> Result<ExternalPlaceDrop, ExternalPlaceDropRejection> {
     if !is_external_place_drop_mime(mime_type) {
-        return None;
+        return Err(ExternalPlaceDropRejection::UnsupportedMime(
+            mime_type.to_string(),
+        ));
     }
 
-    dropped_path_from_text(payload).map(|path| ExternalPlaceDrop {
+    dropped_path_from_text_result(payload).map(|path| ExternalPlaceDrop {
         path,
         source: format!("Slint DropArea {mime_type}"),
     })
+}
+
+pub(crate) fn external_place_drop_rejection_reason(
+    payload: &str,
+    mime_type: &str,
+) -> Option<String> {
+    external_place_drop_from_payload(payload, mime_type)
+        .err()
+        .map(|rejection| rejection.debug_reason())
 }
 
 pub(crate) fn is_external_place_drop_mime(mime_type: &str) -> bool {
@@ -139,10 +176,26 @@ pub(crate) fn places_drop_force_gap(mime_type: &str) -> bool {
 }
 
 fn dropped_path_from_text(text: &str) -> Option<PathBuf> {
-    text.lines()
+    dropped_path_from_text_result(text).ok()
+}
+
+fn dropped_path_from_text_result(text: &str) -> Result<PathBuf, ExternalPlaceDropRejection> {
+    let mut saw_payload_line = false;
+    for line in text
+        .lines()
         .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
-        .filter_map(dropped_path_from_line)
-        .next()
+    {
+        saw_payload_line = true;
+        if let Some(path) = dropped_path_from_line(line) {
+            return Ok(path);
+        }
+    }
+
+    if saw_payload_line {
+        Err(ExternalPlaceDropRejection::NoLocalFilePath)
+    } else {
+        Err(ExternalPlaceDropRejection::EmptyPayload)
+    }
 }
 
 fn dropped_path_from_line(line: &str) -> Option<PathBuf> {
@@ -447,21 +500,23 @@ mod tests {
                 "# comment\nfile://localhost/tmp/Hello%20World\nfile:///tmp/Second\n",
                 "text/uri-list"
             ),
-            Some(ExternalPlaceDrop {
+            Ok(ExternalPlaceDrop {
                 path: PathBuf::from("/tmp/Hello World"),
                 source: "Slint DropArea text/uri-list".to_string(),
             })
         );
         assert_eq!(
             external_place_drop_from_payload("~/Projects", "text/plain"),
-            Some(ExternalPlaceDrop {
+            Ok(ExternalPlaceDrop {
                 path: expand_user_path("~/Projects"),
                 source: "Slint DropArea text/plain".to_string(),
             })
         );
         assert_eq!(
             external_place_drop_from_payload("file:///tmp/ignored", "application/octet-stream"),
-            None
+            Err(ExternalPlaceDropRejection::UnsupportedMime(
+                "application/octet-stream".to_string()
+            ))
         );
     }
 
@@ -469,21 +524,41 @@ mod tests {
     fn external_place_drop_rejects_non_local_uri_payloads() {
         assert_eq!(
             external_place_drop_from_payload("file://remote-host/tmp/Project", "text/uri-list"),
-            None
+            Err(ExternalPlaceDropRejection::NoLocalFilePath)
         );
         assert_eq!(
             external_place_drop_from_payload("sftp://host/tmp/Project", "text/uri-list"),
-            None
+            Err(ExternalPlaceDropRejection::NoLocalFilePath)
         );
         assert_eq!(
             external_place_drop_from_payload(
                 "# comment\nfile://remote-host/tmp/Project\nfile:///tmp/Local",
                 "text/uri-list"
             ),
-            Some(ExternalPlaceDrop {
+            Ok(ExternalPlaceDrop {
                 path: PathBuf::from("/tmp/Local"),
                 source: "Slint DropArea text/uri-list".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn external_place_drop_rejection_reason_distinguishes_failures() {
+        assert_eq!(
+            external_place_drop_rejection_reason("file:///tmp/Project", "application/octet-stream"),
+            Some("unsupported-mime:application/octet-stream".to_string())
+        );
+        assert_eq!(
+            external_place_drop_rejection_reason("# comment\n\n", "text/uri-list"),
+            Some("empty-payload".to_string())
+        );
+        assert_eq!(
+            external_place_drop_rejection_reason("file://remote-host/tmp/Project", "text/uri-list"),
+            Some("no-local-file-path".to_string())
+        );
+        assert_eq!(
+            external_place_drop_rejection_reason("file:///tmp/Project", "text/uri-list"),
+            None
         );
     }
 

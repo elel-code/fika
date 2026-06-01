@@ -281,6 +281,7 @@ export component AppWindow inherits Window {
     callback place_drop_over_item(float, bool) -> bool;
     callback places_drop_supported(string) -> bool;
     callback places_drop_force_gap(string) -> bool;
+    callback places_drop_rejection_reason(string, string) -> string;
     callback trace_places_drop(string, string, string, float, float, int, int, bool, bool);
     pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
     pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
@@ -761,7 +762,7 @@ export component AppWindow inherits Window {
                             root.folder_drag_active = false;
                             root.folder_drag_over_place_item = false;
                             root.place_drag_rejected = false;
-                            root.trace_places_drop("can-drop-rejected", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
+                            root.trace_places_drop("can-drop-rejected:" + root.places_drop_rejection_reason(event.data, event.mime-type), event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
                             false
                         }
                     }

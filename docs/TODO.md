@@ -159,6 +159,7 @@
   - Current: successful external Places drops include the handling backend in the status bar, so real desktop tests can distinguish Slint DropArea from the winit fallback before removing either path.
   - Current: `FIKA_DISABLE_WINIT_DROP_FALLBACK=1` disables only the winit `DroppedFile` event bridge, allowing real desktop tests to prove whether the Slint DropArea `text/uri-list` path works independently.
   - Current: `FIKA_DEBUG_DND=1` prints startup DnD configuration plus Slint DropArea and winit fallback drop traces with backend, phase, MIME type, coordinates, slot/target/gap/item state, and a compact payload summary for real desktop validation.
+  - Current: Slint external-drop rejection diagnostics now distinguish unsupported MIME, empty payload, and payloads without a local file path; these reasons appear in debug traces and failed drops show specific status-bar guidance.
 
 - [x] Drag folder from main view into Places.
   - Acceptance: dropping into the gap between Places items inserts a new Place at that slot.
