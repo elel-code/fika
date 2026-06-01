@@ -85,6 +85,7 @@ pub(crate) struct DeviceMountResult {
 pub(crate) struct DeviceActionResult {
     pub(crate) action: String,
     pub(crate) device_path: String,
+    pub(crate) mount_path: Option<PathBuf>,
     pub(crate) result: Result<(), String>,
 }
 

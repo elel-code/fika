@@ -291,12 +291,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_unmount_device(move |device_path| {
+        ui.on_unmount_device(move |device_path, mount_path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let device_path = device_path.to_string();
+                let mount_path = mounted_device_path(mount_path.as_str());
                 if register_pending_device_action(&state, &device_path, "unmount") {
                     set_status(&ui, "Unmounting device...");
-                    device_action_async(&bridge, "unmount", device_path);
+                    device_action_async(&bridge, "unmount", device_path, mount_path);
                 } else {
                     set_status(&ui, "Device action already in progress");
                 }
@@ -308,12 +309,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_eject_device(move |device_path| {
+        ui.on_eject_device(move |device_path, mount_path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let device_path = device_path.to_string();
+                let mount_path = mounted_device_path(mount_path.as_str());
                 if register_pending_device_action(&state, &device_path, "eject") {
                     set_status(&ui, "Ejecting device...");
-                    device_action_async(&bridge, "eject", device_path);
+                    device_action_async(&bridge, "eject", device_path, mount_path);
                 } else {
                     set_status(&ui, "Device action already in progress");
                 }
@@ -1781,7 +1783,17 @@ fn clear_device_error(state: &Rc<RefCell<AppState>>, device_path: &str) {
     state.borrow_mut().device_errors.remove(device_path);
 }
 
-fn device_action_async(bridge: &AsyncBridge, action: &'static str, device_path: String) {
+fn mounted_device_path(path: &str) -> Option<PathBuf> {
+    let path = expand_user_path(path);
+    (path.is_dir() && path != Path::new("/")).then_some(path)
+}
+
+fn device_action_async(
+    bridge: &AsyncBridge,
+    action: &'static str,
+    device_path: String,
+    mount_path: Option<PathBuf>,
+) {
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {
@@ -1799,6 +1811,7 @@ fn device_action_async(bridge: &AsyncBridge, action: &'static str, device_path: 
             AsyncEvent::DeviceActionFinished(DeviceActionResult {
                 action: action.to_string(),
                 device_path,
+                mount_path,
                 result,
             }),
         );
@@ -2675,7 +2688,13 @@ fn apply_device_action_result(
         Ok(()) => {
             clear_device_error(state, &result.device_path);
             sync_devices(ui, state);
-            refresh_directory(ui, state, bridge);
+            if let Some(mount_path) = &result.mount_path
+                && move_current_directory_home_if_inside_mount(state, mount_path)
+            {
+                load_directory(ui, state, bridge);
+            } else {
+                refresh_directory(ui, state, bridge);
+            }
             set_status(
                 ui,
                 &format!(
@@ -2692,6 +2711,24 @@ fn apply_device_action_result(
             set_status(ui, &status);
         }
     }
+}
+
+fn move_current_directory_home_if_inside_mount(
+    state: &Rc<RefCell<AppState>>,
+    mount_path: &Path,
+) -> bool {
+    let mut state = state.borrow_mut();
+    state
+        .back_stack
+        .retain(|path| !path.starts_with(mount_path));
+    state
+        .forward_stack
+        .retain(|path| !path.starts_with(mount_path));
+    if !state.current_dir.starts_with(mount_path) {
+        return false;
+    }
+    state.current_dir = home_dir();
+    true
 }
 
 fn title_case_action(action: &str) -> Cow<'static, str> {
@@ -4706,6 +4743,54 @@ mod tests {
             "/dev/sdb1",
             "unmount"
         ));
+    }
+
+    #[test]
+    fn successful_unmount_moves_current_mount_path_home_and_prunes_history() {
+        let mount_path = PathBuf::from("/run/media/yk/USB");
+        let state = Rc::new(RefCell::new(AppState::new(
+            mount_path.join("project"),
+            Vec::new(),
+        )));
+        {
+            let mut state = state.borrow_mut();
+            state.back_stack = vec![PathBuf::from("/tmp"), mount_path.join("old")];
+            state.forward_stack = vec![
+                mount_path.join("future"),
+                PathBuf::from("/run/media/yk/USB-sibling"),
+            ];
+        }
+
+        assert!(move_current_directory_home_if_inside_mount(
+            &state,
+            &mount_path
+        ));
+
+        let state = state.borrow();
+        assert_eq!(state.current_dir, home_dir());
+        assert_eq!(state.back_stack, vec![PathBuf::from("/tmp")]);
+        assert_eq!(
+            state.forward_stack,
+            vec![PathBuf::from("/run/media/yk/USB-sibling")]
+        );
+    }
+
+    #[test]
+    fn successful_unmount_keeps_unrelated_current_path() {
+        let state = Rc::new(RefCell::new(AppState::new(
+            PathBuf::from("/run/media/yk/USB-sibling"),
+            Vec::new(),
+        )));
+
+        assert!(!move_current_directory_home_if_inside_mount(
+            &state,
+            Path::new("/run/media/yk/USB")
+        ));
+
+        assert_eq!(
+            state.borrow().current_dir,
+            PathBuf::from("/run/media/yk/USB-sibling")
+        );
     }
 
     #[test]

@@ -99,6 +99,7 @@ Rust 代码当前按低耦合职责拆分为嵌套模块：
 - Devices 行右键菜单复用普通菜单定位和 PopupSurface。已挂载设备提供 Open / Unmount；未挂载设备提供 Mount；当 Drive `Ejectable=true` 时额外显示 Eject。Unmount 调用 `org.freedesktop.UDisks2.Filesystem.Unmount({})`，Eject 调用对应 Drive object 上的 `org.freedesktop.UDisks2.Drive.Eject({})`。这些调用全部通过 Tokio `spawn_blocking()` 离开 UI 线程，完成后刷新 Devices 和当前目录。发起动作前，`AppState` 会按 `device_path` 登记 pending action；同一设备已有 Mount/Unmount/Eject 未完成时，新动作只更新状态栏，不会重复排队 D-Bus 调用。
 - UDisks2 方法调用失败时，后端会识别常见 D-Bus error name：busy device、authorization denied / missing polkit agent、already mounted、not mounted、cancelled、timed out。状态栏优先显示可操作 guidance，同时保留原始 error name 和 detail，便于后续真实发行版排查。
 - 最近一次设备动作失败会按 `device_path` 记录到 `AppState::device_errors`，`sync_devices()` 刷新侧栏时把该错误叠加到对应 `DeviceEntry.error`。`PlaceButton` 会用红色细边、淡红底和 `!` 标记渲染失败设备；同一设备后续 Mount/Unmount/Eject 成功会清除这个视觉错误状态。
+- Unmount/Eject 发起时会把当时的挂载点路径随后台任务一起保存。动作成功后，如果主视图当前目录仍在该挂载点下，Fika 会切回 Home，并清掉 back/forward history 中同一挂载点下的条目。这参考了 Dolphin `setViewsToHomeIfMountPathOpen()` 和 cosmic-files 对已卸载 location 的处理，避免停留或回退到失效路径。
 
 这能覆盖常见桌面环境已经自动挂载的 U 盘路径，也能提前显示并挂载部分未挂载 U 盘。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应继续基于 UDisks2 system bus D-Bus，并在真实发行版上验证 UDisks2 / polkit 边界情况。
 

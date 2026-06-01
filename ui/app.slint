@@ -244,8 +244,8 @@ export component AppWindow inherits Window {
     callback open_with_custom_command(string, string);
     callback open_place(string);
     callback open_device(string, bool);
-    callback unmount_device(string);
-    callback eject_device(string);
+    callback unmount_device(string, string);
+    callback eject_device(string, string);
     callback path_submitted(string);
     callback search_submitted(string);
     callback cancel_search();
@@ -1560,11 +1560,11 @@ export component AppWindow inherits Window {
                 root.close-context-popups();
             }
             unmount_requested => {
-                root.unmount_device(root.context-menu-device-path);
+                root.unmount_device(root.context-menu-device-path, root.context-menu-device-open-path);
                 root.close-context-popups();
             }
             eject_requested => {
-                root.eject_device(root.context-menu-device-path);
+                root.eject_device(root.context-menu-device-path, root.context-menu-device-open-path);
                 root.close-context-popups();
             }
         }
