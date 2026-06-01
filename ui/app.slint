@@ -838,6 +838,9 @@ export component AppWindow inherits Window {
 
             main-pane := Rectangle {
                 horizontal-stretch: 1;
+                min-width: 0px;
+                preferred-width: 0px;
+                max-width: 100000px;
                 background: root.dark_mode ? #101314 : #ffffff;
 
                 main-focus := FocusScope {
