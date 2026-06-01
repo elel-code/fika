@@ -374,7 +374,7 @@ fn udisks2_device_target_from_objects(
         if device != device_path {
             continue;
         }
-        if bool_property(block, "HintIgnore") {
+        if block_is_hidden(block) {
             return Err("device is hidden by UDisks2".to_string());
         }
         if !is_removable_media_object(objects, block) {
@@ -422,7 +422,7 @@ fn udisks2_removable_device_from_interfaces(
     interfaces: &InterfaceMap,
 ) -> Option<DeviceEntry> {
     let block = interfaces.get("org.freedesktop.UDisks2.Block")?;
-    if bool_property(block, "HintIgnore") {
+    if block_is_hidden(block) {
         return None;
     }
 
@@ -455,8 +455,15 @@ fn udisks2_removable_device_from_interfaces(
 
 fn is_removable_media_object(objects: &ManagedObjects, block: &Properties) -> bool {
     drive_for_block(objects, block).is_some_and(|drive| {
-        bool_property(drive, "Removable") && bool_property(drive, "MediaAvailable")
+        bool_property(drive, "MediaAvailable")
+            && (bool_property(drive, "Removable")
+                || bool_property(drive, "Ejectable")
+                || string_property(drive, "ConnectionBus").as_deref() == Some("usb"))
     })
+}
+
+fn block_is_hidden(block: &Properties) -> bool {
+    bool_property(block, "HintIgnore") || bool_property(block, "HintSystem")
 }
 
 fn drive_for_block<'a>(objects: &'a ManagedObjects, block: &Properties) -> Option<&'a Properties> {
@@ -894,6 +901,44 @@ mod tests {
     }
 
     #[test]
+    fn udisks2_lists_usb_attached_media_even_when_not_marked_removable() {
+        let objects = udisks_objects(
+            drive_object_with_options(false, true, false, "usb", "External", "SSD"),
+            block_object(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "Backup",
+                false,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+
+        let devices = udisks2_removable_devices_from_objects(&objects);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].label, "Backup");
+        assert_eq!(devices[0].device_path, "/dev/sdb1");
+        assert!(!devices[0].mounted);
+    }
+
+    #[test]
+    fn udisks2_filters_system_hint_blocks_even_on_usb_media() {
+        let objects = udisks_objects(
+            drive_object_with_options(false, true, false, "usb", "System", "Disk"),
+            block_object_with_system_hint(
+                "/dev/sdb1",
+                "/org/freedesktop/UDisks2/drives/test",
+                "System",
+                false,
+                true,
+            ),
+            Some(filesystem_object(Vec::new())),
+        );
+
+        assert!(udisks2_removable_devices_from_objects(&objects).is_empty());
+    }
+
+    #[test]
     fn udisks2_error_guidance_explains_common_device_failures() {
         assert_eq!(
             udisks2_error_guidance_from_parts(
@@ -1096,15 +1141,41 @@ mod tests {
         vendor: &str,
         model: &str,
     ) -> Properties {
+        drive_object_with_options(removable, media_available, false, "", vendor, model)
+    }
+
+    fn drive_object_with_options(
+        removable: bool,
+        media_available: bool,
+        ejectable: bool,
+        connection_bus: &str,
+        vendor: &str,
+        model: &str,
+    ) -> Properties {
         HashMap::from([
             ("Removable".to_string(), value(removable)),
             ("MediaAvailable".to_string(), value(media_available)),
+            ("Ejectable".to_string(), value(ejectable)),
+            (
+                "ConnectionBus".to_string(),
+                value(connection_bus.to_string()),
+            ),
             ("Vendor".to_string(), value(vendor.to_string())),
             ("Model".to_string(), value(model.to_string())),
         ])
     }
 
     fn block_object(device: &str, drive: &str, label: &str, hint_ignore: bool) -> Properties {
+        block_object_with_system_hint(device, drive, label, hint_ignore, false)
+    }
+
+    fn block_object_with_system_hint(
+        device: &str,
+        drive: &str,
+        label: &str,
+        hint_ignore: bool,
+        hint_system: bool,
+    ) -> Properties {
         HashMap::from([
             (
                 "Device".to_string(),
@@ -1123,6 +1194,7 @@ mod tests {
             ),
             ("IdLabel".to_string(), value(label.to_string())),
             ("HintIgnore".to_string(), value(hint_ignore)),
+            ("HintSystem".to_string(), value(hint_system)),
         ])
     }
 
