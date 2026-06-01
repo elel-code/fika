@@ -283,8 +283,7 @@ export component PlacesBlankMenu inherits PopupSurface {
     }
 }
 
-export component FileContextMenu inherits Rectangle {
-    in property <bool> dark;
+export component FileContextMenu inherits PopupSurface {
     in property <int> selected-count;
     in property <string> selected-status;
     in property <bool> is-dir;
@@ -306,8 +305,6 @@ export component FileContextMenu inherits Rectangle {
     callback copy_location_requested();
     callback properties_requested();
     callback trash_requested();
-
-    background: transparent;
 
     VerticalLayout {
         spacing: 0px;

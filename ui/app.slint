@@ -1424,87 +1424,81 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.context-menu-open && root.context-menu-kind == 1): PopupSurface {
+    if (root.context-menu-open && root.context-menu-kind == 1): FileContextMenu {
         x: root.context-menu-left;
         y: root.context-menu-top;
         width: root.context-file-menu-width;
         height: root.active-context-menu-height;
         dark: root.dark_mode;
-
-        FileContextMenu {
-            width: parent.width;
-            height: parent.height;
-            dark: root.dark_mode;
-            selected-count: root.selected_count;
-            selected-status: root.selected_status;
-            is-dir: root.context-menu-is-dir;
-            default-open-visible: root.context-default-open-visible;
-            default-open-app-name: root.default_open_app_name;
-            clipboard-has-paths: root.clipboard_has_paths;
-            add-to-places-visible: root.context-add-place-visible;
-            open_folder_with_hover(is-hovered) => {
-                root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top, is-hovered);
+        selected-count: root.selected_count;
+        selected-status: root.selected_status;
+        is-dir: root.context-menu-is-dir;
+        default-open-visible: root.context-default-open-visible;
+        default-open-app-name: root.default_open_app_name;
+        clipboard-has-paths: root.clipboard_has_paths;
+        add-to-places-visible: root.context-add-place-visible;
+        open_folder_with_hover(is-hovered) => {
+            root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top, is-hovered);
+        }
+        open_folder_with_clicked => {
+            root.show-open-with-submenu(root.context-menu-path, root.context-menu-top);
+        }
+        default_open_requested => {
+            root.open_path(root.context-menu-path);
+            root.close-context-popups();
+        }
+        open_with_hover(is-hovered) => {
+            root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
+        }
+        open_with_clicked => {
+            root.show-open-with-submenu(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset);
+        }
+        paste_into_folder => {
+            root.paste_into(root.context-menu-path);
+            root.close-context-popups();
+        }
+        add_to_places => {
+            root.add_place(root.context-menu-path);
+            root.close-context-popups();
+        }
+        rename_requested => {
+            root.rename-entry-path = root.context-menu-path;
+            root.rename-entry-name = root.context-menu-name;
+            root.rename-entry-open = true;
+            root.close-context-popups();
+        }
+        duplicate_requested => {
+            root.duplicate_path(root.context-menu-path);
+            root.close-context-popups();
+        }
+        cut_requested => {
+            root.copy_paths(root.context-menu-path, true);
+            root.close-context-popups();
+        }
+        copy_requested => {
+            root.copy_paths(root.context-menu-path, false);
+            root.close-context-popups();
+        }
+        copy_location_requested => {
+            root.copy_location(root.context-menu-path);
+            root.close-context-popups();
+        }
+        properties_requested => {
+            root.properties-name = root.context-menu-name;
+            root.properties-path = root.context-menu-path;
+            root.properties-kind = root.context-menu-is-dir ? "Folder" : "File";
+            root.properties-size = root.context-menu-properties-size;
+            root.properties-modified = root.context-menu-properties-modified;
+            root.properties-open = true;
+            root.close-context-popups();
+        }
+        trash_requested => {
+            if (root.selected_count > 1) {
+                root.trash_selected();
+            } else {
+                root.trash_path(root.context-menu-path);
             }
-            open_folder_with_clicked => {
-                root.show-open-with-submenu(root.context-menu-path, root.context-menu-top);
-            }
-            default_open_requested => {
-                root.open_path(root.context-menu-path);
-                root.close-context-popups();
-            }
-            open_with_hover(is-hovered) => {
-                root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
-            }
-            open_with_clicked => {
-                root.show-open-with-submenu(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset);
-            }
-            paste_into_folder => {
-                root.paste_into(root.context-menu-path);
-                root.close-context-popups();
-            }
-            add_to_places => {
-                root.add_place(root.context-menu-path);
-                root.close-context-popups();
-            }
-            rename_requested => {
-                root.rename-entry-path = root.context-menu-path;
-                root.rename-entry-name = root.context-menu-name;
-                root.rename-entry-open = true;
-                root.close-context-popups();
-            }
-            duplicate_requested => {
-                root.duplicate_path(root.context-menu-path);
-                root.close-context-popups();
-            }
-            cut_requested => {
-                root.copy_paths(root.context-menu-path, true);
-                root.close-context-popups();
-            }
-            copy_requested => {
-                root.copy_paths(root.context-menu-path, false);
-                root.close-context-popups();
-            }
-            copy_location_requested => {
-                root.copy_location(root.context-menu-path);
-                root.close-context-popups();
-            }
-            properties_requested => {
-                root.properties-name = root.context-menu-name;
-                root.properties-path = root.context-menu-path;
-                root.properties-kind = root.context-menu-is-dir ? "Folder" : "File";
-                root.properties-size = root.context-menu-properties-size;
-                root.properties-modified = root.context-menu-properties-modified;
-                root.properties-open = true;
-                root.close-context-popups();
-            }
-            trash_requested => {
-                if (root.selected_count > 1) {
-                    root.trash_selected();
-                } else {
-                    root.trash_path(root.context-menu-path);
-                }
-                root.close-context-popups();
-            }
+            root.close-context-popups();
         }
     }
 
