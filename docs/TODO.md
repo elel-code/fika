@@ -36,12 +36,13 @@
 - [~] Devices sidebar.
   - Current: Devices is Rust-driven rather than hard-coded in Slint, and lists `Filesystem` plus mounted paths under `/run/media/$USER`, `/media/$USER`, `/media`, and `/mnt`.
   - Current: discovery is now mount-table-first via `/proc/self/mountinfo`, closer to Dolphin's KMountPoint/Solid and cosmic-files' mounter-item model than raw directory scanning. Mountinfo parsing keeps source and filesystem type so pseudo filesystems such as `tmpfs` do not appear as removable devices. Directory scanning remains only as a fallback when mountinfo is unavailable.
-  - Current: UDisks2 system-bus `ObjectManager` discovery is used as a best-effort enhancement for removable media, including unmounted drives. Mounted mountinfo entries stay first and win duplicate paths; UDisks2 failures fall back silently to mountinfo/directory discovery.
+  - Current: UDisks2 system-bus `ObjectManager` discovery is used as a best-effort enhancement for removable media, including unmounted drives. Mounted mountinfo entries stay first and win duplicate paths, but UDisks2 still fills in operation metadata such as `/dev/...` `device_path` and eject support for those duplicate rows. UDisks2 failures fall back silently to mountinfo/directory discovery.
   - Current: clicking an unmounted UDisks2 filesystem device starts an async `Filesystem.Mount({})`; success refreshes Devices and opens the returned mount point, while failures are shown in the status bar.
   - Current: device rows have a right-click menu with Mount for unmounted media, Open/Unmount for mounted media, and Eject when UDisks2 reports an ejectable drive. These actions run off the UI thread and refresh Devices after completion.
   - Current: pending device actions are tracked per `device_path`, so repeated clicks on the same device do not queue overlapping Mount/Unmount/Eject D-Bus calls.
   - Current: common UDisks2 D-Bus errors such as busy devices, authorization failures, already-mounted, not-mounted, cancellation, and timeout are mapped to status-bar guidance while retaining the raw error name/detail for diagnostics.
-  - Remaining: distro validation for UDisks2/polkit edge cases and richer per-device visual error state.
+  - Current: failed device actions are retained per device and rendered as a distinct sidebar error state, so the affected row stays visually marked after the status message changes. A later successful action for that device clears the marker.
+  - Remaining: distro validation for UDisks2/polkit edge cases.
 - [x] Internal drop transfer menu with Move / Copy / Link actions.
 - [x] F5 active refresh; toolbar refresh button removed.
 - [x] Mouse Back/Forward navigation with history stacks.

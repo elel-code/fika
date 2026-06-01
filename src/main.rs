@@ -144,7 +144,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ));
     }
     sync_places(&ui, &state.borrow().places);
-    sync_devices(&ui);
+    sync_devices(&ui, &state);
     sync_clipboard_ui(&ui, &state);
     let bridge = AsyncBridge {
         handle: async_handle.clone(),
@@ -1624,7 +1624,7 @@ fn load_directory_with_preservation(
     bridge: &AsyncBridge,
     preserve_view: bool,
 ) {
-    sync_devices(ui);
+    sync_devices(ui, state);
     let (current_dir, generation, cached_entries) = {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
@@ -1703,8 +1703,24 @@ fn load_directory_with_preservation(
     });
 }
 
-fn sync_devices(ui: &AppWindow) {
-    ui.set_devices(ModelRc::new(Rc::new(VecModel::from(mounted_devices()))));
+fn sync_devices(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let errors = state.borrow().device_errors.clone();
+    ui.set_devices(ModelRc::new(Rc::new(VecModel::from(devices_with_errors(
+        mounted_devices(),
+        &errors,
+    )))));
+}
+
+fn devices_with_errors(
+    mut devices: Vec<DeviceEntry>,
+    errors: &std::collections::HashMap<String, String>,
+) -> Vec<DeviceEntry> {
+    for device in &mut devices {
+        if let Some(error) = errors.get(device.device_path.as_str()) {
+            device.error = error.as_str().into();
+        }
+    }
+    devices
 }
 
 fn mount_device_async(bridge: &AsyncBridge, device_path: String) {
@@ -1752,6 +1768,17 @@ fn clear_pending_device_action(state: &Rc<RefCell<AppState>>, device_path: &str,
         .borrow_mut()
         .pending_device_actions
         .retain(|pending| pending.device_path != device_path || pending.action.as_str() != action);
+}
+
+fn set_device_error(state: &Rc<RefCell<AppState>>, device_path: &str, error: &str) {
+    state
+        .borrow_mut()
+        .device_errors
+        .insert(device_path.to_string(), error.to_string());
+}
+
+fn clear_device_error(state: &Rc<RefCell<AppState>>, device_path: &str) {
+    state.borrow_mut().device_errors.remove(device_path);
 }
 
 fn device_action_async(bridge: &AsyncBridge, action: &'static str, device_path: String) {
@@ -2609,13 +2636,16 @@ fn apply_device_mount_result(
     result: DeviceMountResult,
 ) {
     clear_pending_device_action(state, &result.device_path, "mount");
-    sync_devices(ui);
     match result.result {
         Ok(mount_point) if mount_point.is_dir() => {
+            clear_device_error(state, &result.device_path);
+            sync_devices(ui, state);
             set_status(ui, &format!("Mounted {}", result.device_path));
             navigate_to(ui, state, bridge, mount_point);
         }
         Ok(mount_point) => {
+            clear_device_error(state, &result.device_path);
+            sync_devices(ui, state);
             set_status(
                 ui,
                 &format!(
@@ -2625,7 +2655,12 @@ fn apply_device_mount_result(
                 ),
             );
         }
-        Err(err) => set_status(ui, &format!("Cannot mount {}: {err}", result.device_path)),
+        Err(err) => {
+            let status = format!("Cannot mount {}: {err}", result.device_path);
+            set_device_error(state, &result.device_path, &status);
+            sync_devices(ui, state);
+            set_status(ui, &status);
+        }
     }
 }
 
@@ -2636,9 +2671,10 @@ fn apply_device_action_result(
     result: DeviceActionResult,
 ) {
     clear_pending_device_action(state, &result.device_path, &result.action);
-    sync_devices(ui);
     match result.result {
         Ok(()) => {
+            clear_device_error(state, &result.device_path);
+            sync_devices(ui, state);
             refresh_directory(ui, state, bridge);
             set_status(
                 ui,
@@ -2649,10 +2685,12 @@ fn apply_device_action_result(
                 ),
             );
         }
-        Err(err) => set_status(
-            ui,
-            &format!("Cannot {} {}: {err}", result.action, result.device_path),
-        ),
+        Err(err) => {
+            let status = format!("Cannot {} {}: {err}", result.action, result.device_path);
+            set_device_error(state, &result.device_path, &status);
+            sync_devices(ui, state);
+            set_status(ui, &status);
+        }
     }
 }
 
@@ -4668,6 +4706,39 @@ mod tests {
             "/dev/sdb1",
             "unmount"
         ));
+    }
+
+    #[test]
+    fn devices_with_errors_marks_only_matching_device_path() {
+        let devices = vec![
+            DeviceEntry {
+                label: "USB".into(),
+                path: "/run/media/yk/USB".into(),
+                device_path: "/dev/sdb1".into(),
+                marker: "U".into(),
+                mounted: true,
+                can_eject: true,
+                error: "".into(),
+            },
+            DeviceEntry {
+                label: "Other".into(),
+                path: "/dev/sdc1".into(),
+                device_path: "/dev/sdc1".into(),
+                marker: "O".into(),
+                mounted: false,
+                can_eject: false,
+                error: "".into(),
+            },
+        ];
+        let errors = std::collections::HashMap::from([(
+            "/dev/sdb1".to_string(),
+            "Cannot unmount /dev/sdb1: device is busy".to_string(),
+        )]);
+
+        let devices = devices_with_errors(devices, &errors);
+
+        assert_eq!(devices[0].error, "Cannot unmount /dev/sdb1: device is busy");
+        assert_eq!(devices[1].error, "");
     }
 
     fn test_entry(name: &str, path: &str) -> FileEntry {

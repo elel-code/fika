@@ -699,6 +699,7 @@ export component AppWindow inherits Window {
                         drop-target: false;
                         builtin: true;
                         available: device.mounted;
+                        error: device.error;
                         clicked => { root.open_device(device.mounted ? device.path : device.device_path, device.mounted); }
                         context_requested(index, label, builtin, path, x, y) => {
                             root.context-menu-device-path = device.device_path;

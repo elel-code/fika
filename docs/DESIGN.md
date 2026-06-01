@@ -94,12 +94,13 @@ Rust 代码当前按低耦合职责拆分为嵌套模块：
 - 固定包含 `Filesystem`，路径为 `/`。
 - 优先解析 `/proc/self/mountinfo`，只显示挂载点位于 `/run/media/$USER`、`/media/$USER`、`/media` 和 `/mnt` 下、且 source / filesystem type 看起来像真实本地设备的路径。`tmpfs`、`proc`、`sysfs` 等伪文件系统会被过滤掉，避免把运行时目录误显示成 Devices。
 - 当 mountinfo 不可用时，才回退扫描这些目录下的一级目录。
-- 作为增强层，Fika 会 best-effort 查询 system bus 上的 UDisks2 `ObjectManager`，从 `Block` -> `Drive` 关系识别可移动且已有介质的设备。设备模型同时保存显示/打开用的 `path` 和 UDisks2 操作用的 `device_path`：未挂载设备二者通常都是 `/dev/...`；已挂载设备的 `path` 使用第一个 `MountPoints`，`device_path` 继续保留底层 `/dev/...`。UDisks2 不可用、超时或返回错误时，不影响 mountinfo 结果。
+- 作为增强层，Fika 会 best-effort 查询 system bus 上的 UDisks2 `ObjectManager`，从 `Block` -> `Drive` 关系识别可移动且已有介质的设备。设备模型同时保存显示/打开用的 `path` 和 UDisks2 操作用的 `device_path`：未挂载设备二者通常都是 `/dev/...`；已挂载设备的 `path` 使用第一个 `MountPoints`，`device_path` 继续保留底层 `/dev/...`。当 mountinfo 和 UDisks2 发现同一个挂载点时，mountinfo 行保留显示顺序和标签，但会从 UDisks2 补充底层 `device_path` 和 eject 支持。UDisks2 不可用、超时或返回错误时，不影响 mountinfo 结果。
 - 点击未挂载的 UDisks2 filesystem 设备时，UI 线程只发起后台任务；后台通过 system bus 反查对应 `Block` object 并调用 `org.freedesktop.UDisks2.Filesystem.Mount({})`。成功后刷新 Devices 并打开返回的挂载点；失败信息写入状态栏。
 - Devices 行右键菜单复用普通菜单定位和 PopupSurface。已挂载设备提供 Open / Unmount；未挂载设备提供 Mount；当 Drive `Ejectable=true` 时额外显示 Eject。Unmount 调用 `org.freedesktop.UDisks2.Filesystem.Unmount({})`，Eject 调用对应 Drive object 上的 `org.freedesktop.UDisks2.Drive.Eject({})`。这些调用全部通过 Tokio `spawn_blocking()` 离开 UI 线程，完成后刷新 Devices 和当前目录。发起动作前，`AppState` 会按 `device_path` 登记 pending action；同一设备已有 Mount/Unmount/Eject 未完成时，新动作只更新状态栏，不会重复排队 D-Bus 调用。
 - UDisks2 方法调用失败时，后端会识别常见 D-Bus error name：busy device、authorization denied / missing polkit agent、already mounted、not mounted、cancelled、timed out。状态栏优先显示可操作 guidance，同时保留原始 error name 和 detail，便于后续真实发行版排查。
+- 最近一次设备动作失败会按 `device_path` 记录到 `AppState::device_errors`，`sync_devices()` 刷新侧栏时把该错误叠加到对应 `DeviceEntry.error`。`PlaceButton` 会用红色细边、淡红底和 `!` 标记渲染失败设备；同一设备后续 Mount/Unmount/Eject 成功会清除这个视觉错误状态。
 
-这能覆盖常见桌面环境已经自动挂载的 U 盘路径，也能提前显示并挂载部分未挂载 U 盘。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应继续基于 UDisks2 system bus D-Bus，补充 per-device visual error state 和真实发行版验证。
+这能覆盖常见桌面环境已经自动挂载的 U 盘路径，也能提前显示并挂载部分未挂载 U 盘。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应继续基于 UDisks2 system bus D-Bus，并在真实发行版上验证 UDisks2 / polkit 边界情况。
 
 ### Async Runtime
 

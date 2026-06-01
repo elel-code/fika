@@ -65,14 +65,15 @@ export component PlaceButton inherits Rectangle {
     in property <bool> builtin;
     in property <bool> drop-target;
     in property <bool> available: true;
+    in property <string> error: "";
     callback clicked();
     callback context_requested(int, string, bool, string, length, length);
     callback drag_cancelled();
 
     height: 34px;
-    border-width: dragged || drop-target ? 1px : 0px;
-    border-color: drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #4d5962 : #b9c7d3);
-    background: drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1f23 : #e8eef4) : (selected ? (dark ? #214f67 : #dceeff) : (touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent)));
+    border-width: dragged || drop-target || error != "" ? 1px : 0px;
+    border-color: error != "" ? (dark ? #ef4444 : #dc2626) : (drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #4d5962 : #b9c7d3));
+    background: error != "" ? (dark ? #351b1f : #fff1f2) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1f23 : #e8eef4) : (selected ? (dark ? #214f67 : #dceeff) : (touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent))));
     opacity: dragged ? 0.45 : (available ? 1 : 0.68);
 
     drag-area := DragArea {
@@ -106,11 +107,11 @@ export component PlaceButton inherits Rectangle {
                     width: 24px;
                     height: 22px;
                     border-radius: 3px;
-                    background: root.available ? (root.dark ? #4f93d9 : #4f94dc) : (root.dark ? #3f464d : #cbd5e1);
+                    background: root.error != "" ? (root.dark ? #ef4444 : #dc2626) : (root.available ? (root.dark ? #4f93d9 : #4f94dc) : (root.dark ? #3f464d : #cbd5e1));
 
                     Text {
-                        text: root.marker;
-                        color: #102033;
+                        text: root.error != "" ? "!" : root.marker;
+                        color: root.error != "" ? #ffffff : #102033;
                         font-size: 11px;
                         font-weight: 800;
                         horizontal-alignment: center;
@@ -121,7 +122,7 @@ export component PlaceButton inherits Rectangle {
 
             Text {
                 text: root.label;
-                color: root.available ? (root.dark ? #eeeeee : #17212b) : (root.dark ? #8b949e : #64748b);
+                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.available ? (root.dark ? #eeeeee : #17212b) : (root.dark ? #8b949e : #64748b));
                 font-size: 14px;
                 overflow: elide;
                 vertical-alignment: center;

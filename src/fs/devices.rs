@@ -61,15 +61,27 @@ fn merge_device_entries(
     discovered_devices: Vec<DeviceEntry>,
 ) -> Vec<DeviceEntry> {
     let mut devices = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashMap::new();
 
     for device in mounted_devices.into_iter().chain(discovered_devices) {
-        if seen.insert(device.path.to_string()) {
+        let path = device.path.to_string();
+        if let Some(index) = seen.get(&path).copied() {
+            merge_device_metadata(&mut devices[index], &device);
+        } else {
+            seen.insert(path, devices.len());
             devices.push(device);
         }
     }
 
     devices
+}
+
+fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
+    if existing.device_path == existing.path && discovered.device_path != discovered.path {
+        existing.device_path = discovered.device_path.clone();
+    }
+    existing.can_eject |= discovered.can_eject;
+    existing.mounted |= discovered.mounted;
 }
 
 fn filesystem_entry() -> DeviceEntry {
@@ -98,6 +110,7 @@ fn device_entry(
         marker: marker.into(),
         mounted,
         can_eject,
+        error: String::new().into(),
     }
 }
 
@@ -960,6 +973,11 @@ mod tests {
 
         assert_eq!(devices.len(), 3);
         assert_eq!(devices[1].label, "Mounted USB");
+        assert_eq!(devices[1].path, "/run/media/yk/USB");
+        assert_eq!(devices[1].device_path, "/dev/sdb1");
+        assert_eq!(devices[1].marker, "M");
+        assert!(devices[1].mounted);
+        assert!(devices[1].can_eject);
         assert_eq!(devices[2].label, "Unmounted");
     }
 
