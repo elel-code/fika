@@ -23,9 +23,9 @@ mod support;
 
 use app::async_bridge::{AsyncBridge, build_async_runtime, send_async_event};
 use app::events::{
-    AsyncEvent, DeviceActionResult, DeviceMountResult, DirectoryLoadResult, ExternalEditResult,
-    ExternalFileDrop, FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult,
-    FileUndoResult, RecursiveSearchProgress, RecursiveSearchResult,
+    AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
+    ExternalEditResult, ExternalFileDrop, FileOpenResult, FileOpenSuccess, FileOperationProgress,
+    FileOperationResult, FileUndoResult, RecursiveSearchProgress, RecursiveSearchResult,
 };
 use app::file_clipboard::sync_clipboard_ui;
 use app::geometry::{
@@ -144,7 +144,6 @@ fn main() -> Result<(), slint::PlatformError> {
         ));
     }
     sync_places(&ui, &state.borrow().places);
-    sync_devices(&ui, &state);
     sync_clipboard_ui(&ui, &state);
     let bridge = AsyncBridge {
         handle: async_handle.clone(),
@@ -153,6 +152,8 @@ fn main() -> Result<(), slint::PlatformError> {
         directory_watcher: Rc::new(RefCell::new(None)),
         directory_watch_debounce: Arc::new(AtomicU64::new(0)),
     };
+    sync_devices(&ui, &state);
+    refresh_devices_async(&state, &bridge);
 
     let async_rx = Rc::new(RefCell::new(async_rx));
     {
@@ -1627,6 +1628,7 @@ fn load_directory_with_preservation(
     preserve_view: bool,
 ) {
     sync_devices(ui, state);
+    refresh_devices_async(state, bridge);
     let (current_dir, generation, cached_entries) = {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
@@ -1706,11 +1708,30 @@ fn load_directory_with_preservation(
 }
 
 fn sync_devices(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let errors = state.borrow().device_errors.clone();
+    let state = state.borrow();
     ui.set_devices(ModelRc::new(Rc::new(VecModel::from(devices_with_errors(
-        mounted_devices(),
-        &errors,
+        state.devices.clone(),
+        &state.device_errors,
     )))));
+}
+
+fn refresh_devices_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    let generation = state.borrow_mut().device_generation.next();
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let devices = tokio::task::spawn_blocking(mounted_devices)
+            .await
+            .unwrap_or_default();
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::DevicesLoaded(DevicesLoadedResult {
+                generation,
+                devices,
+            }),
+        );
+    });
 }
 
 fn devices_with_errors(
@@ -1922,6 +1943,9 @@ fn apply_async_event(
         }
         AsyncEvent::DeviceActionFinished(result) => {
             apply_device_action_result(ui, state, bridge, result);
+        }
+        AsyncEvent::DevicesLoaded(result) => {
+            apply_devices_loaded_result(ui, state, result);
         }
         AsyncEvent::PrivilegedOperationFinished(result) => {
             apply_privileged_operation_result(ui, state, bridge, result);
@@ -2659,6 +2683,7 @@ fn apply_device_mount_result(
         Ok(mount_point) => {
             clear_device_error(state, &result.device_path);
             sync_devices(ui, state);
+            refresh_devices_async(state, bridge);
             set_status(
                 ui,
                 &format!(
@@ -2672,6 +2697,7 @@ fn apply_device_mount_result(
             let status = format!("Cannot mount {}: {err}", result.device_path);
             set_device_error(state, &result.device_path, &status);
             sync_devices(ui, state);
+            refresh_devices_async(state, bridge);
             set_status(ui, &status);
         }
     }
@@ -2708,9 +2734,25 @@ fn apply_device_action_result(
             let status = format!("Cannot {} {}: {err}", result.action, result.device_path);
             set_device_error(state, &result.device_path, &status);
             sync_devices(ui, state);
+            refresh_devices_async(state, bridge);
             set_status(ui, &status);
         }
     }
+}
+
+fn apply_devices_loaded_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    result: DevicesLoadedResult,
+) {
+    {
+        let mut state = state.borrow_mut();
+        if !state.device_generation.is_current(result.generation) {
+            return;
+        }
+        state.devices = result.devices;
+    }
+    sync_devices(ui, state);
 }
 
 fn move_current_directory_home_if_inside_mount(

@@ -2,7 +2,7 @@ use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::search;
 use crate::fs::thumbnails;
 use crate::support::generation::GenerationCounter;
-use crate::{DesktopApp, FileEntry, PlaceEntry};
+use crate::{DesktopApp, DeviceEntry, FileEntry, PlaceEntry};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -52,6 +52,7 @@ pub(crate) struct AppState {
     pub(crate) last_undo: Option<FileUndo>,
     pub(crate) pending_privileged_command: Option<PrivilegedCommand>,
     pub(crate) external_edits: Vec<ExternalEditSession>,
+    pub(crate) devices: Vec<DeviceEntry>,
     pub(crate) pending_device_actions: Vec<DeviceAction>,
     pub(crate) device_errors: HashMap<String, String>,
     pub(crate) launched_units: Vec<String>,
@@ -59,6 +60,7 @@ pub(crate) struct AppState {
     pub(crate) back_stack: Vec<PathBuf>,
     pub(crate) forward_stack: Vec<PathBuf>,
     pub(crate) load_generation: GenerationCounter,
+    pub(crate) device_generation: GenerationCounter,
     pub(crate) open_generation: GenerationCounter,
     pub(crate) search_generation: GenerationCounter,
     pub(crate) thumbnail_generation: GenerationCounter,
@@ -105,6 +107,7 @@ impl AppState {
             last_undo: None,
             pending_privileged_command: None,
             external_edits: Vec::new(),
+            devices: Vec::new(),
             pending_device_actions: Vec::new(),
             device_errors: HashMap::new(),
             launched_units: Vec::new(),
@@ -112,6 +115,7 @@ impl AppState {
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
             load_generation: GenerationCounter::default(),
+            device_generation: GenerationCounter::default(),
             open_generation: GenerationCounter::default(),
             search_generation: GenerationCounter::default(),
             thumbnail_generation: GenerationCounter::default(),

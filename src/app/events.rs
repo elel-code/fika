@@ -1,3 +1,4 @@
+use crate::DeviceEntry;
 use crate::desktop::open_with;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_actions, file_ops, privilege, search, thumbnails};
@@ -90,6 +91,12 @@ pub(crate) struct DeviceActionResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct DevicesLoadedResult {
+    pub(crate) generation: u64,
+    pub(crate) devices: Vec<DeviceEntry>,
+}
+
+#[derive(Debug)]
 pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
     FileOpened(FileOpenResult),
@@ -104,6 +111,7 @@ pub(crate) enum AsyncEvent {
     FileUndoFinished(FileUndoResult),
     DeviceMountFinished(DeviceMountResult),
     DeviceActionFinished(DeviceActionResult),
+    DevicesLoaded(DevicesLoadedResult),
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),
     ThumbnailLoaded {
