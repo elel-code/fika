@@ -1,6 +1,3 @@
-use crate::app::dnd::{external_path_drop_from_payload, path_from_external_text};
-use crate::app::events::ExternalFileDrop;
-use crate::app::geometry::place_drop_geometry;
 use crate::app::state::AppState;
 use crate::config::paths::expand_user_path;
 use crate::desktop::systemd_launch;
@@ -30,30 +27,7 @@ pub(crate) fn add_place_at_slot(
     path: PathBuf,
     slot: i32,
 ) {
-    add_place_at_slot_inner(ui, state, path, slot, None);
-}
-
-pub(crate) fn add_place_at_slot_from_external_drop(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    path: PathBuf,
-    slot: i32,
-    source: &str,
-) {
-    add_place_at_slot_inner(ui, state, path, slot, Some(source));
-}
-
-pub(crate) fn add_place_at_slot_from_external_payload(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    payload: &str,
-    slot: i32,
-    mime_type: &str,
-) {
-    match external_path_drop_from_payload(payload, mime_type) {
-        Ok(drop) => add_place_at_slot_inner(ui, state, drop.path, slot, Some(drop.source.as_str())),
-        Err(rejection) => ui.set_status(rejection.status_message().into()),
-    }
+    add_place_at_slot_inner(ui, state, path, slot);
 }
 
 fn add_place_at_slot_inner(
@@ -61,7 +35,6 @@ fn add_place_at_slot_inner(
     state: &Rc<RefCell<AppState>>,
     path: PathBuf,
     slot: i32,
-    source: Option<&str>,
 ) {
     let path = normalize_dropped_path(path);
     if !path.is_dir() {
@@ -95,12 +68,12 @@ fn add_place_at_slot_inner(
     state.places.insert(slot, entry);
     save_places(&state.places);
     sync_places(ui, &state.places);
-    ui.set_status(external_drop_status("Folder added to Places", source).into());
+    ui.set_status("Folder added to Places".into());
 }
 
 pub(crate) fn normalize_dropped_path(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
-    path_from_external_text(text.as_ref()).unwrap_or_else(|| expand_user_path(text.as_ref()))
+    expand_user_path(text.as_ref())
 }
 
 pub(crate) fn rename_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index: i32, label: &str) {
@@ -146,27 +119,6 @@ pub(crate) fn remove_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index:
     save_places(&state.places);
     sync_places(ui, &state.places);
     ui.set_status("Place removed".into());
-}
-
-pub(crate) fn apply_external_file_drop(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    drop: ExternalFileDrop,
-) {
-    if drop.x > ui.get_sidebar_width_px() {
-        ui.set_status("Drop folders on the Places sidebar to add them".into());
-        return;
-    }
-
-    let slot = place_drop_geometry(
-        drop.y,
-        state.borrow().places.len(),
-        ui.get_places_list_y_px(),
-        ui.get_places_row_stride_px(),
-        true,
-    )
-    .slot;
-    add_place_at_slot_from_external_drop(ui, state, drop.path, slot, drop.source.as_str());
 }
 
 pub(crate) fn restore_default_places(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -277,13 +229,6 @@ fn place_marker(label: &str) -> String {
         .unwrap_or_else(|| "+".to_string())
 }
 
-fn external_drop_status(message: &str, source: Option<&str>) -> String {
-    source.filter(|source| !source.is_empty()).map_or_else(
-        || message.to_string(),
-        |source| format!("{message} via {source}"),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,25 +273,6 @@ mod tests {
                 },
             ),
             "Opened 'Projects' in a new window"
-        );
-    }
-
-    #[test]
-    fn external_drop_status_identifies_drop_backend_when_known() {
-        assert_eq!(
-            external_drop_status(
-                "Folder added to Places",
-                Some("Slint DropArea text/uri-list")
-            ),
-            "Folder added to Places via Slint DropArea text/uri-list"
-        );
-        assert_eq!(
-            external_drop_status("Folder added to Places", Some("")),
-            "Folder added to Places"
-        );
-        assert_eq!(
-            external_drop_status("Folder added to Places", None),
-            "Folder added to Places"
         );
     }
 

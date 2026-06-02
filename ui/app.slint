@@ -6,11 +6,6 @@ export global DndApi {
     pure callback make-drag-file(path: string) -> data-transfer;
     pure callback event-kind(event: DropEvent) -> DragKind;
     pure callback event-path(event: DropEvent) -> string;
-    pure callback external-force-gap(event: DropEvent) -> bool;
-    pure callback external-drop-supported(event: DropEvent) -> bool;
-    pure callback external-drop-allowed(event: DropEvent, x: float, y: float) -> bool;
-    pure callback external-drop-target-path(event: DropEvent, x: float, y: float) -> string;
-    pure callback external-rejection-reason(event: DropEvent, x: float, y: float) -> string;
 }
 
 import { DragKind } from "dnd_bridge.slint";
@@ -255,21 +250,19 @@ export component AppWindow inherits Window {
     callback open_place_new_window(int);
     callback reorder_place_path(string, int);
     callback add_place_at_slot(string, int);
-    callback add_external_place_at_slot(string, int, string);
     callback prepare_place_transfer(string, int, float, float) -> bool;
     callback prepare_entry_transfer(string, int, float, float) -> bool;
     callback prepare_current_dir_transfer(string, string, float, float) -> bool;
     callback prepare_main_transfer(string, string, float, float) -> bool;
     callback prepare_path_main_transfer(string, float, float) -> bool;
-    callback prepare_external_main_transfer(string, string, float, float) -> bool;
     callback main_drop_target_path(float, float, string) -> string;
     callback main_drop_allowed(float, float, string) -> bool;
     callback main_view_changed();
     callback place_drop_allowed(string, int) -> bool;
-    callback place_drop_target(float, bool) -> int;
-    callback place_drop_slot(float, bool) -> int;
-    callback place_drop_over_gap(float, bool) -> bool;
-    callback place_drop_over_item(float, bool) -> bool;
+    callback place_drop_target(float) -> int;
+    callback place_drop_slot(float) -> int;
+    callback place_drop_over_gap(float) -> bool;
+    callback place_drop_over_item(float) -> bool;
     callback trace_places_drop(string, string, string, float, float, int, int, bool, bool);
     callback trace_main_drop(string, string, string, float, float, bool, string);
     pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
@@ -681,24 +674,24 @@ export component AppWindow inherits Window {
                     }
                     can-drop(event) => {
                         root.trace_places_drop("can-drop", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
-                        if (DndApi.event-kind(event) != DragKind.external || DndApi.external-drop-supported(event)) {
+                        if (DndApi.event-kind(event) == DragKind.place || DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file) {
                             root.folder_drag_path = DndApi.event-path(event);
                             root.folder_drag_label = DndApi.event-path(event);
                             root.folder_drag_x = self.absolute-position.x + event.position.x;
                             root.folder_drag_y = self.absolute-position.y + event.position.y;
                             root.place_drag_x = root.folder_drag_x;
                             root.place_drag_y = root.folder_drag_y;
-                            root.folder_drag_active = DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.external-force-gap(event);
+                            root.folder_drag_active = DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file;
                             root.place_drag_active = DndApi.event-kind(event) == DragKind.place;
                             root.place_drag_label = DndApi.event-path(event);
                             root.place_drag_marker = "P";
                             root.place_list_y = self.absolute-position.y + 44px - sidebar-scroll.viewport-y;
                             root.places_list_y_px = root.place_list_y / 1px;
-                            root.folder_drag_place_target = root.place_drop_target((self.absolute-position.y + event.position.y) / 1px, DndApi.external-force-gap(event));
-                            root.folder_drag_over_place_gap = root.place_drop_over_gap((self.absolute-position.y + event.position.y) / 1px, DndApi.external-force-gap(event));
-                            root.folder_drag_over_place_item = root.place_drop_over_item((self.absolute-position.y + event.position.y) / 1px, DndApi.external-force-gap(event));
+                            root.folder_drag_place_target = root.place_drop_target((self.absolute-position.y + event.position.y) / 1px);
+                            root.folder_drag_over_place_gap = root.place_drop_over_gap((self.absolute-position.y + event.position.y) / 1px);
+                            root.folder_drag_over_place_item = root.place_drop_over_item((self.absolute-position.y + event.position.y) / 1px);
                             root.place_drag_rejected = root.folder_drag_over_place_item && !root.place_drop_allowed(DndApi.event-path(event), root.folder_drag_place_target);
-                            root.folder_drag_slot = root.place_drop_slot((self.absolute-position.y + event.position.y) / 1px, DndApi.external-force-gap(event));
+                            root.folder_drag_slot = root.place_drop_slot((self.absolute-position.y + event.position.y) / 1px);
                             root.place_drag_slot = root.folder_drag_slot;
                             if (DndApi.event-kind(event) == DragKind.file && !root.folder_drag_over_place_item) {
                                 root.folder_drag_active = false;
@@ -713,7 +706,7 @@ export component AppWindow inherits Window {
                             root.folder_drag_active = false;
                             root.folder_drag_over_place_item = false;
                             root.place_drag_rejected = false;
-                            root.trace_places_drop("can-drop-rejected:" + DndApi.external-rejection-reason(event, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px), "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
+                            root.trace_places_drop("can-drop-rejected:slint-external-dnd-unsupported", "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
                             return DragAction.none;
                         }
                     }
@@ -723,8 +716,6 @@ export component AppWindow inherits Window {
                             if (root.folder_drag_over_place_gap || root.folder_drag_slot >= root.places.length) {
                                 if (DndApi.event-kind(event) == DragKind.place) {
                                     root.reorder_place_path(DndApi.event-path(event), root.folder_drag_slot);
-                                } else if (DndApi.external-force-gap(event)) {
-                                    root.add_external_place_at_slot(DndApi.event-path(event), root.folder_drag_slot, DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")));
                                 } else if (DndApi.event-kind(event) == DragKind.folder) {
                                     root.add_place_at_slot(DndApi.event-path(event), root.folder_drag_slot);
                                 }
@@ -791,7 +782,11 @@ export component AppWindow inherits Window {
                     height: parent.height;
 
                     pointer-event(event) => {
-                        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                        if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
+                            root.go_back();
+                        } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
+                            root.go_forward();
+                        } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                             main-focus.focus();
                             root.clear_selection();
                         } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
@@ -906,17 +901,11 @@ export component AppWindow inherits Window {
                                     root.place_drag_target_path = root.main_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                                     root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected" : "can-drop-accepted", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
                                     return DragAction.copy;
-                                } else if (DndApi.external-drop-supported(event)) {
-                                    root.main_drag_active = true;
-                                    root.main_drag_rejected = !DndApi.external-drop-allowed(event, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px);
-                                    root.place_drag_target_path = DndApi.external-drop-target-path(event, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px);
-                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected:" + DndApi.external-rejection-reason(event, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px) : "can-drop-accepted", "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
-                                    return DragAction.copy;
                                 } else {
                                     root.main_drag_active = false;
                                     root.main_drag_rejected = false;
                                     root.place_drag_target_path = "";
-                                    root.trace_main_drop("can-drop-rejected:unsupported-mime", "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
+                                    root.trace_main_drop("can-drop-rejected:slint-external-dnd-unsupported", "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
                                     return DragAction.none;
                                 }
                             }
@@ -926,8 +915,6 @@ export component AppWindow inherits Window {
                                 root.main_drag_rejected = false;
                                 if ((DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_path_main_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
                                     root.transfer-menu-open = true;
-                                } else if (DndApi.external-drop-supported(event) && root.prepare_external_main_transfer(DndApi.event-path(event), DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
-                                    root.transfer-menu-open = true;
                                 }
                                 return DragAction.copy;
                             }
@@ -936,7 +923,11 @@ export component AppWindow inherits Window {
                             width: parent.width;
                             height: parent.height;
                             pointer-event(event) => {
-                                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
+                                    root.go_back();
+                                } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
+                                    root.go_forward();
+                                } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                                     main-focus.focus();
                                     root.selection_rect_pending = true;
                                     root.selection_rect_active = false;
@@ -1036,6 +1027,12 @@ export component AppWindow inherits Window {
                                 }
                                 pan_horizontal(delta) => {
                                     root.pan-main-horizontal(delta);
+                                }
+                                navigate_back => {
+                                    root.go_back();
+                                }
+                                navigate_forward => {
+                                    root.go_forward();
                                 }
                             }
                         }

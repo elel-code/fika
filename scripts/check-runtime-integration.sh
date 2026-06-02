@@ -717,7 +717,6 @@ print_live_validation_notes() {
     echo "  - Re-run with --activate-system-helper when validating packaged system-bus activation."
     echo "  - Portal backend metadata is independent from FileChooser selection; use portals.conf to opt in to fika for XDP FileChooser validation."
     echo "  - Test with real removable media before closing UDisks2 mount/unmount/eject validation."
-    echo "  - Test external DnD with the fallback disabled before removing the compatibility path."
     echo
 }
 
@@ -767,25 +766,6 @@ check_fika_device_model() {
     echo
 }
 
-print_dnd_validation_plan() {
-    echo "Checking external DnD validation plan"
-
-    local fika_cmd
-    if ! fika_cmd="$(fika_diagnostics_command)"; then
-        warn "cannot find fika binary for external DnD validation command"
-        echo "  command: FIKA_DISABLE_WINIT_DROP_FALLBACK=1 FIKA_DEBUG_DND=1 fika"
-    else
-        ok "external DnD validation command can use $fika_cmd"
-        echo "  command: FIKA_DISABLE_WINIT_DROP_FALLBACK=1 FIKA_DEBUG_DND=1 $fika_cmd"
-    fi
-
-    echo "  expected startup: slint_droparea=primary slint_droparea_payloads=internal-data-transfer,text/uri-list,text/plain winit_fallback=disabled"
-    echo "  expected Places drop: role=slint-primary area=places validation=external-local-path"
-    echo "  expected main-pane drop: role=slint-primary area=main validation=external-local-path"
-    echo "  keep fallback if any real external drop only appears with role=winit-fallback"
-    echo
-}
-
 start_recording "$record_path"
 
 echo "Checking Fika integration metadata"
@@ -800,7 +780,6 @@ if [[ "$metadata_only" == false ]]; then
     print_runtime_context
     check_devices_runtime
     check_fika_device_model
-    print_dnd_validation_plan
     print_live_validation_notes
 fi
 

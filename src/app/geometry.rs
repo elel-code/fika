@@ -30,19 +30,6 @@ pub(crate) struct MainPaneBounds {
     pub(crate) bottom: f32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SideButtonDirection {
-    Back,
-    Forward,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct SideButtonNavigation {
-    pub(crate) direction: SideButtonDirection,
-    pub(crate) logical_x: f32,
-    pub(crate) logical_y: f32,
-}
-
 impl MainGridLayout {
     pub(crate) fn from_ui(ui: &AppWindow) -> Self {
         let cell_width = icon_cell_width(ui.get_icon_zoom_level());
@@ -109,61 +96,6 @@ pub(crate) fn main_pane_bounds(
         right: window_width.max(sidebar_width_px + 8.0),
         bottom: window_height.max(64.0),
     }
-}
-
-pub(crate) fn point_in_main_pane(
-    sidebar_width_px: f32,
-    window_width: f32,
-    window_height: f32,
-    x: f32,
-    y: f32,
-) -> bool {
-    let bounds = main_pane_bounds(sidebar_width_px, window_width, window_height);
-    x >= bounds.left && x < bounds.right && y >= bounds.top && y < bounds.bottom
-}
-
-pub(crate) fn side_button_should_navigate_main_pane(
-    sidebar_width_px: f32,
-    window_width: f32,
-    window_height: f32,
-    last_cursor_position: Option<(f32, f32)>,
-    scale_factor: f32,
-) -> Option<(f32, f32)> {
-    let (x, y) = last_cursor_position?;
-    let scale_factor = scale_factor.max(1.0);
-    let logical_x = x / scale_factor;
-    let logical_y = y / scale_factor;
-    point_in_main_pane(
-        sidebar_width_px,
-        window_width,
-        window_height,
-        logical_x,
-        logical_y,
-    )
-    .then_some((logical_x, logical_y))
-}
-
-pub(crate) fn side_button_navigation_in_main_pane(
-    direction: Option<SideButtonDirection>,
-    sidebar_width_px: f32,
-    window_width: f32,
-    window_height: f32,
-    last_cursor_position: Option<(f32, f32)>,
-    scale_factor: f32,
-) -> Option<SideButtonNavigation> {
-    let direction = direction?;
-    let (logical_x, logical_y) = side_button_should_navigate_main_pane(
-        sidebar_width_px,
-        window_width,
-        window_height,
-        last_cursor_position,
-        scale_factor,
-    )?;
-    Some(SideButtonNavigation {
-        direction,
-        logical_x,
-        logical_y,
-    })
 }
 
 pub(crate) fn virtual_grid_plan(
@@ -845,7 +777,6 @@ pub(crate) fn place_drop_geometry(
     place_count: usize,
     place_list_y: f32,
     place_row_stride: f32,
-    force_gap: bool,
 ) -> PlaceDropGeometry {
     let place_row_stride = place_row_stride.max(1.0);
     let local_y = y - place_list_y;
@@ -873,7 +804,7 @@ pub(crate) fn place_drop_geometry(
     let row = (local_y / place_row_stride).floor();
     let row_offset = local_y - row * place_row_stride;
     let target_index = row.max(0.0).min(place_count.saturating_sub(1) as f32) as i32;
-    let over_gap = force_gap || row_offset < 6.0 || row_offset > (place_row_stride - 6.0);
+    let over_gap = row_offset < 6.0 || row_offset > (place_row_stride - 6.0);
     let over_item = !over_gap && target_index >= 0 && target_index < place_count as i32;
     let slot = (target_index + (row_offset > place_row_stride / 2.0) as i32)
         .max(0)
@@ -1194,10 +1125,8 @@ mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
-        PopupRect, RootMenuGeometry, SideButtonDirection, SideButtonNavigation,
-        context_menu_metrics, main_pane_bounds, main_scroll_max_x, place_drop_geometry,
-        point_in_main_pane, search_panel_height, side_button_navigation_in_main_pane,
-        side_button_should_navigate_main_pane, virtual_entry_range, virtual_grid_plan,
+        PopupRect, RootMenuGeometry, context_menu_metrics, main_pane_bounds, main_scroll_max_x,
+        place_drop_geometry, search_panel_height, virtual_entry_range, virtual_grid_plan,
     };
 
     #[test]
@@ -1221,79 +1150,11 @@ mod tests {
     }
 
     #[test]
-    fn main_pane_hit_test_uses_half_open_bounds() {
-        assert!(!point_in_main_pane(320.0, 1100.0, 760.0, 327.9, 100.0));
-        assert!(!point_in_main_pane(320.0, 1100.0, 760.0, 328.0, 63.9));
-        assert!(point_in_main_pane(320.0, 1100.0, 760.0, 328.0, 64.0));
-        assert!(point_in_main_pane(320.0, 1100.0, 760.0, 1099.9, 759.9));
-        assert!(!point_in_main_pane(320.0, 1100.0, 760.0, 1100.0, 759.0));
-        assert!(!point_in_main_pane(320.0, 1100.0, 760.0, 1099.0, 760.0));
-    }
-
-    #[test]
     fn main_pane_bounds_do_not_invert_for_tiny_windows() {
         let bounds = main_pane_bounds(320.0, 100.0, 20.0);
 
         assert_eq!(bounds.left, bounds.right);
         assert_eq!(bounds.top, bounds.bottom);
-        assert!(!point_in_main_pane(320.0, 100.0, 20.0, 328.0, 64.0));
-    }
-
-    #[test]
-    fn side_button_navigation_requires_main_pane_cursor() {
-        assert_eq!(
-            side_button_should_navigate_main_pane(320.0, 1100.0, 760.0, None, 1.0),
-            None
-        );
-        assert_eq!(
-            side_button_should_navigate_main_pane(320.0, 1100.0, 760.0, Some((200.0, 300.0)), 1.0),
-            None
-        );
-        assert_eq!(
-            side_button_should_navigate_main_pane(320.0, 1100.0, 760.0, Some((700.0, 300.0)), 2.0),
-            Some((350.0, 150.0))
-        );
-    }
-
-    #[test]
-    fn side_button_navigation_carries_direction_and_scaled_position() {
-        assert_eq!(
-            side_button_navigation_in_main_pane(
-                None,
-                320.0,
-                1100.0,
-                760.0,
-                Some((700.0, 300.0)),
-                2.0,
-            ),
-            None
-        );
-        assert_eq!(
-            side_button_navigation_in_main_pane(
-                Some(SideButtonDirection::Back),
-                320.0,
-                1100.0,
-                760.0,
-                Some((200.0, 300.0)),
-                1.0,
-            ),
-            None
-        );
-        assert_eq!(
-            side_button_navigation_in_main_pane(
-                Some(SideButtonDirection::Forward),
-                320.0,
-                1100.0,
-                760.0,
-                Some((700.0, 300.0)),
-                2.0,
-            ),
-            Some(SideButtonNavigation {
-                direction: SideButtonDirection::Forward,
-                logical_x: 350.0,
-                logical_y: 150.0,
-            })
-        );
     }
 
     #[test]
@@ -1697,7 +1558,7 @@ mod tests {
     #[test]
     fn place_drop_geometry_distinguishes_gaps_and_items() {
         assert_eq!(
-            place_drop_geometry(108.0, 3, 108.0, 38.0, false),
+            place_drop_geometry(108.0, 3, 108.0, 38.0),
             PlaceDropGeometry {
                 target_index: 0,
                 slot: 0,
@@ -1707,7 +1568,7 @@ mod tests {
             }
         );
         assert_eq!(
-            place_drop_geometry(126.0, 3, 108.0, 38.0, false),
+            place_drop_geometry(126.0, 3, 108.0, 38.0),
             PlaceDropGeometry {
                 target_index: 0,
                 slot: 0,
@@ -1717,7 +1578,7 @@ mod tests {
             }
         );
         assert_eq!(
-            place_drop_geometry(143.0, 3, 108.0, 38.0, false),
+            place_drop_geometry(143.0, 3, 108.0, 38.0),
             PlaceDropGeometry {
                 target_index: 0,
                 slot: 1,
@@ -1731,7 +1592,7 @@ mod tests {
     #[test]
     fn place_drop_geometry_clamps_outside_list() {
         assert_eq!(
-            place_drop_geometry(90.0, 3, 108.0, 38.0, false),
+            place_drop_geometry(90.0, 3, 108.0, 38.0),
             PlaceDropGeometry {
                 target_index: 0,
                 slot: 0,
@@ -1741,7 +1602,7 @@ mod tests {
             }
         );
         assert_eq!(
-            place_drop_geometry(500.0, 3, 108.0, 38.0, false),
+            place_drop_geometry(500.0, 3, 108.0, 38.0),
             PlaceDropGeometry {
                 target_index: 2,
                 slot: 3,
@@ -1751,25 +1612,11 @@ mod tests {
             }
         );
         assert_eq!(
-            place_drop_geometry(120.0, 0, 108.0, 38.0, false),
+            place_drop_geometry(120.0, 0, 108.0, 38.0),
             PlaceDropGeometry {
                 target_index: -1,
                 slot: 0,
                 row_offset: 0.0,
-                over_gap: true,
-                over_item: false,
-            }
-        );
-    }
-
-    #[test]
-    fn place_drop_geometry_can_force_gap_for_external_files() {
-        assert_eq!(
-            place_drop_geometry(126.0, 3, 108.0, 38.0, true),
-            PlaceDropGeometry {
-                target_index: 0,
-                slot: 0,
-                row_offset: 18.0,
                 over_gap: true,
                 over_item: false,
             }

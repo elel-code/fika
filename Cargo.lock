@@ -4419,7 +4419,6 @@ source = "git+https://github.com/slint-ui/slint?branch=master#f1b2e289a5e6d7f8c1
 dependencies = [
  "const-field-offset",
  "i-slint-backend-selector",
- "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",

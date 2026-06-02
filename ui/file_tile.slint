@@ -15,6 +15,8 @@ export component FileTile inherits Rectangle {
     callback zoom_in();
     callback zoom_out();
     callback pan_horizontal(length);
+    callback navigate_back();
+    callback navigate_forward();
 
     height: root.zoom-level == 0 ? 72px : (root.zoom-level == 1 ? 84px : (root.zoom-level == 2 ? 98px : (root.zoom-level == 3 ? 116px : 136px)));
     border-radius: 7px;
@@ -31,7 +33,11 @@ export component FileTile inherits Rectangle {
             height: parent.height;
 
             pointer-event(event) => {
-                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
+                    root.navigate_back();
+                } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
+                    root.navigate_forward();
+                } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                     root.request_select(root.entry.path, event.modifiers.control, event.modifiers.shift);
                 } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                     root.request_context_menu(root.entry.path, root.entry.name, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);

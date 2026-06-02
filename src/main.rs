@@ -25,24 +25,20 @@ use app::chooser::{
 };
 use app::device_monitor::start_device_monitor;
 use app::dnd::{
-    MainDndTrace, PlacesDndTrace, SLINT_DROPAREA_BACKEND_SOURCE,
-    WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME, dnd_debug_enabled_from_env,
-    dnd_main_event_message, dnd_places_event_message, dnd_startup_summary, env_flag_is_truthy,
-    external_path_drop_from_payload, winit_file_drop_fallback_enabled_from_env,
+    MainDndTrace, PlacesDndTrace, SLINT_DROPAREA_BACKEND_SOURCE, dnd_debug_enabled_from_env,
+    dnd_main_event_message, dnd_places_event_message, env_flag_is_truthy,
 };
 use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
-    ExternalEditResult, ExternalFileDrop, FileOpenResult, FileOpenSuccess, FileOperationProgress,
+    ExternalEditResult, FileOpenResult, FileOpenSuccess, FileOperationProgress,
     FileOperationResult, FileUndoResult, RecursiveSearchProgress, RecursiveSearchResult,
 };
 use app::file_clipboard::sync_clipboard_ui;
 use app::geometry::{
-    MainGridLayout, SelectionRect, SideButtonDirection, place_drop_geometry,
-    register_menu_geometry_callbacks, side_button_navigation_in_main_pane,
+    MainGridLayout, SelectionRect, place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::places::{
-    add_place, add_place_at_slot, add_place_at_slot_from_external_payload,
-    apply_external_file_drop, contains_place_path, open_place_new_window, remove_place,
+    add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
     rename_place, reorder_place_path, restore_default_places, sync_places,
 };
 use app::search_ui::{
@@ -99,8 +95,6 @@ fn main() -> Result<(), slint::PlatformError> {
             .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| home_dir()))
     });
     let (async_tx, async_rx) = mpsc::channel();
-    let external_drop_ui_weak = Rc::new(RefCell::new(None));
-    select_winit_backend_for_external_drops(async_tx.clone(), Rc::clone(&external_drop_ui_weak))?;
 
     let state = Rc::new(RefCell::new(AppState::new(
         normalize_start_dir(start_dir),
@@ -108,7 +102,6 @@ fn main() -> Result<(), slint::PlatformError> {
     )));
 
     let ui = AppWindow::new()?;
-    *external_drop_ui_weak.borrow_mut() = Some(ui.as_weak());
 
     // ── DndApi bridge ──────────────────────────────────────────────
     // Maps Slint's opaque `data-transfer` ↔ `DropEvent` ↔ our internal drag info.
@@ -175,41 +168,6 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             SharedString::new()
         });
-
-        // ── External drop helpers (stateless) ──────────────────
-        dnd_api.on_external_force_gap(|event: DropEvent| -> bool {
-            if let Some(rc) = event.data.user_data() {
-                rc.downcast_ref::<FikaDragInfo>().is_none()
-            } else {
-                event.data.has_plaintext()
-            }
-        });
-
-        dnd_api
-            .on_external_drop_supported(|event: DropEvent| -> bool { event.data.has_plaintext() });
-
-        // ── External drop helpers (stateful, captures ui + state) ──
-        {
-            let ui_weak = ui.as_weak();
-            let state_rc = Rc::clone(&state);
-            dnd_api.on_external_drop_allowed(move |event: DropEvent, x, y| -> bool {
-                dnd_external_drop_allowed_impl(&ui_weak, &state_rc, &event, x, y)
-            });
-        }
-        {
-            let ui_weak = ui.as_weak();
-            let state_rc = Rc::clone(&state);
-            dnd_api.on_external_drop_target_path(move |event: DropEvent, x, y| -> SharedString {
-                dnd_external_drop_target_impl(&ui_weak, &state_rc, &event, x, y)
-            });
-        }
-        {
-            let ui_weak = ui.as_weak();
-            let state_rc = Rc::clone(&state);
-            dnd_api.on_external_rejection_reason(move |event: DropEvent, x, y| -> SharedString {
-                dnd_external_rejection_impl(&ui_weak, &state_rc, &event, x, y)
-            });
-        }
     }
     ui.set_chooser_mode(matches!(args.mode, Mode::Chooser));
     ui.set_chooser_select_directories(args.chooser_select_directories);
@@ -683,22 +641,6 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_add_external_place_at_slot(move |payload, slot, mime_type| {
-            if let Some(ui) = ui_weak.upgrade() {
-                add_place_at_slot_from_external_payload(
-                    &ui,
-                    &state,
-                    payload.as_str(),
-                    slot,
-                    mime_type.as_str(),
-                );
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
         ui.on_rename_place(move |index, label| {
             if let Some(ui) = ui_weak.upgrade() {
                 rename_place(&ui, &state, index, label.as_str());
@@ -796,26 +738,6 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_prepare_external_main_transfer(move |payload, mime_type, x, y| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return false;
-            };
-            let drop = match external_path_drop_from_payload(payload.as_str(), mime_type.as_str()) {
-                Ok(drop) => drop,
-                Err(rejection) => {
-                    set_status(&ui, &rejection.status_message());
-                    return false;
-                }
-            };
-            let source = drop.path.to_string_lossy();
-            let label = path_label(source.as_ref());
-            prepare_main_transfer(&ui, &state, source.as_ref(), label.as_str(), x, y)
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
         ui.on_main_drop_target_path(move |x, y, source| {
             let Some(ui) = ui_weak.upgrade() else {
                 return SharedString::new();
@@ -851,7 +773,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_place_drop_target(move |y, force_gap| {
+        ui.on_place_drop_target(move |y| {
             let Some(ui) = ui_weak.upgrade() else {
                 return -1;
             };
@@ -861,7 +783,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 state.places.len(),
                 ui.get_places_list_y_px(),
                 ui.get_places_row_stride_px(),
-                force_gap,
             )
             .target_index
         });
@@ -870,7 +791,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_place_drop_slot(move |y, force_gap| {
+        ui.on_place_drop_slot(move |y| {
             let Some(ui) = ui_weak.upgrade() else {
                 return 0;
             };
@@ -880,7 +801,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 state.places.len(),
                 ui.get_places_list_y_px(),
                 ui.get_places_row_stride_px(),
-                force_gap,
             )
             .slot
         });
@@ -889,7 +809,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_place_drop_over_gap(move |y, force_gap| {
+        ui.on_place_drop_over_gap(move |y| {
             let Some(ui) = ui_weak.upgrade() else {
                 return false;
             };
@@ -899,7 +819,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 state.places.len(),
                 ui.get_places_list_y_px(),
                 ui.get_places_row_stride_px(),
-                force_gap,
             )
             .over_gap
         });
@@ -908,7 +827,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_place_drop_over_item(move |y, force_gap| {
+        ui.on_place_drop_over_item(move |y| {
             let Some(ui) = ui_weak.upgrade() else {
                 return false;
             };
@@ -918,7 +837,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 state.places.len(),
                 ui.get_places_list_y_px(),
                 ui.get_places_row_stride_px(),
-                force_gap,
             )
             .over_item
         });
@@ -1090,214 +1008,6 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     ui.run()
-}
-
-// ── DndApi external drop helpers ──────────────────────────────────
-
-/// Extract a local file path from an external `DropEvent` (plaintext URI).
-fn dnd_extract_external_path(event: &slint::language::DropEvent) -> Option<PathBuf> {
-    // Internal drops carry FikaDragInfo user_data — those are not external.
-    if event.data.user_data().is_some() {
-        return None;
-    }
-    let text = event.data.fetch_plaintext().ok()?;
-    app::dnd::external_path_drop_from_payload(&text, "text/plain")
-        .ok()
-        .map(|drop| drop.path)
-}
-
-fn dnd_external_drop_allowed_impl(
-    ui_weak: &slint::Weak<AppWindow>,
-    state: &Rc<RefCell<AppState>>,
-    event: &slint::language::DropEvent,
-    x: f32,
-    y: f32,
-) -> bool {
-    let Some(ui) = ui_weak.upgrade() else {
-        return false;
-    };
-    let Some(path) = dnd_extract_external_path(event) else {
-        return false;
-    };
-    let state = state.borrow();
-    app::transfer::main_drop_allowed(&ui, &state, x, y, &path)
-}
-
-fn dnd_external_drop_target_impl(
-    ui_weak: &slint::Weak<AppWindow>,
-    state: &Rc<RefCell<AppState>>,
-    event: &slint::language::DropEvent,
-    x: f32,
-    y: f32,
-) -> SharedString {
-    let Some(ui) = ui_weak.upgrade() else {
-        return SharedString::new();
-    };
-    let Some(path) = dnd_extract_external_path(event) else {
-        return SharedString::new();
-    };
-    let source = path.to_string_lossy();
-    let state = state.borrow();
-    entry_at_main_point(&ui, &state, x, y)
-        .filter(|entry| entry.is_dir && entry.path.as_str() != source.as_ref())
-        .map_or_else(SharedString::new, |entry| entry.path)
-}
-
-fn dnd_external_rejection_impl(
-    ui_weak: &slint::Weak<AppWindow>,
-    state: &Rc<RefCell<AppState>>,
-    event: &slint::language::DropEvent,
-    x: f32,
-    y: f32,
-) -> SharedString {
-    let Some(ui) = ui_weak.upgrade() else {
-        return "no-window".into();
-    };
-    let Some(path) = dnd_extract_external_path(event) else {
-        return app::dnd::external_path_drop_rejection_reason("", "text/plain")
-            .unwrap_or_else(|| "no-local-file-path".to_string())
-            .into();
-    };
-    let state = state.borrow();
-    app::transfer::main_drop_rejection(&ui, &state, x, y, &path)
-        .map(|r| r.to_string())
-        .unwrap_or_else(|| "none".to_string())
-        .into()
-}
-
-fn select_winit_backend_for_external_drops(
-    async_tx: mpsc::Sender<AsyncEvent>,
-    ui_weak: Rc<RefCell<Option<slint::Weak<AppWindow>>>>,
-) -> Result<(), slint::PlatformError> {
-    let file_drop_fallback_enabled = winit_file_drop_fallback_enabled_from_env();
-    dnd_log_startup(file_drop_fallback_enabled);
-    slint::BackendSelector::new()
-        .backend_name("winit".into())
-        .with_winit_custom_application_handler(ExternalDropHandler {
-            async_tx,
-            ui_weak,
-            last_cursor_position: None,
-            file_drop_fallback_enabled,
-        })
-        .select()
-}
-
-struct ExternalDropHandler {
-    async_tx: mpsc::Sender<AsyncEvent>,
-    ui_weak: Rc<RefCell<Option<slint::Weak<AppWindow>>>>,
-    last_cursor_position: Option<(f32, f32)>,
-    file_drop_fallback_enabled: bool,
-}
-
-impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
-    fn window_event(
-        &mut self,
-        _event_loop: &slint::winit_030::winit::event_loop::ActiveEventLoop,
-        _window_id: slint::winit_030::winit::window::WindowId,
-        _winit_window: Option<&slint::winit_030::winit::window::Window>,
-        _slint_window: Option<&slint::Window>,
-        event: &slint::winit_030::winit::event::WindowEvent,
-    ) -> slint::winit_030::EventResult {
-        use slint::winit_030::winit::event::{ElementState, MouseButton, WindowEvent};
-
-        match event {
-            WindowEvent::CursorMoved { position, .. } => {
-                self.last_cursor_position = Some((position.x as f32, position.y as f32));
-            }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button,
-                ..
-            } if matches!(button, MouseButton::Back | MouseButton::Forward) => {
-                let Some(ui_weak) = self.ui_weak.borrow().clone() else {
-                    return slint::winit_030::EventResult::Propagate;
-                };
-                let Some(ui) = ui_weak.upgrade() else {
-                    return slint::winit_030::EventResult::Propagate;
-                };
-                let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-                let scale = _winit_window.map_or(1.0, |window| window.scale_factor()) as f32;
-                let direction = match button {
-                    MouseButton::Back => Some(SideButtonDirection::Back),
-                    MouseButton::Forward => Some(SideButtonDirection::Forward),
-                    _ => None,
-                };
-                let Some(navigation) = side_button_navigation_in_main_pane(
-                    direction,
-                    ui.get_sidebar_width_px(),
-                    window_size.width,
-                    window_size.height,
-                    self.last_cursor_position,
-                    scale,
-                ) else {
-                    debug_log(&format!(
-                        "winit side button ignored outside main pane button={button:?}"
-                    ));
-                    return slint::winit_030::EventResult::Propagate;
-                };
-
-                let ui_weak_for_event_loop = ui.as_weak();
-                debug_log(&format!(
-                    "winit side button accepted direction={:?} x={:.1} y={:.1}",
-                    navigation.direction, navigation.logical_x, navigation.logical_y
-                ));
-                let _ = ui_weak_for_event_loop.upgrade_in_event_loop(move |ui| {
-                    match navigation.direction {
-                        SideButtonDirection::Back => ui.invoke_go_back(),
-                        SideButtonDirection::Forward => ui.invoke_go_forward(),
-                    }
-                });
-                return slint::winit_030::EventResult::PreventDefault;
-            }
-            WindowEvent::DroppedFile(path) => {
-                if !self.file_drop_fallback_enabled {
-                    return slint::winit_030::EventResult::Propagate;
-                }
-                let scale = _winit_window.map_or(1.0, |window| window.scale_factor()) as f32;
-                let (x, y) = self.last_cursor_position.unwrap_or_default();
-                dnd_log_places_event(PlacesDndTrace {
-                    backend: WINIT_DROPPED_FILE_FALLBACK_SOURCE,
-                    phase: "dropped",
-                    mime_type: WINIT_DROPPED_FILE_MIME,
-                    payload: path.to_string_lossy().as_ref(),
-                    x: x / scale,
-                    y: y / scale,
-                    slot: -1,
-                    target: -1,
-                    over_gap: false,
-                    over_item: false,
-                });
-                let _ = self
-                    .async_tx
-                    .send(AsyncEvent::ExternalFileDropped(ExternalFileDrop {
-                        path: path.clone(),
-                        x: x / scale,
-                        y: y / scale,
-                        source: WINIT_DROPPED_FILE_FALLBACK_SOURCE.to_string(),
-                    }));
-                if let Some(ui_weak) = self.ui_weak.borrow().clone() {
-                    let _ = ui_weak.upgrade_in_event_loop(|ui| ui.invoke_async_results_ready());
-                }
-            }
-            WindowEvent::CursorLeft { .. } => {
-                self.last_cursor_position = None;
-            }
-            _ => {}
-        }
-
-        slint::winit_030::EventResult::Propagate
-    }
-}
-
-fn dnd_log_startup(winit_fallback_enabled: bool) {
-    if !dnd_debug_enabled_from_env() {
-        return;
-    }
-
-    eprintln!(
-        "[fika dnd] startup {}",
-        dnd_startup_summary(winit_fallback_enabled)
-    );
 }
 
 fn log_chooser_parent_window(parent_window: Option<&str>) {
@@ -1751,7 +1461,6 @@ fn apply_async_event(
         AsyncEvent::ThumbnailLoaded { generation, load } => {
             apply_thumbnail_result(ui, state, bridge, generation, load);
         }
-        AsyncEvent::ExternalFileDropped(drop) => apply_external_file_drop(ui, state, drop),
     }
 }
 
@@ -3345,7 +3054,6 @@ fn dnd_debug_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::app::geometry::{MainGridLayout, place_drop_geometry, virtual_entry_range};
-    use crate::app::places::normalize_dropped_path;
     use crate::app::selection::{
         filtered_entries_range, filtered_entry_at, filtered_entry_summary,
         rebuild_visible_entry_index, selection_range_paths, selection_rect_paths,
@@ -3797,21 +3505,10 @@ mod tests {
 
     #[test]
     fn place_drop_geometry_slot_clamps_to_places_range() {
-        assert_eq!(place_drop_geometry(90.0, 3, 108.0, 38.0, true).slot, 0);
-        assert_eq!(place_drop_geometry(146.0, 3, 108.0, 38.0, true).slot, 1);
-        assert_eq!(place_drop_geometry(500.0, 3, 108.0, 38.0, true).slot, 3);
-        assert_eq!(place_drop_geometry(222.0, 4, 190.0, 38.0, true).slot, 1);
-    }
-
-    #[test]
-    fn decodes_file_uri_drop_payload() {
-        assert_eq!(
-            normalize_dropped_path(PathBuf::from(
-                "# comment\n\nfile://localhost/tmp/Hello%20World\nfile:///tmp/Second\n",
-            ))
-            .to_string_lossy(),
-            "/tmp/Hello World"
-        );
+        assert_eq!(place_drop_geometry(90.0, 3, 108.0, 38.0).slot, 0);
+        assert_eq!(place_drop_geometry(146.0, 3, 108.0, 38.0).slot, 1);
+        assert_eq!(place_drop_geometry(500.0, 3, 108.0, 38.0).slot, 3);
+        assert_eq!(place_drop_geometry(222.0, 4, 190.0, 38.0).slot, 1);
     }
 
     #[test]

@@ -157,24 +157,14 @@
   - Current: Restore Defaults is available from the Places blank-area context menu.
   - Current: the Places blank-area context menu also offers Add Current Folder when the current directory is not already in Places.
 
-- [x] Drag external folder into Places.
-  - Acceptance: dropping a folder path on Places adds it.
-  - Current: Slint `DropArea` accepts `text/uri-list` / `text/plain`; winit `DroppedFile` remains as platform fallback for external file drops. Both paths share the same Rust-side drop path normalization for uri-list comments, first valid local file entry, `file:///...` / `file://localhost/...`, remote file URI rejection, and percent decoding.
-  - Current: Slint internal drags use `data-transfer` user data for place/folder/file identity, while external drops are read as plaintext/URI payloads; Rust owns external parsing, force-gap policy, backend source labeling, and main-pane transfer target validation, so Slint DropArea and fallback behavior cannot drift in path semantics.
-  - Current: Slint DropArea hover feedback and winit fallback slot selection both use the tested Rust `PlaceDropGeometry` over Places list geometry synchronized from Slint, so sidebar scrolling, target item detection, and visual insertion slots share one rule set.
-  - Current: successful external Places drops include the handling backend in the status bar, so real desktop tests can distinguish Slint DropArea from the winit fallback before removing either path.
-  - Current: winit fallback source/mime constants, disable-env parsing, startup diagnostics, DnD trace formatting, and rejection debug tag mapping now live in `src/app/dnd.rs`; `main.rs` only handles the actual winit event bridge.
-  - Current: `FIKA_DISABLE_WINIT_DROP_FALLBACK=1` disables only the winit `DroppedFile` event bridge, allowing real desktop tests to prove whether the Slint DropArea `text/uri-list` path works independently.
-  - Current: `FIKA_DEBUG_DND=1` prints startup DnD configuration plus Slint DropArea and winit fallback drop traces with backend role (`slint-primary` vs `winit-fallback`), phase, data-transfer kind or external payload type, external-path validation result, coordinates, slot/target/gap/item state, and a compact payload summary for real desktop validation.
-  - Current: the fallback-removal check is explicit: run with `FIKA_DISABLE_WINIT_DROP_FALLBACK=1 FIKA_DEBUG_DND=1` and confirm real external drops into Places and the main pane produce `role=slint-primary` with `validation=external-local-path`.
-  - Current: Slint external-drop rejection diagnostics now distinguish unsupported MIME, empty payload, and payloads without a local file path; these reasons appear in debug traces and failed drops show specific status-bar guidance.
+- [ ] Drag external folder into Places.
+  - Acceptance: dropping a folder path from another app on Places adds it.
+  - Current: deferred. Slint DnD is currently used only for app-internal `data-transfer` user data; external `text/uri-list` / `text/plain` parsing and winit `DroppedFile` fallback were removed to avoid maintaining a platform fallback path before Slint supports reliable cross-application DnD.
 
-- [x] Drag external local file or folder into main view.
+- [ ] Drag external local file or folder into main view.
   - Acceptance: dropping onto a main-pane folder opens the transfer menu targeting that folder.
   - Acceptance: dropping onto main-pane blank space opens the transfer menu targeting the current directory.
-  - Current: `text/uri-list` and `text/plain` payloads are parsed in Rust through the same external local-path parser used by Places; ordinary files and folders are both accepted in the main pane.
-  - Current: hover target highlighting uses the existing main-pane folder `drop-target` style and the same self/subdirectory rejection rules as internal drags.
-  - Current: `FIKA_DEBUG_DND=1` traces main-pane can-drop / dropped events with backend role, MIME type, coordinates, rejection state, target folder path, parsed local source path, compact payload summary, and stable rejection tags such as `no-local-file-path`, `self-target`, and `descendant-target`.
+  - Current: deferred with external Places drop. Internal file/folder/place drags already use the same target highlighting and transfer-menu rules; external desktop payloads are rejected as unsupported until Slint exposes stable cross-application DnD.
 
 - [x] Drag folder from main view into Places.
   - Acceptance: dropping into the gap between Places items inserts a new Place at that slot.
@@ -426,7 +416,7 @@ Acceptance for all:
 
 - [x] Runtime integration diagnostic helper.
   - Acceptance: installed packages have a repeatable check for D-Bus activation metadata, Polkit action visibility, portal backend metadata, and helper binary placement.
-  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/UDisks2/tooling context in normal mode, probes UDisks2 ObjectManager visibility and `fika --diagnose-devices` output for Devices validation, prints the external DnD validation command and required `role=slint-primary` / `validation=external-local-path` evidence for fallback-removal testing, reports the active `portals.conf` FileChooser backend selection, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method, and supports `--record FILE` for saving comparable distro/desktop validation reports.
+  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/UDisks2/tooling context in normal mode, probes UDisks2 ObjectManager visibility and `fika --diagnose-devices` output for Devices validation, reports the active `portals.conf` FileChooser backend selection, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method, and supports `--record FILE` for saving comparable distro/desktop validation reports.
   - Remaining: run this diagnostic with `--record` on target distributions/desktops and record any polkit/systemd/dbus activation differences.
 
 - [x] External editor writeback flow.

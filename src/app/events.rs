@@ -119,13 +119,4 @@ pub(crate) enum AsyncEvent {
         generation: u64,
         load: thumbnails::ThumbnailLoad,
     },
-    ExternalFileDropped(ExternalFileDrop),
-}
-
-#[derive(Debug)]
-pub(crate) struct ExternalFileDrop {
-    pub(crate) path: PathBuf,
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-    pub(crate) source: String,
 }
