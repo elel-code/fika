@@ -595,7 +595,7 @@ fn chooser_filter_map(
     };
 
     for (portal_index, filter) in map.portal_filters.iter().enumerate() {
-        let Some((spec, mime_mapped)) = chooser_filter_spec(filter) else {
+        let Some((spec, mime_mapped)) = chooser_filter_spec(filter, portal_index) else {
             map.hidden_filters += 1;
             continue;
         };
@@ -615,12 +615,25 @@ fn chooser_filter_map(
     map
 }
 
-fn chooser_filter_spec((label, patterns): &PortalFilter) -> Option<(String, bool)> {
+fn chooser_filter_spec(
+    (label, patterns): &PortalFilter,
+    portal_index: usize,
+) -> Option<(String, bool)> {
     let (globs, mime_mapped) = chooser_filter_globs(patterns);
     if globs.is_empty() {
         return None;
     }
+    let label = chooser_filter_label(label, portal_index);
     Some((format!("{label}\t{}", globs.join(";")), mime_mapped))
+}
+
+fn chooser_filter_label(label: &str, portal_index: usize) -> String {
+    let label = label.trim();
+    if label.is_empty() {
+        format!("Filter {}", portal_index + 1)
+    } else {
+        label.to_string()
+    }
 }
 
 fn chooser_filter_globs(patterns: &[(u32, String)]) -> (Vec<String>, bool) {
@@ -1289,6 +1302,40 @@ mod tests {
         );
         let current_filter = result.get("current_filter").cloned().unwrap();
         assert_eq!(PortalFilter::try_from(current_filter).unwrap(), filters[0]);
+    }
+
+    #[test]
+    fn portal_filters_with_empty_labels_get_stable_chooser_labels() {
+        let filters = vec![
+            ("".to_string(), vec![(1, "image/png".to_string())]),
+            ("  ".to_string(), vec![(0, "*.txt".to_string())]),
+        ];
+        let mut options = HashMap::new();
+        options.insert(
+            "current_filter".to_string(),
+            OwnedValue::try_from(Value::new(filters[1].clone())).unwrap(),
+        );
+
+        let filter_map = chooser_filter_map(&options, filters.clone());
+
+        assert_eq!(
+            filter_map.chooser_specs,
+            vec!["Filter 1\t*.png".to_string(), "Filter 2\t*.txt".to_string()]
+        );
+        assert_eq!(filter_map.portal_indices, vec![0, 1]);
+        assert_eq!(filter_map.initial_chooser_index, Some(1));
+
+        let result = results_for_paths(
+            ChooserResult {
+                paths: vec![PathBuf::from("/tmp/a.txt")],
+                filter_index: Some(1),
+                choices: Vec::new(),
+            },
+            &options,
+            &filter_map,
+        );
+        let current_filter = result.get("current_filter").cloned().unwrap();
+        assert_eq!(PortalFilter::try_from(current_filter).unwrap(), filters[1]);
     }
 
     #[test]
