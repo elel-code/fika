@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const MAX_THUMBNAIL_CACHE_ENTRIES: usize = 512;
 pub(crate) const MAX_THUMBNAIL_FAILURE_ENTRIES: usize = 512;
+pub(crate) const MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC: usize = 96;
 
 pub(crate) fn decorate_entries_with_cached_thumbnails(
     state: &AppState,
@@ -121,6 +122,30 @@ pub(crate) fn thumbnail_schedule_candidate(
     Some((path, key))
 }
 
+pub(crate) fn thumbnail_schedule_batch(
+    state: &mut AppState,
+    entries: &[&FileEntry],
+    size_px: u32,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for entry in entries {
+        if paths.len() >= MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC {
+            break;
+        }
+
+        let Some((path, key)) = thumbnail_schedule_candidate(state, entry, size_px) else {
+            continue;
+        };
+        state
+            .panes
+            .active
+            .view
+            .insert_thumbnail_pending(entry.path.to_string(), key);
+        paths.push(path);
+    }
+    paths
+}
+
 pub(crate) fn apply_thumbnail_load_to_state(
     state: &mut AppState,
     generation: u64,
@@ -225,6 +250,9 @@ mod tests {
     use super::*;
     use crate::app::state::AppState;
     use std::io;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn test_entry(name: &str, path: &str) -> FileEntry {
         FileEntry {
@@ -241,6 +269,17 @@ mod tests {
             thumbnail_state: 0,
             thumbnail: Image::default(),
         }
+    }
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "fika-thumbnail-pipeline-{}-{name}-{counter}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
     }
 
     #[test]
@@ -536,6 +575,132 @@ mod tests {
                 "item-19.png".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn thumbnail_schedule_batch_marks_pending_visible_first_and_respects_cap() {
+        let temp_dir = temp_test_dir("batch-cap");
+        let mut entries = Vec::new();
+        for index in 0..(MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC + 8) {
+            let path = temp_dir.join(format!("item-{index}.png"));
+            std::fs::write(&path, b"not a real image").unwrap();
+            entries.push(test_entry(
+                &format!("item-{index}.png"),
+                path.to_str().unwrap(),
+            ));
+        }
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let prioritized = prioritize_thumbnail_entries(&entries, 0, 4..8);
+        let paths = thumbnail_schedule_batch(&mut state, &prioritized, 64);
+
+        assert_eq!(paths.len(), MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC);
+        assert_eq!(paths[0], temp_dir.join("item-4.png"));
+        assert_eq!(paths[1], temp_dir.join("item-5.png"));
+        assert_eq!(paths[2], temp_dir.join("item-6.png"));
+        assert_eq!(paths[3], temp_dir.join("item-7.png"));
+        assert!(
+            state
+                .panes
+                .active
+                .view
+                .has_thumbnail_pending(temp_dir.join("item-4.png").to_str().unwrap())
+        );
+        assert!(
+            state
+                .panes
+                .active
+                .view
+                .has_thumbnail_pending(temp_dir.join("item-0.png").to_str().unwrap())
+        );
+        assert!(
+            !state.panes.active.view.has_thumbnail_pending(
+                temp_dir
+                    .join(format!("item-{}.png", MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC + 7))
+                    .to_str()
+                    .unwrap()
+            )
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn thumbnail_schedule_batch_skips_cached_failed_pending_and_directories() {
+        let temp_dir = temp_test_dir("batch-skip");
+        let cached_path = temp_dir.join("cached.png");
+        let failed_path = temp_dir.join("failed.png");
+        let pending_path = temp_dir.join("pending.png");
+        let dir_path = temp_dir.join("folder.png");
+        let ready_path = temp_dir.join("ready.png");
+        for path in [&cached_path, &failed_path, &pending_path, &ready_path] {
+            std::fs::write(path, b"not a real image").unwrap();
+        }
+        std::fs::create_dir_all(&dir_path).unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let cached_key = thumbnails::key_for(&cached_path, 64).unwrap();
+        let failed_key = thumbnails::key_for(&failed_path, 64).unwrap();
+        let pending_key = thumbnails::key_for(&pending_path, 64).unwrap();
+        insert_thumbnail_cache_with_limit(
+            &mut state,
+            cached_key,
+            thumbnails::ThumbnailData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 0],
+            },
+        );
+        insert_thumbnail_failure_with_limit(&mut state, failed_key, "decode failed".to_string());
+        state
+            .panes
+            .active
+            .view
+            .insert_thumbnail_pending(pending_path.to_string_lossy().to_string(), pending_key);
+
+        let mut dir_entry = test_entry("folder.png", dir_path.to_str().unwrap());
+        dir_entry.is_dir = true;
+        let entries = vec![
+            test_entry("cached.png", cached_path.to_str().unwrap()),
+            test_entry("failed.png", failed_path.to_str().unwrap()),
+            test_entry("pending.png", pending_path.to_str().unwrap()),
+            dir_entry,
+            test_entry("ready.png", ready_path.to_str().unwrap()),
+        ];
+        let prioritized = entries.iter().collect::<Vec<_>>();
+        let paths = thumbnail_schedule_batch(&mut state, &prioritized, 64);
+
+        assert_eq!(paths, vec![ready_path.clone()]);
+        assert!(
+            state
+                .panes
+                .active
+                .view
+                .has_thumbnail_pending(ready_path.to_str().unwrap())
+        );
+        assert!(
+            !state
+                .panes
+                .active
+                .view
+                .has_thumbnail_pending(cached_path.to_str().unwrap())
+        );
+        assert!(
+            !state
+                .panes
+                .active
+                .view
+                .has_thumbnail_pending(failed_path.to_str().unwrap())
+        );
+        assert!(
+            !state
+                .panes
+                .active
+                .view
+                .has_thumbnail_pending(dir_path.to_str().unwrap())
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

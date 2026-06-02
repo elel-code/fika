@@ -33,6 +33,7 @@
   - Current: virtual range metadata is cached; scrolling inside the same range does not reset the Slint model.
   - Current: Rust uses a tested `VirtualGridPlan` to calculate clamped viewport position, scroll extent, visible range, overscan range, and Slint anchor column from one source of truth.
   - Current: offscreen thumbnail completions update the cache without resetting the Slint model; visible completions still refresh the current virtual slice.
+  - Current: thumbnail scheduling for each virtual-slice sync is capped and owned by `src/app/thumbnail_pipeline.rs`, so large directories cannot enqueue an unbounded number of decode jobs from a single viewport update.
   - Current: rectangle selection narrows candidates to the intersecting column range before resolving paths, so large directories do not scan every visible result for a local drag box.
 - [x] Ctrl+wheel zoom for main file tiles.
 - [x] Click blank area clears selection and releases LineEdit focus.
@@ -216,6 +217,7 @@
   - Acceptance: thumbnails visible in the viewport are generated before offscreen items.
   - Current: only the current virtual slice plus overscan is scheduled; stale thumbnail results clear only their matching pending key, so viewport changes or zoom changes cannot leave an item permanently stuck as pending.
   - Current: thumbnail jobs for the actually visible columns are queued before left/right overscan thumbnails, keeping large-directory scrolling responsive when many image previews are pending.
+  - Current: the visible-first scheduler now owns duplicate suppression, pending-state marking, and the per-view-sync job cap in `src/app/thumbnail_pipeline.rs`; `main.rs` only submits the prioritized virtual slice and starts the returned async jobs.
   - Current: viewport-only thumbnail scheduling reuses the active directory/zoom generation instead of invalidating in-flight thumbnail work on every scroll.
   - Current: refresh/reload also reuses the active thumbnail generation, so in-flight visible thumbnails are not thrown away while directory entries are refreshed.
 
@@ -472,6 +474,7 @@ Acceptance for all:
   - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, search placement, and transient surface styling; the sidebar may keep Fika's rounded foreground treatment on top of COSMIC proportions.
   - Current direction: once the current structural/menu/performance work is stable, all non-main-pane chrome may move further toward COSMIC Files directly: colors, layout rhythm, address-bar position, Back/Forward affordances, search field position/display, and sidebar treatment should follow COSMIC where practical, while preserving Fika's rounded raised sidebar layer and the existing main-pane arrangement.
   - Current direction: future UI work should freely copy COSMIC Files for all chrome outside the main file arrangement, including color tokens, top-bar/main-pane layer treatment, address-bar alignment, navigation/search placement, menus, dialogs, and sidebar rhythm. The main pane's item arrangement remains the explicit exception.
+  - Current direction: top bar and main pane should continue to read as one flat content layer, while the sidebar remains a rounded foreground layer above them; the sidebar may be more Fika-specific, but its spacing and rhythm should still start from COSMIC.
   - Current: first shell pass aligns the top bar, search panel, status bar, and main pane to one shared surface while the sidebar uses a rounded foreground component color and a softer divider, keeping the main pane's column-first layout untouched.
   - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 56px top bar and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
   - Current: header controls now use a lighter 32px shared `ToolButton`, 32px path/search input surfaces, and softer light-theme sidebar colors, moving non-main-pane chrome closer to COSMIC while leaving the main file arrangement unchanged.
@@ -560,6 +563,7 @@ Acceptance for all:
   - Acceptance: cache files, failure markers, and external thumbnailer desktop entries are considered before adding more ad-hoc thumbnail code.
   - Current: thumbnail keys now carry freedesktop size buckets and cache filename identity, and thumbnail load reads/writes freedesktop cache/fail-marker paths based on the Thumbnail Managing Standard (`file://` URI MD5, `normal` / `large` / `x-large` / `xx-large`, and `fail/fika-$version`).
   - Current: Fika discovers freedesktop `.thumbnailer` entries from XDG thumbnailer directories, honors `TryExec`, matches exact and top-level wildcard MIME entries, expands `%i` / `%u` / `%o` / `%s` Exec field codes without a shell, and lets external thumbnailers generate the standard cache file for non-built-in formats such as PDF/SVG.
+  - Current: thumbnail dispatch is now bounded per virtual-view sync and kept in the thumbnail pipeline rather than inline in `main.rs`, matching the COSMIC-inspired separation between directory items, view state, and thumbnail work.
 
 - [x] Keep pointer-scope behavior aligned with COSMIC's mouse-area approach.
   - Reference: `cosmic-files/src/mouse_area.rs`.

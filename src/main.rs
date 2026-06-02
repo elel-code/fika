@@ -68,7 +68,7 @@ use app::selection::{
 use app::state::{AppState, DeviceAction, FileUndo};
 use app::thumbnail_pipeline::{
     apply_thumbnail_load_to_state, decorate_entries_with_cached_thumbnails,
-    prioritize_thumbnail_entries, thumbnail_schedule_candidate,
+    prioritize_thumbnail_entries, thumbnail_schedule_batch,
 };
 use app::transfer::{
     cancel_queued_operations, entry_at_main_point, main_drop_allowed, path_label,
@@ -3071,19 +3071,7 @@ fn schedule_visible_thumbnails(
     let (generation, paths) = {
         let mut state = state.borrow_mut();
         let generation = state.panes.active.thumbnail_generation.current();
-        let mut paths = Vec::new();
-
-        for entry in entries.iter().take(96) {
-            let Some((path, key)) = thumbnail_schedule_candidate(&state, entry, size_px) else {
-                continue;
-            };
-            state
-                .panes
-                .active
-                .view
-                .insert_thumbnail_pending(entry.path.to_string(), key);
-            paths.push(path);
-        }
+        let paths = thumbnail_schedule_batch(&mut state, entries, size_px);
 
         (generation, paths)
     };
