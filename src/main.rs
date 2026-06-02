@@ -2408,7 +2408,7 @@ fn apply_file_operation_progress(
     state: &Rc<RefCell<AppState>>,
     progress: FileOperationProgress,
 ) {
-    if let Some(update) = state.borrow().file_operation_progress_update(&progress) {
+    if let Some(update) = state.borrow_mut().file_operation_progress_update(&progress) {
         set_status(ui, &update.status);
     }
 }

@@ -106,6 +106,7 @@ impl AppState {
         let cancel = controller.cancel_handle();
         self.active_operation = Some(controller.id());
         self.active_operation_cancel = Some(controller.cancel_handle());
+        self.active_operation_progress_key = None;
         cancel
     }
 
@@ -117,6 +118,7 @@ impl AppState {
         if self.active_operation_id() == Some(id) {
             self.active_operation = None;
             self.active_operation_cancel = None;
+            self.active_operation_progress_key = None;
             true
         } else {
             false
@@ -165,12 +167,21 @@ impl AppState {
     }
 
     pub(crate) fn file_operation_progress_update(
-        &self,
+        &mut self,
         progress: &FileOperationProgress,
     ) -> Option<OperationProgressUpdate> {
         if self.active_operation_id() != Some(progress.id) {
             return None;
         }
+
+        let progress_key = (
+            progress.id,
+            operation_progress_bucket(progress.bytes_done, progress.bytes_total),
+        );
+        if self.active_operation_progress_key == Some(progress_key) {
+            return None;
+        }
+        self.active_operation_progress_key = Some(progress_key);
 
         Some(OperationProgressUpdate {
             status: operation_progress_status(
@@ -228,6 +239,14 @@ pub(crate) fn operation_progress_status(
             format_bytes(bytes_done),
             format_bytes(bytes_total)
         )
+    }
+}
+
+fn operation_progress_bucket(bytes_done: u64, bytes_total: u64) -> u64 {
+    if bytes_total == 0 {
+        u64::MAX
+    } else {
+        (bytes_done.saturating_mul(100) / bytes_total.max(1)).min(100)
     }
 }
 
@@ -454,6 +473,65 @@ mod tests {
             state.file_operation_progress_update(&current),
             Some(OperationProgressUpdate {
                 status: "Copying photo.jpg: 25% (512 B/2.0 KB)".to_string(),
+            })
+        );
+        assert_eq!(state.file_operation_progress_update(&current), None);
+
+        let same_bucket = FileOperationProgress {
+            id: 7,
+            operation: "copy".to_string(),
+            source: PathBuf::from("/tmp/photo.jpg"),
+            bytes_done: 520,
+            bytes_total: 2048,
+        };
+        assert_eq!(state.file_operation_progress_update(&same_bucket), None);
+
+        let next_bucket = FileOperationProgress {
+            id: 7,
+            operation: "copy".to_string(),
+            source: PathBuf::from("/tmp/photo.jpg"),
+            bytes_done: 1024,
+            bytes_total: 2048,
+        };
+        assert_eq!(
+            state.file_operation_progress_update(&next_bucket),
+            Some(OperationProgressUpdate {
+                status: "Copying photo.jpg: 50% (1.0 KB/2.0 KB)".to_string(),
+            })
+        );
+        assert!(state.finish_file_operation(7));
+        assert_eq!(state.active_operation_progress_key, None);
+    }
+
+    #[test]
+    fn operation_progress_update_reports_unknown_total_once() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.begin_file_operation(7);
+
+        let unknown = FileOperationProgress {
+            id: 7,
+            operation: "copy".to_string(),
+            source: PathBuf::from("/tmp/photo.jpg"),
+            bytes_done: 0,
+            bytes_total: 0,
+        };
+        assert_eq!(
+            state.file_operation_progress_update(&unknown),
+            Some(OperationProgressUpdate {
+                status: "Copying photo.jpg...".to_string(),
+            })
+        );
+        assert_eq!(state.file_operation_progress_update(&unknown), None);
+
+        let known = FileOperationProgress {
+            bytes_done: 0,
+            bytes_total: 2048,
+            ..unknown
+        };
+        assert_eq!(
+            state.file_operation_progress_update(&known),
+            Some(OperationProgressUpdate {
+                status: "Copying photo.jpg: 0% (0 B/2.0 KB)".to_string(),
             })
         );
     }

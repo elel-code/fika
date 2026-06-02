@@ -470,7 +470,7 @@ Acceptance for all:
   - Acceptance: paste availability does not depend on reading clipboard from transient menu contexts, and future paste-image/text/video-to-file workflows have a documented path.
   - Current: file-list paste availability now uses Fika's cached clipboard state; startup and menu entry only schedule background refreshes. Future image/text/video paste-to-file workflows remain to be designed.
 
-- [ ] Evolve file operation progress toward COSMIC's controller split.
+- [~] Evolve file operation progress toward COSMIC's controller split.
   - Reference: `cosmic-files/src/operation/controller.rs`, `recursive.rs`, and `notifiers.rs`.
   - Acceptance: queued copy/move/link/trash work has clearer progress/cancel state and less direct coupling to status-bar text.
   - Current: `src/app/operation_controller.rs` now owns operation queue snapshots, start gating, active operation id/cancel flag lifecycle, and cancellation summaries; `transfer.rs` calls these helpers instead of mutating every queue/control field inline.
@@ -479,6 +479,7 @@ Acceptance for all:
   - Current: remaining-queue suffixes and privilege-waiting status updates are also computed by `operation_controller.rs`, so `main.rs` no longer owns operation status composition.
   - Current: operation completion now goes through an `OperationCompletionSummary` in `operation_controller.rs`; stale result ids are ignored before they can register Undo or open a privilege prompt, and cache invalidation / current-directory refresh decisions no longer live in `main.rs`.
   - Current: operation progress events now go through an `OperationProgressUpdate` in `operation_controller.rs`; stale progress ids are ignored by the controller instead of being special-cased in `main.rs`.
+  - Current: the controller also tracks the last active-operation progress bucket, so repeated progress callbacks inside the same percentage/unknown-size state do not churn status-bar updates.
 
 - [ ] Add split view / dual-pane browsing.
   - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.
