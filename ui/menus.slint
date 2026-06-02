@@ -560,6 +560,7 @@ export component FileContextMenu inherits PopupSurface {
 
         if (root.selected-count <= 1 && root.is-dir && root.clipboard-has-paths): MenuItem {
             label: "Paste Into Folder";
+            shortcut: "Ctrl+V";
             dark: root.dark;
             clicked => { root.paste_into_folder(); }
         }
@@ -584,12 +585,14 @@ export component FileContextMenu inherits PopupSurface {
 
         if (root.selected-count <= 1): MenuItem {
             label: "Cut";
+            shortcut: "Ctrl+X";
             dark: root.dark;
             clicked => { root.cut_requested(); }
         }
 
         if (root.selected-count <= 1): MenuItem {
             label: "Copy";
+            shortcut: "Ctrl+C";
             dark: root.dark;
             clicked => { root.copy_requested(); }
         }
@@ -612,12 +615,14 @@ export component FileContextMenu inherits PopupSurface {
 
         if (root.selected-count > 1): MenuItem {
             label: "Cut";
+            shortcut: "Ctrl+X";
             dark: root.dark;
             clicked => { root.cut_requested(); }
         }
 
         if (root.selected-count > 1): MenuItem {
             label: "Copy";
+            shortcut: "Ctrl+C";
             dark: root.dark;
             clicked => { root.copy_requested(); }
         }
@@ -628,6 +633,7 @@ export component FileContextMenu inherits PopupSurface {
 
         MenuItem {
             label: root.selected-count > 1 ? "Move Selected to Trash" : "Move to Trash";
+            shortcut: "Delete";
             dark: root.dark;
             clicked => { root.trash_requested(); }
         }
@@ -662,12 +668,14 @@ export component ViewportContextMenu inherits PopupSurface {
 
         MenuItem {
             label: "Select All";
+            shortcut: "Ctrl+A";
             dark: root.dark;
             clicked => { root.select_all_requested(); }
         }
 
         MenuItem {
             label: root.clipboard-cut ? "Paste Moved Items" : "Paste";
+            shortcut: "Ctrl+V";
             dark: root.dark;
             enabled: root.clipboard-has-paths;
             clicked => { root.paste_requested(); }
