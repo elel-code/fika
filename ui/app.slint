@@ -114,12 +114,12 @@ export component AppWindow inherits Window {
     private property <length> icon-cell-width: root.icon_zoom_level == 0 ? 172px : (root.icon_zoom_level == 1 ? 208px : (root.icon_zoom_level == 2 ? 248px : (root.icon_zoom_level == 3 ? 292px : 340px)));
     private property <length> icon-row-height: root.icon_zoom_level == 0 ? 78px : (root.icon_zoom_level == 1 ? 90px : (root.icon_zoom_level == 2 ? 104px : (root.icon_zoom_level == 3 ? 124px : 146px)));
     private property <length> icon-grid-padding: 14px;
-    private property <color> shell-base-color: root.dark_mode ? #101418 : #f5f7f9;
+    private property <color> shell-base-color: root.dark_mode ? #101418 : #f6f8fa;
     private property <color> sidebar-surface-color: root.dark_mode ? #181e24 : #ffffff;
-    private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d4dde6;
+    private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d8e1ea;
     private property <color> shell-separator-color: root.dark_mode ? #242b33 : #e5eaf0;
-    private property <length> sidebar-panel-margin: 8px;
-    private property <length> sidebar-panel-radius: 14px;
+    private property <length> sidebar-panel-margin: 10px;
+    private property <length> sidebar-panel-radius: 16px;
     private property <float> sidebar-resize-start-width-px: 280;
     private property <length> sidebar-resize-press-x: 0px;
     private property <bool> context-menu-open: false;

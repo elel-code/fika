@@ -486,7 +486,8 @@ Acceptance for all:
   - Current: the top-bar search field now follows COSMIC's 240px header search rhythm through min/preferred/max layout constraints, and the path field relaxes its minimum width while search is active so search mode cannot squeeze the main-pane geometry or create Slint layout recursion.
   - Current: `AppWindow` now owns a single `main-content-left` edge shared by the top bar and main pane; the sidebar divider sits at the main-pane side of the resize gutter, while the raised rounded sidebar remains visually above the flat top/main content layer.
   - Current: the light shell base is subtly distinct from the raised white sidebar, the sidebar border is stronger than the flat top/main separators, and Places/Devices rows are inset inside the rounded sidebar panel.
-  - Current: sidebar foreground geometry now uses explicit 8px panel margin and 14px radius tokens, keeping the COSMIC-style raised sidebar layer consistent while the top bar and main pane remain a shared flat base.
+  - Current: sidebar foreground geometry now uses explicit 10px panel margin and 16px radius tokens, keeping the COSMIC-style raised sidebar layer consistent while the top bar and main pane remain a shared flat base.
+  - Current: shared header controls now use quieter COSMIC-like 32px icon-button styling with 8px radius and lighter text weight, and path/search fields use calmer light/dark tokens without changing the main file arrangement.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.

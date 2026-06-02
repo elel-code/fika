@@ -29,17 +29,17 @@ export component TopBar inherits Rectangle {
     private property <color> separator-color: root.dark ? #242b33 : #e5eaf0;
     private property <color> field-background: root.dark ? #151b20 : #ffffff;
     private property <color> field-focus-background: root.dark ? #12181d : #ffffff;
-    private property <color> field-border: root.dark ? #303943 : #d9e1e8;
+    private property <color> field-border: root.dark ? #2f3841 : #d8e1ea;
     private property <color> field-focus-border: root.dark ? #58b4d8 : #2f8dbc;
-    private property <color> field-text-color: root.dark ? #eef3f7 : #26303a;
-    private property <color> muted-text-color: root.dark ? #87929d : #697684;
-    private property <color> close-hover-color: root.dark ? #222a31 : #edf1f4;
-    private property <length> path-min-width: root.search-active ? 48px : 160px;
+    private property <color> field-text-color: root.dark ? #eef3f7 : #24303b;
+    private property <color> muted-text-color: root.dark ? #8b97a3 : #667381;
+    private property <color> close-hover-color: root.dark ? #20272e : #edf1f4;
+    private property <length> path-min-width: root.search-active ? 64px : 168px;
 
     HorizontalLayout {
-        padding-right: 12px;
-        padding-top: 9px;
-        padding-bottom: 9px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
         spacing: 0px;
 
         Rectangle {
@@ -49,7 +49,7 @@ export component TopBar inherits Rectangle {
 
         HorizontalLayout {
             padding-left: 0px;
-            padding-right: 14px;
+            padding-right: 12px;
             spacing: 4px;
 
             ToolButton {
@@ -77,7 +77,7 @@ export component TopBar inherits Rectangle {
             horizontal-stretch: 1;
             min-width: root.path-min-width;
             height: 32px;
-            border-radius: 9px;
+            border-radius: 8px;
             border-width: 1px;
             border-color: root.path-focused ? root.field-focus-border : root.field-border;
             background: root.path-focused ? root.field-focus-background : root.field-background;
@@ -118,7 +118,7 @@ export component TopBar inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 14px;
+            padding-left: 12px;
             spacing: 4px;
 
             if (!root.search-active): ToolButton {
@@ -139,7 +139,7 @@ export component TopBar inherits Rectangle {
                 preferred-width: 240px;
                 max-width: 240px;
                 height: 32px;
-                border-radius: 9px;
+                border-radius: 8px;
                 border-width: 1px;
                 border-color: root.search-focused ? root.field-focus-border : root.field-border;
                 background: root.search-focused ? root.field-focus-background : root.field-background;

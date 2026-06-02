@@ -56,8 +56,9 @@ Useful UI direction:
 - Current chrome pass: the active top-bar search field follows COSMIC's 240px header search rhythm through min/preferred/max layout constraints instead of a fixed width binding, so opening search can shrink within the header without changing main-pane geometry or creating Slint layout recursion.
 - Current chrome pass: the header uses the same `main-content-left` edge as the main pane, so Back/Forward/Up, the path entry, search, and the horizontal separator all belong to the flat content layer behind the raised rounded sidebar.
 - Current chrome pass: the light shell base is slightly calmer than the raised white sidebar, the sidebar border is a little stronger than flat shell separators, and sidebar rows are inset inside the rounded foreground panel instead of touching the panel edge.
-- Current chrome pass: sidebar geometry uses explicit panel margin/radius tokens (8px / 14px) rather than ad-hoc offsets, keeping the rounded foreground layer consistent as future COSMIC-style sidebar polish continues.
-- Current chrome pass: shared controls now use quieter hover/selected fills, softer 8-9px radii, and consistent separator colors across the top bar, search strip, status bar, and sidebar rows. Places drag geometry stays unchanged while the row visuals move closer to COSMIC's calmer navigation style.
+- Current chrome pass: sidebar geometry uses explicit panel margin/radius tokens (10px / 16px) rather than ad-hoc offsets, keeping the rounded foreground layer consistent as future COSMIC-style sidebar polish continues.
+- Current chrome pass: shared controls now use quieter hover/selected fills, softer 8px radii, and consistent separator colors across the top bar, search strip, status bar, and sidebar rows. Places drag geometry stays unchanged while the row visuals move closer to COSMIC's calmer navigation style.
+- Current chrome pass: the header follows COSMIC's compact icon-button rhythm more closely: 32px buttons use a lighter 13px label weight, path/search fields keep the same quiet input surface, and the active search field remains bounded so it cannot squeeze the main pane.
 
 Follow-up candidates:
 

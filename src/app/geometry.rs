@@ -1541,7 +1541,7 @@ mod tests {
         );
         assert!(
             app.contains(
-                "private property <color> shell-base-color: root.dark_mode ? #101418 : #f5f7f9;"
+                "private property <color> shell-base-color: root.dark_mode ? #101418 : #f6f8fa;"
             ),
             "top bar, main pane, search strip, and status bar should share one calm base surface"
         );
@@ -1551,7 +1551,7 @@ mod tests {
         );
         assert!(
             app.contains(
-                "private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d4dde6;"
+                "private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d8e1ea;"
             ),
             "sidebar border should stay slightly stronger than the flat shell separators"
         );
@@ -1566,6 +1566,11 @@ mod tests {
         assert!(
             app.contains("private property <float> sidebar-resize-start-width-px: 280;"),
             "sidebar resize state should initialize from the same COSMIC-like default"
+        );
+        assert!(
+            app.contains("private property <length> sidebar-panel-margin: 10px;")
+                && app.contains("private property <length> sidebar-panel-radius: 16px;"),
+            "sidebar foreground should keep the roomier rounded COSMIC-like panel treatment"
         );
 
         for (name, slint) in [
@@ -1595,7 +1600,7 @@ mod tests {
         );
         assert!(
             top_bar.contains(
-                "private property <color> field-text-color: root.dark ? #eef3f7 : #26303a;"
+                "private property <color> field-text-color: root.dark ? #eef3f7 : #24303b;"
             ),
             "TopBar input text should remain readable in light theme"
         );
@@ -1605,7 +1610,7 @@ mod tests {
         );
         assert!(
             top_bar.contains(
-                "private property <length> path-min-width: root.search-active ? 48px : 160px;"
+                "private property <length> path-min-width: root.search-active ? 64px : 168px;"
             ),
             "TopBar path field should relax its minimum width when search is active"
         );
@@ -1639,6 +1644,10 @@ mod tests {
         assert!(
             tool_button.contains("width: 32px;") && tool_button.contains("height: 32px;"),
             "shared ToolButton should keep the lighter 32px header control size"
+        );
+        assert!(
+            tool_button.contains("border-radius: 8px;") && tool_button.contains("font-size: 13px;"),
+            "shared ToolButton should keep COSMIC-like icon-button weight"
         );
     }
 
