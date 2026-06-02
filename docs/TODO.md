@@ -460,6 +460,7 @@ Acceptance for all:
   - Acceptance: new UI polish and desktop-integration work first checks `./cosmic-files` before reaching for Dolphin-specific behavior.
   - Acceptance: the current Dolphin-like column-first main-pane arrangement, horizontal scrolling, and virtualized Slint tile model stay intact.
   - Current: `docs/COSMIC_REFERENCE.md` records the policy and concrete source files to inspect.
+  - Current direction: shell visuals should move closer to COSMIC Files: top bar and main pane share one calm surface with only necessary divider lines, the sidebar reads as the raised/foreground layer with Fika-friendly rounded treatment, and address/search/navigation placement follows COSMIC unless it conflicts with Fika's column-first main pane.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.
@@ -498,6 +499,7 @@ Acceptance for all:
   - Current: Virtual range/cache metadata, active viewport position, thumbnail pending map, and per-directory viewport restore cache are now isolated behind `PaneView`, so visible tile slicing, scroll restoration, and thumbnail-range checks can become per-pane before the split UI is exposed.
   - Current: Directory-load, open-file, and thumbnail generation counters are now owned by `PaneState`, so stale async results are scoped to the pane that started the work instead of a global app counter.
   - Current: The active main-pane directory, entries, history, selection, search, and virtual-view state are now grouped under `PaneState`. Fika still renders one pane, but most pane-owned data now has a single ownership boundary before the visible split UI is added.
+  - Current: `AppState` now owns `PanesState` with an explicit active pane slot instead of a naked `PaneState`, so the next split-view pass can add a second pane and focused-pane routing without rewriting every pane-owned state field again.
 
 - [x] Expand Trash beyond first-pass move/undo.
   - Reference: `cosmic-files/src/trash.rs`, `cosmic-files/src/operation/mod.rs`, `cosmic-files/src/menu.rs`, and `cosmic-files/src/app.rs`.

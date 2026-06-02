@@ -44,7 +44,7 @@ pub(crate) fn prepare_virtual_view_update(
         2,
     );
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
-    state.pane.view.viewport_x = plan.viewport_x;
+    state.panes.active.view.viewport_x = plan.viewport_x;
 
     let rebuild_model = should_rebuild_virtual_model(
         state,
@@ -69,11 +69,11 @@ pub(crate) fn prepare_virtual_view_update(
 
     let mut entries = filtered_entries_range(state, plan.range.clone());
     decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
-    state.pane.view.virtual_view.range = plan.range.clone();
-    state.pane.view.virtual_view.entry_count = visible_count;
-    state.pane.view.virtual_view.rows_per_column = input.layout.rows_per_column;
-    state.pane.view.virtual_view.cell_width = input.layout.cell_width;
-    state.pane.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
+    state.panes.active.view.virtual_view.range = plan.range.clone();
+    state.panes.active.view.virtual_view.entry_count = visible_count;
+    state.panes.active.view.virtual_view.rows_per_column = input.layout.rows_per_column;
+    state.panes.active.view.virtual_view.cell_width = input.layout.cell_width;
+    state.panes.active.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
 
     VirtualViewUpdate {
         entry_count: visible_count,
@@ -96,11 +96,11 @@ fn should_rebuild_virtual_model(
     schedule_thumbnails: bool,
 ) -> bool {
     !schedule_thumbnails
-        || state.pane.view.virtual_view.range != plan.range
-        || state.pane.view.virtual_view.entry_count != visible_count
-        || state.pane.view.virtual_view.rows_per_column != layout.rows_per_column
-        || state.pane.view.virtual_view.cell_width != layout.cell_width
-        || state.pane.view.virtual_view.thumbnail_size_px != thumbnail_size_px
+        || state.panes.active.view.virtual_view.range != plan.range
+        || state.panes.active.view.virtual_view.entry_count != visible_count
+        || state.panes.active.view.virtual_view.rows_per_column != layout.rows_per_column
+        || state.panes.active.view.virtual_view.cell_width != layout.cell_width
+        || state.panes.active.view.virtual_view.thumbnail_size_px != thumbnail_size_px
 }
 
 #[cfg(test)]
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn virtual_view_update_reuses_model_inside_same_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.pane.entries = (0..100).map(test_entry).collect();
+        state.panes.active.entries = (0..100).map(test_entry).collect();
 
         let first = prepare_virtual_view_update(
             &mut state,
@@ -159,7 +159,7 @@ mod tests {
         assert!(first.rebuild_model);
         assert_eq!(first.range, 0..24);
         assert_eq!(first.entries.len(), 24);
-        assert_eq!(state.pane.view.viewport_x, 0.0);
+        assert_eq!(state.panes.active.view.viewport_x, 0.0);
 
         let second = prepare_virtual_view_update(
             &mut state,
@@ -174,13 +174,13 @@ mod tests {
         );
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
-        assert_eq!(state.pane.view.viewport_x, 40.0);
+        assert_eq!(state.panes.active.view.viewport_x, 40.0);
     }
 
     #[test]
     fn virtual_view_update_clamps_out_of_bounds_viewport() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.pane.entries = (0..10).map(test_entry).collect();
+        state.panes.active.entries = (0..10).map(test_entry).collect();
 
         let update = prepare_virtual_view_update(
             &mut state,
@@ -197,6 +197,6 @@ mod tests {
         assert!(update.viewport_clamped);
         assert_eq!(update.viewport_x, 70.0);
         assert_eq!(update.range, 0..10);
-        assert_eq!(state.pane.view.viewport_x, 70.0);
+        assert_eq!(state.panes.active.view.viewport_x, 70.0);
     }
 }

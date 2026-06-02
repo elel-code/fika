@@ -24,16 +24,16 @@ pub(crate) fn prepare_directory_load(
     preserve_view: bool,
 ) -> DirectoryLoadPreparation {
     cancel_active_search(state);
-    let generation = state.pane.load_generation.next();
-    state.pane.open_generation.next();
-    state.pane.search_generation.next();
+    let generation = state.panes.active.load_generation.next();
+    state.panes.active.open_generation.next();
+    state.panes.active.search_generation.next();
     if !preserve_view {
-        state.pane.thumbnail_generation.next();
-        state.pane.view.clear_thumbnail_pending();
+        state.panes.active.thumbnail_generation.next();
+        state.panes.active.view.clear_thumbnail_pending();
         reset_search_state(state);
-        state.pane.selection.clear();
+        state.panes.active.selection.clear();
     }
-    let current_dir = state.pane.current_dir.clone();
+    let current_dir = state.panes.active.current_dir.clone();
     let cached_entries = state.cached_directory_entries(&current_dir);
     let defer_view_restore = !preserve_view && cached_entries.is_none();
 
@@ -107,17 +107,18 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp/current"), Vec::new());
         let pending_key = thumbnails::fallback_key(Path::new("/tmp/current/photo.png"), 64);
         state
-            .pane
+            .panes
+            .active
             .view
             .insert_thumbnail_pending("/tmp/current/photo.png".to_string(), pending_key.clone());
-        state.pane.search.query = "photo".to_string();
-        state.pane.selection.paths = vec!["/tmp/current/photo.png".to_string()];
-        state.pane.selection.anchor = Some("/tmp/current/photo.png".to_string());
+        state.panes.active.search.query = "photo".to_string();
+        state.panes.active.selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.panes.active.selection.anchor = Some("/tmp/current/photo.png".to_string());
         state.insert_directory_cache(
             PathBuf::from("/tmp/current"),
             vec![test_entry("photo.png", "/tmp/current/photo.png")],
         );
-        let thumbnail_generation = state.pane.thumbnail_generation.current();
+        let thumbnail_generation = state.panes.active.thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, true);
 
@@ -131,20 +132,24 @@ mod tests {
         );
         assert!(!preparation.defer_view_restore);
         assert_eq!(
-            state.pane.thumbnail_generation.current(),
+            state.panes.active.thumbnail_generation.current(),
             thumbnail_generation
         );
         assert_eq!(
             state
-                .pane
+                .panes
+                .active
                 .view
                 .thumbnail_pending_key("/tmp/current/photo.png"),
             Some(&pending_key)
         );
-        assert_eq!(state.pane.search.query, "photo");
-        assert_eq!(state.pane.selection.paths, vec!["/tmp/current/photo.png"]);
+        assert_eq!(state.panes.active.search.query, "photo");
         assert_eq!(
-            state.pane.selection.anchor.as_deref(),
+            state.panes.active.selection.paths,
+            vec!["/tmp/current/photo.png"]
+        );
+        assert_eq!(
+            state.panes.active.selection.anchor.as_deref(),
             Some("/tmp/current/photo.png")
         );
     }
@@ -154,31 +159,33 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp/current"), Vec::new());
         let pending_key = thumbnails::fallback_key(Path::new("/tmp/current/photo.png"), 64);
         state
-            .pane
+            .panes
+            .active
             .view
             .insert_thumbnail_pending("/tmp/current/photo.png".to_string(), pending_key);
-        state.pane.search.query = "photo".to_string();
-        state.pane.search.kind_filter = 3;
-        state.pane.selection.paths = vec!["/tmp/current/photo.png".to_string()];
-        state.pane.selection.anchor = Some("/tmp/current/photo.png".to_string());
-        let thumbnail_generation = state.pane.thumbnail_generation.current();
+        state.panes.active.search.query = "photo".to_string();
+        state.panes.active.search.kind_filter = 3;
+        state.panes.active.selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.panes.active.selection.anchor = Some("/tmp/current/photo.png".to_string());
+        let thumbnail_generation = state.panes.active.thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, false);
 
         assert_eq!(preparation.current_dir, PathBuf::from("/tmp/current"));
         assert!(preparation.cached_entries.is_none());
         assert!(preparation.defer_view_restore);
-        assert!(state.pane.thumbnail_generation.current() > thumbnail_generation);
+        assert!(state.panes.active.thumbnail_generation.current() > thumbnail_generation);
         assert!(
             !state
-                .pane
+                .panes
+                .active
                 .view
                 .has_thumbnail_pending("/tmp/current/photo.png")
         );
-        assert!(state.pane.search.query.is_empty());
-        assert_eq!(state.pane.search.kind_filter, 0);
-        assert!(state.pane.selection.paths.is_empty());
-        assert!(state.pane.selection.anchor.is_none());
+        assert!(state.panes.active.search.query.is_empty());
+        assert_eq!(state.panes.active.search.kind_filter, 0);
+        assert!(state.panes.active.selection.paths.is_empty());
+        assert!(state.panes.active.selection.anchor.is_none());
     }
 
     #[test]

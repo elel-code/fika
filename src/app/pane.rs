@@ -44,6 +44,19 @@ impl PaneState {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct PanesState {
+    pub(crate) active: PaneState,
+}
+
+impl PanesState {
+    pub(crate) fn new(active_dir: PathBuf) -> Self {
+        Self {
+            active: PaneState::new(active_dir),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PaneNavigation {
     pub(crate) previous: PathBuf,
@@ -377,6 +390,16 @@ mod tests {
         assert!(pane.load_generation.is_current(load));
         assert!(pane.open_generation.is_current(open));
         assert!(pane.thumbnail_generation.is_current(thumbnail));
+    }
+
+    #[test]
+    fn panes_state_starts_with_active_pane() {
+        let panes = PanesState::new(PathBuf::from("/tmp/active"));
+
+        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/active"));
+        assert!(panes.active.entries.is_empty());
+        assert_eq!(panes.active.history.back_len(), 0);
+        assert_eq!(panes.active.history.forward_len(), 0);
     }
 
     #[test]

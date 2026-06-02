@@ -166,7 +166,7 @@ fn main_drop_target_dir(
     entry_at_main_point(ui, state, x, y)
         .filter(|target| target.is_dir && Path::new(target.path.as_str()) != source)
         .map(|target| PathBuf::from(target.path.as_str()))
-        .unwrap_or_else(|| state.pane.current_dir.clone())
+        .unwrap_or_else(|| state.panes.active.current_dir.clone())
 }
 
 fn prepare_current_dir_transfer_with_state(
@@ -177,8 +177,8 @@ fn prepare_current_dir_transfer_with_state(
     x: f32,
     y: f32,
 ) -> bool {
-    let target_path = state.pane.current_dir.display().to_string();
-    let target_label = display_location_name(&state.pane.current_dir);
+    let target_path = state.panes.active.current_dir.display().to_string();
+    let target_label = display_location_name(&state.panes.active.current_dir);
     prepare_transfer_menu(
         ui,
         source,

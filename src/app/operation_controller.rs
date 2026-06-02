@@ -158,8 +158,8 @@ impl AppState {
         }
 
         let refresh_current_dir = source_parent
-            .is_some_and(|parent| parent == self.pane.current_dir)
-            || self.pane.current_dir == target_dir;
+            .is_some_and(|parent| parent == self.panes.active.current_dir)
+            || self.panes.active.current_dir == target_dir;
         Some(OperationCompletionSummary {
             disposition: operation_result_disposition(operation, result, can_request_privilege),
             refresh_current_dir,

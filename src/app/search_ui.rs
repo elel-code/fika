@@ -2,26 +2,26 @@ use crate::app::state::AppState;
 use std::sync::atomic::Ordering;
 
 pub(crate) fn cancel_active_search(state: &mut AppState) {
-    if let Some(cancel) = state.pane.search_cancel.take() {
+    if let Some(cancel) = state.panes.active.search_cancel.take() {
         cancel.store(true, Ordering::Relaxed);
     }
 }
 
 pub(crate) fn reset_search_state(state: &mut AppState) {
-    state.pane.search.reset_all();
-    state.pane.view.virtual_view.invalidate();
+    state.panes.active.search.reset_all();
+    state.panes.active.view.virtual_view.invalidate();
 }
 
 pub(crate) fn set_search_filters(state: &mut AppState, kind: i32, modified: i32, size: i32) {
-    state.pane.search.kind_filter = kind.clamp(0, 3);
-    state.pane.search.modified_filter = modified.clamp(0, 3);
-    state.pane.search.size_filter = size.clamp(0, 3);
+    state.panes.active.search.kind_filter = kind.clamp(0, 3);
+    state.panes.active.search.modified_filter = modified.clamp(0, 3);
+    state.panes.active.search.size_filter = size.clamp(0, 3);
 }
 
 pub(crate) fn search_filters_active(state: &AppState) -> bool {
-    state.pane.search.kind_filter != 0
-        || state.pane.search.modified_filter != 0
-        || state.pane.search.size_filter != 0
+    state.panes.active.search.kind_filter != 0
+        || state.panes.active.search.modified_filter != 0
+        || state.panes.active.search.size_filter != 0
 }
 
 pub(crate) fn recursive_search_status(query: &str) -> String {
@@ -78,47 +78,47 @@ mod tests {
 
         set_search_filters(&mut state, -1, 2, 99);
 
-        assert_eq!(state.pane.search.kind_filter, 0);
-        assert_eq!(state.pane.search.modified_filter, 2);
-        assert_eq!(state.pane.search.size_filter, 3);
+        assert_eq!(state.panes.active.search.kind_filter, 0);
+        assert_eq!(state.panes.active.search.modified_filter, 2);
+        assert_eq!(state.panes.active.search.size_filter, 3);
         assert!(search_filters_active(&state));
 
         set_search_filters(&mut state, 0, 0, 0);
 
-        assert_eq!(state.pane.search.kind_filter, 0);
-        assert_eq!(state.pane.search.modified_filter, 0);
-        assert_eq!(state.pane.search.size_filter, 0);
+        assert_eq!(state.panes.active.search.kind_filter, 0);
+        assert_eq!(state.panes.active.search.modified_filter, 0);
+        assert_eq!(state.panes.active.search.size_filter, 0);
         assert!(!search_filters_active(&state));
     }
 
     #[test]
     fn reset_search_state_clears_query_and_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.pane.search.query = "report".to_string();
+        state.panes.active.search.query = "report".to_string();
         set_search_filters(&mut state, 1, 2, 3);
-        state.pane.search.visible_entry_indices = Some(vec![0, 2, 4]);
-        state.pane.view.virtual_view.range = 1..3;
+        state.panes.active.search.visible_entry_indices = Some(vec![0, 2, 4]);
+        state.panes.active.view.virtual_view.range = 1..3;
 
         reset_search_state(&mut state);
 
-        assert_eq!(state.pane.search.query, "");
-        assert_eq!(state.pane.search.kind_filter, 0);
-        assert_eq!(state.pane.search.modified_filter, 0);
-        assert_eq!(state.pane.search.size_filter, 0);
-        assert!(state.pane.search.visible_entry_indices.is_none());
-        assert!(state.pane.view.virtual_view.range.is_empty());
+        assert_eq!(state.panes.active.search.query, "");
+        assert_eq!(state.panes.active.search.kind_filter, 0);
+        assert_eq!(state.panes.active.search.modified_filter, 0);
+        assert_eq!(state.panes.active.search.size_filter, 0);
+        assert!(state.panes.active.search.visible_entry_indices.is_none());
+        assert!(state.panes.active.view.virtual_view.range.is_empty());
     }
 
     #[test]
     fn cancel_active_search_marks_token_and_removes_it_from_state() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let cancel = Arc::new(AtomicBool::new(false));
-        state.pane.search_cancel = Some(cancel.clone());
+        state.panes.active.search_cancel = Some(cancel.clone());
 
         cancel_active_search(&mut state);
 
         assert!(cancel.load(Ordering::Relaxed));
-        assert!(state.pane.search_cancel.is_none());
+        assert!(state.panes.active.search_cancel.is_none());
     }
 
     #[test]

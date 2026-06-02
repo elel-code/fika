@@ -1,4 +1,4 @@
-use crate::app::pane::PaneState;
+use crate::app::pane::PanesState;
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::thumbnails;
@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicBool;
 pub(crate) const MAX_DIRECTORY_CACHE_ENTRIES: usize = 64;
 #[derive(Debug)]
 pub(crate) struct AppState {
-    pub(crate) pane: PaneState,
+    pub(crate) panes: PanesState,
     pub(crate) places: Vec<PlaceEntry>,
     pub(crate) other_application_apps: Vec<DesktopApp>,
     pub(crate) clipboard_paths: Vec<PathBuf>,
@@ -51,7 +51,7 @@ pub(crate) struct AppState {
 impl AppState {
     pub(crate) fn new(current_dir: PathBuf, places: Vec<PlaceEntry>) -> Self {
         Self {
-            pane: PaneState::new(current_dir),
+            panes: PanesState::new(current_dir),
             places,
             other_application_apps: Vec::new(),
             clipboard_paths: Vec::new(),
