@@ -1,9 +1,9 @@
 use crate::FileEntry;
 use crate::app::pane::PaneTarget;
-use crate::app::search_ui::{cancel_active_search, reset_search_state};
 use crate::app::state::AppState;
 use crate::fs::entries::RawFileEntry;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 #[derive(Debug)]
 pub(crate) struct DirectoryLoadPreparation {
@@ -25,35 +25,42 @@ pub(crate) fn prepare_directory_load(
     state: &mut AppState,
     preserve_view: bool,
 ) -> DirectoryLoadPreparation {
-    cancel_active_search(state);
+    prepare_directory_load_for_target(state, PaneTarget::Focused, preserve_view)
+        .expect("focused pane should always exist")
+}
+
+pub(crate) fn prepare_directory_load_for_target(
+    state: &mut AppState,
+    target: PaneTarget,
+    preserve_view: bool,
+) -> Option<DirectoryLoadPreparation> {
     let (pane_id, current_dir, generation) = {
-        let pane = state
-            .panes
-            .pane_mut_for_target(PaneTarget::Focused)
-            .expect("focused pane should always exist");
+        let pane = state.panes.pane_mut_for_target(target)?;
+        if let Some(cancel) = pane.search_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         let generation = pane.load_generation.next();
         pane.open_generation.next();
         pane.search_generation.next();
         if !preserve_view {
             pane.thumbnail_generation.next();
             pane.view.clear_thumbnail_pending();
+            pane.view.virtual_view.invalidate();
             pane.selection.clear();
+            pane.search.reset_all();
         }
         (pane.id, pane.current_dir.clone(), generation)
     };
-    if !preserve_view {
-        reset_search_state(state);
-    }
     let cached_entries = state.cached_directory_entries(&current_dir);
     let defer_view_restore = !preserve_view && cached_entries.is_none();
 
-    DirectoryLoadPreparation {
+    Some(DirectoryLoadPreparation {
         pane_id,
         current_dir,
         generation,
         cached_entries,
         defer_view_restore,
-    }
+    })
 }
 
 pub(crate) fn directory_load_error_recovery(
@@ -197,6 +204,61 @@ mod tests {
         assert_eq!(state.panes.active.search.kind_filter, 0);
         assert!(state.panes.active.selection.paths.is_empty());
         assert!(state.panes.active.selection.anchor.is_none());
+    }
+
+    #[test]
+    fn targeted_directory_load_updates_only_requested_pane() {
+        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
+        state.panes.active.search.query = "active-query".to_string();
+        state.panes.active.selection.paths = vec!["/tmp/active/keep.txt".to_string()];
+        let active_pending_key = thumbnails::fallback_key(Path::new("/tmp/active/keep.txt"), 64);
+        state
+            .panes
+            .active
+            .view
+            .insert_thumbnail_pending("/tmp/active/keep.txt".to_string(), active_pending_key);
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
+        let inactive_id = state.panes.inactive().expect("inactive pane").id;
+        {
+            let inactive = state.panes.inactive_mut().expect("inactive pane");
+            inactive.search.query = "inactive-query".to_string();
+            inactive.selection.paths = vec!["/tmp/inactive/drop.txt".to_string()];
+            inactive.selection.anchor = Some("/tmp/inactive/drop.txt".to_string());
+            inactive.view.insert_thumbnail_pending(
+                "/tmp/inactive/drop.txt".to_string(),
+                thumbnails::fallback_key(Path::new("/tmp/inactive/drop.txt"), 64),
+            );
+        }
+
+        let preparation =
+            prepare_directory_load_for_target(&mut state, PaneTarget::Id(inactive_id), false)
+                .expect("inactive pane should resolve");
+
+        assert_eq!(preparation.pane_id, inactive_id);
+        assert_eq!(preparation.current_dir, PathBuf::from("/tmp/inactive"));
+        assert_eq!(state.panes.active.search.query, "active-query");
+        assert_eq!(
+            state.panes.active.selection.paths,
+            vec!["/tmp/active/keep.txt"]
+        );
+        assert!(
+            state
+                .panes
+                .active
+                .view
+                .has_thumbnail_pending("/tmp/active/keep.txt")
+        );
+
+        let inactive = state.panes.inactive().expect("inactive pane");
+        assert!(inactive.search.query.is_empty());
+        assert!(inactive.selection.paths.is_empty());
+        assert!(inactive.selection.anchor.is_none());
+        assert!(
+            !inactive
+                .view
+                .has_thumbnail_pending("/tmp/inactive/drop.txt")
+        );
+        assert!(inactive.view.virtual_view.range.is_empty());
     }
 
     #[test]

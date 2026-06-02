@@ -26,7 +26,7 @@ use app::chooser::{
 use app::device_monitor::start_device_monitor;
 use app::directory_loading::{
     DirectoryLoadErrorRecovery, DirectoryLoadPreparation, directory_entries_match,
-    directory_load_error_recovery, prepare_directory_load,
+    directory_load_error_recovery, prepare_directory_load, prepare_directory_load_for_target,
 };
 use app::dnd::{
     MainDndTrace, PlacesDndTrace, SLINT_DROPAREA_BACKEND_SOURCE, dnd_debug_enabled_from_env,
@@ -1210,6 +1210,75 @@ fn refresh_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Asy
     load_directory_with_preservation(ui, state, bridge, true);
 }
 
+fn refresh_panes(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    pane_ids: &[u64],
+) {
+    for pane_id in pane_ids {
+        if state.borrow().panes.active.id == *pane_id {
+            refresh_directory(ui, state, bridge);
+        } else {
+            refresh_inactive_pane(ui, state, bridge, *pane_id);
+        }
+    }
+}
+
+fn refresh_inactive_pane(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    pane_id: u64,
+) {
+    let Some(preparation) = ({
+        let mut state = state.borrow_mut();
+        prepare_directory_load_for_target(&mut state, PaneTarget::Id(pane_id), true)
+    }) else {
+        return;
+    };
+    load_prepared_inactive_directory(ui, state, bridge, preparation);
+}
+
+fn load_prepared_inactive_directory(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    preparation: DirectoryLoadPreparation,
+) {
+    let DirectoryLoadPreparation {
+        pane_id,
+        current_dir,
+        generation,
+        cached_entries: _,
+        defer_view_restore,
+    } = preparation;
+    debug_log(&format!(
+        "load_directory inactive pane_id={pane_id} generation={generation} preserve_view=true defer_view_restore={defer_view_restore} path={}",
+        current_dir.display()
+    ));
+    sync_inactive_pane_ui(ui, state);
+    watch_current_directory(&current_dir, pane_id, generation, bridge);
+
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let result = read_entries_async(&current_dir).await;
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::DirectoryLoaded(DirectoryLoadResult {
+                pane_id,
+                generation,
+                path: current_dir,
+                preserve_view: true,
+                defer_view_restore,
+                result,
+            }),
+        );
+    });
+}
+
 fn prefetch_sidebar_locations_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     let paths = {
         let mut state = state.borrow_mut();
@@ -2294,8 +2363,8 @@ fn apply_file_operation_result(
         OperationResultDisposition::Failed { status } => Some(status),
     };
 
-    if summary.refresh_current_dir {
-        refresh_directory(ui, state, bridge);
+    if !summary.refresh_pane_ids.is_empty() {
+        refresh_panes(ui, state, bridge, &summary.refresh_pane_ids);
     }
     if let Some(status_message) =
         operation_final_status(status_message, requested_privilege, summary.remaining)

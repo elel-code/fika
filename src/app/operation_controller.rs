@@ -44,6 +44,7 @@ pub(crate) enum OperationResultDisposition {
 pub(crate) struct OperationCompletionSummary {
     pub(crate) disposition: OperationResultDisposition,
     pub(crate) refresh_current_dir: bool,
+    pub(crate) refresh_pane_ids: Vec<u64>,
     pub(crate) remaining: usize,
 }
 
@@ -157,12 +158,14 @@ impl AppState {
             self.remove_directory_cache(source_parent);
         }
 
-        let refresh_current_dir = source_parent
-            .is_some_and(|parent| parent == self.panes.active.current_dir)
-            || self.panes.active.current_dir == target_dir;
+        let refresh_pane_ids = operation_affected_pane_ids(self, source_parent, target_dir);
+        let refresh_current_dir = refresh_pane_ids
+            .iter()
+            .any(|id| *id == self.panes.active.id);
         Some(OperationCompletionSummary {
             disposition: operation_result_disposition(operation, result, can_request_privilege),
             refresh_current_dir,
+            refresh_pane_ids,
             remaining: self.operation_queue.len(),
         })
     }
@@ -193,6 +196,32 @@ impl AppState {
             ),
         })
     }
+}
+
+fn operation_affected_pane_ids(
+    state: &AppState,
+    source_parent: Option<&Path>,
+    target_dir: &Path,
+) -> Vec<u64> {
+    let mut pane_ids = Vec::new();
+    if operation_affects_directory(source_parent, target_dir, &state.panes.active.current_dir) {
+        pane_ids.push(state.panes.active.id);
+    }
+    if let Some(inactive) = state.panes.inactive()
+        && operation_affects_directory(source_parent, target_dir, &inactive.current_dir)
+        && !pane_ids.iter().any(|id| *id == inactive.id)
+    {
+        pane_ids.push(inactive.id);
+    }
+    pane_ids
+}
+
+fn operation_affects_directory(
+    source_parent: Option<&Path>,
+    target_dir: &Path,
+    current_dir: &Path,
+) -> bool {
+    source_parent.is_some_and(|parent| parent == current_dir) || current_dir == target_dir
 }
 
 pub(crate) fn operation_queued_status(snapshot: OperationQueueSnapshot) -> String {
@@ -745,6 +774,7 @@ mod tests {
             .unwrap();
 
         assert!(summary.refresh_current_dir);
+        assert_eq!(summary.refresh_pane_ids, vec![state.panes.active.id]);
         assert_eq!(summary.remaining, 1);
         assert_eq!(
             summary.disposition,
@@ -780,6 +810,57 @@ mod tests {
 
         assert_eq!(state.active_operation_id(), Some(7));
         assert!(state.directory_cache.contains_key(&target_dir));
+    }
+
+    #[test]
+    fn complete_file_operation_marks_inactive_pane_for_refresh() {
+        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
+        let inactive_id = state.panes.inactive().expect("inactive pane").id;
+        state.begin_file_operation(7);
+
+        let summary = state
+            .complete_file_operation(
+                7,
+                "copy",
+                Path::new("/tmp/source/item.txt"),
+                Path::new("/tmp/right"),
+                Ok(file_ops::TransferOutcome {
+                    destination: PathBuf::from("/tmp/right/item.txt"),
+                    overwritten_backup: None,
+                }),
+                false,
+            )
+            .unwrap();
+
+        assert!(!summary.refresh_current_dir);
+        assert_eq!(summary.refresh_pane_ids, vec![inactive_id]);
+    }
+
+    #[test]
+    fn complete_file_operation_marks_all_affected_split_panes_for_refresh() {
+        let mut state = AppState::new(PathBuf::from("/tmp/source"), Vec::new());
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/target")));
+        let active_id = state.panes.active.id;
+        let inactive_id = state.panes.inactive().expect("inactive pane").id;
+        state.begin_file_operation(7);
+
+        let summary = state
+            .complete_file_operation(
+                7,
+                "move",
+                Path::new("/tmp/source/item.txt"),
+                Path::new("/tmp/target"),
+                Ok(file_ops::TransferOutcome {
+                    destination: PathBuf::from("/tmp/target/item.txt"),
+                    overwritten_backup: None,
+                }),
+                false,
+            )
+            .unwrap();
+
+        assert!(summary.refresh_current_dir);
+        assert_eq!(summary.refresh_pane_ids, vec![active_id, inactive_id]);
     }
 
     #[test]
