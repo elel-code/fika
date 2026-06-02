@@ -724,10 +724,42 @@ fn mime_filter_globs(mime_type: &str) -> &'static [&'static str] {
         "application/json" => &["*.json"],
         "application/pdf" => &["*.pdf"],
         "application/zip" => &["*.zip"],
+        "application/x-zip-compressed" => &["*.zip"],
         "application/gzip" => &["*.gz"],
+        "application/x-bzip2" => &["*.bz2"],
         "application/x-tar" => &["*.tar"],
+        "application/x-xz" => &["*.xz"],
+        "application/zstd" | "application/x-zstd" => &["*.zst"],
         "application/x-7z-compressed" => &["*.7z"],
         "application/vnd.rar" | "application/x-rar-compressed" => &["*.rar"],
+        "audio/*" => &[
+            "*.aac", "*.flac", "*.m4a", "*.mp3", "*.oga", "*.ogg", "*.opus", "*.wav",
+        ],
+        "audio/aac" => &["*.aac"],
+        "audio/flac" | "audio/x-flac" => &["*.flac"],
+        "audio/mp4" | "audio/x-m4a" => &["*.m4a"],
+        "audio/mpeg" => &["*.mp3"],
+        "audio/ogg" => &["*.oga", "*.ogg"],
+        "audio/opus" => &["*.opus"],
+        "audio/wav" | "audio/x-wav" => &["*.wav"],
+        "video/*" => &[
+            "*.avi", "*.m4v", "*.mkv", "*.mov", "*.mp4", "*.mpeg", "*.mpg", "*.webm",
+        ],
+        "video/mp4" => &["*.mp4", "*.m4v"],
+        "video/mpeg" => &["*.mpeg", "*.mpg"],
+        "video/quicktime" => &["*.mov"],
+        "video/webm" => &["*.webm"],
+        "video/x-matroska" => &["*.mkv"],
+        "video/x-msvideo" | "video/avi" => &["*.avi"],
+        "application/msword" => &["*.doc"],
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => &["*.docx"],
+        "application/vnd.oasis.opendocument.text" => &["*.odt"],
+        "application/vnd.ms-excel" => &["*.xls"],
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => &["*.xlsx"],
+        "application/vnd.oasis.opendocument.spreadsheet" => &["*.ods"],
+        "application/vnd.ms-powerpoint" => &["*.ppt"],
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => &["*.pptx"],
+        "application/vnd.oasis.opendocument.presentation" => &["*.odp"],
         _ => &[],
     }
 }
@@ -1393,6 +1425,51 @@ mod tests {
         assert_eq!(filter_map.portal_indices, vec![1]);
         assert_eq!(filter_map.mime_mapped_filters, 1);
         assert_eq!(filter_map.hidden_filters, 1);
+    }
+
+    #[test]
+    fn portal_media_and_document_mime_filters_map_to_chooser_specs() {
+        let filters = vec![
+            ("Audio".to_string(), vec![(1, "audio/*".to_string())]),
+            ("Video".to_string(), vec![(1, "video/mp4".to_string())]),
+            (
+                "Documents".to_string(),
+                vec![
+                    (
+                        1,
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .to_string(),
+                    ),
+                    (1, "application/vnd.oasis.opendocument.text".to_string()),
+                ],
+            ),
+            (
+                "Sheets".to_string(),
+                vec![
+                    (
+                        1,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            .to_string(),
+                    ),
+                    (1, "application/vnd.ms-excel".to_string()),
+                ],
+            ),
+        ];
+
+        let filter_map = chooser_filter_map(&HashMap::new(), filters);
+
+        assert_eq!(
+            filter_map.chooser_specs,
+            vec![
+                "Audio\t*.aac;*.flac;*.m4a;*.mp3;*.oga;*.ogg;*.opus;*.wav".to_string(),
+                "Video\t*.mp4;*.m4v".to_string(),
+                "Documents\t*.docx;*.odt".to_string(),
+                "Sheets\t*.xlsx;*.xls".to_string(),
+            ]
+        );
+        assert_eq!(filter_map.portal_indices, vec![0, 1, 2, 3]);
+        assert_eq!(filter_map.mime_mapped_filters, 4);
+        assert_eq!(filter_map.hidden_filters, 0);
     }
 
     #[test]
