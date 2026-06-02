@@ -133,6 +133,8 @@ export component AppWindow inherits Window {
     in-out property <string> privileged_prompt_detail;
     private property <bool> new-folder-open: false;
     private property <string> new-folder-name: "New Folder";
+    private property <bool> new-file-open: false;
+    private property <string> new-file-name: "New File.txt";
     private property <bool> rename-entry-open: false;
     private property <string> rename-entry-path;
     private property <string> rename-entry-name;
@@ -208,7 +210,7 @@ export component AppWindow inherits Window {
     private property <bool> path-input-focused: false;
     private property <bool> search-input-focused: false;
     private property <bool> chooser-save-input-focused: false;
-    private property <bool> file-operation-shortcuts-blocked: root.path-input-focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open;
+    private property <bool> file-operation-shortcuts-blocked: root.path-input-focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open;
 
     callback go_home();
     callback go_back();
@@ -222,6 +224,7 @@ export component AppWindow inherits Window {
     callback chooser_select_filter(int);
     callback chooser_select_choice(int, int);
     callback create_folder(string);
+    callback create_file(string);
     callback duplicate_path(string);
     callback copy_location(string);
     callback copy_paths(string, bool);
@@ -1134,7 +1137,7 @@ export component AppWindow inherits Window {
         main-drag-rejected: root.main_drag_rejected;
     }
 
-    if (root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open): MenuDismissLayer {
+    if (root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open): MenuDismissLayer {
         width: parent.width;
         height: parent.height;
         dismissed => {
@@ -1147,6 +1150,7 @@ export component AppWindow inherits Window {
             root.close-chooser-popups();
             root.custom-open-with-open = false;
             root.new-folder-open = false;
+            root.new-file-open = false;
             root.rename-entry-open = false;
             root.properties-open = false;
             if (root.privileged_prompt_open) {
@@ -1377,6 +1381,11 @@ export component AppWindow inherits Window {
             root.new-folder-open = true;
             root.close-context-popups();
         }
+        create_file_selected => {
+            root.new-file-name = "New File.txt";
+            root.new-file-open = true;
+            root.close-context-popups();
+        }
         open_with_app_selected(app-id) => {
             root.open_with_app(root.open_with_path, app-id);
             root.close-context-popups();
@@ -1486,6 +1495,20 @@ export component AppWindow inherits Window {
             root.new-folder-open = false;
         }
         cancelled => { root.new-folder-open = false; }
+    }
+
+    if (root.new-file-open): TextInputPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        title: "New File";
+        accept-label: "Create";
+        value <=> root.new-file-name;
+        accepted(value) => {
+            root.create_file(value);
+            root.new-file-open = false;
+        }
+        cancelled => { root.new-file-open = false; }
     }
 
     ChooserChoicePopupLayer {

@@ -59,12 +59,24 @@ export component OpenWithMenu inherits PopupSurface {
 export component CreateNewMenu inherits PopupSurface {
     callback keep_alive(bool);
     callback folder_selected();
+    callback file_selected();
 
-    MenuItem {
-        label: "Folder";
-        dark: root.dark;
-        hovered(is-hovered) => { root.keep_alive(is-hovered); }
-        clicked => { root.folder_selected(); }
+    VerticalLayout {
+        spacing: 0px;
+
+        MenuItem {
+            label: "Folder";
+            dark: root.dark;
+            hovered(is-hovered) => { root.keep_alive(is-hovered); }
+            clicked => { root.folder_selected(); }
+        }
+
+        MenuItem {
+            label: "File";
+            dark: root.dark;
+            hovered(is-hovered) => { root.keep_alive(is-hovered); }
+            clicked => { root.file_selected(); }
+        }
     }
 }
 
@@ -90,7 +102,7 @@ export component ChildSubmenuLayer inherits Rectangle {
     private property <length> open-with-width: 260px;
     private property <length> open-with-height: min(360px, root.title-height + max(1, root.open-with-apps.length) * root.item-height + root.separator-height + root.item-height);
     private property <length> create-new-width: 180px;
-    private property <length> create-new-height: root.item-height;
+    private property <length> create-new-height: 2 * root.item-height;
     private property <int> active-kind: root.open-with-open ? 1 : (root.create-new-open ? 2 : 0);
     private property <length> active-row-y: root.open-with-open ? root.open-with-row-y : root.create-new-row-y;
     private property <length> active-width: root.open-with-open ? root.open-with-width : root.create-new-width;
@@ -110,6 +122,7 @@ export component ChildSubmenuLayer inherits Rectangle {
     pure callback child_bridge_height(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
     callback child_hovered(int, bool);
     callback create_folder_selected();
+    callback create_file_selected();
     callback open_with_app_selected(string);
     callback other_applications();
 
@@ -136,6 +149,9 @@ export component ChildSubmenuLayer inherits Rectangle {
         }
         folder_selected => {
             root.create_folder_selected();
+        }
+        file_selected => {
+            root.create_file_selected();
         }
     }
 

@@ -71,7 +71,7 @@ require_contains \
 require_contains \
     /etc/dbus-1/system.d/org.fika.FileManager1.Privileged.conf \
     '<allow send_destination="org.fika.FileManager1.Privileged"/>'
-for method in CreateFolder Rename Trash Transfer PrepareExternalEdit CommitExternalEdit DiscardExternalEdit AssociateExternalEditUnit; do
+for method in CreateFolder CreateFile Rename Trash Transfer PrepareExternalEdit CommitExternalEdit DiscardExternalEdit AssociateExternalEditUnit; do
     require_contains \
         /usr/share/dbus-1/interfaces/org.fika.FileManager1.Privileged.xml \
         "<method name=\"$method\">"

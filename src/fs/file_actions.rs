@@ -64,6 +64,41 @@ pub(crate) fn register_callbacks(
 
     {
         let ui_weak = ui.as_weak();
+        let state = Rc::clone(state);
+        let bridge = bridge.clone();
+        ui.on_create_file(move |name| {
+            if let Some(ui) = ui_weak.upgrade() {
+                let parent = state.borrow().current_dir.clone();
+                let privileged_command = privilege::PrivilegedCommand::CreateFile {
+                    parent: parent.clone(),
+                    name: name.to_string(),
+                };
+                spawn_action(
+                    &ui,
+                    &bridge,
+                    "Create file",
+                    parent.clone(),
+                    move || {
+                        let path = file_ops::create_file(&parent, name.as_str())?;
+                        Ok((
+                            path.display().to_string(),
+                            Some(FileUndo {
+                                operation: "create-file".to_string(),
+                                original_source: path.clone(),
+                                destination: path,
+                                overwritten_backup: None,
+                                items: Vec::new(),
+                            }),
+                        ))
+                    },
+                    Some(privileged_command),
+                );
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
         ui.on_duplicate_path(move |path| {
             if let Some(ui) = ui_weak.upgrade() {

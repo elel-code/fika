@@ -2061,6 +2061,7 @@ fn start_file_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Async
         let task_undo = undo.clone();
         let result = tokio::task::spawn_blocking(move || match task_undo.operation.as_str() {
             "create-folder" => fs::file_ops::undo_create_folder(&task_undo.destination),
+            "create-file" => fs::file_ops::undo_create_file(&task_undo.destination),
             "rename" => {
                 fs::file_ops::undo_rename(&task_undo.original_source, &task_undo.destination)
             }
@@ -2441,6 +2442,7 @@ fn operation_finished_label(operation: &str) -> &'static str {
         "copy" => "Copy",
         "link" => "Link",
         "create-folder" => "Create Folder",
+        "create-file" => "Create File",
         "rename" => "Rename",
         "trash" => "Move to Trash",
         _ => "Operation",

@@ -45,6 +45,10 @@ pub(crate) enum PrivilegedCommand {
         parent: PathBuf,
         name: String,
     },
+    CreateFile {
+        parent: PathBuf,
+        name: String,
+    },
     Rename {
         path: PathBuf,
         new_name: String,
@@ -78,6 +82,7 @@ impl PrivilegedCommand {
     pub(crate) fn label(&self) -> &'static str {
         match self {
             Self::CreateFolder { .. } => "Create folder",
+            Self::CreateFile { .. } => "Create file",
             Self::Rename { .. } => "Rename",
             Self::Trash { .. } => "Move to Trash",
             Self::Transfer { operation, .. } => match operation.as_str() {
@@ -93,6 +98,9 @@ impl PrivilegedCommand {
         match self {
             Self::CreateFolder { parent, name } => {
                 format!("Create '{name}' in {}", parent.display())
+            }
+            Self::CreateFile { parent, name } => {
+                format!("Create file '{name}' in {}", parent.display())
             }
             Self::Rename { path, new_name } => {
                 format!("Rename {} to '{new_name}'", path.display())
@@ -120,7 +128,9 @@ impl PrivilegedCommand {
     pub(crate) fn affected_dirs(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         match self {
-            Self::CreateFolder { parent, .. } => dirs.push(parent.clone()),
+            Self::CreateFolder { parent, .. } | Self::CreateFile { parent, .. } => {
+                dirs.push(parent.clone());
+            }
             Self::Rename { path, .. } => {
                 if let Some(parent) = path.parent() {
                     dirs.push(parent.to_path_buf());
@@ -154,6 +164,9 @@ impl PrivilegedCommand {
 trait Privileged {
     #[zbus(name = "CreateFolder")]
     async fn create_folder(&self, parent: &str, name: &str) -> zbus::Result<String>;
+
+    #[zbus(name = "CreateFile")]
+    async fn create_file(&self, parent: &str, name: &str) -> zbus::Result<String>;
 
     #[zbus(name = "Rename")]
     async fn rename(&self, path: &str, new_name: &str) -> zbus::Result<String>;
@@ -267,6 +280,10 @@ async fn call_dbus_command(
     match command {
         PrivilegedCommand::CreateFolder { parent, name } => proxy
             .create_folder(&parent.display().to_string(), name)
+            .await
+            .map_err(|err| err.to_string()),
+        PrivilegedCommand::CreateFile { parent, name } => proxy
+            .create_file(&parent.display().to_string(), name)
             .await
             .map_err(|err| err.to_string()),
         PrivilegedCommand::Rename { path, new_name } => proxy
@@ -1026,6 +1043,20 @@ impl PrivilegedService {
         )
     }
 
+    #[zbus(name = "CreateFile")]
+    async fn create_file(
+        &self,
+        parent: String,
+        name: String,
+        #[zbus(connection)] connection: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<String> {
+        let _authorized_uid = self.authorize(connection, header).await?;
+        Self::map_result(
+            file_ops::create_file(Path::new(&parent), &name).map(|path| path.display().to_string()),
+        )
+    }
+
     #[zbus(name = "Rename")]
     async fn rename(
         &self,
@@ -1388,6 +1419,12 @@ pub(crate) fn run_helper(args: &[String]) -> Result<String, String> {
                 return Err("create-folder expects parent and name".to_string());
             };
             file_ops::create_folder(Path::new(parent), name).map(|path| path.display().to_string())
+        }
+        "create-file" => {
+            let [_, parent, name] = args else {
+                return Err("create-file expects parent and name".to_string());
+            };
+            file_ops::create_file(Path::new(parent), name).map(|path| path.display().to_string())
         }
         "rename" => {
             let [_, path, new_name] = args else {

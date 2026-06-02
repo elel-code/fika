@@ -282,6 +282,20 @@ pub fn create_folder(parent: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
+pub fn create_file(parent: &Path, name: &str) -> Result<PathBuf, String> {
+    if !parent.is_dir() {
+        return Err("current location is not a folder".to_string());
+    }
+    let name = sanitize_child_name(name)?;
+    let destination = unique_destination(parent, name.as_ref());
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|err| err.to_string())?;
+    Ok(destination)
+}
+
 pub fn rename_path(path: &Path, new_name: &str) -> Result<PathBuf, String> {
     if !path_exists(path) {
         return Err("item no longer exists".to_string());
@@ -309,6 +323,17 @@ pub fn undo_create_folder(path: &Path) -> Result<String, String> {
         return Err("created item is no longer a folder".to_string());
     }
     fs::remove_dir(path).map_err(|err| err.to_string())?;
+    Ok(format!("removed {}", path.display()))
+}
+
+pub fn undo_create_file(path: &Path) -> Result<String, String> {
+    if !path_exists(path) {
+        return Err("created file no longer exists".to_string());
+    }
+    if !path.is_file() {
+        return Err("created item is no longer a file".to_string());
+    }
+    fs::remove_file(path).map_err(|err| err.to_string())?;
     Ok(format!("removed {}", path.display()))
 }
 
@@ -1333,6 +1358,22 @@ mod tests {
         undo_create_folder(&created).unwrap();
 
         assert!(!created.exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn create_file_uses_unique_destination_and_can_be_undone() {
+        let temp = test_dir("create-file");
+        fs::create_dir_all(&temp).unwrap();
+        fs::write(temp.join("New File.txt"), b"occupied").unwrap();
+
+        let created = create_file(&temp, "New File.txt").unwrap();
+
+        assert_eq!(created.file_name().unwrap(), "New File copy.txt");
+        assert!(created.is_file());
+        undo_create_file(&created).unwrap();
+        assert!(!created.exists());
+        assert!(temp.join("New File.txt").exists());
         let _ = fs::remove_dir_all(temp);
     }
 

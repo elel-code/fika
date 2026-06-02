@@ -805,7 +805,7 @@ require_contains "$portal_descriptor" "DBusName=$portal_bus_name"
 require_contains "$portal_descriptor" "Interfaces=org.freedesktop.impl.portal.FileChooser;"
 require_contains "$portal_descriptor" "UseIn=fika"
 
-for method in CreateFolder Rename Trash Transfer PrepareExternalEdit CommitExternalEdit DiscardExternalEdit AssociateExternalEditUnit; do
+for method in CreateFolder CreateFile Rename Trash Transfer PrepareExternalEdit CommitExternalEdit DiscardExternalEdit AssociateExternalEditUnit; do
     require_contains "$privileged_interface_xml" "<method name=\"$method\">"
 done
 

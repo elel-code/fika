@@ -364,7 +364,7 @@ Acceptance for all:
 
 - [x] D-Bus privileged helper protocol draft.
   - Acceptance: document a constrained D-Bus interface for protected operations.
-  - Current: `data/dbus-1/interfaces/org.fika.FileManager1.Privileged.xml` defines CreateFolder / Rename / Trash / Transfer and external-edit writeback methods.
+  - Current: `data/dbus-1/interfaces/org.fika.FileManager1.Privileged.xml` defines CreateFolder / CreateFile / Rename / Trash / Transfer and external-edit writeback methods.
 
 - [x] D-Bus privileged helper prototype.
   - Acceptance: GUI calls helper over D-Bus instead of spawning one-shot operation argv.
