@@ -441,6 +441,37 @@ Acceptance for all:
   - Current: helper tracks associated systemd unit lifetime and cleans scratch after unit exit; tokens without a unit are expired after a bounded TTL with a final writeback attempt.
   - Current: helper exits after idle time when no external edit tokens are active.
 
+## Phase 12: COSMIC Files Reference Pass
+
+- [~] Treat COSMIC Files as the primary Rust/design reference outside the main-pane layout.
+  - Acceptance: new UI polish and desktop-integration work first checks `./cosmic-files` before reaching for Dolphin-specific behavior.
+  - Acceptance: the current Dolphin-like column-first main-pane arrangement, horizontal scrolling, and virtualized Slint tile model stay intact.
+  - Current: `docs/COSMIC_REFERENCE.md` records the policy and concrete source files to inspect.
+
+- [ ] Align menu/action enablement with COSMIC where it fits Fika.
+  - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.
+  - Acceptance: context menu action grouping, disabled/hidden states, and current-folder actions are reviewed against COSMIC without changing the already-fixed submenu lifetime rules.
+
+- [ ] Revisit clipboard behavior against COSMIC's cached Wayland model.
+  - Reference: `cosmic-files/src/clipboard.rs` and clipboard handling in `cosmic-files/src/app.rs`.
+  - Acceptance: paste availability does not depend on reading clipboard from transient menu contexts, and future paste-image/text/video-to-file workflows have a documented path.
+
+- [ ] Evolve file operation progress toward COSMIC's controller split.
+  - Reference: `cosmic-files/src/operation/controller.rs`, `recursive.rs`, and `notifiers.rs`.
+  - Acceptance: queued copy/move/link/trash work has clearer progress/cancel state and less direct coupling to status-bar text.
+
+- [ ] Continue device and mount polish with COSMIC's mounter abstraction in mind.
+  - Reference: `cosmic-files/src/mounter/mod.rs` and `mounter/gvfs.rs`.
+  - Acceptance: local removable devices stay on Fika's UDisks2 system-bus path, while future network/removable abstractions can share one sidebar model.
+
+- [ ] Move thumbnail caching closer to the freedesktop model used by COSMIC.
+  - Reference: `cosmic-files/src/thumbnail_cacher.rs` and `thumbnailer.rs`.
+  - Acceptance: cache files, failure markers, and external thumbnailer desktop entries are considered before adding more ad-hoc thumbnail code.
+
+- [ ] Keep pointer-scope behavior aligned with COSMIC's mouse-area approach.
+  - Reference: `cosmic-files/src/mouse_area.rs`.
+  - Acceptance: side-button navigation and future pointer gestures remain scoped to the intended pane and do not leak into sidebar/topbar interactions.
+
 - [x] Re-evaluate transparent external-editor saves after D-Bus writeback is stable.
   - Acceptance: no FUSE layer is introduced unless scratch/writeback proves insufficient.
   - Current decision: keep the scratch/writeback model. It now has helper-owned file watching, explicit Commit/Discard operations, systemd unit lifecycle cleanup, TTL fallback cleanup, and focused tests for multiple saves, commit, discard, stale expiry, and changed-original rejection. Do not introduce a FUSE layer unless a real external-editor workflow proves the scratch path model insufficient.

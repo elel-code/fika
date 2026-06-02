@@ -2,14 +2,15 @@
 
 本文档记录 Fika 当前架构、设计边界和后续扩展方向。它的目标不是冻结实现，而是给后续逐项完善提供稳定参照。
 
-交互细节可参考 `docs/DOLPHIN_REFERENCE.md`，其中记录了本地 `./dolphin` 源码链接中与右键菜单、选择、拖拽、视图状态和搜索相关的关键文件。
+Fika 的后续实现优先参考本地 Rust 项目 `./cosmic-files`，对应记录在 `docs/COSMIC_REFERENCE.md`。Dolphin 继续作为布局和成熟文件管理器交互的对照，尤其是主栏列优先图标视图、菜单行为和选择模型；相关源码索引记录在 `docs/DOLPHIN_REFERENCE.md`。
 
 ## Goals
 
 Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前优先级是：
 
 - 保持 UI 响应，不让目录读取、MIME 探测、文件操作阻塞 Slint 主线程。
-- 采用 Dolphin 风格的布局逻辑：顶部路径/工具栏、左侧 Places、右侧列优先图标视图、底部状态栏。
+- 采用 Dolphin 风格的主布局逻辑：顶部路径/工具栏、左侧 Places、右侧列优先图标视图、底部状态栏。
+- 除主栏文件项排列方式继续保持当前 Dolphin-like 列优先模型外，视觉风格、Rust 侧桌面集成、菜单组织、剪贴板、文件操作队列、设备/mounter 抽象、缩略图缓存等后续打磨优先参考 cosmic-files。
 - 使用 Slint `1.16.1`，UI 保持在 `.slint` 文件中，通过 `build.rs` 编译。
 - 避免依赖长期未维护的 MIME/XDG 小库；桌面默认应用解析先采用项目内置实现。
 - 为后续 portal chooser 和 Polkit helper 保留清晰边界。
