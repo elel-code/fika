@@ -480,6 +480,7 @@ fn copy_path_inner(
             cancel,
             bytes_done,
             bytes_total,
+            metadata.len(),
             progress,
         )
     } else if metadata.is_dir() {
@@ -509,6 +510,7 @@ fn copy_symlink(
     cancel: Option<&Arc<AtomicBool>>,
     bytes_done: &mut u64,
     bytes_total: u64,
+    link_size: u64,
     progress: &mut impl FnMut(TransferProgress),
 ) -> io::Result<()> {
     ensure_not_cancelled(cancel)?;
@@ -529,7 +531,7 @@ fn copy_symlink(
         }
     }
 
-    *bytes_done = bytes_total;
+    *bytes_done = bytes_done.saturating_add(link_size).min(bytes_total);
     progress(TransferProgress {
         bytes_done: *bytes_done,
         bytes_total,
@@ -937,15 +939,28 @@ mod tests {
             PathBuf::from("folder")
         );
 
+        let mut directory_progress = Vec::new();
         let copied_dir = perform_transfer_with_progress(
             "copy",
             &source_dir,
             &nested_target,
             "keep-both",
             None,
-            |_| {},
+            |progress| directory_progress.push(progress),
         )
         .unwrap();
+        assert!(!directory_progress.is_empty());
+        assert!(
+            directory_progress
+                .iter()
+                .all(|progress| progress.bytes_done <= progress.bytes_total)
+        );
+        assert!(
+            directory_progress
+                .last()
+                .is_some_and(|progress| progress.bytes_done == progress.bytes_total)
+        );
+
         let copied_nested_file_link = copied_dir.join("file-link");
         let copied_nested_folder_link = copied_dir.join("folder-link");
         assert!(
