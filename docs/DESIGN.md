@@ -104,6 +104,7 @@ Rust 代码当前按低耦合职责拆分为嵌套模块：
 - Unmount/Eject 发起时会把当时的挂载点路径随后台任务一起保存。动作成功后，如果主视图当前目录仍在该挂载点下，Fika 会切回 Home，并清掉 back/forward history 中同一挂载点下的条目。这参考了 Dolphin `setViewsToHomeIfMountPathOpen()` 和 cosmic-files 对已卸载 location 的处理，避免停留或回退到失效路径。
 - 设置 `FIKA_DEBUG_DEVICES=1` 启动 Fika 时，会把设备发现和 monitor 诊断输出到 stderr，包括 mountinfo 是否可用、UDisks2 接受的设备、被过滤设备的原因、monitor 刷新原因、单行发现摘要、mountinfo-only / UDisks2-only / merged 行数，以及最终合并后的 Devices 侧栏列表。UDisks2 接受行和最终列表都会打印 marker；发现摘要记录 mountinfo/root-scan 来源、UDisks2 行数、最终 mounted/unmounted 行数和 Mount/Unmount/Eject 能力计数，用于真实 U 盘、外置硬盘、polkit/UDisks2 发行版差异验证。
 - `scripts/check-runtime-integration.sh` 的普通运行模式会额外报告 UDisks2 system service 状态、`udisksctl` 可用性、`org.freedesktop.UDisks2` system-bus owner/activation 状态，并调用 ObjectManager 统计 Block / Drive / Filesystem 接口数量。这是只读探测，不会执行 Mount、Unmount 或 Eject，适合打包后在不同发行版上确认 Devices 侧栏的后端条件。
+- `fika --diagnose-devices` 是不启动 GUI 的只读诊断入口，会直接运行 Rust 侧 Devices 发现逻辑并逐行输出 label、marker、显示路径、底层 device path、mounted 状态和 Mount/Unmount/Eject 能力。它用于把真实机器上的侧栏输入模型直接贴出来排查，不会执行任何设备动作。
 
 这能覆盖常见桌面环境已经自动挂载的 U 盘路径，也能提前显示并挂载部分未挂载 U 盘。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应继续基于 UDisks2 system bus D-Bus，并在真实发行版上验证 UDisks2 / polkit 边界情况。
 

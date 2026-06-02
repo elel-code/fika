@@ -18,6 +18,7 @@ Wayland desktops. The current implementation focuses on a small, usable core:
 ```sh
 cargo run
 cargo run -- --chooser ~/Downloads
+cargo run -- --diagnose-devices
 ```
 
 Packaged desktop integration installs D-Bus, Polkit, and portal metadata in
@@ -34,6 +35,11 @@ installed system-bus helper, Polkit action, and portal backend metadata. The
 script also prints a runtime context summary for distro/desktop comparison. Add
 `--activate-system-helper` to confirm D-Bus activation of the privileged helper
 without invoking a privileged file-operation method.
+
+For Devices sidebar validation without starting the GUI, run
+`fika --diagnose-devices`. It prints the same Rust-discovered device rows and
+Mount/Unmount/Eject capabilities used by the UI, without performing any device
+operation.
 
 The UI is defined in `ui/app.slint` and compiled from `build.rs` with
 `slint-build`. Both `slint` and `slint-build` are pinned to `1.16.1`.

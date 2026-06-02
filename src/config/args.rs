@@ -4,6 +4,7 @@ use std::path::PathBuf;
 pub enum Mode {
     Manager,
     Chooser,
+    DeviceDiagnostics,
 }
 
 #[derive(Debug)]
@@ -154,6 +155,7 @@ impl Args {
                     mode = Mode::Chooser;
                     pending_parent_window = true;
                 }
+                "--diagnose-devices" => mode = Mode::DeviceDiagnostics,
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -199,6 +201,7 @@ fn print_help() {
            --chooser-choices LIST    Use newline-separated portal choice specs.\n\
            --chooser-return-choices  Print selected choice metadata before paths.\n\
            --chooser-parent-window W Preserve portal parent window handle metadata.\n\
+           --diagnose-devices        Print Devices discovery rows and exit.\n\
            -h, --help                Show this help."
     );
 }
@@ -238,5 +241,13 @@ mod tests {
 
         assert_eq!(args.mode, Mode::Chooser);
         assert_eq!(args.chooser_parent_window, None);
+    }
+
+    #[test]
+    fn parses_device_diagnostics_mode() {
+        let args = Args::parse(["--diagnose-devices"].into_iter().map(str::to_string));
+
+        assert_eq!(args.mode, Mode::DeviceDiagnostics);
+        assert!(args.start_dir.is_none());
     }
 }

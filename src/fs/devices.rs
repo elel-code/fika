@@ -1,6 +1,7 @@
 use crate::DeviceEntry;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -50,6 +51,47 @@ pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
     ));
     device_debug_log_devices("merged", &merged.devices);
     merged.devices
+}
+
+pub(crate) fn device_diagnostics_report() -> String {
+    format_device_diagnostics_report(&mounted_devices())
+}
+
+fn format_device_diagnostics_report(devices: &[DeviceEntry]) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Fika Devices diagnostics");
+    let _ = writeln!(output, "rows: {}", devices.len());
+    for (index, device) in devices.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "[{index}] label=\"{}\" marker=\"{}\" path=\"{}\" device_path=\"{}\" mounted={} can_mount={} can_unmount={} can_eject={} error=\"{}\"",
+            diagnostic_value(device.label.as_str()),
+            diagnostic_value(device.marker.as_str()),
+            diagnostic_value(device.path.as_str()),
+            diagnostic_value(device.device_path.as_str()),
+            device.mounted,
+            device.can_mount,
+            device.can_unmount,
+            device.can_eject,
+            diagnostic_value(device.error.as_str()),
+        );
+    }
+    output
+}
+
+fn diagnostic_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn mounted_devices_from_roots(roots: Vec<PathBuf>) -> Vec<DeviceEntry> {
@@ -1011,6 +1053,30 @@ mod tests {
         assert_eq!(devices[0].path, "/");
         assert_eq!(devices[0].marker, "/");
         assert!(devices[0].mounted);
+    }
+
+    #[test]
+    fn device_diagnostics_report_lists_rows_and_escapes_fields() {
+        let devices = vec![device_entry(
+            "USB \"Disk\"".into(),
+            "/run/media/yk/USB\nDisk".into(),
+            "/dev/sdb1".into(),
+            "USB".into(),
+            true,
+            DeviceCapabilities {
+                can_unmount: true,
+                can_eject: true,
+                ..DeviceCapabilities::default()
+            },
+        )];
+
+        let report = format_device_diagnostics_report(&devices);
+
+        assert!(report.starts_with("Fika Devices diagnostics\nrows: 1\n"));
+        assert!(report.contains("label=\"USB \\\"Disk\\\"\""));
+        assert!(report.contains("path=\"/run/media/yk/USB\\nDisk\""));
+        assert!(report.contains("device_path=\"/dev/sdb1\""));
+        assert!(report.contains("mounted=true can_mount=false can_unmount=true can_eject=true"));
     }
 
     #[test]

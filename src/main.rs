@@ -64,7 +64,9 @@ use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::settings::{AppSettings, load_settings, save_settings};
 use desktop::{mime_open, open_with, terminal};
-use fs::devices::{eject_device, mount_device, mounted_devices, unmount_device};
+use fs::devices::{
+    device_diagnostics_report, eject_device, mount_device, mounted_devices, unmount_device,
+};
 use fs::entries::{read_entries_async, to_file_entry};
 use fs::places::default_places;
 use fs::{file_actions, privilege, search, thumbnails};
@@ -74,11 +76,15 @@ slint::include_modules!();
 fn main() -> Result<(), slint::PlatformError> {
     sanitize_locale_for_icu4x();
     let raw_args = env::args().skip(1).collect::<Vec<_>>();
+    let args = Args::parse(raw_args.into_iter());
+
+    if matches!(args.mode, Mode::DeviceDiagnostics) {
+        print!("{}", device_diagnostics_report());
+        return Ok(());
+    }
 
     let async_runtime = build_async_runtime();
     let async_handle = async_runtime.handle().clone();
-
-    let args = Args::parse(raw_args.into_iter());
     let settings = load_settings();
     let start_dir = args.start_dir.clone().unwrap_or_else(|| {
         settings

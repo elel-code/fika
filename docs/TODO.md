@@ -50,6 +50,7 @@
   - Current: Devices now has a background monitor. UDisks2 system-bus signals trigger debounced refreshes, and a low-frequency snapshot poll catches missed mount-table or desktop-backend changes.
   - Current: `FIKA_DEBUG_DEVICES=1` prints device discovery and monitor diagnostics, including mountinfo/fallback usage, UDisks2 accepted rows, UDisks2 skip reasons, monitor refresh reasons, a single-line discovery summary, mountinfo-only / UDisks2-only / merged row counts, semantic markers, and the final merged sidebar device list.
   - Current: `scripts/check-runtime-integration.sh` now includes a Devices runtime probe that reports UDisks2 service state, system-bus availability, ObjectManager visibility, and Block/Drive/Filesystem interface counts without performing mount, unmount, or eject operations.
+  - Current: `fika --diagnose-devices` prints the same Rust-discovered Devices rows and capabilities used by the UI, without creating a Slint window or performing device operations.
   - Remaining: distro validation for UDisks2/polkit edge cases.
 - [x] Internal drop transfer menu with Move / Copy / Link actions.
 - [x] F5 active refresh; toolbar refresh button removed.
