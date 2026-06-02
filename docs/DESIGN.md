@@ -89,6 +89,12 @@ Rust 侧核心状态在 `AppState`：
 - `open_generation`: `GenerationCounter`，用于丢弃过期打开状态。
 - `search_generation` / `thumbnail_generation`: 分别用于递归搜索与缩略图加载的 stale-result 控制。
 
+目录 cache 与 COSMIC Files 的关系：
+
+- Fika 对齐 COSMIC 的 location/items 分层：目标路径可以先成为当前 location，但右侧条目模型的归属路径只在 cache hit 或异步扫描结果确认后提交。
+- Fika 比 COSMIC 更激进：COSMIC 当前主要以 `Tab::items_opt` 表示扫描状态，Fika 额外维护最近目录条目 LRU、目录视图位置 LRU 和 Places 预取，以减少 back/forward 与侧栏跳转的等待。
+- 设备发现和目录扫描保持独立。普通目录切换不再同步重建设备侧栏或启动设备发现；Devices 只在启动、设备 monitor 信号/轮询、以及 Mount/Unmount/Eject 结果后刷新，避免 Places/Devices 导航时把侧栏重绘伪装成主栏闪烁。
+
 Slint UI 只在主线程更新。后台任务不持有 `AppWindow` 或 `Rc<RefCell<AppState>>`。
 
 Rust 代码当前按低耦合职责拆分为嵌套模块：

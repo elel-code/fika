@@ -44,7 +44,6 @@ use app::geometry::{
 };
 use app::operation_controller::{
     OperationResultDisposition, operation_final_status, operation_finished_label,
-    operation_progress_status,
 };
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
@@ -1198,8 +1197,6 @@ fn load_directory_with_preservation(
     bridge: &AsyncBridge,
     preserve_view: bool,
 ) {
-    sync_devices(ui, state);
-    refresh_devices_async(state, bridge);
     let DirectoryLoadPreparation {
         current_dir,
         generation,
@@ -2281,6 +2278,7 @@ fn apply_device_mount_result(
         Ok(mount_point) if mount_point.is_dir() => {
             clear_device_error(state, &result.device_path);
             sync_devices(ui, state);
+            refresh_devices_async(state, bridge);
             set_status(ui, &format!("Mounted {}", result.device_path));
             navigate_to(ui, state, bridge, mount_point);
         }
@@ -2318,6 +2316,7 @@ fn apply_device_action_result(
         Ok(()) => {
             clear_device_error(state, &result.device_path);
             sync_devices(ui, state);
+            refresh_devices_async(state, bridge);
             if let Some(mount_path) = &result.mount_path
                 && move_current_directory_home_if_inside_mount(state, mount_path)
             {
@@ -2390,19 +2389,9 @@ fn apply_file_operation_progress(
     state: &Rc<RefCell<AppState>>,
     progress: FileOperationProgress,
 ) {
-    if state.borrow().active_operation_id() != Some(progress.id) {
-        return;
+    if let Some(update) = state.borrow().file_operation_progress_update(&progress) {
+        set_status(ui, &update.status);
     }
-
-    set_status(
-        ui,
-        &operation_progress_status(
-            &progress.operation,
-            &progress.source,
-            progress.bytes_done,
-            progress.bytes_total,
-        ),
-    );
 }
 
 fn apply_privileged_operation_result(

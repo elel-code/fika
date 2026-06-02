@@ -73,6 +73,7 @@
   - Current: watcher/manual refresh results that are visibly unchanged only refresh the cache and status text; they do not reset the Slint model or virtual range.
   - Current: uncached directory navigation keeps the previous visible model in place and defers restoring the target directory viewport until the new entries are ready, matching the COSMIC-style separation between location change and item replacement more closely. The stale model is inert during the transition, so old tiles cannot be opened, selected, dragged, or used as drop targets after the path has changed.
   - Current: Places paths are prefetched into the same bounded directory cache in the background, so sidebar jumps are more likely to use the instant cache-hit path instead of showing a long stale-view transition.
+  - Current: Devices refresh is decoupled from ordinary directory loading. Startup, the device monitor, and explicit Mount/Unmount/Eject outcomes refresh Devices, while Places/Devices navigation no longer rebuilds the sidebar device model on every directory load.
 - [x] Dolphin-style delayed main-view clearing for uncached directory navigation.
 - [x] Per-directory main-view scroll position memory.
   - Current: remembered view states are cached with an LRU cap so long browsing sessions cannot keep every visited path's viewport state forever.
@@ -474,6 +475,7 @@ Acceptance for all:
   - Current: transfer result handling is split into a pure `OperationResultDisposition` summary for completed / privilege-required / failed outcomes, while `main.rs` keeps only UI-side effects such as Undo registration, privileged prompts, refresh, and queue advancement.
   - Current: remaining-queue suffixes and privilege-waiting status updates are also computed by `operation_controller.rs`, so `main.rs` no longer owns operation status composition.
   - Current: operation completion now goes through an `OperationCompletionSummary` in `operation_controller.rs`; stale result ids are ignored before they can register Undo or open a privilege prompt, and cache invalidation / current-directory refresh decisions no longer live in `main.rs`.
+  - Current: operation progress events now go through an `OperationProgressUpdate` in `operation_controller.rs`; stale progress ids are ignored by the controller instead of being special-cased in `main.rs`.
 
 - [ ] Add split view / dual-pane browsing.
   - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.

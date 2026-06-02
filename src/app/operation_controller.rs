@@ -1,3 +1,4 @@
+use crate::app::events::FileOperationProgress;
 use crate::app::state::{AppState, FileOperationRequest};
 use crate::fs::{file_ops, privilege};
 use std::path::{Path, PathBuf};
@@ -44,6 +45,11 @@ pub(crate) struct OperationCompletionSummary {
     pub(crate) disposition: OperationResultDisposition,
     pub(crate) refresh_current_dir: bool,
     pub(crate) remaining: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OperationProgressUpdate {
+    pub(crate) status: String,
 }
 
 #[derive(Clone, Debug)]
@@ -155,6 +161,24 @@ impl AppState {
             disposition: operation_result_disposition(operation, result, can_request_privilege),
             refresh_current_dir,
             remaining: self.operation_queue.len(),
+        })
+    }
+
+    pub(crate) fn file_operation_progress_update(
+        &self,
+        progress: &FileOperationProgress,
+    ) -> Option<OperationProgressUpdate> {
+        if self.active_operation_id() != Some(progress.id) {
+            return None;
+        }
+
+        Some(OperationProgressUpdate {
+            status: operation_progress_status(
+                &progress.operation,
+                &progress.source,
+                progress.bytes_done,
+                progress.bytes_total,
+            ),
         })
     }
 }
@@ -402,6 +426,35 @@ mod tests {
         assert_eq!(
             operation_failed_status("link", "permission denied"),
             "Link failed: permission denied"
+        );
+    }
+
+    #[test]
+    fn operation_progress_update_ignores_stale_progress_ids() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.begin_file_operation(7);
+
+        let stale = FileOperationProgress {
+            id: 6,
+            operation: "copy".to_string(),
+            source: PathBuf::from("/tmp/photo.jpg"),
+            bytes_done: 512,
+            bytes_total: 2048,
+        };
+        assert_eq!(state.file_operation_progress_update(&stale), None);
+
+        let current = FileOperationProgress {
+            id: 7,
+            operation: "copy".to_string(),
+            source: PathBuf::from("/tmp/photo.jpg"),
+            bytes_done: 512,
+            bytes_total: 2048,
+        };
+        assert_eq!(
+            state.file_operation_progress_update(&current),
+            Some(OperationProgressUpdate {
+                status: "Copying photo.jpg: 25% (512 B/2.0 KB)".to_string(),
+            })
         );
     }
 
