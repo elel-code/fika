@@ -1152,8 +1152,8 @@ fn refresh_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Asy
 
 fn prefetch_sidebar_locations_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     let paths = {
-        let state = state.borrow();
-        sidebar_prefetch_paths(&state)
+        let mut state = state.borrow_mut();
+        sidebar_prefetch_paths(&mut state)
     };
     for path in paths {
         let async_tx = bridge.tx.clone();
@@ -1172,33 +1172,36 @@ fn prefetch_sidebar_locations_async(state: &Rc<RefCell<AppState>>, bridge: &Asyn
     }
 }
 
-fn sidebar_prefetch_paths(state: &AppState) -> Vec<PathBuf> {
+fn sidebar_prefetch_paths(state: &mut AppState) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    for place in &state.places {
-        let text = place.path.as_str();
-        if text.is_empty() {
-            continue;
-        }
-        let path = expand_user_path(text);
+    let candidates = state
+        .places
+        .iter()
+        .filter_map(|place| {
+            let text = place.path.as_str();
+            (!text.is_empty()).then(|| expand_user_path(text))
+        })
+        .chain(state.devices.iter().filter_map(|device| {
+            let text = device.path.as_str();
+            (device.mounted && !text.is_empty()).then(|| PathBuf::from(text))
+        }))
+        .collect::<Vec<_>>();
+
+    for path in candidates {
         push_sidebar_prefetch_path(state, &mut paths, path);
-    }
-    for device in &state.devices {
-        let text = device.path.as_str();
-        if !device.mounted || text.is_empty() {
-            continue;
-        }
-        push_sidebar_prefetch_path(state, &mut paths, PathBuf::from(text));
     }
     paths
 }
 
-fn push_sidebar_prefetch_path(state: &AppState, paths: &mut Vec<PathBuf>, path: PathBuf) {
+fn push_sidebar_prefetch_path(state: &mut AppState, paths: &mut Vec<PathBuf>, path: PathBuf) {
     if path == state.current_dir
         || state.directory_cache.contains_key(&path)
+        || state.directory_prefetch_pending.contains(&path)
         || paths.iter().any(|existing| existing == &path)
     {
         return;
     }
+    state.directory_prefetch_pending.insert(path.clone());
     paths.push(path);
 }
 
@@ -1679,9 +1682,10 @@ fn apply_directory_prefetch_result(
     path: PathBuf,
     result: io::Result<Vec<RawFileEntry>>,
 ) {
+    let mut state = state.borrow_mut();
+    state.directory_prefetch_pending.remove(&path);
     match result {
         Ok(entries) => {
-            let mut state = state.borrow_mut();
             if state.current_dir == path {
                 debug_log(&format!(
                     "directory_prefetched ignored current path={}",
@@ -3899,12 +3903,34 @@ mod tests {
             vec![test_entry("a", "/tmp/a")],
         );
 
-        assert_eq!(
-            sidebar_prefetch_paths(&state),
-            vec![
-                PathBuf::from("/tmp/target"),
-                PathBuf::from("/run/media/yk/USB")
-            ]
+        let expected = vec![
+            PathBuf::from("/tmp/target"),
+            PathBuf::from("/run/media/yk/USB"),
+        ];
+        assert_eq!(sidebar_prefetch_paths(&mut state), expected);
+        assert!(state.directory_prefetch_pending.contains(&expected[0]));
+        assert!(state.directory_prefetch_pending.contains(&expected[1]));
+        assert!(sidebar_prefetch_paths(&mut state).is_empty());
+
+        let state = Rc::new(RefCell::new(state));
+        apply_directory_prefetch_result(&state, expected[0].clone(), Ok(Vec::new()));
+        assert!(
+            !state
+                .borrow()
+                .directory_prefetch_pending
+                .contains(&expected[0])
+        );
+
+        apply_directory_prefetch_result(
+            &state,
+            expected[1].clone(),
+            Err(io::Error::other("prefetch failed")),
+        );
+        assert!(
+            !state
+                .borrow()
+                .directory_prefetch_pending
+                .contains(&expected[1])
         );
     }
 

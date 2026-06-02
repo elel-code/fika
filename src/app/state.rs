@@ -3,7 +3,7 @@ use crate::fs::search;
 use crate::fs::thumbnails;
 use crate::support::generation::GenerationCounter;
 use crate::{DesktopApp, DeviceEntry, FileEntry, PlaceEntry};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -36,6 +36,7 @@ pub(crate) struct AppState {
     pub(crate) chooser_parent_window: Option<String>,
     pub(crate) directory_cache: HashMap<PathBuf, Vec<FileEntry>>,
     pub(crate) directory_cache_order: VecDeque<PathBuf>,
+    pub(crate) directory_prefetch_pending: HashSet<PathBuf>,
     pub(crate) view_state_cache: HashMap<PathBuf, DirectoryViewState>,
     pub(crate) view_state_cache_order: VecDeque<PathBuf>,
     pub(crate) thumbnail_cache: HashMap<thumbnails::ThumbnailKey, thumbnails::ThumbnailData>,
@@ -92,6 +93,7 @@ impl AppState {
             chooser_parent_window: None,
             directory_cache: HashMap::new(),
             directory_cache_order: VecDeque::new(),
+            directory_prefetch_pending: HashSet::new(),
             view_state_cache: HashMap::new(),
             view_state_cache_order: VecDeque::new(),
             thumbnail_cache: HashMap::new(),
