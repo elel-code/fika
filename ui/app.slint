@@ -109,10 +109,6 @@ export component AppWindow inherits Window {
     private property <bool> context-default-open-visible: root.default_open_app_name != "" && root.open_with_path == root.context-menu-path;
     private property <bool> context-add-place-visible: root.context-menu-kind == 4 ? (root.current_path != "" && !root.is_place(root.current_path)) : (root.context-menu-is-dir && !root.is_place(root.context-menu-path));
     private property <length> child-menu-gap: 3px;
-    private property <length> open-with-menu-width: 260px;
-    private property <length> open-with-menu-height: min(360px, root.menu-title-height + max(1, root.open_with_apps.length) * root.menu-item-height + root.menu-separator-height + root.menu-item-height);
-    private property <length> create-new-menu-width: 180px;
-    private property <length> create-new-menu-height: root.menu-item-height;
     private property <bool> rename-place-open: false;
     private property <int> rename-place-index: -1;
     private property <string> rename-place-label;
@@ -1663,14 +1659,11 @@ export component AppWindow inherits Window {
         child-gap: root.child-menu-gap;
         item-height: root.menu-item-height;
         title-height: root.menu-title-height;
+        separator-height: root.menu-separator-height;
         create-new-open: root.create-new-menu-open;
         create-new-row-y: root.create-new-menu-y;
-        create-new-width: root.create-new-menu-width;
-        create-new-height: root.create-new-menu-height;
         open-with-open: root.open-with-menu-open;
         open-with-row-y: root.open-with-menu-y;
-        open-with-width: root.open-with-menu-width;
-        open-with-height: root.open-with-menu-height;
         open-with-title: root.open_with_mime == "" ? "Open With" : "Open With - " + root.open_with_mime;
         open-with-apps: root.open_with_apps;
         dark: root.dark_mode;
