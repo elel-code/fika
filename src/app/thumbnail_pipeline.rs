@@ -122,14 +122,25 @@ pub(crate) fn apply_thumbnail_load_to_state(
     }
 
     remove_matching_thumbnail_pending(state, path_text, &load.key);
+    let freedesktop_cache_paths = load.cache_paths.as_ref();
 
     match load.data {
         Ok(data) => {
+            let _cache_path = freedesktop_cache_paths.map(|paths| &paths.thumbnail_path);
             remove_thumbnail_failure(state, &load.key);
             insert_thumbnail_cache_with_limit(state, load.key, data);
         }
         Err(err) => {
-            insert_thumbnail_failure_with_limit(state, load.key, err.to_string());
+            let error = if let Some(paths) = freedesktop_cache_paths {
+                format!(
+                    "{}; fail marker path {}",
+                    err,
+                    paths.fail_marker_path.display()
+                )
+            } else {
+                err.to_string()
+            };
+            insert_thumbnail_failure_with_limit(state, load.key, error);
         }
     }
 
@@ -393,6 +404,7 @@ mod tests {
             thumbnails::ThumbnailLoad {
                 path: PathBuf::from(path),
                 key: key.clone(),
+                cache_paths: None,
                 data: Ok(data),
             },
         );
@@ -426,6 +438,7 @@ mod tests {
             thumbnails::ThumbnailLoad {
                 path: PathBuf::from(path),
                 key: key.clone(),
+                cache_paths: None,
                 data: Err(io::Error::other("decode failed")),
             },
         );
@@ -459,6 +472,7 @@ mod tests {
             thumbnails::ThumbnailLoad {
                 path: PathBuf::from(path),
                 key: key.clone(),
+                cache_paths: None,
                 data: Ok(data),
             },
         );

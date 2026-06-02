@@ -468,6 +468,18 @@ Acceptance for all:
   - Current: remaining-queue suffixes and privilege-waiting status updates are also computed by `operation_controller.rs`, so `main.rs` no longer owns operation status composition.
   - Current: operation completion now goes through an `OperationCompletionSummary` in `operation_controller.rs`; stale result ids are ignored before they can register Undo or open a privilege prompt, and cache invalidation / current-directory refresh decisions no longer live in `main.rs`.
 
+- [ ] Add split view / dual-pane browsing.
+  - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.
+  - Acceptance: each pane has independent current directory, selection, search/filter state, viewport position, history stacks, and focused-pane ownership for shortcuts, menus, DnD targets, and status updates.
+  - Acceptance: the existing column-first, horizontal-scroll, virtualized main-pane item layout remains unchanged inside each pane.
+  - Acceptance: Places, Devices, Open Terminal Here, Open With, Trash, and privileged operations act on the focused pane unless an operation explicitly targets the other pane.
+
+- [ ] Expand Trash beyond first-pass move/undo.
+  - Reference: `cosmic-files/src/trash.rs`, `cosmic-files/src/operation/mod.rs`, `cosmic-files/src/menu.rs`, and `cosmic-files/src/app.rs`.
+  - Acceptance: Trash has a navigable location/sidebar entry with Empty Trash, Restore From Trash, Delete Permanently, trash-specific sorting/metadata where practical, and a rescan/watch path after trash operations.
+  - Acceptance: normal Delete continues to prefer Move to Trash for local files; permanent delete requires explicit Trash-context action or confirmation.
+  - Current: Fika can move single/multiple paths to XDG Trash, write `.trashinfo`, summarize failures, and undo by restoring trashed paths. Missing pieces are a Trash location view, restore/permanent-delete menus, empty-trash confirmation, and trash change monitoring.
+
 - [ ] Continue device and mount polish with COSMIC's mounter abstraction in mind.
   - Reference: `cosmic-files/src/mounter/mod.rs` and `mounter/gvfs.rs`.
   - Acceptance: local removable devices stay on Fika's UDisks2 system-bus path, while future network/removable abstractions can share one sidebar model.
@@ -475,6 +487,7 @@ Acceptance for all:
 - [ ] Move thumbnail caching closer to the freedesktop model used by COSMIC.
   - Reference: `cosmic-files/src/thumbnail_cacher.rs` and `thumbnailer.rs`.
   - Acceptance: cache files, failure markers, and external thumbnailer desktop entries are considered before adding more ad-hoc thumbnail code.
+  - Current: thumbnail keys now carry freedesktop size buckets and cache filename identity, and thumbnail load results carry freedesktop cache/fail-marker paths based on the Thumbnail Managing Standard (`file://` URI MD5, `normal` / `large` / `x-large` / `xx-large`, and `fail/fika-$version`). Actual disk cache read/write and external thumbnailer execution are still pending.
 
 - [ ] Keep pointer-scope behavior aligned with COSMIC's mouse-area approach.
   - Reference: `cosmic-files/src/mouse_area.rs`.

@@ -74,6 +74,8 @@ Reference files:
 - `cosmic-files/src/operation/controller.rs`
 - `cosmic-files/src/operation/recursive.rs`
 - `cosmic-files/src/operation/notifiers.rs`
+- `cosmic-files/src/operation/mod.rs`
+- `cosmic-files/src/trash.rs`
 - `cosmic-files/src/mounter/mod.rs`
 - `cosmic-files/src/mounter/gvfs.rs`
 - `cosmic-files/src/thumbnail_cacher.rs`

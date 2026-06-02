@@ -2701,6 +2701,7 @@ fn schedule_visible_thumbnails(
                 Err(err) => thumbnails::ThumbnailLoad {
                     key: thumbnails::fallback_key(&fallback_path, size_px),
                     path: fallback_path,
+                    cache_paths: None,
                     data: Err(io::Error::other(format!("thumbnail task failed: {err}"))),
                 },
             };
