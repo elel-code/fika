@@ -2,7 +2,7 @@ use crate::app::state::AppState;
 use std::sync::atomic::Ordering;
 
 pub(crate) fn cancel_active_search(state: &mut AppState) {
-    if let Some(cancel) = state.active_search_cancel.take() {
+    if let Some(cancel) = state.pane.search_cancel.take() {
         cancel.store(true, Ordering::Relaxed);
     }
 }
@@ -113,12 +113,12 @@ mod tests {
     fn cancel_active_search_marks_token_and_removes_it_from_state() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let cancel = Arc::new(AtomicBool::new(false));
-        state.active_search_cancel = Some(cancel.clone());
+        state.pane.search_cancel = Some(cancel.clone());
 
         cancel_active_search(&mut state);
 
         assert!(cancel.load(Ordering::Relaxed));
-        assert!(state.active_search_cancel.is_none());
+        assert!(state.pane.search_cancel.is_none());
     }
 
     #[test]

@@ -71,7 +71,7 @@ Slint `FlexboxLayout` 采用策略：
 
 Rust 侧核心状态在 `AppState`：
 
-- `pane`: 当前主栏 pane 的目录、完整条目、历史、选择、搜索/filter 和虚拟视图 cache，封装在 `PaneState` 中。当前仍然只有一个主栏 pane，但这一步已经把 `current_dir` / `entries` / `PaneHistory` / `PaneSelection` / `PaneSearch` / `PaneView` 收敛为可被每个 pane 独立持有的状态块，贴近 COSMIC Files 的 per-tab `location` / `items_opt` 模型。递归搜索 cancel token、progress、generation 和 UI 的 `main_viewport_x` 暂时仍在 pane 外，后续 split view 需要随 active pane ownership 继续拆分。
+- `pane`: 当前主栏 pane 的目录、完整条目、历史、选择、搜索/filter、递归搜索运行态和虚拟视图 cache，封装在 `PaneState` 中。当前仍然只有一个主栏 pane，但这一步已经把 `current_dir` / `entries` / `PaneHistory` / `PaneSelection` / `PaneSearch` / recursive search cancel/progress/generation / `PaneView` 收敛为可被每个 pane 独立持有的状态块，贴近 COSMIC Files 的 per-tab `location` / `items_opt` 模型。UI 的 `main_viewport_x` 暂时仍在 pane 外，后续 split view 需要随 active pane ownership 继续拆分。
 - UI 侧把地址栏使用的 `current_path` 和主栏 item model 归属的 `items_path` 分开：uncached 导航时地址栏可以先显示目标路径，但 sidebar/Devices 选中态保持跟随旧 `items_path`，直到 cache hit 或新 entries 提交。这与 COSMIC Files 的 location / `items_opt` 分层一致，避免 Places 跳转时左侧先高亮新位置而右侧仍显示旧模型。
 - `places`: 左侧 Places。
 - `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。

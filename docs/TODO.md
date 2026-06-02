@@ -494,7 +494,7 @@ Acceptance for all:
   - Acceptance: Places, Devices, Open Terminal Here, Open With, Trash, and privileged operations act on the focused pane unless an operation explicitly targets the other pane.
   - Current: Back/Forward history is now isolated behind `PaneHistory` instead of naked AppState stacks. Fika still exposes one pane, but history push/pop/prune semantics are testable as a pane-owned state block, matching the direction of COSMIC's per-tab location/history model.
   - Current: Selection paths and range anchor are now isolated behind `PaneSelection`, so the next split-view pass can give each pane its own selected set without reworking clipboard, chooser, trash, and menu call sites at the same time.
-  - Current: Search query, type/mtime/size filters, and the filtered visible-index cache are now isolated behind `PaneSearch`. Recursive-search cancel/progress/generation are still shared and should move with active pane ownership before exposing the split UI.
+  - Current: Search query, type/mtime/size filters, the filtered visible-index cache, and recursive-search cancel/progress/generation are now isolated behind the active `PaneState`.
   - Current: Virtual range/cache metadata is now isolated behind `PaneView`, so visible tile slicing and thumbnail-range checks can become per-pane before the split UI is exposed.
   - Current: The active main-pane directory, entries, history, selection, search, and virtual-view state are now grouped under `PaneState`. Fika still renders one pane, but most pane-owned data now has a single ownership boundary before the visible split UI is added.
 

@@ -1,7 +1,6 @@
 use crate::app::pane::PaneState;
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
-use crate::fs::search;
 use crate::fs::thumbnails;
 use crate::support::generation::GenerationCounter;
 use crate::{DesktopApp, DeviceEntry, FileEntry, PlaceEntry};
@@ -41,8 +40,6 @@ pub(crate) struct AppState {
     pub(crate) active_operation: Option<u64>,
     pub(crate) active_operation_cancel: Option<Arc<AtomicBool>>,
     pub(crate) active_operation_progress_key: Option<(u64, u64)>,
-    pub(crate) active_search_cancel: Option<Arc<AtomicBool>>,
-    pub(crate) search_progress: search::SearchProgress,
     pub(crate) pending_transfer_conflict: Option<TransferConflict>,
     pub(crate) last_undo: Option<FileUndo>,
     pub(crate) pending_privileged_command: Option<PrivilegedCommand>,
@@ -56,7 +53,6 @@ pub(crate) struct AppState {
     pub(crate) load_generation: GenerationCounter,
     pub(crate) device_generation: GenerationCounter,
     pub(crate) open_generation: GenerationCounter,
-    pub(crate) search_generation: GenerationCounter,
     pub(crate) thumbnail_generation: GenerationCounter,
 }
 
@@ -89,8 +85,6 @@ impl AppState {
             active_operation: None,
             active_operation_cancel: None,
             active_operation_progress_key: None,
-            active_search_cancel: None,
-            search_progress: search::SearchProgress::default(),
             pending_transfer_conflict: None,
             last_undo: None,
             pending_privileged_command: None,
@@ -104,7 +98,6 @@ impl AppState {
             load_generation: GenerationCounter::default(),
             device_generation: GenerationCounter::default(),
             open_generation: GenerationCounter::default(),
-            search_generation: GenerationCounter::default(),
             thumbnail_generation: GenerationCounter::default(),
         }
     }

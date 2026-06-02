@@ -1894,7 +1894,7 @@ fn submit_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBr
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
         state.pane.search.query = query.clone();
-        state.search_generation.next();
+        state.pane.search_generation.next();
     }
 
     if query.is_empty() {
@@ -1915,9 +1915,9 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
     let (query, progress) = {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
-        state.search_generation.next();
+        state.pane.search_generation.next();
         let query = state.pane.search.query.clone();
-        let progress = state.search_progress;
+        let progress = state.pane.search_progress;
         let current_dir = state.pane.current_dir.clone();
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
             state.pane.entries = entries;
@@ -1971,10 +1971,10 @@ fn start_recursive_search(
     let (root, generation, cancel) = {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
-        let generation = state.search_generation.next();
+        let generation = state.pane.search_generation.next();
         let cancel = Arc::new(AtomicBool::new(false));
-        state.active_search_cancel = Some(cancel.clone());
-        state.search_progress = search::SearchProgress::default();
+        state.pane.search_cancel = Some(cancel.clone());
+        state.pane.search_progress = search::SearchProgress::default();
         (state.pane.current_dir.clone(), generation, cancel)
     };
 
@@ -2034,7 +2034,7 @@ fn apply_recursive_search_progress(
 ) {
     {
         let state = state.borrow();
-        let stale = !state.search_generation.is_current(progress.generation)
+        let stale = !state.pane.search_generation.is_current(progress.generation)
             || state.pane.current_dir != progress.root
             || state.pane.search.query != progress.query
             || !ui.get_search_loading();
@@ -2042,7 +2042,7 @@ fn apply_recursive_search_progress(
             return;
         }
     }
-    state.borrow_mut().search_progress = progress.progress;
+    state.borrow_mut().pane.search_progress = progress.progress;
 
     set_status(
         ui,
@@ -2062,13 +2062,13 @@ fn apply_recursive_search_result(
 ) {
     {
         let mut state = state.borrow_mut();
-        let stale = !state.search_generation.is_current(result.generation)
+        let stale = !state.pane.search_generation.is_current(result.generation)
             || state.pane.current_dir != result.root
             || state.pane.search.query != result.query;
         if stale {
             return;
         }
-        state.active_search_cancel = None;
+        state.pane.search_cancel = None;
     }
     ui.set_search_loading(false);
 

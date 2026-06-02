@@ -1,14 +1,21 @@
 use crate::FileEntry;
+use crate::fs::search;
+use crate::support::generation::GenerationCounter;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct PaneState {
     pub(crate) current_dir: PathBuf,
     pub(crate) entries: Vec<FileEntry>,
     pub(crate) history: PaneHistory,
     pub(crate) selection: PaneSelection,
     pub(crate) search: PaneSearch,
+    pub(crate) search_cancel: Option<Arc<AtomicBool>>,
+    pub(crate) search_progress: search::SearchProgress,
+    pub(crate) search_generation: GenerationCounter,
     pub(crate) view: PaneView,
 }
 
@@ -20,6 +27,9 @@ impl PaneState {
             history: PaneHistory::default(),
             selection: PaneSelection::default(),
             search: PaneSearch::default(),
+            search_cancel: None,
+            search_progress: search::SearchProgress::default(),
+            search_generation: GenerationCounter::default(),
             view: PaneView::default(),
         }
     }
@@ -237,6 +247,24 @@ mod tests {
         assert_eq!(search.modified_filter, 0);
         assert_eq!(search.size_filter, 0);
         assert!(search.visible_entry_indices.is_none());
+    }
+
+    #[test]
+    fn pane_state_owns_recursive_search_runtime() {
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        pane.search_cancel = Some(cancel);
+        pane.search_progress = search::SearchProgress {
+            directories_scanned: 4,
+            matches_found: 2,
+        };
+        let generation = pane.search_generation.next();
+
+        assert!(pane.search_cancel.is_some());
+        assert_eq!(pane.search_progress.directories_scanned, 4);
+        assert_eq!(pane.search_progress.matches_found, 2);
+        assert!(pane.search_generation.is_current(generation));
     }
 
     #[test]

@@ -26,7 +26,7 @@ pub(crate) fn prepare_directory_load(
     cancel_active_search(state);
     let generation = state.load_generation.next();
     state.open_generation.next();
-    state.search_generation.next();
+    state.pane.search_generation.next();
     if !preserve_view {
         state.thumbnail_generation.next();
         state.thumbnail_pending.clear();
