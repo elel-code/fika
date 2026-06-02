@@ -411,7 +411,7 @@ Acceptance for all:
 
 - [x] Runtime integration diagnostic helper.
   - Acceptance: installed packages have a repeatable check for D-Bus activation metadata, Polkit action visibility, portal backend metadata, and helper binary placement.
-  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/UDisks2/tooling context in normal mode, probes UDisks2 ObjectManager visibility for Devices validation, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, and can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method.
+  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/UDisks2/tooling context in normal mode, probes UDisks2 ObjectManager visibility and `fika --diagnose-devices` output for Devices validation, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, and can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method.
   - Remaining: run this diagnostic on target distributions/desktops and record any polkit/systemd/dbus activation differences.
 
 - [x] External editor writeback flow.

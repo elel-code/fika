@@ -68,6 +68,7 @@ polkit_policy="$datadir/polkit-1/actions/org.fika.FileManager.policy"
 privileged_interface_xml="$datadir/dbus-1/interfaces/$privileged_bus_name.xml"
 portal_service="$datadir/dbus-1/services/$portal_bus_name.service"
 portal_descriptor="$datadir/xdg-desktop-portal/portals/fika.portal"
+fika_binary="$bindir/fika"
 
 failures=0
 warnings=0
@@ -417,6 +418,52 @@ check_devices_runtime() {
     echo
 }
 
+fika_diagnostics_command() {
+    if [[ -x "$fika_binary" ]]; then
+        printf '%s' "$fika_binary"
+        return 0
+    fi
+
+    if command -v fika >/dev/null 2>&1; then
+        command -v fika
+        return 0
+    fi
+
+    return 1
+}
+
+check_fika_device_model() {
+    echo "Checking Fika Devices model"
+
+    local fika_cmd
+    if ! fika_cmd="$(fika_diagnostics_command)"; then
+        warn "cannot find fika binary for --diagnose-devices; skipping UI model probe"
+        echo
+        return
+    fi
+
+    local output
+    if command -v timeout >/dev/null 2>&1; then
+        output="$(timeout 5 "$fika_cmd" --diagnose-devices 2>&1)"
+    else
+        output="$("$fika_cmd" --diagnose-devices 2>&1)"
+    fi
+    local status=$?
+
+    if [[ "$status" -eq 0 ]]; then
+        ok "$fika_cmd --diagnose-devices completed"
+        while IFS= read -r line; do
+            printf '  %s\n' "$line"
+        done <<<"$output"
+    elif [[ "$status" -eq 124 ]]; then
+        warn "$fika_cmd --diagnose-devices timed out"
+    else
+        warn "$fika_cmd --diagnose-devices failed: $(first_line "$output")"
+    fi
+
+    echo
+}
+
 echo "Checking Fika integration metadata"
 echo "  bindir:     $bindir"
 echo "  datadir:    $datadir"
@@ -427,6 +474,7 @@ echo
 if [[ "$metadata_only" == false ]]; then
     print_runtime_context
     check_devices_runtime
+    check_fika_device_model
 fi
 
 require_file "$privileged_service"
