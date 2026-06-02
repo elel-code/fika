@@ -235,24 +235,10 @@ pub(crate) fn reorder_place(
     from: i32,
     to_slot: i32,
 ) {
-    if from < 0 || to_slot < 0 {
-        return;
-    }
-
     let mut state = state.borrow_mut();
-    let from = from as usize;
-    let mut to = to_slot as usize;
-    if from >= state.places.len() {
+    let Some((from, to)) = place_reorder_indices(state.places.len(), from, to_slot) else {
         return;
-    }
-
-    to = to.min(state.places.len());
-    if to > from {
-        to -= 1;
-    }
-    if from == to {
-        return;
-    }
+    };
 
     let place = state.places.remove(from);
     state.places.insert(to, place);
@@ -278,6 +264,24 @@ pub(crate) fn reorder_place_path(
         return;
     };
     reorder_place(ui, state, from as i32, to_slot);
+}
+
+fn place_reorder_indices(len: usize, from: i32, to_slot: i32) -> Option<(usize, usize)> {
+    let from = usize::try_from(from).ok()?;
+    let mut to = usize::try_from(to_slot).ok()?;
+    if from >= len {
+        return None;
+    }
+
+    to = to.min(len);
+    if to > from {
+        to -= 1;
+    }
+    if from == to {
+        return None;
+    }
+
+    Some((from, to))
 }
 
 fn place_marker(label: &str) -> String {
@@ -389,5 +393,21 @@ mod tests {
 
         assert!(contains_place_path(&state, "/tmp/projects"));
         assert!(!contains_place_path(&state, "/tmp/projects-old"));
+    }
+
+    #[test]
+    fn place_reorder_indices_follow_insertion_slot_semantics() {
+        assert_eq!(place_reorder_indices(5, 1, 4), Some((1, 3)));
+        assert_eq!(place_reorder_indices(5, 1, 5), Some((1, 4)));
+        assert_eq!(place_reorder_indices(5, 3, 1), Some((3, 1)));
+    }
+
+    #[test]
+    fn place_reorder_indices_ignore_invalid_or_same_position_drops() {
+        assert_eq!(place_reorder_indices(5, -1, 2), None);
+        assert_eq!(place_reorder_indices(5, 5, 2), None);
+        assert_eq!(place_reorder_indices(5, 1, -1), None);
+        assert_eq!(place_reorder_indices(5, 1, 1), None);
+        assert_eq!(place_reorder_indices(5, 1, 2), None);
     }
 }
