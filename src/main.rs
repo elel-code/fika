@@ -274,7 +274,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     load_directory(&ui, &state, &bridge);
-    prefetch_places_async(&state, &bridge);
+    prefetch_sidebar_locations_async(&state, &bridge);
 
     {
         let ui_weak = ui.as_weak();
@@ -641,7 +641,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_add_place(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 add_place(&ui, &state, PathBuf::from(path.as_str()));
-                prefetch_places_async(&state, &bridge);
+                prefetch_sidebar_locations_async(&state, &bridge);
             }
         });
     }
@@ -653,7 +653,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_add_place_at_slot(move |path, slot| {
             if let Some(ui) = ui_weak.upgrade() {
                 add_place_at_slot(&ui, &state, PathBuf::from(path.as_str()), slot);
-                prefetch_places_async(&state, &bridge);
+                prefetch_sidebar_locations_async(&state, &bridge);
             }
         });
     }
@@ -675,7 +675,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_remove_place(move |index| {
             if let Some(ui) = ui_weak.upgrade() {
                 remove_place(&ui, &state, index);
-                prefetch_places_async(&state, &bridge);
+                prefetch_sidebar_locations_async(&state, &bridge);
             }
         });
     }
@@ -687,7 +687,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_restore_default_places(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 restore_default_places(&ui, &state);
-                prefetch_places_async(&state, &bridge);
+                prefetch_sidebar_locations_async(&state, &bridge);
             }
         });
     }
@@ -1003,7 +1003,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_reorder_place_path(move |path, to| {
             if let Some(ui) = ui_weak.upgrade() {
                 reorder_place_path(&ui, &state, path.as_str(), to);
-                prefetch_places_async(&state, &bridge);
+                prefetch_sidebar_locations_async(&state, &bridge);
             }
         });
     }
@@ -1150,10 +1150,10 @@ fn refresh_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Asy
     load_directory_with_preservation(ui, state, bridge, true);
 }
 
-fn prefetch_places_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+fn prefetch_sidebar_locations_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     let paths = {
         let state = state.borrow();
-        place_prefetch_paths(&state)
+        sidebar_prefetch_paths(&state)
     };
     for path in paths {
         let async_tx = bridge.tx.clone();
@@ -1172,7 +1172,7 @@ fn prefetch_places_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     }
 }
 
-fn place_prefetch_paths(state: &AppState) -> Vec<PathBuf> {
+fn sidebar_prefetch_paths(state: &AppState) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for place in &state.places {
         let text = place.path.as_str();
@@ -1180,15 +1180,26 @@ fn place_prefetch_paths(state: &AppState) -> Vec<PathBuf> {
             continue;
         }
         let path = expand_user_path(text);
-        if path == state.current_dir
-            || state.directory_cache.contains_key(&path)
-            || paths.iter().any(|existing| existing == &path)
-        {
+        push_sidebar_prefetch_path(state, &mut paths, path);
+    }
+    for device in &state.devices {
+        let text = device.path.as_str();
+        if !device.mounted || text.is_empty() {
             continue;
         }
-        paths.push(path);
+        push_sidebar_prefetch_path(state, &mut paths, PathBuf::from(text));
     }
     paths
+}
+
+fn push_sidebar_prefetch_path(state: &AppState, paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if path == state.current_dir
+        || state.directory_cache.contains_key(&path)
+        || paths.iter().any(|existing| existing == &path)
+    {
+        return;
+    }
+    paths.push(path);
 }
 
 fn load_directory_with_preservation(
@@ -1541,7 +1552,7 @@ fn apply_async_event(
             refresh_devices_async(state, bridge);
         }
         AsyncEvent::DevicesLoaded(result) => {
-            apply_devices_loaded_result(ui, state, result);
+            apply_devices_loaded_result(ui, state, bridge, result);
         }
         AsyncEvent::ClipboardLoaded(result) => {
             apply_clipboard_load_result(ui, state, result);
@@ -2346,6 +2357,7 @@ fn apply_device_action_result(
 fn apply_devices_loaded_result(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
     result: DevicesLoadedResult,
 ) {
     {
@@ -2356,6 +2368,7 @@ fn apply_devices_loaded_result(
         state.devices = result.devices;
     }
     sync_devices(ui, state);
+    prefetch_sidebar_locations_async(state, bridge);
 }
 
 fn move_current_directory_home_if_inside_mount(
@@ -3827,7 +3840,7 @@ mod tests {
     }
 
     #[test]
-    fn place_prefetch_paths_skip_current_cached_empty_and_duplicates() {
+    fn sidebar_prefetch_paths_skip_current_cached_empty_duplicates_and_unmounted_devices() {
         let mut state = AppState::new(
             PathBuf::from("/tmp/current"),
             vec![
@@ -3843,14 +3856,55 @@ mod tests {
                 },
             ],
         );
+        state.devices = vec![
+            DeviceEntry {
+                label: "USB".into(),
+                path: "/run/media/yk/USB".into(),
+                device_path: "/dev/sdb1".into(),
+                marker: "U".into(),
+                mounted: true,
+                can_mount: false,
+                can_unmount: true,
+                can_eject: true,
+                pending_action: "".into(),
+                error: "".into(),
+            },
+            DeviceEntry {
+                label: "Duplicate".into(),
+                path: "/tmp/target".into(),
+                device_path: "/dev/sdb2".into(),
+                marker: "D".into(),
+                mounted: true,
+                can_mount: false,
+                can_unmount: true,
+                can_eject: false,
+                pending_action: "".into(),
+                error: "".into(),
+            },
+            DeviceEntry {
+                label: "Unmounted".into(),
+                path: "/dev/sdc1".into(),
+                device_path: "/dev/sdc1".into(),
+                marker: "U".into(),
+                mounted: false,
+                can_mount: true,
+                can_unmount: false,
+                can_eject: true,
+                pending_action: "".into(),
+                error: "".into(),
+            },
+        ];
         state.insert_directory_cache(
             PathBuf::from("/tmp/cached"),
             vec![test_entry("a", "/tmp/a")],
         );
 
         assert_eq!(
-            place_prefetch_paths(&state),
-            vec![PathBuf::from("/tmp/target")]
+            sidebar_prefetch_paths(&state),
+            vec![
+                PathBuf::from("/tmp/target"),
+                PathBuf::from("/run/media/yk/USB")
+            ]
         );
     }
 

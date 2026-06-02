@@ -72,7 +72,7 @@
   - Current: directory scans run as one background blocking scan, following COSMIC Files' local-directory pattern instead of scheduling per-entry async filesystem operations.
   - Current: watcher/manual refresh results that are visibly unchanged only refresh the cache and status text; they do not reset the Slint model or virtual range.
   - Current: uncached directory navigation keeps the previous visible model in place and defers restoring the target directory viewport until the new entries are ready, matching the COSMIC-style separation between location change and item replacement more closely. The stale model is inert during the transition, so old tiles cannot be opened, selected, dragged, or used as drop targets after the path has changed.
-  - Current: Places paths are prefetched into the same bounded directory cache in the background, so sidebar jumps are more likely to use the instant cache-hit path instead of showing a long stale-view transition.
+  - Current: Places paths and mounted Devices paths are prefetched into the same bounded directory cache in the background, so sidebar jumps are more likely to use the instant cache-hit path instead of showing a long stale-view transition.
   - Current: Devices refresh is decoupled from ordinary directory loading. Startup, the device monitor, and explicit Mount/Unmount/Eject outcomes refresh Devices, while Places/Devices navigation no longer rebuilds the sidebar device model on every directory load.
 - [x] Dolphin-style delayed main-view clearing for uncached directory navigation.
 - [x] Per-directory main-view scroll position memory.
@@ -492,6 +492,7 @@ Acceptance for all:
 - [ ] Continue device and mount polish with COSMIC's mounter abstraction in mind.
   - Reference: `cosmic-files/src/mounter/mod.rs` and `mounter/gvfs.rs`.
   - Acceptance: local removable devices stay on Fika's UDisks2 system-bus path, while future network/removable abstractions can share one sidebar model.
+  - Current: mounted Devices entries participate in the same sidebar directory prefetch path as Places after asynchronous device discovery, reducing uncached transitions when jumping through the Devices section.
 
 - [ ] Move thumbnail caching closer to the freedesktop model used by COSMIC.
   - Reference: `cosmic-files/src/thumbnail_cacher.rs` and `thumbnailer.rs`.
