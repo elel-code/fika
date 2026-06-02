@@ -287,12 +287,17 @@ export component TransferMenu inherits PopupSurface {
 
 export component TransferMenuLayer inherits Rectangle {
     in property <bool> menu-open;
-    in property <length> menu-left;
-    in property <length> menu-top;
-    in property <length> menu-width;
-    in property <length> menu-height;
+    in property <float> menu-x;
+    in property <float> menu-y;
+    in property <length> item-height: 38px;
+    in property <length> separator-height: 8px;
+    in property <length> title-height: 30px;
     in property <string> title;
     in property <bool> dark;
+    private property <length> menu-left: root.menu-x * 1px;
+    private property <length> menu-top: root.menu-y * 1px;
+    private property <length> menu-width: 240px;
+    private property <length> menu-height: root.title-height + 4 * root.item-height + root.separator-height;
     callback operation_selected(string);
     callback cancelled();
 

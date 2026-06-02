@@ -166,10 +166,6 @@ export component AppWindow inherits Window {
     in-out property <string> transfer_target_label;
     in-out property <float> transfer_menu_x: 0;
     in-out property <float> transfer_menu_y: 0;
-    private property <length> transfer-menu-width: 240px;
-    private property <length> transfer-menu-height: root.menu-title-height + 4 * root.menu-item-height + root.menu-separator-height;
-    private property <length> transfer-menu-left: root.transfer_menu_x * 1px;
-    private property <length> transfer-menu-top: root.transfer_menu_y * 1px;
     private property <bool> place_drag_active: false;
     private property <int> place_drag_from: -1;
     private property <int> place_drag_slot: 0;
@@ -1773,10 +1769,11 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
         menu-open: root.transfer-menu-open;
-        menu-left: root.transfer-menu-left;
-        menu-top: root.transfer-menu-top;
-        menu-width: root.transfer-menu-width;
-        menu-height: root.transfer-menu-height;
+        menu-x: root.transfer_menu_x;
+        menu-y: root.transfer_menu_y;
+        item-height: root.menu-item-height;
+        separator-height: root.menu-separator-height;
+        title-height: root.menu-title-height;
         title: root.transfer_source_label + " -> " + root.transfer_target_label;
         dark: root.dark_mode;
         operation_selected(operation) => {
