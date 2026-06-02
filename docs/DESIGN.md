@@ -73,6 +73,7 @@ Rust 侧核心状态在 `AppState`：
 
 - `current_dir`: 当前目录。
 - `entries`: 当前目录完整条目。
+- `history`: 当前主栏的 Back/Forward 历史，封装在 `PaneHistory` 中。当前仍然只有一个主栏 pane，但这一步已经把历史栈从全局裸 `Vec<PathBuf>` 收敛为可被每个 pane 独立持有的状态块，后续 split view 会继续把 selection、search/filter、viewport 和 load generation 迁入 pane-owned state。
 - UI 侧把地址栏使用的 `current_path` 和主栏 item model 归属的 `items_path` 分开：uncached 导航时地址栏可以先显示目标路径，但 sidebar/Devices 选中态保持跟随旧 `items_path`，直到 cache hit 或新 entries 提交。这与 COSMIC Files 的 location / `items_opt` 分层一致，避免 Places 跳转时左侧先高亮新位置而右侧仍显示旧模型。
 - `places`: 左侧 Places。
 - `search_query`: 当前过滤关键字。

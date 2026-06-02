@@ -492,6 +492,7 @@ Acceptance for all:
   - Acceptance: each pane has independent current directory, selection, search/filter state, viewport position, history stacks, and focused-pane ownership for shortcuts, menus, DnD targets, and status updates.
   - Acceptance: the existing column-first, horizontal-scroll, virtualized main-pane item layout remains unchanged inside each pane.
   - Acceptance: Places, Devices, Open Terminal Here, Open With, Trash, and privileged operations act on the focused pane unless an operation explicitly targets the other pane.
+  - Current: Back/Forward history is now isolated behind `PaneHistory` instead of naked AppState stacks. Fika still exposes one pane, but history push/pop/prune semantics are testable as a pane-owned state block, matching the direction of COSMIC's per-tab location/history model.
 
 - [x] Expand Trash beyond first-pass move/undo.
   - Reference: `cosmic-files/src/trash.rs`, `cosmic-files/src/operation/mod.rs`, `cosmic-files/src/menu.rs`, and `cosmic-files/src/app.rs`.

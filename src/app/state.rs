@@ -1,3 +1,4 @@
+use crate::app::pane::PaneHistory;
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::search;
@@ -61,8 +62,7 @@ pub(crate) struct AppState {
     pub(crate) device_errors: HashMap<String, String>,
     pub(crate) launched_units: Vec<String>,
     pub(crate) next_operation_id: u64,
-    pub(crate) back_stack: Vec<PathBuf>,
-    pub(crate) forward_stack: Vec<PathBuf>,
+    pub(crate) history: PaneHistory,
     pub(crate) clipboard_generation: GenerationCounter,
     pub(crate) load_generation: GenerationCounter,
     pub(crate) device_generation: GenerationCounter,
@@ -120,8 +120,7 @@ impl AppState {
             device_errors: HashMap::new(),
             launched_units: Vec::new(),
             next_operation_id: 1,
-            back_stack: Vec::new(),
-            forward_stack: Vec::new(),
+            history: PaneHistory::default(),
             clipboard_generation: GenerationCounter::default(),
             load_generation: GenerationCounter::default(),
             device_generation: GenerationCounter::default(),

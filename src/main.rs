@@ -46,6 +46,8 @@ use app::geometry::{
 use app::operation_controller::{
     OperationResultDisposition, operation_final_status, operation_finished_label,
 };
+#[cfg(test)]
+use app::pane::PaneHistory;
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
     rename_place, reorder_place_path, restore_default_places, sync_places,
@@ -2422,12 +2424,7 @@ fn move_current_directory_home_if_inside_mount(
     mount_path: &Path,
 ) -> bool {
     let mut state = state.borrow_mut();
-    state
-        .back_stack
-        .retain(|path| !path.starts_with(mount_path));
-    state
-        .forward_stack
-        .retain(|path| !path.starts_with(mount_path));
+    state.history.prune_under(mount_path);
     if !state.current_dir.starts_with(mount_path) {
         return false;
     }
@@ -2942,17 +2939,16 @@ fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBrid
             return;
         }
 
-        let previous = state_ref.current_dir.clone();
         debug_log(&format!(
             "navigate_to from={} to={} back_len_before={} forward_len_before={}",
-            previous.display(),
+            state_ref.current_dir.display(),
             path.display(),
-            state_ref.back_stack.len(),
-            state_ref.forward_stack.len()
+            state_ref.history.back_len(),
+            state_ref.history.forward_len()
         ));
-        state_ref.back_stack.push(previous);
-        state_ref.forward_stack.clear();
-        state_ref.current_dir = path;
+        let previous = state_ref.current_dir.clone();
+        let nav = state_ref.history.navigate_from(previous, path);
+        state_ref.current_dir = nav.target;
     }
     load_directory(ui, state, bridge);
 }
@@ -2974,23 +2970,22 @@ fn go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) 
         debug_log(&format!(
             "go_back requested current={} back_len={} forward_len={}",
             state.current_dir.display(),
-            state.back_stack.len(),
-            state.forward_stack.len()
+            state.history.back_len(),
+            state.history.forward_len()
         ));
-        let Some(target) = state.back_stack.pop() else {
+        let previous = state.current_dir.clone();
+        let Some(nav) = state.history.go_back_from(previous) else {
             debug_log("go_back ignored: empty back stack");
             set_status(ui, "No previous location");
             return;
         };
+        state.current_dir = nav.target.clone();
 
-        let current = state.current_dir.clone();
         debug_log(&format!(
             "go_back accepted target={} previous_current={}",
-            target.display(),
-            current.display()
+            nav.target.display(),
+            nav.previous.display()
         ));
-        state.forward_stack.push(current);
-        state.current_dir = target;
     }
     load_directory(ui, state, bridge);
 }
@@ -3002,23 +2997,22 @@ fn go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridg
         debug_log(&format!(
             "go_forward requested current={} back_len={} forward_len={}",
             state.current_dir.display(),
-            state.back_stack.len(),
-            state.forward_stack.len()
+            state.history.back_len(),
+            state.history.forward_len()
         ));
-        let Some(target) = state.forward_stack.pop() else {
+        let previous = state.current_dir.clone();
+        let Some(nav) = state.history.go_forward_from(previous) else {
             debug_log("go_forward ignored: empty forward stack");
             set_status(ui, "No next location");
             return;
         };
+        state.current_dir = nav.target.clone();
 
-        let current = state.current_dir.clone();
         debug_log(&format!(
             "go_forward accepted target={} previous_current={}",
-            target.display(),
-            current.display()
+            nav.target.display(),
+            nav.previous.display()
         ));
-        state.back_stack.push(current);
-        state.current_dir = target;
     }
     load_directory(ui, state, bridge);
 }
@@ -3761,11 +3755,13 @@ mod tests {
         )));
         {
             let mut state = state.borrow_mut();
-            state.back_stack = vec![PathBuf::from("/tmp"), mount_path.join("old")];
-            state.forward_stack = vec![
-                mount_path.join("future"),
-                PathBuf::from("/run/media/yk/USB-sibling"),
-            ];
+            state.history = PaneHistory::from_stacks(
+                vec![PathBuf::from("/tmp"), mount_path.join("old")],
+                vec![
+                    mount_path.join("future"),
+                    PathBuf::from("/run/media/yk/USB-sibling"),
+                ],
+            );
         }
 
         assert!(move_current_directory_home_if_inside_mount(
@@ -3775,10 +3771,10 @@ mod tests {
 
         let state = state.borrow();
         assert_eq!(state.current_dir, home_dir());
-        assert_eq!(state.back_stack, vec![PathBuf::from("/tmp")]);
+        assert_eq!(state.history.back_paths(), &[PathBuf::from("/tmp")]);
         assert_eq!(
-            state.forward_stack,
-            vec![PathBuf::from("/run/media/yk/USB-sibling")]
+            state.history.forward_paths(),
+            &[PathBuf::from("/run/media/yk/USB-sibling")]
         );
     }
 
