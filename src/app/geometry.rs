@@ -1243,6 +1243,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cosmic_shell_chrome_keeps_sidebar_as_foreground_layer() {
+        let app = include_str!("../../ui/app.slint");
+        let top_bar = include_str!("../../ui/top_bar.slint");
+        let search_panel = include_str!("../../ui/search_panel.slint");
+        let status_bar = include_str!("../../ui/status_bar.slint");
+
+        assert!(
+            app.contains("private property <color> shell-base-color"),
+            "AppWindow should own a shared shell base color"
+        );
+        assert!(
+            app.contains("private property <color> sidebar-surface-color"),
+            "AppWindow should own the raised sidebar surface color"
+        );
+        assert!(
+            app.contains("private property <color> shell-separator-color"),
+            "AppWindow should own one separator color for the shared shell"
+        );
+        assert!(
+            app.matches("background: root.shell-base-color;").count() >= 4,
+            "window, splitter, main pane, and empty view should share the shell base"
+        );
+        assert!(
+            app.contains("sidebar-foreground := Rectangle"),
+            "sidebar foreground panel should remain explicit"
+        );
+        assert!(
+            app.contains("background: root.sidebar-surface-color;"),
+            "sidebar foreground should use the raised sidebar surface"
+        );
+        assert!(
+            app.contains("border-color: root.sidebar-border-color;"),
+            "sidebar foreground should keep a subtle border"
+        );
+
+        for (name, slint) in [
+            ("TopBar", top_bar),
+            ("SearchPanel", search_panel),
+            ("StatusBar", status_bar),
+        ] {
+            assert!(
+                slint.contains("background: transparent;"),
+                "{name} should stay transparent over the shared shell base"
+            );
+            assert!(
+                slint.contains("private property <color> separator-color"),
+                "{name} should define a local separator color instead of a panel surface"
+            );
+            assert!(
+                slint.contains("background: root.separator-color;"),
+                "{name} should draw only a separator line"
+            );
+        }
+
+        assert!(
+            top_bar.contains(
+                "private property <color> field-background: root.dark ? #161a1f : #ffffff;"
+            ),
+            "TopBar path/search fields should use the quiet COSMIC-like input surface"
+        );
+        assert!(
+            top_bar.contains(
+                "private property <color> field-text-color: root.dark ? #f2f5f8 : #202832;"
+            ),
+            "TopBar input text should remain readable in light theme"
+        );
+    }
+
     fn menu_metrics_input(kind: i32) -> MenuMetricsInput {
         MenuMetricsInput {
             kind,

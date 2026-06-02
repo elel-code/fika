@@ -29,11 +29,13 @@ export component SearchPanel inherits Rectangle {
     background: transparent;
     border-width: 0px;
 
+    private property <color> separator-color: root.dark ? #222832 : #dde4ec;
+
     Rectangle {
         y: parent.height - 1px;
         width: parent.width;
         height: 1px;
-        background: root.dark ? #242a30 : #e2e7ec;
+        background: root.separator-color;
     }
 
     FlexboxLayout {

@@ -27,10 +27,19 @@ export component TopBar inherits Rectangle {
     background: transparent;
     border-width: 0px;
 
+    private property <color> separator-color: root.dark ? #222832 : #dde4ec;
+    private property <color> field-background: root.dark ? #161a1f : #ffffff;
+    private property <color> field-focus-background: root.dark ? #12161a : #ffffff;
+    private property <color> field-border: root.dark ? #2c343c : #dfe6ee;
+    private property <color> field-focus-border: root.dark ? #58b4d8 : #2f8dbc;
+    private property <color> field-text-color: root.dark ? #f2f5f8 : #202832;
+    private property <color> muted-text-color: root.dark ? #818c96 : #667586;
+    private property <color> close-hover-color: root.dark ? #252b32 : #eef2f6;
+
     HorizontalLayout {
-        padding-right: 14px;
-        padding-top: 10px;
-        padding-bottom: 10px;
+        padding-right: 12px;
+        padding-top: 9px;
+        padding-bottom: 9px;
         spacing: 0px;
 
         Rectangle {
@@ -41,7 +50,7 @@ export component TopBar inherits Rectangle {
         HorizontalLayout {
             padding-left: 0px;
             padding-right: 10px;
-            spacing: 5px;
+            spacing: 4px;
 
             ToolButton {
                 label: "<";
@@ -67,11 +76,11 @@ export component TopBar inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             min-width: 120px;
-            height: 34px;
+            height: 36px;
             border-radius: 8px;
             border-width: 1px;
-            border-color: root.path-focused ? (root.dark ? #56b6dd : #2b86b7) : (root.dark ? #333a42 : #d6dde5);
-            background: root.path-focused ? (root.dark ? #15191d : #ffffff) : (root.dark ? #191e23 : #eef1f4);
+            border-color: root.path-focused ? root.field-focus-border : root.field-border;
+            background: root.path-focused ? root.field-focus-background : root.field-background;
 
             Text {
                 visible: root.path-text == "";
@@ -79,7 +88,7 @@ export component TopBar inherits Rectangle {
                 width: parent.width - 24px;
                 height: parent.height;
                 text: "/path/to/folder";
-                color: root.dark ? #7f8a94 : #687381;
+                color: root.muted-text-color;
                 font-size: 14px;
                 overflow: elide;
                 vertical-alignment: center;
@@ -93,8 +102,8 @@ export component TopBar inherits Rectangle {
                 single-line: true;
                 font-size: 14px;
                 vertical-alignment: center;
-                color: root.dark ? #f4f7fa : #202832;
-                selection-background-color: root.dark ? #51a9d4 : #2b86b7;
+                color: root.field-text-color;
+                selection-background-color: root.dark ? #58b4d8 : #2f8dbc;
                 selection-foreground-color: root.dark ? #0f172a : #ffffff;
                 accepted => { root.path_submitted(self.text); }
                 changed has-focus => {
@@ -109,8 +118,8 @@ export component TopBar inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 8px;
-            spacing: 5px;
+            padding-left: 10px;
+            spacing: 4px;
 
             if (!root.search-active): ToolButton {
                 label: "||";
@@ -126,19 +135,19 @@ export component TopBar inherits Rectangle {
             }
 
             if (root.search-active): Rectangle {
-                width: 246px;
-                height: 34px;
+                width: 260px;
+                height: 36px;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: root.search-focused ? (root.dark ? #56b6dd : #2b86b7) : (root.dark ? #333a42 : #d6dde5);
-                background: root.search-focused ? (root.dark ? #15191d : #ffffff) : (root.dark ? #191e23 : #eef1f4);
+                border-color: root.search-focused ? root.field-focus-border : root.field-border;
+                background: root.search-focused ? root.field-focus-background : root.field-background;
 
                 Text {
                     x: 12px;
                     width: 18px;
                     height: parent.height;
                     text: "S";
-                    color: root.dark ? #8b98a5 : #667586;
+                    color: root.muted-text-color;
                     font-size: 13px;
                     font-weight: 800;
                     horizontal-alignment: center;
@@ -151,7 +160,7 @@ export component TopBar inherits Rectangle {
                     width: parent.width - 74px;
                     height: parent.height;
                     text: "Search";
-                    color: root.dark ? #74808a : #687381;
+                    color: root.muted-text-color;
                     font-size: 14px;
                     overflow: elide;
                     vertical-alignment: center;
@@ -165,8 +174,8 @@ export component TopBar inherits Rectangle {
                     single-line: true;
                     font-size: 14px;
                     vertical-alignment: center;
-                    color: root.dark ? #f4f7fa : #202832;
-                    selection-background-color: root.dark ? #51a9d4 : #2b86b7;
+                    color: root.field-text-color;
+                    selection-background-color: root.dark ? #58b4d8 : #2f8dbc;
                     selection-foreground-color: root.dark ? #0f172a : #ffffff;
                     accepted => { root.search_submitted(self.text); }
                     changed has-focus => {
@@ -187,7 +196,7 @@ export component TopBar inherits Rectangle {
                     width: 21px;
                     height: 21px;
                     border-radius: 6px;
-                    background: close-search-touch.has-hover ? (root.dark ? #282f36 : #e9edf2) : transparent;
+                    background: close-search-touch.has-hover ? root.close-hover-color : transparent;
 
                     Text {
                         text: "X";
@@ -213,6 +222,6 @@ export component TopBar inherits Rectangle {
         y: parent.height - 1px;
         width: max(1px, parent.width - self.x);
         height: 1px;
-        background: root.dark ? #242a30 : #e2e7ec;
+        background: root.separator-color;
     }
 }
