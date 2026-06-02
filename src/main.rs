@@ -45,7 +45,8 @@ use app::geometry::{
     register_menu_geometry_callbacks, split_preview_plan,
 };
 use app::operation_controller::{
-    OperationResultDisposition, operation_final_status, operation_finished_label,
+    OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
+    operation_finished_label,
 };
 #[cfg(test)]
 use app::pane::PaneHistory;
@@ -1222,6 +1223,24 @@ fn refresh_panes(
         } else {
             refresh_inactive_pane(ui, state, bridge, *pane_id);
         }
+    }
+}
+
+fn refresh_affected_directories(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    affected_dirs: &[PathBuf],
+) {
+    let pane_ids = {
+        let mut state = state.borrow_mut();
+        for dir in affected_dirs {
+            state.remove_directory_cache(dir);
+        }
+        affected_directory_pane_ids(&state, affected_dirs.iter().map(|dir| dir.as_path()))
+    };
+    if !pane_ids.is_empty() {
+        refresh_panes(ui, state, bridge, &pane_ids);
     }
 }
 
@@ -2489,25 +2508,9 @@ fn apply_file_undo_result(
     bridge: &AsyncBridge,
     result: FileUndoResult,
 ) {
-    {
-        let mut state = state.borrow_mut();
-        if let Some(parent) = result.undo.original_source.parent() {
-            state.remove_directory_cache(parent);
-        }
-        if let Some(parent) = result.undo.destination.parent() {
-            state.remove_directory_cache(parent);
-        }
-        for item in &result.undo.items {
-            if let Some(parent) = item.original_source.parent() {
-                state.remove_directory_cache(parent);
-            }
-            if let Some(parent) = item.destination.parent() {
-                state.remove_directory_cache(parent);
-            }
-        }
-    }
+    let affected_dirs = file_undo_affected_dirs(&result.undo);
+    refresh_affected_directories(ui, state, bridge, &affected_dirs);
 
-    refresh_directory(ui, state, bridge);
     match result.result {
         Ok(message) => set_status(ui, &format!("Undo complete: {message}")),
         Err(err) => {
@@ -2519,6 +2522,29 @@ fn apply_file_undo_result(
                 set_status(ui, &format!("Undo failed: {err}; newer Undo is available"));
             }
         }
+    }
+}
+
+fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    push_unique_parent(&mut dirs, &undo.original_source);
+    push_unique_parent(&mut dirs, &undo.destination);
+    for item in &undo.items {
+        push_unique_parent(&mut dirs, &item.original_source);
+        push_unique_parent(&mut dirs, &item.destination);
+    }
+    dirs
+}
+
+fn push_unique_parent(paths: &mut Vec<PathBuf>, path: &Path) {
+    if let Some(parent) = path.parent() {
+        push_unique_path(paths, parent.to_path_buf());
+    }
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
     }
 }
 
@@ -2661,20 +2687,7 @@ fn apply_privileged_operation_result(
     bridge: &AsyncBridge,
     result: privilege::PrivilegedOperationResult,
 ) {
-    let refresh_current_dir = {
-        let mut state = state.borrow_mut();
-        for dir in &result.affected_dirs {
-            state.remove_directory_cache(dir);
-        }
-        result
-            .affected_dirs
-            .iter()
-            .any(|dir| dir == &state.panes.active.current_dir)
-    };
-
-    if refresh_current_dir {
-        refresh_directory(ui, state, bridge);
-    }
+    refresh_affected_directories(ui, state, bridge, &result.affected_dirs);
 
     match result.result {
         Ok(message) => set_status(ui, &format!("{} complete: {message}", result.label)),
@@ -2758,10 +2771,8 @@ fn apply_external_edit_result(
     match result.result {
         Ok(path) => {
             if result.operation == "Save Back" {
-                if let Some(parent) = path.parent()
-                    && parent == state.borrow().panes.active.current_dir
-                {
-                    refresh_directory(ui, state, bridge);
+                if let Some(parent) = path.parent() {
+                    refresh_affected_directories(ui, state, bridge, &[parent.to_path_buf()]);
                 }
                 set_status(
                     ui,
@@ -4352,6 +4363,30 @@ mod tests {
         assert_eq!(retained.operation, newer.operation);
         assert_eq!(retained.original_source, newer.original_source);
         assert_eq!(retained.destination, newer.destination);
+    }
+
+    #[test]
+    fn file_undo_affected_dirs_are_deduplicated_in_operation_order() {
+        let mut undo = test_undo("copy", "/tmp/source/one.txt", "/tmp/target/one.txt");
+        undo.items = vec![
+            crate::app::state::FileUndoItem {
+                original_source: PathBuf::from("/tmp/source/two.txt"),
+                destination: PathBuf::from("/tmp/target/two.txt"),
+            },
+            crate::app::state::FileUndoItem {
+                original_source: PathBuf::from("/tmp/other/three.txt"),
+                destination: PathBuf::from("/tmp/target/three.txt"),
+            },
+        ];
+
+        assert_eq!(
+            file_undo_affected_dirs(&undo),
+            vec![
+                PathBuf::from("/tmp/source"),
+                PathBuf::from("/tmp/target"),
+                PathBuf::from("/tmp/other"),
+            ]
+        );
     }
 
     #[test]

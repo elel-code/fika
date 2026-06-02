@@ -158,7 +158,10 @@ impl AppState {
             self.remove_directory_cache(source_parent);
         }
 
-        let refresh_pane_ids = operation_affected_pane_ids(self, source_parent, target_dir);
+        let refresh_pane_ids = affected_directory_pane_ids(
+            self,
+            [Some(target_dir), source_parent].into_iter().flatten(),
+        );
         let refresh_current_dir = refresh_pane_ids
             .iter()
             .any(|id| *id == self.panes.active.id);
@@ -198,30 +201,26 @@ impl AppState {
     }
 }
 
-fn operation_affected_pane_ids(
+pub(crate) fn affected_directory_pane_ids<'a>(
     state: &AppState,
-    source_parent: Option<&Path>,
-    target_dir: &Path,
+    affected_dirs: impl IntoIterator<Item = &'a Path>,
 ) -> Vec<u64> {
+    let affected_dirs = affected_dirs.into_iter().collect::<Vec<_>>();
     let mut pane_ids = Vec::new();
-    if operation_affects_directory(source_parent, target_dir, &state.panes.active.current_dir) {
+    if affected_dirs
+        .iter()
+        .any(|dir| *dir == state.panes.active.current_dir.as_path())
+    {
         pane_ids.push(state.panes.active.id);
     }
     if let Some(inactive) = state.panes.inactive()
-        && operation_affects_directory(source_parent, target_dir, &inactive.current_dir)
-        && !pane_ids.iter().any(|id| *id == inactive.id)
+        && affected_dirs
+            .iter()
+            .any(|dir| *dir == inactive.current_dir.as_path())
     {
         pane_ids.push(inactive.id);
     }
     pane_ids
-}
-
-fn operation_affects_directory(
-    source_parent: Option<&Path>,
-    target_dir: &Path,
-    current_dir: &Path,
-) -> bool {
-    source_parent.is_some_and(|parent| parent == current_dir) || current_dir == target_dir
 }
 
 pub(crate) fn operation_queued_status(snapshot: OperationQueueSnapshot) -> String {
@@ -861,6 +860,26 @@ mod tests {
 
         assert!(summary.refresh_current_dir);
         assert_eq!(summary.refresh_pane_ids, vec![active_id, inactive_id]);
+    }
+
+    #[test]
+    fn affected_directory_pane_ids_deduplicates_matching_split_panes() {
+        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
+        let active_id = state.panes.active.id;
+        let inactive_id = state.panes.inactive().expect("inactive pane").id;
+
+        let pane_ids = affected_directory_pane_ids(
+            &state,
+            [
+                Path::new("/tmp/active"),
+                Path::new("/tmp/right"),
+                Path::new("/tmp/active"),
+                Path::new("/tmp/other"),
+            ],
+        );
+
+        assert_eq!(pane_ids, vec![active_id, inactive_id]);
     }
 
     #[test]
