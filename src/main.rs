@@ -1165,6 +1165,7 @@ fn load_directory_with_preservation(
     ui.set_current_path(current_path.as_str().into());
     ui.set_path_input_text(current_path.into());
     ui.set_current_name(display_location_name(&current_dir).into());
+    ui.set_current_in_trash(fs::file_ops::is_in_trash_files_dir(&current_dir));
     ui.set_search_loading(false);
     if !preserve_view {
         restore_view_state(ui, state, &current_dir);

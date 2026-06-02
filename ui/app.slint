@@ -66,6 +66,7 @@ export component AppWindow inherits Window {
     in-out property <bool> search_loading: false;
     in-out property <bool> clipboard_has_paths: false;
     in-out property <bool> clipboard_cut: false;
+    in-out property <bool> current_in_trash: false;
 
     in-out property <int> icon_zoom_level: 2;
     in-out property <float> sidebar_width_px: 320;
@@ -234,6 +235,10 @@ export component AppWindow inherits Window {
     callback rename_path(string, string);
     callback trash_path(string);
     callback trash_selected();
+    callback restore_trash_path(string);
+    callback restore_trash_selected();
+    callback delete_permanently_path(string);
+    callback delete_permanently_selected();
     callback prepare_open_with(string);
     callback prepare_other_applications(string);
     callback filter_other_applications(string);
@@ -284,9 +289,9 @@ export component AppWindow inherits Window {
     pure callback child_bridge_top(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
     pure callback child_bridge_width(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
     pure callback child_bridge_height(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
     callback transfer_operation(string, string, string);
     callback transfer_conflict_choice(string);
     callback privileged_prompt_accept();
@@ -522,7 +527,7 @@ export component AppWindow inherits Window {
         KeyBinding {
             keys: @keys(Delete);
             activated => {
-                if (!root.file-operation-shortcuts-blocked && root.selected_count > 0) {
+                if (!root.file-operation-shortcuts-blocked && root.selected_count > 0 && !root.current_in_trash) {
                     if (root.selected_count > 1) {
                         root.trash_selected();
                     } else {
@@ -1190,6 +1195,7 @@ export component AppWindow inherits Window {
         clipboard-has-paths: root.clipboard_has_paths;
         clipboard-cut: root.clipboard_cut;
         add-to-places-visible: root.context-add-place-visible;
+        in-trash: root.current_in_trash;
         place-title: root.rename-place-label;
         place-builtin: root.context-menu-place-builtin;
         device-title: root.rename-place-label;
@@ -1204,14 +1210,14 @@ export component AppWindow inherits Window {
         root_menu_top(a, b, c, d, e, f, g, h) => {
             return root.root_menu_top(a, b, c, d, e, f, g, h);
         }
-        context_menu_height(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) => {
-            return root.context_menu_height(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o);
+        context_menu_height(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) => {
+            return root.context_menu_height(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p);
         }
-        context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) => {
-            return root.context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o);
+        context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) => {
+            return root.context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p);
         }
-        context_menu_create_new_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) => {
-            return root.context_menu_create_new_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o);
+        context_menu_create_new_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) => {
+            return root.context_menu_create_new_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p);
         }
         file_open_folder_with_hover(row-y, is-hovered) => {
             root.open-with-submenu-hover(root.context-menu-path, row-y, is-hovered);
@@ -1273,6 +1279,22 @@ export component AppWindow inherits Window {
                 root.trash_selected();
             } else {
                 root.trash_path(root.context-menu-path);
+            }
+            root.close-context-popups();
+        }
+        file_restore_trash_requested => {
+            if (root.selected_count > 1) {
+                root.restore_trash_selected();
+            } else {
+                root.restore_trash_path(root.context-menu-path);
+            }
+            root.close-context-popups();
+        }
+        file_delete_permanently_requested => {
+            if (root.selected_count > 1) {
+                root.delete_permanently_selected();
+            } else {
+                root.delete_permanently_path(root.context-menu-path);
             }
             root.close-context-popups();
         }

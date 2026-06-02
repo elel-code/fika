@@ -270,6 +270,112 @@ pub(crate) fn register_callbacks(
             }
         });
     }
+
+    {
+        let ui_weak = ui.as_weak();
+        let bridge = bridge.clone();
+        ui.on_restore_trash_path(move |path| {
+            if let Some(ui) = ui_weak.upgrade() {
+                let path = PathBuf::from(path.as_str());
+                let affected_dir = path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(file_ops::trash_files_dir);
+                spawn_action(
+                    &ui,
+                    &bridge,
+                    "Restore From Trash",
+                    affected_dir,
+                    move || {
+                        let summary = file_ops::restore_trash_paths(&[path]);
+                        Ok((summary.to_result_message("restored from trash")?, None))
+                    },
+                    None,
+                );
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(state);
+        let bridge = bridge.clone();
+        ui.on_restore_trash_selected(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let paths = state
+                    .borrow()
+                    .selected_paths
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>();
+                let affected_dir = state.borrow().current_dir.clone();
+                spawn_action(
+                    &ui,
+                    &bridge,
+                    "Restore selected from Trash",
+                    affected_dir,
+                    move || {
+                        let summary = file_ops::restore_trash_paths(&paths);
+                        Ok((summary.to_result_message("restored from trash")?, None))
+                    },
+                    None,
+                );
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let bridge = bridge.clone();
+        ui.on_delete_permanently_path(move |path| {
+            if let Some(ui) = ui_weak.upgrade() {
+                let path = PathBuf::from(path.as_str());
+                let affected_dir = path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(file_ops::trash_files_dir);
+                spawn_action(
+                    &ui,
+                    &bridge,
+                    "Delete Permanently",
+                    affected_dir,
+                    move || {
+                        let summary = file_ops::permanently_delete_trash_paths(&[path]);
+                        Ok((summary.to_result_message("deleted permanently")?, None))
+                    },
+                    None,
+                );
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(state);
+        let bridge = bridge.clone();
+        ui.on_delete_permanently_selected(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let paths = state
+                    .borrow()
+                    .selected_paths
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>();
+                let affected_dir = state.borrow().current_dir.clone();
+                spawn_action(
+                    &ui,
+                    &bridge,
+                    "Delete selected permanently",
+                    affected_dir,
+                    move || {
+                        let summary = file_ops::permanently_delete_trash_paths(&paths);
+                        Ok((summary.to_result_message("deleted permanently")?, None))
+                    },
+                    None,
+                );
+            }
+        });
+    }
 }
 
 fn trash_undo_from_summary(summary: &file_ops::FileActionSummary) -> Option<FileUndo> {

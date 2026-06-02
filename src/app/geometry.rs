@@ -224,6 +224,7 @@ pub(crate) struct MenuMetricsInput {
     pub(crate) default_open_visible: bool,
     pub(crate) add_to_places_visible: bool,
     pub(crate) clipboard_has_paths: bool,
+    pub(crate) in_trash: bool,
     pub(crate) place_builtin: bool,
     pub(crate) device_mounted: bool,
     pub(crate) device_pending: bool,
@@ -585,6 +586,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
          default_open_visible,
          add_to_places_visible,
          clipboard_has_paths,
+         in_trash,
          place_builtin,
          device_mounted,
          device_pending,
@@ -601,6 +603,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
                 default_open_visible,
                 add_to_places_visible,
                 clipboard_has_paths,
+                in_trash,
                 place_builtin,
                 device_mounted,
                 device_pending,
@@ -622,6 +625,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
          default_open_visible,
          add_to_places_visible,
          clipboard_has_paths,
+         in_trash,
          place_builtin,
          device_mounted,
          device_pending,
@@ -638,6 +642,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
                 default_open_visible,
                 add_to_places_visible,
                 clipboard_has_paths,
+                in_trash,
                 place_builtin,
                 device_mounted,
                 device_pending,
@@ -659,6 +664,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
          default_open_visible,
          add_to_places_visible,
          clipboard_has_paths,
+         in_trash,
          place_builtin,
          device_mounted,
          device_pending,
@@ -675,6 +681,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
                 default_open_visible,
                 add_to_places_visible,
                 clipboard_has_paths,
+                in_trash,
                 place_builtin,
                 device_mounted,
                 device_pending,
@@ -724,18 +731,22 @@ fn file_context_menu_metrics(
     title: f32,
 ) -> MenuMetrics {
     if input.selected_count > 1 {
+        let action_rows = if input.in_trash { 4.0 } else { 3.0 };
         return MenuMetrics {
-            height: title + 3.0 * item + separator,
+            height: title + action_rows * item + separator,
             open_with_row_y_offset: 0.0,
             create_new_row_y_offset: 0.0,
         };
     }
 
-    let item_count = if input.is_dir {
+    let mut item_count = if input.is_dir {
         8 + input.clipboard_has_paths as i32 + input.add_to_places_visible as i32
     } else {
         8 + input.default_open_visible as i32
     };
+    if input.in_trash {
+        item_count += 1;
+    }
     MenuMetrics {
         height: item_count as f32 * item + 2.0 * separator,
         open_with_row_y_offset: if input.is_dir {
@@ -1183,6 +1194,7 @@ mod tests {
             default_open_visible: true,
             add_to_places_visible: false,
             clipboard_has_paths: false,
+            in_trash: false,
             place_builtin: false,
             device_mounted: false,
             device_pending: false,
@@ -1199,6 +1211,29 @@ mod tests {
         );
         assert_eq!(single_file.open_with_row_y_offset, item_height);
 
+        let single_file_in_trash = context_menu_metrics(MenuMetricsInput {
+            kind: 1,
+            selected_count: 1,
+            is_dir: false,
+            default_open_visible: true,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            in_trash: true,
+            place_builtin: false,
+            device_mounted: false,
+            device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(
+            single_file_in_trash.height,
+            10.0 * item_height + 2.0 * separator_height
+        );
+
         let viewport_with_paste = context_menu_metrics(MenuMetricsInput {
             kind: 3,
             selected_count: 0,
@@ -1206,6 +1241,7 @@ mod tests {
             default_open_visible: false,
             add_to_places_visible: false,
             clipboard_has_paths: true,
+            in_trash: false,
             place_builtin: false,
             device_mounted: false,
             device_pending: false,
@@ -1231,6 +1267,7 @@ mod tests {
             default_open_visible: false,
             add_to_places_visible: false,
             clipboard_has_paths: false,
+            in_trash: false,
             place_builtin: false,
             device_mounted: false,
             device_pending: false,
@@ -1254,6 +1291,7 @@ mod tests {
             default_open_visible: false,
             add_to_places_visible: false,
             clipboard_has_paths: false,
+            in_trash: false,
             place_builtin: true,
             device_mounted: false,
             device_pending: false,
@@ -1273,6 +1311,7 @@ mod tests {
             default_open_visible: false,
             add_to_places_visible: true,
             clipboard_has_paths: false,
+            in_trash: false,
             place_builtin: false,
             device_mounted: false,
             device_pending: false,
@@ -1295,6 +1334,7 @@ mod tests {
             default_open_visible: false,
             add_to_places_visible: false,
             clipboard_has_paths: false,
+            in_trash: false,
             place_builtin: true,
             device_mounted: true,
             device_pending: false,
@@ -1314,6 +1354,7 @@ mod tests {
             default_open_visible: false,
             add_to_places_visible: false,
             clipboard_has_paths: false,
+            in_trash: false,
             place_builtin: true,
             device_mounted: false,
             device_pending: false,
@@ -1333,6 +1374,7 @@ mod tests {
             default_open_visible: false,
             add_to_places_visible: false,
             clipboard_has_paths: false,
+            in_trash: false,
             place_builtin: false,
             device_mounted: true,
             device_pending: false,
@@ -1355,6 +1397,7 @@ mod tests {
             default_open_visible: false,
             add_to_places_visible: false,
             clipboard_has_paths: false,
+            in_trash: false,
             place_builtin: true,
             device_mounted: true,
             device_pending: true,

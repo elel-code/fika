@@ -517,6 +517,7 @@ export component FileContextMenu inherits PopupSurface {
     in property <string> default-open-app-name;
     in property <bool> clipboard-has-paths;
     in property <bool> add-to-places-visible;
+    in property <bool> in-trash;
     callback open_folder_with_hover(bool);
     callback open_folder_with_clicked();
     callback default_open_requested();
@@ -531,6 +532,8 @@ export component FileContextMenu inherits PopupSurface {
     callback copy_location_requested();
     callback properties_requested();
     callback trash_requested();
+    callback restore_trash_requested();
+    callback delete_permanently_requested();
 
     VerticalLayout {
         spacing: 0px;
@@ -639,11 +642,23 @@ export component FileContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        MenuItem {
+        if (!root.in-trash): MenuItem {
             label: root.selected-count > 1 ? "Move Selected to Trash" : "Move to Trash";
             shortcut: "Delete";
             dark: root.dark;
             clicked => { root.trash_requested(); }
+        }
+
+        if (root.in-trash): MenuItem {
+            label: root.selected-count > 1 ? "Restore Selected From Trash" : "Restore From Trash";
+            dark: root.dark;
+            clicked => { root.restore_trash_requested(); }
+        }
+
+        if (root.in-trash): MenuItem {
+            label: root.selected-count > 1 ? "Delete Selected Permanently" : "Delete Permanently";
+            dark: root.dark;
+            clicked => { root.delete_permanently_requested(); }
         }
     }
 }
@@ -729,6 +744,7 @@ export component RootContextMenuLayer inherits Rectangle {
     in property <bool> clipboard-has-paths;
     in property <bool> clipboard-cut;
     in property <bool> add-to-places-visible;
+    in property <bool> in-trash;
     in property <string> place-title;
     in property <bool> place-builtin;
     in property <string> device-title;
@@ -740,15 +756,15 @@ export component RootContextMenuLayer inherits Rectangle {
     out property <length> active-menu-left: root.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     out property <length> active-menu-top: root.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     out property <length> active-menu-width: (root.menu-kind == 2 || root.menu-kind == 5) ? root.place-menu-width : ((root.menu-kind == 3 || root.menu-kind == 4) ? root.blank-menu-width : root.file-menu-width);
-    out property <length> active-menu-height: root.context_menu_height(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    out property <length> active-menu-height: root.context_menu_height(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
     private property <bool> metrics-device-pending: root.menu-kind == 5 && root.device-pending-action != "";
-    private property <length> open-with-row-y: root.active-menu-top + root.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
-    private property <length> create-new-row-y: root.active-menu-top + root.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    private property <length> open-with-row-y: root.active-menu-top + root.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    private property <length> create-new-row-y: root.active-menu-top + root.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
     pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
     pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
-    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
     callback file_open_folder_with_hover(length, bool);
     callback file_open_folder_with_clicked(length);
     callback file_default_open_requested();
@@ -763,6 +779,8 @@ export component RootContextMenuLayer inherits Rectangle {
     callback file_copy_location_requested();
     callback file_properties_requested();
     callback file_trash_requested();
+    callback file_restore_trash_requested();
+    callback file_delete_permanently_requested();
     callback place_open_new_window();
     callback place_rename_requested();
     callback place_remove_requested();
@@ -795,6 +813,7 @@ export component RootContextMenuLayer inherits Rectangle {
         default-open-app-name: root.default-open-app-name;
         clipboard-has-paths: root.clipboard-has-paths;
         add-to-places-visible: root.add-to-places-visible;
+        in-trash: root.in-trash;
         open_folder_with_hover(is-hovered) => { root.file_open_folder_with_hover(root.active-menu-top, is-hovered); }
         open_folder_with_clicked => { root.file_open_folder_with_clicked(root.active-menu-top); }
         default_open_requested => { root.file_default_open_requested(); }
@@ -809,6 +828,8 @@ export component RootContextMenuLayer inherits Rectangle {
         copy_location_requested => { root.file_copy_location_requested(); }
         properties_requested => { root.file_properties_requested(); }
         trash_requested => { root.file_trash_requested(); }
+        restore_trash_requested => { root.file_restore_trash_requested(); }
+        delete_permanently_requested => { root.file_delete_permanently_requested(); }
     }
 
     if (root.menu-open && root.menu-kind == 2): PlaceContextMenu {

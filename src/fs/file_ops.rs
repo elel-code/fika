@@ -440,6 +440,75 @@ pub fn undo_trash(items: &[(PathBuf, PathBuf)]) -> Result<String, String> {
     Ok(format!("restored {} item(s)", items.len()))
 }
 
+pub fn restore_trash_paths(paths: &[PathBuf]) -> FileActionSummary {
+    let mut summary = FileActionSummary::default();
+    for path in paths {
+        match restore_trash_path(path) {
+            Ok(record) => summary.successes.push(record),
+            Err(err) => summary.failures.push(format!("{}: {err}", path.display())),
+        }
+    }
+    summary
+}
+
+pub fn permanently_delete_trash_paths(paths: &[PathBuf]) -> FileActionSummary {
+    let mut summary = FileActionSummary::default();
+    for path in paths {
+        match permanently_delete_trash_path(path) {
+            Ok(record) => summary.successes.push(record),
+            Err(err) => summary.failures.push(format!("{}: {err}", path.display())),
+        }
+    }
+    summary
+}
+
+fn restore_trash_path(trash_path: &Path) -> Result<TrashRecord, String> {
+    if is_trash_files_dir(trash_path) || !is_in_trash_files_dir(trash_path) {
+        return Err("item is not inside Trash".to_string());
+    }
+    if !path_exists(trash_path) {
+        return Err("trash item no longer exists".to_string());
+    }
+
+    let original_path = trash_original_path(trash_path)?;
+    if path_exists(&original_path) {
+        return Err(format!(
+            "original location is already occupied: {}",
+            original_path.display()
+        ));
+    }
+
+    if let Some(parent) = original_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    fs::rename(trash_path, &original_path).map_err(|err| err.to_string())?;
+    let _ = remove_trashinfo(trash_path);
+
+    Ok(TrashRecord {
+        original_path,
+        trash_path: trash_path.to_path_buf(),
+    })
+}
+
+fn permanently_delete_trash_path(trash_path: &Path) -> Result<TrashRecord, String> {
+    if is_trash_files_dir(trash_path) || !is_in_trash_files_dir(trash_path) {
+        return Err("item is not inside Trash".to_string());
+    }
+    if !path_exists(trash_path) {
+        return Err("trash item no longer exists".to_string());
+    }
+
+    let original_path =
+        trash_original_path(trash_path).unwrap_or_else(|_| trash_path.to_path_buf());
+    remove_path(trash_path).map_err(|err| err.to_string())?;
+    let _ = remove_trashinfo(trash_path);
+
+    Ok(TrashRecord {
+        original_path,
+        trash_path: trash_path.to_path_buf(),
+    })
+}
+
 #[derive(Debug, Default)]
 pub struct FileActionSummary {
     pub successes: Vec<TrashRecord>,
@@ -752,15 +821,45 @@ fn restore_overwrite_backup(destination: &Path, backup: &Path) -> Result<(), Str
 }
 
 fn remove_trashinfo(trash_path: &Path) -> Result<(), String> {
-    let Some(name) = trash_path.file_name().and_then(|name| name.to_str()) else {
+    let Some(info_path) = trash_info_path(trash_path) else {
         return Ok(());
     };
-    let trash_home = trash_home();
-    let info_path = trash_home.join("info").join(format!("{name}.trashinfo"));
     if path_exists(&info_path) {
         fs::remove_file(info_path).map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+fn trash_original_path(trash_path: &Path) -> Result<PathBuf, String> {
+    let info_path =
+        trash_info_path(trash_path).ok_or_else(|| "trash item has no metadata name".to_string())?;
+    let contents = fs::read_to_string(&info_path).map_err(|err| {
+        format!(
+            "failed to read trash metadata {}: {err}",
+            info_path.display()
+        )
+    })?;
+    trash_original_path_from_info(&contents)
+}
+
+fn trash_original_path_from_info(contents: &str) -> Result<PathBuf, String> {
+    let encoded = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("Path="))
+        .ok_or_else(|| "trash metadata is missing Path".to_string())?;
+    let path = percent_decode_path(encoded)?;
+    if !path.is_absolute() {
+        return Err(format!(
+            "trash metadata Path is not absolute: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn trash_info_path(trash_path: &Path) -> Option<PathBuf> {
+    let name = trash_path.file_name()?.to_str()?;
+    Some(trash_info_dir().join(format!("{name}.trashinfo")))
 }
 
 fn trash_info_dir() -> PathBuf {
@@ -850,6 +949,41 @@ fn percent_encode_path(path: &Path) -> String {
             _ => format!("%{byte:02X}").chars().collect(),
         })
         .collect()
+}
+
+fn percent_decode_path(value: &str) -> Result<PathBuf, String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err("trash metadata Path contains truncated percent escape".to_string());
+            }
+            let high = hex_value(bytes[index + 1])
+                .ok_or_else(|| "trash metadata Path contains invalid percent escape".to_string())?;
+            let low = hex_value(bytes[index + 2])
+                .ok_or_else(|| "trash metadata Path contains invalid percent escape".to_string())?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+
+    String::from_utf8(decoded)
+        .map(PathBuf::from)
+        .map_err(|_| "trash metadata Path is not valid UTF-8".to_string())
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub fn unique_destination(target_dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
@@ -1493,6 +1627,32 @@ mod tests {
         assert!(!is_in_trash_files_dir(
             &trash_files.with_file_name("outside-trash")
         ));
+    }
+
+    #[test]
+    fn trashinfo_path_decodes_original_location() {
+        let info = "[Trash Info]\nPath=/tmp/a%20b%5Bc%5D.txt\nDeletionDate=2026-06-02T10:11:12\n";
+
+        assert_eq!(
+            trash_original_path_from_info(info).unwrap(),
+            PathBuf::from("/tmp/a b[c].txt")
+        );
+    }
+
+    #[test]
+    fn trashinfo_path_rejects_missing_relative_or_invalid_values() {
+        assert_eq!(
+            trash_original_path_from_info("[Trash Info]\nDeletionDate=now\n").unwrap_err(),
+            "trash metadata is missing Path"
+        );
+        assert_eq!(
+            trash_original_path_from_info("[Trash Info]\nPath=relative/file.txt\n").unwrap_err(),
+            "trash metadata Path is not absolute: relative/file.txt"
+        );
+        assert_eq!(
+            trash_original_path_from_info("[Trash Info]\nPath=/tmp/%XX.txt\n").unwrap_err(),
+            "trash metadata Path contains invalid percent escape"
+        );
     }
 
     fn test_dir(name: &str) -> PathBuf {
