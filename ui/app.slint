@@ -122,17 +122,6 @@ export component AppWindow inherits Window {
     private property <length> open-with-menu-height: min(360px, root.menu-title-height + max(1, root.open_with_apps.length) * root.menu-item-height + root.menu-separator-height + root.menu-item-height);
     private property <length> create-new-menu-width: 180px;
     private property <length> create-new-menu-height: root.menu-item-height;
-    private property <int> active-child-menu-kind: root.open-with-menu-open ? 1 : (root.create-new-menu-open ? 2 : 0);
-    private property <length> active-child-menu-width: root.open-with-menu-open ? root.open-with-menu-width : root.create-new-menu-width;
-    private property <length> active-child-menu-height: root.open-with-menu-open ? root.open-with-menu-height : root.create-new-menu-height;
-    private property <length> active-child-menu-y: root.open-with-menu-open ? root.open-with-menu-y : root.create-new-menu-y;
-    private property <length> active-child-menu-title-height: root.open-with-menu-open ? root.menu-title-height : 0px;
-    private property <length> active-child-menu-left: root.child_menu_left(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-width / 1px, root.active-child-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
-    private property <length> active-child-menu-top: root.child_menu_top(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-width / 1px, root.active-child-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
-    private property <length> active-child-bridge-left: root.child_bridge_left(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-left / 1px, root.active-child-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-top / 1px, root.menu-item-height / 1px, root.active-child-menu-title-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
-    private property <length> active-child-bridge-top: root.child_bridge_top(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-left / 1px, root.active-child-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-top / 1px, root.menu-item-height / 1px, root.active-child-menu-title-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
-    private property <length> active-child-bridge-width: root.child_bridge_width(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-left / 1px, root.active-child-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-top / 1px, root.menu-item-height / 1px, root.active-child-menu-title-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
-    private property <length> active-child-bridge-height: root.child_bridge_height(root.width / 1px, root.height / 1px, root.context-menu-left / 1px, root.active-context-menu-width / 1px, root.active-child-menu-left / 1px, root.active-child-menu-width / 1px, root.active-child-menu-y / 1px, root.active-child-menu-top / 1px, root.menu-item-height / 1px, root.active-child-menu-title-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
     private property <bool> rename-place-open: false;
     private property <int> rename-place-index: -1;
     private property <string> rename-place-label;
@@ -1653,25 +1642,44 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
         context-menu-open: root.context-menu-open;
-        active-kind: root.active-child-menu-kind;
-        bridge-left: root.active-child-bridge-left;
-        bridge-top: root.active-child-bridge-top;
-        bridge-width: root.active-child-bridge-width;
-        bridge-height: root.active-child-bridge-height;
+        context-menu-left: root.context-menu-left;
+        context-menu-width: root.active-context-menu-width;
+        window-width: root.width;
+        window-height: root.height;
+        screen-margin: root.menu-screen-margin;
+        pointer-gap: root.menu-pointer-gap;
+        child-gap: root.child-menu-gap;
+        item-height: root.menu-item-height;
+        title-height: root.menu-title-height;
         create-new-open: root.create-new-menu-open;
-        create-new-left: root.active-child-menu-left;
-        create-new-top: root.active-child-menu-top;
+        create-new-row-y: root.create-new-menu-y;
         create-new-width: root.create-new-menu-width;
         create-new-height: root.create-new-menu-height;
         open-with-open: root.open-with-menu-open;
-        open-with-left: root.active-child-menu-left;
-        open-with-top: root.active-child-menu-top;
+        open-with-row-y: root.open-with-menu-y;
         open-with-width: root.open-with-menu-width;
         open-with-height: root.open-with-menu-height;
         open-with-title: root.open_with_mime == "" ? "Open With" : "Open With - " + root.open_with_mime;
         open-with-apps: root.open_with_apps;
-        open-with-item-height: root.menu-item-height;
         dark: root.dark_mode;
+        child_menu_left(a, b, c, d, e, f, g, h, i, j) => {
+            return root.child_menu_left(a, b, c, d, e, f, g, h, i, j);
+        }
+        child_menu_top(a, b, c, d, e, f, g, h, i, j) => {
+            return root.child_menu_top(a, b, c, d, e, f, g, h, i, j);
+        }
+        child_bridge_left(a, b, c, d, e, f, g, h, i, j, k, l, m) => {
+            return root.child_bridge_left(a, b, c, d, e, f, g, h, i, j, k, l, m);
+        }
+        child_bridge_top(a, b, c, d, e, f, g, h, i, j, k, l, m) => {
+            return root.child_bridge_top(a, b, c, d, e, f, g, h, i, j, k, l, m);
+        }
+        child_bridge_width(a, b, c, d, e, f, g, h, i, j, k, l, m) => {
+            return root.child_bridge_width(a, b, c, d, e, f, g, h, i, j, k, l, m);
+        }
+        child_bridge_height(a, b, c, d, e, f, g, h, i, j, k, l, m) => {
+            return root.child_bridge_height(a, b, c, d, e, f, g, h, i, j, k, l, m);
+        }
         child_hovered(kind, is-hovered) => {
             root.set-child-submenu-hover(kind, is-hovered);
         }

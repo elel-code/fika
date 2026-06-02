@@ -70,25 +70,43 @@ export component CreateNewMenu inherits PopupSurface {
 
 export component ChildSubmenuLayer inherits Rectangle {
     in property <bool> context-menu-open;
-    in property <int> active-kind;
-    in property <length> bridge-left;
-    in property <length> bridge-top;
-    in property <length> bridge-width;
-    in property <length> bridge-height;
+    in property <length> context-menu-left;
+    in property <length> context-menu-width;
+    in property <length> window-width;
+    in property <length> window-height;
+    in property <length> screen-margin;
+    in property <length> pointer-gap;
+    in property <length> child-gap;
+    in property <length> item-height: 38px;
+    in property <length> title-height: 30px;
     in property <bool> create-new-open;
-    in property <length> create-new-left;
-    in property <length> create-new-top;
+    in property <length> create-new-row-y;
     in property <length> create-new-width;
     in property <length> create-new-height;
     in property <bool> open-with-open;
-    in property <length> open-with-left;
-    in property <length> open-with-top;
+    in property <length> open-with-row-y;
     in property <length> open-with-width;
     in property <length> open-with-height;
     in property <string> open-with-title;
     in property <[DesktopApp]> open-with-apps;
-    in property <length> open-with-item-height: 38px;
     in property <bool> dark;
+    private property <int> active-kind: root.open-with-open ? 1 : (root.create-new-open ? 2 : 0);
+    private property <length> active-row-y: root.open-with-open ? root.open-with-row-y : root.create-new-row-y;
+    private property <length> active-width: root.open-with-open ? root.open-with-width : root.create-new-width;
+    private property <length> active-height: root.open-with-open ? root.open-with-height : root.create-new-height;
+    private property <length> active-title-height: root.open-with-open ? root.title-height : 0px;
+    private property <length> active-left: root.child_menu_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-row-y / 1px, root.active-width / 1px, root.active-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> active-top: root.child_menu_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-row-y / 1px, root.active-width / 1px, root.active-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-left: root.child_bridge_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, root.active-title-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-top: root.child_bridge_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, root.active-title-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-width: root.child_bridge_width(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, root.active-title-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-height: root.child_bridge_height(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, root.active-title-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    pure callback child_menu_left(float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_menu_top(float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_left(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_top(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_width(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_height(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
     callback child_hovered(int, bool);
     callback create_folder_selected();
     callback open_with_app_selected(string);
@@ -107,8 +125,8 @@ export component ChildSubmenuLayer inherits Rectangle {
     }
 
     if (root.create-new-open): CreateNewMenu {
-        x: root.create-new-left;
-        y: root.create-new-top;
+        x: root.active-left;
+        y: root.active-top;
         width: root.create-new-width;
         height: root.create-new-height;
         dark: root.dark;
@@ -121,14 +139,14 @@ export component ChildSubmenuLayer inherits Rectangle {
     }
 
     if (root.open-with-open): OpenWithMenu {
-        x: root.open-with-left;
-        y: root.open-with-top;
+        x: root.active-left;
+        y: root.active-top;
         width: root.open-with-width;
         height: root.open-with-height;
         title: root.open-with-title;
         dark: root.dark;
         apps: root.open-with-apps;
-        item-height: root.open-with-item-height;
+        item-height: root.item-height;
         keep_alive(is-hovered) => {
             root.child_hovered(1, is-hovered);
         }
