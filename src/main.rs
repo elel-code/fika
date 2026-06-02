@@ -43,8 +43,8 @@ use app::geometry::{
     MainGridLayout, SelectionRect, place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::operation_controller::{
-    OperationResultDisposition, operation_finished_label, operation_progress_status,
-    operation_result_disposition,
+    OperationResultDisposition, operation_final_status, operation_finished_label,
+    operation_progress_status, operation_result_disposition,
 };
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
@@ -1973,17 +1973,10 @@ fn apply_file_operation_result(
     if refresh_current_dir {
         refresh_directory(ui, state, bridge);
     }
-    if let Some(status_message) = status_message {
-        if remaining == 0 {
-            set_status(ui, &status_message);
-        } else {
-            set_status(ui, &format!("{status_message}; {remaining} queued"));
-        }
-    } else if requested_privilege && remaining > 0 {
-        set_status(
-            ui,
-            &format!("Administrator privileges required; {remaining} queued"),
-        );
+    if let Some(status_message) =
+        operation_final_status(status_message, requested_privilege, remaining)
+    {
+        set_status(ui, &status_message);
     }
     start_next_operation(ui, state, bridge);
 }

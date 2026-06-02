@@ -463,6 +463,7 @@ Acceptance for all:
   - Current: `src/app/operation_controller.rs` now owns operation queue snapshots, start gating, active operation id/cancel flag lifecycle, and cancellation summaries; `transfer.rs` calls these helpers instead of mutating every queue/control field inline.
   - Current: queued/start/progress/complete/failed/cancel status text is also formatted by `operation_controller.rs`, leaving `main.rs` and `transfer.rs` to apply status updates rather than build operation copy directly.
   - Current: transfer result handling is split into a pure `OperationResultDisposition` summary for completed / privilege-required / failed outcomes, while `main.rs` keeps only UI-side effects such as Undo registration, privileged prompts, refresh, and queue advancement.
+  - Current: remaining-queue suffixes and privilege-waiting status updates are also computed by `operation_controller.rs`, so `main.rs` no longer owns operation status composition.
 
 - [ ] Continue device and mount polish with COSMIC's mounter abstraction in mind.
   - Reference: `cosmic-files/src/mounter/mod.rs` and `mounter/gvfs.rs`.

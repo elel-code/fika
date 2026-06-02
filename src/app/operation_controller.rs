@@ -204,6 +204,21 @@ pub(crate) fn operation_result_disposition(
     }
 }
 
+pub(crate) fn operation_final_status(
+    status: Option<String>,
+    requested_privilege: bool,
+    remaining: usize,
+) -> Option<String> {
+    match (status, requested_privilege, remaining) {
+        (Some(status), _, 0) => Some(status),
+        (Some(status), _, remaining) => Some(format!("{status}; {remaining} queued")),
+        (None, true, remaining) if remaining > 0 => Some(format!(
+            "Administrator privileges required; {remaining} queued"
+        )),
+        (None, _, _) => None,
+    }
+}
+
 pub(crate) fn operation_label(operation: &str) -> &'static str {
     match operation {
         "move" => "Moving",
@@ -387,5 +402,23 @@ mod tests {
                 status: "Move failed: Permission denied".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn operation_final_status_preserves_prompt_and_queue_semantics() {
+        assert_eq!(
+            operation_final_status(Some("Copy complete: /tmp/a".to_string()), false, 0),
+            Some("Copy complete: /tmp/a".to_string())
+        );
+        assert_eq!(
+            operation_final_status(Some("Copy complete: /tmp/a".to_string()), false, 2),
+            Some("Copy complete: /tmp/a; 2 queued".to_string())
+        );
+        assert_eq!(
+            operation_final_status(None, true, 3),
+            Some("Administrator privileges required; 3 queued".to_string())
+        );
+        assert_eq!(operation_final_status(None, true, 0), None);
+        assert_eq!(operation_final_status(None, false, 3), None);
     }
 }
