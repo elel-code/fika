@@ -498,11 +498,7 @@ fn chooser_failure_message(code: Option<i32>, stderr: &str) -> String {
 
 fn parse_chooser_output(stdout: &str) -> ChooserResult {
     let mut result = ChooserResult::default();
-    for line in stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
+    for line in stdout.lines().filter(|line| !line.is_empty()) {
         if let Some(index) = line
             .strip_prefix("FIKA_CHOOSER_FILTER\t")
             .and_then(|index| index.parse::<usize>().ok())
@@ -1252,6 +1248,21 @@ mod tests {
             vec![("encoding".to_string(), "latin1".to_string())]
         );
         assert_eq!(result.paths, vec![PathBuf::from("/tmp/file.txt")]);
+    }
+
+    #[test]
+    fn chooser_output_preserves_path_whitespace() {
+        let result =
+            parse_chooser_output("FIKA_CHOOSER_FILTER\t0\n/tmp/ leading.txt\n/tmp/trailing.txt \n");
+
+        assert_eq!(result.filter_index, Some(0));
+        assert_eq!(
+            result.paths,
+            vec![
+                PathBuf::from("/tmp/ leading.txt"),
+                PathBuf::from("/tmp/trailing.txt "),
+            ]
+        );
     }
 
     #[test]
