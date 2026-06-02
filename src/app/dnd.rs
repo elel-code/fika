@@ -196,4 +196,42 @@ mod tests {
             "[fika dnd] backend=Slint DropArea role=slint-primary area=main phase=can-drop-rejected mime=file validation=internal-drag x=12.2 y=99.8 rejected=true target_path=/tmp/Target Folder payload=/tmp/A"
         );
     }
+
+    #[test]
+    fn side_button_navigation_stays_scoped_to_main_view_sources() {
+        let app = include_str!("../../ui/app.slint");
+        let main_pane_start = app
+            .find("main-pane := Rectangle")
+            .expect("app.slint should keep an explicit main pane root");
+        let before_main_pane = &app[..main_pane_start];
+        assert!(
+            !before_main_pane.contains("PointerEventButton.back")
+                && !before_main_pane.contains("PointerEventButton.forward"),
+            "mouse side buttons must not navigate from topbar, sidebar, or splitter sources"
+        );
+
+        let main_pane = &app[main_pane_start..];
+        assert!(main_pane.contains("PointerEventButton.back"));
+        assert!(main_pane.contains("PointerEventButton.forward"));
+
+        let file_tile = include_str!("../../ui/file_tile.slint");
+        assert!(file_tile.contains("PointerEventButton.back"));
+        assert!(file_tile.contains("PointerEventButton.forward"));
+
+        for (name, source) in [
+            ("top_bar.slint", include_str!("../../ui/top_bar.slint")),
+            ("widgets.slint", include_str!("../../ui/widgets.slint")),
+            ("menus.slint", include_str!("../../ui/menus.slint")),
+            (
+                "status_bar.slint",
+                include_str!("../../ui/status_bar.slint"),
+            ),
+        ] {
+            assert!(
+                !source.contains("PointerEventButton.back")
+                    && !source.contains("PointerEventButton.forward"),
+                "mouse side buttons must not navigate from {name}"
+            );
+        }
+    }
 }

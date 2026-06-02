@@ -504,9 +504,11 @@ Acceptance for all:
   - Current: thumbnail keys now carry freedesktop size buckets and cache filename identity, and thumbnail load reads/writes freedesktop cache/fail-marker paths based on the Thumbnail Managing Standard (`file://` URI MD5, `normal` / `large` / `x-large` / `xx-large`, and `fail/fika-$version`).
   - Current: Fika discovers freedesktop `.thumbnailer` entries from XDG thumbnailer directories, honors `TryExec`, matches exact and top-level wildcard MIME entries, expands `%i` / `%u` / `%o` / `%s` Exec field codes without a shell, and lets external thumbnailers generate the standard cache file for non-built-in formats such as PDF/SVG.
 
-- [ ] Keep pointer-scope behavior aligned with COSMIC's mouse-area approach.
+- [x] Keep pointer-scope behavior aligned with COSMIC's mouse-area approach.
   - Reference: `cosmic-files/src/mouse_area.rs`.
   - Acceptance: side-button navigation and future pointer gestures remain scoped to the intended pane and do not leak into sidebar/topbar interactions.
+  - Current: mouse Back/Forward follows COSMIC's area-owned pointer handling model: Slint `PointerEventButton.back` / `forward` handling lives on the main-pane blank/grid layer and `FileTile`, while sidebar, topbar, splitter, menus, and status bar do not emit history navigation.
+  - Current: a source-level regression test guards that side-button navigation stays out of non-main-view Slint sources.
 
 - [x] Re-evaluate transparent external-editor saves after D-Bus writeback is stable.
   - Acceptance: no FUSE layer is introduced unless scratch/writeback proves insufficient.
