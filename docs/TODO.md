@@ -155,13 +155,19 @@
 
 - [x] Drag external folder into Places.
   - Acceptance: dropping a folder path on Places adds it.
-  - Current: Slint `DropArea` accepts `text/uri-list` / `text/plain`; winit `DroppedFile` remains as platform fallback. Both paths share the same Rust-side drop path normalization for uri-list comments, first valid local file entry, `file:///...` / `file://localhost/...`, remote file URI rejection, and percent decoding.
-  - Current: Slint now passes payload plus MIME type to Rust; Rust owns MIME classification, parsing, force-gap policy, and backend source labeling, so Slint DropArea and winit fallback cannot drift in path semantics.
+  - Current: Slint `DropArea` accepts `text/uri-list` / `text/plain`; winit `DroppedFile` remains as platform fallback for external file drops. Both paths share the same Rust-side drop path normalization for uri-list comments, first valid local file entry, `file:///...` / `file://localhost/...`, remote file URI rejection, and percent decoding.
+  - Current: Slint now passes payload plus MIME type to Rust; Rust owns MIME classification, parsing, force-gap policy, backend source labeling, and main-pane transfer target validation, so Slint DropArea and fallback behavior cannot drift in path semantics.
   - Current: Slint DropArea hover feedback and winit fallback slot selection both use the tested Rust `PlaceDropGeometry` over Places list geometry synchronized from Slint, so sidebar scrolling, target item detection, and visual insertion slots share one rule set.
   - Current: successful external Places drops include the handling backend in the status bar, so real desktop tests can distinguish Slint DropArea from the winit fallback before removing either path.
   - Current: `FIKA_DISABLE_WINIT_DROP_FALLBACK=1` disables only the winit `DroppedFile` event bridge, allowing real desktop tests to prove whether the Slint DropArea `text/uri-list` path works independently.
   - Current: `FIKA_DEBUG_DND=1` prints startup DnD configuration plus Slint DropArea and winit fallback drop traces with backend, phase, MIME type, coordinates, slot/target/gap/item state, and a compact payload summary for real desktop validation.
   - Current: Slint external-drop rejection diagnostics now distinguish unsupported MIME, empty payload, and payloads without a local file path; these reasons appear in debug traces and failed drops show specific status-bar guidance.
+
+- [x] Drag external local file or folder into main view.
+  - Acceptance: dropping onto a main-pane folder opens the transfer menu targeting that folder.
+  - Acceptance: dropping onto main-pane blank space opens the transfer menu targeting the current directory.
+  - Current: `text/uri-list` and `text/plain` payloads are parsed in Rust through the same external local-path parser used by Places; ordinary files and folders are both accepted in the main pane.
+  - Current: hover target highlighting uses the existing main-pane folder `drop-target` style and the same self/subdirectory rejection rules as internal drags.
 
 - [x] Drag folder from main view into Places.
   - Acceptance: dropping into the gap between Places items inserts a new Place at that slot.

@@ -32,9 +32,10 @@ use app::geometry::{
 };
 use app::places::{
     add_place, add_place_at_slot, add_place_at_slot_from_external_payload,
-    apply_external_file_drop, contains_place_path, external_place_drop_rejection_reason,
-    is_supported_places_drop_mime, open_place_new_window, places_drop_force_gap, remove_place,
-    rename_place, reorder_place_path, restore_default_places, sync_places,
+    apply_external_file_drop, contains_place_path, external_path_drop_from_payload,
+    external_path_drop_rejection_reason, is_external_path_drop_mime, is_supported_places_drop_mime,
+    open_place_new_window, places_drop_force_gap, remove_place, rename_place, reorder_place_path,
+    restore_default_places, sync_places,
 };
 use app::selection::{
     append_unique_paths, filtered_entry_count, filtered_entry_paths, rebuild_visible_entry_index,
@@ -677,6 +678,26 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_prepare_external_main_transfer(move |payload, mime_type, x, y| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return false;
+            };
+            let drop = match external_path_drop_from_payload(payload.as_str(), mime_type.as_str()) {
+                Ok(drop) => drop,
+                Err(rejection) => {
+                    set_status(&ui, &rejection.status_message());
+                    return false;
+                }
+            };
+            let source = drop.path.to_string_lossy();
+            let label = path_label(source.as_ref());
+            prepare_main_transfer(&ui, &state, source.as_ref(), label.as_str(), x, y)
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         ui.on_main_drop_target_path(move |x, y, source| {
             let Some(ui) = ui_weak.upgrade() else {
                 return SharedString::new();
@@ -698,6 +719,41 @@ fn main() -> Result<(), slint::PlatformError> {
             let state = state.borrow();
             let source = Path::new(source.as_str());
             main_drop_allowed(&ui, &state, x, y, source)
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_main_external_drop_target_path(move |x, y, payload, mime_type| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return SharedString::new();
+            };
+            let Ok(drop) = external_path_drop_from_payload(payload.as_str(), mime_type.as_str())
+            else {
+                return SharedString::new();
+            };
+            let source = drop.path.to_string_lossy();
+            let state = state.borrow();
+            entry_at_main_point(&ui, &state, x, y)
+                .filter(|entry| entry.is_dir && entry.path.as_str() != source.as_ref())
+                .map_or_else(SharedString::new, |entry| entry.path)
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_main_external_drop_allowed(move |x, y, payload, mime_type| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return false;
+            };
+            let Ok(drop) = external_path_drop_from_payload(payload.as_str(), mime_type.as_str())
+            else {
+                return false;
+            };
+            let state = state.borrow();
+            main_drop_allowed(&ui, &state, x, y, drop.path.as_path())
         });
     }
 
@@ -788,10 +844,11 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_places_drop_supported(|mime_type| is_supported_places_drop_mime(mime_type.as_str()));
     ui.on_places_drop_force_gap(|mime_type| places_drop_force_gap(mime_type.as_str()));
     ui.on_places_drop_rejection_reason(|payload, mime_type| {
-        external_place_drop_rejection_reason(payload.as_str(), mime_type.as_str())
+        external_path_drop_rejection_reason(payload.as_str(), mime_type.as_str())
             .unwrap_or_else(|| "none".to_string())
             .into()
     });
+    ui.on_main_external_drop_supported(|mime_type| is_external_path_drop_mime(mime_type.as_str()));
     ui.on_trace_places_drop(
         |phase, mime_type, payload, x, y, slot, target, over_gap, over_item| {
             dnd_log_places_event(PlacesDndTrace {
