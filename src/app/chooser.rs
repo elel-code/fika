@@ -109,7 +109,8 @@ pub(crate) fn chooser_output_metadata(state: &AppState) -> ChooserOutputMetadata
 
 pub(crate) fn selected_directory_or_current(state: &AppState) -> PathBuf {
     state
-        .selected_paths
+        .selection
+        .paths
         .first()
         .map(PathBuf::from)
         .filter(|path| path.is_dir())

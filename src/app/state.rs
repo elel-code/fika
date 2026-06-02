@@ -1,4 +1,4 @@
-use crate::app::pane::PaneHistory;
+use crate::app::pane::{PaneHistory, PaneSelection};
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::search;
@@ -26,8 +26,7 @@ pub(crate) struct AppState {
     pub(crate) search_kind_filter: i32,
     pub(crate) search_modified_filter: i32,
     pub(crate) search_size_filter: i32,
-    pub(crate) selected_paths: Vec<String>,
-    pub(crate) selection_anchor: Option<String>,
+    pub(crate) selection: PaneSelection,
     pub(crate) clipboard_paths: Vec<PathBuf>,
     pub(crate) clipboard_cut: bool,
     pub(crate) clipboard_content_kind: Option<ClipboardContentKind>,
@@ -84,8 +83,7 @@ impl AppState {
             search_kind_filter: 0,
             search_modified_filter: 0,
             search_size_filter: 0,
-            selected_paths: Vec::new(),
-            selection_anchor: None,
+            selection: PaneSelection::default(),
             clipboard_paths: Vec::new(),
             clipboard_cut: false,
             clipboard_content_kind: None,

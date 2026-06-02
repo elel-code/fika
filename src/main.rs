@@ -615,7 +615,8 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_is_selected(move |path| {
             state
                 .borrow()
-                .selected_paths
+                .selection
+                .paths
                 .iter()
                 .any(|selected| selected == path.as_str())
         });
@@ -1624,7 +1625,7 @@ fn apply_directory_result(
                     state.insert_directory_cache(result.path.clone(), cache_entries);
                     if !result.preserve_view {
                         reset_search_state(&mut state);
-                        state.selected_paths.clear();
+                        state.selection.clear();
                     }
                     false
                 }
@@ -1695,7 +1696,7 @@ fn apply_directory_result(
                         state.virtual_view.invalidate();
                         if !result.preserve_view {
                             reset_search_state(&mut state);
-                            state.selected_paths.clear();
+                            state.selection.clear();
                         }
                     }
                     ui.set_items_path(result.path.display().to_string().into());
@@ -2730,15 +2731,16 @@ fn retain_visible_selection(
 ) {
     let selected_paths = {
         let mut state = state.borrow_mut();
-        state.selected_paths = retained_visible_paths(&state.selected_paths, visible_paths);
+        state.selection.paths = retained_visible_paths(&state.selection.paths, visible_paths);
         if state
-            .selection_anchor
+            .selection
+            .anchor
             .as_ref()
             .is_some_and(|anchor| !visible_paths.iter().any(|visible| visible == anchor))
         {
-            state.selection_anchor = state.selected_paths.last().cloned();
+            state.selection.anchor = state.selection.paths.last().cloned();
         }
-        state.selected_paths.clone()
+        state.selection.paths.clone()
     };
     update_selection_ui(ui, &selected_paths);
 }
@@ -2755,35 +2757,37 @@ fn select_path(
 
         if range {
             let anchor = state
-                .selection_anchor
+                .selection
+                .anchor
                 .as_deref()
-                .or_else(|| state.selected_paths.last().map(String::as_str))
+                .or_else(|| state.selection.paths.last().map(String::as_str))
                 .unwrap_or(path);
             let range_paths = selection_range_paths_filtered(&state, anchor, path);
             if toggle {
-                append_unique_paths(&mut state.selected_paths, range_paths);
+                append_unique_paths(&mut state.selection.paths, range_paths);
             } else {
-                state.selected_paths = range_paths;
+                state.selection.paths = range_paths;
             }
         } else if toggle {
             if let Some(index) = state
-                .selected_paths
+                .selection
+                .paths
                 .iter()
                 .position(|selected| selected == path)
             {
-                state.selected_paths.remove(index);
+                state.selection.paths.remove(index);
             } else {
-                state.selected_paths.push(path.to_string());
+                state.selection.paths.push(path.to_string());
             }
         } else {
-            state.selected_paths.clear();
-            state.selected_paths.push(path.to_string());
+            state.selection.paths.clear();
+            state.selection.paths.push(path.to_string());
         }
 
         if !range {
-            state.selection_anchor = Some(path.to_string());
+            state.selection.anchor = Some(path.to_string());
         }
-        state.selected_paths.clone()
+        state.selection.paths.clone()
     };
 
     update_selection_ui(ui, &selected_paths);
@@ -2796,8 +2800,8 @@ fn select_all_visible(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     };
     {
         let mut state = state.borrow_mut();
-        state.selected_paths = selected_paths.clone();
-        state.selection_anchor = selected_paths.last().cloned();
+        state.selection.paths = selected_paths.clone();
+        state.selection.anchor = selected_paths.last().cloned();
     }
     update_selection_ui(ui, &selected_paths);
 }
@@ -2807,20 +2811,19 @@ fn select_rect(ui: &AppWindow, state: &Rc<RefCell<AppState>>, rect: SelectionRec
         let mut state = state.borrow_mut();
         let selected = selection_rect_paths_filtered(&state, rect);
         if toggle {
-            append_unique_paths(&mut state.selected_paths, selected);
+            append_unique_paths(&mut state.selection.paths, selected);
         } else {
-            state.selected_paths = selected;
+            state.selection.paths = selected;
         }
-        state.selection_anchor = state.selected_paths.last().cloned();
-        state.selected_paths.clone()
+        state.selection.anchor = state.selection.paths.last().cloned();
+        state.selection.paths.clone()
     };
     update_selection_ui(ui, &selected_paths);
 }
 
 fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let mut state = state.borrow_mut();
-    state.selected_paths.clear();
-    state.selection_anchor = None;
+    state.selection.clear();
     drop(state);
     update_selection_ui(ui, &[]);
 }
@@ -3083,9 +3086,10 @@ fn chooser_accept(
             vec![selected_directory_or_current(&state_ref)],
             chooser_output_metadata(&state_ref),
         );
-    } else if !state_ref.selected_paths.is_empty() {
+    } else if !state_ref.selection.paths.is_empty() {
         let selected_files = state_ref
-            .selected_paths
+            .selection
+            .paths
             .iter()
             .map(PathBuf::from)
             .filter(|path| !path.is_dir())

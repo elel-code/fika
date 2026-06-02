@@ -7,6 +7,19 @@ pub(crate) struct PaneNavigation {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PaneSelection {
+    pub(crate) paths: Vec<String>,
+    pub(crate) anchor: Option<String>,
+}
+
+impl PaneSelection {
+    pub(crate) fn clear(&mut self) {
+        self.paths.clear();
+        self.anchor = None;
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PaneHistory {
     back_stack: Vec<PathBuf>,
     forward_stack: Vec<PathBuf>,
@@ -116,5 +129,18 @@ mod tests {
             history.forward_paths(),
             &[PathBuf::from("/run/media/yk/USB-sibling")]
         );
+    }
+
+    #[test]
+    fn pane_selection_clear_resets_paths_and_anchor() {
+        let mut selection = PaneSelection {
+            paths: vec!["/tmp/a".to_string()],
+            anchor: Some("/tmp/a".to_string()),
+        };
+
+        selection.clear();
+
+        assert!(selection.paths.is_empty());
+        assert!(selection.anchor.is_none());
     }
 }

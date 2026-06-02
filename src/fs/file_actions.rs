@@ -247,7 +247,8 @@ pub(crate) fn register_callbacks(
             if let Some(ui) = ui_weak.upgrade() {
                 let paths = state
                     .borrow()
-                    .selected_paths
+                    .selection
+                    .paths
                     .iter()
                     .map(PathBuf::from)
                     .collect::<Vec<_>>();
@@ -304,7 +305,8 @@ pub(crate) fn register_callbacks(
             if let Some(ui) = ui_weak.upgrade() {
                 let paths = state
                     .borrow()
-                    .selected_paths
+                    .selection
+                    .paths
                     .iter()
                     .map(PathBuf::from)
                     .collect::<Vec<_>>();
@@ -357,7 +359,8 @@ pub(crate) fn register_callbacks(
             if let Some(ui) = ui_weak.upgrade() {
                 let paths = state
                     .borrow()
-                    .selected_paths
+                    .selection
+                    .paths
                     .iter()
                     .map(PathBuf::from)
                     .collect::<Vec<_>>();

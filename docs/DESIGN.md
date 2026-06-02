@@ -73,11 +73,11 @@ Rust 侧核心状态在 `AppState`：
 
 - `current_dir`: 当前目录。
 - `entries`: 当前目录完整条目。
-- `history`: 当前主栏的 Back/Forward 历史，封装在 `PaneHistory` 中。当前仍然只有一个主栏 pane，但这一步已经把历史栈从全局裸 `Vec<PathBuf>` 收敛为可被每个 pane 独立持有的状态块，后续 split view 会继续把 selection、search/filter、viewport 和 load generation 迁入 pane-owned state。
+- `history`: 当前主栏的 Back/Forward 历史，封装在 `PaneHistory` 中。当前仍然只有一个主栏 pane，但这一步已经把历史栈从全局裸 `Vec<PathBuf>` 收敛为可被每个 pane 独立持有的状态块。
+- `selection`: 当前主栏的选中路径和 range anchor，封装在 `PaneSelection` 中。后续 split view 会继续把 search/filter、viewport 和 load generation 迁入 pane-owned state。
 - UI 侧把地址栏使用的 `current_path` 和主栏 item model 归属的 `items_path` 分开：uncached 导航时地址栏可以先显示目标路径，但 sidebar/Devices 选中态保持跟随旧 `items_path`，直到 cache hit 或新 entries 提交。这与 COSMIC Files 的 location / `items_opt` 分层一致，避免 Places 跳转时左侧先高亮新位置而右侧仍显示旧模型。
 - `places`: 左侧 Places。
 - `search_query`: 当前过滤关键字。
-- `selected_paths`: 当前选中项。
 - `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。
 - `view_state_cache`: 每个目录的主栏 viewport 坐标缓存，用于返回目录时恢复滚动位置；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留每个路径的视图状态。
 - uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。保留的旧模型在加载期间只作为视觉占位，不接受打开、选择、右键、滚轮或 drop 操作；cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。目录读取失败时不会清空已经提交的主栏模型：刷新失败保留当前视图，缓存刷新失败保留缓存视图，未缓存的 Places/Devices 跳转失败会把 `current_path` 回滚到最后提交的 `items_path`。

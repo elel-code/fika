@@ -59,7 +59,7 @@ pub(crate) fn sync_clipboard_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 fn copy_paths(ui: &AppWindow, state: &Rc<RefCell<AppState>>, context_path: &str, cut: bool) {
     let paths = {
         let state = state.borrow();
-        clipboard_paths_for_context(&state.selected_paths, context_path)
+        clipboard_paths_for_context(&state.selection.paths, context_path)
     };
 
     if paths.is_empty() {

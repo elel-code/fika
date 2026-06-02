@@ -31,8 +31,7 @@ pub(crate) fn prepare_directory_load(
         state.thumbnail_generation.next();
         state.thumbnail_pending.clear();
         reset_search_state(state);
-        state.selected_paths.clear();
-        state.selection_anchor = None;
+        state.selection.clear();
     }
     let current_dir = state.current_dir.clone();
     let cached_entries = state.cached_directory_entries(&current_dir);
@@ -111,8 +110,8 @@ mod tests {
             .thumbnail_pending
             .insert("/tmp/current/photo.png".to_string(), pending_key.clone());
         state.search_query = "photo".to_string();
-        state.selected_paths = vec!["/tmp/current/photo.png".to_string()];
-        state.selection_anchor = Some("/tmp/current/photo.png".to_string());
+        state.selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.selection.anchor = Some("/tmp/current/photo.png".to_string());
         state.insert_directory_cache(
             PathBuf::from("/tmp/current"),
             vec![test_entry("photo.png", "/tmp/current/photo.png")],
@@ -136,9 +135,9 @@ mod tests {
             Some(&pending_key)
         );
         assert_eq!(state.search_query, "photo");
-        assert_eq!(state.selected_paths, vec!["/tmp/current/photo.png"]);
+        assert_eq!(state.selection.paths, vec!["/tmp/current/photo.png"]);
         assert_eq!(
-            state.selection_anchor.as_deref(),
+            state.selection.anchor.as_deref(),
             Some("/tmp/current/photo.png")
         );
     }
@@ -152,8 +151,8 @@ mod tests {
             .insert("/tmp/current/photo.png".to_string(), pending_key);
         state.search_query = "photo".to_string();
         state.search_kind_filter = 3;
-        state.selected_paths = vec!["/tmp/current/photo.png".to_string()];
-        state.selection_anchor = Some("/tmp/current/photo.png".to_string());
+        state.selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.selection.anchor = Some("/tmp/current/photo.png".to_string());
         let thumbnail_generation = state.thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, false);
@@ -165,8 +164,8 @@ mod tests {
         assert!(state.thumbnail_pending.is_empty());
         assert!(state.search_query.is_empty());
         assert_eq!(state.search_kind_filter, 0);
-        assert!(state.selected_paths.is_empty());
-        assert!(state.selection_anchor.is_none());
+        assert!(state.selection.paths.is_empty());
+        assert!(state.selection.anchor.is_none());
     }
 
     #[test]
