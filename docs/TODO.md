@@ -248,6 +248,7 @@
   - Acceptance: completed copy/link operations can be undone by removing the created target.
   - Acceptance: completed move operations can be undone by moving the item back to its original path when that path is still free.
   - Current: the status bar exposes a one-step Undo action after copy/move/link operations, including overwrite conflicts. Overwrite keeps the replaced target as a temporary backup for the active undo entry; replacing that undo entry cleans the old backup.
+  - Current: if Undo fails, the same Undo entry is restored so the user can fix the blocking condition and retry. If a newer Undo entry appeared before the failure result returned, Fika keeps the newer entry instead of overwriting it.
 
 - [x] Copy/move operation queue.
   - Acceptance: long operations run in background and report progress.

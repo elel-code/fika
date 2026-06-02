@@ -2293,7 +2293,27 @@ fn apply_file_undo_result(
     refresh_directory(ui, state, bridge);
     match result.result {
         Ok(message) => set_status(ui, &format!("Undo complete: {message}")),
-        Err(err) => set_status(ui, &format!("Undo failed: {err}")),
+        Err(err) => {
+            let restored = restore_failed_file_undo(state, result.undo);
+            sync_undo_ui(ui, state);
+            if restored {
+                set_status(ui, &format!("Undo failed: {err}; Undo can be retried"));
+            } else {
+                set_status(ui, &format!("Undo failed: {err}; newer Undo is available"));
+            }
+        }
+    }
+}
+
+fn restore_failed_file_undo(state: &Rc<RefCell<AppState>>, undo: FileUndo) -> bool {
+    let mut state_ref = state.borrow_mut();
+    if state_ref.last_undo.is_none() {
+        state_ref.last_undo = Some(undo);
+        true
+    } else {
+        drop(state_ref);
+        cleanup_file_undo_backup(Some(undo));
+        false
     }
 }
 
@@ -3821,6 +3841,52 @@ mod tests {
         assert_eq!(devices[0].pending_action, "");
         assert_eq!(devices[1].error, "");
         assert_eq!(devices[1].pending_action, "mount");
+    }
+
+    #[test]
+    fn failed_file_undo_is_restored_when_no_newer_undo_exists() {
+        let state = Rc::new(RefCell::new(AppState::new(
+            PathBuf::from("/tmp"),
+            Vec::new(),
+        )));
+        let undo = test_undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
+
+        assert!(restore_failed_file_undo(&state, undo.clone()));
+
+        let state = state.borrow();
+        let restored = state.last_undo.as_ref().unwrap();
+        assert_eq!(restored.operation, undo.operation);
+        assert_eq!(restored.original_source, undo.original_source);
+        assert_eq!(restored.destination, undo.destination);
+    }
+
+    #[test]
+    fn failed_file_undo_does_not_replace_newer_undo() {
+        let state = Rc::new(RefCell::new(AppState::new(
+            PathBuf::from("/tmp"),
+            Vec::new(),
+        )));
+        let newer = test_undo("move", "/tmp/new-source.txt", "/tmp/new-target.txt");
+        state.borrow_mut().last_undo = Some(newer.clone());
+        let failed = test_undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
+
+        assert!(!restore_failed_file_undo(&state, failed));
+
+        let state = state.borrow();
+        let retained = state.last_undo.as_ref().unwrap();
+        assert_eq!(retained.operation, newer.operation);
+        assert_eq!(retained.original_source, newer.original_source);
+        assert_eq!(retained.destination, newer.destination);
+    }
+
+    fn test_undo(operation: &str, original_source: &str, destination: &str) -> FileUndo {
+        FileUndo {
+            operation: operation.to_string(),
+            original_source: PathBuf::from(original_source),
+            destination: PathBuf::from(destination),
+            overwritten_backup: None,
+            items: Vec::new(),
+        }
     }
 
     fn test_entry(name: &str, path: &str) -> FileEntry {

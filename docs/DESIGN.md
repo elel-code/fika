@@ -279,7 +279,7 @@ Places 分为内置项和用户项：
 - 内部 Cut / Copy / Paste：单项和多选菜单可以暂存路径；主栏空白和目录项菜单在有内部剪贴板内容时显示 Paste，实际执行复用 async move/copy 队列。
 - 桌面剪贴板：Cut / Copy 同时尝试写入 `x-special/gnome-copied-files`，payload 第一行为 `cut` 或 `copy`，后续为 `file://` URI。Copy 在该 MIME 发布失败时会回退到 `text/uri-list`，提高与只理解 URI list 的桌面组件互操作性；Cut 不回退，因为 URI list 本身没有 move/cut 语义。打开右键菜单或执行 Paste 时会尝试读取 `x-special/gnome-copied-files`，失败后退到 `text/uri-list`；导入 URI list 时额外读取 Dolphin/KDE 使用的 `application/x-kde-cutselection`，首字节为 `1` 时按 cut/move 处理。读取成功后复用现有 async move/copy 队列。内部和导入的剪贴板路径会按原顺序去重，避免同一源路径被重复 Paste。右键菜单刷新和 Paste 入队前都会过滤已经不存在的剪贴板路径，全部失效时清空内部剪贴板并隐藏 Paste。
 - 冲突处理：通过 drop、Paste 或内部 transfer 菜单发起的 copy/move/link，如果目标名称已存在，会先要求用户选择 Overwrite、Keep Both、Rename 或 Skip。Apply-to-remaining 只应用于 Skip、Keep Both 和 Overwrite；Rename 始终只处理当前冲突，避免把一个手写目标名复用到不相关的后续冲突。Overwrite 会先把旧目标移动到同目录临时备份；操作失败时尝试恢复旧目标，因此文件和目录覆盖走同一套路径。
-- Undo：成功的 copy/link 会在状态栏提供一次性 Undo，执行时删除刚创建的目标；成功的 move 会尝试把目标移回原路径。Overwrite 操作会把被替换的旧目标保留为当前 Undo 条目的临时备份；撤销 copy/link overwrite 时删除新目标并恢复旧目标，撤销 move overwrite 时先把移动来的目标移回原路径再恢复旧目标。新的 Undo 条目替换旧条目时会清理旧 overwrite 备份。
+- Undo：成功的 copy/link 会在状态栏提供一次性 Undo，执行时删除刚创建的目标；成功的 move 会尝试把目标移回原路径。Overwrite 操作会把被替换的旧目标保留为当前 Undo 条目的临时备份；撤销 copy/link overwrite 时删除新目标并恢复旧目标，撤销 move overwrite 时先把移动来的目标移回原路径再恢复旧目标。新的 Undo 条目替换旧条目时会清理旧 overwrite 备份。Undo 失败时会恢复同一个 Undo 入口以便修正阻塞条件后重试；如果失败结果返回前已经产生了新的 Undo 条目，则保留新的 Undo，不用旧失败结果覆盖当前状态。
 - 移到回收站：右键菜单支持单项或多选项移动到 XDG Trash；多选菜单只调用批量 trash 路径，写入 `files/` 和对应 `.trashinfo`。
 - 错误汇总：批量移动到回收站会汇总成功数量和失败原因，显示在状态栏。
 
