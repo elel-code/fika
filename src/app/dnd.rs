@@ -142,10 +142,36 @@ mod tests {
 
     #[test]
     fn dnd_validation_rejects_non_internal_drop_payloads() {
-        assert_eq!(
-            dnd_drop_validation_summary("file:///tmp/source", "text/uri-list"),
-            "rejected reason=unsupported-dnd-payload"
-        );
+        for mime_type in [
+            "text/uri-list",
+            "text/plain",
+            "text/plain;charset=utf-8",
+            "application/octet-stream",
+        ] {
+            assert_eq!(
+                dnd_drop_validation_summary("file:///tmp/source", mime_type),
+                "rejected reason=unsupported-dnd-payload"
+            );
+        }
+    }
+
+    #[test]
+    fn dnd_scope_does_not_keep_native_window_fallbacks() {
+        let sources = [
+            include_str!("../../Cargo.toml"),
+            include_str!("../main.rs"),
+            include_str!("../../ui/app.slint"),
+            include_str!("../../ui/dnd_bridge.slint"),
+        ];
+
+        for source in sources {
+            for forbidden in ["winit", "x11", "X11", "native-window", "native_window"] {
+                assert!(
+                    !source.contains(forbidden),
+                    "drag and drop should stay on Slint DropArea without {forbidden} fallback"
+                );
+            }
+        }
     }
 
     #[test]

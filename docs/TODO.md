@@ -106,6 +106,7 @@
   - Current: root file, Places, Devices, Places blank-area, and main viewport context menu hosting is centralized in `RootContextMenuLayer`, so `ui/app.slint` keeps action wiring while `ui/menus.slint` owns the repeated root-menu placement shell.
   - Current: `RootContextMenuLayer` also owns root-menu width/height selection, flip/clamp placement, and Open With / Create New parent-row anchors before forwarding submenu hover/click events, so `ui/app.slint` no longer carries duplicate root-menu geometry properties.
   - Current: chooser filter and choice popups are hosted through `ChooserOptionPopupLayer` / `ChooserChoicePopupLayer`, keeping the popup loops and anchored placement formulae out of `ui/app.slint`.
+  - Current: chooser filter and choice popups now share an internal `AnchoredChooserPopup` shell in `ui/menus.slint`, so their above-anchor flip/clamp placement formula is defined once instead of repeated across both chooser popup layers.
   - Current: menu geometry callback access now lives in the `MenuGeometry` Slint global (`ui/menu_geometry.slint`), and child submenu lifecycle state lives in `MenuLifecycle` (`ui/menu_lifecycle.slint`), so `ui/app.slint` no longer forwards placement callbacks or directly owns child-submenu open/anchor state.
 - [x] Dolphin/QMenu-style menu placement.
   - Acceptance: root, child, and transfer menus share preferred-point, flip, and clamp placement rules; child hover bridge follows the clamped submenu position.
@@ -178,14 +179,12 @@
   - Current: Restore Defaults is available from the Places blank-area context menu.
   - Current: the Places blank-area context menu also offers Add Current Folder when the current directory is not already in Places.
 
-- [~] Cross-application folder drop into Places.
-  - Future acceptance: once Slint exposes stable cross-application DnD, dropping a folder path from another app on Places adds it.
-  - Current: deferred by project decision. Slint DnD is currently used only for app-internal `data-transfer` user data; external `text/uri-list` / `text/plain` parsing and native-window drop fallback are intentionally absent to avoid maintaining a platform fallback path before Slint supports reliable cross-application DnD.
-
-- [~] Cross-application local file or folder drop into main view.
-  - Future acceptance: once Slint exposes stable cross-application DnD, dropping onto a main-pane folder opens the transfer menu targeting that folder.
-  - Future acceptance: dropping onto main-pane blank space opens the transfer menu targeting the current directory.
-  - Current: deferred with external Places drop. Internal file/folder/place drags already use the same target highlighting and transfer-menu rules; external desktop payloads are rejected as unsupported until Slint exposes stable cross-application DnD.
+- [x] Cross-application DnD fallback removal.
+  - Acceptance: the current project scope only supports app-internal Slint `DragArea` / `DropArea` payloads.
+  - Acceptance: external desktop payloads such as `text/uri-list` and `text/plain` are rejected as unsupported instead of being parsed through a second native-window path.
+  - Acceptance: no winit, X11, or native-window fallback is kept for drag and drop.
+  - Current: internal file/folder/place drags already use the same target highlighting and transfer-menu rules for Places, main-pane blank space, and main-pane folders.
+  - Future: once Slint exposes stable cross-application DnD, reopen this as a new design pass for external folder/file drops.
 
 - [x] Drag folder from main view into Places.
   - Acceptance: dropping into the gap between Places items inserts a new Place at that slot.
@@ -256,7 +255,7 @@
 - [x] First-pass conflict handling.
   - Acceptance: copy/move/link transfers do not silently pick a conflict policy when the destination name exists.
   - Current: transfer conflicts prompt for Overwrite, Keep Both, Rename, or Skip before an operation enters the queue.
-  - Current: Apply-to-remaining is limited to Skip, Keep Both, and Overwrite; Rename remains a single-conflict choice because one explicit target name is not safely reusable across unrelated conflicts. The conflict dialog calls this out when Apply-to-remaining is enabled.
+  - Current: Apply-to-remaining supports Skip, Keep Both, Overwrite, and Rename. Rename keeps the user's explicit target name for the current conflict and assigns each remaining conflict its own unique `copy`-style suggested name, so one hand-written name is not reused across unrelated files.
 
 - [x] First-pass operation undo.
   - Acceptance: completed copy/link operations can be undone by removing the created target.
@@ -369,6 +368,7 @@ Acceptance for all:
   - Current: the portal request title is passed to the chooser window title and accept_label is passed to the chooser confirmation button; portal glob filters are exposed as a chooser filter popup in the footer, common MIME filters such as images, text, audio, video, archives, PDF, JSON, XML, Microsoft Office, and OpenDocument formats are conservatively converted into extension glob patterns, current_filter chooses the initial filter when it matches an exposed chooser filter, and the selected filter is returned as the original portal filter with the result. Empty portal filter labels are mapped to stable chooser labels such as `Filter 1`, while result mapping still preserves the original portal filter.
   - Current: unknown MIME-only portal filters remain hidden instead of appearing as empty chooser filters, because the current Fika chooser UI can only express glob-pattern filtering.
   - Current: portal choices are exposed as chooser footer controls; clicking a choice opens a small option menu instead of blindly cycling, and the selected choices are returned with the result.
+  - Current: portal choice specs now use strict ID/default/option-ID validation and display-label sanitization before launching the chooser, so separator characters from portal clients cannot corrupt the chooser argument protocol or produce mismatched result IDs.
   - Current: recognized `wayland:` `parent_window` handles are preserved and forwarded to `fika --chooser --chooser-parent-window`; empty, malformed, or unknown handles are dropped. `FIKA_DEBUG_PORTAL=1` logs the backend parse decision and the chooser-side received handle, and both diagnostics explicitly report `parent_binding=metadata-only`, `parent_binding_reason=slint-parent-token-binding-unavailable`, and `native_transient=false`. Native transient parent binding remains Wayland platform/window-backend work.
   - Current: `FIKA_DEBUG_PORTAL=1` also prints one request summary per OpenFile / SaveFile / SaveFiles call, including request handle, start directory, selection/save flags, portal/chooser filter counts, MIME-mapped filter count, hidden unsupported filter count, initial filter index, parent-window forwarding state, parent binding status, and `native_transient=false`. When the chooser future finishes, the same debug stream now records whether the request selected paths, was cancelled by the user, produced empty output, was closed by the portal request, or failed with an error.
   - Current: the backend subscribes to the portal request handle's `org.freedesktop.impl.portal.Request.Close` signal while `fika --chooser` is running; request Close maps to portal response `1` and drops the chooser wait future. The chooser process is also launched with `kill_on_drop`, so Close, backend-side cancellation, or connection teardown do not leave an orphan chooser window.
@@ -447,6 +447,7 @@ Acceptance for all:
 - [x] Runtime integration diagnostic helper.
   - Acceptance: installed packages have a repeatable check for D-Bus activation metadata, Polkit action visibility, portal backend metadata, and helper binary placement.
   - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/UDisks2/tooling context in normal mode, probes UDisks2 ObjectManager visibility and `fika --diagnose-devices` output for Devices validation, reports the active `portals.conf` FileChooser backend selection, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method, and supports `--record FILE` for saving comparable distro/desktop validation reports.
+  - Current: metadata-only validation now rejects unexpanded `@bindir@`, placeholder `example.invalid`, and dev-only `pkexec` / `--session-bus` service entries in installed metadata.
   - Remaining: run this diagnostic with `--record` on target distributions/desktops and record any polkit/systemd/dbus activation differences.
 
 - [x] External editor writeback flow.
@@ -470,12 +471,19 @@ Acceptance for all:
   - Current direction: shell visuals should move closer to COSMIC Files: top bar and main pane share one calm surface with only necessary divider lines, the sidebar reads as the raised/foreground layer with Fika-friendly rounded treatment, and address/search/navigation placement follows COSMIC unless it conflicts with Fika's column-first main pane.
   - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, search placement, and transient surface styling; the sidebar may keep Fika's rounded foreground treatment on top of COSMIC proportions.
   - Current direction: once the current structural/menu/performance work is stable, all non-main-pane chrome may move further toward COSMIC Files directly: colors, layout rhythm, address-bar position, Back/Forward affordances, search field position/display, and sidebar treatment should follow COSMIC where practical, while preserving Fika's rounded raised sidebar layer and the existing main-pane arrangement.
+  - Current direction: future UI work should freely copy COSMIC Files for all chrome outside the main file arrangement, including color tokens, top-bar/main-pane layer treatment, address-bar alignment, navigation/search placement, menus, dialogs, and sidebar rhythm. The main pane's item arrangement remains the explicit exception.
   - Current: first shell pass aligns the top bar, search panel, status bar, and main pane to one shared surface while the sidebar uses a rounded foreground component color and a softer divider, keeping the main pane's column-first layout untouched.
-  - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 60px top bar and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
+  - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 56px top bar and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
+  - Current: header controls now use a lighter 32px shared `ToolButton`, 32px path/search input surfaces, and softer light-theme sidebar colors, moving non-main-pane chrome closer to COSMIC while leaving the main file arrangement unchanged.
   - Current: TopBar follows COSMIC's previous/next/up navigation grouping. Home remains a Places/sidebar action rather than a top-bar button.
   - Current: Search follows COSMIC's header behavior more closely: the toolbar search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
   - Current: TopBar Split now uses the shared `ToolButton` selected state instead of a hand-drawn one-off rectangle, keeping header controls in one COSMIC-like component family.
   - Current: the TopBar bottom divider now starts at the sidebar/main split instead of crossing the raised sidebar, so the header and main pane read as one shared layer behind the sidebar foreground.
+  - Current: the default sidebar width is now 280px to better match COSMIC's narrower navigation rhythm, while persisted user widths still override it.
+  - Current: the top-bar search field now follows COSMIC's 240px header search rhythm through min/preferred/max layout constraints, and the path field relaxes its minimum width while search is active so search mode cannot squeeze the main-pane geometry or create Slint layout recursion.
+  - Current: `AppWindow` now owns a single `main-content-left` edge shared by the top bar and main pane; the sidebar divider sits at the main-pane side of the resize gutter, while the raised rounded sidebar remains visually above the flat top/main content layer.
+  - Current: the light shell base is subtly distinct from the raised white sidebar, the sidebar border is stronger than the flat top/main separators, and Places/Devices rows are inset inside the rounded sidebar panel.
+  - Current: sidebar foreground geometry now uses explicit 8px panel margin and 14px radius tokens, keeping the COSMIC-style raised sidebar layer consistent while the top bar and main pane remain a shared flat base.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.
@@ -486,6 +494,9 @@ Acceptance for all:
   - Current: shared Slint `MenuItem` rows now support COSMIC-style right-aligned shortcut hints, and context menus only display hints for actions already handled by `KeyBinding` (`Ctrl+A`, `Ctrl+V`, `Ctrl+C`, `Ctrl+X`, `Delete`).
   - Current: single-folder context menus now expose `Open Terminal Here` for that folder, matching COSMIC's selected-directory terminal action while reusing Fika's existing terminal discovery and systemd-scope launch path.
   - Current: root menu metrics callbacks now share one Rust registration path, and geometry tests cover Open With / Create New parent-row offsets plus hover bridges when child menus are clamped by the window edge.
+  - Current: hover bridge geometry is now tested across right-side child menus, left-flipped child menus, and vertically clamped child menus, so the bridge must cover both the parent submenu row and the first child-menu row along the real pointer path.
+  - Current: repeated context-menu rows for submenu parents, Paste, and Cut/Copy are now small internal components in `ui/menus.slint`; `ui/app.slint` only wires menu actions and no longer owns low-level row layout.
+  - Current: ordinary action rows now also route through an internal `ActionMenuRow`, so raw `MenuItem` usage is limited to row wrapper internals while file, viewport, Places, Devices, transfer, chooser, Open With, and Create New menus share the same action-row enabled/shortcut/hover/click wiring.
 
 - [~] Revisit clipboard behavior against COSMIC's cached Wayland model.
   - Reference: `cosmic-files/src/clipboard.rs` and clipboard handling in `cosmic-files/src/app.rs`.
@@ -503,6 +514,7 @@ Acceptance for all:
   - Current: operation completion now goes through an `OperationCompletionSummary` in `operation_controller.rs`; stale result ids are ignored before they can register Undo or open a privilege prompt, and cache invalidation / current-directory refresh decisions no longer live in `main.rs`.
   - Current: operation progress events now go through an `OperationProgressUpdate` in `operation_controller.rs`; stale progress ids are ignored by the controller instead of being special-cased in `main.rs`.
   - Current: the controller also tracks the last active-operation progress bucket, so repeated progress callbacks inside the same percentage/unknown-size state do not churn status-bar updates.
+  - Current: transfer-conflict status text for Skip and Apply to remaining is now computed by `operation_controller.rs`, keeping `transfer.rs` focused on queue mutation and popup routing while preserving tested user-facing copy.
 
 - [ ] Add split view / dual-pane browsing.
   - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.
@@ -516,7 +528,15 @@ Acceptance for all:
   - Current: Directory-load, open-file, and thumbnail generation counters are now owned by `PaneState`, so stale async results are scoped to the pane that started the work instead of a global app counter.
   - Current: The active main-pane directory, entries, history, selection, search, and virtual-view state are now grouped under `PaneState`. Fika still renders one pane, but most pane-owned data now has a single ownership boundary before the visible split UI is added.
   - Current: `AppState` now owns `PanesState` with an explicit active pane slot instead of a naked `PaneState`, so the next split-view pass can add a second pane and focused-pane routing without rewriting every pane-owned state field again.
-  - Current: `PanesState` now stores an optional inactive pane and exposes open/close split state transitions. The COSMIC-style top-bar Split control toggles that state and reflects it visually, but the main UI still renders only the active pane until real dual-pane layout and focused-pane routing are implemented.
+  - Current: `PanesState` now stores an optional inactive pane and exposes open/close/focus split state transitions. Opening Split clones a snapshot of the active pane into an inactive pane, including directory entries, search/filter state, virtual-view metadata, and viewport position, while intentionally not copying selection or history.
+  - Current: the UI now renders a visible inactive-pane preview beside the active virtualized main pane when Split is open. The active pane keeps the existing column-first virtual grid and uses half the main-pane width for search height, scroll extent, blank-area input, and virtual slicing.
+  - Current: the inactive-pane preview now uses the same `VirtualGridPlan` family as the main view and slices entries around its own horizontal viewport instead of sending a fixed first chunk, reducing Slint model/tile pressure for large split directories.
+  - Current: the inactive-pane preview now handles ordinary wheel / horizontal wheel as horizontal scrolling on its own viewport, while Ctrl+wheel still uses the shared icon zoom action.
+  - Current: double-clicking an inactive preview tile now routes focus to that pane and then reuses the active-pane `open_path()` flow, so split preview can open folders/files without duplicating navigation and file-open logic.
+  - Current: clicking the inactive preview swaps active/inactive pane focus without a directory rescan, synchronizes address/search/selection/status state from the newly active pane, and rebuilds the active virtual slice for the focused pane.
+  - Current: directory load requests and directory watcher refreshes now carry a stable pane id. If focus moves before the async result returns, the result updates the pane that requested it, and inactive-pane results refresh the preview/cache instead of being discarded as stale active-pane data.
+  - Current: `PanesState` now exposes `PaneTarget::{Focused, Inactive, Id}` lookup helpers, giving shortcuts, menus, DnD, and async operation code a tested route away from hard-coded `active` access toward focused-pane or explicit-pane routing.
+  - Remaining: full independent dual-pane routing for shortcuts, menus, DnD/drop targets, status ownership, and non-directory async operations.
   - Current: successful device unmount cleanup prunes mount paths from both active and inactive pane histories, so the split scaffold does not strand a removed device path in the hidden pane.
 
 - [x] Expand Trash beyond first-pass move/undo.

@@ -544,20 +544,20 @@ export component TransferConflictDialog inherits Rectangle {
                 height: 34px;
                 text <=> root.rename-name;
                 accepted => {
-                    root.choice("rename:" + self.text);
+                    root.choice(root.apply-all ? ("all:rename:" + self.text) : ("rename:" + self.text));
                 }
             }
         }
 
         CheckOption {
             width: 300px;
-            label: "Apply Skip / Keep Both / Overwrite to remaining conflicts";
+            label: "Apply this choice to remaining conflicts";
             dark: root.dark;
             checked <=> root.apply-all;
         }
 
         if (root.apply-all): Text {
-            text: "Rename applies only to this conflict.";
+            text: "Rename uses unique suggested names for each remaining conflict.";
             color: root.dark ? #a8b2bd : #64748b;
             font-size: 12px;
         }
@@ -579,7 +579,7 @@ export component TransferConflictDialog inherits Rectangle {
                 width: 86px;
                 label: "Rename";
                 dark: root.dark;
-                clicked => { root.choice("rename:" + root.rename-name); }
+                clicked => { root.choice(root.apply-all ? ("all:rename:" + root.rename-name) : ("rename:" + root.rename-name)); }
             }
 
             MenuItem {

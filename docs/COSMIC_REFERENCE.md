@@ -18,6 +18,7 @@ Keep the current Fika main-pane item arrangement:
 Prefer COSMIC Files for the surrounding product feel and Rust implementation shape:
 
 - Quieter toolbar/sidebar/status surfaces.
+- Colors, spacing, layout rhythm, address bar placement, previous/next controls, and search placement/display outside the main file arrangement.
 - Practical menu grouping and action enablement.
 - Desktop app and terminal discovery.
 - Clipboard import/export details.
@@ -39,14 +40,21 @@ Useful UI direction:
 
 - Prefer quieter surfaces with clearer row spacing, softer separators, and less dense menu groups where it helps scanning.
 - Keep primary panes visually simple: sidebar, toolbar, content, and footer should feel integrated instead of heavily framed.
-- Outside the main-pane item arrangement, Fika should treat COSMIC Files as the default visual reference for color, spacing, toolbar layout, address entry placement, previous/next controls, search entry placement, and transient surface styling.
+- Outside the main-pane item arrangement, Fika should treat COSMIC Files as the default visual reference for all UI chrome: color, spacing, toolbar layout, address entry position, previous/next controls, search entry position/display, status area, menu surfaces, and dialog/transient surface styling.
 - The top bar and main content should read as one shared layer: use the same calm base surface, keep only necessary divider lines, and avoid a separate toolbar color block.
-- The sidebar should be the raised foreground layer. It may keep Fika's rounded treatment on top of COSMIC's sidebar proportions, while the main pane and top bar stay visually flatter behind it.
+- The sidebar should be the raised foreground layer. It may keep Fika's rounded treatment on top of COSMIC's sidebar proportions, while the main pane and top bar stay visually flatter behind it. The separator line remains useful for resizing/orientation, but hover highlighting is unnecessary when the cursor shape already communicates resize affordance.
+- After the current structural work is stable, every non-main-pane UI detail should be audited against COSMIC Files directly: palette, control radii, toolbar rhythm, address bar placement, Back/Forward affordances, search field position/display, menu layout, and sidebar prominence. The deliberate exception is the main pane's current column-first file arrangement and horizontal scroll model.
+- Future visual passes should treat COSMIC Files as the source of truth for all chrome outside the main file arrangement: color tokens, top-bar/main-pane layer relationship, address-bar alignment, Back/Forward/search placement, menu/dialog styling, and status/toolbar rhythm. Fika may keep a rounded raised sidebar on top of COSMIC's sidebar proportions, but should not preserve Dolphin-like chrome by inertia.
 - Context menus should keep practical action grouping, but visual weight can move closer to COSMIC Files than Dolphin when the interaction rules are already covered by tests.
 - Fika's first visual pass keeps Dolphin-like pane layout, but shifts the surface colors toward COSMIC's quieter feel: off-white light backgrounds, lower-contrast separators, softer hover fills, 7-8px radii for controls/menus, and consistent selected/drop feedback between the sidebar and main pane.
 - Current shell direction: the top bar and main pane share one calm base surface, while the sidebar is treated as a raised foreground panel with Fika's rounded treatment and only a narrow resize divider between the two layers.
-- Search follows COSMIC's header pattern more closely: the search button becomes a fixed-width top-bar search field when active, while the main-pane strip only carries recursive/filter actions.
+- Search follows COSMIC's header pattern more closely: the search button becomes a responsive top-bar search field when active, while the main-pane strip only carries recursive/filter actions.
 - Current chrome pass: `AppWindow` owns shared base/sidebar/separator color tokens; `TopBar`, `SearchPanel`, and `StatusBar` stay transparent and only draw separator lines, while path/search fields use quiet white/dark input surfaces so the light theme remains readable.
+- Current chrome pass: the default sidebar width is 280px, matching COSMIC's narrower navigation rhythm while still allowing user-resized persisted widths.
+- Current chrome pass: the active top-bar search field follows COSMIC's 240px header search rhythm through min/preferred/max layout constraints instead of a fixed width binding, so opening search can shrink within the header without changing main-pane geometry or creating Slint layout recursion.
+- Current chrome pass: the header uses the same `main-content-left` edge as the main pane, so Back/Forward/Up, the path entry, search, and the horizontal separator all belong to the flat content layer behind the raised rounded sidebar.
+- Current chrome pass: the light shell base is slightly calmer than the raised white sidebar, the sidebar border is a little stronger than flat shell separators, and sidebar rows are inset inside the rounded foreground panel instead of touching the panel edge.
+- Current chrome pass: sidebar geometry uses explicit panel margin/radius tokens (8px / 14px) rather than ad-hoc offsets, keeping the rounded foreground layer consistent as future COSMIC-style sidebar polish continues.
 
 Follow-up candidates:
 

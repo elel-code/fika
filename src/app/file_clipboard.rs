@@ -1,5 +1,6 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::events::{AsyncEvent, ClipboardLoadResult};
+use crate::app::pane::PaneTarget;
 use crate::app::state::{AppState, FileUndo};
 use crate::app::transfer::{
     TransferStart, clear_accepted_cut_source, start_transfer_operation,
@@ -59,7 +60,7 @@ pub(crate) fn sync_clipboard_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 fn copy_paths(ui: &AppWindow, state: &Rc<RefCell<AppState>>, context_path: &str, cut: bool) {
     let paths = {
         let state = state.borrow();
-        clipboard_paths_for_context(&state.panes.active.selection.paths, context_path)
+        clipboard_paths_for_focused_context(&state, context_path)
     };
 
     if paths.is_empty() {
@@ -349,6 +350,15 @@ fn clipboard_paths_for_context(selected_paths: &[String], context_path: &str) ->
     unique_paths(paths)
 }
 
+fn clipboard_paths_for_focused_context(state: &AppState, context_path: &str) -> Vec<PathBuf> {
+    let selected_paths = state
+        .panes
+        .pane_for_target(PaneTarget::Focused)
+        .map(|pane| pane.selection.paths.as_slice())
+        .unwrap_or_else(|| state.panes.active.selection.paths.as_slice());
+    clipboard_paths_for_context(selected_paths, context_path)
+}
+
 fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut unique = Vec::with_capacity(paths.len());
     for path in paths {
@@ -362,8 +372,8 @@ fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_clipboard_load, clipboard_paths_for_context, existing_clipboard_paths,
-        merge_desktop_clipboard, unique_paths,
+        apply_clipboard_load, clipboard_paths_for_context, clipboard_paths_for_focused_context,
+        existing_clipboard_paths, merge_desktop_clipboard, unique_paths,
     };
     use crate::app::events::ClipboardLoadResult;
     use crate::app::state::AppState;
@@ -439,6 +449,26 @@ mod tests {
         assert_eq!(
             clipboard_paths_for_context(&selected, "/tmp/c"),
             vec![PathBuf::from("/tmp/c")]
+        );
+    }
+
+    #[test]
+    fn clipboard_context_uses_focused_pane_selection() {
+        let mut state = AppState::new(PathBuf::from("/tmp/left"), Vec::new());
+        state.panes.active.selection.paths =
+            vec!["/tmp/left/a".to_string(), "/tmp/left/b".to_string()];
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
+        state.panes.focus_inactive();
+        state.panes.active.selection.paths =
+            vec!["/tmp/right/a".to_string(), "/tmp/right/b".to_string()];
+
+        assert_eq!(
+            clipboard_paths_for_focused_context(&state, "/tmp/right/b"),
+            vec![PathBuf::from("/tmp/right/a"), PathBuf::from("/tmp/right/b")]
+        );
+        assert_eq!(
+            clipboard_paths_for_focused_context(&state, "/tmp/left/b"),
+            vec![PathBuf::from("/tmp/left/b")]
         );
     }
 

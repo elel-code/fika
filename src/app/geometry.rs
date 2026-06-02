@@ -2,7 +2,7 @@ use crate::{AppWindow, MenuGeometry};
 use slint::ComponentHandle;
 use std::ops::Range;
 
-const TOP_BAR_HEIGHT: f32 = 60.0;
+const TOP_BAR_HEIGHT: f32 = 56.0;
 const STATUS_BAR_HEIGHT: f32 = 36.0;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
 const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
@@ -47,13 +47,14 @@ impl MainGridLayout {
             window_size.width,
             window_size.height,
         );
+        let active_width = active_main_pane_width(pane.right - pane.left, ui.get_split_view_open());
         let search_panel_height = search_panel_height(
             ui.get_search_bar_open(),
             ui.get_search_query().as_str(),
             ui.get_search_kind_filter(),
             ui.get_search_modified_filter(),
             ui.get_search_size_filter(),
-            pane.right - pane.left,
+            active_width,
         );
         let available_grid_height =
             (pane.bottom - pane.top - STATUS_BAR_HEIGHT - search_panel_height - 2.0 * padding)
@@ -90,6 +91,15 @@ impl MainGridLayout {
         }
 
         Some(column * self.rows_per_column + row)
+    }
+}
+
+pub(crate) fn active_main_pane_width(main_pane_width: f32, split_open: bool) -> f32 {
+    let main_pane_width = main_pane_width.max(1.0);
+    if split_open {
+        (main_pane_width / 2.0).max(1.0)
+    } else {
+        main_pane_width
     }
 }
 
@@ -148,6 +158,31 @@ pub(crate) fn virtual_grid_plan(
         visible_range,
         start_column,
     }
+}
+
+pub(crate) fn split_preview_plan(
+    entry_count: usize,
+    pane_width: f32,
+    pane_height: f32,
+    requested_viewport_x: f32,
+    zoom_level: i32,
+) -> VirtualGridPlan {
+    let cell_width = icon_cell_width(zoom_level);
+    let row_height = icon_row_height(zoom_level);
+    let padding = 14.0;
+    let header_height = 44.0;
+    let available_height = (pane_height - header_height - 2.0 * padding).max(row_height);
+    let rows_per_column = (available_height / row_height).floor().max(1.0) as usize;
+
+    virtual_grid_plan(
+        entry_count,
+        rows_per_column,
+        requested_viewport_x,
+        pane_width.max(1.0),
+        cell_width,
+        padding,
+        2,
+    )
 }
 
 pub(crate) fn icon_cell_width(zoom_level: i32) -> f32 {
@@ -1084,9 +1119,9 @@ mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
-        PopupRect, RootMenuGeometry, TOP_BAR_HEIGHT, context_menu_metrics, main_pane_bounds,
-        main_scroll_max_x, place_drop_geometry, search_panel_height, virtual_entry_range,
-        virtual_grid_plan,
+        PopupRect, RootMenuGeometry, TOP_BAR_HEIGHT, active_main_pane_width, context_menu_metrics,
+        main_pane_bounds, main_scroll_max_x, place_drop_geometry, search_panel_height,
+        split_preview_plan, virtual_entry_range, virtual_grid_plan,
     };
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
@@ -1244,6 +1279,192 @@ mod tests {
     }
 
     #[test]
+    fn context_menu_rows_are_componentized_in_menus_layer() {
+        let app = include_str!("../../ui/app.slint");
+        let menus = include_str!("../../ui/menus.slint");
+
+        for component in [
+            "ActionMenuRow",
+            "SubmenuMenuRow",
+            "PasteMenuRow",
+            "CutCopyMenuRows",
+        ] {
+            assert!(
+                menus.contains(&format!("component {component} inherits Rectangle")),
+                "menus.slint should keep reusable {component} row component"
+            );
+            assert!(
+                !app.contains(&format!("{component} {{")),
+                "AppWindow should not compose low-level menu row components"
+            );
+        }
+
+        assert_eq!(
+            menus.matches("submenu: true;").count(),
+            1,
+            "submenu indicator wiring should live in SubmenuMenuRow instead of being repeated"
+        );
+        assert_eq!(
+            menus.matches("MenuItem {").count(),
+            2,
+            "raw MenuItem usage should stay limited to ActionMenuRow and SubmenuMenuRow"
+        );
+        assert_eq!(
+            menus.matches("shortcut: \"Ctrl+V\";").count(),
+            1,
+            "Paste shortcut wiring should live in PasteMenuRow instead of being repeated"
+        );
+        assert_eq!(
+            menus.matches("shortcut: \"Ctrl+X\";").count(),
+            1,
+            "Cut shortcut wiring should live in CutCopyMenuRows instead of being repeated"
+        );
+        assert_eq!(
+            menus.matches("shortcut: \"Ctrl+C\";").count(),
+            1,
+            "Copy shortcut wiring should live in CutCopyMenuRows instead of being repeated"
+        );
+        assert_eq!(
+            menus.matches("SubmenuMenuRow {").count(),
+            4,
+            "file and viewport menus should reuse the submenu row for Open With/Create New entries"
+        );
+        assert_eq!(
+            menus.matches("PasteMenuRow {").count(),
+            2,
+            "file and viewport menus should reuse the paste row"
+        );
+        assert_eq!(
+            menus.matches("CutCopyMenuRows {").count(),
+            2,
+            "single and multi-selection file menus should reuse the cut/copy row group"
+        );
+        assert!(
+            menus.matches("ActionMenuRow {").count() >= 30,
+            "ordinary menu actions should use ActionMenuRow instead of duplicating raw MenuItem wiring"
+        );
+        assert!(
+            !app.contains("MenuItem {"),
+            "AppWindow should not regain direct context-menu row layout"
+        );
+    }
+
+    #[test]
+    fn child_submenu_delayed_close_is_limited_to_child_menu_paths() {
+        let app = include_str!("../../ui/app.slint");
+        let menus = include_str!("../../ui/menus.slint");
+        let menu_lifecycle = include_str!("../../ui/menu_lifecycle.slint");
+
+        let action_row_start = menus
+            .find("component ActionMenuRow")
+            .expect("ActionMenuRow should exist");
+        let paste_row_start = menus
+            .find("component PasteMenuRow")
+            .expect("PasteMenuRow should exist after ActionMenuRow");
+        let action_row = &menus[action_row_start..paste_row_start];
+        assert!(
+            action_row.contains("callback hovered(bool);")
+                && action_row.contains("hovered(is-hovered) => { root.hovered(is-hovered); }"),
+            "ActionMenuRow may expose passive hover for child menu panels"
+        );
+
+        let file_menu_start = menus
+            .find("export component FileContextMenu")
+            .expect("FileContextMenu should exist");
+        let viewport_menu_start = menus
+            .find("export component ViewportContextMenu")
+            .expect("ViewportContextMenu should exist");
+        let root_layer_start = menus
+            .find("export component RootContextMenuLayer")
+            .expect("RootContextMenuLayer should exist");
+        let file_menu = &menus[file_menu_start..viewport_menu_start];
+        let viewport_menu = &menus[viewport_menu_start..root_layer_start];
+        let root_layer = &menus[root_layer_start..];
+
+        assert_eq!(
+            file_menu.matches("hovered(is-hovered) =>").count(),
+            2,
+            "file context menu hover should only be wired for Open Folder With and Open With submenu parents"
+        );
+        assert!(file_menu.contains("root.open_folder_with_hover(is-hovered);"));
+        assert!(file_menu.contains("root.open_with_hover(is-hovered);"));
+        assert!(!file_menu.contains("ActionMenuRow {\n            label: \"Open Terminal Here\";\n            dark: root.dark;\n            hovered"));
+        assert!(!file_menu.contains("ActionMenuRow {\n            label: \"Rename\";\n            dark: root.dark;\n            hovered"));
+
+        assert_eq!(
+            viewport_menu.matches("hovered(is-hovered) =>").count(),
+            2,
+            "viewport context menu hover should only be wired for Create New and Open Folder With submenu parents"
+        );
+        assert!(viewport_menu.contains("root.create_new_hover(is-hovered);"));
+        assert!(viewport_menu.contains("root.open_folder_with_hover(is-hovered);"));
+        assert!(!viewport_menu.contains("ActionMenuRow {\n            label: \"Select All\";\n            shortcut: \"Ctrl+A\";\n            dark: root.dark;\n            hovered"));
+        assert!(!viewport_menu.contains("ActionMenuRow {\n            label: \"Open Terminal Here\";\n            dark: root.dark;\n            hovered"));
+
+        for callback in [
+            "file_open_folder_with_hover",
+            "file_open_with_hover",
+            "viewport_create_new_hover",
+            "viewport_open_folder_with_hover",
+        ] {
+            assert!(
+                root_layer.contains(callback),
+                "RootContextMenuLayer should keep submenu parent callback {callback}"
+            );
+        }
+        assert!(
+            !root_layer.contains("ActionMenuRow") && !root_layer.contains("MenuItem"),
+            "RootContextMenuLayer should only forward menu events, not own row-level hover behavior"
+        );
+        assert!(
+            app.contains("child_hovered(kind, is-hovered) => {\n            root.set-child-submenu-hover(kind, is-hovered);\n        }"),
+            "ChildSubmenuLayer hover bridge/panel should be the route that keeps or closes a child submenu"
+        );
+        assert!(
+            menu_lifecycle.contains("} else if (menu == 1 || menu == 2) {\n            MenuLifecycle.begin-close(menu);\n            close-timer.start();\n        }"),
+            "delayed close should only start from explicit child submenu hover loss"
+        );
+    }
+
+    #[test]
+    fn chooser_popup_layers_share_anchored_popup_shell() {
+        let menus = include_str!("../../ui/menus.slint");
+        let anchored_component_start = menus
+            .find("component AnchoredChooserPopup")
+            .expect("AnchoredChooserPopup should exist");
+        let choice_layer_start = menus
+            .find("export component ChooserChoicePopupLayer")
+            .expect("ChooserChoicePopupLayer should exist");
+        assert!(
+            menus.contains("export component ChooserOptionPopupLayer"),
+            "ChooserOptionPopupLayer should still exist"
+        );
+        let anchored_component = &menus[anchored_component_start..choice_layer_start];
+        let chooser_layers = &menus[choice_layer_start..];
+
+        assert!(
+            anchored_component.contains("MenuGeometry.anchored_menu_left("),
+            "anchored chooser shell should own horizontal placement"
+        );
+        assert!(
+            anchored_component.contains("MenuGeometry.anchored_menu_top("),
+            "anchored chooser shell should own vertical placement"
+        );
+        assert_eq!(
+            chooser_layers
+                .matches("MenuGeometry.anchored_menu_")
+                .count(),
+            0,
+            "chooser layers should delegate placement to AnchoredChooserPopup"
+        );
+        assert_eq!(
+            chooser_layers.matches("AnchoredChooserPopup {").count(),
+            2,
+            "filter and choice chooser layers should both use the shared shell"
+        );
+    }
+
+    #[test]
     fn cosmic_shell_chrome_keeps_sidebar_as_foreground_layer() {
         let app = include_str!("../../ui/app.slint");
         let top_bar = include_str!("../../ui/top_bar.slint");
@@ -1263,6 +1484,20 @@ mod tests {
             "AppWindow should own one separator color for the shared shell"
         );
         assert!(
+            app.contains(
+                "private property <length> main-content-left: root.sidebar_width_px * 1px + root.sidebar-splitter-width;"
+            ),
+            "AppWindow should expose the main content edge used by both top bar and main pane"
+        );
+        assert!(
+            app.contains("private property <length> main-pane-width: max(1px, root.width - root.main-content-left);"),
+            "main pane width should derive from the same content edge as the header"
+        );
+        assert!(
+            app.contains("private property <length> sidebar-divider-offset: 7px;"),
+            "sidebar divider should sit on the main-pane side of the resize gutter"
+        );
+        assert!(
             app.matches("background: root.shell-base-color;").count() >= 4,
             "window, splitter, main pane, and empty view should share the shell base"
         );
@@ -1271,12 +1506,62 @@ mod tests {
             "sidebar foreground panel should remain explicit"
         );
         assert!(
+            !app.contains("SidebarSection { label: \"Remote\""),
+            "sidebar should not show an unimplemented Remote section"
+        );
+        assert!(
+            !app.contains("label: \"Network\""),
+            "sidebar should not expose a no-op Network placeholder"
+        );
+        assert!(
             app.contains("background: root.sidebar-surface-color;"),
             "sidebar foreground should use the raised sidebar surface"
         );
         assert!(
             app.contains("border-color: root.sidebar-border-color;"),
             "sidebar foreground should keep a subtle border"
+        );
+        assert!(
+            app.contains("private property <length> top-bar-height: 56px;"),
+            "AppWindow top bar height should match Rust main-pane geometry"
+        );
+        assert!(
+            top_bar.contains("height: 56px;"),
+            "TopBar visible height should match AppWindow top-bar-height"
+        );
+        assert!(
+            top_bar.contains("in property <length> main-start-x;")
+                && top_bar.contains("width: root.main-start-x;")
+                && top_bar.contains("x: root.main-start-x;"),
+            "TopBar controls and separator should start from the same main content edge as the main pane"
+        );
+        assert!(
+            app.contains(
+                "private property <color> shell-base-color: root.dark_mode ? #101418 : #f8f9fb;"
+            ),
+            "top bar, main pane, search strip, and status bar should share one calm base surface"
+        );
+        assert!(
+            app.contains("private property <color> sidebar-surface-color: root.dark_mode ? #181e24 : #ffffff;"),
+            "light theme sidebar should be a raised white foreground surface"
+        );
+        assert!(
+            app.contains(
+                "private property <color> sidebar-border-color: root.dark_mode ? #2d353e : #d8dee6;"
+            ),
+            "sidebar border should stay slightly stronger than the flat shell separators"
+        );
+        assert!(
+            app.contains("padding-left: 8px;") && app.contains("padding-right: 8px;"),
+            "sidebar rows should be inset inside the rounded foreground panel"
+        );
+        assert!(
+            app.contains("in-out property <float> sidebar_width_px: 280;"),
+            "default sidebar width should follow COSMIC's narrower nav rhythm"
+        );
+        assert!(
+            app.contains("private property <float> sidebar-resize-start-width-px: 280;"),
+            "sidebar resize state should initialize from the same COSMIC-like default"
         );
 
         for (name, slint) in [
@@ -1300,7 +1585,7 @@ mod tests {
 
         assert!(
             top_bar.contains(
-                "private property <color> field-background: root.dark ? #161a1f : #ffffff;"
+                "private property <color> field-background: root.dark ? #151a1f : #fcfdfe;"
             ),
             "TopBar path/search fields should use the quiet COSMIC-like input surface"
         );
@@ -1310,6 +1595,89 @@ mod tests {
             ),
             "TopBar input text should remain readable in light theme"
         );
+        assert!(
+            top_bar.matches("height: 32px;").count() >= 2,
+            "TopBar path/search inputs should keep the lighter COSMIC-style 32px height"
+        );
+        assert!(
+            top_bar.contains(
+                "private property <length> path-min-width: root.search-active ? 48px : 160px;"
+            ),
+            "TopBar path field should relax its minimum width when search is active"
+        );
+        assert!(
+            top_bar.contains("min-width: root.path-min-width;"),
+            "TopBar path field should relax its minimum width when search is active in a narrow header"
+        );
+        assert!(
+            top_bar.contains("min-width: 136px;")
+                && top_bar.contains("preferred-width: 240px;")
+                && top_bar.contains("max-width: 240px;"),
+            "TopBar active search field should follow COSMIC's 240px search input rhythm without a fixed width binding"
+        );
+        assert!(
+            top_bar.contains("width: max(1px, parent.width - 70px);"),
+            "TopBar search input text should clamp narrow available widths instead of overflowing"
+        );
+        assert!(
+            !top_bar.contains("\n                width: 240px;"),
+            "TopBar active search field must not return to a fixed width that can squeeze the main pane"
+        );
+        assert!(
+            !top_bar.contains("root.width - root.sidebar-width-px"),
+            "TopBar layout constraints should not depend on root width because that can create Slint layoutinfo binding loops"
+        );
+        let widgets = include_str!("../../ui/widgets.slint");
+        let tool_button = widgets
+            .split("export component ActionButton")
+            .next()
+            .expect("ToolButton component should be before ActionButton");
+        assert!(
+            tool_button.contains("width: 32px;") && tool_button.contains("height: 32px;"),
+            "shared ToolButton should keep the lighter 32px header control size"
+        );
+    }
+
+    #[test]
+    fn split_pane_ui_has_active_width_and_inactive_preview_wiring() {
+        let app = include_str!("../../ui/app.slint");
+        let split_pane = include_str!("../../ui/split_pane.slint");
+
+        assert!(app.contains("import { SplitPaneView } from \"split_pane.slint\";"));
+        assert!(app.contains("in property <[FileEntry]> inactive_pane_entries;"));
+        assert!(app.contains("callback focus_inactive_pane();"));
+        assert!(app.contains("callback open_inactive_path(string);"));
+        assert!(app.contains("private property <length> active-pane-width"));
+        assert!(app.contains("width: root.active-pane-width;"));
+        assert!(app.contains("callback inactive_pane_view_changed();"));
+        assert!(app.contains("in-out property <float> inactive_pane_viewport_x"));
+        assert!(app.contains("if (root.split_view_open) : SplitPaneView"));
+        assert!(app.contains("virtual-start-index: root.inactive_pane_virtual_start_index;"));
+        assert!(app.contains("viewport-offset <=> root.inactive_pane_viewport_offset;"));
+        assert!(app.contains("root.focus_inactive_pane();"));
+        assert!(app.contains("root.open_inactive_path(path);"));
+        assert!(split_pane.contains("export component SplitPaneView"));
+        assert!(split_pane.contains("callback view_changed();"));
+        assert!(split_pane.contains("callback focus_requested();"));
+        assert!(split_pane.contains("callback activated(string);"));
+        assert!(split_pane.contains("double-clicked => { root.activated(root.entry.path); }"));
+        assert!(split_pane.contains("activated(path) => { root.activated(path); }"));
+        assert!(split_pane.contains("callback zoom_in();"));
+        assert!(split_pane.contains("callback zoom_out();"));
+        assert!(split_pane.contains("function handle-scroll("));
+        assert!(split_pane.contains("scroll-event(event)"));
+        assert!(split_pane.contains("root.scrolled(event.delta-x, event.delta-y"));
+        assert!(split_pane.contains("root.handle-scroll(delta-x, delta-y, control);"));
+        assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
+        assert!(split_pane.contains("virtual-layer := Rectangle"));
+    }
+
+    #[test]
+    fn active_main_pane_width_halves_only_when_split_is_open() {
+        assert_eq!(active_main_pane_width(900.0, false), 900.0);
+        assert_eq!(active_main_pane_width(900.0, true), 450.0);
+        assert_eq!(active_main_pane_width(0.0, false), 1.0);
+        assert_eq!(active_main_pane_width(0.0, true), 1.0);
     }
 
     fn menu_metrics_input(kind: i32) -> MenuMetricsInput {
@@ -1772,6 +2140,21 @@ mod tests {
     }
 
     #[test]
+    fn split_preview_plan_uses_bounded_virtual_slice() {
+        let plan = split_preview_plan(1_000, 420.0, 704.0, 1_200.0, 1);
+
+        assert_eq!(plan.viewport_x, 1200.0);
+        assert_eq!(plan.visible_range, 35..63);
+        assert_eq!(plan.range, 21..77);
+        assert_eq!(plan.start_column, 3);
+
+        let clamped = split_preview_plan(12, 420.0, 704.0, 4_000.0, 1);
+        assert_eq!(clamped.viewport_x, 24.0);
+        assert_eq!(clamped.range, 0..12);
+        assert_eq!(clamped.start_column, 0);
+    }
+
+    #[test]
     fn qmenu_style_root_popup_flips_and_clamps() {
         let placement = PopupPlacement::new(512.0, 512.0, 12.0, 8.0);
 
@@ -1917,6 +2300,70 @@ mod tests {
         assert!(bridge.y <= child.y);
         assert!(bridge.y <= row_y);
         assert!(bridge.y + bridge.height >= row_y + row_height);
+    }
+
+    fn assert_bridge_covers_parent_row_and_child_first_row(
+        bridge: PopupRect,
+        row_y: f32,
+        child_top: f32,
+        row_height: f32,
+    ) {
+        assert!(
+            bridge.y <= row_y,
+            "bridge should cover the parent submenu row top"
+        );
+        assert!(
+            bridge.y + bridge.height >= row_y + row_height,
+            "bridge should cover the parent submenu row bottom"
+        );
+        assert!(
+            bridge.y <= child_top,
+            "bridge should cover the child menu top after vertical clamp"
+        );
+        assert!(
+            bridge.y + bridge.height >= child_top + row_height,
+            "bridge should cover the first child menu action row"
+        );
+    }
+
+    #[test]
+    fn submenu_hover_bridge_covers_real_paths_after_flip_and_clamp() {
+        let cases = [
+            (80.0, 140.0, 120.0, 260.0, 520.0, 520.0),
+            (80.0, 140.0, 460.0, 260.0, 520.0, 520.0),
+            (330.0, 150.0, 120.0, 220.0, 520.0, 520.0),
+            (330.0, 150.0, 20.0, 260.0, 520.0, 210.0),
+        ];
+        let row_height = MENU_ITEM_HEIGHT;
+
+        for (parent_left, parent_width, row_y, child_height, view_width, view_height) in cases {
+            let placement = PopupPlacement::new(view_width, view_height, 12.0, 8.0);
+            let child = placement.child_popup(ChildPopupInput {
+                parent_left,
+                parent_width,
+                row_y,
+                child_width: 170.0,
+                child_height,
+                child_gap: 3.0,
+            });
+            let bridge = placement.hover_bridge(HoverBridgeInput {
+                parent_left,
+                parent_width,
+                child_left: child.x,
+                child_width: 170.0,
+                row_y,
+                child_top: child.y,
+                row_height,
+                title_height: 0.0,
+                child_gap: 3.0,
+            });
+
+            assert!(
+                bridge.width >= 3.0,
+                "bridge should keep at least the child menu gap hittable"
+            );
+            assert_bridge_covers_parent_row_and_child_first_row(bridge, row_y, child.y, row_height);
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::FileEntry;
+use crate::app::pane::PaneTarget;
 use crate::app::search_ui::{cancel_active_search, reset_search_state};
 use crate::app::state::AppState;
 use crate::fs::entries::RawFileEntry;
@@ -6,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(crate) struct DirectoryLoadPreparation {
+    pub(crate) pane_id: u64,
     pub(crate) current_dir: PathBuf,
     pub(crate) generation: u64,
     pub(crate) cached_entries: Option<Vec<FileEntry>>,
@@ -24,20 +26,29 @@ pub(crate) fn prepare_directory_load(
     preserve_view: bool,
 ) -> DirectoryLoadPreparation {
     cancel_active_search(state);
-    let generation = state.panes.active.load_generation.next();
-    state.panes.active.open_generation.next();
-    state.panes.active.search_generation.next();
+    let (pane_id, current_dir, generation) = {
+        let pane = state
+            .panes
+            .pane_mut_for_target(PaneTarget::Focused)
+            .expect("focused pane should always exist");
+        let generation = pane.load_generation.next();
+        pane.open_generation.next();
+        pane.search_generation.next();
+        if !preserve_view {
+            pane.thumbnail_generation.next();
+            pane.view.clear_thumbnail_pending();
+            pane.selection.clear();
+        }
+        (pane.id, pane.current_dir.clone(), generation)
+    };
     if !preserve_view {
-        state.panes.active.thumbnail_generation.next();
-        state.panes.active.view.clear_thumbnail_pending();
         reset_search_state(state);
-        state.panes.active.selection.clear();
     }
-    let current_dir = state.panes.active.current_dir.clone();
     let cached_entries = state.cached_directory_entries(&current_dir);
     let defer_view_restore = !preserve_view && cached_entries.is_none();
 
     DirectoryLoadPreparation {
+        pane_id,
         current_dir,
         generation,
         cached_entries,

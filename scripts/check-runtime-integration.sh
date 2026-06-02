@@ -401,10 +401,24 @@ require_contains() {
     full_path="$(staged_path "$path")"
     if [[ ! -f "$full_path" ]]; then
         fail "cannot inspect missing $path"
-    elif grep -Fq "$text" "$full_path"; then
+    elif grep -Fq -- "$text" "$full_path"; then
         ok "$path contains $text"
     else
         fail "$path does not contain $text"
+    fi
+}
+
+require_not_contains() {
+    local path="$1"
+    local text="$2"
+    local full_path
+    full_path="$(staged_path "$path")"
+    if [[ ! -f "$full_path" ]]; then
+        fail "cannot inspect missing $path"
+    elif grep -Fq -- "$text" "$full_path"; then
+        fail "$path must not contain $text"
+    else
+        ok "$path does not contain $text"
     fi
 }
 
@@ -416,7 +430,7 @@ require_not_contains_tree() {
     if [[ ! -e "$full_path" ]]; then
         return
     fi
-    if grep -R -Fq "$text" "$full_path"; then
+    if grep -R -Fq -- "$text" "$full_path"; then
         fail "$path still contains $text"
     else
         ok "$path does not contain $text"
@@ -448,7 +462,7 @@ dbus_list_activatable_contains() {
         return
     fi
 
-    if grep -Fq "$name" <<<"$output"; then
+    if grep -Fq -- "$name" <<<"$output"; then
         ok "$name is activatable on the $bus bus"
     else
         fail "$name is not activatable on the $bus bus"
@@ -472,7 +486,7 @@ dbus_name_has_owner() {
         return 1
     fi
 
-    if grep -Fq "boolean true" <<<"$output"; then
+    if grep -Fq -- "boolean true" <<<"$output"; then
         return 0
     fi
 
@@ -495,7 +509,7 @@ dbus_optional_activatable_contains() {
         return 1
     fi
 
-    grep -Fq "$name" <<<"$output"
+    grep -Fq -- "$name" <<<"$output"
 }
 
 check_polkit_action() {
@@ -507,7 +521,7 @@ check_polkit_action() {
     local output
     if output="$(pkaction --verbose --action-id "$polkit_action" 2>&1)"; then
         ok "polkit action $polkit_action is visible"
-        if grep -Fq "auth_admin_keep" <<<"$output"; then
+        if grep -Fq -- "auth_admin_keep" <<<"$output"; then
             ok "polkit action advertises auth_admin_keep"
         else
             warn "polkit action output did not mention auth_admin_keep"
@@ -804,6 +818,22 @@ require_contains "$portal_service" "Exec=$bindir/fika-xdp-filechooser"
 require_contains "$portal_descriptor" "DBusName=$portal_bus_name"
 require_contains "$portal_descriptor" "Interfaces=org.freedesktop.impl.portal.FileChooser;"
 require_contains "$portal_descriptor" "UseIn=fika"
+
+for metadata_path in \
+    "$privileged_service" \
+    "$privileged_policy" \
+    "$polkit_policy" \
+    "$privileged_interface_xml" \
+    "$portal_service" \
+    "$portal_descriptor"; do
+    require_not_contains "$metadata_path" "@bindir@"
+    require_not_contains "$metadata_path" "example.invalid"
+done
+
+require_not_contains "$privileged_service" "pkexec"
+require_not_contains "$privileged_service" "--session-bus"
+require_not_contains "$portal_service" "pkexec"
+require_not_contains "$portal_service" "--session-bus"
 
 for method in CreateFolder CreateFile Rename Trash Transfer PrepareExternalEdit CommitExternalEdit DiscardExternalEdit AssociateExternalEditUnit; do
     require_contains "$privileged_interface_xml" "<method name=\"$method\">"

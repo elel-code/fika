@@ -29,7 +29,7 @@ export component SearchPanel inherits Rectangle {
     background: transparent;
     border-width: 0px;
 
-    private property <color> separator-color: root.dark ? #222832 : #dde4ec;
+    private property <color> separator-color: root.dark ? #222832 : #e1e6ec;
 
     Rectangle {
         y: parent.height - 1px;
@@ -39,17 +39,17 @@ export component SearchPanel inherits Rectangle {
     }
 
     FlexboxLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        padding-top: 6px;
-        padding-bottom: 6px;
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 7px;
+        padding-bottom: 7px;
         flex-wrap: wrap;
         align-content: start;
         align-items: center;
         spacing: 8px;
 
         CheckOption {
-            width: 164px;
+            width: 158px;
             flex-shrink: 0;
             label: "Search subfolders";
             dark: root.dark;
@@ -62,7 +62,7 @@ export component SearchPanel inherits Rectangle {
         }
 
         FilterButton {
-            width: 126px;
+            width: 122px;
             flex-shrink: 0;
             label: root.kind-label;
             dark: root.dark;
@@ -73,7 +73,7 @@ export component SearchPanel inherits Rectangle {
         }
 
         FilterButton {
-            width: 154px;
+            width: 148px;
             flex-shrink: 0;
             label: root.modified-label;
             dark: root.dark;
@@ -84,7 +84,7 @@ export component SearchPanel inherits Rectangle {
         }
 
         FilterButton {
-            width: 144px;
+            width: 138px;
             flex-shrink: 0;
             label: root.size-label;
             dark: root.dark;

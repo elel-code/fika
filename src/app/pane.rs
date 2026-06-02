@@ -11,6 +11,7 @@ pub(crate) const MAX_VIEW_STATE_CACHE_ENTRIES: usize = 128;
 
 #[derive(Debug)]
 pub(crate) struct PaneState {
+    pub(crate) id: u64,
     pub(crate) current_dir: PathBuf,
     pub(crate) entries: Vec<FileEntry>,
     pub(crate) history: PaneHistory,
@@ -26,8 +27,14 @@ pub(crate) struct PaneState {
 }
 
 impl PaneState {
+    #[cfg(test)]
     pub(crate) fn new(current_dir: PathBuf) -> Self {
+        Self::new_with_id(0, current_dir)
+    }
+
+    fn new_with_id(id: u64, current_dir: PathBuf) -> Self {
         Self {
+            id,
             current_dir,
             entries: Vec::new(),
             history: PaneHistory::default(),
@@ -42,19 +49,37 @@ impl PaneState {
             view: PaneView::default(),
         }
     }
+
+    pub(crate) fn split_snapshot(&self, id: u64) -> Self {
+        let mut pane = Self::new_with_id(id, self.current_dir.clone());
+        pane.entries = self.entries.clone();
+        pane.search = self.search.clone();
+        pane.view.viewport_x = self.view.viewport_x;
+        pane.view.virtual_view = self.view.virtual_view.clone();
+        pane
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct PanesState {
     pub(crate) active: PaneState,
     inactive: Option<PaneState>,
+    next_pane_id: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PaneTarget {
+    Focused,
+    Inactive,
+    Id(u64),
 }
 
 impl PanesState {
     pub(crate) fn new(active_dir: PathBuf) -> Self {
         Self {
-            active: PaneState::new(active_dir),
+            active: PaneState::new_with_id(1, active_dir),
             inactive: None,
+            next_pane_id: 2,
         }
     }
 
@@ -67,21 +92,60 @@ impl PanesState {
         1 + usize::from(self.inactive.is_some())
     }
 
-    #[cfg(test)]
     pub(crate) fn inactive(&self) -> Option<&PaneState> {
         self.inactive.as_ref()
     }
 
-    #[cfg(test)]
+    pub(crate) fn pane_by_id(&self, id: u64) -> Option<&PaneState> {
+        if self.active.id == id {
+            return Some(&self.active);
+        }
+        self.inactive.as_ref().filter(|pane| pane.id == id)
+    }
+
+    pub(crate) fn pane_mut_by_id(&mut self, id: u64) -> Option<&mut PaneState> {
+        if self.active.id == id {
+            return Some(&mut self.active);
+        }
+        self.inactive.as_mut().filter(|pane| pane.id == id)
+    }
+
     pub(crate) fn inactive_mut(&mut self) -> Option<&mut PaneState> {
         self.inactive.as_mut()
     }
 
+    pub(crate) fn pane_for_target(&self, target: PaneTarget) -> Option<&PaneState> {
+        match target {
+            PaneTarget::Focused => Some(&self.active),
+            PaneTarget::Inactive => self.inactive(),
+            PaneTarget::Id(id) => self.pane_by_id(id),
+        }
+    }
+
+    pub(crate) fn pane_mut_for_target(&mut self, target: PaneTarget) -> Option<&mut PaneState> {
+        match target {
+            PaneTarget::Focused => Some(&mut self.active),
+            PaneTarget::Inactive => self.inactive_mut(),
+            PaneTarget::Id(id) => self.pane_mut_by_id(id),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn open_inactive(&mut self, current_dir: PathBuf) -> bool {
         if self.inactive.is_some() {
             return false;
         }
-        self.inactive = Some(PaneState::new(current_dir));
+        let id = self.allocate_pane_id();
+        self.inactive = Some(PaneState::new_with_id(id, current_dir));
+        true
+    }
+
+    pub(crate) fn open_inactive_from_active(&mut self) -> bool {
+        if self.inactive.is_some() {
+            return false;
+        }
+        let id = self.allocate_pane_id();
+        self.inactive = Some(self.active.split_snapshot(id));
         true
     }
 
@@ -89,7 +153,6 @@ impl PanesState {
         self.inactive.take()
     }
 
-    #[cfg(test)]
     pub(crate) fn focus_inactive(&mut self) -> bool {
         let Some(mut inactive) = self.inactive.take() else {
             return false;
@@ -105,6 +168,12 @@ impl PanesState {
             prune_pane_mount_path(inactive, mount_path, &fallback_dir);
         }
         active_moved
+    }
+
+    fn allocate_pane_id(&mut self) -> u64 {
+        let id = self.next_pane_id;
+        self.next_pane_id += 1;
+        id
     }
 }
 
@@ -338,6 +407,7 @@ impl PaneHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slint::Image;
 
     #[test]
     fn pane_history_navigation_keeps_back_and_forward_independent() {
@@ -457,6 +527,7 @@ mod tests {
         let panes = PanesState::new(PathBuf::from("/tmp/active"));
 
         assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/active"));
+        assert_eq!(panes.active.id, 1);
         assert_eq!(panes.pane_count(), 1);
         assert!(!panes.is_split());
         assert!(panes.inactive().is_none());
@@ -468,9 +539,12 @@ mod tests {
     #[test]
     fn panes_state_can_open_focus_and_close_inactive_pane() {
         let mut panes = PanesState::new(PathBuf::from("/tmp/left"));
+        let active_id = panes.active.id;
 
         assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
         assert!(!panes.open_inactive(PathBuf::from("/tmp/third")));
+        let inactive_id = panes.inactive().expect("inactive pane").id;
+        assert_ne!(active_id, inactive_id);
         assert!(panes.is_split());
         assert_eq!(panes.pane_count(), 2);
         assert_eq!(
@@ -480,17 +554,158 @@ mod tests {
 
         assert!(panes.focus_inactive());
         assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/right"));
+        assert_eq!(panes.active.id, inactive_id);
         assert_eq!(
             panes.inactive().map(|pane| pane.current_dir.as_path()),
             Some(Path::new("/tmp/left"))
         );
+        assert_eq!(panes.inactive().expect("inactive pane").id, active_id);
 
         let closed = panes.close_inactive().expect("inactive pane should close");
         assert_eq!(closed.current_dir, PathBuf::from("/tmp/left"));
+        assert_eq!(closed.id, active_id);
         assert_eq!(panes.pane_count(), 1);
         assert!(!panes.is_split());
         assert!(panes.close_inactive().is_none());
         assert!(!panes.focus_inactive());
+    }
+
+    #[test]
+    fn pane_targets_resolve_focused_inactive_and_stable_ids() {
+        let mut panes = PanesState::new(PathBuf::from("/tmp/left"));
+        let left_id = panes.active.id;
+        assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
+        let right_id = panes.inactive().expect("inactive pane").id;
+
+        assert_eq!(
+            panes
+                .pane_for_target(PaneTarget::Focused)
+                .map(|pane| pane.current_dir.as_path()),
+            Some(Path::new("/tmp/left"))
+        );
+        assert_eq!(
+            panes
+                .pane_for_target(PaneTarget::Inactive)
+                .map(|pane| pane.current_dir.as_path()),
+            Some(Path::new("/tmp/right"))
+        );
+        assert_eq!(
+            panes
+                .pane_for_target(PaneTarget::Id(right_id))
+                .map(|pane| pane.current_dir.as_path()),
+            Some(Path::new("/tmp/right"))
+        );
+
+        panes
+            .pane_mut_for_target(PaneTarget::Inactive)
+            .expect("inactive pane")
+            .search
+            .query = "right".to_string();
+        assert_eq!(
+            panes
+                .pane_for_target(PaneTarget::Id(right_id))
+                .map(|pane| pane.search.query.as_str()),
+            Some("right")
+        );
+
+        assert!(panes.focus_inactive());
+        assert_eq!(
+            panes
+                .pane_for_target(PaneTarget::Focused)
+                .map(|pane| pane.current_dir.as_path()),
+            Some(Path::new("/tmp/right"))
+        );
+        assert_eq!(
+            panes
+                .pane_for_target(PaneTarget::Inactive)
+                .map(|pane| pane.current_dir.as_path()),
+            Some(Path::new("/tmp/left"))
+        );
+        assert_eq!(
+            panes
+                .pane_for_target(PaneTarget::Id(left_id))
+                .map(|pane| pane.current_dir.as_path()),
+            Some(Path::new("/tmp/left"))
+        );
+        assert!(panes.pane_for_target(PaneTarget::Id(999)).is_none());
+        assert!(panes.pane_mut_for_target(PaneTarget::Id(999)).is_none());
+    }
+
+    #[test]
+    fn panes_state_allocates_stable_non_reused_inactive_ids() {
+        let mut panes = PanesState::new(PathBuf::from("/tmp/left"));
+
+        assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
+        let first_inactive_id = panes.inactive().expect("inactive pane").id;
+        assert_eq!(first_inactive_id, 2);
+        panes.close_inactive();
+
+        assert!(panes.open_inactive(PathBuf::from("/tmp/next")));
+        let second_inactive_id = panes.inactive().expect("inactive pane").id;
+        assert_eq!(second_inactive_id, 3);
+        assert_ne!(first_inactive_id, second_inactive_id);
+        assert!(panes.pane_by_id(first_inactive_id).is_none());
+        assert!(panes.pane_by_id(second_inactive_id).is_some());
+    }
+
+    #[test]
+    fn inactive_pane_snapshot_copies_directory_view_and_search_not_history_or_selection() {
+        let mut panes = PanesState::new(PathBuf::from("/tmp/active"));
+        let active_id = panes.active.id;
+        panes.active.entries = vec![
+            test_entry("one.txt", "/tmp/active/one.txt"),
+            test_entry("two.txt", "/tmp/active/two.txt"),
+        ];
+        panes.active.search = PaneSearch {
+            query: "one".to_string(),
+            kind_filter: 2,
+            modified_filter: 1,
+            size_filter: 3,
+            visible_entry_indices: Some(vec![0]),
+        };
+        panes.active.selection.paths = vec!["/tmp/active/one.txt".to_string()];
+        panes.active.selection.anchor = Some("/tmp/active/one.txt".to_string());
+        panes.active.history = PaneHistory::from_stacks(
+            vec![PathBuf::from("/tmp/back")],
+            vec![PathBuf::from("/tmp/forward")],
+        );
+        panes.active.view.viewport_x = 128.0;
+        panes.active.view.virtual_view = VirtualViewCache {
+            range: 4..12,
+            entry_count: 24,
+            rows_per_column: 4,
+            cell_width: 208.0,
+            thumbnail_size_px: 80,
+        };
+
+        assert!(panes.open_inactive_from_active());
+        assert!(!panes.open_inactive_from_active());
+
+        let inactive = panes.inactive().expect("inactive pane");
+        assert_ne!(inactive.id, active_id);
+        assert_eq!(inactive.current_dir, PathBuf::from("/tmp/active"));
+        assert_eq!(
+            inactive
+                .entries
+                .iter()
+                .map(|entry| (entry.name.as_str(), entry.path.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("one.txt", "/tmp/active/one.txt"),
+                ("two.txt", "/tmp/active/two.txt")
+            ]
+        );
+        assert_eq!(inactive.search, panes.active.search);
+        assert_eq!(inactive.view.viewport_x, 128.0);
+        assert_eq!(inactive.view.virtual_view.range, 4..12);
+        assert_eq!(inactive.view.virtual_view.entry_count, 24);
+        assert_eq!(inactive.view.virtual_view.rows_per_column, 4);
+        assert_eq!(inactive.view.virtual_view.cell_width, 208.0);
+        assert_eq!(inactive.view.virtual_view.thumbnail_size_px, 80);
+        assert!(inactive.selection.paths.is_empty());
+        assert!(inactive.selection.anchor.is_none());
+        assert_eq!(inactive.history.back_len(), 0);
+        assert_eq!(inactive.history.forward_len(), 0);
     }
 
     #[test]
@@ -593,5 +808,22 @@ mod tests {
         );
         assert_eq!(view.pop_newest_state_cache_path(), Some(first));
         assert_eq!(view.pop_oldest_state_cache_path(), Some(second));
+    }
+
+    fn test_entry(name: &str, path: &str) -> FileEntry {
+        FileEntry {
+            name: name.into(),
+            path: path.into(),
+            group: String::new().into(),
+            location: String::new().into(),
+            kind: "File".into(),
+            size: "1 KB".into(),
+            size_bytes: 1024.0,
+            modified: "Today".into(),
+            modified_age_days: 0,
+            is_dir: false,
+            thumbnail_state: 0,
+            thumbnail: Image::default(),
+        }
     }
 }

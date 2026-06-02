@@ -298,6 +298,65 @@ pub(crate) fn operation_final_status(
     }
 }
 
+pub(crate) fn transfer_conflict_skip_status(
+    destination: &Path,
+    skipped_remaining: usize,
+) -> String {
+    if skipped_remaining > 0 {
+        format!(
+            "Skipped {} and {skipped_remaining} remaining conflict(s)",
+            destination.display()
+        )
+    } else {
+        format!("Skipped {}", destination.display())
+    }
+}
+
+pub(crate) fn transfer_conflict_apply_remaining_status(
+    decision: &str,
+    applied: usize,
+) -> Option<String> {
+    (applied > 0).then(|| {
+        format!(
+            "Applied {} to {applied} remaining conflict(s)",
+            transfer_conflict_decision_label(decision)
+        )
+    })
+}
+
+pub(crate) fn transfer_conflict_decision_label(decision: &str) -> &'static str {
+    match decision {
+        "keep-both" => "Keep Both",
+        "overwrite" => "Overwrite",
+        "rename" => "Rename",
+        "skip" => "Skip",
+        _ => "decision",
+    }
+}
+
+pub(crate) fn transfer_target_rejection(source: &Path, target_dir: &Path) -> Option<&'static str> {
+    file_ops::transfer_target_relation(source, target_dir).map(|relation| match relation {
+        file_ops::TransferTargetRelation::Same => "Cannot drop an item onto itself",
+        file_ops::TransferTargetRelation::Descendant => "Cannot drop a folder into itself",
+    })
+}
+
+pub(crate) fn transfer_request_conflict_destination(
+    request: &FileOperationRequest,
+) -> Result<Option<PathBuf>, String> {
+    if !file_ops::path_exists(&request.source) {
+        return Err("source no longer exists".to_string());
+    }
+    if !request.target_dir.is_dir() {
+        return Err("target is not a folder".to_string());
+    }
+    if let Some(reason) = transfer_target_rejection(&request.source, &request.target_dir) {
+        return Err(reason.to_string());
+    }
+    let destination = file_ops::base_destination(&request.source, &request.target_dir)?;
+    Ok(file_ops::path_exists(&destination).then_some(destination))
+}
+
 pub(crate) fn operation_label(operation: &str) -> &'static str {
     match operation {
         "move" => "Moving",
@@ -347,6 +406,7 @@ fn operation_item_label(path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::app::state::AppState;
+    use std::fs;
     use std::path::PathBuf;
 
     fn request(operation: &str) -> FileOperationRequest {
@@ -447,6 +507,94 @@ mod tests {
             operation_failed_status("link", "permission denied"),
             "Link failed: permission denied"
         );
+    }
+
+    #[test]
+    fn transfer_conflict_status_text_is_stable_and_testable() {
+        assert_eq!(
+            transfer_conflict_skip_status(Path::new("/tmp/target/note.txt"), 0),
+            "Skipped /tmp/target/note.txt"
+        );
+        assert_eq!(
+            transfer_conflict_skip_status(Path::new("/tmp/target/note.txt"), 2),
+            "Skipped /tmp/target/note.txt and 2 remaining conflict(s)"
+        );
+        assert_eq!(
+            transfer_conflict_apply_remaining_status("keep-both", 3),
+            Some("Applied Keep Both to 3 remaining conflict(s)".to_string())
+        );
+        assert_eq!(
+            transfer_conflict_apply_remaining_status("overwrite", 1),
+            Some("Applied Overwrite to 1 remaining conflict(s)".to_string())
+        );
+        assert_eq!(
+            transfer_conflict_apply_remaining_status("rename", 2),
+            Some("Applied Rename to 2 remaining conflict(s)".to_string())
+        );
+        assert_eq!(transfer_conflict_apply_remaining_status("rename", 0), None);
+        assert_eq!(transfer_conflict_decision_label("skip"), "Skip");
+    }
+
+    #[test]
+    fn transfer_target_validation_reports_self_and_descendant_rejections() {
+        let temp = test_dir("transfer-target-validation");
+        let source = temp.join("source");
+        let child = source.join("child");
+        let target = temp.join("target");
+        fs::create_dir_all(&child).unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        assert_eq!(
+            transfer_target_rejection(&source, &source),
+            Some("Cannot drop an item onto itself")
+        );
+        assert_eq!(
+            transfer_target_rejection(&source, &child),
+            Some("Cannot drop a folder into itself")
+        );
+        assert_eq!(transfer_target_rejection(&source, &target), None);
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn transfer_conflict_destination_validation_is_controller_owned() {
+        let temp = test_dir("transfer-conflict-destination");
+        let source = temp.join("source").join("note.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&source, "new").unwrap();
+
+        let request = FileOperationRequest {
+            id: 1,
+            operation: "copy".to_string(),
+            source: source.clone(),
+            target_dir: target_dir.clone(),
+            conflict_policy: "ask".to_string(),
+        };
+        assert_eq!(
+            transfer_request_conflict_destination(&request).unwrap(),
+            None
+        );
+
+        let occupied = target_dir.join("note.txt");
+        fs::write(&occupied, "old").unwrap();
+        assert_eq!(
+            transfer_request_conflict_destination(&request).unwrap(),
+            Some(occupied)
+        );
+
+        let missing = FileOperationRequest {
+            source: temp.join("missing.txt"),
+            ..request
+        };
+        assert_eq!(
+            transfer_request_conflict_destination(&missing),
+            Err("source no longer exists".to_string())
+        );
+
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]
@@ -650,5 +798,14 @@ mod tests {
         );
         assert_eq!(operation_final_status(None, true, 0), None);
         assert_eq!(operation_final_status(None, false, 3), None);
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "fika-operation-controller-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        path
     }
 }

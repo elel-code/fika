@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub(crate) struct DirectoryLoadResult {
+    pub(crate) pane_id: u64,
     pub(crate) generation: u64,
     pub(crate) path: PathBuf,
     pub(crate) preserve_view: bool,

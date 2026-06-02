@@ -3,6 +3,96 @@ import { MenuGeometry } from "menu_geometry.slint";
 import { ChooserChoice, ChooserChoiceOption, DesktopApp } from "models.slint";
 import { MenuHoverBridge, MenuHoverRegion, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
 
+component SubmenuMenuRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    callback hovered(bool);
+    callback clicked();
+
+    horizontal-stretch: 1;
+    height: 38px;
+
+    MenuItem {
+        width: parent.width;
+        height: parent.height;
+        label: root.label;
+        dark: root.dark;
+        submenu: true;
+        hovered(is-hovered) => { root.hovered(is-hovered); }
+        clicked => { root.clicked(); }
+    }
+}
+
+component ActionMenuRow inherits Rectangle {
+    in property <string> label;
+    in property <string> shortcut: "";
+    in property <bool> dark;
+    in property <bool> enabled: true;
+    callback hovered(bool);
+    callback clicked();
+
+    horizontal-stretch: 1;
+    height: 38px;
+
+    MenuItem {
+        width: parent.width;
+        height: parent.height;
+        label: root.label;
+        shortcut: root.shortcut;
+        dark: root.dark;
+        enabled: root.enabled;
+        hovered(is-hovered) => { root.hovered(is-hovered); }
+        clicked => { root.clicked(); }
+    }
+}
+
+component PasteMenuRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> dark;
+    in property <bool> enabled;
+    callback paste_requested();
+
+    horizontal-stretch: 1;
+    height: 38px;
+
+    ActionMenuRow {
+        width: parent.width;
+        height: parent.height;
+        label: root.label;
+        shortcut: "Ctrl+V";
+        dark: root.dark;
+        enabled: root.enabled;
+        clicked => { root.paste_requested(); }
+    }
+}
+
+component CutCopyMenuRows inherits Rectangle {
+    in property <bool> dark;
+    callback cut_requested();
+    callback copy_requested();
+
+    horizontal-stretch: 1;
+    height: 76px;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        ActionMenuRow {
+            label: "Cut";
+            shortcut: "Ctrl+X";
+            dark: root.dark;
+            clicked => { root.cut_requested(); }
+        }
+
+        ActionMenuRow {
+            label: "Copy";
+            shortcut: "Ctrl+C";
+            dark: root.dark;
+            clicked => { root.copy_requested(); }
+        }
+    }
+}
+
 export component OpenWithMenu inherits PopupSurface {
     in property <[DesktopApp]> apps;
     in property <length> item-height: 38px;
@@ -29,7 +119,7 @@ export component OpenWithMenu inherits PopupSurface {
             viewport-width: root.width;
             viewport-height: max(root.item-height, root.apps.length * root.item-height);
 
-            if (root.apps.length == 0): MenuItem {
+            if (root.apps.length == 0): ActionMenuRow {
                 width: root.width;
                 label: "Loading applications...";
                 dark: root.dark;
@@ -37,7 +127,7 @@ export component OpenWithMenu inherits PopupSurface {
                 clicked => { }
             }
 
-            for app[index] in root.apps: MenuItem {
+            for app[index] in root.apps: ActionMenuRow {
                 y: index * root.item-height;
                 width: root.width;
                 label: (app.is_default ? "Default: " : "") + app.name;
@@ -51,7 +141,7 @@ export component OpenWithMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Other Applications...";
             dark: root.dark;
             hovered(is-hovered) => { root.keep_alive(is-hovered); }
@@ -74,14 +164,14 @@ export component CreateNewMenu inherits PopupSurface {
     VerticalLayout {
         spacing: 0px;
 
-        MenuItem {
+        ActionMenuRow {
             label: "Folder";
             dark: root.dark;
             hovered(is-hovered) => { root.keep_alive(is-hovered); }
             clicked => { root.folder_selected(); }
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "File";
             dark: root.dark;
             hovered(is-hovered) => { root.keep_alive(is-hovered); }
@@ -196,7 +286,7 @@ export component ChooserChoiceMenu inherits Rectangle {
             dark: root.dark;
         }
 
-        for option[index] in root.options: MenuItem {
+        for option[index] in root.options: ActionMenuRow {
             label: (index == root.selected-index ? "✓ " : "  ") + option.label;
             dark: root.dark;
             clicked => { root.option_selected(index); }
@@ -225,6 +315,41 @@ export component ChooserChoicePopup inherits PopupSurface {
     }
 }
 
+component AnchoredChooserPopup inherits Rectangle {
+    in property <bool> open;
+    in property <length> menu-x;
+    in property <length> menu-y;
+    in property <length> menu-width;
+    in property <length> window-width;
+    in property <length> window-height;
+    in property <length> screen-margin;
+    in property <length> pointer-gap;
+    in property <length> child-gap;
+    in property <bool> dark;
+    in property <string> title;
+    in property <[ChooserChoiceOption]> options;
+    in property <int> selected-index;
+    in property <length> title-height: 30px;
+    in property <length> item-height: 38px;
+    private property <length> popup-height: root.title-height + max(1, root.options.length) * root.item-height;
+    callback option_selected(int);
+
+    background: transparent;
+
+    if (root.open): ChooserChoicePopup {
+        x: MenuGeometry.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, root.popup-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        y: MenuGeometry.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, root.popup-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        width: root.menu-width;
+        dark: root.dark;
+        title: root.title;
+        options: root.options;
+        selected-index: root.selected-index;
+        title-height: root.title-height;
+        item-height: root.item-height;
+        option_selected(option-index) => { root.option_selected(option-index); }
+    }
+}
+
 export component ChooserChoicePopupLayer inherits Rectangle {
     in property <bool> menu-open;
     in property <int> menu-index;
@@ -244,18 +369,27 @@ export component ChooserChoicePopupLayer inherits Rectangle {
 
     background: transparent;
 
-    for choice[index] in root.choices: ChooserChoicePopup {
-        visible: root.menu-open && root.menu-index == index;
-        x: MenuGeometry.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, choice.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-        y: MenuGeometry.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, choice.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-        width: root.menu-width;
+    for choice[index] in root.choices: AnchoredChooserPopup {
+        width: parent.width;
+        height: parent.height;
+        open: root.menu-open && root.menu-index == index;
+        menu-x: root.menu-x;
+        menu-y: root.menu-y;
+        menu-width: root.menu-width;
+        window-width: root.window-width;
+        window-height: root.window-height;
+        screen-margin: root.screen-margin;
+        pointer-gap: root.pointer-gap;
+        child-gap: root.child-gap;
         dark: root.dark;
         title: choice.label;
         options: choice.options;
         selected-index: choice.selected_index;
         title-height: root.title-height;
         item-height: root.item-height;
-        option_selected(option-index) => { root.option_selected(index, option-index); }
+        option_selected(option-index) => {
+            root.option_selected(index, option-index);
+        }
     }
 }
 
@@ -279,17 +413,27 @@ export component ChooserOptionPopupLayer inherits Rectangle {
 
     background: transparent;
 
-    if (root.menu-open): ChooserChoicePopup {
-        x: MenuGeometry.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, root.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-        y: MenuGeometry.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, root.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-        width: root.menu-width;
+    AnchoredChooserPopup {
+        width: parent.width;
+        height: parent.height;
+        open: root.menu-open;
+        menu-x: root.menu-x;
+        menu-y: root.menu-y;
+        menu-width: root.menu-width;
+        window-width: root.window-width;
+        window-height: root.window-height;
+        screen-margin: root.screen-margin;
+        pointer-gap: root.pointer-gap;
+        child-gap: root.child-gap;
         dark: root.dark;
         title: root.title;
         options: root.options;
         selected-index: root.selected-index;
         title-height: root.title-height;
         item-height: root.item-height;
-        option_selected(option-index) => { root.option_selected(option-index); }
+        option_selected(option-index) => {
+            root.option_selected(option-index);
+        }
     }
 }
 
@@ -306,19 +450,19 @@ export component TransferMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Move Here";
             dark: root.dark;
             clicked => { root.operation_selected("move"); }
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Copy Here";
             dark: root.dark;
             clicked => { root.operation_selected("copy"); }
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Link Here";
             dark: root.dark;
             clicked => { root.operation_selected("link"); }
@@ -328,7 +472,7 @@ export component TransferMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Cancel";
             dark: root.dark;
             clicked => { root.cancelled(); }
@@ -385,7 +529,7 @@ export component PlaceContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Open in New Window";
             dark: root.dark;
             clicked => { root.open_new_window(); }
@@ -395,13 +539,13 @@ export component PlaceContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (!root.builtin): MenuItem {
+        if (!root.builtin): ActionMenuRow {
             label: "Rename";
             dark: root.dark;
             clicked => { root.rename_requested(); }
         }
 
-        if (!root.builtin): MenuItem {
+        if (!root.builtin): ActionMenuRow {
             label: "Remove";
             dark: root.dark;
             clicked => { root.remove_requested(); }
@@ -429,20 +573,20 @@ export component DeviceContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.pending-action != ""): MenuItem {
+        if (root.pending-action != ""): ActionMenuRow {
             label: root.pending-action == "mount" ? "Mounting..." : (root.pending-action == "unmount" ? "Unmounting..." : (root.pending-action == "eject" ? "Ejecting..." : "Working..."));
             dark: root.dark;
             enabled: false;
             clicked => { }
         }
 
-        if (root.pending-action == "" && root.mounted): MenuItem {
+        if (root.pending-action == "" && root.mounted): ActionMenuRow {
             label: "Open";
             dark: root.dark;
             clicked => { root.open_requested(); }
         }
 
-        if (root.pending-action == "" && !root.mounted && root.can-mount): MenuItem {
+        if (root.pending-action == "" && !root.mounted && root.can-mount): ActionMenuRow {
             label: "Mount";
             dark: root.dark;
             clicked => { root.mount_requested(); }
@@ -452,19 +596,19 @@ export component DeviceContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.pending-action == "" && root.can-unmount): MenuItem {
+        if (root.pending-action == "" && root.can-unmount): ActionMenuRow {
             label: "Unmount";
             dark: root.dark;
             clicked => { root.unmount_requested(); }
         }
 
-        if (root.pending-action == "" && root.can-eject): MenuItem {
+        if (root.pending-action == "" && root.can-eject): ActionMenuRow {
             label: "Eject";
             dark: root.dark;
             clicked => { root.eject_requested(); }
         }
 
-        if (root.pending-action == "" && !root.mounted && !root.can-mount && !root.can-unmount && !root.can-eject): MenuItem {
+        if (root.pending-action == "" && !root.mounted && !root.can-mount && !root.can-unmount && !root.can-eject): ActionMenuRow {
             label: "No actions available";
             dark: root.dark;
             enabled: false;
@@ -486,7 +630,7 @@ export component PlacesBlankMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Add Current Folder";
             dark: root.dark;
             enabled: root.add-current-enabled;
@@ -497,7 +641,7 @@ export component PlacesBlankMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Restore Defaults";
             dark: root.dark;
             clicked => { root.restore_defaults(); }
@@ -540,24 +684,22 @@ export component FileContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.selected-count <= 1 && root.is-dir): MenuItem {
+        if (root.selected-count <= 1 && root.is-dir): SubmenuMenuRow {
             label: "Open Folder With";
             dark: root.dark;
-            submenu: true;
             hovered(is-hovered) => { root.open_folder_with_hover(is-hovered); }
             clicked => { root.open_folder_with_clicked(); }
         }
 
-        if (root.selected-count <= 1 && !root.is-dir && root.default-open-visible): MenuItem {
+        if (root.selected-count <= 1 && !root.is-dir && root.default-open-visible): ActionMenuRow {
             label: "Open With " + root.default-open-app-name;
             dark: root.dark;
             clicked => { root.default_open_requested(); }
         }
 
-        if (root.selected-count <= 1 && !root.is-dir): MenuItem {
+        if (root.selected-count <= 1 && !root.is-dir): SubmenuMenuRow {
             label: "Open With";
             dark: root.dark;
-            submenu: true;
             hovered(is-hovered) => { root.open_with_hover(is-hovered); }
             clicked => { root.open_with_clicked(); }
         }
@@ -566,59 +708,50 @@ export component FileContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.selected-count <= 1 && root.is-dir): MenuItem {
+        if (root.selected-count <= 1 && root.is-dir): PasteMenuRow {
             label: "Paste Into Folder";
-            shortcut: "Ctrl+V";
             dark: root.dark;
             enabled: root.clipboard-has-paths;
-            clicked => { root.paste_into_folder(); }
+            paste_requested => { root.paste_into_folder(); }
         }
 
-        if (root.selected-count <= 1 && root.is-dir && root.add-to-places-visible): MenuItem {
+        if (root.selected-count <= 1 && root.is-dir && root.add-to-places-visible): ActionMenuRow {
             label: "Add to Places";
             dark: root.dark;
             clicked => { root.add_to_places(); }
         }
 
-        if (root.selected-count <= 1 && root.is-dir && !root.in-trash): MenuItem {
+        if (root.selected-count <= 1 && root.is-dir && !root.in-trash): ActionMenuRow {
             label: "Open Terminal Here";
             dark: root.dark;
             clicked => { root.open_terminal_here(); }
         }
 
-        if (root.selected-count <= 1): MenuItem {
+        if (root.selected-count <= 1): ActionMenuRow {
             label: "Rename";
             dark: root.dark;
             clicked => { root.rename_requested(); }
         }
 
-        if (root.selected-count <= 1): MenuItem {
+        if (root.selected-count <= 1): ActionMenuRow {
             label: "Duplicate Here";
             dark: root.dark;
             clicked => { root.duplicate_requested(); }
         }
 
-        if (root.selected-count <= 1): MenuItem {
-            label: "Cut";
-            shortcut: "Ctrl+X";
+        if (root.selected-count <= 1): CutCopyMenuRows {
             dark: root.dark;
-            clicked => { root.cut_requested(); }
+            cut_requested => { root.cut_requested(); }
+            copy_requested => { root.copy_requested(); }
         }
 
-        if (root.selected-count <= 1): MenuItem {
-            label: "Copy";
-            shortcut: "Ctrl+C";
-            dark: root.dark;
-            clicked => { root.copy_requested(); }
-        }
-
-        if (root.selected-count <= 1): MenuItem {
+        if (root.selected-count <= 1): ActionMenuRow {
             label: "Copy Location";
             dark: root.dark;
             clicked => { root.copy_location_requested(); }
         }
 
-        if (root.selected-count <= 1): MenuItem {
+        if (root.selected-count <= 1): ActionMenuRow {
             label: "Properties";
             dark: root.dark;
             clicked => { root.properties_requested(); }
@@ -628,38 +761,30 @@ export component FileContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.selected-count > 1): MenuItem {
-            label: "Cut";
-            shortcut: "Ctrl+X";
+        if (root.selected-count > 1): CutCopyMenuRows {
             dark: root.dark;
-            clicked => { root.cut_requested(); }
-        }
-
-        if (root.selected-count > 1): MenuItem {
-            label: "Copy";
-            shortcut: "Ctrl+C";
-            dark: root.dark;
-            clicked => { root.copy_requested(); }
+            cut_requested => { root.cut_requested(); }
+            copy_requested => { root.copy_requested(); }
         }
 
         if (root.selected-count > 1): MenuSeparator {
             dark: root.dark;
         }
 
-        if (!root.in-trash): MenuItem {
+        if (!root.in-trash): ActionMenuRow {
             label: root.selected-count > 1 ? "Move Selected to Trash" : "Move to Trash";
             shortcut: "Delete";
             dark: root.dark;
             clicked => { root.trash_requested(); }
         }
 
-        if (root.in-trash): MenuItem {
+        if (root.in-trash): ActionMenuRow {
             label: root.selected-count > 1 ? "Restore Selected From Trash" : "Restore From Trash";
             dark: root.dark;
             clicked => { root.restore_trash_requested(); }
         }
 
-        if (root.in-trash): MenuItem {
+        if (root.in-trash): ActionMenuRow {
             label: root.selected-count > 1 ? "Delete Selected Permanently" : "Delete Permanently";
             dark: root.dark;
             clicked => { root.delete_permanently_requested(); }
@@ -683,16 +808,15 @@ export component ViewportContextMenu inherits PopupSurface {
     VerticalLayout {
         spacing: 0px;
 
-        if (root.in-trash): MenuItem {
+        if (root.in-trash): ActionMenuRow {
             label: "Empty Trash";
             dark: root.dark;
             clicked => { root.empty_trash_requested(); }
         }
 
-        if (!root.in-trash): MenuItem {
+        if (!root.in-trash): SubmenuMenuRow {
             label: "Create New";
             dark: root.dark;
-            submenu: true;
             hovered(is-hovered) => { root.create_new_hover(is-hovered); }
             clicked => { root.create_new_clicked(); }
         }
@@ -701,30 +825,28 @@ export component ViewportContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        MenuItem {
+        ActionMenuRow {
             label: "Select All";
             shortcut: "Ctrl+A";
             dark: root.dark;
             clicked => { root.select_all_requested(); }
         }
 
-        if (!root.in-trash): MenuItem {
+        if (!root.in-trash): PasteMenuRow {
             label: root.clipboard-cut ? "Paste Moved Items" : "Paste";
-            shortcut: "Ctrl+V";
             dark: root.dark;
             enabled: root.clipboard-has-paths;
-            clicked => { root.paste_requested(); }
+            paste_requested => { root.paste_requested(); }
         }
 
-        if (!root.in-trash): MenuItem {
+        if (!root.in-trash): SubmenuMenuRow {
             label: "Open Folder With";
             dark: root.dark;
-            submenu: true;
             hovered(is-hovered) => { root.open_folder_with_hover(is-hovered); }
             clicked => { root.open_folder_with_clicked(); }
         }
 
-        if (!root.in-trash): MenuItem {
+        if (!root.in-trash): ActionMenuRow {
             label: "Open Terminal Here";
             dark: root.dark;
             clicked => { root.open_terminal_here(); }

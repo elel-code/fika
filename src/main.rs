@@ -41,14 +41,15 @@ use app::file_clipboard::{
     apply_clipboard_load_result, refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    MainGridLayout, SelectionRect, place_drop_geometry, register_menu_geometry_callbacks,
+    MainGridLayout, SelectionRect, active_main_pane_width, main_pane_bounds, place_drop_geometry,
+    register_menu_geometry_callbacks, split_preview_plan,
 };
 use app::operation_controller::{
     OperationResultDisposition, operation_final_status, operation_finished_label,
 };
-use app::pane::DirectoryViewState;
 #[cfg(test)]
 use app::pane::PaneHistory;
+use app::pane::{DirectoryViewState, PaneTarget};
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
     rename_place, reorder_place_path, restore_default_places, sync_places,
@@ -266,6 +267,16 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_main_view_changed(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 sync_virtual_entries(&ui, &state, &bridge, true);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_inactive_pane_view_changed(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                sync_inactive_pane_view_from_ui(&ui, &state);
             }
         });
     }
@@ -562,9 +573,32 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_toggle_split_view(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                toggle_split_view(&ui, &state);
+                toggle_split_view(&ui, &state, &bridge);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_focus_inactive_pane(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                focus_inactive_pane(&ui, &state, &bridge);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_open_inactive_path(move |path| {
+            if let Some(ui) = ui_weak.upgrade() {
+                open_inactive_path(&ui, &state, path.as_str(), &bridge);
             }
         });
     }
@@ -1238,6 +1272,7 @@ fn load_directory_with_preservation(
     preserve_view: bool,
 ) {
     let DirectoryLoadPreparation {
+        pane_id,
         current_dir,
         generation,
         cached_entries,
@@ -1247,7 +1282,7 @@ fn load_directory_with_preservation(
         prepare_directory_load(&mut state, preserve_view)
     };
     debug_log(&format!(
-        "load_directory generation={generation} preserve_view={preserve_view} defer_view_restore={defer_view_restore} path={} cache_hit={}",
+        "load_directory pane_id={pane_id} generation={generation} preserve_view={preserve_view} defer_view_restore={defer_view_restore} path={} cache_hit={}",
         current_dir.display(),
         cached_entries.is_some()
     ));
@@ -1277,7 +1312,7 @@ fn load_directory_with_preservation(
         update_selection_ui(ui, &[]);
         set_status(ui, "Loading folder...");
     }
-    watch_current_directory(&current_dir, generation, bridge);
+    watch_current_directory(&current_dir, pane_id, generation, bridge);
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -1287,6 +1322,7 @@ fn load_directory_with_preservation(
             async_tx,
             notify_ui,
             AsyncEvent::DirectoryLoaded(DirectoryLoadResult {
+                pane_id,
                 generation,
                 path: current_dir,
                 preserve_view,
@@ -1437,7 +1473,7 @@ fn device_action_async(
     });
 }
 
-fn watch_current_directory(path: &Path, generation: u64, bridge: &AsyncBridge) {
+fn watch_current_directory(path: &Path, pane_id: u64, generation: u64, bridge: &AsyncBridge) {
     use notify::Watcher;
 
     if fs::file_ops::is_trash_files_dir(path) {
@@ -1475,6 +1511,7 @@ fn watch_current_directory(path: &Path, generation: u64, bridge: &AsyncBridge) {
                 async_tx,
                 notify_ui,
                 AsyncEvent::DirectoryLoaded(DirectoryLoadResult {
+                    pane_id,
                     generation,
                     path: reload_path,
                     preserve_view: true,
@@ -1602,32 +1639,38 @@ fn apply_directory_result(
 ) {
     {
         let state = state.borrow();
-        if !state
-            .panes
-            .active
-            .load_generation
-            .is_current(result.generation)
-            || result.path != state.panes.active.current_dir
-        {
+        let Some(pane) = state.panes.pane_for_target(PaneTarget::Id(result.pane_id)) else {
             debug_log(&format!(
-                "directory_loaded stale generation={} path={} current={} current_generation_match={}",
+                "directory_loaded stale missing-pane pane_id={} generation={} path={}",
+                result.pane_id,
+                result.generation,
+                result.path.display()
+            ));
+            return;
+        };
+        if !pane.load_generation.is_current(result.generation) || result.path != pane.current_dir {
+            debug_log(&format!(
+                "directory_loaded stale pane_id={} generation={} path={} current={} current_generation_match={}",
+                result.pane_id,
                 result.generation,
                 result.path.display(),
-                state.panes.active.current_dir.display(),
-                state
-                    .panes
-                    .active
-                    .load_generation
-                    .is_current(result.generation)
+                pane.current_dir.display(),
+                pane.load_generation.is_current(result.generation)
             ));
             return;
         }
     }
 
+    if state.borrow().panes.active.id != result.pane_id {
+        apply_inactive_directory_result(ui, state, result);
+        return;
+    }
+
     match result.result {
         Ok(entries) => {
             debug_log(&format!(
-                "directory_loaded ok generation={} path={} entries={} preserve_view={}",
+                "directory_loaded ok pane_id={} generation={} path={} entries={} preserve_view={}",
+                result.pane_id,
                 result.generation,
                 result.path.display(),
                 entries.len(),
@@ -1699,7 +1742,7 @@ fn apply_directory_result(
                         state.panes.active.current_dir = path.clone();
                     }
                     set_current_location_ui(ui, &path);
-                    watch_current_directory(&path, result.generation, bridge);
+                    watch_current_directory(&path, result.pane_id, result.generation, bridge);
                     save_current_settings(ui, state);
                     sync_virtual_entries(ui, state, bridge, true);
                     ui.set_directory_loading(false);
@@ -1742,6 +1785,64 @@ fn apply_directory_result(
                     set_status(ui, &format!("Cannot read directory: {err}"));
                 }
             }
+        }
+    }
+}
+
+fn apply_inactive_directory_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    result: DirectoryLoadResult,
+) {
+    match result.result {
+        Ok(entries) => {
+            debug_log(&format!(
+                "directory_loaded inactive ok pane_id={} generation={} path={} entries={} preserve_view={}",
+                result.pane_id,
+                result.generation,
+                result.path.display(),
+                entries.len(),
+                result.preserve_view
+            ));
+            let mut entries = Some(entries);
+            {
+                let mut state = state.borrow_mut();
+                let Some(pane) = state
+                    .panes
+                    .pane_mut_for_target(PaneTarget::Id(result.pane_id))
+                else {
+                    return;
+                };
+                let incoming = entries.as_ref().expect("entries should be present");
+                if directory_entries_match(&pane.entries, incoming) {
+                    let cache_entries = pane.entries.clone();
+                    state.insert_directory_cache(result.path.clone(), cache_entries);
+                } else {
+                    pane.entries = entries
+                        .take()
+                        .expect("entries should be present")
+                        .into_iter()
+                        .map(to_file_entry)
+                        .collect();
+                    pane.view.virtual_view.invalidate();
+                    if !result.preserve_view {
+                        pane.search.reset_all();
+                        pane.selection.clear();
+                    }
+                    let cache_entries = pane.entries.clone();
+                    state.insert_directory_cache(result.path.clone(), cache_entries);
+                }
+            }
+            sync_inactive_pane_ui(ui, state);
+        }
+        Err(err) => {
+            debug_log(&format!(
+                "directory_loaded inactive error pane_id={} generation={} path={} preserve_view={} error={err}",
+                result.pane_id,
+                result.generation,
+                result.path.display(),
+                result.preserve_view
+            ));
         }
     }
 }
@@ -2655,7 +2756,8 @@ fn sync_virtual_entries_with_count(
     let size_px = thumbnail_size_px(ui);
     let layout = MainGridLayout::from_ui(ui);
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-    let viewport_width = (window_size.width - ui.get_sidebar_width_px() - 8.0).max(1.0);
+    let main_width = (window_size.width - ui.get_sidebar_width_px() - 8.0).max(1.0);
+    let viewport_width = active_main_pane_width(main_width, ui.get_split_view_open());
     let update = {
         let mut state_ref = state.borrow_mut();
         prepare_virtual_view_update(
@@ -2982,14 +3084,103 @@ fn update_selection_ui(ui: &AppWindow, selected_paths: &[String]) {
     ui.set_selection_revision(ui.get_selection_revision() + 1);
 }
 
-fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let state = state.borrow();
-    ui.set_can_go_back(state.panes.active.history.back_len() > 0);
-    ui.set_can_go_forward(state.panes.active.history.forward_len() > 0);
-    ui.set_split_view_open(state.panes.is_split());
+fn sync_inactive_pane_view_from_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    {
+        let mut state = state.borrow_mut();
+        let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Inactive) else {
+            return;
+        };
+        pane.view.viewport_x = ui.get_inactive_pane_viewport_x();
+    }
+    sync_inactive_pane_ui(ui, state);
 }
 
-fn toggle_split_view(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let window_size = ui.window().size().to_logical(ui.window().scale_factor());
+    let pane_bounds = main_pane_bounds(
+        ui.get_sidebar_width_px(),
+        window_size.width,
+        window_size.height,
+    );
+    let main_width = (pane_bounds.right - pane_bounds.left).max(1.0);
+    let active_width = active_main_pane_width(main_width, ui.get_split_view_open());
+    let inactive_width = (main_width - active_width).max(1.0);
+    let inactive_height = (pane_bounds.bottom - pane_bounds.top).max(1.0);
+
+    let snapshot = {
+        let mut state = state.borrow_mut();
+        match state.panes.pane_mut_for_target(PaneTarget::Inactive) {
+            Some(pane) => {
+                let entry_count = pane.entries.len();
+                let plan = split_preview_plan(
+                    entry_count,
+                    inactive_width,
+                    inactive_height,
+                    pane.view.viewport_x,
+                    ui.get_icon_zoom_level(),
+                );
+                pane.view.viewport_x = plan.viewport_x;
+                let entries = pane.entries[plan.range.clone()].to_vec();
+                Some((
+                    pane.current_dir.display().to_string(),
+                    display_location_name(&pane.current_dir),
+                    entry_count,
+                    plan.range.start,
+                    plan.start_column,
+                    plan.viewport_x,
+                    entries,
+                ))
+            }
+            None => None,
+        }
+    };
+
+    let Some((path, name, entry_count, virtual_start, start_column, viewport_x, mut entries)) =
+        snapshot
+    else {
+        ui.set_inactive_pane_path(SharedString::new());
+        ui.set_inactive_pane_name(SharedString::new());
+        ui.set_inactive_pane_entry_count(0);
+        ui.set_inactive_pane_virtual_start_index(0);
+        ui.set_inactive_pane_virtual_start_column(0);
+        ui.set_inactive_pane_viewport_x(0.0);
+        ui.set_inactive_pane_viewport_offset(0.0);
+        ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(
+            Vec::<FileEntry>::new(),
+        ))));
+        return;
+    };
+
+    {
+        let state = state.borrow();
+        decorate_entries_with_cached_thumbnails(&state, &mut entries, thumbnail_size_px(ui));
+    }
+    ui.set_inactive_pane_path(path.into());
+    ui.set_inactive_pane_name(name.into());
+    ui.set_inactive_pane_entry_count(entry_count as i32);
+    ui.set_inactive_pane_virtual_start_index(virtual_start as i32);
+    ui.set_inactive_pane_virtual_start_column(start_column as i32);
+    ui.set_inactive_pane_viewport_x(viewport_x);
+    ui.set_inactive_pane_viewport_offset(-viewport_x);
+    ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(entries))));
+}
+
+fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let (can_go_back, can_go_forward, split_open) = {
+        let state = state.borrow();
+        (
+            state.panes.active.history.back_len() > 0,
+            state.panes.active.history.forward_len() > 0,
+            state.panes.is_split(),
+        )
+    };
+    ui.set_can_go_back(can_go_back);
+    ui.set_can_go_forward(can_go_forward);
+    ui.set_split_view_open(split_open);
+    sync_inactive_pane_ui(ui, state);
+}
+
+fn toggle_split_view(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     let (opened, current_dir) = {
         let mut state = state.borrow_mut();
         if state.panes.is_split() {
@@ -2997,12 +3188,13 @@ fn toggle_split_view(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             (false, state.panes.active.current_dir.clone())
         } else {
             let current_dir = state.panes.active.current_dir.clone();
-            state.panes.open_inactive(current_dir.clone());
+            state.panes.open_inactive_from_active();
             (true, current_dir)
         }
     };
 
     sync_navigation_ui(ui, state);
+    sync_virtual_entries(ui, state, bridge, true);
     if opened {
         set_status(
             ui,
@@ -3011,6 +3203,97 @@ fn toggle_split_view(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     } else {
         set_status(ui, "Split view closed");
     }
+}
+
+fn focus_inactive_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    let focused = activate_inactive_pane(ui, state, bridge);
+    if focused {
+        set_directory_status_from_entries(ui, state);
+    }
+}
+
+fn open_inactive_path(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    path: &str,
+    bridge: &AsyncBridge,
+) {
+    let should_focus_inactive = {
+        let state = state.borrow();
+        let active_contains = state
+            .panes
+            .active
+            .entries
+            .iter()
+            .any(|entry| entry.path.as_str() == path);
+        let inactive_contains = state
+            .panes
+            .inactive()
+            .is_some_and(|pane| pane.entries.iter().any(|entry| entry.path.as_str() == path));
+        inactive_contains && !active_contains
+    };
+
+    if should_focus_inactive && !activate_inactive_pane(ui, state, bridge) {
+        return;
+    }
+
+    open_path(ui, state, path, bridge);
+}
+
+fn activate_inactive_pane(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+) -> bool {
+    remember_current_view_state(ui, state);
+    let focused = state.borrow_mut().panes.focus_inactive();
+    if !focused {
+        return false;
+    }
+
+    let (
+        pane_id,
+        current_dir,
+        selected_paths,
+        search_query,
+        kind_filter,
+        modified_filter,
+        size_filter,
+        viewport_x,
+    ) = {
+        let mut state = state.borrow_mut();
+        state.panes.active.view.virtual_view.invalidate();
+        (
+            state.panes.active.id,
+            state.panes.active.current_dir.clone(),
+            state.panes.active.selection.paths.clone(),
+            state.panes.active.search.query.clone(),
+            state.panes.active.search.kind_filter,
+            state.panes.active.search.modified_filter,
+            state.panes.active.search.size_filter,
+            state.panes.active.view.viewport_x,
+        )
+    };
+
+    set_current_location_ui(ui, &current_dir);
+    ui.set_items_path(current_dir.display().to_string().into());
+    ui.set_search_query(search_query.into());
+    ui.set_search_kind_filter(kind_filter);
+    ui.set_search_modified_filter(modified_filter);
+    ui.set_search_size_filter(size_filter);
+    ui.set_search_loading(false);
+    ui.set_directory_loading(false);
+    ui.set_main_viewport_x(viewport_x);
+    ui.set_main_viewport_offset(-viewport_x);
+    update_selection_ui(ui, &selected_paths);
+    sync_navigation_ui(ui, state);
+    sync_virtual_entries(ui, state, bridge, true);
+    set_directory_status_from_entries(ui, state);
+    save_current_settings(ui, state);
+
+    let generation = state.borrow().panes.active.load_generation.current();
+    watch_current_directory(&current_dir, pane_id, generation, bridge);
+    true
 }
 
 fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge, path: PathBuf) {
@@ -3356,11 +3639,11 @@ fn dnd_debug_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::app::geometry::{MainGridLayout, place_drop_geometry, virtual_entry_range};
+    use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
         filtered_entries_range, filtered_entry_at, filtered_entry_summary,
         rebuild_visible_entry_index, selection_range_paths, selection_rect_paths,
     };
-    use crate::app::transfer::transfer_target_rejection;
     use slint::Image;
 
     #[test]

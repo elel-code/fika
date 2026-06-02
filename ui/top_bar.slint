@@ -3,8 +3,7 @@ import { ToolButton } from "widgets.slint";
 export component TopBar inherits Rectangle {
     in property <bool> dark;
     in property <string> current-path;
-    in property <float> sidebar-width-px;
-    in property <length> divider-offset: 3px;
+    in property <length> main-start-x;
     in property <bool> can-go-back;
     in property <bool> can-go-forward;
     in property <bool> search-active;
@@ -23,34 +22,35 @@ export component TopBar inherits Rectangle {
     callback toggle_split_view();
     callback dark_toggled();
 
-    height: 60px;
+    height: 56px;
     background: transparent;
     border-width: 0px;
 
-    private property <color> separator-color: root.dark ? #222832 : #dde4ec;
-    private property <color> field-background: root.dark ? #161a1f : #ffffff;
-    private property <color> field-focus-background: root.dark ? #12161a : #ffffff;
-    private property <color> field-border: root.dark ? #2c343c : #dfe6ee;
+    private property <color> separator-color: root.dark ? #222832 : #dfe5eb;
+    private property <color> field-background: root.dark ? #151a1f : #fcfdfe;
+    private property <color> field-focus-background: root.dark ? #11161b : #ffffff;
+    private property <color> field-border: root.dark ? #2b333c : #d8e0e8;
     private property <color> field-focus-border: root.dark ? #58b4d8 : #2f8dbc;
     private property <color> field-text-color: root.dark ? #f2f5f8 : #202832;
-    private property <color> muted-text-color: root.dark ? #818c96 : #667586;
-    private property <color> close-hover-color: root.dark ? #252b32 : #eef2f6;
+    private property <color> muted-text-color: root.dark ? #85909b : #667586;
+    private property <color> close-hover-color: root.dark ? #252b32 : #eef1f5;
+    private property <length> path-min-width: root.search-active ? 48px : 160px;
 
     HorizontalLayout {
-        padding-right: 12px;
-        padding-top: 9px;
-        padding-bottom: 9px;
+        padding-right: 10px;
+        padding-top: 10px;
+        padding-bottom: 10px;
         spacing: 0px;
 
         Rectangle {
-            width: root.sidebar-width-px * 1px + root.divider-offset;
+            width: root.main-start-x;
             background: transparent;
         }
 
         HorizontalLayout {
             padding-left: 0px;
-            padding-right: 10px;
-            spacing: 4px;
+            padding-right: 12px;
+            spacing: 3px;
 
             ToolButton {
                 label: "<";
@@ -75,8 +75,8 @@ export component TopBar inherits Rectangle {
 
         Rectangle {
             horizontal-stretch: 1;
-            min-width: 120px;
-            height: 36px;
+            min-width: root.path-min-width;
+            height: 32px;
             border-radius: 8px;
             border-width: 1px;
             border-color: root.path-focused ? root.field-focus-border : root.field-border;
@@ -84,8 +84,8 @@ export component TopBar inherits Rectangle {
 
             Text {
                 visible: root.path-text == "";
-                x: 12px;
-                width: parent.width - 24px;
+                x: 13px;
+                width: max(1px, parent.width - 26px);
                 height: parent.height;
                 text: "/path/to/folder";
                 color: root.muted-text-color;
@@ -95,8 +95,8 @@ export component TopBar inherits Rectangle {
             }
 
             TextInput {
-                x: 12px;
-                width: parent.width - 24px;
+                x: 13px;
+                width: max(1px, parent.width - 26px);
                 height: parent.height;
                 text <=> root.path-text;
                 single-line: true;
@@ -118,8 +118,8 @@ export component TopBar inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 10px;
-            spacing: 4px;
+            padding-left: 12px;
+            spacing: 3px;
 
             if (!root.search-active): ToolButton {
                 label: "||";
@@ -135,15 +135,17 @@ export component TopBar inherits Rectangle {
             }
 
             if (root.search-active): Rectangle {
-                width: 260px;
-                height: 36px;
+                min-width: 136px;
+                preferred-width: 240px;
+                max-width: 240px;
+                height: 32px;
                 border-radius: 8px;
                 border-width: 1px;
                 border-color: root.search-focused ? root.field-focus-border : root.field-border;
                 background: root.search-focused ? root.field-focus-background : root.field-background;
 
                 Text {
-                    x: 12px;
+                    x: 11px;
                     width: 18px;
                     height: parent.height;
                     text: "S";
@@ -156,8 +158,8 @@ export component TopBar inherits Rectangle {
 
                 Text {
                     visible: root.search-query == "";
-                    x: 38px;
-                    width: parent.width - 74px;
+                    x: 36px;
+                    width: max(1px, parent.width - 70px);
                     height: parent.height;
                     text: "Search";
                     color: root.muted-text-color;
@@ -167,8 +169,8 @@ export component TopBar inherits Rectangle {
                 }
 
                 TextInput {
-                    x: 38px;
-                    width: parent.width - 74px;
+                    x: 36px;
+                    width: max(1px, parent.width - 70px);
                     height: parent.height;
                     text <=> root.search-query;
                     single-line: true;
@@ -184,14 +186,14 @@ export component TopBar inherits Rectangle {
                 }
 
                 close-search-touch := TouchArea {
-                    x: parent.width - 30px;
-                    width: 30px;
+                    x: parent.width - 28px;
+                    width: 28px;
                     height: parent.height;
                     clicked => { root.search_close_requested(); }
                 }
 
                 Rectangle {
-                    x: parent.width - 26px;
+                    x: parent.width - 25px;
                     y: (parent.height - self.height) / 2;
                     width: 21px;
                     height: 21px;
@@ -218,7 +220,7 @@ export component TopBar inherits Rectangle {
     }
 
     Rectangle {
-        x: root.sidebar-width-px * 1px + root.divider-offset;
+        x: root.main-start-x;
         y: parent.height - 1px;
         width: max(1px, parent.width - self.x);
         height: 1px;

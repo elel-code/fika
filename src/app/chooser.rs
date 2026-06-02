@@ -1,3 +1,4 @@
+use crate::app::pane::PaneTarget;
 use crate::app::state::{AppState, ChooserChoice, ChooserChoiceItem, ChooserFilter};
 use std::path::{Path, PathBuf};
 
@@ -108,15 +109,17 @@ pub(crate) fn chooser_output_metadata(state: &AppState) -> ChooserOutputMetadata
 }
 
 pub(crate) fn selected_directory_or_current(state: &AppState) -> PathBuf {
-    state
+    let focused = state
         .panes
-        .active
+        .pane_for_target(PaneTarget::Focused)
+        .unwrap_or(&state.panes.active);
+    focused
         .selection
         .paths
         .first()
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
-        .unwrap_or_else(|| state.panes.active.current_dir.clone())
+        .unwrap_or_else(|| focused.current_dir.clone())
 }
 
 pub(crate) fn safe_child_path(parent: &Path, name: &str) -> Option<PathBuf> {
@@ -224,5 +227,21 @@ mod tests {
             assert!(safe_child_path(parent, invalid).is_none());
         }
         assert!(safe_child_path(parent, "bad\0name").is_none());
+    }
+
+    #[test]
+    fn selected_directory_or_current_uses_focused_pane() {
+        let mut state = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/fika-right")));
+        assert_eq!(
+            selected_directory_or_current(&state),
+            PathBuf::from("/tmp/fika-left")
+        );
+
+        assert!(state.panes.focus_inactive());
+        assert_eq!(
+            selected_directory_or_current(&state),
+            PathBuf::from("/tmp/fika-right")
+        );
     }
 }

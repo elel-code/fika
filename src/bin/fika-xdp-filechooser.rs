@@ -193,6 +193,8 @@ impl FileChooser {
         let filters = portal_filters(&options);
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
+        let choice_specs = chooser_choice_specs(&choices);
+        let return_choices = !choice_specs.is_empty();
         let parent_window = portal_parent_window(parent_window);
         let start_dir = current_folder(&options);
         portal_debug_log_request(PortalRequestDebug {
@@ -221,8 +223,8 @@ impl FileChooser {
             filters: filter_map.chooser_specs.clone(),
             filter_index: filter_map.initial_chooser_index,
             return_filter: !filter_map.chooser_specs.is_empty(),
-            choices: chooser_choice_specs(&choices),
-            return_choices: !choices.is_empty(),
+            choices: choice_specs,
+            return_choices,
             parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
@@ -252,6 +254,8 @@ impl FileChooser {
         let filters = portal_filters(&options);
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
+        let choice_specs = chooser_choice_specs(&choices);
+        let return_choices = !choice_specs.is_empty();
         let parent_window = portal_parent_window(parent_window);
         portal_debug_log_request(PortalRequestDebug {
             method: "SaveFile",
@@ -278,8 +282,8 @@ impl FileChooser {
             filters: filter_map.chooser_specs.clone(),
             filter_index: filter_map.initial_chooser_index,
             return_filter: !filter_map.chooser_specs.is_empty(),
-            choices: chooser_choice_specs(&choices),
-            return_choices: !choices.is_empty(),
+            choices: choice_specs,
+            return_choices,
             parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
@@ -309,6 +313,8 @@ impl FileChooser {
         let filters = portal_filters(&options);
         let filter_map = chooser_filter_map(&options, filters);
         let choices = portal_choices(&options);
+        let choice_specs = chooser_choice_specs(&choices);
+        let return_choices = !choice_specs.is_empty();
         let parent_window = portal_parent_window(parent_window);
         let start_dir = current_folder(&options);
         portal_debug_log_request(PortalRequestDebug {
@@ -337,8 +343,8 @@ impl FileChooser {
             filters: filter_map.chooser_specs.clone(),
             filter_index: filter_map.initial_chooser_index,
             return_filter: !filter_map.chooser_specs.is_empty(),
-            choices: chooser_choice_specs(&choices),
-            return_choices: !choices.is_empty(),
+            choices: choice_specs,
+            return_choices,
             parent_window: parent_window.handle,
             ..ChooserArgs::default()
         });
@@ -767,15 +773,55 @@ fn mime_filter_globs(mime_type: &str) -> &'static [&'static str] {
 fn chooser_choice_specs(choices: &[PortalChoice]) -> Vec<String> {
     choices
         .iter()
-        .map(|(id, label, items, default)| {
+        .filter_map(|(id, label, items, default)| {
+            let id = chooser_choice_token(id)?;
+            let label = chooser_choice_label(label).unwrap_or_else(|| id.clone());
             let items = items
                 .iter()
+                .filter_map(|(item_id, item_label)| {
+                    let item_id = chooser_choice_token(item_id)?;
+                    let item_label =
+                        chooser_choice_label(item_label).unwrap_or_else(|| item_id.clone());
+                    Some((item_id, item_label))
+                })
+                .collect::<Vec<_>>();
+            if items.is_empty() {
+                return None;
+            }
+            let default = chooser_choice_token(default)
+                .filter(|default| items.iter().any(|(item_id, _)| item_id == default))
+                .unwrap_or_default();
+            let items = items
+                .into_iter()
                 .map(|(item_id, item_label)| format!("{item_id}={item_label}"))
                 .collect::<Vec<_>>()
                 .join(";");
-            format!("{id}\t{label}\t{default}\t{items}")
+            Some(format!("{id}\t{label}\t{default}\t{items}"))
         })
         .collect()
+}
+
+fn chooser_choice_token(value: &str) -> Option<String> {
+    (!value.trim().is_empty()
+        && !value
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, ';' | '=')))
+    .then(|| value.to_string())
+}
+
+fn chooser_choice_label(value: &str) -> Option<String> {
+    let normalized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || matches!(ch, ';' | '=') {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect::<String>();
+    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn nul_terminated_bytes_to_path(bytes: Vec<u8>) -> Option<PathBuf> {
@@ -1549,6 +1595,70 @@ mod tests {
         assert_eq!(
             selected,
             vec![("encoding".to_string(), "latin1".to_string())]
+        );
+    }
+
+    #[test]
+    fn portal_choice_specs_sanitize_labels_and_drop_unsafe_ids() {
+        let choices: Vec<PortalChoice> = vec![
+            (
+                "encoding".to_string(),
+                "Encoding\tMode=Fast;Safe".to_string(),
+                vec![
+                    ("utf8".to_string(), "UTF-8\nDefault".to_string()),
+                    ("latin;1".to_string(), "Latin-1".to_string()),
+                    ("raw".to_string(), "Raw=Bytes;Exact".to_string()),
+                ],
+                "missing-default".to_string(),
+            ),
+            (
+                "bad\tchoice".to_string(),
+                "Broken".to_string(),
+                vec![("ok".to_string(), "OK".to_string())],
+                "ok".to_string(),
+            ),
+            (
+                "empty-items".to_string(),
+                "Empty Items".to_string(),
+                vec![("bad=option".to_string(), "Bad".to_string())],
+                "bad=option".to_string(),
+            ),
+        ];
+
+        assert_eq!(
+            chooser_choice_specs(&choices),
+            vec!["encoding\tEncoding Mode Fast Safe\t\tutf8=UTF-8 Default;raw=Raw Bytes Exact"]
+        );
+    }
+
+    #[test]
+    fn portal_choice_specs_keep_original_safe_ids_for_result_mapping() {
+        let choices: Vec<PortalChoice> = vec![(
+            "output mode".to_string(),
+            "Output Mode".to_string(),
+            vec![("plain text".to_string(), "Plain Text".to_string())],
+            "plain text".to_string(),
+        )];
+
+        assert_eq!(
+            chooser_choice_specs(&choices),
+            vec!["output mode\tOutput Mode\tplain text\tplain text=Plain Text"]
+        );
+
+        let result = results_for_paths(
+            ChooserResult {
+                paths: vec![PathBuf::from("/tmp/a.txt")],
+                filter_index: None,
+                choices: vec![("output mode".to_string(), "plain text".to_string())],
+            },
+            &options_with_choices(choices),
+            &ChooserFilterMap::default(),
+        );
+        let selected =
+            Vec::<(String, String)>::try_from(result.get("choices").cloned().unwrap()).unwrap();
+        assert_eq!(
+            selected,
+            vec![("output mode".to_string(), "plain text".to_string())]
         );
     }
 

@@ -24,6 +24,7 @@ import { ChooserChoice, ChooserChoiceOption, DesktopApp, DeviceEntry, FileEntry,
 import { FileTile } from "file_tile.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
+import { SplitPaneView } from "split_pane.slint";
 import { StatusBar } from "status_bar.slint";
 import { TopBar } from "top_bar.slint";
 import { ChildSubmenuLayer, ChooserChoicePopupLayer, ChooserOptionPopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
@@ -50,6 +51,14 @@ export component AppWindow inherits Window {
     in property <[FileEntry]> virtual_entries;
     in-out property <int> virtual_start_index: 0;
     in-out property <int> virtual_start_column: 0;
+    in property <[FileEntry]> inactive_pane_entries;
+    in-out property <string> inactive_pane_path;
+    in-out property <string> inactive_pane_name;
+    in-out property <int> inactive_pane_entry_count: 0;
+    in-out property <int> inactive_pane_virtual_start_index: 0;
+    in-out property <int> inactive_pane_virtual_start_column: 0;
+    in-out property <float> inactive_pane_viewport_x: 0;
+    in-out property <length> inactive_pane_viewport_offset: 0px;
     in property <[PlaceEntry]> places;
     in property <[DeviceEntry]> devices;
     in-out property <string> selected_path;
@@ -77,37 +86,41 @@ export component AppWindow inherits Window {
     in-out property <bool> split_view_open: false;
 
     in-out property <int> icon_zoom_level: 2;
-    in-out property <float> sidebar_width_px: 320;
+    in-out property <float> sidebar_width_px: 280;
     in-out property <float> places_list_y_px: 108;
     in-out property <float> places_row_stride_px: 38;
     in-out property <bool> directory_loading: false;
     in-out property <float> main_viewport_x: 0;
     in-out property <length> main_viewport_offset: 0px;
-    private property <length> top-bar-height: 60px;
+    private property <length> top-bar-height: 56px;
     private property <length> status-bar-height: 36px;
     private property <length> sidebar-splitter-width: 8px;
-    private property <length> sidebar-divider-offset: 3px;
+    private property <length> sidebar-divider-offset: 7px;
+    private property <length> main-content-left: root.sidebar_width_px * 1px + root.sidebar-splitter-width;
     private property <bool> search-filters-active: root.search_kind_filter != 0 || root.search_modified_filter != 0 || root.search_size_filter != 0;
     private property <bool> search-panel-visible: root.search_bar_open || root.search_query != "" || root.search-filters-active;
-    private property <length> search-panel-height: root.search-panel-visible ? (root.main-pane-width < 760px ? 78px : 44px) : 0px;
+    private property <length> search-panel-height: root.search-panel-visible ? (root.active-pane-width < 760px ? 78px : 44px) : 0px;
     private property <string> search-kind-filter-label: root.search_kind_filter == 1 ? "Type: Folders" : (root.search_kind_filter == 2 ? "Type: Files" : (root.search_kind_filter == 3 ? "Type: Images" : "Type: All"));
     private property <string> search-modified-filter-label: root.search_modified_filter == 1 ? "Modified: Today" : (root.search_modified_filter == 2 ? "Modified: 7 days" : (root.search_modified_filter == 3 ? "Modified: 30 days" : "Modified: Any"));
     private property <string> search-size-filter-label: root.search_size_filter == 1 ? "Size: < 1 MB" : (root.search_size_filter == 2 ? "Size: 1-100 MB" : (root.search_size_filter == 3 ? "Size: > 100 MB" : "Size: Any"));
-    private property <length> main-pane-width: max(1px, root.width - root.sidebar_width_px * 1px - root.sidebar-splitter-width);
+    private property <length> main-pane-width: max(1px, root.width - root.main-content-left);
+    private property <length> active-pane-width: root.split_view_open ? max(1px, root.main-pane-width / 2) : root.main-pane-width;
     private property <length> main-available-grid-height: max(root.icon-row-height, root.height - root.top-bar-height - root.status-bar-height - root.search-panel-height - 2 * root.icon-grid-padding);
     private property <int> main-rows-per-column: max(1, floor(root.main-available-grid-height / root.icon-row-height));
     private property <int> main-column-count: max(1, ceil(root.entry_count / root.main-rows-per-column));
     private property <length> main-viewport-width: 2 * root.icon-grid-padding + root.main-column-count * root.icon-cell-width;
-    private property <float> main-scroll-max-x: max(0, (root.main-viewport-width - root.main-pane-width) / 1px);
+    private property <float> main-scroll-max-x: max(0, (root.main-viewport-width - root.active-pane-width) / 1px);
 
     private property <length> icon-cell-width: root.icon_zoom_level == 0 ? 172px : (root.icon_zoom_level == 1 ? 208px : (root.icon_zoom_level == 2 ? 248px : (root.icon_zoom_level == 3 ? 292px : 340px)));
     private property <length> icon-row-height: root.icon_zoom_level == 0 ? 78px : (root.icon_zoom_level == 1 ? 90px : (root.icon_zoom_level == 2 ? 104px : (root.icon_zoom_level == 3 ? 124px : 146px)));
     private property <length> icon-grid-padding: 14px;
-    private property <color> shell-base-color: root.dark_mode ? #101418 : #f8fafc;
-    private property <color> sidebar-surface-color: root.dark_mode ? #181e24 : #eef2f6;
-    private property <color> sidebar-border-color: root.dark_mode ? #2c353e : #d8e0e8;
-    private property <color> shell-separator-color: root.dark_mode ? #222832 : #dde4ec;
-    private property <float> sidebar-resize-start-width-px: 320;
+    private property <color> shell-base-color: root.dark_mode ? #101418 : #f7f8fb;
+    private property <color> sidebar-surface-color: root.dark_mode ? #181e24 : #ffffff;
+    private property <color> sidebar-border-color: root.dark_mode ? #303943 : #d7dfe8;
+    private property <color> shell-separator-color: root.dark_mode ? #242b33 : #e4e9ef;
+    private property <length> sidebar-panel-margin: 8px;
+    private property <length> sidebar-panel-radius: 14px;
+    private property <float> sidebar-resize-start-width-px: 280;
     private property <length> sidebar-resize-press-x: 0px;
     private property <bool> context-menu-open: false;
     private property <int> context-menu-kind: 0;
@@ -272,6 +285,8 @@ export component AppWindow inherits Window {
     callback cancel_search();
     callback search_filters_changed(int, int, int);
     callback toggle_split_view();
+    callback focus_inactive_pane();
+    callback open_inactive_path(string);
     callback select_path(string, bool, bool);
     callback select_rect(float, float, float, float, int, float, float, float, bool);
     callback select_all_visible();
@@ -291,6 +306,7 @@ export component AppWindow inherits Window {
     callback main_drop_target_path(float, float, string) -> string;
     callback main_drop_allowed(float, float, string) -> bool;
     callback main_view_changed();
+    callback inactive_pane_view_changed();
     callback place_drop_allowed(string, int) -> bool;
     callback place_drop_target(float) -> int;
     callback place_drop_slot(float) -> int;
@@ -449,18 +465,33 @@ export component AppWindow inherits Window {
     min-height: 460px;
     background: root.shell-base-color;
 
-    changed width => { root.main_view_changed(); }
-    changed height => { root.main_view_changed(); }
+    changed width => {
+        root.main_view_changed();
+        root.inactive_pane_view_changed();
+    }
+    changed height => {
+        root.main_view_changed();
+        root.inactive_pane_view_changed();
+    }
     changed sidebar_width_px => {
         root.sync-main-viewport();
         root.main_view_changed();
+        root.inactive_pane_view_changed();
     }
     changed search-panel-height => {
         root.sync-main-viewport();
         root.main_view_changed();
     }
+    changed active-pane-width => {
+        root.sync-main-viewport();
+        root.main_view_changed();
+        root.inactive_pane_view_changed();
+    }
     changed main_viewport_x => { root.main_view_changed(); }
-    changed icon_zoom_level => { root.main_view_changed(); }
+    changed icon_zoom_level => {
+        root.main_view_changed();
+        root.inactive_pane_view_changed();
+    }
     changed transfer_conflict_open => {
         if (root.transfer_conflict_open) {
             root.transfer-conflict-apply-all = false;
@@ -476,11 +507,11 @@ export component AppWindow inherits Window {
         }
 
         sidebar-foreground := Rectangle {
-            x: 8px;
-            y: 6px;
-            width: max(1px, root.sidebar_width_px * 1px - 16px);
-            height: max(1px, parent.height - 12px);
-            border-radius: 14px;
+            x: root.sidebar-panel-margin;
+            y: root.sidebar-panel-margin;
+            width: max(1px, root.sidebar_width_px * 1px - 2 * root.sidebar-panel-margin);
+            height: max(1px, parent.height - 2 * root.sidebar-panel-margin);
+            border-radius: root.sidebar-panel-radius;
             background: root.sidebar-surface-color;
             border-color: root.sidebar-border-color;
             border-width: 1px;
@@ -590,8 +621,7 @@ export component AppWindow inherits Window {
             height: root.top-bar-height;
             dark: root.dark_mode;
             current-path: root.current_path;
-            sidebar-width-px: root.sidebar_width_px;
-            divider-offset: root.sidebar-divider-offset;
+            main-start-x: root.main-content-left;
             can-go-back: root.can_go_back;
             can-go-forward: root.can_go_forward;
             search-active: root.search-panel-visible;
@@ -634,11 +664,11 @@ export component AppWindow inherits Window {
                 background: transparent;
 
                 sidebar-surface := Rectangle {
-                x: 8px;
-                y: 6px;
-                width: max(1px, parent.width - 16px);
-                height: max(1px, parent.height - 12px);
-                border-radius: 14px;
+                x: root.sidebar-panel-margin;
+                y: root.sidebar-panel-margin;
+                width: max(1px, parent.width - 2 * root.sidebar-panel-margin);
+                height: max(1px, parent.height - 2 * root.sidebar-panel-margin);
+                border-radius: root.sidebar-panel-radius;
                 background: transparent;
                 border-width: 0px;
 
@@ -661,12 +691,14 @@ export component AppWindow inherits Window {
                     horizontal-scrollbar-policy: always-off;
                     vertical-scrollbar-policy: as-needed;
                     viewport-width: parent.width;
-                    viewport-height: max(parent.height, 520px + (root.places.length + root.devices.length) * 38px);
+                    viewport-height: max(parent.height, 480px + (root.places.length + root.devices.length) * 38px);
                     changed viewport-y => {
                         root.places_list_y_px = (self.absolute-position.y + 44px - self.viewport-y) / 1px;
                     }
 
                 VerticalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
                     padding-top: 10px;
                     spacing: 4px;
                     width: sidebar-scroll.viewport-width;
@@ -707,16 +739,6 @@ export component AppWindow inherits Window {
                         label: "Cancel Operations";
                         dark: root.dark_mode;
                         clicked => { root.cancel_queued_operations(); }
-                    }
-
-                    SidebarSection { label: "Remote"; dark: root.dark_mode; }
-                    PlaceButton {
-                        label: "Network";
-                        path: "";
-                        marker: "N";
-                        selected: false;
-                        dark: root.dark_mode;
-                        clicked => { }
                     }
 
                     SidebarSection { label: "Devices"; dark: root.dark_mode; }
@@ -868,7 +890,7 @@ export component AppWindow inherits Window {
                 }
 
                 main-blank-touch := TouchArea {
-                    width: parent.width;
+                    width: root.active-pane-width;
                     height: parent.height;
 
                     pointer-event(event) => {
@@ -893,7 +915,7 @@ export component AppWindow inherits Window {
                 }
 
                 VerticalLayout {
-                    width: 100%;
+                    width: root.active-pane-width;
                     height: 100%;
                     padding: 0px;
                     spacing: 0px;
@@ -1186,6 +1208,37 @@ export component AppWindow inherits Window {
                             root.chooser-choice-menu-y = y;
                             root.chooser-choice-menu-open = true;
                         }
+                    }
+                }
+
+                if (root.split_view_open) : SplitPaneView {
+                    x: root.active-pane-width;
+                    width: max(1px, parent.width - root.active-pane-width);
+                    height: parent.height;
+                    dark: root.dark_mode;
+                    path: root.inactive_pane_path;
+                    name: root.inactive_pane_name;
+                    entry-count: root.inactive_pane_entry_count;
+                    entries: root.inactive_pane_entries;
+                    virtual-start-index: root.inactive_pane_virtual_start_index;
+                    virtual-start-column: root.inactive_pane_virtual_start_column;
+                    viewport-x <=> root.inactive_pane_viewport_x;
+                    viewport-offset <=> root.inactive_pane_viewport_offset;
+                    zoom-level: root.icon_zoom_level;
+                    view_changed => {
+                        root.inactive_pane_view_changed();
+                    }
+                    zoom_in => {
+                        root.zoom-main-in();
+                    }
+                    zoom_out => {
+                        root.zoom-main-out();
+                    }
+                    focus_requested => {
+                        root.focus_inactive_pane();
+                    }
+                    activated(path) => {
+                        root.open_inactive_path(path);
                     }
                 }
 
