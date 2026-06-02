@@ -18,6 +18,11 @@ mod fs;
 mod support;
 
 use app::async_bridge::{AsyncBridge, build_async_runtime, send_async_event};
+use app::chooser::{
+    ChooserOutputMetadata, chooser_output_metadata, parse_chooser_choice_spec,
+    parse_chooser_filter_spec, safe_child_path, selected_directory_or_current,
+    set_chooser_choice_index,
+};
 use app::device_monitor::start_device_monitor;
 use app::dnd::{
     MainDndTrace, PlacesDndTrace, WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME,
@@ -52,10 +57,7 @@ use app::selection::{
     append_unique_paths, filtered_entry_count, filtered_entry_paths, rebuild_visible_entry_index,
     retained_visible_paths, selection_range_paths_filtered, selection_rect_paths_filtered,
 };
-use app::state::{
-    AppState, ChooserChoice as StateChooserChoice, ChooserChoiceItem, ChooserFilter, DeviceAction,
-    DirectoryViewState, FileUndo,
-};
+use app::state::{AppState, DeviceAction, DirectoryViewState, FileUndo};
 use app::thumbnail_pipeline::{
     apply_thumbnail_load_to_state, decorate_entries_with_cached_thumbnails,
     prioritize_thumbnail_entries, thumbnail_schedule_candidate,
@@ -3607,62 +3609,6 @@ fn chooser_accept(
     }
 }
 
-fn parse_chooser_filter_spec(spec: &str) -> Option<ChooserFilter> {
-    let (label, patterns) = spec.split_once('\t').unwrap_or((spec, ""));
-    let label = label.trim();
-    if label.is_empty() {
-        return None;
-    }
-    let patterns = patterns
-        .split(';')
-        .map(str::trim)
-        .filter(|pattern| !pattern.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    Some(ChooserFilter {
-        label: label.to_string(),
-        patterns,
-    })
-}
-
-fn parse_chooser_choice_spec(spec: &str) -> Option<StateChooserChoice> {
-    let parts = spec.split('\t').collect::<Vec<_>>();
-    let [id, label, selected, items] = parts.as_slice() else {
-        return None;
-    };
-    if id.is_empty() || label.is_empty() {
-        return None;
-    }
-
-    let items = items
-        .split(';')
-        .filter_map(|item| {
-            let (item_id, item_label) = item.split_once('=')?;
-            if item_id.is_empty() || item_label.is_empty() {
-                return None;
-            }
-            Some(ChooserChoiceItem {
-                id: item_id.to_string(),
-                label: item_label.to_string(),
-            })
-        })
-        .collect::<Vec<_>>();
-    if items.is_empty() {
-        return None;
-    }
-    let selected_index = items
-        .iter()
-        .position(|item| item.id == *selected)
-        .unwrap_or_default();
-
-    Some(StateChooserChoice {
-        id: (*id).to_string(),
-        label: (*label).to_string(),
-        items,
-        selected_index,
-    })
-}
-
 fn sync_chooser_filter_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let state = state.borrow();
     ui.set_chooser_filter_count(state.chooser_filters.len() as i32);
@@ -3733,75 +3679,6 @@ fn select_chooser_choice(
         }
     }
     sync_chooser_choices_ui(ui, state);
-}
-
-fn set_chooser_choice_index(state: &mut AppState, choice_index: i32, option_index: i32) -> bool {
-    let (Ok(choice_index), Ok(option_index)) =
-        (usize::try_from(choice_index), usize::try_from(option_index))
-    else {
-        return false;
-    };
-    let Some(choice) = state.chooser_choices.get_mut(choice_index) else {
-        return false;
-    };
-    if option_index >= choice.items.len() {
-        return false;
-    }
-    choice.selected_index = option_index;
-    true
-}
-
-#[derive(Clone, Debug, Default)]
-struct ChooserOutputMetadata {
-    filter_index: Option<usize>,
-    choices: Vec<(String, String)>,
-}
-
-fn chooser_output_metadata(state: &AppState) -> ChooserOutputMetadata {
-    ChooserOutputMetadata {
-        filter_index: if state.chooser_return_filter && !state.chooser_filters.is_empty() {
-            Some(state.chooser_filter_index)
-        } else {
-            None
-        },
-        choices: if state.chooser_return_choices {
-            state
-                .chooser_choices
-                .iter()
-                .filter_map(|choice| {
-                    choice
-                        .items
-                        .get(choice.selected_index)
-                        .map(|item| (choice.id.clone(), item.id.clone()))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        },
-    }
-}
-
-fn selected_directory_or_current(state: &AppState) -> PathBuf {
-    state
-        .selected_paths
-        .first()
-        .map(PathBuf::from)
-        .filter(|path| path.is_dir())
-        .unwrap_or_else(|| state.current_dir.clone())
-}
-
-fn safe_child_path(parent: &Path, name: &str) -> Option<PathBuf> {
-    let name = name.trim();
-    if name.is_empty()
-        || name == "."
-        || name == ".."
-        || name.contains('/')
-        || name.contains('\\')
-        || name.as_bytes().contains(&0)
-    {
-        return None;
-    }
-    Some(parent.join(name))
 }
 
 fn output_chooser_paths_and_exit(paths: Vec<PathBuf>, metadata: ChooserOutputMetadata) -> ! {
@@ -4128,27 +4005,6 @@ mod tests {
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/Documents".to_string(), "/tmp/photo.PNG".to_string()]
-        );
-    }
-
-    #[test]
-    fn chooser_choice_specs_parse_and_emit_selected_metadata() {
-        let choice =
-            parse_chooser_choice_spec("encoding\tEncoding\tlatin1\tutf8=UTF-8;latin1=Latin-1")
-                .unwrap();
-        assert_eq!(choice.id, "encoding");
-        assert_eq!(choice.label, "Encoding");
-        assert_eq!(choice.selected_index, 1);
-
-        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.chooser_choices = vec![choice];
-        state.chooser_return_choices = true;
-        assert!(set_chooser_choice_index(&mut state, 0, 0));
-        assert!(!set_chooser_choice_index(&mut state, 0, 9));
-        assert!(!set_chooser_choice_index(&mut state, 9, 0));
-        assert_eq!(
-            chooser_output_metadata(&state).choices,
-            vec![("encoding".to_string(), "utf8".to_string())]
         );
     }
 

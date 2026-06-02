@@ -337,6 +337,8 @@ Places 分为内置项和用户项：
 
 当前 chooser mode 使用双击和底部确认区两种选择语义：双击目录继续进入目录，双击普通文件会输出该文件路径并退出；底部确认区用于目录选择、保存路径选择和多选确认。stdout 合约必须保持稳定；任何调试输出都只能写 stderr。
 
+Chooser 的纯数据逻辑集中在 `src/app/chooser.rs`：portal filter / choice 参数解析、choice 选中项更新、stdout metadata 生成、保存文件名安全校验和“选中目录否则当前目录”的目标目录选择都在该模块测试。`main.rs` 只保留 chooser UI 同步、用户确认流程，以及真正写 stdout 并退出进程的边界。
+
 ### Directory Monitoring
 
 目标：

@@ -1,4 +1,5 @@
 pub(crate) mod async_bridge;
+pub(crate) mod chooser;
 pub(crate) mod device_monitor;
 pub(crate) mod dnd;
 pub(crate) mod events;

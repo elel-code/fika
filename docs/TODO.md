@@ -332,6 +332,7 @@ Acceptance for all:
 
 - [x] Define chooser output contract.
   - Acceptance: chooser stdout format is documented and stable.
+  - Current: chooser filter/choice parsing, selected-choice mutation, stdout metadata generation, save-name validation, and selected-directory resolution live in `src/app/chooser.rs`; `main.rs` keeps UI syncing and process-output/exit boundaries.
 
 - [x] Add XDP / `xdg-desktop-portal` integration design.
   - Acceptance: document how Fika maps to `org.freedesktop.impl.portal.FileChooser`.
