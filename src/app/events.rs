@@ -11,6 +11,7 @@ pub(crate) struct DirectoryLoadResult {
     pub(crate) generation: u64,
     pub(crate) path: PathBuf,
     pub(crate) preserve_view: bool,
+    pub(crate) defer_view_restore: bool,
     pub(crate) result: io::Result<Vec<RawFileEntry>>,
 }
 

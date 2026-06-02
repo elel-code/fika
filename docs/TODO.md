@@ -68,6 +68,7 @@
   - Current: directory entries are cached with an LRU cap so long browsing sessions cannot keep every visited directory's full entry list forever.
   - Current: directory scans run as one background blocking scan, following COSMIC Files' local-directory pattern instead of scheduling per-entry async filesystem operations.
   - Current: watcher/manual refresh results that are visibly unchanged only refresh the cache and status text; they do not reset the Slint model or virtual range.
+  - Current: uncached directory navigation keeps the previous visible model in place and defers restoring the target directory viewport until the new entries are ready, matching the COSMIC-style separation between location change and item replacement more closely.
 - [x] Dolphin-style delayed main-view clearing for uncached directory navigation.
 - [x] Per-directory main-view scroll position memory.
   - Current: remembered view states are cached with an LRU cap so long browsing sessions cannot keep every visited path's viewport state forever.

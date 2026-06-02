@@ -1152,12 +1152,13 @@ fn load_directory_with_preservation(
         current_dir,
         generation,
         cached_entries,
+        defer_view_restore,
     } = {
         let mut state = state.borrow_mut();
         prepare_directory_load(&mut state, preserve_view)
     };
     debug_log(&format!(
-        "load_directory generation={generation} preserve_view={preserve_view} path={} cache_hit={}",
+        "load_directory generation={generation} preserve_view={preserve_view} defer_view_restore={defer_view_restore} path={} cache_hit={}",
         current_dir.display(),
         cached_entries.is_some()
     ));
@@ -1167,7 +1168,7 @@ fn load_directory_with_preservation(
     ui.set_current_name(display_location_name(&current_dir).into());
     ui.set_current_in_trash(fs::file_ops::is_in_trash_files_dir(&current_dir));
     ui.set_search_loading(false);
-    if !preserve_view {
+    if !preserve_view && !defer_view_restore {
         restore_view_state(ui, state, &current_dir);
     }
     save_current_settings(ui, state);
@@ -1203,6 +1204,7 @@ fn load_directory_with_preservation(
                 generation,
                 path: current_dir,
                 preserve_view,
+                defer_view_restore,
                 result,
             }),
         );
@@ -1386,6 +1388,7 @@ fn watch_current_directory(path: &Path, generation: u64, bridge: &AsyncBridge) {
                     generation,
                     path: reload_path,
                     preserve_view: true,
+                    defer_view_restore: false,
                     result,
                 }),
             );
@@ -1506,6 +1509,9 @@ fn apply_directory_result(
                 entries.len(),
                 result.preserve_view
             ));
+            if result.defer_view_restore {
+                restore_view_state(ui, state, &result.path);
+            }
             let unchanged = {
                 let mut state = state.borrow_mut();
                 if directory_entries_match(&state.entries, &entries) {

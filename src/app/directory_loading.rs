@@ -9,6 +9,7 @@ pub(crate) struct DirectoryLoadPreparation {
     pub(crate) current_dir: PathBuf,
     pub(crate) generation: u64,
     pub(crate) cached_entries: Option<Vec<FileEntry>>,
+    pub(crate) defer_view_restore: bool,
 }
 
 pub(crate) fn prepare_directory_load(
@@ -28,11 +29,13 @@ pub(crate) fn prepare_directory_load(
     }
     let current_dir = state.current_dir.clone();
     let cached_entries = state.cached_directory_entries(&current_dir);
+    let defer_view_restore = !preserve_view && cached_entries.is_none();
 
     DirectoryLoadPreparation {
         current_dir,
         generation,
         cached_entries,
+        defer_view_restore,
     }
 }
 
@@ -94,6 +97,7 @@ mod tests {
                 .map(|entries| entries.len()),
             Some(1)
         );
+        assert!(!preparation.defer_view_restore);
         assert_eq!(state.thumbnail_generation.current(), thumbnail_generation);
         assert_eq!(
             state.thumbnail_pending.get("/tmp/current/photo.png"),
@@ -124,12 +128,27 @@ mod tests {
 
         assert_eq!(preparation.current_dir, PathBuf::from("/tmp/current"));
         assert!(preparation.cached_entries.is_none());
+        assert!(preparation.defer_view_restore);
         assert!(state.thumbnail_generation.current() > thumbnail_generation);
         assert!(state.thumbnail_pending.is_empty());
         assert!(state.search_query.is_empty());
         assert_eq!(state.search_kind_filter, 0);
         assert!(state.selected_paths.is_empty());
         assert!(state.selection_anchor.is_none());
+    }
+
+    #[test]
+    fn cached_directory_load_restores_view_before_async_refresh() {
+        let mut state = AppState::new(PathBuf::from("/tmp/current"), Vec::new());
+        state.insert_directory_cache(
+            PathBuf::from("/tmp/current"),
+            vec![test_entry("cached.txt", "/tmp/current/cached.txt")],
+        );
+
+        let preparation = prepare_directory_load(&mut state, false);
+
+        assert!(preparation.cached_entries.is_some());
+        assert!(!preparation.defer_view_restore);
     }
 
     fn test_entry(name: &str, path: &str) -> FileEntry {
