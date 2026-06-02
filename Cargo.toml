@@ -13,7 +13,7 @@ futures-lite = "2.6.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 png = "0.18.1"
 slint = { git = "https://github.com/slint-ui/slint", branch = "master", features = ["image-default-formats"] }
-tokio = { version = "1", features = ["fs", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 zbus = "5.16.0"
 zbus_polkit = "5.0.0"
 

@@ -1,10 +1,15 @@
 use futures_lite::StreamExt;
 use std::collections::HashMap;
 use std::env;
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::OnceLock;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Child;
 use tokio::process::Command;
+use tokio::task::JoinHandle;
 use zbus::fdo;
 use zbus::message::Type;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
@@ -30,6 +35,18 @@ struct ChooserResult {
     paths: Vec<PathBuf>,
     filter_index: Option<usize>,
     choices: Vec<(String, String)>,
+}
+
+#[derive(Debug)]
+struct ChooserProcessOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+struct ChooserProcess {
+    output_task: JoinHandle<Result<ChooserProcessOutput, String>>,
+    terminate_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -410,13 +427,7 @@ fn chooser_args(request: ChooserArgs) -> Vec<String> {
     args
 }
 
-async fn run_chooser(args: Vec<String>) -> Result<ChooserRun, String> {
-    let mut command = chooser_command(gui_executable()?, args);
-
-    let output = command
-        .output()
-        .await
-        .map_err(|err| format!("cannot launch fika chooser: {err}"))?;
+fn chooser_run_from_output(output: ChooserProcessOutput) -> Result<ChooserRun, String> {
     if !output.status.success() {
         if output.status.code() == Some(fika::chooser::CHOOSER_CANCEL_EXIT_CODE) {
             return Ok(ChooserRun::Cancelled(ChooserCancelReason::UserCancelled));
@@ -443,9 +454,14 @@ async fn run_chooser_for_request(
     args: Vec<String>,
 ) -> Result<ChooserRun, String> {
     let mut close_stream = request_close_stream(connection, handle).await?;
+    let ChooserProcess {
+        mut output_task,
+        terminate_tx,
+    } = ChooserProcess::spawn(chooser_command(gui_executable()?, args))?;
     let outcome = tokio::select! {
-        result = run_chooser(args) => result,
+        result = &mut output_task => chooser_output_from_task_result(result).and_then(chooser_run_from_output),
         close = close_stream.next() => {
+            terminate_chooser_process(output_task, terminate_tx).await?;
             match close {
                 Some(Ok(_)) => Ok(ChooserRun::Cancelled(ChooserCancelReason::RequestClose)),
                 Some(Err(err)) => Err(format!("portal request Close signal failed: {err}")),
@@ -455,6 +471,111 @@ async fn run_chooser_for_request(
     };
     portal_debug_log_chooser_lifecycle(handle.as_str(), &outcome);
     outcome
+}
+
+impl ChooserProcess {
+    fn spawn(mut command: Command) -> Result<Self, String> {
+        let mut child = command
+            .spawn()
+            .map_err(|err| format!("cannot launch fika chooser: {err}"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "cannot capture chooser stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "cannot capture chooser stderr".to_string())?;
+        let stdout_task = read_pipe_task(stdout);
+        let stderr_task = read_pipe_task(stderr);
+        let (terminate_tx, terminate_rx) = tokio::sync::oneshot::channel();
+        let output_task = tokio::spawn(async move {
+            wait_chooser_child(child, stdout_task, stderr_task, terminate_rx).await
+        });
+        Ok(Self {
+            output_task,
+            terminate_tx: Some(terminate_tx),
+        })
+    }
+}
+
+async fn wait_chooser_child(
+    mut child: Child,
+    stdout_task: JoinHandle<io::Result<Vec<u8>>>,
+    stderr_task: JoinHandle<io::Result<Vec<u8>>>,
+    mut terminate_rx: tokio::sync::oneshot::Receiver<()>,
+) -> Result<ChooserProcessOutput, String> {
+    let status = tokio::select! {
+        status = child.wait() => {
+            status.map_err(|err| format!("cannot wait for fika chooser: {err}"))?
+        }
+        terminate = &mut terminate_rx => {
+            if terminate.is_ok() {
+                kill_chooser_child(&mut child).await?
+            } else {
+                child.wait().await.map_err(|err| format!("cannot wait for fika chooser after lifecycle channel closed: {err}"))?
+            }
+        }
+    };
+    let stdout = collect_pipe("stdout", stdout_task).await?;
+    let stderr = collect_pipe("stderr", stderr_task).await?;
+    Ok(ChooserProcessOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+async fn kill_chooser_child(child: &mut Child) -> Result<ExitStatus, String> {
+    match child.start_kill() {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::InvalidInput => {}
+        Err(err) => {
+            return Err(format!(
+                "cannot terminate fika chooser after request Close: {err}"
+            ));
+        }
+    }
+    child
+        .wait()
+        .await
+        .map_err(|err| format!("cannot wait for terminated fika chooser: {err}"))
+}
+
+fn read_pipe_task<R>(mut reader: R) -> JoinHandle<io::Result<Vec<u8>>>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await?;
+        Ok(output)
+    })
+}
+
+async fn terminate_chooser_process(
+    output_task: JoinHandle<Result<ChooserProcessOutput, String>>,
+    terminate_tx: Option<tokio::sync::oneshot::Sender<()>>,
+) -> Result<ChooserProcessOutput, String> {
+    if let Some(terminate_tx) = terminate_tx {
+        let _ = terminate_tx.send(());
+    }
+    chooser_output_from_task_result(output_task.await)
+}
+
+async fn collect_pipe(
+    name: &'static str,
+    task: JoinHandle<io::Result<Vec<u8>>>,
+) -> Result<Vec<u8>, String> {
+    task.await
+        .map_err(|err| format!("chooser {name} reader task failed: {err}"))?
+        .map_err(|err| format!("cannot read chooser {name}: {err}"))
+}
+
+fn chooser_output_from_task_result(
+    result: Result<Result<ChooserProcessOutput, String>, tokio::task::JoinError>,
+) -> Result<ChooserProcessOutput, String> {
+    result.map_err(|err| format!("chooser lifecycle task failed: {err}"))?
 }
 
 async fn request_close_stream(
@@ -1758,9 +1879,32 @@ mod tests {
     }
 
     #[test]
-    fn chooser_process_is_killed_if_portal_request_is_dropped() {
+    fn chooser_process_keeps_kill_on_drop_as_lifecycle_fallback() {
         let command = chooser_command(PathBuf::from("/bin/true"), vec!["--chooser".to_string()]);
         assert!(command.get_kill_on_drop());
+    }
+
+    #[tokio::test]
+    async fn chooser_process_is_explicitly_terminated_for_request_close() {
+        let process = ChooserProcess::spawn(chooser_command(
+            PathBuf::from("/bin/sleep"),
+            vec!["30".into()],
+        ))
+        .unwrap();
+        let ChooserProcess {
+            output_task,
+            terminate_tx,
+        } = process;
+
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            terminate_chooser_process(output_task, terminate_tx),
+        )
+        .await
+        .expect("chooser termination should not wait for the full sleep")
+        .expect("chooser termination should return process output");
+
+        assert!(!output.status.success());
     }
 
     #[test]

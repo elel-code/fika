@@ -473,7 +473,7 @@ system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privi
 - 设置 `FIKA_DEBUG_PORTAL=1` 时，backend 还会为每个 OpenFile / SaveFile / SaveFiles 请求打印一行请求摘要，包含 request handle、起始目录、选择/保存模式、portal/chooser filter 数量、MIME 转换 filter 数量、隐藏的未知 filter 数量、初始 filter、parent-window 转发状态、parent binding 状态，并继续显式标记 `native_transient=false`。chooser future 结束时还会记录收尾原因：选择成功、用户取消、空输出、portal request Close、Close stream 结束或异常失败，方便验证 filter 映射、取消清理和子进程生命周期。
 - 返回 URI 统一为 `file://`，路径中的空格和非 ASCII 字节按百分号编码；backend 保留 chooser 输出的所选路径本身，不在返回前把符号链接解析成目标路径。
 - 用户关闭 chooser 时，`fika --chooser` 以专用取消码退出，backend 返回 response `1`；chooser 成功退出但无路径输出也按取消处理。其它非零退出会返回 D-Bus error，并带上 exit status 和 stderr，避免把崩溃或启动后异常静默伪装成用户取消。
-- backend 在每个 FileChooser 请求期间订阅对应 request handle 上的 `org.freedesktop.impl.portal.Request.Close` signal。Close 先到时 backend 返回 response `1`，并 drop 掉正在等待的 chooser 进程；`fika --chooser` 同时以 `kill_on_drop` 启动，所以 request Close、backend future 被取消或连接断开时，未完成的 chooser 子进程都会随 drop 被终止，避免留下孤儿选择器窗口。
+- backend 在每个 FileChooser 请求期间订阅对应 request handle 上的 `org.freedesktop.impl.portal.Request.Close` signal。Close 先到时 backend 会主动通知 chooser lifecycle task 终止 `fika --chooser` 子进程并等待其退出，然后返回 response `1`。`kill_on_drop` 仍保留为 backend future 被取消或连接断开时的兜底，避免留下孤儿选择器窗口。
 - `options["current_folder"]` 会作为 chooser 起始目录。
 - `data/dbus-1/services/org.freedesktop.impl.portal.desktop.fika.service.in` 提供 D-Bus activation 模板。
 - `data/xdg-desktop-portal/portals/fika.portal` 提供 xdg-desktop-portal backend 描述文件；active backend selection 由 `portals.conf` 单独控制，并由 `scripts/check-runtime-integration.sh` 的普通模式报告。
