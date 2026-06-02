@@ -2,7 +2,7 @@ use crate::FileEntry;
 use crate::app::geometry::{
     MainGridLayout, VirtualGridPlan, split_preview_plan, virtual_grid_plan,
 };
-use crate::app::pane::PaneTarget;
+use crate::app::pane::{PaneTarget, VirtualViewCache};
 use crate::app::selection::{filtered_entries_range, filtered_entry_count};
 use crate::app::state::AppState;
 use crate::app::thumbnail_pipeline::decorate_entries_with_cached_thumbnails;
@@ -39,6 +39,7 @@ pub(crate) struct SplitPreviewUpdate {
     pub(crate) range: Range<usize>,
     pub(crate) start_column: usize,
     pub(crate) entries: Vec<FileEntry>,
+    pub(crate) rebuild_model: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -47,6 +48,7 @@ pub(crate) struct SplitPreviewInput {
     pub(crate) pane_height: f32,
     pub(crate) zoom_level: i32,
     pub(crate) thumbnail_size_px: u32,
+    pub(crate) force_rebuild_model: bool,
 }
 
 pub(crate) fn prepare_virtual_view_update(
@@ -72,7 +74,6 @@ pub(crate) fn prepare_virtual_view_update(
         state,
         &plan,
         visible_count,
-        input.layout,
         input.thumbnail_size_px,
         input.schedule_thumbnails,
     );
@@ -113,7 +114,7 @@ pub(crate) fn prepare_split_preview_update(
     state: &mut AppState,
     input: SplitPreviewInput,
 ) -> Option<SplitPreviewUpdate> {
-    let (current_dir, entry_count, plan, mut entries) = {
+    let (current_dir, entry_count, plan, rebuild_model, mut entries) = {
         let pane = state.panes.pane_mut_for_target(PaneTarget::Inactive)?;
         let entry_count = pane.entries.len();
         let plan = split_preview_plan(
@@ -123,12 +124,38 @@ pub(crate) fn prepare_split_preview_update(
             pane.view.viewport_x,
             input.zoom_level,
         );
+        let rebuild_model = input.force_rebuild_model
+            || should_rebuild_virtual_cache(
+                &pane.view.virtual_view,
+                &plan,
+                entry_count,
+                input.thumbnail_size_px,
+            );
         pane.view.viewport_x = plan.viewport_x;
-        let entries = pane.entries[plan.range.clone()].to_vec();
-        (pane.current_dir.clone(), entry_count, plan, entries)
+        let entries = if rebuild_model {
+            pane.entries[plan.range.clone()].to_vec()
+        } else {
+            Vec::new()
+        };
+        if rebuild_model {
+            pane.view.virtual_view.range = plan.range.clone();
+            pane.view.virtual_view.entry_count = entry_count;
+            pane.view.virtual_view.rows_per_column = plan.rows_per_column;
+            pane.view.virtual_view.cell_width = plan.cell_width;
+            pane.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
+        }
+        (
+            pane.current_dir.clone(),
+            entry_count,
+            plan,
+            rebuild_model,
+            entries,
+        )
     };
 
-    decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
+    if rebuild_model {
+        decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
+    }
 
     Some(SplitPreviewUpdate {
         current_dir,
@@ -137,6 +164,7 @@ pub(crate) fn prepare_split_preview_update(
         range: plan.range,
         start_column: plan.start_column,
         entries,
+        rebuild_model,
     })
 }
 
@@ -144,16 +172,29 @@ fn should_rebuild_virtual_model(
     state: &AppState,
     plan: &VirtualGridPlan,
     visible_count: usize,
-    layout: MainGridLayout,
     thumbnail_size_px: u32,
     schedule_thumbnails: bool,
 ) -> bool {
     !schedule_thumbnails
-        || state.panes.active.view.virtual_view.range != plan.range
-        || state.panes.active.view.virtual_view.entry_count != visible_count
-        || state.panes.active.view.virtual_view.rows_per_column != layout.rows_per_column
-        || state.panes.active.view.virtual_view.cell_width != layout.cell_width
-        || state.panes.active.view.virtual_view.thumbnail_size_px != thumbnail_size_px
+        || should_rebuild_virtual_cache(
+            &state.panes.active.view.virtual_view,
+            plan,
+            visible_count,
+            thumbnail_size_px,
+        )
+}
+
+fn should_rebuild_virtual_cache(
+    cache: &VirtualViewCache,
+    plan: &VirtualGridPlan,
+    entry_count: usize,
+    thumbnail_size_px: u32,
+) -> bool {
+    cache.range != plan.range
+        || cache.entry_count != entry_count
+        || cache.rows_per_column != plan.rows_per_column
+        || cache.cell_width != plan.cell_width
+        || cache.thumbnail_size_px != thumbnail_size_px
 }
 
 #[cfg(test)]
@@ -270,6 +311,7 @@ mod tests {
                 pane_height: 704.0,
                 zoom_level: 1,
                 thumbnail_size_px: 80,
+                force_rebuild_model: false,
             },
         )
         .unwrap();
@@ -279,6 +321,7 @@ mod tests {
         assert_eq!(update.viewport_x, 1_200.0);
         assert_eq!(update.range, 21..77);
         assert_eq!(update.start_column, 3);
+        assert!(update.rebuild_model);
         assert_eq!(update.entries.len(), 56);
         assert_eq!(update.entries[0].name.as_str(), "item-21.txt");
         assert_eq!(
@@ -294,13 +337,70 @@ mod tests {
                 pane_height: 704.0,
                 zoom_level: 1,
                 thumbnail_size_px: 80,
+                force_rebuild_model: false,
             },
         )
         .unwrap();
 
         assert_eq!(clamped.viewport_x, 2_728.0);
         assert_eq!(clamped.range, 77..100);
+        assert!(clamped.rebuild_model);
         assert_eq!(state.panes.inactive().unwrap().view.viewport_x, 2_728.0);
+    }
+
+    #[test]
+    fn split_preview_update_reuses_model_inside_same_range() {
+        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
+        state.panes.inactive_mut().unwrap().entries = (0..100).map(test_entry).collect();
+
+        let first = prepare_split_preview_update(
+            &mut state,
+            SplitPreviewInput {
+                pane_width: 420.0,
+                pane_height: 704.0,
+                zoom_level: 1,
+                thumbnail_size_px: 80,
+                force_rebuild_model: false,
+            },
+        )
+        .unwrap();
+        assert!(first.rebuild_model);
+        assert_eq!(first.range, 0..42);
+        assert_eq!(first.entries.len(), first.range.len());
+
+        state.panes.inactive_mut().unwrap().view.viewport_x = 40.0;
+        let second = prepare_split_preview_update(
+            &mut state,
+            SplitPreviewInput {
+                pane_width: 420.0,
+                pane_height: 704.0,
+                zoom_level: 1,
+                thumbnail_size_px: 80,
+                force_rebuild_model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(!second.rebuild_model);
+        assert!(second.entries.is_empty());
+        assert_eq!(second.range, first.range);
+
+        let forced = prepare_split_preview_update(
+            &mut state,
+            SplitPreviewInput {
+                pane_width: 420.0,
+                pane_height: 704.0,
+                zoom_level: 1,
+                thumbnail_size_px: 80,
+                force_rebuild_model: true,
+            },
+        )
+        .unwrap();
+
+        assert!(forced.rebuild_model);
+        assert_eq!(forced.range, first.range);
+        assert_eq!(forced.entries.len(), first.entries.len());
     }
 
     #[test]
@@ -315,6 +415,7 @@ mod tests {
                     pane_height: 704.0,
                     zoom_level: 1,
                     thumbnail_size_px: 80,
+                    force_rebuild_model: false,
                 },
             )
             .is_none()

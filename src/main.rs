@@ -3186,6 +3186,7 @@ fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 pane_height: inactive_height,
                 zoom_level: ui.get_icon_zoom_level(),
                 thumbnail_size_px: thumbnail_size_px(ui),
+                force_rebuild_model: ui.get_inactive_pane_entry_count() == 0,
             },
         )
     };
@@ -3213,7 +3214,9 @@ fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_inactive_pane_virtual_start_column(update.start_column as i32);
     ui.set_inactive_pane_viewport_x(update.viewport_x);
     ui.set_inactive_pane_viewport_offset(-update.viewport_x);
-    ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
+    if update.rebuild_model {
+        ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
+    }
 }
 
 fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {

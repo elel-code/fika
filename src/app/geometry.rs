@@ -26,6 +26,8 @@ pub(crate) struct VirtualGridPlan {
     pub(crate) range: Range<usize>,
     pub(crate) visible_range: Range<usize>,
     pub(crate) start_column: usize,
+    pub(crate) rows_per_column: usize,
+    pub(crate) cell_width: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -157,6 +159,8 @@ pub(crate) fn virtual_grid_plan(
         range,
         visible_range,
         start_column,
+        rows_per_column,
+        cell_width,
     }
 }
 
@@ -1537,7 +1541,7 @@ mod tests {
         );
         assert!(
             app.contains(
-                "private property <color> shell-base-color: root.dark_mode ? #101418 : #f8f9fb;"
+                "private property <color> shell-base-color: root.dark_mode ? #101418 : #f5f7f9;"
             ),
             "top bar, main pane, search strip, and status bar should share one calm base surface"
         );
@@ -1547,7 +1551,7 @@ mod tests {
         );
         assert!(
             app.contains(
-                "private property <color> sidebar-border-color: root.dark_mode ? #2d353e : #d8dee6;"
+                "private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d4dde6;"
             ),
             "sidebar border should stay slightly stronger than the flat shell separators"
         );
@@ -1585,13 +1589,13 @@ mod tests {
 
         assert!(
             top_bar.contains(
-                "private property <color> field-background: root.dark ? #151a1f : #fcfdfe;"
+                "private property <color> field-background: root.dark ? #151b20 : #ffffff;"
             ),
             "TopBar path/search fields should use the quiet COSMIC-like input surface"
         );
         assert!(
             top_bar.contains(
-                "private property <color> field-text-color: root.dark ? #f2f5f8 : #202832;"
+                "private property <color> field-text-color: root.dark ? #eef3f7 : #26303a;"
             ),
             "TopBar input text should remain readable in light theme"
         );
