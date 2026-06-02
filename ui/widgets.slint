@@ -4,10 +4,10 @@ export component ToolButton inherits Rectangle {
     in property <bool> enabled: true;
     callback clicked();
 
-    width: 34px;
-    height: 40px;
-    border-radius: 7px;
-    background: root.enabled && touch-area.has-hover ? (dark ? #2b3035 : #e9eef4) : transparent;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: root.enabled && touch-area.has-hover ? (dark ? #2a3036 : #edf1f5) : transparent;
     opacity: root.enabled ? 1 : 0.45;
 
     touch-area := TouchArea {
@@ -19,8 +19,8 @@ export component ToolButton inherits Rectangle {
         text: root.label;
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: root.enabled ? (root.dark ? #edf2f7 : #1f2933) : (root.dark ? #6b7580 : #9aa8b6);
-        font-size: 17px;
+        color: root.enabled ? (root.dark ? #eef3f7 : #202832) : (root.dark ? #6f7780 : #9aa3ad);
+        font-size: 16px;
         font-weight: 700;
     }
 }
@@ -76,9 +76,10 @@ export component PlaceButton inherits Rectangle {
     callback drag_cancelled();
 
     height: 34px;
+    border-radius: 9px;
     border-width: dragged || drop-target || error != "" || pending-action != "" ? 1px : 0px;
     border-color: error != "" ? (dark ? #ef4444 : #dc2626) : (pending-action != "" ? (dark ? #51a9d4 : #2b86b7) : (drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #49545d : #bdc9d4)));
-    background: error != "" ? (dark ? #351b1f : #fff1f2) : (pending-action != "" ? (dark ? #102c38 : #e3f4fb) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1e22 : #e8edf3) : (selected ? (dark ? #223f4f : #e4f0f8) : (touch-area.has-hover ? (dark ? #262b30 : #edf2f6) : transparent)))));
+    background: error != "" ? (dark ? #351b1f : #fff1f2) : (pending-action != "" ? (dark ? #102c38 : #e3f4fb) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1e22 : #e8edf3) : (selected ? (dark ? #213f4e : #e7f2fb) : (touch-area.has-hover ? (dark ? #262c31 : #edf1f5) : transparent)))));
     opacity: dragged ? 0.45 : (available ? 1 : 0.68);
 
     drag-area := DragArea {
@@ -97,7 +98,7 @@ export component PlaceButton inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 12px;
+            padding-left: 11px;
             padding-right: 10px;
             spacing: 10px;
 
@@ -126,7 +127,7 @@ export component PlaceButton inherits Rectangle {
 
             Text {
                 text: root.label;
-                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.pending-action != "" ? (root.dark ? #bce7f7 : #075985) : (root.available ? (root.dark ? #edf2f7 : #1f2933) : (root.dark ? #8b949e : #64748b)));
+                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.pending-action != "" ? (root.dark ? #bce7f7 : #075985) : (root.available ? (root.dark ? #eef3f7 : #202832) : (root.dark ? #8b949e : #64748b)));
                 font-size: 14px;
                 overflow: elide;
                 vertical-alignment: center;
@@ -141,8 +142,8 @@ export component SidebarAction inherits Rectangle {
     callback clicked();
 
     height: 30px;
-    border-radius: 7px;
-    background: touch-area.has-hover ? (dark ? #262b30 : #edf2f6) : transparent;
+    border-radius: 8px;
+    background: touch-area.has-hover ? (dark ? #262c31 : #edf1f5) : transparent;
 
     touch-area := TouchArea {
         clicked => { root.clicked(); }
@@ -152,7 +153,7 @@ export component SidebarAction inherits Rectangle {
         text: root.label;
         x: 12px;
         width: parent.width - 24px;
-        color: root.dark ? #ccd4dc : #526071;
+        color: root.dark ? #cbd3dc : #596473;
         font-size: 13px;
         overflow: elide;
         vertical-alignment: center;
@@ -169,8 +170,8 @@ export component SidebarSection inherits Rectangle {
     Text {
         x: 12px;
         text: root.label;
-        color: root.dark ? #9aa5af : #697684;
-        font-size: 13px;
+        color: root.dark ? #9aa5af : #687381;
+        font-size: 12px;
         font-weight: 700;
         vertical-alignment: center;
     }
