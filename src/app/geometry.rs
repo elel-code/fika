@@ -263,13 +263,7 @@ pub(crate) fn context_menu_metrics(input: MenuMetricsInput) -> MenuMetrics {
         },
         3 => viewport_context_menu_metrics(input, item, separator),
         4 => MenuMetrics {
-            height: title
-                + item
-                + if input.add_to_places_visible {
-                    item + separator
-                } else {
-                    0.0
-                },
+            height: title + 2.0 * item + separator,
             open_with_row_y_offset: 0.0,
             create_new_row_y_offset: 0.0,
         },
@@ -1403,6 +1397,29 @@ mod tests {
         assert_eq!(
             places_blank_with_add_current.height,
             title_height + 2.0 * item_height + separator_height
+        );
+
+        let places_blank_without_add_current = context_menu_metrics(MenuMetricsInput {
+            kind: 4,
+            selected_count: 0,
+            is_dir: false,
+            default_open_visible: false,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            in_trash: false,
+            place_builtin: false,
+            device_mounted: false,
+            device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(
+            places_blank_without_add_current.height,
+            places_blank_with_add_current.height
         );
 
         let filesystem_device = context_menu_metrics(MenuMetricsInput {

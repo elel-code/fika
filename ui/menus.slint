@@ -479,7 +479,7 @@ export component DeviceContextMenu inherits PopupSurface {
 }
 
 export component PlacesBlankMenu inherits PopupSurface {
-    in property <bool> add-current-visible;
+    in property <bool> add-current-enabled;
     callback add_current_folder();
     callback restore_defaults();
 
@@ -491,13 +491,14 @@ export component PlacesBlankMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.add-current-visible): MenuItem {
+        MenuItem {
             label: "Add Current Folder";
             dark: root.dark;
+            enabled: root.add-current-enabled;
             clicked => { root.add_current_folder(); }
         }
 
-        if (root.add-current-visible): MenuSeparator {
+        MenuSeparator {
             dark: root.dark;
         }
 
@@ -887,7 +888,7 @@ export component RootContextMenuLayer inherits Rectangle {
         width: root.blank-menu-width;
         height: root.active-menu-height;
         dark: root.dark;
-        add-current-visible: root.add-to-places-visible;
+        add-current-enabled: root.add-to-places-visible;
         add_current_folder => { root.places_blank_add_current_folder(); }
         restore_defaults => { root.places_blank_restore_defaults(); }
     }
