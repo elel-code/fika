@@ -269,6 +269,97 @@ export component PrivilegedPromptPopup inherits Rectangle {
     }
 }
 
+export component ConfirmationDialog inherits Rectangle {
+    in property <bool> dark;
+    in property <string> title;
+    in property <string> message;
+    in property <string> detail;
+    in property <string> accept-label;
+    callback cancelled();
+    callback accepted();
+
+    border-radius: 8px;
+    background: root.dark ? #24282c : #fcfdfe;
+    border-width: 1px;
+    border-color: root.dark ? #3f474f : #d9e1e8;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+
+        Text {
+            text: root.title;
+            color: root.dark ? #f8fafc : #17212b;
+            font-size: 15px;
+            font-weight: 700;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.message;
+            color: root.dark ? #d8dee5 : #334155;
+            font-size: 13px;
+            wrap: word-wrap;
+            max-height: 54px;
+        }
+
+        Text {
+            text: root.detail;
+            color: root.dark ? #a8a8a8 : #64748b;
+            font-size: 12px;
+            wrap: word-wrap;
+            max-height: 44px;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle { horizontal-stretch: 1; }
+
+            MenuItem {
+                width: 92px;
+                label: "Cancel";
+                dark: root.dark;
+                clicked => { root.cancelled(); }
+            }
+
+            MenuItem {
+                width: 132px;
+                label: root.accept-label;
+                dark: root.dark;
+                clicked => { root.accepted(); }
+            }
+        }
+    }
+}
+
+export component ConfirmationPopup inherits Rectangle {
+    in property <bool> dark;
+    in property <string> title;
+    in property <string> message;
+    in property <string> detail;
+    in property <string> accept-label;
+    callback cancelled();
+    callback accepted();
+
+    background: transparent;
+
+    ConfirmationDialog {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 440px;
+        height: 210px;
+        dark: root.dark;
+        title: root.title;
+        message: root.message;
+        detail: root.detail;
+        accept-label: root.accept-label;
+        cancelled => { root.cancelled(); }
+        accepted => { root.accepted(); }
+    }
+}
+
 export component OtherApplicationsDialog inherits Rectangle {
     in property <bool> dark;
     in property <[DesktopApp]> apps;

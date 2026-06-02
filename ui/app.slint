@@ -23,7 +23,7 @@ import { SearchPanel } from "search_panel.slint";
 import { StatusBar } from "status_bar.slint";
 import { TopBar } from "top_bar.slint";
 import { ChildSubmenuLayer, ChooserChoicePopupLayer, ChooserOptionPopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
-import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
+import { ConfirmationPopup, OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
 export component AppWindow inherits Window {
     in-out property <string> current_path;
@@ -132,6 +132,13 @@ export component AppWindow inherits Window {
     in-out property <string> privileged_prompt_title;
     in-out property <string> privileged_prompt_message;
     in-out property <string> privileged_prompt_detail;
+    private property <bool> trash-confirm-open: false;
+    private property <string> trash-confirm-action;
+    private property <string> trash-confirm-path;
+    private property <string> trash-confirm-title;
+    private property <string> trash-confirm-message;
+    private property <string> trash-confirm-detail;
+    private property <string> trash-confirm-accept-label;
     private property <bool> new-folder-open: false;
     private property <string> new-folder-name: "New Folder";
     private property <bool> new-file-open: false;
@@ -211,8 +218,8 @@ export component AppWindow inherits Window {
     private property <bool> path-input-focused: false;
     private property <bool> search-input-focused: false;
     private property <bool> chooser-save-input-focused: false;
-    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open;
-    private property <bool> file-operation-shortcuts-blocked: root.path-input-focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open;
+    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
+    private property <bool> file-operation-shortcuts-blocked: root.path-input-focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open;
 
     callback go_home();
     callback go_back();
@@ -381,6 +388,42 @@ export component AppWindow inherits Window {
         if (root.privileged_prompt_open) {
             root.privileged_prompt_dismiss();
         }
+        root.trash-confirm-open = false;
+    }
+
+    function confirm-permanent-delete(path: string, selected: bool) {
+        root.close-context-popups();
+        root.trash-confirm-action = selected ? "delete-selected" : "delete-path";
+        root.trash-confirm-path = path;
+        root.trash-confirm-title = selected ? "Delete Selected Permanently?" : "Delete Permanently?";
+        root.trash-confirm-message = selected ? "Delete the selected Trash items permanently?" : "Delete this Trash item permanently?";
+        root.trash-confirm-detail = selected ? (root.selected_status + "\nThis cannot be undone.") : (path + "\nThis cannot be undone.");
+        root.trash-confirm-accept-label = "Delete";
+        root.trash-confirm-open = true;
+    }
+
+    function confirm-empty-trash() {
+        root.close-context-popups();
+        root.trash-confirm-action = "empty-trash";
+        root.trash-confirm-path = "";
+        root.trash-confirm-title = "Empty Trash?";
+        root.trash-confirm-message = "Delete all items in Trash permanently?";
+        root.trash-confirm-detail = "This cannot be undone.";
+        root.trash-confirm-accept-label = "Empty Trash";
+        root.trash-confirm-open = true;
+    }
+
+    function accept-trash-confirmation() {
+        root.trash-confirm-open = false;
+        if (root.trash-confirm-action == "delete-selected") {
+            root.delete_permanently_selected();
+        } else if (root.trash-confirm-action == "delete-path") {
+            root.delete_permanently_path(root.trash-confirm-path);
+        } else if (root.trash-confirm-action == "empty-trash") {
+            root.empty_trash();
+        }
+        root.trash-confirm-action = "";
+        root.trash-confirm-path = "";
     }
 
     function show-context-menu(kind: int, x: length, y: length) {
@@ -549,6 +592,8 @@ export component AppWindow inherits Window {
                     root.rename-place-open = false;
                 } else if (root.privileged_prompt_open) {
                     root.privileged_prompt_dismiss();
+                } else if (root.trash-confirm-open) {
+                    root.trash-confirm-open = false;
                 } else if (root.search_bar_open || root.search_query != "" || root.search-filters-active) {
                     root.search_query = "";
                     root.search_kind_filter = 0;
@@ -1293,11 +1338,10 @@ export component AppWindow inherits Window {
         }
         file_delete_permanently_requested => {
             if (root.selected_count > 1) {
-                root.delete_permanently_selected();
+                root.confirm-permanent-delete("", true);
             } else {
-                root.delete_permanently_path(root.context-menu-path);
+                root.confirm-permanent-delete(root.context-menu-path, false);
             }
-            root.close-context-popups();
         }
         place_open_new_window => {
             root.open_place_new_window(root.context-menu-place-index);
@@ -1351,8 +1395,7 @@ export component AppWindow inherits Window {
             root.close-context-popups();
         }
         viewport_empty_trash_requested => {
-            root.empty_trash();
-            root.close-context-popups();
+            root.confirm-empty-trash();
         }
         viewport_open_folder_with_hover(row-y, is-hovered) => {
             root.open-with-submenu-hover(root.current_path, row-y, is-hovered);
@@ -1467,6 +1510,18 @@ export component AppWindow inherits Window {
         detail: root.privileged_prompt_detail;
         cancelled => { root.privileged_prompt_dismiss(); }
         accepted => { root.privileged_prompt_accept(); }
+    }
+
+    if (root.trash-confirm-open): ConfirmationPopup {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        title: root.trash-confirm-title;
+        message: root.trash-confirm-message;
+        detail: root.trash-confirm-detail;
+        accept-label: root.trash-confirm-accept-label;
+        cancelled => { root.trash-confirm-open = false; }
+        accepted => { root.accept-trash-confirmation(); }
     }
 
     if (root.transfer_conflict_open): TransferConflictPopup {
