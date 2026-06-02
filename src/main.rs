@@ -1920,10 +1920,7 @@ fn apply_file_operation_result(
     let result_source = result.source.clone();
     let (refresh_current_dir, remaining) = {
         let mut state = state.borrow_mut();
-        if state.active_operation == Some(result.id) {
-            state.active_operation = None;
-            state.active_operation_cancel = None;
-        }
+        state.finish_file_operation(result.id);
         state.remove_directory_cache(&result.target_dir);
         if let Some(source_parent) = &source_parent {
             state.remove_directory_cache(source_parent);
@@ -2268,7 +2265,7 @@ fn apply_file_operation_progress(
     state: &Rc<RefCell<AppState>>,
     progress: FileOperationProgress,
 ) {
-    if state.borrow().active_operation != Some(progress.id) {
+    if state.borrow().active_operation_id() != Some(progress.id) {
         return;
     }
 

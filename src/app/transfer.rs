@@ -1,6 +1,7 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::file_clipboard::sync_clipboard_ui;
 use crate::app::geometry::{MainGridLayout, PopupPlacement, PopupPoint};
+use crate::app::operation_controller::OperationQueuePosition;
 use crate::app::selection::filtered_entry_at;
 use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
 use crate::fs::{file_ops, privilege};
@@ -12,8 +13,6 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 const MENU_SCREEN_MARGIN: f32 = 12.0;
 const MENU_POINTER_GAP: f32 = 8.0;
@@ -533,35 +532,36 @@ enum QueuePosition {
     Back,
 }
 
+impl From<QueuePosition> for OperationQueuePosition {
+    fn from(position: QueuePosition) -> Self {
+        match position {
+            QueuePosition::Front => OperationQueuePosition::Front,
+            QueuePosition::Back => OperationQueuePosition::Back,
+        }
+    }
+}
+
 fn queue_transfer_operation(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
-    mut request: FileOperationRequest,
+    request: FileOperationRequest,
     position: QueuePosition,
 ) {
-    let (id, queued_len, active, pending_conflict) = {
-        let mut state = state.borrow_mut();
-        let id = state.next_operation_id;
-        state.next_operation_id += 1;
-        request.id = id;
-        match position {
-            QueuePosition::Front => state.operation_queue.push_front(request),
-            QueuePosition::Back => state.operation_queue.push_back(request),
-        }
-        (
-            id,
-            state.operation_queue.len(),
-            state.active_operation,
-            state.pending_transfer_conflict.is_some(),
-        )
+    let snapshot = {
+        state
+            .borrow_mut()
+            .queue_file_operation(request, position.into())
     };
 
     set_status(
         ui,
-        &format!("Queued operation #{id} ({queued_len} pending)"),
+        &format!(
+            "Queued operation #{} ({} pending)",
+            snapshot.id, snapshot.queued_len
+        ),
     );
-    if active.is_none() && !pending_conflict {
+    if !snapshot.active && !snapshot.pending_conflict {
         start_next_operation(ui, state, bridge);
     }
 }
@@ -573,7 +573,7 @@ pub(crate) fn start_next_operation(
 ) {
     let request = {
         let mut state = state.borrow_mut();
-        if state.active_operation.is_some() || state.pending_transfer_conflict.is_some() {
+        if !state.can_start_file_operation() {
             return;
         }
         let request = loop {
@@ -597,9 +597,7 @@ pub(crate) fn start_next_operation(
                 }
             }
         };
-        let cancel = Arc::new(AtomicBool::new(false));
-        state.active_operation = Some(request.id);
-        state.active_operation_cancel = Some(Arc::clone(&cancel));
+        let cancel = state.begin_file_operation(request.id);
         (request, cancel)
     };
     let (request, cancel) = request;
@@ -729,27 +727,21 @@ fn default_rename_suggestion(destination: &Path) -> String {
 }
 
 pub(crate) fn cancel_queued_operations(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let (queued_cancelled, active_cancelled) = {
-        let mut state = state.borrow_mut();
-        let queued_cancelled = state.operation_queue.len();
-        state.operation_queue.clear();
-        let active_cancelled = state.active_operation_cancel.is_some();
-        if let Some(cancel) = &state.active_operation_cancel {
-            cancel.store(true, AtomicOrdering::Relaxed);
-        }
-        (queued_cancelled, active_cancelled)
-    };
-    if queued_cancelled == 0 && !active_cancelled {
+    let summary = state.borrow_mut().cancel_file_operations();
+    if summary.queued_cancelled == 0 && !summary.active_cancelled {
         set_status(ui, "No queued operations to cancel");
-    } else if active_cancelled {
+    } else if summary.active_cancelled {
         set_status(
             ui,
-            &format!("Cancelling active operation; removed {queued_cancelled} queued operation(s)"),
+            &format!(
+                "Cancelling active operation; removed {} queued operation(s)",
+                summary.queued_cancelled
+            ),
         );
     } else {
         set_status(
             ui,
-            &format!("Cancelled {queued_cancelled} queued operation(s)"),
+            &format!("Cancelled {} queued operation(s)", summary.queued_cancelled),
         );
     }
 }

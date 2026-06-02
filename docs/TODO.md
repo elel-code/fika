@@ -460,6 +460,7 @@ Acceptance for all:
 - [ ] Evolve file operation progress toward COSMIC's controller split.
   - Reference: `cosmic-files/src/operation/controller.rs`, `recursive.rs`, and `notifiers.rs`.
   - Acceptance: queued copy/move/link/trash work has clearer progress/cancel state and less direct coupling to status-bar text.
+  - Current: `src/app/operation_controller.rs` now owns operation queue snapshots, start gating, active operation id/cancel flag lifecycle, and cancellation summaries; `transfer.rs` calls these helpers instead of mutating every queue/control field inline.
 
 - [ ] Continue device and mount polish with COSMIC's mounter abstraction in mind.
   - Reference: `cosmic-files/src/mounter/mod.rs` and `mounter/gvfs.rs`.

@@ -6,6 +6,7 @@ pub(crate) mod dnd;
 pub(crate) mod events;
 pub(crate) mod file_clipboard;
 pub(crate) mod geometry;
+pub(crate) mod operation_controller;
 pub(crate) mod places;
 pub(crate) mod search_ui;
 pub(crate) mod selection;
