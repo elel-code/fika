@@ -226,7 +226,7 @@
   - Acceptance: item and multi-selection context menus expose Cut and Copy.
   - Acceptance: current-folder and folder-item menus expose Paste when the internal clipboard has paths.
   - Current: paste reuses the existing async copy/move operation queue and privileged fallback.
-  - Current: Ctrl+C, Ctrl+X, Ctrl+V, and Ctrl+Z are declared with Slint `KeyBinding`; they operate on the selected files/current directory/last undo entry only when menus, dialogs, and text inputs are not active.
+  - Current: Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+Z, and Delete are declared with Slint `KeyBinding`; they operate on the selected files/current directory/last undo entry only when menus, dialogs, and text inputs are not active.
   - Current: Cut / Copy also publishes `x-special/gnome-copied-files` to the Wayland desktop clipboard through `wl-copy` when available; Copy falls back to `text/uri-list` if the desktop helper cannot publish the GNOME file-list MIME type.
   - Current: opening a context menu refreshes `x-special/gnome-copied-files` / `text/uri-list` from the Wayland desktop clipboard through `wl-paste` when Fika's internal clipboard is empty, so Paste can import file selections from other file managers.
   - Current: when importing `text/uri-list`, Fika also checks KDE/Dolphin's `application/x-kde-cutselection` marker so Dolphin Cut pastes as a move rather than a copy.

@@ -494,6 +494,19 @@ export component AppWindow inherits Window {
         }
 
         KeyBinding {
+            keys: @keys(Delete);
+            activated => {
+                if (!root.file-operation-shortcuts-blocked && root.selected_count > 0) {
+                    if (root.selected_count > 1) {
+                        root.trash_selected();
+                    } else {
+                        root.trash_path(root.selected_path);
+                    }
+                }
+            }
+        }
+
+        KeyBinding {
             keys: @keys(Escape);
             activated => {
                 if (root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open) {
