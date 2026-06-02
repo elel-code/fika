@@ -119,8 +119,18 @@ pub(crate) fn main_drop_allowed(
     y: f32,
     source: &Path,
 ) -> bool {
+    main_drop_rejection(ui, state, x, y, source).is_none()
+}
+
+pub(crate) fn main_drop_rejection(
+    ui: &AppWindow,
+    state: &AppState,
+    x: f32,
+    y: f32,
+    source: &Path,
+) -> Option<&'static str> {
     let target_dir = main_drop_target_dir(ui, state, x, y, source);
-    transfer_target_rejection(source, &target_dir).is_none()
+    transfer_target_rejection(source, &target_dir)
 }
 
 pub(crate) fn place_drop_allowed(state: &AppState, source: &Path, target_index: i32) -> bool {

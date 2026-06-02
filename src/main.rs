@@ -54,9 +54,10 @@ use app::thumbnail_pipeline::{
 };
 use app::transfer::{
     cancel_queued_operations, entry_at_main_point, format_bytes, main_drop_allowed,
-    operation_label, path_label, place_drop_allowed, prepare_current_dir_transfer,
-    prepare_entry_transfer, prepare_main_transfer, prepare_place_transfer,
-    resolve_transfer_conflict, start_next_operation, start_transfer_operation,
+    main_drop_rejection, operation_label, path_label, place_drop_allowed,
+    prepare_current_dir_transfer, prepare_entry_transfer, prepare_main_transfer,
+    prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
+    start_transfer_operation,
 };
 use app::virtual_view::{VirtualViewInput, prepare_virtual_view_update};
 use config::args::{Args, Mode};
@@ -757,6 +758,30 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let state = state.borrow();
             main_drop_allowed(&ui, &state, x, y, drop.path.as_path())
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_main_external_drop_rejection_reason(move |payload, mime_type, x, y| {
+            if let Some(reason) =
+                external_path_drop_rejection_reason(payload.as_str(), mime_type.as_str())
+            {
+                return reason.into();
+            }
+            let Some(ui) = ui_weak.upgrade() else {
+                return "no-window".into();
+            };
+            let Ok(drop) = external_path_drop_from_payload(payload.as_str(), mime_type.as_str())
+            else {
+                return "no-local-file-path".into();
+            };
+            let state = state.borrow();
+            main_drop_rejection(&ui, &state, x, y, drop.path.as_path())
+                .map(drop_target_rejection_debug_reason)
+                .unwrap_or("none")
+                .into()
         });
     }
 
@@ -3958,6 +3983,14 @@ fn dnd_main_event_message(trace: &MainDndTrace<'_>) -> String {
     )
 }
 
+fn drop_target_rejection_debug_reason(reason: &str) -> &'static str {
+    match reason {
+        "Cannot drop an item onto itself" => "self-target",
+        "Cannot drop a folder into itself" => "descendant-target",
+        _ => "target-rejected",
+    }
+}
+
 fn dnd_debug_enabled() -> bool {
     static DEBUG_DND: OnceLock<bool> = OnceLock::new();
     *DEBUG_DND.get_or_init(dnd_debug_enabled_from_env)
@@ -4555,6 +4588,22 @@ mod tests {
                 target_path: "/tmp/Target Folder",
             }),
             "[fika dnd] backend=Slint DropArea area=main phase=can-drop-rejected mime=text/uri-list x=12.2 y=99.8 rejected=true target_path=/tmp/Target Folder payload=file:///tmp/A\\nfile:///tmp/B"
+        );
+    }
+
+    #[test]
+    fn drop_target_rejection_debug_reason_is_stable() {
+        assert_eq!(
+            drop_target_rejection_debug_reason("Cannot drop an item onto itself"),
+            "self-target"
+        );
+        assert_eq!(
+            drop_target_rejection_debug_reason("Cannot drop a folder into itself"),
+            "descendant-target"
+        );
+        assert_eq!(
+            drop_target_rejection_debug_reason("Some future transfer rejection"),
+            "target-rejected"
         );
     }
 

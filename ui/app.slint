@@ -276,6 +276,7 @@ export component AppWindow inherits Window {
     callback main_external_drop_supported(string) -> bool;
     callback main_external_drop_target_path(float, float, string, string) -> string;
     callback main_external_drop_allowed(float, float, string, string) -> bool;
+    callback main_external_drop_rejection_reason(string, string, float, float) -> string;
     callback main_view_changed();
     callback place_drop_allowed(string, int) -> bool;
     callback place_drop_target(float, bool) -> int;
@@ -1089,7 +1090,7 @@ export component AppWindow inherits Window {
                                     root.main_drag_active = true;
                                     root.main_drag_rejected = !root.main_external_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data, event.mime-type);
                                     root.place_drag_target_path = root.main_external_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data, event.mime-type);
-                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected" : "can-drop-accepted", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
+                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected:" + root.main_external_drop_rejection_reason(event.data, event.mime-type, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px) : "can-drop-accepted", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
                                     true
                                 } else {
                                     root.main_drag_active = false;
