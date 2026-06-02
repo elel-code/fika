@@ -39,6 +39,13 @@ pub(crate) enum OperationResultDisposition {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OperationCompletionSummary {
+    pub(crate) disposition: OperationResultDisposition,
+    pub(crate) refresh_current_dir: bool,
+    pub(crate) remaining: usize,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FileOperationController {
     id: u64,
@@ -121,6 +128,34 @@ impl AppState {
             queued_cancelled,
             active_cancelled,
         }
+    }
+
+    pub(crate) fn complete_file_operation(
+        &mut self,
+        id: u64,
+        operation: &str,
+        source: &Path,
+        target_dir: &Path,
+        result: Result<file_ops::TransferOutcome, String>,
+        can_request_privilege: bool,
+    ) -> Option<OperationCompletionSummary> {
+        if !self.finish_file_operation(id) {
+            return None;
+        }
+
+        self.remove_directory_cache(target_dir);
+        let source_parent = source.parent();
+        if let Some(source_parent) = source_parent {
+            self.remove_directory_cache(source_parent);
+        }
+
+        let refresh_current_dir = source_parent.is_some_and(|parent| parent == self.current_dir)
+            || self.current_dir == target_dir;
+        Some(OperationCompletionSummary {
+            disposition: operation_result_disposition(operation, result, can_request_privilege),
+            refresh_current_dir,
+            remaining: self.operation_queue.len(),
+        })
     }
 }
 
@@ -402,6 +437,69 @@ mod tests {
                 status: "Move failed: Permission denied".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn complete_file_operation_summarizes_state_and_invalidates_caches() {
+        let mut state = AppState::new(PathBuf::from("/tmp/target"), Vec::new());
+        let target_dir = PathBuf::from("/tmp/target");
+        let source = PathBuf::from("/tmp/source/item.txt");
+        let source_parent = source.parent().unwrap().to_path_buf();
+        state.insert_directory_cache(target_dir.clone(), Vec::new());
+        state.insert_directory_cache(source_parent.clone(), Vec::new());
+        state.queue_file_operation(request("move"), OperationQueuePosition::Back);
+        state.begin_file_operation(7);
+
+        let summary = state
+            .complete_file_operation(
+                7,
+                "copy",
+                &source,
+                &target_dir,
+                Ok(file_ops::TransferOutcome {
+                    destination: target_dir.join("item.txt"),
+                    overwritten_backup: None,
+                }),
+                false,
+            )
+            .unwrap();
+
+        assert!(summary.refresh_current_dir);
+        assert_eq!(summary.remaining, 1);
+        assert_eq!(
+            summary.disposition,
+            OperationResultDisposition::Completed {
+                destination: target_dir.join("item.txt"),
+                overwritten_backup: None,
+                status: "Copy complete: /tmp/target/item.txt".to_string(),
+            }
+        );
+        assert_eq!(state.active_operation_id(), None);
+        assert!(!state.directory_cache.contains_key(&target_dir));
+        assert!(!state.directory_cache.contains_key(&source_parent));
+    }
+
+    #[test]
+    fn complete_file_operation_ignores_stale_result_ids() {
+        let mut state = AppState::new(PathBuf::from("/tmp/target"), Vec::new());
+        let target_dir = PathBuf::from("/tmp/target");
+        state.insert_directory_cache(target_dir.clone(), Vec::new());
+        state.begin_file_operation(7);
+
+        assert_eq!(
+            state.complete_file_operation(
+                99,
+                "copy",
+                Path::new("/tmp/source/item.txt"),
+                &target_dir,
+                Err("late result".to_string()),
+                false,
+            ),
+            None
+        );
+
+        assert_eq!(state.active_operation_id(), Some(7));
+        assert!(state.directory_cache.contains_key(&target_dir));
     }
 
     #[test]

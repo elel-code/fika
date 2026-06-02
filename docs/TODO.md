@@ -466,6 +466,7 @@ Acceptance for all:
   - Current: queued/start/progress/complete/failed/cancel status text is also formatted by `operation_controller.rs`, leaving `main.rs` and `transfer.rs` to apply status updates rather than build operation copy directly.
   - Current: transfer result handling is split into a pure `OperationResultDisposition` summary for completed / privilege-required / failed outcomes, while `main.rs` keeps only UI-side effects such as Undo registration, privileged prompts, refresh, and queue advancement.
   - Current: remaining-queue suffixes and privilege-waiting status updates are also computed by `operation_controller.rs`, so `main.rs` no longer owns operation status composition.
+  - Current: operation completion now goes through an `OperationCompletionSummary` in `operation_controller.rs`; stale result ids are ignored before they can register Undo or open a privilege prompt, and cache invalidation / current-directory refresh decisions no longer live in `main.rs`.
 
 - [ ] Continue device and mount polish with COSMIC's mounter abstraction in mind.
   - Reference: `cosmic-files/src/mounter/mod.rs` and `mounter/gvfs.rs`.

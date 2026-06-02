@@ -67,10 +67,10 @@ pub(crate) fn open_terminal_here(dir: &Path) -> Result<systemd_launch::LaunchRes
 fn terminal_candidates() -> Vec<TerminalCommand> {
     let mut candidates = Vec::new();
     for key in ["FIKA_TERMINAL", "TERMINAL"] {
-        if let Ok(value) = env::var(key) {
-            if let Some(command) = terminal_command_from_env_value(key, &value) {
-                push_unique_command(&mut candidates, command);
-            }
+        if let Ok(value) = env::var(key)
+            && let Some(command) = terminal_command_from_env_value(key, &value)
+        {
+            push_unique_command(&mut candidates, command);
         }
     }
 

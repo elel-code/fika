@@ -44,7 +44,7 @@ use app::geometry::{
 };
 use app::operation_controller::{
     OperationResultDisposition, operation_final_status, operation_finished_label,
-    operation_progress_status, operation_result_disposition,
+    operation_progress_status,
 };
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
@@ -164,14 +164,14 @@ fn main() -> Result<(), slint::PlatformError> {
         });
 
         dnd_api.on_event_path(|event: DropEvent| -> SharedString {
-            if let Some(rc) = event.data.user_data() {
-                if let Some(info) = rc.downcast_ref::<FikaDragInfo>() {
-                    return match info {
-                        FikaDragInfo::Place(p)
-                        | FikaDragInfo::Folder(p)
-                        | FikaDragInfo::File(p) => SharedString::from(p.as_str()),
-                    };
-                }
+            if let Some(rc) = event.data.user_data()
+                && let Some(info) = rc.downcast_ref::<FikaDragInfo>()
+            {
+                return match info {
+                    FikaDragInfo::Place(p) | FikaDragInfo::Folder(p) | FikaDragInfo::File(p) => {
+                        SharedString::from(p.as_str())
+                    }
+                };
             }
             if let Ok(text) = event.data.fetch_plaintext() {
                 return text;
@@ -1919,30 +1919,31 @@ fn apply_file_operation_result(
     bridge: &AsyncBridge,
     result: FileOperationResult,
 ) {
-    let source_parent = result.source.parent().map(Path::to_path_buf);
-    let result_operation = result.operation.clone();
-    let result_source = result.source.clone();
-    let (refresh_current_dir, remaining) = {
+    let FileOperationResult {
+        id,
+        operation,
+        source,
+        target_dir,
+        privileged_command,
+        result,
+    } = result;
+    let can_request_privilege = privileged_command.is_some();
+    let summary = {
         let mut state = state.borrow_mut();
-        state.finish_file_operation(result.id);
-        state.remove_directory_cache(&result.target_dir);
-        if let Some(source_parent) = &source_parent {
-            state.remove_directory_cache(source_parent);
-        }
-        let refresh_current_dir = source_parent
-            .as_ref()
-            .is_some_and(|source_parent| source_parent == &state.current_dir)
-            || state.current_dir == result.target_dir;
-        (refresh_current_dir, state.operation_queue.len())
+        state.complete_file_operation(
+            id,
+            &operation,
+            &source,
+            &target_dir,
+            result,
+            can_request_privilege,
+        )
     };
-
-    let disposition = operation_result_disposition(
-        &result.operation,
-        result.result,
-        result.privileged_command.is_some(),
-    );
+    let Some(summary) = summary else {
+        return;
+    };
     let mut requested_privilege = false;
-    let status_message = match disposition {
+    let status_message = match summary.disposition {
         OperationResultDisposition::Completed {
             destination,
             overwritten_backup,
@@ -1951,15 +1952,15 @@ fn apply_file_operation_result(
             register_file_undo(
                 ui,
                 state,
-                &result_operation,
-                &result_source,
+                &operation,
+                &source,
                 &destination,
                 overwritten_backup,
             );
             Some(status)
         }
         OperationResultDisposition::RequestPrivilege { error } => {
-            if let Some(command) = result.privileged_command {
+            if let Some(command) = privileged_command {
                 file_actions::request_privileged_action(ui, state, command, &error);
                 requested_privilege = true;
                 None
@@ -1970,11 +1971,11 @@ fn apply_file_operation_result(
         OperationResultDisposition::Failed { status } => Some(status),
     };
 
-    if refresh_current_dir {
+    if summary.refresh_current_dir {
         refresh_directory(ui, state, bridge);
     }
     if let Some(status_message) =
-        operation_final_status(status_message, requested_privilege, remaining)
+        operation_final_status(status_message, requested_privilege, summary.remaining)
     {
         set_status(ui, &status_message);
     }
