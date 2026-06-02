@@ -43,6 +43,11 @@ use app::places::{
     open_place_new_window, places_drop_force_gap, remove_place, rename_place, reorder_place_path,
     restore_default_places, sync_places,
 };
+use app::search_ui::{
+    cancel_active_search, recursive_search_cancelled_status, recursive_search_finished_status,
+    recursive_search_progress_status, recursive_search_status, reset_search_state,
+    search_filters_active, set_search_filters,
+};
 use app::selection::{
     append_unique_paths, filtered_entry_count, filtered_entry_paths, rebuild_visible_entry_index,
     retained_visible_paths, selection_range_paths_filtered, selection_rect_paths_filtered,
@@ -1804,6 +1809,13 @@ fn restore_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path
     ui.set_main_viewport_offset(-view_state.viewport_x);
 }
 
+fn reset_search_controls(ui: &AppWindow) {
+    ui.set_search_query(SharedString::new());
+    ui.set_search_kind_filter(0);
+    ui.set_search_modified_filter(0);
+    ui.set_search_size_filter(0);
+}
+
 fn load_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     load_directory_with_preservation(ui, state, bridge, false);
 }
@@ -1829,10 +1841,7 @@ fn load_directory_with_preservation(
         state.thumbnail_generation.next();
         state.thumbnail_pending.clear();
         if !preserve_view {
-            state.search_query.clear();
-            state.search_kind_filter = 0;
-            state.search_modified_filter = 0;
-            state.search_size_filter = 0;
+            reset_search_state(&mut state);
             state.selected_paths.clear();
             state.selection_anchor = None;
         }
@@ -1864,18 +1873,12 @@ fn load_directory_with_preservation(
             state.virtual_view.invalidate();
         }
         ui.set_directory_loading(false);
-        ui.set_search_query(SharedString::new());
-        ui.set_search_kind_filter(0);
-        ui.set_search_modified_filter(0);
-        ui.set_search_size_filter(0);
+        reset_search_controls(ui);
         apply_filter(ui, state, bridge, false);
         set_status(ui, "Refreshing cached folder...");
     } else {
         ui.set_directory_loading(true);
-        ui.set_search_query(SharedString::new());
-        ui.set_search_kind_filter(0);
-        ui.set_search_modified_filter(0);
-        ui.set_search_size_filter(0);
+        reset_search_controls(ui);
         update_selection_ui(ui, &[]);
         set_status(ui, "Loading folder...");
     }
@@ -2200,18 +2203,12 @@ fn apply_directory_result(
                 state.virtual_view.invalidate();
                 state.insert_directory_cache(result.path.clone(), cache_entries);
                 if !result.preserve_view {
-                    state.search_query.clear();
-                    state.search_kind_filter = 0;
-                    state.search_modified_filter = 0;
-                    state.search_size_filter = 0;
+                    reset_search_state(&mut state);
                     state.selected_paths.clear();
                 }
             }
             if !result.preserve_view {
-                ui.set_search_query(SharedString::new());
-                ui.set_search_kind_filter(0);
-                ui.set_search_modified_filter(0);
-                ui.set_search_size_filter(0);
+                reset_search_controls(ui);
             }
             apply_filter(ui, state, bridge, result.preserve_view);
         }
@@ -2229,18 +2226,12 @@ fn apply_directory_result(
                 state.visible_entry_indices = None;
                 state.virtual_view.invalidate();
                 if !result.preserve_view {
-                    state.search_query.clear();
-                    state.search_kind_filter = 0;
-                    state.search_modified_filter = 0;
-                    state.search_size_filter = 0;
+                    reset_search_state(&mut state);
                     state.selected_paths.clear();
                 }
             }
             if !result.preserve_view {
-                ui.set_search_query(SharedString::new());
-                ui.set_search_kind_filter(0);
-                ui.set_search_modified_filter(0);
-                ui.set_search_size_filter(0);
+                reset_search_controls(ui);
             }
             ui.set_entry_count(0);
             ui.set_virtual_start_index(0);
@@ -2444,12 +2435,6 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
     }
 }
 
-fn cancel_active_search(state: &mut AppState) {
-    if let Some(cancel) = state.active_search_cancel.take() {
-        cancel.store(true, AtomicOrdering::Relaxed);
-    }
-}
-
 fn update_search_filters(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -2460,9 +2445,7 @@ fn update_search_filters(
 ) {
     {
         let mut state = state.borrow_mut();
-        state.search_kind_filter = kind.clamp(0, 3);
-        state.search_modified_filter = modified.clamp(0, 3);
-        state.search_size_filter = size.clamp(0, 3);
+        set_search_filters(&mut state, kind, modified, size);
     }
 
     apply_filter(ui, state, bridge, true);
@@ -2608,46 +2591,6 @@ fn apply_recursive_search_result(
         }
         Err(err) => set_status(ui, &format!("Recursive search failed: {err}")),
     }
-}
-
-fn recursive_search_status(query: &str) -> String {
-    format!("Searching recursively for '{query}'...")
-}
-
-fn recursive_search_progress_status(
-    query: &str,
-    directories_scanned: usize,
-    matches: usize,
-) -> String {
-    if directories_scanned == 0 {
-        return recursive_search_status(query);
-    }
-
-    format!(
-        "Searching recursively for '{query}'... {matches} result(s), {directories_scanned} folder(s) scanned"
-    )
-}
-
-fn recursive_search_finished_status(visible: usize, total: usize) -> String {
-    if visible == total {
-        format!("{total} recursive search result(s)")
-    } else {
-        format!("{visible} of {total} recursive search result(s) after filters")
-    }
-}
-
-fn recursive_search_cancelled_status(
-    query: &str,
-    directories_scanned: usize,
-    matches: usize,
-) -> String {
-    if directories_scanned == 0 {
-        return format!("Recursive search for '{query}' cancelled");
-    }
-
-    format!(
-        "Recursive search for '{query}' cancelled after {directories_scanned} folder(s); {matches} result(s) discarded"
-    )
 }
 
 fn apply_file_operation_result(
@@ -3278,12 +3221,6 @@ fn apply_filter(
             ),
         );
     }
-}
-
-fn search_filters_active(state: &AppState) -> bool {
-    state.search_kind_filter != 0
-        || state.search_modified_filter != 0
-        || state.search_size_filter != 0
 }
 
 fn retain_visible_selection(
@@ -4172,38 +4109,6 @@ mod tests {
                 ("".to_string(), "/tmp/docs/second.txt".to_string()),
                 ("".to_string(), "/tmp/docs/third.txt".to_string())
             ]
-        );
-    }
-
-    #[test]
-    fn recursive_search_status_keeps_query_visible_during_background_scan() {
-        assert_eq!(
-            recursive_search_status("report"),
-            "Searching recursively for 'report'..."
-        );
-        assert_eq!(
-            recursive_search_progress_status("report", 12, 4),
-            "Searching recursively for 'report'... 4 result(s), 12 folder(s) scanned"
-        );
-        assert_eq!(
-            recursive_search_finished_status(4, 4),
-            "4 recursive search result(s)"
-        );
-        assert_eq!(
-            recursive_search_finished_status(2, 4),
-            "2 of 4 recursive search result(s) after filters"
-        );
-        assert_eq!(
-            recursive_search_cancelled_status("report", 12, 4),
-            "Recursive search for 'report' cancelled after 12 folder(s); 4 result(s) discarded"
-        );
-        assert_eq!(
-            recursive_search_cancelled_status("report", 3, 0),
-            "Recursive search for 'report' cancelled after 3 folder(s); 0 result(s) discarded"
-        );
-        assert_eq!(
-            recursive_search_cancelled_status("report", 0, 0),
-            "Recursive search for 'report' cancelled"
         );
     }
 

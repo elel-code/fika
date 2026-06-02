@@ -279,6 +279,7 @@
   - Current: the search strip exposes Type / Modified / Size cycle buttons; filters apply to current-directory filtering and recursive search results.
   - Current: when filters hide some recursive search matches, the completion status explicitly says the visible count is after filters.
   - Current: search strip layout is split into `ui/search_panel.slint`, keeping query, clear/close, recursive, and filter controls out of `ui/app.slint`.
+  - Current: search UI state helpers, recursive-search cancellation token handling, and search status text live in `src/app/search_ui.rs`, keeping `main.rs` focused on callback wiring and async search startup.
 
 ## Phase 8: Open With
 

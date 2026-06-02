@@ -5,6 +5,7 @@ pub(crate) mod events;
 pub(crate) mod file_clipboard;
 pub(crate) mod geometry;
 pub(crate) mod places;
+pub(crate) mod search_ui;
 pub(crate) mod selection;
 pub(crate) mod state;
 pub(crate) mod thumbnail_pipeline;
