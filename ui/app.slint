@@ -230,7 +230,7 @@ export component AppWindow inherits Window {
     callback go_root();
     callback refresh();
     callback open_path(string);
-    callback open_terminal_here();
+    callback open_terminal_here(string);
     callback chooser_accept(string);
     callback chooser_select_filter(int);
     callback chooser_select_choice(int, int);
@@ -1319,6 +1319,10 @@ export component AppWindow inherits Window {
             root.add_place(root.context-menu-path);
             root.close-context-popups();
         }
+        file_open_terminal_here => {
+            root.open_terminal_here(root.context-menu-path);
+            root.close-context-popups();
+        }
         file_rename_requested => {
             root.rename-entry-path = root.context-menu-path;
             root.rename-entry-name = root.context-menu-name;
@@ -1435,7 +1439,7 @@ export component AppWindow inherits Window {
             root.show-open-with-submenu(root.current_path, row-y);
         }
         viewport_open_terminal_here => {
-            root.open_terminal_here();
+            root.open_terminal_here(root.current_path);
             root.close-context-popups();
         }
     }

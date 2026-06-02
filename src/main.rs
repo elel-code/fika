@@ -466,13 +466,12 @@ fn main() -> Result<(), slint::PlatformError> {
 
     {
         let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
         let async_handle = async_handle.clone();
-        ui.on_open_terminal_here(move || {
+        ui.on_open_terminal_here(move |dir| {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
-            let dir = state.borrow().current_dir.clone();
+            let dir = PathBuf::from(dir.as_str());
             set_status(&ui, &format!("Opening terminal in {}...", dir.display()));
             let ui_weak = ui.as_weak();
             async_handle.spawn(async move {

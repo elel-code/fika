@@ -525,6 +525,7 @@ export component FileContextMenu inherits PopupSurface {
     callback open_with_clicked();
     callback paste_into_folder();
     callback add_to_places();
+    callback open_terminal_here();
     callback rename_requested();
     callback duplicate_requested();
     callback cut_requested();
@@ -580,6 +581,12 @@ export component FileContextMenu inherits PopupSurface {
             label: "Add to Places";
             dark: root.dark;
             clicked => { root.add_to_places(); }
+        }
+
+        if (root.selected-count <= 1 && root.is-dir && !root.in-trash): MenuItem {
+            label: "Open Terminal Here";
+            dark: root.dark;
+            clicked => { root.open_terminal_here(); }
         }
 
         if (root.selected-count <= 1): MenuItem {
@@ -780,6 +787,7 @@ export component RootContextMenuLayer inherits Rectangle {
     callback file_open_with_clicked(length);
     callback file_paste_into_folder();
     callback file_add_to_places();
+    callback file_open_terminal_here();
     callback file_rename_requested();
     callback file_duplicate_requested();
     callback file_cut_requested();
@@ -830,6 +838,7 @@ export component RootContextMenuLayer inherits Rectangle {
         open_with_clicked => { root.file_open_with_clicked(root.open-with-row-y); }
         paste_into_folder => { root.file_paste_into_folder(); }
         add_to_places => { root.file_add_to_places(); }
+        open_terminal_here => { root.file_open_terminal_here(); }
         rename_requested => { root.file_rename_requested(); }
         duplicate_requested => { root.file_duplicate_requested(); }
         cut_requested => { root.file_cut_requested(); }

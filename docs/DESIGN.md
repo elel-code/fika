@@ -166,7 +166,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - Open With 子菜单最后一项是 `Other Applications...`，会打开应用选择框。
 - 应用选择框支持指定 desktop app 打开、一次性自定义命令打开，以及写入用户级 `mimeapps.list` 设置默认应用。
 - `Other Applications` 弹窗使用一个对话框级别的 “Set selected application as default” 勾选框；候选列表只负责选择要打开的应用。
-- `Open Terminal Here` 参考 cosmic-files 的终端选择方式：保留 `FIKA_TERMINAL` / `TERMINAL` 显式覆盖优先级，然后查询 `xdg-mime query default x-scheme-handler/terminal` 并解析对应 `.desktop`；只有可见且 `Categories` 包含 `TerminalEmulator` 的 entry 会作为桌面终端候选。之后再优先尝试 `com.system76.CosmicTerm.desktop`、其它 `TerminalEmulator` desktop entries 和内置终端可执行文件 fallback。
+- `Open Terminal Here` 可从主栏空白菜单作用于当前目录，也可从单个目录项菜单作用于该目录。终端选择参考 cosmic-files 的方式：保留 `FIKA_TERMINAL` / `TERMINAL` 显式覆盖优先级，然后查询 `xdg-mime query default x-scheme-handler/terminal` 并解析对应 `.desktop`；只有可见且 `Categories` 包含 `TerminalEmulator` 的 entry 会作为桌面终端候选。之后再优先尝试 `com.system76.CosmicTerm.desktop`、其它 `TerminalEmulator` desktop entries 和内置终端可执行文件 fallback。
 
 这个模块目前是同步实现，因此从 UI 调用时必须通过 `spawn_blocking()`。
 
@@ -285,6 +285,7 @@ Places 分为内置项和用户项：
 当前支持：
 
 - 新建：从主栏空白右键菜单 `Create New > Folder` 或 `Create New > File` 打开命名对话框，在当前目录创建；重名时自动生成 `copy` 后缀。
+- Open Terminal Here：主栏空白菜单打开当前目录；单个目录项菜单打开该目录。
 - 重命名：文件/文件夹右键菜单打开对话框，只接受单级名称，拒绝路径分隔符。
 - Duplicate Here：右键单项后在同一父目录中排队执行 copy。
 - Copy Location：把当前条目的绝对路径写入 Wayland 桌面文本剪贴板，使用 `wl-copy`。

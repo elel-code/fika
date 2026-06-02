@@ -464,6 +464,7 @@ Acceptance for all:
   - Acceptance: context menu action grouping, disabled/hidden states, and current-folder actions are reviewed against COSMIC without changing the already-fixed submenu lifetime rules.
   - Current: the main-view blank context menu exposes Select All and keeps a disabled Paste row when no file clipboard is available, matching COSMIC's stable action layout instead of making lower rows jump as clipboard state changes.
   - Current: shared Slint `MenuItem` rows now support COSMIC-style right-aligned shortcut hints, and context menus only display hints for actions already handled by `KeyBinding` (`Ctrl+A`, `Ctrl+V`, `Ctrl+C`, `Ctrl+X`, `Delete`).
+  - Current: single-folder context menus now expose `Open Terminal Here` for that folder, matching COSMIC's selected-directory terminal action while reusing Fika's existing terminal discovery and systemd-scope launch path.
 
 - [~] Revisit clipboard behavior against COSMIC's cached Wayland model.
   - Reference: `cosmic-files/src/clipboard.rs` and clipboard handling in `cosmic-files/src/app.rs`.
