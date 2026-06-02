@@ -1,4 +1,5 @@
 use crate::app::state::{AppState, FileOperationRequest};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -107,6 +108,111 @@ impl AppState {
     }
 }
 
+pub(crate) fn operation_queued_status(snapshot: OperationQueueSnapshot) -> String {
+    format!(
+        "Queued operation #{} ({} pending)",
+        snapshot.id, snapshot.queued_len
+    )
+}
+
+pub(crate) fn operation_cancel_status(summary: OperationCancelSummary) -> String {
+    if summary.queued_cancelled == 0 && !summary.active_cancelled {
+        "No queued operations to cancel".to_string()
+    } else if summary.active_cancelled {
+        format!(
+            "Cancelling active operation; removed {} queued operation(s)",
+            summary.queued_cancelled
+        )
+    } else {
+        format!("Cancelled {} queued operation(s)", summary.queued_cancelled)
+    }
+}
+
+pub(crate) fn operation_started_status(operation: &str, source: &Path) -> String {
+    format!(
+        "{} {}...",
+        operation_label(operation),
+        operation_item_label(source)
+    )
+}
+
+pub(crate) fn operation_progress_status(
+    operation: &str,
+    source: &Path,
+    bytes_done: u64,
+    bytes_total: u64,
+) -> String {
+    let label = operation_item_label(source);
+    if bytes_total == 0 {
+        format!("{} {label}...", operation_label(operation))
+    } else {
+        let percent = (bytes_done.saturating_mul(100) / bytes_total.max(1)).min(100);
+        format!(
+            "{} {label}: {percent}% ({}/{})",
+            operation_label(operation),
+            format_bytes(bytes_done),
+            format_bytes(bytes_total)
+        )
+    }
+}
+
+pub(crate) fn operation_complete_status(operation: &str, destination: &Path) -> String {
+    format!(
+        "{} complete: {}",
+        operation_finished_label(operation),
+        destination.display()
+    )
+}
+
+pub(crate) fn operation_failed_status(operation: &str, error: &str) -> String {
+    format!("{} failed: {error}", operation_finished_label(operation))
+}
+
+pub(crate) fn operation_label(operation: &str) -> &'static str {
+    match operation {
+        "move" => "Moving",
+        "copy" => "Copying",
+        "link" => "Linking",
+        _ => "Processing",
+    }
+}
+
+pub(crate) fn operation_finished_label(operation: &str) -> &'static str {
+    match operation {
+        "move" => "Move",
+        "copy" => "Copy",
+        "link" => "Link",
+        "create-folder" => "Create Folder",
+        "create-file" => "Create File",
+        "rename" => "Rename",
+        "trash" => "Move to Trash",
+        _ => "Operation",
+    }
+}
+
+pub(crate) fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn operation_item_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("item")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +274,48 @@ mod tests {
         assert_eq!(state.active_operation_id(), None);
         assert!(state.active_operation_cancel.is_none());
         assert!(!state.finish_file_operation(7));
+    }
+
+    #[test]
+    fn operation_status_text_is_stable_and_testable() {
+        assert_eq!(
+            operation_queued_status(OperationQueueSnapshot {
+                id: 3,
+                queued_len: 2,
+                active: false,
+                pending_conflict: false,
+            }),
+            "Queued operation #3 (2 pending)"
+        );
+        assert_eq!(
+            operation_cancel_status(OperationCancelSummary {
+                queued_cancelled: 0,
+                active_cancelled: false,
+            }),
+            "No queued operations to cancel"
+        );
+        assert_eq!(
+            operation_cancel_status(OperationCancelSummary {
+                queued_cancelled: 4,
+                active_cancelled: true,
+            }),
+            "Cancelling active operation; removed 4 queued operation(s)"
+        );
+        assert_eq!(
+            operation_started_status("copy", Path::new("/tmp/photo.jpg")),
+            "Copying photo.jpg..."
+        );
+        assert_eq!(
+            operation_progress_status("copy", Path::new("/tmp/photo.jpg"), 512, 2048),
+            "Copying photo.jpg: 25% (512 B/2.0 KB)"
+        );
+        assert_eq!(
+            operation_complete_status("move", Path::new("/tmp/done.txt")),
+            "Move complete: /tmp/done.txt"
+        );
+        assert_eq!(
+            operation_failed_status("link", "permission denied"),
+            "Link failed: permission denied"
+        );
     }
 }

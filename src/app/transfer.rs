@@ -1,7 +1,10 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::file_clipboard::sync_clipboard_ui;
 use crate::app::geometry::{MainGridLayout, PopupPlacement, PopupPoint};
-use crate::app::operation_controller::OperationQueuePosition;
+use crate::app::operation_controller::{
+    OperationQueuePosition, operation_cancel_status, operation_queued_status,
+    operation_started_status,
+};
 use crate::app::selection::filtered_entry_at;
 use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
 use crate::fs::{file_ops, privilege};
@@ -554,13 +557,7 @@ fn queue_transfer_operation(
             .queue_file_operation(request, position.into())
     };
 
-    set_status(
-        ui,
-        &format!(
-            "Queued operation #{} ({} pending)",
-            snapshot.id, snapshot.queued_len
-        ),
-    );
+    set_status(ui, &operation_queued_status(snapshot));
     if !snapshot.active && !snapshot.pending_conflict {
         start_next_operation(ui, state, bridge);
     }
@@ -604,15 +601,7 @@ pub(crate) fn start_next_operation(
 
     set_status(
         ui,
-        &format!(
-            "{} {}...",
-            operation_label(request.operation.as_str()),
-            request
-                .source
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("item")
-        ),
+        &operation_started_status(request.operation.as_str(), &request.source),
     );
 
     let async_tx = bridge.tx.clone();
@@ -728,46 +717,7 @@ fn default_rename_suggestion(destination: &Path) -> String {
 
 pub(crate) fn cancel_queued_operations(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let summary = state.borrow_mut().cancel_file_operations();
-    if summary.queued_cancelled == 0 && !summary.active_cancelled {
-        set_status(ui, "No queued operations to cancel");
-    } else if summary.active_cancelled {
-        set_status(
-            ui,
-            &format!(
-                "Cancelling active operation; removed {} queued operation(s)",
-                summary.queued_cancelled
-            ),
-        );
-    } else {
-        set_status(
-            ui,
-            &format!("Cancelled {} queued operation(s)", summary.queued_cancelled),
-        );
-    }
-}
-
-pub(crate) fn operation_label(operation: &str) -> &'static str {
-    match operation {
-        "move" => "Moving",
-        "copy" => "Copying",
-        "link" => "Linking",
-        _ => "Processing",
-    }
-}
-
-pub(crate) fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} {}", UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
+    set_status(ui, &operation_cancel_status(summary));
 }
 
 pub(crate) fn path_label(path: &str) -> String {

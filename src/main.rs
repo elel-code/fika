@@ -42,6 +42,10 @@ use app::file_clipboard::{
 use app::geometry::{
     MainGridLayout, SelectionRect, place_drop_geometry, register_menu_geometry_callbacks,
 };
+use app::operation_controller::{
+    operation_complete_status, operation_failed_status, operation_finished_label,
+    operation_progress_status,
+};
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
     rename_place, reorder_place_path, restore_default_places, sync_places,
@@ -62,10 +66,10 @@ use app::thumbnail_pipeline::{
     prioritize_thumbnail_entries, thumbnail_schedule_candidate,
 };
 use app::transfer::{
-    cancel_queued_operations, entry_at_main_point, format_bytes, main_drop_allowed,
-    operation_label, path_label, place_drop_allowed, prepare_current_dir_transfer,
-    prepare_entry_transfer, prepare_main_transfer, prepare_place_transfer,
-    resolve_transfer_conflict, start_next_operation, start_transfer_operation,
+    cancel_queued_operations, entry_at_main_point, main_drop_allowed, path_label,
+    place_drop_allowed, prepare_current_dir_transfer, prepare_entry_transfer,
+    prepare_main_transfer, prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
+    start_transfer_operation,
 };
 use app::virtual_view::{VirtualViewInput, prepare_virtual_view_update};
 use config::args::{Args, Mode};
@@ -1943,10 +1947,9 @@ fn apply_file_operation_result(
                 &outcome.destination,
                 outcome.overwritten_backup.clone(),
             );
-            Some(format!(
-                "{} complete: {}",
-                operation_finished_label(&result_operation),
-                outcome.destination.display()
+            Some(operation_complete_status(
+                &result_operation,
+                &outcome.destination,
             ))
         }
         Err(err) if privilege::is_permission_error(&err) => {
@@ -1955,16 +1958,10 @@ fn apply_file_operation_result(
                 requested_privilege = true;
                 None
             } else {
-                Some(format!(
-                    "{} failed: {err}",
-                    operation_finished_label(&result.operation)
-                ))
+                Some(operation_failed_status(&result.operation, &err))
             }
         }
-        Err(err) => Some(format!(
-            "{} failed: {err}",
-            operation_finished_label(&result.operation)
-        )),
+        Err(err) => Some(operation_failed_status(&result.operation, &err)),
     };
 
     if refresh_current_dir {
@@ -2269,29 +2266,15 @@ fn apply_file_operation_progress(
         return;
     }
 
-    let label = progress
-        .source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("item");
-    if progress.bytes_total == 0 {
-        set_status(
-            ui,
-            &format!("{} {label}...", operation_label(&progress.operation)),
-        );
-    } else {
-        let percent =
-            (progress.bytes_done.saturating_mul(100) / progress.bytes_total.max(1)).min(100);
-        set_status(
-            ui,
-            &format!(
-                "{} {label}: {percent}% ({}/{})",
-                operation_label(&progress.operation),
-                format_bytes(progress.bytes_done),
-                format_bytes(progress.bytes_total)
-            ),
-        );
-    }
+    set_status(
+        ui,
+        &operation_progress_status(
+            &progress.operation,
+            &progress.source,
+            progress.bytes_done,
+            progress.bytes_total,
+        ),
+    );
 }
 
 fn apply_privileged_operation_result(
@@ -2430,19 +2413,6 @@ fn sync_external_edit_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         ui.set_external_edit_status(format!("Protected edit: {label}").into());
     } else {
         ui.set_external_edit_status(format!("{count} protected edits").into());
-    }
-}
-
-fn operation_finished_label(operation: &str) -> &'static str {
-    match operation {
-        "move" => "Move",
-        "copy" => "Copy",
-        "link" => "Link",
-        "create-folder" => "Create Folder",
-        "create-file" => "Create File",
-        "rename" => "Rename",
-        "trash" => "Move to Trash",
-        _ => "Operation",
     }
 }
 
