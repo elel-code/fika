@@ -44,6 +44,7 @@ pub(crate) fn prepare_virtual_view_update(
         2,
     );
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
+    state.pane.view.viewport_x = plan.viewport_x;
 
     let rebuild_model = should_rebuild_virtual_model(
         state,
@@ -158,6 +159,7 @@ mod tests {
         assert!(first.rebuild_model);
         assert_eq!(first.range, 0..24);
         assert_eq!(first.entries.len(), 24);
+        assert_eq!(state.pane.view.viewport_x, 0.0);
 
         let second = prepare_virtual_view_update(
             &mut state,
@@ -172,6 +174,7 @@ mod tests {
         );
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
+        assert_eq!(state.pane.view.viewport_x, 40.0);
     }
 
     #[test]
@@ -194,5 +197,6 @@ mod tests {
         assert!(update.viewport_clamped);
         assert_eq!(update.viewport_x, 70.0);
         assert_eq!(update.range, 0..10);
+        assert_eq!(state.pane.view.viewport_x, 70.0);
     }
 }

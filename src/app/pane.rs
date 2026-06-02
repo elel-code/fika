@@ -1,10 +1,13 @@
 use crate::FileEntry;
 use crate::fs::search;
 use crate::support::generation::GenerationCounter;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
+pub(crate) const MAX_VIEW_STATE_CACHE_ENTRIES: usize = 128;
 
 #[derive(Debug)]
 pub(crate) struct PaneState {
@@ -75,7 +78,64 @@ impl PaneSearch {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PaneView {
+    pub(crate) viewport_x: f32,
     pub(crate) virtual_view: VirtualViewCache,
+    state_cache: HashMap<PathBuf, DirectoryViewState>,
+    state_cache_order: VecDeque<PathBuf>,
+}
+
+impl PaneView {
+    pub(crate) fn cached_state(&mut self, path: &Path) -> Option<DirectoryViewState> {
+        let view_state = self.state_cache.get(path).copied()?;
+        self.refresh_state_cache_order(path);
+        Some(view_state)
+    }
+
+    pub(crate) fn insert_state_cache(&mut self, path: PathBuf, view_state: DirectoryViewState) {
+        self.state_cache.insert(path.clone(), view_state);
+        self.refresh_state_cache_order(&path);
+        while self.state_cache_order.len() > MAX_VIEW_STATE_CACHE_ENTRIES {
+            if let Some(oldest) = self.state_cache_order.pop_front() {
+                self.state_cache.remove(&oldest);
+            }
+        }
+    }
+
+    fn refresh_state_cache_order(&mut self, path: &Path) {
+        self.state_cache_order
+            .retain(|cached| cached.as_path() != path);
+        self.state_cache_order.push_back(path.to_path_buf());
+    }
+
+    #[cfg(test)]
+    fn state_cache_len(&self) -> usize {
+        self.state_cache.len()
+    }
+
+    #[cfg(test)]
+    fn state_cache_order_len(&self) -> usize {
+        self.state_cache_order.len()
+    }
+
+    #[cfg(test)]
+    fn contains_state_cache_path(&self, path: &Path) -> bool {
+        self.state_cache.contains_key(path)
+    }
+
+    #[cfg(test)]
+    fn pop_oldest_state_cache_path(&mut self) -> Option<PathBuf> {
+        self.state_cache_order.pop_front()
+    }
+
+    #[cfg(test)]
+    fn pop_newest_state_cache_path(&mut self) -> Option<PathBuf> {
+        self.state_cache_order.pop_back()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DirectoryViewState {
+    pub(crate) viewport_x: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -277,6 +337,7 @@ mod tests {
                 cell_width: 96.0,
                 thumbnail_size_px: 128,
             },
+            ..PaneView::default()
         };
 
         view.virtual_view.invalidate();
@@ -286,5 +347,41 @@ mod tests {
         assert_eq!(view.virtual_view.rows_per_column, 8);
         assert_eq!(view.virtual_view.cell_width, 96.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
+    }
+
+    #[test]
+    fn pane_view_state_cache_evicts_oldest_entries() {
+        let mut view = PaneView::default();
+        for index in 0..(MAX_VIEW_STATE_CACHE_ENTRIES + 2) {
+            view.insert_state_cache(
+                PathBuf::from(format!("/tmp/view-{index}")),
+                DirectoryViewState {
+                    viewport_x: index as f32,
+                },
+            );
+        }
+
+        assert_eq!(view.state_cache_len(), MAX_VIEW_STATE_CACHE_ENTRIES);
+        assert_eq!(view.state_cache_order_len(), MAX_VIEW_STATE_CACHE_ENTRIES);
+        assert!(!view.contains_state_cache_path(Path::new("/tmp/view-0")));
+        assert!(!view.contains_state_cache_path(Path::new("/tmp/view-1")));
+        assert!(view.contains_state_cache_path(Path::new("/tmp/view-2")));
+    }
+
+    #[test]
+    fn pane_view_state_cache_hit_refreshes_lru_order() {
+        let mut view = PaneView::default();
+        let first = PathBuf::from("/tmp/first-view");
+        let second = PathBuf::from("/tmp/second-view");
+
+        view.insert_state_cache(first.clone(), DirectoryViewState { viewport_x: 10.0 });
+        view.insert_state_cache(second.clone(), DirectoryViewState { viewport_x: 20.0 });
+
+        assert_eq!(
+            view.cached_state(&first).map(|state| state.viewport_x),
+            Some(10.0)
+        );
+        assert_eq!(view.pop_newest_state_cache_path(), Some(first));
+        assert_eq!(view.pop_oldest_state_cache_path(), Some(second));
     }
 }

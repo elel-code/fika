@@ -71,11 +71,11 @@ Slint `FlexboxLayout` 采用策略：
 
 Rust 侧核心状态在 `AppState`：
 
-- `pane`: 当前主栏 pane 的目录、完整条目、历史、选择、搜索/filter、递归搜索运行态和虚拟视图 cache，封装在 `PaneState` 中。当前仍然只有一个主栏 pane，但这一步已经把 `current_dir` / `entries` / `PaneHistory` / `PaneSelection` / `PaneSearch` / recursive search cancel/progress/generation / `PaneView` 收敛为可被每个 pane 独立持有的状态块，贴近 COSMIC Files 的 per-tab `location` / `items_opt` 模型。UI 的 `main_viewport_x` 暂时仍在 pane 外，后续 split view 需要随 active pane ownership 继续拆分。
+- `pane`: 当前主栏 pane 的目录、完整条目、历史、选择、搜索/filter、递归搜索运行态和虚拟视图 cache，封装在 `PaneState` 中。当前仍然只有一个主栏 pane，但这一步已经把 `current_dir` / `entries` / `PaneHistory` / `PaneSelection` / `PaneSearch` / recursive search cancel/progress/generation / `PaneView` 收敛为可被每个 pane 独立持有的状态块，贴近 COSMIC Files 的 per-tab `location` / `items_opt` 模型。UI 的 `main_viewport_x` 现在只是 active pane viewport 的 Slint 镜像，后续 split view 切换 focused pane 时需要把该镜像重绑定到目标 pane。
 - UI 侧把地址栏使用的 `current_path` 和主栏 item model 归属的 `items_path` 分开：uncached 导航时地址栏可以先显示目标路径，但 sidebar/Devices 选中态保持跟随旧 `items_path`，直到 cache hit 或新 entries 提交。这与 COSMIC Files 的 location / `items_opt` 分层一致，避免 Places 跳转时左侧先高亮新位置而右侧仍显示旧模型。
 - `places`: 左侧 Places。
 - `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。
-- `view_state_cache`: 每个目录的主栏 viewport 坐标缓存，用于返回目录时恢复滚动位置；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留每个路径的视图状态。
+- `pane.view`: 当前 pane 的 viewport 坐标、虚拟 range/cache metadata，以及每个目录的 viewport 坐标 LRU cache，用于返回目录时恢复滚动位置；每个 pane 独立持有自己的 view-state cache，避免分屏后同一路径在不同 pane 之间互相覆盖滚动位置。
 - uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。保留的旧模型在加载期间只作为视觉占位，不接受打开、选择、右键、滚轮或 drop 操作；cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。目录读取失败时不会清空已经提交的主栏模型：刷新失败保留当前视图，缓存刷新失败保留缓存视图，未缓存的 Places/Devices 跳转失败会把 `current_path` 回滚到最后提交的 `items_path`。
 - `thumbnail_cache`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图像素。
 - `thumbnail_failures`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图失败结果，避免坏图或不支持格式在大目录滚动时反复排队解码；文件修改后 key 变化，会重新尝试。

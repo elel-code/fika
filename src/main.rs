@@ -46,6 +46,7 @@ use app::geometry::{
 use app::operation_controller::{
     OperationResultDisposition, operation_final_status, operation_finished_label,
 };
+use app::pane::DirectoryViewState;
 #[cfg(test)]
 use app::pane::PaneHistory;
 use app::places::{
@@ -62,7 +63,7 @@ use app::selection::{
     rebuild_visible_entry_index, retained_visible_paths, selection_range_paths_filtered,
     selection_rect_paths_filtered,
 };
-use app::state::{AppState, DeviceAction, DirectoryViewState, FileUndo};
+use app::state::{AppState, DeviceAction, FileUndo};
 use app::thumbnail_pipeline::{
     apply_thumbnail_load_to_state, decorate_entries_with_cached_thumbnails,
     prioritize_thumbnail_entries, thumbnail_schedule_candidate,
@@ -1122,19 +1123,21 @@ fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 fn remember_current_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let mut state = state.borrow_mut();
     let current_dir = state.pane.current_dir.clone();
-    state.insert_view_state_cache(
-        current_dir,
-        DirectoryViewState {
-            viewport_x: ui.get_main_viewport_x(),
-        },
-    );
+    let viewport_x = ui.get_main_viewport_x();
+    state.pane.view.viewport_x = viewport_x;
+    state
+        .pane
+        .view
+        .insert_state_cache(current_dir, DirectoryViewState { viewport_x });
 }
 
 fn restore_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path) {
-    let view_state = state
-        .borrow_mut()
-        .cached_view_state(path)
-        .unwrap_or_default();
+    let view_state = {
+        let mut state = state.borrow_mut();
+        let view_state = state.pane.view.cached_state(path).unwrap_or_default();
+        state.pane.view.viewport_x = view_state.viewport_x;
+        view_state
+    };
     ui.set_main_viewport_x(view_state.viewport_x);
     ui.set_main_viewport_offset(-view_state.viewport_x);
 }
