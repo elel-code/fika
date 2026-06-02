@@ -33,7 +33,7 @@ pub(crate) fn register_callbacks(
         let bridge = bridge.clone();
         ui.on_create_folder(move |name| {
             if let Some(ui) = ui_weak.upgrade() {
-                let parent = state.borrow().current_dir.clone();
+                let parent = state.borrow().pane.current_dir.clone();
                 let privileged_command = privilege::PrivilegedCommand::CreateFolder {
                     parent: parent.clone(),
                     name: name.to_string(),
@@ -68,7 +68,7 @@ pub(crate) fn register_callbacks(
         let bridge = bridge.clone();
         ui.on_create_file(move |name| {
             if let Some(ui) = ui_weak.upgrade() {
-                let parent = state.borrow().current_dir.clone();
+                let parent = state.borrow().pane.current_dir.clone();
                 let privileged_command = privilege::PrivilegedCommand::CreateFile {
                     parent: parent.clone(),
                     name: name.to_string(),
@@ -247,12 +247,13 @@ pub(crate) fn register_callbacks(
             if let Some(ui) = ui_weak.upgrade() {
                 let paths = state
                     .borrow()
+                    .pane
                     .selection
                     .paths
                     .iter()
                     .map(PathBuf::from)
                     .collect::<Vec<_>>();
-                let affected_dir = state.borrow().current_dir.clone();
+                let affected_dir = state.borrow().pane.current_dir.clone();
                 let privileged_command = privilege::PrivilegedCommand::Trash {
                     paths: paths.clone(),
                 };
@@ -305,12 +306,13 @@ pub(crate) fn register_callbacks(
             if let Some(ui) = ui_weak.upgrade() {
                 let paths = state
                     .borrow()
+                    .pane
                     .selection
                     .paths
                     .iter()
                     .map(PathBuf::from)
                     .collect::<Vec<_>>();
-                let affected_dir = state.borrow().current_dir.clone();
+                let affected_dir = state.borrow().pane.current_dir.clone();
                 spawn_action(
                     &ui,
                     &bridge,
@@ -359,12 +361,13 @@ pub(crate) fn register_callbacks(
             if let Some(ui) = ui_weak.upgrade() {
                 let paths = state
                     .borrow()
+                    .pane
                     .selection
                     .paths
                     .iter()
                     .map(PathBuf::from)
                     .collect::<Vec<_>>();
-                let affected_dir = state.borrow().current_dir.clone();
+                let affected_dir = state.borrow().pane.current_dir.clone();
                 spawn_action(
                     &ui,
                     &bridge,

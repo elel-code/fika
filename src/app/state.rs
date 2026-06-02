@@ -1,4 +1,4 @@
-use crate::app::pane::{PaneHistory, PaneSearch, PaneSelection, PaneView};
+use crate::app::pane::PaneState;
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::search;
@@ -15,13 +15,9 @@ pub(crate) const MAX_VIEW_STATE_CACHE_ENTRIES: usize = 128;
 
 #[derive(Debug)]
 pub(crate) struct AppState {
-    pub(crate) current_dir: PathBuf,
-    pub(crate) entries: Vec<FileEntry>,
-    pub(crate) view: PaneView,
+    pub(crate) pane: PaneState,
     pub(crate) places: Vec<PlaceEntry>,
     pub(crate) other_application_apps: Vec<DesktopApp>,
-    pub(crate) search: PaneSearch,
-    pub(crate) selection: PaneSelection,
     pub(crate) clipboard_paths: Vec<PathBuf>,
     pub(crate) clipboard_cut: bool,
     pub(crate) clipboard_content_kind: Option<ClipboardContentKind>,
@@ -56,7 +52,6 @@ pub(crate) struct AppState {
     pub(crate) device_errors: HashMap<String, String>,
     pub(crate) launched_units: Vec<String>,
     pub(crate) next_operation_id: u64,
-    pub(crate) history: PaneHistory,
     pub(crate) clipboard_generation: GenerationCounter,
     pub(crate) load_generation: GenerationCounter,
     pub(crate) device_generation: GenerationCounter,
@@ -68,13 +63,9 @@ pub(crate) struct AppState {
 impl AppState {
     pub(crate) fn new(current_dir: PathBuf, places: Vec<PlaceEntry>) -> Self {
         Self {
-            current_dir,
-            entries: Vec::new(),
-            view: PaneView::default(),
+            pane: PaneState::new(current_dir),
             places,
             other_application_apps: Vec::new(),
-            search: PaneSearch::default(),
-            selection: PaneSelection::default(),
             clipboard_paths: Vec::new(),
             clipboard_cut: false,
             clipboard_content_kind: None,
@@ -109,7 +100,6 @@ impl AppState {
             device_errors: HashMap::new(),
             launched_units: Vec::new(),
             next_operation_id: 1,
-            history: PaneHistory::default(),
             clipboard_generation: GenerationCounter::default(),
             load_generation: GenerationCounter::default(),
             device_generation: GenerationCounter::default(),

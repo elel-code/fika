@@ -68,11 +68,11 @@ pub(crate) fn prepare_virtual_view_update(
 
     let mut entries = filtered_entries_range(state, plan.range.clone());
     decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
-    state.view.virtual_view.range = plan.range.clone();
-    state.view.virtual_view.entry_count = visible_count;
-    state.view.virtual_view.rows_per_column = input.layout.rows_per_column;
-    state.view.virtual_view.cell_width = input.layout.cell_width;
-    state.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
+    state.pane.view.virtual_view.range = plan.range.clone();
+    state.pane.view.virtual_view.entry_count = visible_count;
+    state.pane.view.virtual_view.rows_per_column = input.layout.rows_per_column;
+    state.pane.view.virtual_view.cell_width = input.layout.cell_width;
+    state.pane.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
 
     VirtualViewUpdate {
         entry_count: visible_count,
@@ -95,11 +95,11 @@ fn should_rebuild_virtual_model(
     schedule_thumbnails: bool,
 ) -> bool {
     !schedule_thumbnails
-        || state.view.virtual_view.range != plan.range
-        || state.view.virtual_view.entry_count != visible_count
-        || state.view.virtual_view.rows_per_column != layout.rows_per_column
-        || state.view.virtual_view.cell_width != layout.cell_width
-        || state.view.virtual_view.thumbnail_size_px != thumbnail_size_px
+        || state.pane.view.virtual_view.range != plan.range
+        || state.pane.view.virtual_view.entry_count != visible_count
+        || state.pane.view.virtual_view.rows_per_column != layout.rows_per_column
+        || state.pane.view.virtual_view.cell_width != layout.cell_width
+        || state.pane.view.virtual_view.thumbnail_size_px != thumbnail_size_px
 }
 
 #[cfg(test)]
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn virtual_view_update_reuses_model_inside_same_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = (0..100).map(test_entry).collect();
+        state.pane.entries = (0..100).map(test_entry).collect();
 
         let first = prepare_virtual_view_update(
             &mut state,
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn virtual_view_update_clamps_out_of_bounds_viewport() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = (0..10).map(test_entry).collect();
+        state.pane.entries = (0..10).map(test_entry).collect();
 
         let update = prepare_virtual_view_update(
             &mut state,

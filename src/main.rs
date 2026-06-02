@@ -615,6 +615,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_is_selected(move |path| {
             state
                 .borrow()
+                .pane
                 .selection
                 .paths
                 .iter()
@@ -1106,7 +1107,7 @@ fn start_privileged_operation(
 }
 
 fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let current_dir = state.borrow().current_dir.clone();
+    let current_dir = state.borrow().pane.current_dir.clone();
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     save_settings(&AppSettings {
         dark_mode: Some(ui.get_dark_mode()),
@@ -1120,7 +1121,7 @@ fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 fn remember_current_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let mut state = state.borrow_mut();
-    let current_dir = state.current_dir.clone();
+    let current_dir = state.pane.current_dir.clone();
     state.insert_view_state_cache(
         current_dir,
         DirectoryViewState {
@@ -1205,7 +1206,7 @@ fn sidebar_prefetch_paths(state: &mut AppState) -> Vec<PathBuf> {
 }
 
 fn push_sidebar_prefetch_path(state: &mut AppState, paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if path == state.current_dir
+    if path == state.pane.current_dir
         || state.directory_cache.contains_key(&path)
         || state.directory_prefetch_pending.contains(&path)
         || paths.iter().any(|existing| existing == &path)
@@ -1248,8 +1249,8 @@ fn load_directory_with_preservation(
     } else if let Some(cached_entries) = cached_entries {
         {
             let mut state = state.borrow_mut();
-            state.entries = cached_entries;
-            state.view.virtual_view.invalidate();
+            state.pane.entries = cached_entries;
+            state.pane.view.virtual_view.invalidate();
         }
         reset_search_controls(ui);
         apply_filter(ui, state, bridge, false);
@@ -1587,13 +1588,14 @@ fn apply_directory_result(
 ) {
     {
         let state = state.borrow();
-        if !state.load_generation.is_current(result.generation) || result.path != state.current_dir
+        if !state.load_generation.is_current(result.generation)
+            || result.path != state.pane.current_dir
         {
             debug_log(&format!(
                 "directory_loaded stale generation={} path={} current={} current_generation_match={}",
                 result.generation,
                 result.path.display(),
-                state.current_dir.display(),
+                state.pane.current_dir.display(),
                 state.load_generation.is_current(result.generation)
             ));
             return;
@@ -1614,18 +1616,18 @@ fn apply_directory_result(
             }
             let unchanged = {
                 let mut state = state.borrow_mut();
-                if directory_entries_match(&state.entries, &entries) {
-                    let cache_entries = state.entries.clone();
+                if directory_entries_match(&state.pane.entries, &entries) {
+                    let cache_entries = state.pane.entries.clone();
                     state.insert_directory_cache(result.path.clone(), cache_entries);
                     true
                 } else {
-                    state.entries = entries.into_iter().map(to_file_entry).collect();
-                    let cache_entries = state.entries.clone();
-                    state.view.virtual_view.invalidate();
+                    state.pane.entries = entries.into_iter().map(to_file_entry).collect();
+                    let cache_entries = state.pane.entries.clone();
+                    state.pane.view.virtual_view.invalidate();
                     state.insert_directory_cache(result.path.clone(), cache_entries);
                     if !result.preserve_view {
                         reset_search_state(&mut state);
-                        state.selection.clear();
+                        state.pane.selection.clear();
                     }
                     false
                 }
@@ -1661,7 +1663,7 @@ fn apply_directory_result(
                     result.preserve_view,
                     &result.path,
                     ui.get_items_path().as_str(),
-                    !state_ref.entries.is_empty(),
+                    !state_ref.pane.entries.is_empty(),
                 )
             };
             match recovery {
@@ -1672,7 +1674,7 @@ fn apply_directory_result(
                 DirectoryLoadErrorRecovery::RollBackToItemsPath(path) => {
                     {
                         let mut state = state.borrow_mut();
-                        state.current_dir = path.clone();
+                        state.pane.current_dir = path.clone();
                     }
                     set_current_location_ui(ui, &path);
                     watch_current_directory(&path, result.generation, bridge);
@@ -1691,12 +1693,12 @@ fn apply_directory_result(
                 DirectoryLoadErrorRecovery::ClearTarget => {
                     {
                         let mut state = state.borrow_mut();
-                        state.entries.clear();
-                        state.search.visible_entry_indices = None;
-                        state.view.virtual_view.invalidate();
+                        state.pane.entries.clear();
+                        state.pane.search.visible_entry_indices = None;
+                        state.pane.view.virtual_view.invalidate();
                         if !result.preserve_view {
                             reset_search_state(&mut state);
-                            state.selection.clear();
+                            state.pane.selection.clear();
                         }
                     }
                     ui.set_items_path(result.path.display().to_string().into());
@@ -1731,7 +1733,7 @@ fn apply_directory_prefetch_result(
     state.directory_prefetch_pending.remove(&path);
     match result {
         Ok(entries) => {
-            if state.current_dir == path {
+            if state.pane.current_dir == path {
                 debug_log(&format!(
                     "directory_prefetched ignored current path={}",
                     path.display()
@@ -1891,7 +1893,7 @@ fn submit_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBr
     {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
-        state.search.query = query.clone();
+        state.pane.search.query = query.clone();
         state.search_generation.next();
     }
 
@@ -1914,12 +1916,12 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
         state.search_generation.next();
-        let query = state.search.query.clone();
+        let query = state.pane.search.query.clone();
         let progress = state.search_progress;
-        let current_dir = state.current_dir.clone();
+        let current_dir = state.pane.current_dir.clone();
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
-            state.entries = entries;
-            state.view.virtual_view.invalidate();
+            state.pane.entries = entries;
+            state.pane.view.virtual_view.invalidate();
         }
         (query, progress)
     };
@@ -1955,7 +1957,7 @@ fn update_search_filters(
 
     apply_filter(ui, state, bridge, true);
     if ui.get_search_loading() {
-        let query = state.borrow().search.query.clone();
+        let query = state.borrow().pane.search.query.clone();
         set_status(ui, &recursive_search_status(&query));
     }
 }
@@ -1973,15 +1975,15 @@ fn start_recursive_search(
         let cancel = Arc::new(AtomicBool::new(false));
         state.active_search_cancel = Some(cancel.clone());
         state.search_progress = search::SearchProgress::default();
-        (state.current_dir.clone(), generation, cancel)
+        (state.pane.current_dir.clone(), generation, cancel)
     };
 
     ui.set_search_loading(true);
     set_status(ui, &recursive_search_status(&query));
     {
         let mut state = state.borrow_mut();
-        state.search.visible_entry_indices = None;
-        state.view.virtual_view.invalidate();
+        state.pane.search.visible_entry_indices = None;
+        state.pane.view.virtual_view.invalidate();
     }
     ui.set_entry_count(0);
     ui.set_virtual_start_index(0);
@@ -2033,8 +2035,8 @@ fn apply_recursive_search_progress(
     {
         let state = state.borrow();
         let stale = !state.search_generation.is_current(progress.generation)
-            || state.current_dir != progress.root
-            || state.search.query != progress.query
+            || state.pane.current_dir != progress.root
+            || state.pane.search.query != progress.query
             || !ui.get_search_loading();
         if stale {
             return;
@@ -2061,8 +2063,8 @@ fn apply_recursive_search_result(
     {
         let mut state = state.borrow_mut();
         let stale = !state.search_generation.is_current(result.generation)
-            || state.current_dir != result.root
-            || state.search.query != result.query;
+            || state.pane.current_dir != result.root
+            || state.pane.search.query != result.query;
         if stale {
             return;
         }
@@ -2081,8 +2083,8 @@ fn apply_recursive_search_result(
             let total = entries.len();
             {
                 let mut state = state.borrow_mut();
-                state.entries = entries.clone();
-                state.view.virtual_view.invalidate();
+                state.pane.entries = entries.clone();
+                state.pane.view.virtual_view.invalidate();
             }
             apply_filter(ui, state, bridge, true);
             let visible = filtered_entry_count(&state.borrow());
@@ -2425,11 +2427,11 @@ fn move_current_directory_home_if_inside_mount(
     mount_path: &Path,
 ) -> bool {
     let mut state = state.borrow_mut();
-    state.history.prune_under(mount_path);
-    if !state.current_dir.starts_with(mount_path) {
+    state.pane.history.prune_under(mount_path);
+    if !state.pane.current_dir.starts_with(mount_path) {
         return false;
     }
-    state.current_dir = home_dir();
+    state.pane.current_dir = home_dir();
     true
 }
 
@@ -2465,7 +2467,7 @@ fn apply_privileged_operation_result(
         result
             .affected_dirs
             .iter()
-            .any(|dir| dir == &state.current_dir)
+            .any(|dir| dir == &state.pane.current_dir)
     };
 
     if refresh_current_dir {
@@ -2555,7 +2557,7 @@ fn apply_external_edit_result(
         Ok(path) => {
             if result.operation == "Save Back" {
                 if let Some(parent) = path.parent()
-                    && parent == state.borrow().current_dir
+                    && parent == state.borrow().pane.current_dir
                 {
                     refresh_directory(ui, state, bridge);
                 }
@@ -2660,9 +2662,9 @@ fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState
     let (query, filters_active, total, summary) = {
         let state_ref = state.borrow();
         (
-            state_ref.search.query.to_ascii_lowercase(),
+            state_ref.pane.search.query.to_ascii_lowercase(),
             search_filters_active(&state_ref),
-            state_ref.entries.len(),
+            state_ref.pane.entries.len(),
             filtered_entry_summary(&state_ref, false),
         )
     };
@@ -2691,11 +2693,11 @@ fn apply_filter(
     let (query, filters_active, total, summary) = {
         let mut state_ref = state.borrow_mut();
         let summary = rebuild_visible_entry_index(&mut state_ref, preserve_selection);
-        state_ref.view.virtual_view.invalidate();
+        state_ref.pane.view.virtual_view.invalidate();
         (
-            state_ref.search.query.to_ascii_lowercase(),
+            state_ref.pane.search.query.to_ascii_lowercase(),
             search_filters_active(&state_ref),
-            state_ref.entries.len(),
+            state_ref.pane.entries.len(),
             summary,
         )
     };
@@ -2731,16 +2733,18 @@ fn retain_visible_selection(
 ) {
     let selected_paths = {
         let mut state = state.borrow_mut();
-        state.selection.paths = retained_visible_paths(&state.selection.paths, visible_paths);
+        state.pane.selection.paths =
+            retained_visible_paths(&state.pane.selection.paths, visible_paths);
         if state
+            .pane
             .selection
             .anchor
             .as_ref()
             .is_some_and(|anchor| !visible_paths.iter().any(|visible| visible == anchor))
         {
-            state.selection.anchor = state.selection.paths.last().cloned();
+            state.pane.selection.anchor = state.pane.selection.paths.last().cloned();
         }
-        state.selection.paths.clone()
+        state.pane.selection.paths.clone()
     };
     update_selection_ui(ui, &selected_paths);
 }
@@ -2757,37 +2761,39 @@ fn select_path(
 
         if range {
             let anchor = state
+                .pane
                 .selection
                 .anchor
                 .as_deref()
-                .or_else(|| state.selection.paths.last().map(String::as_str))
+                .or_else(|| state.pane.selection.paths.last().map(String::as_str))
                 .unwrap_or(path);
             let range_paths = selection_range_paths_filtered(&state, anchor, path);
             if toggle {
-                append_unique_paths(&mut state.selection.paths, range_paths);
+                append_unique_paths(&mut state.pane.selection.paths, range_paths);
             } else {
-                state.selection.paths = range_paths;
+                state.pane.selection.paths = range_paths;
             }
         } else if toggle {
             if let Some(index) = state
+                .pane
                 .selection
                 .paths
                 .iter()
                 .position(|selected| selected == path)
             {
-                state.selection.paths.remove(index);
+                state.pane.selection.paths.remove(index);
             } else {
-                state.selection.paths.push(path.to_string());
+                state.pane.selection.paths.push(path.to_string());
             }
         } else {
-            state.selection.paths.clear();
-            state.selection.paths.push(path.to_string());
+            state.pane.selection.paths.clear();
+            state.pane.selection.paths.push(path.to_string());
         }
 
         if !range {
-            state.selection.anchor = Some(path.to_string());
+            state.pane.selection.anchor = Some(path.to_string());
         }
-        state.selection.paths.clone()
+        state.pane.selection.paths.clone()
     };
 
     update_selection_ui(ui, &selected_paths);
@@ -2800,8 +2806,8 @@ fn select_all_visible(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     };
     {
         let mut state = state.borrow_mut();
-        state.selection.paths = selected_paths.clone();
-        state.selection.anchor = selected_paths.last().cloned();
+        state.pane.selection.paths = selected_paths.clone();
+        state.pane.selection.anchor = selected_paths.last().cloned();
     }
     update_selection_ui(ui, &selected_paths);
 }
@@ -2811,19 +2817,19 @@ fn select_rect(ui: &AppWindow, state: &Rc<RefCell<AppState>>, rect: SelectionRec
         let mut state = state.borrow_mut();
         let selected = selection_rect_paths_filtered(&state, rect);
         if toggle {
-            append_unique_paths(&mut state.selection.paths, selected);
+            append_unique_paths(&mut state.pane.selection.paths, selected);
         } else {
-            state.selection.paths = selected;
+            state.pane.selection.paths = selected;
         }
-        state.selection.anchor = state.selection.paths.last().cloned();
-        state.selection.paths.clone()
+        state.pane.selection.anchor = state.pane.selection.paths.last().cloned();
+        state.pane.selection.paths.clone()
     };
     update_selection_ui(ui, &selected_paths);
 }
 
 fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let mut state = state.borrow_mut();
-    state.selection.clear();
+    state.pane.selection.clear();
     drop(state);
     update_selection_ui(ui, &[]);
 }
@@ -2932,7 +2938,7 @@ fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBrid
     remember_current_view_state(ui, state);
     {
         let mut state_ref = state.borrow_mut();
-        if state_ref.current_dir == path {
+        if state_ref.pane.current_dir == path {
             debug_log(&format!(
                 "navigate_to same path={} -> refresh",
                 path.display()
@@ -2944,20 +2950,25 @@ fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBrid
 
         debug_log(&format!(
             "navigate_to from={} to={} back_len_before={} forward_len_before={}",
-            state_ref.current_dir.display(),
+            state_ref.pane.current_dir.display(),
             path.display(),
-            state_ref.history.back_len(),
-            state_ref.history.forward_len()
+            state_ref.pane.history.back_len(),
+            state_ref.pane.history.forward_len()
         ));
-        let previous = state_ref.current_dir.clone();
-        let nav = state_ref.history.navigate_from(previous, path);
-        state_ref.current_dir = nav.target;
+        let previous = state_ref.pane.current_dir.clone();
+        let nav = state_ref.pane.history.navigate_from(previous, path);
+        state_ref.pane.current_dir = nav.target;
     }
     load_directory(ui, state, bridge);
 }
 
 fn go_parent(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
-    let parent = state.borrow().current_dir.parent().map(Path::to_path_buf);
+    let parent = state
+        .borrow()
+        .pane
+        .current_dir
+        .parent()
+        .map(Path::to_path_buf);
     if let Some(parent) = parent {
         debug_log(&format!("go_parent target={}", parent.display()));
         navigate_to(ui, state, bridge, parent);
@@ -2972,17 +2983,17 @@ fn go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) 
         let mut state = state.borrow_mut();
         debug_log(&format!(
             "go_back requested current={} back_len={} forward_len={}",
-            state.current_dir.display(),
-            state.history.back_len(),
-            state.history.forward_len()
+            state.pane.current_dir.display(),
+            state.pane.history.back_len(),
+            state.pane.history.forward_len()
         ));
-        let previous = state.current_dir.clone();
-        let Some(nav) = state.history.go_back_from(previous) else {
+        let previous = state.pane.current_dir.clone();
+        let Some(nav) = state.pane.history.go_back_from(previous) else {
             debug_log("go_back ignored: empty back stack");
             set_status(ui, "No previous location");
             return;
         };
-        state.current_dir = nav.target.clone();
+        state.pane.current_dir = nav.target.clone();
 
         debug_log(&format!(
             "go_back accepted target={} previous_current={}",
@@ -2999,17 +3010,17 @@ fn go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridg
         let mut state = state.borrow_mut();
         debug_log(&format!(
             "go_forward requested current={} back_len={} forward_len={}",
-            state.current_dir.display(),
-            state.history.back_len(),
-            state.history.forward_len()
+            state.pane.current_dir.display(),
+            state.pane.history.back_len(),
+            state.pane.history.forward_len()
         ));
-        let previous = state.current_dir.clone();
-        let Some(nav) = state.history.go_forward_from(previous) else {
+        let previous = state.pane.current_dir.clone();
+        let Some(nav) = state.pane.history.go_forward_from(previous) else {
             debug_log("go_forward ignored: empty forward stack");
             set_status(ui, "No next location");
             return;
         };
-        state.current_dir = nav.target.clone();
+        state.pane.current_dir = nav.target.clone();
 
         debug_log(&format!(
             "go_forward accepted target={} previous_current={}",
@@ -3024,6 +3035,7 @@ fn open_path(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &str, bridge: 
     let (path, is_known_dir) = {
         let state = state.borrow();
         let entry = state
+            .pane
             .entries
             .iter()
             .find(|entry| entry.path.as_str() == path);
@@ -3086,8 +3098,9 @@ fn chooser_accept(
             vec![selected_directory_or_current(&state_ref)],
             chooser_output_metadata(&state_ref),
         );
-    } else if !state_ref.selection.paths.is_empty() {
+    } else if !state_ref.pane.selection.paths.is_empty() {
         let selected_files = state_ref
+            .pane
             .selection
             .paths
             .iter()
@@ -3278,12 +3291,12 @@ mod tests {
     #[test]
     fn filtered_entry_paths_returns_only_visible_matches() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = vec![
+        state.pane.entries = vec![
             test_entry("Alpha.txt", "/tmp/Alpha.txt"),
             test_entry("Beta.txt", "/tmp/Beta.txt"),
             test_entry("notes.md", "/tmp/project-notes.md"),
         ];
-        state.search.query = "project".to_string();
+        state.pane.search.query = "project".to_string();
 
         assert_eq!(
             filtered_entry_paths(&state),
@@ -3308,29 +3321,29 @@ mod tests {
         archive.size_bytes = 150_000_000.0;
         archive.modified_age_days = 20;
 
-        state.entries = vec![folder, image, archive];
+        state.pane.entries = vec![folder, image, archive];
 
-        state.search.kind_filter = 1;
+        state.pane.search.kind_filter = 1;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/Images".to_string()]
         );
 
-        state.search.kind_filter = 3;
+        state.pane.search.kind_filter = 3;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/photo.png".to_string()]
         );
 
-        state.search.kind_filter = 0;
-        state.search.size_filter = 3;
+        state.pane.search.kind_filter = 0;
+        state.pane.search.size_filter = 3;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/archive.zip".to_string()]
         );
 
-        state.search.size_filter = 0;
-        state.search.modified_filter = 2;
+        state.pane.search.size_filter = 0;
+        state.pane.search.modified_filter = 2;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/Images".to_string(), "/tmp/photo.png".to_string()]
@@ -3340,10 +3353,10 @@ mod tests {
     #[test]
     fn filtered_entries_range_clones_only_requested_filtered_window() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = (0..8)
+        state.pane.entries = (0..8)
             .map(|index| test_entry(&format!("item-{index}.txt"), &format!("/tmp/item-{index}")))
             .collect();
-        state.search.query = "item".to_string();
+        state.pane.search.query = "item".to_string();
 
         assert_eq!(filtered_entry_count(&state), 8);
         assert_eq!(
@@ -3362,12 +3375,12 @@ mod tests {
     #[test]
     fn filtered_entry_at_clones_only_requested_visible_item() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = vec![
+        state.pane.entries = vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
         ];
-        state.search.query = ".txt".to_string();
+        state.pane.search.query = ".txt".to_string();
 
         assert_eq!(
             filtered_entry_at(&state, 1)
@@ -3383,12 +3396,12 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let mut folder = test_entry("item-folder", "/tmp/item-folder");
         folder.is_dir = true;
-        state.entries = vec![
+        state.pane.entries = vec![
             folder,
             test_entry("item-file.txt", "/tmp/item-file.txt"),
             test_entry("hidden.log", "/tmp/hidden.log"),
         ];
-        state.search.query = "item".to_string();
+        state.pane.search.query = "item".to_string();
 
         let summary = filtered_entry_summary(&state, true);
 
@@ -3407,7 +3420,7 @@ mod tests {
     #[test]
     fn visible_entry_index_uses_identity_fast_path_without_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = vec![
+        state.pane.entries = vec![
             test_entry("alpha", "/tmp/alpha"),
             test_entry("beta", "/tmp/beta"),
         ];
@@ -3415,7 +3428,7 @@ mod tests {
         let summary = rebuild_visible_entry_index(&mut state, true);
 
         assert_eq!(summary.count, 2);
-        assert!(state.search.visible_entry_indices.is_none());
+        assert!(state.pane.search.visible_entry_indices.is_none());
         assert_eq!(
             filtered_entries_range(&state, 1..2)
                 .into_iter()
@@ -3428,19 +3441,19 @@ mod tests {
     #[test]
     fn visible_entry_index_drives_virtual_range_without_rescanning_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = vec![
+        state.pane.entries = vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.search.query = ".txt".to_string();
+        state.pane.search.query = ".txt".to_string();
 
         let summary = rebuild_visible_entry_index(&mut state, false);
 
         assert_eq!(summary.count, 3);
         assert_eq!(
-            state.search.visible_entry_indices.as_deref(),
+            state.pane.search.visible_entry_indices.as_deref(),
             Some(&[0, 2, 3][..])
         );
         assert_eq!(filtered_entry_count(&state), 3);
@@ -3468,8 +3481,8 @@ mod tests {
         let mut visible_file = test_entry("visible.txt", "/tmp/docs/visible.txt");
         visible_file.location = "docs".into();
         visible_file.modified_age_days = 0;
-        state.entries = vec![old_file, visible_file];
-        state.search.modified_filter = 1;
+        state.pane.entries = vec![old_file, visible_file];
+        state.pane.search.modified_filter = 1;
 
         let summary = rebuild_visible_entry_index(&mut state, false);
 
@@ -3492,7 +3505,7 @@ mod tests {
         second.location = "docs".into();
         let mut third = test_entry("third.txt", "/tmp/docs/third.txt");
         third.location = "docs".into();
-        state.entries = vec![first, second, third];
+        state.pane.entries = vec![first, second, third];
         rebuild_visible_entry_index(&mut state, false);
 
         assert_eq!(
@@ -3513,7 +3526,7 @@ mod tests {
         let mut folder = test_entry("Documents", "/tmp/Documents");
         folder.is_dir = true;
         folder.kind = "Folder".into();
-        state.entries = vec![
+        state.pane.entries = vec![
             folder,
             test_entry("photo.PNG", "/tmp/photo.PNG"),
             test_entry("notes.txt", "/tmp/notes.txt"),
@@ -3567,13 +3580,13 @@ mod tests {
     #[test]
     fn filtered_selection_range_scans_only_visible_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = vec![
+        state.pane.entries = vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.search.query = ".txt".to_string();
+        state.pane.search.query = ".txt".to_string();
 
         assert_eq!(
             selection_range_paths_filtered(&state, "/tmp/gamma", "/tmp/alpha"),
@@ -3635,13 +3648,13 @@ mod tests {
     #[test]
     fn filtered_selection_rect_scans_visible_order_without_cloning_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = vec![
+        state.pane.entries = vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.search.query = ".txt".to_string();
+        state.pane.search.query = ".txt".to_string();
 
         let selected = selection_rect_paths_filtered(
             &state,
@@ -3666,7 +3679,7 @@ mod tests {
     #[test]
     fn filtered_selection_rect_limits_scan_to_intersecting_columns() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = (0..20)
+        state.pane.entries = (0..20)
             .map(|index| test_entry(&format!("entry-{index}"), &format!("/tmp/{index}")))
             .collect();
 
@@ -3762,7 +3775,7 @@ mod tests {
         )));
         {
             let mut state = state.borrow_mut();
-            state.history = PaneHistory::from_stacks(
+            state.pane.history = PaneHistory::from_stacks(
                 vec![PathBuf::from("/tmp"), mount_path.join("old")],
                 vec![
                     mount_path.join("future"),
@@ -3777,10 +3790,10 @@ mod tests {
         ));
 
         let state = state.borrow();
-        assert_eq!(state.current_dir, home_dir());
-        assert_eq!(state.history.back_paths(), &[PathBuf::from("/tmp")]);
+        assert_eq!(state.pane.current_dir, home_dir());
+        assert_eq!(state.pane.history.back_paths(), &[PathBuf::from("/tmp")]);
         assert_eq!(
-            state.history.forward_paths(),
+            state.pane.history.forward_paths(),
             &[PathBuf::from("/run/media/yk/USB-sibling")]
         );
     }
@@ -3798,7 +3811,7 @@ mod tests {
         ));
 
         assert_eq!(
-            state.borrow().current_dir,
+            state.borrow().pane.current_dir,
             PathBuf::from("/run/media/yk/USB-sibling")
         );
     }

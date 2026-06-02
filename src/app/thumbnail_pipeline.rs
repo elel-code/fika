@@ -53,13 +53,13 @@ pub(crate) fn prioritize_thumbnail_entries(
 }
 
 pub(crate) fn path_is_in_virtual_range(state: &AppState, path_text: &str) -> bool {
-    let range_start = state.view.virtual_view.range.start;
-    let range_end = state.view.virtual_view.range.end;
+    let range_start = state.pane.view.virtual_view.range.start;
+    let range_end = state.pane.view.virtual_view.range.end;
     if range_start >= range_end {
         return false;
     }
 
-    if let Some(indices) = state.search.visible_entry_indices.as_ref() {
+    if let Some(indices) = state.pane.search.visible_entry_indices.as_ref() {
         let start = range_start.min(indices.len());
         let end = range_end.min(indices.len());
         if start >= end {
@@ -68,17 +68,17 @@ pub(crate) fn path_is_in_virtual_range(state: &AppState, path_text: &str) -> boo
 
         return indices[start..end]
             .iter()
-            .filter_map(|entry_index| state.entries.get(*entry_index))
+            .filter_map(|entry_index| state.pane.entries.get(*entry_index))
             .any(|entry| entry.path.as_str() == path_text);
     }
 
-    let start = range_start.min(state.entries.len());
-    let end = range_end.min(state.entries.len());
+    let start = range_start.min(state.pane.entries.len());
+    let end = range_end.min(state.pane.entries.len());
     if start >= end {
         return false;
     }
 
-    state.entries[start..end]
+    state.pane.entries[start..end]
         .iter()
         .any(|entry| entry.path.as_str() == path_text)
 }
@@ -390,8 +390,8 @@ mod tests {
             rgba: vec![255, 0, 0, 255],
         };
 
-        state.entries = vec![test_entry("photo.png", path)];
-        state.view.virtual_view.range = 0..1;
+        state.pane.entries = vec![test_entry("photo.png", path)];
+        state.pane.view.virtual_view.range = 0..1;
         state
             .thumbnail_pending
             .insert(path.to_string(), key.clone());
@@ -413,7 +413,7 @@ mod tests {
         assert!(!state.thumbnail_pending.contains_key(path));
         assert!(state.thumbnail_cache.contains_key(&key));
         assert!(!state.thumbnail_failures.contains_key(&key));
-        assert_eq!(state.entries[0].thumbnail_state, 0);
+        assert_eq!(state.pane.entries[0].thumbnail_state, 0);
     }
 
     #[test]
@@ -425,8 +425,8 @@ mod tests {
 
         let mut entry = test_entry("photo.png", path);
         entry.thumbnail_state = 1;
-        state.entries = vec![entry];
-        state.view.virtual_view.range = 0..1;
+        state.pane.entries = vec![entry];
+        state.pane.view.virtual_view.range = 0..1;
         state
             .thumbnail_pending
             .insert(path.to_string(), key.clone());
@@ -446,7 +446,7 @@ mod tests {
         assert!(should_refresh);
         assert!(!state.thumbnail_pending.contains_key(path));
         assert!(state.thumbnail_failures.contains_key(&key));
-        assert_eq!(state.entries[0].thumbnail_state, 1);
+        assert_eq!(state.pane.entries[0].thumbnail_state, 1);
     }
 
     #[test]
@@ -516,10 +516,10 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_uses_identity_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = (0..6)
+        state.pane.entries = (0..6)
             .map(|index| test_entry(&format!("{index}.png"), &format!("/tmp/{index}.png")))
             .collect();
-        state.view.virtual_view.range = 2..5;
+        state.pane.view.virtual_view.range = 2..5;
 
         assert!(path_is_in_virtual_range(&state, "/tmp/2.png"));
         assert!(path_is_in_virtual_range(&state, "/tmp/4.png"));
@@ -530,14 +530,14 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_uses_filtered_visible_indices() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = vec![
+        state.pane.entries = vec![
             test_entry("alpha.png", "/tmp/alpha.png"),
             test_entry("skip.log", "/tmp/skip.log"),
             test_entry("beta.png", "/tmp/beta.png"),
             test_entry("gamma.png", "/tmp/gamma.png"),
         ];
-        state.search.visible_entry_indices = Some(vec![0, 2, 3]);
-        state.view.virtual_view.range = 1..3;
+        state.pane.search.visible_entry_indices = Some(vec![0, 2, 3]);
+        state.pane.view.virtual_view.range = 1..3;
 
         assert!(path_is_in_virtual_range(&state, "/tmp/beta.png"));
         assert!(path_is_in_virtual_range(&state, "/tmp/gamma.png"));
@@ -548,11 +548,11 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_rejects_empty_or_stale_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.entries = vec![test_entry("alpha.png", "/tmp/alpha.png")];
-        state.view.virtual_view.range = 0..0;
+        state.pane.entries = vec![test_entry("alpha.png", "/tmp/alpha.png")];
+        state.pane.view.virtual_view.range = 0..0;
         assert!(!path_is_in_virtual_range(&state, "/tmp/alpha.png"));
 
-        state.view.virtual_view.range = 9..12;
+        state.pane.view.virtual_view.range = 9..12;
         assert!(!path_is_in_virtual_range(&state, "/tmp/alpha.png"));
     }
 }

@@ -109,12 +109,13 @@ pub(crate) fn chooser_output_metadata(state: &AppState) -> ChooserOutputMetadata
 
 pub(crate) fn selected_directory_or_current(state: &AppState) -> PathBuf {
     state
+        .pane
         .selection
         .paths
         .first()
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
-        .unwrap_or_else(|| state.current_dir.clone())
+        .unwrap_or_else(|| state.pane.current_dir.clone())
 }
 
 pub(crate) fn safe_child_path(parent: &Path, name: &str) -> Option<PathBuf> {

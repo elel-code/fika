@@ -31,9 +31,9 @@ pub(crate) fn prepare_directory_load(
         state.thumbnail_generation.next();
         state.thumbnail_pending.clear();
         reset_search_state(state);
-        state.selection.clear();
+        state.pane.selection.clear();
     }
-    let current_dir = state.current_dir.clone();
+    let current_dir = state.pane.current_dir.clone();
     let cached_entries = state.cached_directory_entries(&current_dir);
     let defer_view_restore = !preserve_view && cached_entries.is_none();
 
@@ -109,9 +109,9 @@ mod tests {
         state
             .thumbnail_pending
             .insert("/tmp/current/photo.png".to_string(), pending_key.clone());
-        state.search.query = "photo".to_string();
-        state.selection.paths = vec!["/tmp/current/photo.png".to_string()];
-        state.selection.anchor = Some("/tmp/current/photo.png".to_string());
+        state.pane.search.query = "photo".to_string();
+        state.pane.selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.pane.selection.anchor = Some("/tmp/current/photo.png".to_string());
         state.insert_directory_cache(
             PathBuf::from("/tmp/current"),
             vec![test_entry("photo.png", "/tmp/current/photo.png")],
@@ -134,10 +134,10 @@ mod tests {
             state.thumbnail_pending.get("/tmp/current/photo.png"),
             Some(&pending_key)
         );
-        assert_eq!(state.search.query, "photo");
-        assert_eq!(state.selection.paths, vec!["/tmp/current/photo.png"]);
+        assert_eq!(state.pane.search.query, "photo");
+        assert_eq!(state.pane.selection.paths, vec!["/tmp/current/photo.png"]);
         assert_eq!(
-            state.selection.anchor.as_deref(),
+            state.pane.selection.anchor.as_deref(),
             Some("/tmp/current/photo.png")
         );
     }
@@ -149,10 +149,10 @@ mod tests {
         state
             .thumbnail_pending
             .insert("/tmp/current/photo.png".to_string(), pending_key);
-        state.search.query = "photo".to_string();
-        state.search.kind_filter = 3;
-        state.selection.paths = vec!["/tmp/current/photo.png".to_string()];
-        state.selection.anchor = Some("/tmp/current/photo.png".to_string());
+        state.pane.search.query = "photo".to_string();
+        state.pane.search.kind_filter = 3;
+        state.pane.selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.pane.selection.anchor = Some("/tmp/current/photo.png".to_string());
         let thumbnail_generation = state.thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, false);
@@ -162,10 +162,10 @@ mod tests {
         assert!(preparation.defer_view_restore);
         assert!(state.thumbnail_generation.current() > thumbnail_generation);
         assert!(state.thumbnail_pending.is_empty());
-        assert!(state.search.query.is_empty());
-        assert_eq!(state.search.kind_filter, 0);
-        assert!(state.selection.paths.is_empty());
-        assert!(state.selection.anchor.is_none());
+        assert!(state.pane.search.query.is_empty());
+        assert_eq!(state.pane.search.kind_filter, 0);
+        assert!(state.pane.selection.paths.is_empty());
+        assert!(state.pane.selection.anchor.is_none());
     }
 
     #[test]

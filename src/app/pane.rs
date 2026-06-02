@@ -1,5 +1,29 @@
+use crate::FileEntry;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug)]
+pub(crate) struct PaneState {
+    pub(crate) current_dir: PathBuf,
+    pub(crate) entries: Vec<FileEntry>,
+    pub(crate) history: PaneHistory,
+    pub(crate) selection: PaneSelection,
+    pub(crate) search: PaneSearch,
+    pub(crate) view: PaneView,
+}
+
+impl PaneState {
+    pub(crate) fn new(current_dir: PathBuf) -> Self {
+        Self {
+            current_dir,
+            entries: Vec::new(),
+            history: PaneHistory::default(),
+            selection: PaneSelection::default(),
+            search: PaneSearch::default(),
+            view: PaneView::default(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PaneNavigation {

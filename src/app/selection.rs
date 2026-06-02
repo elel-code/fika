@@ -23,16 +23,17 @@ pub(crate) fn retained_visible_paths(
 }
 
 pub(crate) fn filtered_entry_paths(state: &AppState) -> Vec<String> {
-    if let Some(indices) = state.search.visible_entry_indices.as_ref() {
+    if let Some(indices) = state.pane.search.visible_entry_indices.as_ref() {
         return indices
             .iter()
-            .filter_map(|index| state.entries.get(*index))
+            .filter_map(|index| state.pane.entries.get(*index))
             .map(|entry| entry.path.to_string())
             .collect();
     }
 
     if filters_are_identity(state) {
         return state
+            .pane
             .entries
             .iter()
             .map(|entry| entry.path.to_string())
@@ -46,8 +47,9 @@ pub(crate) fn filtered_entry_paths(state: &AppState) -> Vec<String> {
 }
 
 pub(crate) fn filtered_entries(state: &AppState) -> Vec<FileEntry> {
-    let query = state.search.query.to_ascii_lowercase();
+    let query = state.pane.search.query.to_ascii_lowercase();
     state
+        .pane
         .entries
         .iter()
         .filter(|entry| matches_entry_filters(entry, state, &query))
@@ -56,16 +58,17 @@ pub(crate) fn filtered_entries(state: &AppState) -> Vec<FileEntry> {
 }
 
 pub(crate) fn filtered_entry_count(state: &AppState) -> usize {
-    if let Some(indices) = state.search.visible_entry_indices.as_ref() {
+    if let Some(indices) = state.pane.search.visible_entry_indices.as_ref() {
         return indices.len();
     }
 
     if filters_are_identity(state) {
-        return state.entries.len();
+        return state.pane.entries.len();
     }
 
-    let query = state.search.query.to_ascii_lowercase();
+    let query = state.pane.search.query.to_ascii_lowercase();
     state
+        .pane
         .entries
         .iter()
         .filter(|entry| matches_entry_filters(entry, state, &query))
@@ -73,19 +76,20 @@ pub(crate) fn filtered_entry_count(state: &AppState) -> usize {
 }
 
 pub(crate) fn filtered_entry_at(state: &AppState, index: usize) -> Option<FileEntry> {
-    if let Some(indices) = state.search.visible_entry_indices.as_ref() {
+    if let Some(indices) = state.pane.search.visible_entry_indices.as_ref() {
         return indices
             .get(index)
-            .and_then(|entry_index| state.entries.get(*entry_index))
+            .and_then(|entry_index| state.pane.entries.get(*entry_index))
             .cloned();
     }
 
     if filters_are_identity(state) {
-        return state.entries.get(index).cloned();
+        return state.pane.entries.get(index).cloned();
     }
 
-    let query = state.search.query.to_ascii_lowercase();
+    let query = state.pane.search.query.to_ascii_lowercase();
     state
+        .pane
         .entries
         .iter()
         .filter(|entry| matches_entry_filters(entry, state, &query))
@@ -98,13 +102,13 @@ pub(crate) fn rebuild_visible_entry_index(
     collect_paths: bool,
 ) -> FilteredEntrySummary {
     if filters_are_identity(state) {
-        state.search.visible_entry_indices = None;
+        state.pane.search.visible_entry_indices = None;
         let mut summary = FilteredEntrySummary {
-            count: state.entries.len(),
+            count: state.pane.entries.len(),
             visible_paths: collect_paths.then(Vec::new),
             ..FilteredEntrySummary::default()
         };
-        for entry in &state.entries {
+        for entry in &state.pane.entries {
             if entry.is_dir {
                 summary.folders += 1;
             } else {
@@ -117,7 +121,7 @@ pub(crate) fn rebuild_visible_entry_index(
         return summary;
     }
 
-    let query = state.search.query.to_ascii_lowercase();
+    let query = state.pane.search.query.to_ascii_lowercase();
     let mut summary = FilteredEntrySummary {
         visible_paths: collect_paths.then(Vec::new),
         ..FilteredEntrySummary::default()
@@ -125,6 +129,7 @@ pub(crate) fn rebuild_visible_entry_index(
     let mut indices = Vec::new();
 
     for (index, entry) in state
+        .pane
         .entries
         .iter()
         .enumerate()
@@ -142,7 +147,7 @@ pub(crate) fn rebuild_visible_entry_index(
         indices.push(index);
     }
 
-    state.search.visible_entry_indices = Some(indices);
+    state.pane.search.visible_entry_indices = Some(indices);
     summary
 }
 
@@ -150,13 +155,14 @@ pub(crate) fn filtered_entry_summary(
     state: &AppState,
     collect_paths: bool,
 ) -> FilteredEntrySummary {
-    let query = state.search.query.to_ascii_lowercase();
+    let query = state.pane.search.query.to_ascii_lowercase();
     let mut summary = FilteredEntrySummary {
         visible_paths: collect_paths.then(Vec::new),
         ..FilteredEntrySummary::default()
     };
 
     for entry in state
+        .pane
         .entries
         .iter()
         .filter(|entry| matches_entry_filters(entry, state, &query))
@@ -180,23 +186,25 @@ pub(crate) fn filtered_entries_range(state: &AppState, range: Range<usize>) -> V
         return Vec::new();
     }
 
-    let mut entries = if let Some(indices) = state.search.visible_entry_indices.as_ref() {
+    let mut entries = if let Some(indices) = state.pane.search.visible_entry_indices.as_ref() {
         indices
             .get(range.start..range.end.min(indices.len()))
             .unwrap_or(&[])
             .iter()
-            .filter_map(|index| state.entries.get(*index))
+            .filter_map(|index| state.pane.entries.get(*index))
             .cloned()
             .collect()
     } else if filters_are_identity(state) {
         state
+            .pane
             .entries
-            .get(range.start..range.end.min(state.entries.len()))
+            .get(range.start..range.end.min(state.pane.entries.len()))
             .unwrap_or(&[])
             .to_vec()
     } else {
-        let query = state.search.query.to_ascii_lowercase();
+        let query = state.pane.search.query.to_ascii_lowercase();
         state
+            .pane
             .entries
             .iter()
             .filter(|entry| matches_entry_filters(entry, state, &query))
@@ -215,7 +223,12 @@ fn annotate_visible_location_groups(
     start_visible_index: usize,
     entries: &mut [FileEntry],
 ) {
-    if !state.entries.iter().any(|entry| !entry.location.is_empty()) {
+    if !state
+        .pane
+        .entries
+        .iter()
+        .any(|entry| !entry.location.is_empty())
+    {
         return;
     }
 
@@ -233,22 +246,24 @@ fn annotate_visible_location_groups(
 }
 
 fn visible_entry_location_at(state: &AppState, visible_index: usize) -> Option<String> {
-    if let Some(indices) = state.search.visible_entry_indices.as_ref() {
+    if let Some(indices) = state.pane.search.visible_entry_indices.as_ref() {
         return indices
             .get(visible_index)
-            .and_then(|entry_index| state.entries.get(*entry_index))
+            .and_then(|entry_index| state.pane.entries.get(*entry_index))
             .map(|entry| entry.location.to_string());
     }
 
     if filters_are_identity(state) {
         return state
+            .pane
             .entries
             .get(visible_index)
             .map(|entry| entry.location.to_string());
     }
 
-    let query = state.search.query.to_ascii_lowercase();
+    let query = state.pane.search.query.to_ascii_lowercase();
     state
+        .pane
         .entries
         .iter()
         .filter(|entry| matches_entry_filters(entry, state, &query))
@@ -267,10 +282,10 @@ fn search_group_label(location: &str) -> String {
 }
 
 fn filters_are_identity(state: &AppState) -> bool {
-    state.search.query.is_empty()
-        && state.search.kind_filter == 0
-        && state.search.modified_filter == 0
-        && state.search.size_filter == 0
+    state.pane.search.query.is_empty()
+        && state.pane.search.kind_filter == 0
+        && state.pane.search.modified_filter == 0
+        && state.pane.search.size_filter == 0
         && chooser_filter_is_identity(state)
 }
 
@@ -283,9 +298,9 @@ fn chooser_filter_is_identity(state: &AppState) -> bool {
 
 fn matches_entry_filters(entry: &FileEntry, state: &AppState, query: &str) -> bool {
     matches_search_query(entry, query)
-        && matches_kind_filter(entry, state.search.kind_filter)
-        && matches_modified_filter(entry, state.search.modified_filter)
-        && matches_size_filter(entry, state.search.size_filter)
+        && matches_kind_filter(entry, state.pane.search.kind_filter)
+        && matches_modified_filter(entry, state.pane.search.modified_filter)
+        && matches_size_filter(entry, state.pane.search.size_filter)
         && matches_chooser_filter(entry, state)
 }
 
@@ -529,12 +544,13 @@ fn visible_entries_range_iter(
         return Box::new(std::iter::empty());
     }
 
-    if let Some(indices) = state.search.visible_entry_indices.as_ref() {
+    if let Some(indices) = state.pane.search.visible_entry_indices.as_ref() {
         let start = range.start.min(indices.len());
         let end = range.end.min(indices.len());
         return Box::new(indices[start..end].iter().enumerate().filter_map(
             move |(offset, index)| {
                 state
+                    .pane
                     .entries
                     .get(*index)
                     .map(|entry| (start + offset, entry))
@@ -543,19 +559,20 @@ fn visible_entries_range_iter(
     }
 
     if filters_are_identity(state) {
-        let start = range.start.min(state.entries.len());
-        let end = range.end.min(state.entries.len());
+        let start = range.start.min(state.pane.entries.len());
+        let end = range.end.min(state.pane.entries.len());
         return Box::new(
-            state.entries[start..end]
+            state.pane.entries[start..end]
                 .iter()
                 .enumerate()
                 .map(move |(offset, entry)| (start + offset, entry)),
         );
     }
 
-    let query = state.search.query.to_ascii_lowercase();
+    let query = state.pane.search.query.to_ascii_lowercase();
     Box::new(
         state
+            .pane
             .entries
             .iter()
             .filter(move |entry| matches_entry_filters(entry, state, &query))
@@ -566,17 +583,22 @@ fn visible_entries_range_iter(
 }
 
 fn visible_entry_iter(state: &AppState) -> Box<dyn Iterator<Item = &FileEntry> + '_> {
-    if let Some(indices) = state.search.visible_entry_indices.as_ref() {
-        return Box::new(indices.iter().filter_map(|index| state.entries.get(*index)));
+    if let Some(indices) = state.pane.search.visible_entry_indices.as_ref() {
+        return Box::new(
+            indices
+                .iter()
+                .filter_map(|index| state.pane.entries.get(*index)),
+        );
     }
 
     if filters_are_identity(state) {
-        return Box::new(state.entries.iter());
+        return Box::new(state.pane.entries.iter());
     }
 
-    let query = state.search.query.to_ascii_lowercase();
+    let query = state.pane.search.query.to_ascii_lowercase();
     Box::new(
         state
+            .pane
             .entries
             .iter()
             .filter(move |entry| matches_entry_filters(entry, state, &query)),
