@@ -93,7 +93,26 @@ struct ChooserArgs {
 
 enum ChooserRun {
     Selected(ChooserResult),
-    Cancelled,
+    Cancelled(ChooserCancelReason),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChooserCancelReason {
+    UserCancelled,
+    EmptyOutput,
+    RequestClose,
+    CloseStreamEnded,
+}
+
+impl ChooserCancelReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::UserCancelled => "user-cancelled",
+            Self::EmptyOutput => "empty-output",
+            Self::RequestClose => "request-close",
+            Self::CloseStreamEnded => "close-stream-ended",
+        }
+    }
 }
 
 fn main() {
@@ -185,7 +204,7 @@ impl FileChooser {
             Ok(ChooserRun::Selected(result)) => {
                 Ok((0, results_for_paths(result, &options, &filter_map)))
             }
-            Ok(ChooserRun::Cancelled) => Ok(cancelled()),
+            Ok(ChooserRun::Cancelled(_)) => Ok(cancelled()),
             Err(err) => Err(fdo::Error::Failed(err)),
         }
     }
@@ -240,7 +259,7 @@ impl FileChooser {
             Ok(ChooserRun::Selected(result)) => {
                 Ok((0, results_for_paths(result, &options, &filter_map)))
             }
-            Ok(ChooserRun::Cancelled) => Ok(cancelled()),
+            Ok(ChooserRun::Cancelled(_)) => Ok(cancelled()),
             Err(err) => Err(fdo::Error::Failed(err)),
         }
     }
@@ -297,7 +316,7 @@ impl FileChooser {
             Ok(ChooserRun::Selected(result)) => {
                 Ok((0, results_for_paths(result, &options, &filter_map)))
             }
-            Ok(ChooserRun::Cancelled) => Ok(cancelled()),
+            Ok(ChooserRun::Cancelled(_)) => Ok(cancelled()),
             Err(err) => Err(fdo::Error::Failed(err)),
         }
     }
@@ -364,7 +383,7 @@ async fn run_chooser(args: Vec<String>) -> Result<ChooserRun, String> {
         .map_err(|err| format!("cannot launch fika chooser: {err}"))?;
     if !output.status.success() {
         if output.status.code() == Some(fika::chooser::CHOOSER_CANCEL_EXIT_CODE) {
-            return Ok(ChooserRun::Cancelled);
+            return Ok(ChooserRun::Cancelled(ChooserCancelReason::UserCancelled));
         }
         return Err(chooser_failure_message(
             output.status.code(),
@@ -376,7 +395,7 @@ async fn run_chooser(args: Vec<String>) -> Result<ChooserRun, String> {
         .map_err(|err| format!("chooser stdout was not UTF-8: {err}"))?;
     let result = parse_chooser_output(&stdout);
     if result.paths.is_empty() {
-        Ok(ChooserRun::Cancelled)
+        Ok(ChooserRun::Cancelled(ChooserCancelReason::EmptyOutput))
     } else {
         Ok(ChooserRun::Selected(result))
     }
@@ -388,16 +407,18 @@ async fn run_chooser_for_request(
     args: Vec<String>,
 ) -> Result<ChooserRun, String> {
     let mut close_stream = request_close_stream(connection, handle).await?;
-    tokio::select! {
+    let outcome = tokio::select! {
         result = run_chooser(args) => result,
         close = close_stream.next() => {
             match close {
-                Some(Ok(_)) => Ok(ChooserRun::Cancelled),
+                Some(Ok(_)) => Ok(ChooserRun::Cancelled(ChooserCancelReason::RequestClose)),
                 Some(Err(err)) => Err(format!("portal request Close signal failed: {err}")),
-                None => Ok(ChooserRun::Cancelled),
+                None => Ok(ChooserRun::Cancelled(ChooserCancelReason::CloseStreamEnded)),
             }
         }
-    }
+    };
+    portal_debug_log_chooser_lifecycle(handle.as_str(), &outcome);
+    outcome
 }
 
 async fn request_close_stream(
@@ -700,6 +721,46 @@ fn portal_debug_log_parent(decision: &ParentWindowDecision) {
     );
 }
 
+fn portal_debug_log_chooser_lifecycle(handle: &str, outcome: &Result<ChooserRun, String>) {
+    if !portal_debug_enabled() {
+        return;
+    }
+
+    eprintln!(
+        "[fika portal] {}",
+        chooser_lifecycle_summary(handle, outcome)
+    );
+}
+
+fn chooser_lifecycle_summary(handle: &str, outcome: &Result<ChooserRun, String>) -> String {
+    match outcome {
+        Ok(ChooserRun::Selected(result)) => format!(
+            "chooser_finished handle={} outcome=selected paths={} filter={} choices={}",
+            handle,
+            result.paths.len(),
+            result
+                .filter_index
+                .map(|index| index.to_string())
+                .unwrap_or_else(|| "<none>".to_string()),
+            result.choices.len()
+        ),
+        Ok(ChooserRun::Cancelled(reason)) => format!(
+            "chooser_finished handle={} outcome=cancelled reason={}",
+            handle,
+            reason.as_str()
+        ),
+        Err(err) => format!(
+            "chooser_finished handle={} outcome=failed error={}",
+            handle,
+            first_log_line(err)
+        ),
+    }
+}
+
+fn first_log_line(text: &str) -> &str {
+    text.lines().next().unwrap_or(text)
+}
+
 fn portal_debug_enabled() -> bool {
     static DEBUG_PORTAL: OnceLock<bool> = OnceLock::new();
     *DEBUG_PORTAL.get_or_init(|| {
@@ -971,6 +1032,40 @@ mod tests {
         assert_eq!(
             summary,
             "request method=SaveFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=<none> directory=false multiple=false save_kind=file save_files=0 portal_filters=0 chooser_filters=0 initial_filter=<none> portal_choices=0 parent_status=empty parent_forwarded=false native_transient=false"
+        );
+    }
+
+    #[test]
+    fn chooser_lifecycle_summary_reports_selected_metadata() {
+        let outcome = Ok(ChooserRun::Selected(ChooserResult {
+            paths: vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")],
+            filter_index: Some(1),
+            choices: vec![("encoding".to_string(), "utf8".to_string())],
+        }));
+
+        assert_eq!(
+            chooser_lifecycle_summary("/request", &outcome),
+            "chooser_finished handle=/request outcome=selected paths=2 filter=1 choices=1"
+        );
+    }
+
+    #[test]
+    fn chooser_lifecycle_summary_reports_cancellation_reason() {
+        let outcome = Ok(ChooserRun::Cancelled(ChooserCancelReason::RequestClose));
+
+        assert_eq!(
+            chooser_lifecycle_summary("/request", &outcome),
+            "chooser_finished handle=/request outcome=cancelled reason=request-close"
+        );
+    }
+
+    #[test]
+    fn chooser_lifecycle_summary_reports_first_failure_line() {
+        let outcome = Err("cannot launch chooser\nextra detail".to_string());
+
+        assert_eq!(
+            chooser_lifecycle_summary("/request", &outcome),
+            "chooser_finished handle=/request outcome=failed error=cannot launch chooser"
         );
     }
 
