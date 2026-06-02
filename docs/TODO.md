@@ -469,6 +469,7 @@ Acceptance for all:
   - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 60px top bar and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
   - Current: TopBar follows COSMIC's previous/next/up navigation grouping. Home remains a Places/sidebar action rather than a top-bar button.
   - Current: Search follows COSMIC's header behavior more closely: the toolbar search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
+  - Current: TopBar Split now uses the shared `ToolButton` selected state instead of a hand-drawn one-off rectangle, keeping header controls in one COSMIC-like component family.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.

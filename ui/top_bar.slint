@@ -112,26 +112,11 @@ export component TopBar inherits Rectangle {
             padding-left: 8px;
             spacing: 5px;
 
-            if (!root.search-active): Rectangle {
-                height: 34px;
-                width: 38px;
-                border-radius: 8px;
-                border-width: root.split-view-open ? 1px : 0px;
-                border-color: root.dark ? #3f829e : #9bcfe4;
-                background: root.split-view-open ? (root.dark ? #173443 : #e1f2f9) : (split-touch.has-hover ? (root.dark ? #282f36 : #e9edf2) : transparent);
-
-                split-touch := TouchArea {
-                    clicked => { root.toggle_split_view(); }
-                }
-
-                Text {
-                    text: "||";
-                    color: root.split-view-open ? (root.dark ? #e8f8ff : #0f526c) : (root.dark ? #dce3ea : #526071);
-                    font-size: 15px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+            if (!root.search-active): ToolButton {
+                label: "||";
+                dark: root.dark;
+                selected: root.split-view-open;
+                clicked => { root.toggle_split_view(); }
             }
 
             if (!root.search-active): ToolButton {
