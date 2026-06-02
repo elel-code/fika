@@ -49,6 +49,7 @@
   - Current: Devices discovery runs through the async event bridge; `/proc/self/mountinfo` parsing and UDisks2 system-bus discovery no longer execute on the UI thread, and stale device-list generations are ignored.
   - Current: Devices now has a background monitor. UDisks2 system-bus signals trigger debounced refreshes, and a low-frequency snapshot poll catches missed mount-table or desktop-backend changes.
   - Current: `FIKA_DEBUG_DEVICES=1` prints device discovery and monitor diagnostics, including mountinfo/fallback usage, UDisks2 accepted rows, UDisks2 skip reasons, monitor refresh reasons, a single-line discovery summary, mountinfo-only / UDisks2-only / merged row counts, semantic markers, and the final merged sidebar device list.
+  - Current: `scripts/check-runtime-integration.sh` now includes a Devices runtime probe that reports UDisks2 service state, system-bus availability, ObjectManager visibility, and Block/Drive/Filesystem interface counts without performing mount, unmount, or eject operations.
   - Remaining: distro validation for UDisks2/polkit edge cases.
 - [x] Internal drop transfer menu with Move / Copy / Link actions.
 - [x] F5 active refresh; toolbar refresh button removed.
@@ -409,7 +410,7 @@ Acceptance for all:
 
 - [x] Runtime integration diagnostic helper.
   - Acceptance: installed packages have a repeatable check for D-Bus activation metadata, Polkit action visibility, portal backend metadata, and helper binary placement.
-  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/tooling context in normal mode, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, and can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method.
+  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/UDisks2/tooling context in normal mode, probes UDisks2 ObjectManager visibility for Devices validation, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, and can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method.
   - Remaining: run this diagnostic on target distributions/desktops and record any polkit/systemd/dbus activation differences.
 
 - [x] External editor writeback flow.

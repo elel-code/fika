@@ -152,6 +152,22 @@ systemctl_user_service_probe() {
     fi
 }
 
+systemctl_system_service_probe() {
+    local service="$1"
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        printf 'systemctl missing'
+        return
+    fi
+
+    local output
+    if output="$(systemctl is-active "$service" 2>&1)"; then
+        printf '%s' "$(first_line "$output")"
+    else
+        printf '%s' "$(first_line "$output")"
+    fi
+}
+
 polkit_agent_probe() {
     if ! command -v pgrep >/dev/null 2>&1; then
         printf 'unknown (pgrep missing)'
@@ -190,10 +206,12 @@ print_runtime_context() {
     echo "  systemd user: $(systemctl_user_probe)"
     echo "  xdp service:  $(systemctl_user_service_probe xdg-desktop-portal.service)"
     echo "  polkit agent: $(polkit_agent_probe)"
+    echo "  udisks2:      $(systemctl_system_service_probe udisks2.service)"
     echo "  tool dbus-send: $(command_probe dbus-send --version)"
     echo "  tool busctl:    $(command_probe busctl --version)"
     echo "  tool gdbus:     $(command_probe gdbus --version)"
     echo "  tool pkaction:  $(command_probe pkaction --version)"
+    echo "  tool udisksctl: $(command_probe udisksctl --version)"
     echo
 }
 
@@ -273,6 +291,49 @@ dbus_list_activatable_contains() {
     fi
 }
 
+dbus_name_has_owner() {
+    local bus="$1"
+    local name="$2"
+
+    if ! command -v dbus-send >/dev/null 2>&1; then
+        warn "dbus-send is not available; cannot query $bus bus owner for $name"
+        return 1
+    fi
+
+    local output
+    if ! output="$(dbus-send "--$bus" --dest=org.freedesktop.DBus --print-reply \
+        /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner \
+        "string:$name" 2>&1)"; then
+        warn "cannot query $bus bus owner for $name: $output"
+        return 1
+    fi
+
+    if grep -Fq "boolean true" <<<"$output"; then
+        return 0
+    fi
+
+    return 1
+}
+
+dbus_optional_activatable_contains() {
+    local bus="$1"
+    local name="$2"
+
+    if ! command -v dbus-send >/dev/null 2>&1; then
+        warn "dbus-send is not available; cannot query $bus bus activatable names for $name"
+        return 1
+    fi
+
+    local output
+    if ! output="$(dbus-send "--$bus" --dest=org.freedesktop.DBus --print-reply \
+        /org/freedesktop/DBus org.freedesktop.DBus.ListActivatableNames 2>&1)"; then
+        warn "cannot query $bus bus activatable names for $name: $output"
+        return 1
+    fi
+
+    grep -Fq "$name" <<<"$output"
+}
+
 check_polkit_action() {
     if ! command -v pkaction >/dev/null 2>&1; then
         warn "pkaction is not available; cannot query installed polkit actions"
@@ -318,6 +379,44 @@ activate_system_helper() {
     fail "neither busctl nor gdbus is available; cannot activate-check system helper"
 }
 
+check_devices_runtime() {
+    local udisks_name="org.freedesktop.UDisks2"
+    echo "Checking Devices runtime"
+
+    if dbus_name_has_owner system "$udisks_name"; then
+        ok "$udisks_name currently owns a system-bus name"
+    elif dbus_optional_activatable_contains system "$udisks_name"; then
+        ok "$udisks_name is activatable on the system bus"
+    else
+        warn "$udisks_name is not owned or activatable; mounted-path fallback may still work, but mount/unmount/eject cannot use UDisks2"
+        echo
+        return
+    fi
+
+    if ! command -v dbus-send >/dev/null 2>&1; then
+        warn "dbus-send is not available; cannot query UDisks2 ObjectManager"
+        echo
+        return
+    fi
+
+    local output
+    if output="$(dbus-send --system --dest="$udisks_name" --print-reply \
+        /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>&1)"; then
+        local blocks drives filesystems
+        blocks="$(grep -Fc 'string "org.freedesktop.UDisks2.Block"' <<<"$output")"
+        drives="$(grep -Fc 'string "org.freedesktop.UDisks2.Drive"' <<<"$output")"
+        filesystems="$(grep -Fc 'string "org.freedesktop.UDisks2.Filesystem"' <<<"$output")"
+        ok "UDisks2 ObjectManager returned $blocks Block, $drives Drive, and $filesystems Filesystem interface(s)"
+        if [[ "$blocks" -eq 0 || "$drives" -eq 0 ]]; then
+            warn "UDisks2 responded but exposed few storage objects; test with real removable media before closing Devices validation"
+        fi
+    else
+        warn "cannot query UDisks2 ObjectManager: $output"
+    fi
+
+    echo
+}
+
 echo "Checking Fika integration metadata"
 echo "  bindir:     $bindir"
 echo "  datadir:    $datadir"
@@ -327,6 +426,7 @@ echo
 
 if [[ "$metadata_only" == false ]]; then
     print_runtime_context
+    check_devices_runtime
 fi
 
 require_file "$privileged_service"
