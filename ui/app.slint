@@ -1,16 +1,15 @@
-import { LineEdit, ScrollView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import {
-    ActionButton,
     MenuDismissLayer,
     PlaceButton,
     SidebarAction,
     SidebarSection,
-    ToolButton,
 } from "widgets.slint";
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
+import { StatusBar } from "status_bar.slint";
 import { TopBar } from "top_bar.slint";
 import { ChildSubmenuLayer, ChooserChoicePopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
 import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
@@ -1042,89 +1041,39 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    Rectangle {
+                    StatusBar {
                         horizontal-stretch: 1;
                         height: 36px;
-                        background: root.dark_mode ? #111416 : #ffffff;
-                        border-color: root.dark_mode ? #454a50 : #d6dce2;
-                        border-width: 1px;
-
-                        HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            spacing: 8px;
-
-                            Text {
-                                horizontal-stretch: 1;
-                                text: root.selected_count == 0 ? root.status : root.selected_status;
-                                color: root.dark_mode ? #f1f1f1 : #334155;
-                                font-size: 13px;
-                                overflow: elide;
-                                vertical-alignment: center;
-                            }
-
-                            if (root.external_edit_active): Text {
-                                text: root.external_edit_status;
-                                color: root.dark_mode ? #fbbf24 : #92400e;
-                                font-size: 12px;
-                                overflow: elide;
-                                vertical-alignment: center;
-                            }
-
-                            if (root.external_edit_active): ToolButton {
-                                label: "Save Back";
-                                dark: root.dark_mode;
-                                clicked => { root.commit_external_edit(); }
-                            }
-
-                            if (root.external_edit_active): ToolButton {
-                                label: "Discard";
-                                dark: root.dark_mode;
-                                clicked => { root.discard_external_edit(); }
-                            }
-
-                            if (root.undo_available): ActionButton {
-                                label: root.undo_label == "" ? "Undo" : root.undo_label;
-                                dark: root.dark_mode;
-                                clicked => { root.undo_last_operation(); }
-                            }
-
-                            if (root.chooser_mode && root.chooser_save_mode): LineEdit {
-                                text <=> root.chooser_save_name;
-                                height: 28px;
-                                min-width: 220px;
-                                placeholder-text: "File name";
-                                accepted => { root.chooser_accept(self.text); }
-                                changed has-focus => {
-                                    root.chooser-save-input-focused = self.has-focus;
-                                }
-                            }
-
-                            if (root.chooser_mode && root.chooser_filter_count > 0): ActionButton {
-                                width: 150px;
-                                label: root.chooser_filter_label == "" ? "Filter: All" : ("Filter: " + root.chooser_filter_label);
-                                dark: root.dark_mode;
-                                clicked => { root.chooser_next_filter(); }
-                            }
-
-                            for choice[index] in root.chooser_choices: ActionButton {
-                                width: 180px;
-                                label: choice.label + ": " + choice.selected_label;
-                                dark: root.dark_mode;
-                                clicked => {
-                                    root.chooser-choice-menu-index = index;
-                                    root.chooser-choice-menu-x = self.absolute-position.x;
-                                    root.chooser-choice-menu-y = self.absolute-position.y;
-                                    root.chooser-choice-menu-open = true;
-                                }
-                            }
-
-                            if (root.chooser_mode): ActionButton {
-                                label: root.chooser_accept_label != "" ? root.chooser_accept_label : (root.chooser_save_mode ? "Save" : "Choose");
-                                dark: root.dark_mode;
-                                enabled: root.chooser_save_mode ? root.chooser_save_name != "" : (root.chooser_select_directories || root.selected_path != "");
-                                clicked => { root.chooser_accept(root.chooser_save_name); }
-                            }
+                        dark: root.dark_mode;
+                        status: root.status;
+                        selected-count: root.selected_count;
+                        selected-status: root.selected_status;
+                        external-edit-active: root.external_edit_active;
+                        external-edit-status: root.external_edit_status;
+                        undo-available: root.undo_available;
+                        undo-label: root.undo_label;
+                        chooser-mode: root.chooser_mode;
+                        chooser-select-directories: root.chooser_select_directories;
+                        chooser-save-mode: root.chooser_save_mode;
+                        chooser-accept-label: root.chooser_accept_label;
+                        selected-path: root.selected_path;
+                        chooser-filter-count: root.chooser_filter_count;
+                        chooser-filter-label: root.chooser_filter_label;
+                        chooser-choices: root.chooser_choices;
+                        chooser-save-name <=> root.chooser_save_name;
+                        save_focus_changed(focused) => {
+                            root.chooser-save-input-focused = focused;
+                        }
+                        commit_external_edit => { root.commit_external_edit(); }
+                        discard_external_edit => { root.discard_external_edit(); }
+                        undo_last_operation => { root.undo_last_operation(); }
+                        chooser_accept(value) => { root.chooser_accept(value); }
+                        chooser_next_filter => { root.chooser_next_filter(); }
+                        chooser_choice_requested(index, x, y) => {
+                            root.chooser-choice-menu-index = index;
+                            root.chooser-choice-menu-x = x;
+                            root.chooser-choice-menu-y = y;
+                            root.chooser-choice-menu-open = true;
                         }
                     }
                 }

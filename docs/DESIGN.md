@@ -34,6 +34,7 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 - `ui/widgets.slint` 包含通用按钮、菜单项、popup surface、Places 行和 `FolderGlyph`。
 - `ui/top_bar.slint` 负责父目录/Home、路径输入、搜索入口和主题切换；`AppWindow` 只保留动作 callback、路径输入状态和持久化转发。
 - `ui/file_tile.slint` 负责主栏文件项显示、选择、右键菜单、双击打开。
+- `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
 
 主栏当前采用列优先布局：
 

@@ -1,0 +1,110 @@
+import { LineEdit } from "std-widgets.slint";
+import { ActionButton, ToolButton } from "widgets.slint";
+import { ChooserChoice } from "models.slint";
+
+export component StatusBar inherits Rectangle {
+    in property <bool> dark;
+    in property <string> status;
+    in property <int> selected-count;
+    in property <string> selected-status;
+    in property <bool> external-edit-active;
+    in property <string> external-edit-status;
+    in property <bool> undo-available;
+    in property <string> undo-label;
+    in property <bool> chooser-mode;
+    in property <bool> chooser-select-directories;
+    in property <bool> chooser-save-mode;
+    in property <string> chooser-accept-label;
+    in property <string> selected-path;
+    in property <int> chooser-filter-count;
+    in property <string> chooser-filter-label;
+    in property <[ChooserChoice]> chooser-choices;
+    in-out property <string> chooser-save-name;
+    callback save_focus_changed(bool);
+    callback commit_external_edit();
+    callback discard_external_edit();
+    callback undo_last_operation();
+    callback chooser_accept(string);
+    callback chooser_next_filter();
+    callback chooser_choice_requested(int, length, length);
+
+    height: 36px;
+    background: root.dark ? #111416 : #ffffff;
+    border-color: root.dark ? #454a50 : #d6dce2;
+    border-width: 1px;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.selected-count == 0 ? root.status : root.selected-status;
+            color: root.dark ? #f1f1f1 : #334155;
+            font-size: 13px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        if (root.external-edit-active): Text {
+            text: root.external-edit-status;
+            color: root.dark ? #fbbf24 : #92400e;
+            font-size: 12px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        if (root.external-edit-active): ToolButton {
+            label: "Save Back";
+            dark: root.dark;
+            clicked => { root.commit_external_edit(); }
+        }
+
+        if (root.external-edit-active): ToolButton {
+            label: "Discard";
+            dark: root.dark;
+            clicked => { root.discard_external_edit(); }
+        }
+
+        if (root.undo-available): ActionButton {
+            label: root.undo-label == "" ? "Undo" : root.undo-label;
+            dark: root.dark;
+            clicked => { root.undo_last_operation(); }
+        }
+
+        if (root.chooser-mode && root.chooser-save-mode): LineEdit {
+            text <=> root.chooser-save-name;
+            height: 28px;
+            min-width: 220px;
+            placeholder-text: "File name";
+            accepted => { root.chooser_accept(self.text); }
+            changed has-focus => {
+                root.save_focus_changed(self.has-focus);
+            }
+        }
+
+        if (root.chooser-mode && root.chooser-filter-count > 0): ActionButton {
+            width: 150px;
+            label: root.chooser-filter-label == "" ? "Filter: All" : ("Filter: " + root.chooser-filter-label);
+            dark: root.dark;
+            clicked => { root.chooser_next_filter(); }
+        }
+
+        for choice[index] in root.chooser-choices: ActionButton {
+            width: 180px;
+            label: choice.label + ": " + choice.selected_label;
+            dark: root.dark;
+            clicked => {
+                root.chooser_choice_requested(index, self.absolute-position.x, self.absolute-position.y);
+            }
+        }
+
+        if (root.chooser-mode): ActionButton {
+            label: root.chooser-accept-label != "" ? root.chooser-accept-label : (root.chooser-save-mode ? "Save" : "Choose");
+            dark: root.dark;
+            enabled: root.chooser-save-mode ? root.chooser-save-name != "" : (root.chooser-select-directories || root.selected-path != "");
+            clicked => { root.chooser_accept(root.chooser-save-name); }
+        }
+    }
+}
