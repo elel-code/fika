@@ -20,7 +20,8 @@ mod support;
 use app::async_bridge::{AsyncBridge, build_async_runtime, send_async_event};
 use app::device_monitor::start_device_monitor;
 use app::dnd::{
-    WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME, dnd_debug_enabled_from_env,
+    MainDndTrace, PlacesDndTrace, WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME,
+    dnd_debug_enabled_from_env, dnd_main_event_message, dnd_places_event_message,
     dnd_startup_summary, env_flag_is_truthy, external_path_drop_from_payload,
     external_path_drop_rejection_reason, is_external_path_drop_mime,
     winit_file_drop_fallback_enabled_from_env,
@@ -3897,48 +3898,12 @@ fn debug_log(message: &str) {
     }
 }
 
-struct PlacesDndTrace<'a> {
-    backend: &'a str,
-    phase: &'a str,
-    mime_type: &'a str,
-    payload: &'a str,
-    x: f32,
-    y: f32,
-    slot: i32,
-    target: i32,
-    over_gap: bool,
-    over_item: bool,
-}
-
-struct MainDndTrace<'a> {
-    backend: &'a str,
-    phase: &'a str,
-    mime_type: &'a str,
-    payload: &'a str,
-    x: f32,
-    y: f32,
-    rejected: bool,
-    target_path: &'a str,
-}
-
 fn dnd_log_places_event(trace: PlacesDndTrace<'_>) {
     if !dnd_debug_enabled() {
         return;
     }
 
-    eprintln!(
-        "[fika dnd] backend={} phase={} mime={} x={:.1} y={:.1} slot={} target={} gap={} item={} payload={}",
-        trace.backend,
-        trace.phase,
-        trace.mime_type,
-        trace.x,
-        trace.y,
-        trace.slot,
-        trace.target,
-        trace.over_gap,
-        trace.over_item,
-        dnd_payload_summary(trace.payload)
-    );
+    eprintln!("{}", dnd_places_event_message(&trace));
 }
 
 fn dnd_log_main_event(trace: MainDndTrace<'_>) {
@@ -3947,20 +3912,6 @@ fn dnd_log_main_event(trace: MainDndTrace<'_>) {
     }
 
     eprintln!("{}", dnd_main_event_message(&trace));
-}
-
-fn dnd_main_event_message(trace: &MainDndTrace<'_>) -> String {
-    format!(
-        "[fika dnd] backend={} area=main phase={} mime={} x={:.1} y={:.1} rejected={} target_path={} payload={}",
-        trace.backend,
-        trace.phase,
-        trace.mime_type,
-        trace.x,
-        trace.y,
-        trace.rejected,
-        dnd_payload_summary(trace.target_path),
-        dnd_payload_summary(trace.payload)
-    )
 }
 
 fn drop_target_rejection_debug_reason(reason: &str) -> &'static str {
@@ -3974,23 +3925,6 @@ fn drop_target_rejection_debug_reason(reason: &str) -> &'static str {
 fn dnd_debug_enabled() -> bool {
     static DEBUG_DND: OnceLock<bool> = OnceLock::new();
     *DEBUG_DND.get_or_init(dnd_debug_enabled_from_env)
-}
-
-fn dnd_payload_summary(payload: &str) -> String {
-    const MAX_CHARS: usize = 96;
-    let mut summary = String::new();
-    for ch in payload.chars().take(MAX_CHARS) {
-        match ch {
-            '\n' => summary.push_str("\\n"),
-            '\r' => summary.push_str("\\r"),
-            '\t' => summary.push_str("\\t"),
-            _ => summary.push(ch),
-        }
-    }
-    if payload.chars().count() > MAX_CHARS {
-        summary.push_str("...");
-    }
-    summary
 }
 
 #[cfg(test)]
@@ -4516,36 +4450,6 @@ mod tests {
             ))
             .to_string_lossy(),
             "/tmp/Hello World"
-        );
-    }
-
-    #[test]
-    fn dnd_payload_summary_escapes_control_chars_and_truncates() {
-        assert_eq!(
-            dnd_payload_summary("file:///tmp/A\nfile:///tmp/B\tx"),
-            "file:///tmp/A\\nfile:///tmp/B\\tx"
-        );
-
-        assert_eq!(
-            dnd_payload_summary(&"a".repeat(97)),
-            format!("{}...", "a".repeat(96))
-        );
-    }
-
-    #[test]
-    fn main_dnd_trace_message_reports_target_and_rejection_state() {
-        assert_eq!(
-            dnd_main_event_message(&MainDndTrace {
-                backend: "Slint DropArea",
-                phase: "can-drop-rejected",
-                mime_type: "text/uri-list",
-                payload: "file:///tmp/A\nfile:///tmp/B",
-                x: 12.25,
-                y: 99.75,
-                rejected: true,
-                target_path: "/tmp/Target Folder",
-            }),
-            "[fika dnd] backend=Slint DropArea area=main phase=can-drop-rejected mime=text/uri-list x=12.2 y=99.8 rejected=true target_path=/tmp/Target Folder payload=file:///tmp/A\\nfile:///tmp/B"
         );
     }
 

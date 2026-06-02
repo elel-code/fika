@@ -8,6 +8,30 @@ const DISABLE_WINIT_DROP_FALLBACK_ENV: &str = "FIKA_DISABLE_WINIT_DROP_FALLBACK"
 const DEBUG_DND_ENV: &str = "FIKA_DEBUG_DND";
 const SLINT_DROPAREA_MIME_SUMMARY: &str = "text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path";
 
+pub(crate) struct PlacesDndTrace<'a> {
+    pub(crate) backend: &'a str,
+    pub(crate) phase: &'a str,
+    pub(crate) mime_type: &'a str,
+    pub(crate) payload: &'a str,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) slot: i32,
+    pub(crate) target: i32,
+    pub(crate) over_gap: bool,
+    pub(crate) over_item: bool,
+}
+
+pub(crate) struct MainDndTrace<'a> {
+    pub(crate) backend: &'a str,
+    pub(crate) phase: &'a str,
+    pub(crate) mime_type: &'a str,
+    pub(crate) payload: &'a str,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) rejected: bool,
+    pub(crate) target_path: &'a str,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ExternalPathDrop {
     pub(crate) path: PathBuf,
@@ -97,6 +121,36 @@ pub(crate) fn dnd_startup_summary(winit_fallback_enabled: bool) -> String {
     )
 }
 
+pub(crate) fn dnd_places_event_message(trace: &PlacesDndTrace<'_>) -> String {
+    format!(
+        "[fika dnd] backend={} phase={} mime={} x={:.1} y={:.1} slot={} target={} gap={} item={} payload={}",
+        trace.backend,
+        trace.phase,
+        trace.mime_type,
+        trace.x,
+        trace.y,
+        trace.slot,
+        trace.target,
+        trace.over_gap,
+        trace.over_item,
+        dnd_payload_summary(trace.payload)
+    )
+}
+
+pub(crate) fn dnd_main_event_message(trace: &MainDndTrace<'_>) -> String {
+    format!(
+        "[fika dnd] backend={} area=main phase={} mime={} x={:.1} y={:.1} rejected={} target_path={} payload={}",
+        trace.backend,
+        trace.phase,
+        trace.mime_type,
+        trace.x,
+        trace.y,
+        trace.rejected,
+        dnd_payload_summary(trace.target_path),
+        dnd_payload_summary(trace.payload)
+    )
+}
+
 pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -163,6 +217,23 @@ fn percent_decode(value: &str) -> String {
         index += 1;
     }
     String::from_utf8_lossy(&output).to_string()
+}
+
+fn dnd_payload_summary(payload: &str) -> String {
+    const MAX_CHARS: usize = 96;
+    let mut summary = String::new();
+    for ch in payload.chars().take(MAX_CHARS) {
+        match ch {
+            '\n' => summary.push_str("\\n"),
+            '\r' => summary.push_str("\\r"),
+            '\t' => summary.push_str("\\t"),
+            _ => summary.push(ch),
+        }
+    }
+    if payload.chars().count() > MAX_CHARS {
+        summary.push_str("...");
+    }
+    summary
 }
 
 #[cfg(test)]
@@ -264,6 +335,55 @@ mod tests {
         assert!(
             dnd_startup_summary(false).contains("winit_fallback=disabled"),
             "disabled fallback state should be visible in startup diagnostics"
+        );
+    }
+
+    #[test]
+    fn dnd_payload_summary_escapes_control_chars_and_truncates() {
+        assert_eq!(
+            dnd_payload_summary("file:///tmp/A\nfile:///tmp/B\tx"),
+            "file:///tmp/A\\nfile:///tmp/B\\tx"
+        );
+
+        assert_eq!(
+            dnd_payload_summary(&"a".repeat(97)),
+            format!("{}...", "a".repeat(96))
+        );
+    }
+
+    #[test]
+    fn dnd_places_trace_message_reports_drop_geometry() {
+        assert_eq!(
+            dnd_places_event_message(&PlacesDndTrace {
+                backend: "Slint DropArea",
+                phase: "can-drop-accepted",
+                mime_type: "text/uri-list",
+                payload: "file:///tmp/A\nfile:///tmp/B",
+                x: 12.25,
+                y: 99.75,
+                slot: 3,
+                target: 2,
+                over_gap: false,
+                over_item: true,
+            }),
+            "[fika dnd] backend=Slint DropArea phase=can-drop-accepted mime=text/uri-list x=12.2 y=99.8 slot=3 target=2 gap=false item=true payload=file:///tmp/A\\nfile:///tmp/B"
+        );
+    }
+
+    #[test]
+    fn dnd_main_trace_message_reports_target_and_rejection_state() {
+        assert_eq!(
+            dnd_main_event_message(&MainDndTrace {
+                backend: "Slint DropArea",
+                phase: "can-drop-rejected",
+                mime_type: "text/uri-list",
+                payload: "file:///tmp/A\nfile:///tmp/B",
+                x: 12.25,
+                y: 99.75,
+                rejected: true,
+                target_path: "/tmp/Target Folder",
+            }),
+            "[fika dnd] backend=Slint DropArea area=main phase=can-drop-rejected mime=text/uri-list x=12.2 y=99.8 rejected=true target_path=/tmp/Target Folder payload=file:///tmp/A\\nfile:///tmp/B"
         );
     }
 }
