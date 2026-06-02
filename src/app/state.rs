@@ -1,3 +1,4 @@
+use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::search;
 use crate::fs::thumbnails;
@@ -28,6 +29,7 @@ pub(crate) struct AppState {
     pub(crate) selection_anchor: Option<String>,
     pub(crate) clipboard_paths: Vec<PathBuf>,
     pub(crate) clipboard_cut: bool,
+    pub(crate) clipboard_content_kind: Option<ClipboardContentKind>,
     pub(crate) chooser_filters: Vec<ChooserFilter>,
     pub(crate) chooser_filter_index: usize,
     pub(crate) chooser_return_filter: bool,
@@ -86,6 +88,7 @@ impl AppState {
             selection_anchor: None,
             clipboard_paths: Vec::new(),
             clipboard_cut: false,
+            clipboard_content_kind: None,
             chooser_filters: Vec::new(),
             chooser_filter_index: 0,
             chooser_return_filter: false,

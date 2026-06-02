@@ -302,6 +302,26 @@ pub fn create_file(parent: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
+pub fn write_unique_file(
+    parent: &Path,
+    base_name: &str,
+    extension: &str,
+    data: &[u8],
+) -> Result<PathBuf, String> {
+    if !parent.is_dir() {
+        return Err("current location is not a folder".to_string());
+    }
+    let extension = extension.trim_start_matches('.');
+    let file_name = if extension.is_empty() {
+        sanitize_child_name(base_name)?
+    } else {
+        sanitize_child_name(&format!("{base_name}.{extension}"))?
+    };
+    let destination = unique_destination(parent, file_name.as_ref());
+    fs::write(&destination, data).map_err(|err| err.to_string())?;
+    Ok(destination)
+}
+
 pub fn rename_path(path: &Path, new_name: &str) -> Result<PathBuf, String> {
     if !path_exists(path) {
         return Err("item no longer exists".to_string());
@@ -1608,6 +1628,20 @@ mod tests {
         undo_create_file(&created).unwrap();
         assert!(!created.exists());
         assert!(temp.join("New File.txt").exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn write_unique_file_uses_keep_both_names_and_writes_bytes() {
+        let temp = test_dir("write-unique-file");
+        fs::create_dir_all(&temp).unwrap();
+        fs::write(temp.join("Pasted Text.txt"), b"old").unwrap();
+
+        let created = write_unique_file(&temp, "Pasted Text", "txt", b"new").unwrap();
+
+        assert_eq!(created.file_name().unwrap(), "Pasted Text copy.txt");
+        assert_eq!(fs::read(&created).unwrap(), b"new");
+        assert_eq!(fs::read(temp.join("Pasted Text.txt")).unwrap(), b"old");
         let _ = fs::remove_dir_all(temp);
     }
 

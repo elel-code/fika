@@ -1,6 +1,6 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::events::{AsyncEvent, ClipboardLoadResult};
-use crate::app::state::AppState;
+use crate::app::state::{AppState, FileUndo};
 use crate::app::transfer::{
     TransferStart, clear_accepted_cut_source, start_transfer_operation,
     target_is_source_or_descendant,
@@ -50,7 +50,9 @@ pub(crate) fn register_callbacks(
 
 pub(crate) fn sync_clipboard_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let state = state.borrow();
-    ui.set_clipboard_has_paths(!state.clipboard_paths.is_empty());
+    ui.set_clipboard_has_paths(
+        !state.clipboard_paths.is_empty() || state.clipboard_content_kind.is_some(),
+    );
     ui.set_clipboard_cut(state.clipboard_cut);
 }
 
@@ -70,6 +72,7 @@ fn copy_paths(ui: &AppWindow, state: &Rc<RefCell<AppState>>, context_path: &str,
         state.clipboard_generation.next();
         state.clipboard_paths = paths;
         state.clipboard_cut = cut;
+        state.clipboard_content_kind = None;
     }
     sync_clipboard_ui(ui, state);
 
@@ -98,12 +101,17 @@ fn paste_into(
     }
 
     let (operation, paths, pruned_missing) = {
-        if state.borrow().clipboard_paths.is_empty() {
+        let needs_clipboard_refresh = {
+            let state_ref = state.borrow();
+            state_ref.clipboard_paths.is_empty() && state_ref.clipboard_content_kind.is_none()
+        };
+        if needs_clipboard_refresh {
             refresh_clipboard_availability(ui, state);
         }
         let mut state_ref = state.borrow_mut();
         if state_ref.clipboard_paths.is_empty() {
-            set_status(ui, "Clipboard is empty");
+            drop(state_ref);
+            paste_non_file_content_async(ui, bridge, target_dir);
             return;
         }
         let (existing_paths, missing_count) =
@@ -168,6 +176,66 @@ fn paste_into(
     }
 }
 
+fn paste_non_file_content_async(ui: &AppWindow, bridge: &AsyncBridge, target_dir: PathBuf) {
+    set_status(ui, "Pasting clipboard contents...");
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let affected_dir = target_dir.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let content = clipboard::read_non_file_content()?;
+            let extension = content
+                .extension()
+                .ok_or_else(|| format!("unsupported clipboard MIME type {}", content.mime_type))?;
+            let destination = file_ops::write_unique_file(
+                &target_dir,
+                content.base_file_name(),
+                extension,
+                &content.data,
+            )?;
+            Ok((
+                format!(
+                    "{} saved to {}",
+                    clipboard_content_label(content.kind),
+                    destination.display()
+                ),
+                Some(FileUndo {
+                    operation: "create-file".to_string(),
+                    original_source: destination.clone(),
+                    destination,
+                    overwritten_backup: None,
+                    items: Vec::new(),
+                }),
+            ))
+        })
+        .await
+        .unwrap_or_else(|err| Err(format!("clipboard paste task failed: {err}")));
+        let (result, undo) = match result {
+            Ok((message, undo)) => (Ok(message), undo),
+            Err(err) => (Err(err), None),
+        };
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::FileActionFinished(crate::fs::file_actions::FileActionResult {
+                action: "Paste Clipboard",
+                affected_dir,
+                privileged_command: None,
+                result,
+                undo,
+            }),
+        );
+    });
+}
+
+fn clipboard_content_label(kind: clipboard::ClipboardContentKind) -> &'static str {
+    match kind {
+        clipboard::ClipboardContentKind::Image => "Image",
+        clipboard::ClipboardContentKind::Video => "Video",
+        clipboard::ClipboardContentKind::Text => "Text",
+    }
+}
+
 pub(crate) fn refresh_clipboard_availability_async(
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
@@ -176,7 +244,7 @@ pub(crate) fn refresh_clipboard_availability_async(
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {
-        let result = tokio::task::spawn_blocking(clipboard::read_file_list)
+        let result = tokio::task::spawn_blocking(clipboard::read_clipboard_snapshot)
             .await
             .unwrap_or_else(|err| Err(format!("clipboard read task failed: {err}")));
         send_async_event(
@@ -217,7 +285,7 @@ fn existing_clipboard_paths(
 
 fn refresh_clipboard_availability(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let generation = state.borrow_mut().clipboard_generation.next();
-    if let Ok(clipboard) = clipboard::read_file_list() {
+    if let Ok(clipboard) = clipboard::read_clipboard_snapshot() {
         let mut state_ref = state.borrow_mut();
         apply_clipboard_load(
             &mut state_ref,
@@ -248,13 +316,23 @@ fn apply_clipboard_load(
 
 fn merge_desktop_clipboard(
     state: &mut AppState,
-    clipboard: clipboard::FileClipboard,
+    clipboard: clipboard::ClipboardSnapshot,
     exists: impl Fn(&Path) -> bool,
 ) -> usize {
-    let paths = unique_paths(clipboard.paths);
+    state.clipboard_content_kind = clipboard.content_kind;
+    let Some(files) = clipboard.files else {
+        state.clipboard_paths.clear();
+        state.clipboard_cut = false;
+        return 0;
+    };
+
+    let paths = unique_paths(files.paths);
     let (existing_paths, missing_count) = existing_clipboard_paths(&paths, exists);
     state.clipboard_paths = existing_paths;
-    state.clipboard_cut = clipboard.cut && !state.clipboard_paths.is_empty();
+    state.clipboard_cut = files.cut && !state.clipboard_paths.is_empty();
+    if !state.clipboard_paths.is_empty() {
+        state.clipboard_content_kind = None;
+    }
     missing_count
 }
 
@@ -290,8 +368,19 @@ mod tests {
     use crate::app::events::ClipboardLoadResult;
     use crate::app::state::AppState;
     use crate::app::transfer::target_is_source_or_descendant;
-    use crate::desktop::clipboard::FileClipboard;
+    use crate::desktop::clipboard::{ClipboardContentKind, ClipboardSnapshot, FileClipboard};
     use std::path::{Path, PathBuf};
+
+    fn file_snapshot(paths: Vec<PathBuf>, cut: bool) -> ClipboardSnapshot {
+        ClipboardSnapshot {
+            files: Some(FileClipboard {
+                paths,
+                cut,
+                helper: "test".to_string(),
+            }),
+            content_kind: None,
+        }
+    }
 
     #[test]
     fn paste_target_rejects_self_and_descendant() {
@@ -361,11 +450,10 @@ mod tests {
 
         merge_desktop_clipboard(
             &mut state,
-            FileClipboard {
-                paths: vec![PathBuf::from("/tmp/new-a"), PathBuf::from("/tmp/new-b")],
-                cut: true,
-                helper: "test".to_string(),
-            },
+            file_snapshot(
+                vec![PathBuf::from("/tmp/new-a"), PathBuf::from("/tmp/new-b")],
+                true,
+            ),
             |_| true,
         );
 
@@ -400,15 +488,14 @@ mod tests {
 
         merge_desktop_clipboard(
             &mut state,
-            FileClipboard {
-                paths: vec![
+            file_snapshot(
+                vec![
                     PathBuf::from("/tmp/new-a"),
                     PathBuf::from("/tmp/new-b"),
                     PathBuf::from("/tmp/new-a"),
                 ],
-                cut: false,
-                helper: "test".to_string(),
-            },
+                false,
+            ),
             |_| true,
         );
 
@@ -425,15 +512,14 @@ mod tests {
 
         let missing = merge_desktop_clipboard(
             &mut state,
-            FileClipboard {
-                paths: vec![
+            file_snapshot(
+                vec![
                     PathBuf::from("/tmp/exists-a"),
                     PathBuf::from("/tmp/missing"),
                     PathBuf::from("/tmp/exists-b"),
                 ],
-                cut: true,
-                helper: "test".to_string(),
-            },
+                true,
+            ),
             |path| path.to_string_lossy().contains("exists"),
         );
 
@@ -449,11 +535,7 @@ mod tests {
 
         let missing = merge_desktop_clipboard(
             &mut state,
-            FileClipboard {
-                paths: vec![PathBuf::from("/tmp/missing")],
-                cut: true,
-                helper: "test".to_string(),
-            },
+            file_snapshot(vec![PathBuf::from("/tmp/missing")], true),
             |_| false,
         );
 
@@ -474,11 +556,7 @@ mod tests {
             &mut state,
             ClipboardLoadResult {
                 generation: stale_generation,
-                result: Ok(FileClipboard {
-                    paths: vec![PathBuf::from("/tmp/external")],
-                    cut: false,
-                    helper: "test".to_string(),
-                }),
+                result: Ok(file_snapshot(vec![PathBuf::from("/tmp/external")], false)),
             },
             |_| true,
         );
@@ -497,11 +575,7 @@ mod tests {
             &mut state,
             ClipboardLoadResult {
                 generation,
-                result: Ok(FileClipboard {
-                    paths: vec![PathBuf::from("/tmp/external")],
-                    cut: false,
-                    helper: "test".to_string(),
-                }),
+                result: Ok(file_snapshot(vec![PathBuf::from("/tmp/external")], false)),
             },
             |_| true,
         );
@@ -509,5 +583,28 @@ mod tests {
         assert!(applied);
         assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/external")]);
         assert!(!state.clipboard_cut);
+    }
+
+    #[test]
+    fn desktop_clipboard_content_snapshot_clears_stale_file_paths() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_paths = vec![PathBuf::from("/tmp/old")];
+        state.clipboard_cut = true;
+
+        merge_desktop_clipboard(
+            &mut state,
+            ClipboardSnapshot {
+                files: None,
+                content_kind: Some(ClipboardContentKind::Image),
+            },
+            |_| true,
+        );
+
+        assert!(state.clipboard_paths.is_empty());
+        assert!(!state.clipboard_cut);
+        assert_eq!(
+            state.clipboard_content_kind,
+            Some(ClipboardContentKind::Image)
+        );
     }
 }

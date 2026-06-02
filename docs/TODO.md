@@ -469,7 +469,8 @@ Acceptance for all:
 - [~] Revisit clipboard behavior against COSMIC's cached Wayland model.
   - Reference: `cosmic-files/src/clipboard.rs` and clipboard handling in `cosmic-files/src/app.rs`.
   - Acceptance: paste availability does not depend on reading clipboard from transient menu contexts, and future paste-image/text/video-to-file workflows have a documented path.
-  - Current: file-list paste availability now uses Fika's cached clipboard state; startup and menu entry only schedule background refreshes. Future image/text/video paste-to-file workflows remain to be designed.
+  - Current: file-list paste availability now uses Fika's cached clipboard state; startup and menu entry only schedule background refreshes.
+  - Current: when the clipboard has no file-list payload, Fika probes `wl-paste --list-types` and caches whether image, video, or text content is pasteable without reading the full payload from transient menu handling. Paste then follows COSMIC's order: files first, then image, video, and text, writing non-file contents as unique `Pasted Image.*`, `Pasted Video.*`, or `Pasted Text.txt` files with Undo support.
 
 - [~] Evolve file operation progress toward COSMIC's controller split.
   - Reference: `cosmic-files/src/operation/controller.rs`, `recursive.rs`, and `notifiers.rs`.

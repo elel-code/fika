@@ -101,7 +101,7 @@ pub(crate) struct DevicesLoadedResult {
 #[derive(Debug)]
 pub(crate) struct ClipboardLoadResult {
     pub(crate) generation: u64,
-    pub(crate) result: Result<clipboard::FileClipboard, String>,
+    pub(crate) result: Result<clipboard::ClipboardSnapshot, String>,
 }
 
 #[derive(Debug)]
