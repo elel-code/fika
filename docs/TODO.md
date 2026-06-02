@@ -194,6 +194,7 @@
   - Acceptance: thumbnail memory use does not grow without bound while browsing many image directories.
   - Current: cache entries are capped and the oldest entry is evicted when the limit is exceeded.
   - Current: inspired by `cosmic-files/src/thumbnail_cacher.rs`, failed thumbnail attempts are also cached by path, mtime, and target size with capped LRU eviction, so broken/unsupported images do not repeatedly enqueue decode jobs while scrolling large directories.
+  - Current: thumbnail loading also reads and writes freedesktop.org disk cache PNGs under `normal` / `large` / `x-large` / `xx-large`, and writes `fail/fika-$version` markers after decode errors so repeated visits do not decode the same broken image again until the source mtime changes.
   - Current: thumbnail load results update only the thumbnail success/failure caches and pending map; visible tiles are refreshed by re-decorating the virtual slice, avoiding a full `entries` scan for every completed thumbnail.
   - Current: same-directory refresh and watcher reload preserve the active thumbnail generation and pending jobs, following COSMIC Files' item/thumbnail separation; full navigation still cancels stale thumbnail work.
 
@@ -489,7 +490,7 @@ Acceptance for all:
 - [ ] Move thumbnail caching closer to the freedesktop model used by COSMIC.
   - Reference: `cosmic-files/src/thumbnail_cacher.rs` and `thumbnailer.rs`.
   - Acceptance: cache files, failure markers, and external thumbnailer desktop entries are considered before adding more ad-hoc thumbnail code.
-  - Current: thumbnail keys now carry freedesktop size buckets and cache filename identity, and thumbnail load results carry freedesktop cache/fail-marker paths based on the Thumbnail Managing Standard (`file://` URI MD5, `normal` / `large` / `x-large` / `xx-large`, and `fail/fika-$version`). Actual disk cache read/write and external thumbnailer execution are still pending.
+  - Current: thumbnail keys now carry freedesktop size buckets and cache filename identity, and thumbnail load reads/writes freedesktop cache/fail-marker paths based on the Thumbnail Managing Standard (`file://` URI MD5, `normal` / `large` / `x-large` / `xx-large`, and `fail/fika-$version`). External thumbnailer execution is still pending.
 
 - [ ] Keep pointer-scope behavior aligned with COSMIC's mouse-area approach.
   - Reference: `cosmic-files/src/mouse_area.rs`.

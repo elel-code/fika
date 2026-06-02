@@ -1315,6 +1315,7 @@ dependencies = [
  "futures-lite",
  "image",
  "notify",
+ "png 0.18.1",
  "slint",
  "slint-build",
  "tokio",

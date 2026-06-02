@@ -1,7 +1,7 @@
 use image::GenericImageView;
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -116,9 +116,31 @@ pub(crate) fn fallback_key(path: &Path, size_px: u32) -> ThumbnailKey {
 }
 
 pub(crate) fn load_thumbnail(path: PathBuf, size_px: u32) -> ThumbnailLoad {
+    let cache_base_dir = freedesktop_thumbnail_cache_base_dir();
+    load_thumbnail_with_cache_base(path, size_px, cache_base_dir.as_deref())
+}
+
+fn load_thumbnail_with_cache_base(
+    path: PathBuf,
+    size_px: u32,
+    cache_base_dir: Option<&Path>,
+) -> ThumbnailLoad {
     let key = key_for(&path, size_px).unwrap_or_else(|_| fallback_key(&path, size_px));
-    let cache_paths = freedesktop_thumbnail_cache_paths(&path, size_px).unwrap_or_default();
-    let data = decode_thumbnail(&path, size_px);
+    let cache_paths = cache_base_dir
+        .map(|cache_base_dir| {
+            freedesktop_thumbnail_cache_paths_for_path_base(&path, size_px, cache_base_dir)
+        })
+        .transpose()
+        .unwrap_or_default();
+    let data = if key.freedesktop_cache_filename.is_some() {
+        if let Some(cache_paths) = cache_paths.as_ref() {
+            load_thumbnail_with_freedesktop_cache(&path, size_px, &key, cache_paths)
+        } else {
+            decode_thumbnail(&path, size_px)
+        }
+    } else {
+        decode_thumbnail(&path, size_px)
+    };
     ThumbnailLoad {
         path,
         key,
@@ -127,8 +149,42 @@ pub(crate) fn load_thumbnail(path: PathBuf, size_px: u32) -> ThumbnailLoad {
     }
 }
 
+fn load_thumbnail_with_freedesktop_cache(
+    path: &Path,
+    size_px: u32,
+    key: &ThumbnailKey,
+    cache_paths: &FreedesktopThumbnailCachePaths,
+) -> io::Result<ThumbnailData> {
+    if let Some(data) = read_thumbnail_cache(cache_paths, key.modified_secs, size_px) {
+        return Ok(data);
+    }
+
+    if thumbnail_disk_entry_is_fresh(&cache_paths.fail_marker_path, key.modified_secs) {
+        return Err(io::Error::other(format!(
+            "thumbnail generation previously failed; fail marker {}",
+            cache_paths.fail_marker_path.display()
+        )));
+    }
+
+    let cache_size_px = cache_paths.size.pixel_size();
+    match decode_thumbnail(path, cache_size_px) {
+        Ok(cache_data) => {
+            let _ = write_thumbnail_cache(cache_paths, &cache_data, key.modified_secs);
+            resize_thumbnail_data(&cache_data, size_px)
+        }
+        Err(err) => {
+            let _ = write_thumbnail_fail_marker(cache_paths);
+            Err(err)
+        }
+    }
+}
+
 fn decode_thumbnail(path: &Path, size_px: u32) -> io::Result<ThumbnailData> {
     let image = image::open(path).map_err(io::Error::other)?;
+    thumbnail_dynamic_image(image, size_px)
+}
+
+fn thumbnail_dynamic_image(image: image::DynamicImage, size_px: u32) -> io::Result<ThumbnailData> {
     let (width, height) = image.dimensions();
     let scale = (size_px as f32 / width.max(height).max(1) as f32).min(1.0);
     let target_width = ((width as f32 * scale).round() as u32).max(1);
@@ -142,24 +198,31 @@ fn decode_thumbnail(path: &Path, size_px: u32) -> io::Result<ThumbnailData> {
     })
 }
 
+fn resize_thumbnail_data(data: &ThumbnailData, size_px: u32) -> io::Result<ThumbnailData> {
+    if data.width.max(data.height) <= size_px.max(1) {
+        return Ok(data.clone());
+    }
+    let image = image::RgbaImage::from_raw(data.width, data.height, data.rgba.clone())
+        .ok_or_else(|| io::Error::other("thumbnail buffer dimensions do not match RGBA data"))?;
+    thumbnail_dynamic_image(image::DynamicImage::ImageRgba8(image), size_px)
+}
+
 pub(crate) fn freedesktop_thumbnail_cache_base_dir() -> Option<PathBuf> {
     let xdg_cache_home = env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
     let home = env::var_os("HOME").map(PathBuf::from);
     thumbnail_cache_base_dir_from_values(xdg_cache_home.as_deref(), home.as_deref())
 }
 
-pub(crate) fn freedesktop_thumbnail_cache_paths(
+fn freedesktop_thumbnail_cache_paths_for_path_base(
     path: &Path,
     size_px: u32,
-) -> io::Result<Option<FreedesktopThumbnailCachePaths>> {
-    let Some(cache_base_dir) = freedesktop_thumbnail_cache_base_dir() else {
-        return Ok(None);
-    };
-    Ok(Some(freedesktop_thumbnail_cache_paths_for_base(
+    cache_base_dir: &Path,
+) -> io::Result<FreedesktopThumbnailCachePaths> {
+    Ok(freedesktop_thumbnail_cache_paths_for_base(
         &thumbnail_file_uri(path)?,
         size_px,
-        &cache_base_dir,
-    )))
+        cache_base_dir,
+    ))
 }
 
 fn thumbnail_cache_base_dir_from_values(
@@ -246,6 +309,124 @@ fn thumbnail_cache_filename(source_uri: &str) -> String {
 
 fn freedesktop_fail_marker_app_id() -> String {
     format!("fika-{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn read_thumbnail_cache(
+    cache_paths: &FreedesktopThumbnailCachePaths,
+    source_modified_secs: u64,
+    size_px: u32,
+) -> Option<ThumbnailData> {
+    if !thumbnail_disk_entry_is_fresh(&cache_paths.thumbnail_path, source_modified_secs) {
+        return None;
+    }
+
+    match decode_thumbnail(&cache_paths.thumbnail_path, size_px) {
+        Ok(data) => Some(data),
+        Err(_) => {
+            let _ = fs::remove_file(&cache_paths.thumbnail_path);
+            None
+        }
+    }
+}
+
+fn write_thumbnail_cache(
+    cache_paths: &FreedesktopThumbnailCachePaths,
+    data: &ThumbnailData,
+    source_modified_secs: u64,
+) -> io::Result<()> {
+    let parent = cache_paths
+        .thumbnail_path
+        .parent()
+        .ok_or_else(|| io::Error::other("thumbnail cache path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let temp_path = parent.join(format!(
+        ".{}.{}.tmp",
+        cache_paths.cache_filename,
+        std::process::id()
+    ));
+
+    write_thumbnail_cache_png(
+        &temp_path,
+        data,
+        &cache_paths.source_uri,
+        source_modified_secs,
+    )?;
+    match fs::rename(&temp_path, &cache_paths.thumbnail_path) {
+        Ok(()) => {
+            let _ = remove_thumbnail_fail_marker(cache_paths);
+            Ok(())
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(err)
+        }
+    }
+}
+
+fn write_thumbnail_cache_png(
+    path: &Path,
+    data: &ThumbnailData,
+    source_uri: &str,
+    source_modified_secs: u64,
+) -> io::Result<()> {
+    let file = fs::File::create(path)?;
+    let writer = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(writer, data.width, data.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .add_text_chunk("Thumb::URI".to_string(), source_uri.to_string())
+        .map_err(io::Error::other)?;
+    encoder
+        .add_text_chunk("Thumb::MTime".to_string(), source_modified_secs.to_string())
+        .map_err(io::Error::other)?;
+    let mut writer = encoder.write_header().map_err(io::Error::other)?;
+    writer
+        .write_image_data(&data.rgba)
+        .map_err(io::Error::other)
+}
+
+fn write_thumbnail_fail_marker(cache_paths: &FreedesktopThumbnailCachePaths) -> io::Result<()> {
+    let parent = cache_paths
+        .fail_marker_path
+        .parent()
+        .ok_or_else(|| io::Error::other("thumbnail fail marker path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    fs::write(
+        &cache_paths.fail_marker_path,
+        format!("{}\n", cache_paths.source_uri),
+    )
+}
+
+fn remove_thumbnail_fail_marker(cache_paths: &FreedesktopThumbnailCachePaths) -> io::Result<()> {
+    match fs::remove_file(&cache_paths.fail_marker_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn thumbnail_disk_entry_is_fresh(path: &Path, source_modified_secs: u64) -> bool {
+    file_modified_secs(path).is_some_and(|modified_secs| {
+        thumbnail_disk_entry_is_fresh_for_times(modified_secs, source_modified_secs)
+    })
+}
+
+fn thumbnail_disk_entry_is_fresh_for_times(
+    entry_modified_secs: u64,
+    source_modified_secs: u64,
+) -> bool {
+    entry_modified_secs >= source_modified_secs
+}
+
+fn file_modified_secs(path: &Path) -> Option<u64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
 }
 
 fn md5_hex(input: &[u8]) -> String {
@@ -410,6 +591,49 @@ fn hex_digit_upper(nibble: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageFormat;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_dir(name: &str) -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "fika-thumbnail-{name}-{}-{now}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn write_rgba_png(path: &Path, rgba: &[u8], width: u32, height: u32) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        image::save_buffer_with_format(
+            path,
+            rgba,
+            width,
+            height,
+            image::ColorType::Rgba8,
+            ImageFormat::Png,
+        )
+        .unwrap();
+    }
+
+    fn png_text_chunks(path: &Path) -> Vec<(String, String)> {
+        let file = fs::File::open(path).unwrap();
+        let decoder = png::Decoder::new(std::io::BufReader::new(file));
+        let reader = decoder.read_info().unwrap();
+        reader
+            .info()
+            .uncompressed_latin1_text
+            .iter()
+            .map(|chunk| (chunk.keyword.clone(), chunk.text.clone()))
+            .collect()
+    }
 
     #[test]
     fn recognizes_supported_image_extensions() {
@@ -500,5 +724,105 @@ mod tests {
             Some(PathBuf::from("/home/user/.cache/thumbnails"))
         );
         assert_eq!(thumbnail_cache_base_dir_from_values(None, None), None);
+    }
+
+    #[test]
+    fn load_thumbnail_writes_freedesktop_cache_after_decode() {
+        let dir = test_dir("cache-write");
+        let source = dir.join("source.png");
+        let cache_base = dir.join("cache").join("thumbnails");
+        write_rgba_png(&source, &[0, 255, 0, 255], 1, 1);
+
+        let load = load_thumbnail_with_cache_base(source.clone(), 64, Some(&cache_base));
+        let data = load.data.unwrap();
+        let cache_paths = load.cache_paths.unwrap();
+
+        assert_eq!(data.rgba, vec![0, 255, 0, 255]);
+        assert!(cache_paths.thumbnail_path.exists());
+        assert!(thumbnail_disk_entry_is_fresh(
+            &cache_paths.thumbnail_path,
+            key_for(&source, 64).unwrap().modified_secs
+        ));
+        let text_chunks = png_text_chunks(&cache_paths.thumbnail_path);
+        assert!(text_chunks.contains(&("Thumb::URI".to_string(), cache_paths.source_uri)));
+        assert!(text_chunks.iter().any(|(keyword, text)| {
+            keyword == "Thumb::MTime"
+                && text == &key_for(&source, 64).unwrap().modified_secs.to_string()
+        }));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_thumbnail_prefers_fresh_freedesktop_cache() {
+        let dir = test_dir("cache-hit");
+        let source = dir.join("source.png");
+        let cache_base = dir.join("cache").join("thumbnails");
+        write_rgba_png(&source, &[0, 0, 255, 255], 1, 1);
+        let cache_paths =
+            freedesktop_thumbnail_cache_paths_for_path_base(&source, 64, &cache_base).unwrap();
+        write_thumbnail_cache(
+            &cache_paths,
+            &ThumbnailData {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 0, 0, 255],
+            },
+            key_for(&source, 64).unwrap().modified_secs,
+        )
+        .unwrap();
+
+        let load = load_thumbnail_with_cache_base(source, 64, Some(&cache_base));
+        let data = load.data.unwrap();
+
+        assert_eq!(data.rgba, vec![255, 0, 0, 255]);
+        assert_eq!(
+            load.cache_paths.unwrap().thumbnail_path,
+            cache_paths.thumbnail_path
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fresh_fail_marker_skips_thumbnail_decode() {
+        let dir = test_dir("fail-marker-hit");
+        let source = dir.join("source.png");
+        let cache_base = dir.join("cache").join("thumbnails");
+        write_rgba_png(&source, &[0, 0, 255, 255], 1, 1);
+        let cache_paths =
+            freedesktop_thumbnail_cache_paths_for_path_base(&source, 64, &cache_base).unwrap();
+        write_thumbnail_fail_marker(&cache_paths).unwrap();
+
+        let load = load_thumbnail_with_cache_base(source, 64, Some(&cache_base));
+        let error = load.data.unwrap_err().to_string();
+
+        assert!(error.contains("thumbnail generation previously failed"));
+        assert!(cache_paths.fail_marker_path.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn decode_failure_writes_freedesktop_fail_marker() {
+        let dir = test_dir("fail-marker-write");
+        let source = dir.join("broken.png");
+        let cache_base = dir.join("cache").join("thumbnails");
+        fs::write(&source, b"not an image").unwrap();
+
+        let load = load_thumbnail_with_cache_base(source, 64, Some(&cache_base));
+        let cache_paths = load.cache_paths.unwrap();
+
+        assert!(load.data.is_err());
+        assert!(cache_paths.fail_marker_path.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn thumbnail_disk_entry_freshness_uses_source_mtime() {
+        assert!(thumbnail_disk_entry_is_fresh_for_times(10, 10));
+        assert!(thumbnail_disk_entry_is_fresh_for_times(11, 10));
+        assert!(!thumbnail_disk_entry_is_fresh_for_times(9, 10));
     }
 }
