@@ -42,7 +42,7 @@ use app::file_clipboard::{
 };
 use app::geometry::{
     MainGridLayout, SelectionRect, active_main_pane_width, main_pane_bounds, place_drop_geometry,
-    register_menu_geometry_callbacks, split_preview_plan,
+    register_menu_geometry_callbacks,
 };
 use app::operation_controller::{
     OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
@@ -76,7 +76,9 @@ use app::transfer::{
     prepare_main_transfer, prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
     start_transfer_operation,
 };
-use app::virtual_view::{VirtualViewInput, prepare_virtual_view_update};
+use app::virtual_view::{
+    SplitPreviewInput, VirtualViewInput, prepare_split_preview_update, prepare_virtual_view_update,
+};
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::settings::{AppSettings, load_settings, save_settings};
@@ -3177,35 +3179,18 @@ fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
     let snapshot = {
         let mut state = state.borrow_mut();
-        match state.panes.pane_mut_for_target(PaneTarget::Inactive) {
-            Some(pane) => {
-                let entry_count = pane.entries.len();
-                let plan = split_preview_plan(
-                    entry_count,
-                    inactive_width,
-                    inactive_height,
-                    pane.view.viewport_x,
-                    ui.get_icon_zoom_level(),
-                );
-                pane.view.viewport_x = plan.viewport_x;
-                let entries = pane.entries[plan.range.clone()].to_vec();
-                Some((
-                    pane.current_dir.display().to_string(),
-                    display_location_name(&pane.current_dir),
-                    entry_count,
-                    plan.range.start,
-                    plan.start_column,
-                    plan.viewport_x,
-                    entries,
-                ))
-            }
-            None => None,
-        }
+        prepare_split_preview_update(
+            &mut state,
+            SplitPreviewInput {
+                pane_width: inactive_width,
+                pane_height: inactive_height,
+                zoom_level: ui.get_icon_zoom_level(),
+                thumbnail_size_px: thumbnail_size_px(ui),
+            },
+        )
     };
 
-    let Some((path, name, entry_count, virtual_start, start_column, viewport_x, mut entries)) =
-        snapshot
-    else {
+    let Some(update) = snapshot else {
         ui.set_inactive_pane_path(SharedString::new());
         ui.set_inactive_pane_name(SharedString::new());
         ui.set_inactive_pane_entry_count(0);
@@ -3219,18 +3204,16 @@ fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         return;
     };
 
-    {
-        let state = state.borrow();
-        decorate_entries_with_cached_thumbnails(&state, &mut entries, thumbnail_size_px(ui));
-    }
+    let path = update.current_dir.display().to_string();
+    let name = display_location_name(&update.current_dir);
     ui.set_inactive_pane_path(path.into());
     ui.set_inactive_pane_name(name.into());
-    ui.set_inactive_pane_entry_count(entry_count as i32);
-    ui.set_inactive_pane_virtual_start_index(virtual_start as i32);
-    ui.set_inactive_pane_virtual_start_column(start_column as i32);
-    ui.set_inactive_pane_viewport_x(viewport_x);
-    ui.set_inactive_pane_viewport_offset(-viewport_x);
-    ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(entries))));
+    ui.set_inactive_pane_entry_count(update.entry_count as i32);
+    ui.set_inactive_pane_virtual_start_index(update.range.start as i32);
+    ui.set_inactive_pane_virtual_start_column(update.start_column as i32);
+    ui.set_inactive_pane_viewport_x(update.viewport_x);
+    ui.set_inactive_pane_viewport_offset(-update.viewport_x);
+    ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
 }
 
 fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {

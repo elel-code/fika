@@ -1,9 +1,13 @@
 use crate::FileEntry;
-use crate::app::geometry::{MainGridLayout, VirtualGridPlan, virtual_grid_plan};
+use crate::app::geometry::{
+    MainGridLayout, VirtualGridPlan, split_preview_plan, virtual_grid_plan,
+};
+use crate::app::pane::PaneTarget;
 use crate::app::selection::{filtered_entries_range, filtered_entry_count};
 use crate::app::state::AppState;
 use crate::app::thumbnail_pipeline::decorate_entries_with_cached_thumbnails;
 use std::ops::Range;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VirtualViewUpdate {
@@ -25,6 +29,24 @@ pub(crate) struct VirtualViewInput {
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
     pub(crate) visible_count_override: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SplitPreviewUpdate {
+    pub(crate) current_dir: PathBuf,
+    pub(crate) entry_count: usize,
+    pub(crate) viewport_x: f32,
+    pub(crate) range: Range<usize>,
+    pub(crate) start_column: usize,
+    pub(crate) entries: Vec<FileEntry>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SplitPreviewInput {
+    pub(crate) pane_width: f32,
+    pub(crate) pane_height: f32,
+    pub(crate) zoom_level: i32,
+    pub(crate) thumbnail_size_px: u32,
 }
 
 pub(crate) fn prepare_virtual_view_update(
@@ -85,6 +107,37 @@ pub(crate) fn prepare_virtual_view_update(
         entries,
         rebuild_model: true,
     }
+}
+
+pub(crate) fn prepare_split_preview_update(
+    state: &mut AppState,
+    input: SplitPreviewInput,
+) -> Option<SplitPreviewUpdate> {
+    let (current_dir, entry_count, plan, mut entries) = {
+        let pane = state.panes.pane_mut_for_target(PaneTarget::Inactive)?;
+        let entry_count = pane.entries.len();
+        let plan = split_preview_plan(
+            entry_count,
+            input.pane_width,
+            input.pane_height,
+            pane.view.viewport_x,
+            input.zoom_level,
+        );
+        pane.view.viewport_x = plan.viewport_x;
+        let entries = pane.entries[plan.range.clone()].to_vec();
+        (pane.current_dir.clone(), entry_count, plan, entries)
+    };
+
+    decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
+
+    Some(SplitPreviewUpdate {
+        current_dir,
+        entry_count,
+        viewport_x: plan.viewport_x,
+        range: plan.range,
+        start_column: plan.start_column,
+        entries,
+    })
 }
 
 fn should_rebuild_virtual_model(
@@ -198,5 +251,73 @@ mod tests {
         assert_eq!(update.viewport_x, 70.0);
         assert_eq!(update.range, 0..10);
         assert_eq!(state.panes.active.view.viewport_x, 70.0);
+    }
+
+    #[test]
+    fn split_preview_update_slices_inactive_pane_and_clamps_viewport() {
+        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
+        {
+            let inactive = state.panes.inactive_mut().unwrap();
+            inactive.entries = (0..100).map(test_entry).collect();
+            inactive.view.viewport_x = 1_200.0;
+        }
+
+        let update = prepare_split_preview_update(
+            &mut state,
+            SplitPreviewInput {
+                pane_width: 420.0,
+                pane_height: 704.0,
+                zoom_level: 1,
+                thumbnail_size_px: 80,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(update.current_dir, PathBuf::from("/tmp/inactive"));
+        assert_eq!(update.entry_count, 100);
+        assert_eq!(update.viewport_x, 1_200.0);
+        assert_eq!(update.range, 21..77);
+        assert_eq!(update.start_column, 3);
+        assert_eq!(update.entries.len(), 56);
+        assert_eq!(update.entries[0].name.as_str(), "item-21.txt");
+        assert_eq!(
+            state.panes.inactive().unwrap().view.viewport_x,
+            update.viewport_x
+        );
+
+        state.panes.inactive_mut().unwrap().view.viewport_x = 4_000.0;
+        let clamped = prepare_split_preview_update(
+            &mut state,
+            SplitPreviewInput {
+                pane_width: 420.0,
+                pane_height: 704.0,
+                zoom_level: 1,
+                thumbnail_size_px: 80,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(clamped.viewport_x, 2_728.0);
+        assert_eq!(clamped.range, 77..100);
+        assert_eq!(state.panes.inactive().unwrap().view.viewport_x, 2_728.0);
+    }
+
+    #[test]
+    fn split_preview_update_returns_none_without_inactive_pane() {
+        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
+
+        assert!(
+            prepare_split_preview_update(
+                &mut state,
+                SplitPreviewInput {
+                    pane_width: 420.0,
+                    pane_height: 704.0,
+                    zoom_level: 1,
+                    thumbnail_size_px: 80,
+                },
+            )
+            .is_none()
+        );
     }
 }
