@@ -994,7 +994,6 @@ fn selected_choices_for_options(
 }
 
 fn path_to_file_uri(path: &Path) -> String {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let text = path.to_string_lossy();
     let mut uri = String::from("file://");
     for byte in text.as_bytes() {
@@ -1037,6 +1036,26 @@ mod tests {
     fn file_uri_percent_encodes_non_ascii_and_spaces() {
         let uri = path_to_file_uri(Path::new("/tmp/Fika Test/数值.txt"));
         assert_eq!(uri, "file:///tmp/Fika%20Test/%E6%95%B0%E5%80%BC.txt");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_uri_preserves_selected_symlink_path() {
+        let temp =
+            std::env::temp_dir().join(format!("fika-portal-uri-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        let target = temp.join("target.txt");
+        let link = temp.join("link.txt");
+        std::fs::write(&target, "target").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert_eq!(
+            path_to_file_uri(&link),
+            format!("file://{}", link.to_string_lossy())
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
