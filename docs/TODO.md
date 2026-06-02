@@ -66,6 +66,8 @@
 - [x] Split Rust code into focused nested modules for config, desktop integration, filesystem logic, and support helpers.
 - [x] Directory cache for instant redraw on previously visited folders.
   - Current: directory entries are cached with an LRU cap so long browsing sessions cannot keep every visited directory's full entry list forever.
+  - Current: directory scans run as one background blocking scan, following COSMIC Files' local-directory pattern instead of scheduling per-entry async filesystem operations.
+  - Current: watcher/manual refresh results that are visibly unchanged only refresh the cache and status text; they do not reset the Slint model or virtual range.
 - [x] Dolphin-style delayed main-view clearing for uncached directory navigation.
 - [x] Per-directory main-view scroll position memory.
   - Current: remembered view states are cached with an LRU cap so long browsing sessions cannot keep every visited path's viewport state forever.

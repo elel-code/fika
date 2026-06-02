@@ -1,6 +1,7 @@
 use crate::FileEntry;
 use crate::app::search_ui::{cancel_active_search, reset_search_state};
 use crate::app::state::AppState;
+use crate::fs::entries::RawFileEntry;
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -33,6 +34,30 @@ pub(crate) fn prepare_directory_load(
         generation,
         cached_entries,
     }
+}
+
+pub(crate) fn directory_entries_match(
+    current_entries: &[FileEntry],
+    incoming_entries: &[RawFileEntry],
+) -> bool {
+    current_entries.len() == incoming_entries.len()
+        && current_entries
+            .iter()
+            .zip(incoming_entries)
+            .all(|(current, incoming)| file_entry_matches_raw(current, incoming))
+}
+
+fn file_entry_matches_raw(current: &FileEntry, incoming: &RawFileEntry) -> bool {
+    current.name.as_str() == incoming.name
+        && current.path.as_str() == incoming.path
+        && current.group.as_str() == incoming.group
+        && current.location.as_str() == incoming.location
+        && current.kind.as_str() == incoming.kind
+        && current.size.as_str() == incoming.size
+        && current.size_bytes == incoming.size_bytes as f32
+        && current.modified.as_str() == incoming.modified
+        && current.modified_age_days == incoming.modified_age_days
+        && current.is_dir == incoming.is_dir
 }
 
 #[cfg(test)]
@@ -122,5 +147,36 @@ mod tests {
             thumbnail_state: 0,
             thumbnail: Image::default(),
         }
+    }
+
+    fn test_raw_entry(name: &str, path: &str) -> RawFileEntry {
+        RawFileEntry {
+            name: name.to_string(),
+            path: path.to_string(),
+            group: String::new(),
+            location: String::new(),
+            kind: "File".to_string(),
+            size: "1 KB".to_string(),
+            size_bytes: 1024,
+            modified: "Today".to_string(),
+            modified_age_days: 0,
+            is_dir: false,
+        }
+    }
+
+    #[test]
+    fn directory_entries_match_detects_equivalent_visible_model() {
+        let current = vec![test_entry("photo.png", "/tmp/current/photo.png")];
+        let incoming = vec![test_raw_entry("photo.png", "/tmp/current/photo.png")];
+
+        assert!(directory_entries_match(&current, &incoming));
+    }
+
+    #[test]
+    fn directory_entries_match_detects_visible_changes() {
+        let current = vec![test_entry("photo.png", "/tmp/current/photo.png")];
+        let incoming = vec![test_raw_entry("notes.txt", "/tmp/current/notes.txt")];
+
+        assert!(!directory_entries_match(&current, &incoming));
     }
 }

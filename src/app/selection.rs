@@ -146,7 +146,6 @@ pub(crate) fn rebuild_visible_entry_index(
     summary
 }
 
-#[cfg(test)]
 pub(crate) fn filtered_entry_summary(
     state: &AppState,
     collect_paths: bool,

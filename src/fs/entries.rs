@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RawFileEntry {
     pub name: String,
     pub path: String,
@@ -21,11 +21,21 @@ pub struct RawFileEntry {
 }
 
 pub async fn read_entries_async(path: &Path) -> io::Result<Vec<RawFileEntry>> {
-    let mut entries = Vec::new();
-    let mut dir = tokio::fs::read_dir(path).await?;
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || read_entries_sync(&path))
+        .await
+        .map_err(|err| io::Error::other(format!("directory scan task failed: {err}")))?
+}
 
-    while let Some(item) = dir.next_entry().await? {
-        if let Ok(metadata) = item.metadata().await {
+pub fn read_entries_sync(path: &Path) -> io::Result<Vec<RawFileEntry>> {
+    let mut entries = Vec::new();
+    let dir = std::fs::read_dir(path)?;
+
+    for item in dir {
+        let Ok(item) = item else {
+            continue;
+        };
+        if let Ok(metadata) = item.metadata() {
             entries.push(to_raw_file_entry(
                 item.path(),
                 item.file_name().to_string_lossy().trim().to_string(),

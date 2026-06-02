@@ -24,7 +24,9 @@ use app::chooser::{
     set_chooser_choice_index,
 };
 use app::device_monitor::start_device_monitor;
-use app::directory_loading::{DirectoryLoadPreparation, prepare_directory_load};
+use app::directory_loading::{
+    DirectoryLoadPreparation, directory_entries_match, prepare_directory_load,
+};
 use app::dnd::{
     MainDndTrace, PlacesDndTrace, SLINT_DROPAREA_BACKEND_SOURCE, dnd_debug_enabled_from_env,
     dnd_main_event_message, dnd_places_event_message, env_flag_is_truthy,
@@ -50,8 +52,9 @@ use app::search_ui::{
     search_filters_active, set_search_filters,
 };
 use app::selection::{
-    append_unique_paths, filtered_entry_count, filtered_entry_paths, rebuild_visible_entry_index,
-    retained_visible_paths, selection_range_paths_filtered, selection_rect_paths_filtered,
+    append_unique_paths, filtered_entry_count, filtered_entry_paths, filtered_entry_summary,
+    rebuild_visible_entry_index, retained_visible_paths, selection_range_paths_filtered,
+    selection_rect_paths_filtered,
 };
 use app::state::{AppState, DeviceAction, DirectoryViewState, FileUndo};
 use app::thumbnail_pipeline::{
@@ -1493,16 +1496,32 @@ fn apply_directory_result(
                 entries.len(),
                 result.preserve_view
             ));
-            {
+            let unchanged = {
                 let mut state = state.borrow_mut();
-                state.entries = entries.into_iter().map(to_file_entry).collect();
-                let cache_entries = state.entries.clone();
-                state.virtual_view.invalidate();
-                state.insert_directory_cache(result.path.clone(), cache_entries);
-                if !result.preserve_view {
-                    reset_search_state(&mut state);
-                    state.selected_paths.clear();
+                if directory_entries_match(&state.entries, &entries) {
+                    let cache_entries = state.entries.clone();
+                    state.insert_directory_cache(result.path.clone(), cache_entries);
+                    true
+                } else {
+                    state.entries = entries.into_iter().map(to_file_entry).collect();
+                    let cache_entries = state.entries.clone();
+                    state.virtual_view.invalidate();
+                    state.insert_directory_cache(result.path.clone(), cache_entries);
+                    if !result.preserve_view {
+                        reset_search_state(&mut state);
+                        state.selected_paths.clear();
+                    }
+                    false
                 }
+            };
+            if unchanged {
+                debug_log(&format!(
+                    "directory_loaded unchanged generation={} path={}",
+                    result.generation,
+                    result.path.display()
+                ));
+                set_directory_status_from_entries(ui, state);
+                return;
             }
             if !result.preserve_view {
                 reset_search_controls(ui);
@@ -2494,6 +2513,32 @@ fn sync_virtual_entries_with_count(
         let thumbnail_entries =
             prioritize_thumbnail_entries(&update.entries, update.range.start, update.visible_range);
         schedule_visible_thumbnails(ui, state, bridge, &thumbnail_entries, size_px, false);
+    }
+}
+
+fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let (query, filters_active, total, summary) = {
+        let state_ref = state.borrow();
+        (
+            state_ref.search_query.to_ascii_lowercase(),
+            search_filters_active(&state_ref),
+            state_ref.entries.len(),
+            filtered_entry_summary(&state_ref, false),
+        )
+    };
+    if query.is_empty() && !filters_active {
+        set_status(
+            ui,
+            &format!("{} folders, {} files", summary.folders, summary.files),
+        );
+    } else {
+        set_status(
+            ui,
+            &format!(
+                "{} of {total} items ({} folders, {} files)",
+                summary.count, summary.folders, summary.files
+            ),
+        );
     }
 }
 
