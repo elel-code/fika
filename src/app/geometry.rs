@@ -353,6 +353,411 @@ pub(crate) fn context_menu_metrics(input: MenuMetricsInput) -> MenuMetrics {
     }
 }
 
+pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
+    ui.on_root_menu_left(
+        |view_width,
+         view_height,
+         anchor_x,
+         anchor_y,
+         menu_width,
+         menu_height,
+         margin,
+         pointer_gap| {
+            RootMenuGeometry {
+                view_width,
+                view_height,
+                anchor_x,
+                anchor_y,
+                menu_width,
+                menu_height,
+                margin,
+                pointer_gap,
+            }
+            .popup()
+            .x
+        },
+    );
+
+    ui.on_root_menu_top(
+        |view_width,
+         view_height,
+         anchor_x,
+         anchor_y,
+         menu_width,
+         menu_height,
+         margin,
+         pointer_gap| {
+            RootMenuGeometry {
+                view_width,
+                view_height,
+                anchor_x,
+                anchor_y,
+                menu_width,
+                menu_height,
+                margin,
+                pointer_gap,
+            }
+            .popup()
+            .y
+        },
+    );
+
+    ui.on_anchored_menu_left(
+        |view_width,
+         view_height,
+         anchor_x,
+         anchor_y,
+         menu_width,
+         menu_height,
+         margin,
+         pointer_gap,
+         gap| {
+            AnchoredMenuGeometry {
+                view_width,
+                view_height,
+                anchor_x,
+                anchor_y,
+                menu_width,
+                menu_height,
+                margin,
+                pointer_gap,
+                gap,
+            }
+            .popup()
+            .x
+        },
+    );
+
+    ui.on_anchored_menu_top(
+        |view_width,
+         view_height,
+         anchor_x,
+         anchor_y,
+         menu_width,
+         menu_height,
+         margin,
+         pointer_gap,
+         gap| {
+            AnchoredMenuGeometry {
+                view_width,
+                view_height,
+                anchor_x,
+                anchor_y,
+                menu_width,
+                menu_height,
+                margin,
+                pointer_gap,
+                gap,
+            }
+            .popup()
+            .y
+        },
+    );
+
+    ui.on_child_menu_left(
+        |view_width,
+         view_height,
+         parent_left,
+         parent_width,
+         row_y,
+         child_width,
+         child_height,
+         margin,
+         pointer_gap,
+         child_gap| {
+            ChildMenuGeometry {
+                view_width,
+                view_height,
+                parent_left,
+                parent_width,
+                row_y,
+                child_width,
+                child_height,
+                margin,
+                pointer_gap,
+                child_gap,
+            }
+            .popup()
+            .x
+        },
+    );
+
+    ui.on_child_menu_top(
+        |view_width,
+         view_height,
+         parent_left,
+         parent_width,
+         row_y,
+         child_width,
+         child_height,
+         margin,
+         pointer_gap,
+         child_gap| {
+            ChildMenuGeometry {
+                view_width,
+                view_height,
+                parent_left,
+                parent_width,
+                row_y,
+                child_width,
+                child_height,
+                margin,
+                pointer_gap,
+                child_gap,
+            }
+            .popup()
+            .y
+        },
+    );
+
+    ui.on_child_bridge_left(
+        |view_width,
+         view_height,
+         parent_left,
+         parent_width,
+         child_left,
+         child_width,
+         row_y,
+         child_top,
+         row_height,
+         title_height,
+         margin,
+         pointer_gap,
+         child_gap| {
+            ChildBridgeGeometry {
+                view_width,
+                view_height,
+                parent_left,
+                parent_width,
+                child_left,
+                child_width,
+                row_y,
+                child_top,
+                row_height,
+                title_height,
+                margin,
+                pointer_gap,
+                child_gap,
+            }
+            .rect()
+            .x
+        },
+    );
+
+    ui.on_child_bridge_top(
+        |view_width,
+         view_height,
+         parent_left,
+         parent_width,
+         child_left,
+         child_width,
+         row_y,
+         child_top,
+         row_height,
+         title_height,
+         margin,
+         pointer_gap,
+         child_gap| {
+            ChildBridgeGeometry {
+                view_width,
+                view_height,
+                parent_left,
+                parent_width,
+                child_left,
+                child_width,
+                row_y,
+                child_top,
+                row_height,
+                title_height,
+                margin,
+                pointer_gap,
+                child_gap,
+            }
+            .rect()
+            .y
+        },
+    );
+
+    ui.on_child_bridge_width(
+        |view_width,
+         view_height,
+         parent_left,
+         parent_width,
+         child_left,
+         child_width,
+         row_y,
+         child_top,
+         row_height,
+         title_height,
+         margin,
+         pointer_gap,
+         child_gap| {
+            ChildBridgeGeometry {
+                view_width,
+                view_height,
+                parent_left,
+                parent_width,
+                child_left,
+                child_width,
+                row_y,
+                child_top,
+                row_height,
+                title_height,
+                margin,
+                pointer_gap,
+                child_gap,
+            }
+            .rect()
+            .width
+        },
+    );
+
+    ui.on_child_bridge_height(
+        |view_width,
+         view_height,
+         parent_left,
+         parent_width,
+         child_left,
+         child_width,
+         row_y,
+         child_top,
+         row_height,
+         title_height,
+         margin,
+         pointer_gap,
+         child_gap| {
+            ChildBridgeGeometry {
+                view_width,
+                view_height,
+                parent_left,
+                parent_width,
+                child_left,
+                child_width,
+                row_y,
+                child_top,
+                row_height,
+                title_height,
+                margin,
+                pointer_gap,
+                child_gap,
+            }
+            .rect()
+            .height
+        },
+    );
+
+    ui.on_context_menu_height(
+        |kind,
+         selected_count,
+         is_dir,
+         default_open_visible,
+         add_to_places_visible,
+         clipboard_has_paths,
+         place_builtin,
+         device_mounted,
+         device_pending,
+         device_can_mount,
+         device_can_unmount,
+         device_can_eject,
+         item_height,
+         separator_height,
+         title_height| {
+            context_menu_metrics(MenuMetricsInput {
+                kind,
+                selected_count,
+                is_dir,
+                default_open_visible,
+                add_to_places_visible,
+                clipboard_has_paths,
+                place_builtin,
+                device_mounted,
+                device_pending,
+                device_can_mount,
+                device_can_unmount,
+                device_can_eject,
+                item_height,
+                separator_height,
+                title_height,
+            })
+            .height
+        },
+    );
+
+    ui.on_context_menu_open_with_row_offset(
+        |kind,
+         selected_count,
+         is_dir,
+         default_open_visible,
+         add_to_places_visible,
+         clipboard_has_paths,
+         place_builtin,
+         device_mounted,
+         device_pending,
+         device_can_mount,
+         device_can_unmount,
+         device_can_eject,
+         item_height,
+         separator_height,
+         title_height| {
+            context_menu_metrics(MenuMetricsInput {
+                kind,
+                selected_count,
+                is_dir,
+                default_open_visible,
+                add_to_places_visible,
+                clipboard_has_paths,
+                place_builtin,
+                device_mounted,
+                device_pending,
+                device_can_mount,
+                device_can_unmount,
+                device_can_eject,
+                item_height,
+                separator_height,
+                title_height,
+            })
+            .open_with_row_y_offset
+        },
+    );
+
+    ui.on_context_menu_create_new_row_offset(
+        |kind,
+         selected_count,
+         is_dir,
+         default_open_visible,
+         add_to_places_visible,
+         clipboard_has_paths,
+         place_builtin,
+         device_mounted,
+         device_pending,
+         device_can_mount,
+         device_can_unmount,
+         device_can_eject,
+         item_height,
+         separator_height,
+         title_height| {
+            context_menu_metrics(MenuMetricsInput {
+                kind,
+                selected_count,
+                is_dir,
+                default_open_visible,
+                add_to_places_visible,
+                clipboard_has_paths,
+                place_builtin,
+                device_mounted,
+                device_pending,
+                device_can_mount,
+                device_can_unmount,
+                device_can_eject,
+                item_height,
+                separator_height,
+                title_height,
+            })
+            .create_new_row_y_offset
+        },
+    );
+}
+
 fn device_context_menu_height(
     input: MenuMetricsInput,
     item: f32,
