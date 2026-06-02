@@ -27,10 +27,8 @@ use app::device_monitor::start_device_monitor;
 use app::dnd::{
     MainDndTrace, PlacesDndTrace, SLINT_DROPAREA_BACKEND_SOURCE,
     WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME, dnd_debug_enabled_from_env,
-    dnd_main_event_message, dnd_places_event_message, dnd_startup_summary,
-    drop_target_rejection_debug_reason, env_flag_is_truthy, external_path_drop_from_payload,
-    external_path_drop_rejection_reason, is_external_path_drop_mime,
-    winit_file_drop_fallback_enabled_from_env,
+    dnd_main_event_message, dnd_places_event_message, dnd_startup_summary, env_flag_is_truthy,
+    external_path_drop_from_payload, winit_file_drop_fallback_enabled_from_env,
 };
 use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
@@ -44,9 +42,8 @@ use app::geometry::{
 };
 use app::places::{
     add_place, add_place_at_slot, add_place_at_slot_from_external_payload,
-    apply_external_file_drop, contains_place_path, is_supported_places_drop_mime,
-    open_place_new_window, places_drop_force_gap, remove_place, rename_place, reorder_place_path,
-    restore_default_places, sync_places,
+    apply_external_file_drop, contains_place_path, open_place_new_window, remove_place,
+    rename_place, reorder_place_path, restore_default_places, sync_places,
 };
 use app::search_ui::{
     cancel_active_search, recursive_search_cancelled_status, recursive_search_finished_status,
@@ -64,10 +61,9 @@ use app::thumbnail_pipeline::{
 };
 use app::transfer::{
     cancel_queued_operations, entry_at_main_point, format_bytes, main_drop_allowed,
-    main_drop_rejection, operation_label, path_label, place_drop_allowed,
-    prepare_current_dir_transfer, prepare_entry_transfer, prepare_main_transfer,
-    prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
-    start_transfer_operation,
+    operation_label, path_label, place_drop_allowed, prepare_current_dir_transfer,
+    prepare_entry_transfer, prepare_main_transfer, prepare_place_transfer,
+    resolve_transfer_conflict, start_next_operation, start_transfer_operation,
 };
 use app::virtual_view::{VirtualViewInput, prepare_virtual_view_update};
 use config::args::{Args, Mode};
@@ -845,65 +841,6 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_main_external_drop_target_path(move |x, y, payload, mime_type| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return SharedString::new();
-            };
-            let Ok(drop) = external_path_drop_from_payload(payload.as_str(), mime_type.as_str())
-            else {
-                return SharedString::new();
-            };
-            let source = drop.path.to_string_lossy();
-            let state = state.borrow();
-            entry_at_main_point(&ui, &state, x, y)
-                .filter(|entry| entry.is_dir && entry.path.as_str() != source.as_ref())
-                .map_or_else(SharedString::new, |entry| entry.path)
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_main_external_drop_allowed(move |x, y, payload, mime_type| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return false;
-            };
-            let Ok(drop) = external_path_drop_from_payload(payload.as_str(), mime_type.as_str())
-            else {
-                return false;
-            };
-            let state = state.borrow();
-            main_drop_allowed(&ui, &state, x, y, drop.path.as_path())
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_main_external_drop_rejection_reason(move |payload, mime_type, x, y| {
-            if let Some(reason) =
-                external_path_drop_rejection_reason(payload.as_str(), mime_type.as_str())
-            {
-                return reason.into();
-            }
-            let Some(ui) = ui_weak.upgrade() else {
-                return "no-window".into();
-            };
-            let Ok(drop) = external_path_drop_from_payload(payload.as_str(), mime_type.as_str())
-            else {
-                return "no-local-file-path".into();
-            };
-            let state = state.borrow();
-            main_drop_rejection(&ui, &state, x, y, drop.path.as_path())
-                .map(drop_target_rejection_debug_reason)
-                .unwrap_or("none")
-                .into()
-        });
-    }
-
-    {
         let state = Rc::clone(&state);
         ui.on_place_drop_allowed(move |source, target_index| {
             let state = state.borrow();
@@ -987,14 +924,6 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    ui.on_places_drop_supported(|mime_type| is_supported_places_drop_mime(mime_type.as_str()));
-    ui.on_places_drop_force_gap(|mime_type| places_drop_force_gap(mime_type.as_str()));
-    ui.on_places_drop_rejection_reason(|payload, mime_type| {
-        external_path_drop_rejection_reason(payload.as_str(), mime_type.as_str())
-            .unwrap_or_else(|| "none".to_string())
-            .into()
-    });
-    ui.on_main_external_drop_supported(|mime_type| is_external_path_drop_mime(mime_type.as_str()));
     ui.on_trace_places_drop(
         |phase, mime_type, payload, x, y, slot, target, over_gap, over_item| {
             dnd_log_places_event(PlacesDndTrace {

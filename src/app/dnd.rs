@@ -156,7 +156,8 @@ pub(crate) fn dnd_main_event_message(trace: &MainDndTrace<'_>) -> String {
     )
 }
 
-pub(crate) fn drop_target_rejection_debug_reason(reason: &str) -> &'static str {
+#[cfg(test)]
+fn drop_target_rejection_debug_reason(reason: &str) -> &'static str {
     match reason {
         "Cannot drop an item onto itself" => "self-target",
         "Cannot drop a folder into itself" => "descendant-target",

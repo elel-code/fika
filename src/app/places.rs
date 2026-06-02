@@ -1,6 +1,4 @@
-use crate::app::dnd::{
-    external_path_drop_from_payload, is_external_path_drop_mime, path_from_external_text,
-};
+use crate::app::dnd::{external_path_drop_from_payload, path_from_external_text};
 use crate::app::events::ExternalFileDrop;
 use crate::app::geometry::place_drop_geometry;
 use crate::app::state::AppState;
@@ -103,19 +101,6 @@ fn add_place_at_slot_inner(
 pub(crate) fn normalize_dropped_path(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     path_from_external_text(text.as_ref()).unwrap_or_else(|| expand_user_path(text.as_ref()))
-}
-
-pub(crate) fn is_supported_places_drop_mime(mime_type: &str) -> bool {
-    matches!(
-        mime_type,
-        "application/x-fika-folder-path"
-            | "application/x-fika-file-path"
-            | "application/x-fika-place-path"
-    ) || is_external_path_drop_mime(mime_type)
-}
-
-pub(crate) fn places_drop_force_gap(mime_type: &str) -> bool {
-    is_external_path_drop_mime(mime_type)
 }
 
 pub(crate) fn rename_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index: i32, label: &str) {
@@ -363,27 +348,6 @@ mod tests {
             external_drop_status("Folder added to Places", None),
             "Folder added to Places"
         );
-    }
-
-    #[test]
-    fn places_drop_mime_policy_accepts_internal_and_external_sources() {
-        assert!(is_supported_places_drop_mime("text/uri-list"));
-        assert!(is_supported_places_drop_mime("text/plain"));
-        assert!(places_drop_force_gap("text/uri-list"));
-        assert!(places_drop_force_gap("text/plain"));
-        assert!(is_supported_places_drop_mime(
-            "application/x-fika-folder-path"
-        ));
-        assert!(is_supported_places_drop_mime(
-            "application/x-fika-file-path"
-        ));
-        assert!(is_supported_places_drop_mime(
-            "application/x-fika-place-path"
-        ));
-        assert!(!places_drop_force_gap("application/x-fika-folder-path"));
-        assert!(!places_drop_force_gap("application/x-fika-file-path"));
-        assert!(!places_drop_force_gap("application/x-fika-place-path"));
-        assert!(!is_supported_places_drop_mime("application/octet-stream"));
     }
 
     #[test]
