@@ -1,5 +1,12 @@
 use crate::config::paths::expand_user_path;
+use std::env;
 use std::path::PathBuf;
+
+pub(crate) const WINIT_DROPPED_FILE_FALLBACK_SOURCE: &str = "winit DroppedFile fallback";
+pub(crate) const WINIT_DROPPED_FILE_MIME: &str = "winit/dropped-file";
+const DISABLE_WINIT_DROP_FALLBACK_ENV: &str = "FIKA_DISABLE_WINIT_DROP_FALLBACK";
+const DEBUG_DND_ENV: &str = "FIKA_DEBUG_DND";
+const SLINT_DROPAREA_MIME_SUMMARY: &str = "text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path";
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ExternalPathDrop {
@@ -61,6 +68,40 @@ pub(crate) fn external_path_drop_rejection_reason(
 
 pub(crate) fn is_external_path_drop_mime(mime_type: &str) -> bool {
     matches!(mime_type, "text/uri-list" | "text/plain")
+}
+
+pub(crate) fn winit_file_drop_fallback_enabled_from_env() -> bool {
+    winit_file_drop_fallback_enabled(env::var(DISABLE_WINIT_DROP_FALLBACK_ENV).ok().as_deref())
+}
+
+fn winit_file_drop_fallback_enabled(disable_env_value: Option<&str>) -> bool {
+    disable_env_value
+        .map(|value| !env_flag_is_truthy(value))
+        .unwrap_or(true)
+}
+
+pub(crate) fn dnd_debug_enabled_from_env() -> bool {
+    env::var(DEBUG_DND_ENV).is_ok_and(|value| env_flag_is_truthy(&value))
+}
+
+pub(crate) fn dnd_startup_summary(winit_fallback_enabled: bool) -> String {
+    format!(
+        "slint_droparea_mime={} winit_fallback={} disable_winit_env={}",
+        SLINT_DROPAREA_MIME_SUMMARY,
+        if winit_fallback_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        DISABLE_WINIT_DROP_FALLBACK_ENV
+    )
+}
+
+pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 pub(crate) fn path_from_external_text(text: &str) -> Option<PathBuf> {
@@ -198,6 +239,31 @@ mod tests {
         assert_eq!(
             external_path_drop_rejection_reason("file:///tmp/Project", "text/uri-list"),
             None
+        );
+    }
+
+    #[test]
+    fn env_flag_truthy_values_disable_winit_drop_fallback() {
+        for value in ["1", "true", "TRUE", "yes", "on", " On "] {
+            assert!(env_flag_is_truthy(value));
+            assert!(!winit_file_drop_fallback_enabled(Some(value)));
+        }
+        for value in ["", "0", "false", "no", "off", "anything-else"] {
+            assert!(!env_flag_is_truthy(value));
+            assert!(winit_file_drop_fallback_enabled(Some(value)));
+        }
+        assert!(winit_file_drop_fallback_enabled(None));
+    }
+
+    #[test]
+    fn dnd_startup_summary_reports_drop_backends() {
+        assert_eq!(
+            dnd_startup_summary(true),
+            "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path winit_fallback=enabled disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK"
+        );
+        assert!(
+            dnd_startup_summary(false).contains("winit_fallback=disabled"),
+            "disabled fallback state should be visible in startup diagnostics"
         );
     }
 }

@@ -20,8 +20,10 @@ mod support;
 use app::async_bridge::{AsyncBridge, build_async_runtime, send_async_event};
 use app::device_monitor::start_device_monitor;
 use app::dnd::{
-    external_path_drop_from_payload, external_path_drop_rejection_reason,
-    is_external_path_drop_mime,
+    WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME, dnd_debug_enabled_from_env,
+    dnd_startup_summary, env_flag_is_truthy, external_path_drop_from_payload,
+    external_path_drop_rejection_reason, is_external_path_drop_mime,
+    winit_file_drop_fallback_enabled_from_env,
 };
 use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
@@ -1669,9 +1671,9 @@ impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
                 let scale = _winit_window.map_or(1.0, |window| window.scale_factor()) as f32;
                 let (x, y) = self.last_cursor_position.unwrap_or_default();
                 dnd_log_places_event(PlacesDndTrace {
-                    backend: "winit DroppedFile fallback",
+                    backend: WINIT_DROPPED_FILE_FALLBACK_SOURCE,
                     phase: "dropped",
-                    mime_type: "winit/dropped-file",
+                    mime_type: WINIT_DROPPED_FILE_MIME,
                     payload: path.to_string_lossy().as_ref(),
                     x: x / scale,
                     y: y / scale,
@@ -1686,7 +1688,7 @@ impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
                         path: path.clone(),
                         x: x / scale,
                         y: y / scale,
-                        source: "winit DroppedFile fallback".to_string(),
+                        source: WINIT_DROPPED_FILE_FALLBACK_SOURCE.to_string(),
                     }));
                 if let Some(ui_weak) = self.ui_weak.borrow().clone() {
                     let _ = ui_weak.upgrade_in_event_loop(|ui| ui.invoke_async_results_ready());
@@ -1702,16 +1704,6 @@ impl slint::winit_030::CustomApplicationHandler for ExternalDropHandler {
     }
 }
 
-fn winit_file_drop_fallback_enabled_from_env() -> bool {
-    env::var("FIKA_DISABLE_WINIT_DROP_FALLBACK")
-        .map(|value| !env_flag_is_truthy(&value))
-        .unwrap_or(true)
-}
-
-fn dnd_debug_enabled_from_env() -> bool {
-    env::var("FIKA_DEBUG_DND").is_ok_and(|value| env_flag_is_truthy(&value))
-}
-
 fn dnd_log_startup(winit_fallback_enabled: bool) {
     if !dnd_debug_enabled_from_env() {
         return;
@@ -1721,24 +1713,6 @@ fn dnd_log_startup(winit_fallback_enabled: bool) {
         "[fika dnd] startup {}",
         dnd_startup_summary(winit_fallback_enabled)
     );
-}
-
-fn dnd_startup_summary(winit_fallback_enabled: bool) -> String {
-    format!(
-        "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path winit_fallback={} disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK",
-        if winit_fallback_enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    )
-}
-
-fn env_flag_is_truthy(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
 }
 
 fn log_chooser_parent_window(parent_window: Option<&str>) {
@@ -4542,28 +4516,6 @@ mod tests {
             ))
             .to_string_lossy(),
             "/tmp/Hello World"
-        );
-    }
-
-    #[test]
-    fn env_flag_truthy_values_disable_winit_drop_fallback() {
-        for value in ["1", "true", "TRUE", "yes", "on", " On "] {
-            assert!(env_flag_is_truthy(value));
-        }
-        for value in ["", "0", "false", "no", "off", "anything-else"] {
-            assert!(!env_flag_is_truthy(value));
-        }
-    }
-
-    #[test]
-    fn dnd_startup_summary_reports_drop_backends() {
-        assert_eq!(
-            dnd_startup_summary(true),
-            "slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path winit_fallback=enabled disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK"
-        );
-        assert!(
-            dnd_startup_summary(false).contains("winit_fallback=disabled"),
-            "disabled fallback state should be visible in startup diagnostics"
         );
     }
 
