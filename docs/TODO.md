@@ -461,6 +461,7 @@ Acceptance for all:
   - Acceptance: the current Dolphin-like column-first main-pane arrangement, horizontal scrolling, and virtualized Slint tile model stay intact.
   - Current: `docs/COSMIC_REFERENCE.md` records the policy and concrete source files to inspect.
   - Current direction: shell visuals should move closer to COSMIC Files: top bar and main pane share one calm surface with only necessary divider lines, the sidebar reads as the raised/foreground layer with Fika-friendly rounded treatment, and address/search/navigation placement follows COSMIC unless it conflicts with Fika's column-first main pane.
+  - Current: first shell pass aligns the top bar, search panel, status bar, and main pane to one shared surface while the sidebar uses a rounded foreground component color and a softer divider, keeping the main pane's column-first layout untouched.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.

@@ -28,9 +28,15 @@ export component SearchPanel inherits Rectangle {
         root.submitted("");
     }
 
-    background: root.dark ? #15191c : #f6f8fa;
-    border-color: root.dark ? #303840 : #e0e6ec;
-    border-width: 1px;
+    background: root.dark ? #0f1214 : #fbfcfd;
+    border-width: 0px;
+
+    Rectangle {
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: root.dark ? #252b31 : #e7edf3;
+    }
 
     VerticalLayout {
         padding-left: 14px;

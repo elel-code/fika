@@ -654,8 +654,9 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 width: root.sidebar_width_px * 1px;
-                background: root.dark_mode ? #191d20 : #f4f7fa;
-                border-color: root.dark_mode ? #303840 : #e0e6ec;
+                border-radius: 10px;
+                background: root.dark_mode ? #171b1f : #f2f5f8;
+                border-color: root.dark_mode ? #2b333a : #d8e1e9;
                 border-width: 1px;
 
                 TouchArea {
@@ -841,13 +842,13 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 width: root.sidebar-splitter-width;
-                background: root.dark_mode ? #111518 : #f4f7fa;
+                background: root.dark_mode ? #0f1214 : #fbfcfd;
 
                 Rectangle {
                     x: root.sidebar-divider-offset;
                     width: 1px;
                     height: parent.height;
-                    background: root.dark_mode ? #303840 : #d9e1e8;
+                    background: root.dark_mode ? #252b31 : #e7edf3;
                 }
 
                 resize-touch := TouchArea {

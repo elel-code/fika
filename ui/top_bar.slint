@@ -14,9 +14,8 @@ export component TopBar inherits Rectangle {
     callback dark_toggled();
 
     height: 64px;
-    background: root.dark ? #1d2125 : #f6f8fa;
-    border-color: root.dark ? #333a41 : #e0e6ec;
-    border-width: 1px;
+    background: root.dark ? #0f1214 : #fbfcfd;
+    border-width: 0px;
 
     HorizontalLayout {
         padding-right: 18px;
@@ -49,8 +48,8 @@ export component TopBar inherits Rectangle {
             height: 40px;
             border-radius: 8px;
             border-width: 1px;
-            border-color: root.path-focused ? (root.dark ? #51a9d4 : #2b86b7) : (root.dark ? #444e57 : #d3dce5);
-            background: root.path-focused ? (root.dark ? #15191c : #ffffff) : (root.dark ? #15191c : #f1f4f7);
+            border-color: root.path-focused ? (root.dark ? #58b6dd : #2b86b7) : (root.dark ? #30363c : #d8e0e8);
+            background: root.path-focused ? (root.dark ? #15191c : #ffffff) : (root.dark ? #15191c : #f5f7fa);
 
             Text {
                 visible: root.path-text == "";
@@ -113,5 +112,12 @@ export component TopBar inherits Rectangle {
                 clicked => { root.dark_toggled(); }
             }
         }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: root.dark ? #252b31 : #e7edf3;
     }
 }
