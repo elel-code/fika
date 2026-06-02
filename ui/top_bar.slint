@@ -1,0 +1,111 @@
+import { ToolButton } from "widgets.slint";
+
+export component TopBar inherits Rectangle {
+    in property <bool> dark;
+    in property <string> current-path;
+    in-out property <string> path-text;
+    in-out property <bool> path-focused;
+    callback go_parent();
+    callback go_home();
+    callback path_submitted(string);
+    callback search_requested();
+    callback dark_toggled();
+
+    height: 64px;
+    background: root.dark ? #25292d : #f8fafc;
+    border-color: root.dark ? #43484d : #d6dce2;
+    border-width: 1px;
+
+    HorizontalLayout {
+        padding-left: 18px;
+        padding-right: 18px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 14px;
+
+        HorizontalLayout {
+            spacing: 6px;
+
+            ToolButton {
+                label: "<";
+                dark: root.dark;
+                clicked => { root.go_parent(); }
+            }
+
+            ToolButton {
+                label: "H";
+                dark: root.dark;
+                clicked => { root.go_home(); }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 260px;
+            height: 40px;
+            border-radius: 6px;
+            border-width: root.path-focused ? 1px : 2px;
+            border-color: root.path-focused ? (root.dark ? #38bdf8 : #0284c7) : (root.dark ? #56616b : #64748b);
+            background: root.path-focused ? (root.dark ? #161a1d : #ffffff) : (root.dark ? #161a1d : #e8eef5);
+
+            Text {
+                visible: root.path-text == "";
+                x: 12px;
+                width: parent.width - 24px;
+                height: parent.height;
+                text: "/path/to/folder";
+                color: root.dark ? #6f7a84 : #64748b;
+                font-size: 14px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
+            TextInput {
+                x: 12px;
+                width: parent.width - 24px;
+                height: parent.height;
+                text <=> root.path-text;
+                single-line: true;
+                font-size: 14px;
+                color: root.dark ? #f8fafc : #17212b;
+                selection-background-color: root.dark ? #38bdf8 : #0284c7;
+                selection-foreground-color: root.dark ? #0f172a : #ffffff;
+                accepted => { root.path_submitted(self.text); }
+                changed has-focus => {
+                    root.path-focused = self.has-focus;
+                    if (!self.has-focus) {
+                        self.text = root.current-path;
+                    } else if (self.text == "") {
+                        self.text = root.current-path;
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 16px;
+
+            Text {
+                text: "Split";
+                color: root.dark ? #f1f1f1 : #334155;
+                font-size: 14px;
+                font-weight: 500;
+                height: 40px;
+                min-width: 34px;
+                vertical-alignment: center;
+            }
+
+            ToolButton {
+                label: "S";
+                dark: root.dark;
+                clicked => { root.search_requested(); }
+            }
+
+            ToolButton {
+                label: root.dark ? "L" : "D";
+                dark: root.dark;
+                clicked => { root.dark_toggled(); }
+            }
+        }
+    }
+}

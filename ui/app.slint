@@ -1,8 +1,6 @@
 import { LineEdit, ScrollView } from "std-widgets.slint";
 import {
     ActionButton,
-    CheckOption,
-    FilterButton,
     MenuDismissLayer,
     PlaceButton,
     SidebarAction,
@@ -13,6 +11,7 @@ import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "m
 import { FileTile } from "file_tile.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
+import { TopBar } from "top_bar.slint";
 import { ChildSubmenuLayer, ChooserChoicePopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
 import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
@@ -531,105 +530,18 @@ export component AppWindow inherits Window {
             padding: 0px;
             spacing: 0px;
 
-        Rectangle {
-            height: 64px;
-            background: root.dark_mode ? #25292d : #f8fafc;
-            border-color: root.dark_mode ? #43484d : #d6dce2;
-            border-width: 1px;
-
-            HorizontalLayout {
-                padding-left: 18px;
-                padding-right: 18px;
-                padding-top: 12px;
-                padding-bottom: 12px;
-                spacing: 14px;
-
-                HorizontalLayout {
-                    spacing: 6px;
-
-                    ToolButton {
-                        label: "<";
-                        dark: root.dark_mode;
-                        clicked => { root.go_parent(); }
-                    }
-                    ToolButton {
-                        label: "H";
-                        dark: root.dark_mode;
-                        clicked => { root.go_home(); }
-                    }
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                    min-width: 260px;
-                    height: 40px;
-                    border-radius: 6px;
-                    border-width: root.path-input-focused ? 1px : 2px;
-                    border-color: root.path-input-focused ? (root.dark_mode ? #38bdf8 : #0284c7) : (root.dark_mode ? #56616b : #64748b);
-                    background: root.path-input-focused ? (root.dark_mode ? #161a1d : #ffffff) : (root.dark_mode ? #161a1d : #e8eef5);
-
-                    Text {
-                        visible: root.path_input_text == "";
-                        x: 12px;
-                        width: parent.width - 24px;
-                        height: parent.height;
-                        text: "/path/to/folder";
-                        color: root.dark_mode ? #6f7a84 : #64748b;
-                        font-size: 14px;
-                        overflow: elide;
-                        vertical-alignment: center;
-                    }
-
-                    TextInput {
-                        x: 12px;
-                        width: parent.width - 24px;
-                        height: parent.height;
-                        text <=> root.path_input_text;
-                        single-line: true;
-                        font-size: 14px;
-                        color: root.dark_mode ? #f8fafc : #17212b;
-                        selection-background-color: root.dark_mode ? #38bdf8 : #0284c7;
-                        selection-foreground-color: root.dark_mode ? #0f172a : #ffffff;
-                        accepted => { root.path_submitted(self.text); }
-                        changed has-focus => {
-                            root.path-input-focused = self.has-focus;
-                            if (!self.has-focus) {
-                                self.text = root.current_path;
-                            } else if (self.text == "") {
-                                self.text = root.current_path;
-                            }
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 16px;
-
-                    Text {
-                        text: "Split";
-                        color: root.dark_mode ? #f1f1f1 : #334155;
-                        font-size: 14px;
-                        font-weight: 500;
-                        height: 40px;
-                        min-width: 34px;
-                        vertical-alignment: center;
-                    }
-
-                    ToolButton {
-                        label: "S";
-                        dark: root.dark_mode;
-                        clicked => { root.search_bar_open = true; }
-                    }
-
-                    ToolButton {
-                        label: root.dark_mode ? "L" : "D";
-                        dark: root.dark_mode;
-                        clicked => {
-                            root.dark_mode = !root.dark_mode;
-                            root.persist_ui_state();
-                        }
-                    }
-                }
+        TopBar {
+            dark: root.dark_mode;
+            current-path: root.current_path;
+            path-text <=> root.path_input_text;
+            path-focused <=> root.path-input-focused;
+            go_parent => { root.go_parent(); }
+            go_home => { root.go_home(); }
+            path_submitted(path) => { root.path_submitted(path); }
+            search_requested => { root.search_bar_open = true; }
+            dark_toggled => {
+                root.dark_mode = !root.dark_mode;
+                root.persist_ui_state();
             }
         }
 

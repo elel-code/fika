@@ -91,6 +91,7 @@ Useful interaction rules:
 Current Fika mapping:
 
 - Fika already preserves old view during uncached navigation, caches directory entries, and remembers per-directory horizontal scroll.
+- Top bar layout now lives in `TopBar`, keeping path editing, search entry, and theme toggling out of `AppWindow`.
 - Submenu positioning has been changed to anchor to the actual parent menu item and avoid window edges.
 - File item, viewport, Open With, Create New, Transfer, Places, Devices, and Places blank-area menu content have been split into `ui/menus.slint`.
 - Root file / Places / Devices / blank-area menu hosting and root popup placement now go through `RootContextMenuLayer`, while `AppWindow` still owns action wiring and delayed-close timers.
