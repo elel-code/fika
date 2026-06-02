@@ -409,6 +409,19 @@ export component MenuHoverBridge inherits Rectangle {
     }
 }
 
+export component MenuHoverRegion inherits Rectangle {
+    callback hovered(bool);
+
+    background: transparent;
+
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+
+        changed has-hover => { root.hovered(self.has-hover); }
+    }
+}
+
 export component FolderGlyph inherits Rectangle {
     in property <bool> dir;
     in property <bool> dark;

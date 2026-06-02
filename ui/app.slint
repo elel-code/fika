@@ -210,6 +210,7 @@ export component AppWindow inherits Window {
     private property <bool> path-input-focused: false;
     private property <bool> search-input-focused: false;
     private property <bool> chooser-save-input-focused: false;
+    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open;
     private property <bool> file-operation-shortcuts-blocked: root.path-input-focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open;
 
     callback go_home();
@@ -356,6 +357,24 @@ export component AppWindow inherits Window {
     function close-chooser-popups() {
         root.chooser-choice-menu-open = false;
         root.chooser-filter-menu-open = false;
+    }
+
+    function dismiss-transient-popups() {
+        root.close-context-popups();
+        root.rename-place-open = false;
+        root.transfer-menu-open = false;
+        if (root.transfer_conflict_open) {
+            root.transfer_conflict_choice("skip");
+        }
+        root.close-chooser-popups();
+        root.custom-open-with-open = false;
+        root.new-folder-open = false;
+        root.new-file-open = false;
+        root.rename-entry-open = false;
+        root.properties-open = false;
+        if (root.privileged_prompt_open) {
+            root.privileged_prompt_dismiss();
+        }
     }
 
     function show-context-menu(kind: int, x: length, y: length) {
@@ -1137,25 +1156,11 @@ export component AppWindow inherits Window {
         main-drag-rejected: root.main_drag_rejected;
     }
 
-    if (root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open): MenuDismissLayer {
+    if (root.transient-popup-open): MenuDismissLayer {
         width: parent.width;
         height: parent.height;
         dismissed => {
-            root.close-context-popups();
-            root.rename-place-open = false;
-            root.transfer-menu-open = false;
-            if (root.transfer_conflict_open) {
-                root.transfer_conflict_choice("skip");
-            }
-            root.close-chooser-popups();
-            root.custom-open-with-open = false;
-            root.new-folder-open = false;
-            root.new-file-open = false;
-            root.rename-entry-open = false;
-            root.properties-open = false;
-            if (root.privileged_prompt_open) {
-                root.privileged_prompt_dismiss();
-            }
+            root.dismiss-transient-popups();
         }
     }
 
@@ -1352,7 +1357,6 @@ export component AppWindow inherits Window {
         create-new-row-y: root.create-new-menu-y;
         open-with-open: root.open-with-menu-open;
         open-with-row-y: root.open-with-menu-y;
-        open-with-title: root.open_with_mime == "" ? "Open With" : "Open With - " + root.open_with_mime;
         open-with-apps: root.open_with_apps;
         dark: root.dark_mode;
         child_menu_left(a, b, c, d, e, f, g, h, i, j) => {

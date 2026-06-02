@@ -82,6 +82,8 @@
   - Acceptance: submenu rows use explicit child indicators, child menus keep a timed grace area between parent and child, and drop operation menus include Cancel.
   - Current: parent menu, Open With, and Create New timer handling is centralized in local Slint helper functions, so delay/keep-alive behavior is no longer repeated across individual menu callbacks.
   - Current: Open With and Create New now share one child-submenu hover/timer entrypoint; parent rows, hover bridges, and child menu bodies all use the same keep-alive contract.
+  - Current: Open With and Create New child menu panels also include a reusable `MenuHoverRegion`, so moving across separators, list edges, or menu padding does not immediately start submenu dismissal.
+  - Current: Open With now behaves like a normal child menu: no extra title row, first application row aligns with the parent submenu row, the app list is capped to 7 visible rows, and `Other Applications...` stays as the final fixed action.
   - Current: Open With and Create New also share one active child-menu hover bridge instance, so `ui/app.slint` no longer carries duplicate bridge layout for the two submenu types.
   - Current: `ChildSubmenuLayer` now owns child submenu sizing, child placement, and hover-bridge placement inputs, so `ui/app.slint` no longer carries the active child-menu / bridge intermediate layout properties.
   - Current: file item, Open With, Create New, Transfer, sidebar Places, Devices, Places blank-area, and main viewport context menus own their `PopupSurface` framing in `ui/menus.slint`, reducing repeated popup wrapper layout in `ui/app.slint`.
@@ -403,7 +405,7 @@ Acceptance for all:
 
 - [x] Apply Dolphin-like context menu grouping and submenu grace.
   - Acceptance: context menus use grouped separators, submenu indicators are separate from labels, child menus anchor to their parent row and have a hover bridge to avoid accidental disappearance while moving between parent and child.
-  - Current: Open With and Create New submenus share delayed-close timers, one `ChildSubmenuLayer` placement/hover-bridge host, and reusable invisible bridge hit areas; timer start/stop, parent+child close behavior, and context-menu opening are routed through local Slint helper functions; viewport menu order follows Dolphin more closely with Create New first.
+  - Current: Open With and Create New submenus share delayed-close timers, one `ChildSubmenuLayer` placement/hover-bridge host, reusable invisible bridge hit areas, and panel-level hover regions; timer start/stop, parent+child close behavior, and context-menu opening are routed through local Slint helper functions; viewport menu order follows Dolphin more closely with Create New first.
 
 - [x] Apply Dolphin/QMenu-style popup placement.
   - Acceptance: menus prefer the requested popup point, flip if they would overflow the safe rect, and clamp when the window is too small.

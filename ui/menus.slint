@@ -1,32 +1,35 @@
 import { ScrollView } from "std-widgets.slint";
 import { ChooserChoice, ChooserChoiceOption, DesktopApp } from "models.slint";
-import { MenuHoverBridge, MenuHoverTitle, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
+import { MenuHoverBridge, MenuHoverRegion, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
 
 export component OpenWithMenu inherits PopupSurface {
-    in property <string> title;
     in property <[DesktopApp]> apps;
     in property <length> item-height: 38px;
+    in property <length> separator-height: 8px;
+    private property <length> list-height: max(root.item-height, root.height - root.separator-height - root.item-height);
     callback keep_alive(bool);
     callback app_selected(string);
     callback other_applications();
 
+    MenuHoverRegion {
+        width: parent.width;
+        height: parent.height;
+        hovered(is-hovered) => { root.keep_alive(is-hovered); }
+    }
+
     VerticalLayout {
         spacing: 0px;
 
-        MenuHoverTitle {
-            label: root.title;
-            dark: root.dark;
-            hovered(is-hovered) => { root.keep_alive(is-hovered); }
-        }
-
         ScrollView {
-            vertical-stretch: 1;
-            horizontal-scrollbar-policy: as-needed;
+            width: parent.width;
+            height: root.list-height;
+            horizontal-scrollbar-policy: always-off;
             vertical-scrollbar-policy: as-needed;
-            viewport-width: parent.width;
+            viewport-width: root.width;
             viewport-height: max(root.item-height, root.apps.length * root.item-height);
 
             if (root.apps.length == 0): MenuItem {
+                width: root.width;
                 label: "Loading applications...";
                 dark: root.dark;
                 hovered(is-hovered) => { root.keep_alive(is-hovered); }
@@ -35,7 +38,7 @@ export component OpenWithMenu inherits PopupSurface {
 
             for app[index] in root.apps: MenuItem {
                 y: index * root.item-height;
-                width: parent.width;
+                width: root.width;
                 label: (app.is_default ? "Default: " : "") + app.name;
                 dark: root.dark;
                 hovered(is-hovered) => { root.keep_alive(is-hovered); }
@@ -60,6 +63,12 @@ export component CreateNewMenu inherits PopupSurface {
     callback keep_alive(bool);
     callback folder_selected();
     callback file_selected();
+
+    MenuHoverRegion {
+        width: parent.width;
+        height: parent.height;
+        hovered(is-hovered) => { root.keep_alive(is-hovered); }
+    }
 
     VerticalLayout {
         spacing: 0px;
@@ -96,24 +105,23 @@ export component ChildSubmenuLayer inherits Rectangle {
     in property <length> create-new-row-y;
     in property <bool> open-with-open;
     in property <length> open-with-row-y;
-    in property <string> open-with-title;
     in property <[DesktopApp]> open-with-apps;
     in property <bool> dark;
     private property <length> open-with-width: 260px;
-    private property <length> open-with-height: min(360px, root.title-height + max(1, root.open-with-apps.length) * root.item-height + root.separator-height + root.item-height);
+    private property <length> open-with-list-height: max(root.item-height, min(7 * root.item-height, max(1, root.open-with-apps.length) * root.item-height));
+    private property <length> open-with-height: root.open-with-list-height + root.separator-height + root.item-height;
     private property <length> create-new-width: 180px;
     private property <length> create-new-height: 2 * root.item-height;
     private property <int> active-kind: root.open-with-open ? 1 : (root.create-new-open ? 2 : 0);
     private property <length> active-row-y: root.open-with-open ? root.open-with-row-y : root.create-new-row-y;
     private property <length> active-width: root.open-with-open ? root.open-with-width : root.create-new-width;
     private property <length> active-height: root.open-with-open ? root.open-with-height : root.create-new-height;
-    private property <length> active-title-height: root.open-with-open ? root.title-height : 0px;
     private property <length> active-left: root.child_menu_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-row-y / 1px, root.active-width / 1px, root.active-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
     private property <length> active-top: root.child_menu_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-row-y / 1px, root.active-width / 1px, root.active-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> bridge-left: root.child_bridge_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, root.active-title-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> bridge-top: root.child_bridge_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, root.active-title-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> bridge-width: root.child_bridge_width(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, root.active-title-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> bridge-height: root.child_bridge_height(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, root.active-title-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-left: root.child_bridge_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-top: root.child_bridge_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-width: root.child_bridge_width(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-height: root.child_bridge_height(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
     pure callback child_menu_left(float, float, float, float, float, float, float, float, float, float) -> float;
     pure callback child_menu_top(float, float, float, float, float, float, float, float, float, float) -> float;
     pure callback child_bridge_left(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
@@ -160,10 +168,10 @@ export component ChildSubmenuLayer inherits Rectangle {
         y: root.active-top;
         width: root.open-with-width;
         height: root.open-with-height;
-        title: root.open-with-title;
         dark: root.dark;
         apps: root.open-with-apps;
         item-height: root.item-height;
+        separator-height: root.separator-height;
         keep_alive(is-hovered) => {
             root.child_hovered(1, is-hovered);
         }
