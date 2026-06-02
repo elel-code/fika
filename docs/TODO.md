@@ -11,6 +11,9 @@
 ## Phase 0: Current Baseline
 
 - [x] Slint 1.16.1 pinned in `Cargo.toml`.
+- [x] Slint master experimental layout gate enabled for scoped FlexboxLayout use.
+  - Current: `build.rs` enables Slint's experimental compiler registry so Fika can use `FlexboxLayout` from the master branch without requiring users to export `SLINT_ENABLE_EXPERIMENTAL_FEATURES` manually.
+  - Current: FlexboxLayout is limited to local responsive control rows; the main file view keeps its deterministic column-first virtual layout.
 - [x] UI entry lives in `ui/app.slint` and is compiled through `build.rs`; shared models/widgets/file tiles are split into focused `.slint` files.
 - [x] Dolphin-like shell: toolbar, Places sidebar, main icon area, status bar.
 - [x] Dark mode.
@@ -282,6 +285,7 @@
   - Current: the search strip exposes Type / Modified / Size cycle buttons; filters apply to current-directory filtering and recursive search results.
   - Current: when filters hide some recursive search matches, the completion status explicitly says the visible count is after filters.
   - Current: search strip layout is split into `ui/search_panel.slint`, keeping query, clear/close, recursive, and filter controls out of `ui/app.slint`.
+  - Current: search strip control rows use scoped `FlexboxLayout`, so the query row can reserve fixed action buttons while the filter controls wrap inside the panel instead of forcing the main pane width.
   - Current: search UI state helpers, recursive-search cancellation token handling, and search status text live in `src/app/search_ui.rs`, keeping `main.rs` focused on callback wiring and async search startup.
 
 ## Phase 8: Open With

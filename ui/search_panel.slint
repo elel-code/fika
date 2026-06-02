@@ -39,11 +39,16 @@ export component SearchPanel inherits Rectangle {
         padding-bottom: 8px;
         spacing: 6px;
 
-        HorizontalLayout {
+        FlexboxLayout {
+            height: 34px;
+            flex-wrap: no-wrap;
+            align-items: center;
             spacing: 8px;
 
             LineEdit {
-                horizontal-stretch: 1;
+                flex-basis: 220px;
+                flex-grow: 1;
+                flex-shrink: 1;
                 min-width: 120px;
                 height: 34px;
                 text <=> root.query;
@@ -56,6 +61,7 @@ export component SearchPanel inherits Rectangle {
 
             if (root.loading): SidebarAction {
                 width: 70px;
+                flex-shrink: 0;
                 label: "Cancel";
                 dark: root.dark;
                 clicked => { root.cancel_requested(); }
@@ -63,12 +69,14 @@ export component SearchPanel inherits Rectangle {
 
             if (root.query != "" || root.filters-active): SidebarAction {
                 width: 64px;
+                flex-shrink: 0;
                 label: "Clear";
                 dark: root.dark;
                 clicked => { root.clear-search-state(); }
             }
 
             ToolButton {
+                flex-shrink: 0;
                 label: "X";
                 dark: root.dark;
                 clicked => {
@@ -78,11 +86,16 @@ export component SearchPanel inherits Rectangle {
             }
         }
 
-        HorizontalLayout {
+        FlexboxLayout {
+            height: 72px;
+            flex-wrap: wrap;
+            align-content: start;
+            align-items: center;
             spacing: 8px;
 
             CheckOption {
                 width: 156px;
+                flex-shrink: 0;
                 label: "Search subfolders";
                 dark: root.dark;
                 checked <=> root.recursive;
@@ -95,6 +108,7 @@ export component SearchPanel inherits Rectangle {
 
             FilterButton {
                 width: 126px;
+                flex-shrink: 0;
                 label: root.kind-label;
                 dark: root.dark;
                 clicked => {
@@ -102,13 +116,10 @@ export component SearchPanel inherits Rectangle {
                     root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
                 }
             }
-        }
-
-        HorizontalLayout {
-            spacing: 8px;
 
             FilterButton {
                 width: 154px;
+                flex-shrink: 0;
                 label: root.modified-label;
                 dark: root.dark;
                 clicked => {
@@ -119,6 +130,7 @@ export component SearchPanel inherits Rectangle {
 
             FilterButton {
                 width: 144px;
+                flex-shrink: 0;
                 label: root.size-label;
                 dark: root.dark;
                 clicked => {

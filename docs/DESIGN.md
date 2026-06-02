@@ -61,6 +61,12 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 - 缩略图调度按“当前可见列优先，overscan 后置”排序，减少大目录图片预览队列对当前屏幕反馈的拖慢。
 - 离屏缩略图完成时只更新 Rust 缓存，不重置 Slint 模型；缩略图所属路径落在当前虚拟切片内时才刷新 `virtual_entries`。
 
+Slint `FlexboxLayout` 采用策略：
+
+- `build.rs` 明确启用 Slint 实验特性，允许使用当前 master 分支仍处于 experimental registry 的 `FlexboxLayout`。
+- Flex 只用于局部响应式控件行，例如搜索栏、后续菜单行或弹窗按钮组，用来减少固定宽度控件在窄窗口里的挤压。
+- 主栏文件视图不使用 Flex。列优先横向滚动、虚拟化范围、拖拽命中、选择框和缩略图调度都依赖确定性的行列几何，继续由 Rust/Slint 手写布局维护。
+
 ### State Layer
 
 Rust 侧核心状态在 `AppState`：
