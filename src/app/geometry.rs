@@ -1158,10 +1158,23 @@ mod tests {
             "show-create-new",
             "close-pending-child-submenu",
         ];
+        let controller_functions = [
+            "stop-close-timer",
+            "close-child-submenus",
+            "set-child-submenu-hover",
+            "show-child-submenu",
+            "show-open-with-submenu",
+            "show-create-new-submenu",
+            "open-with-submenu-hover",
+            "create-new-submenu-hover",
+        ];
 
         assert!(app.contains("export { MenuLifecycle } from \"menu_lifecycle.slint\";"));
-        assert!(app.contains("import { MenuLifecycle } from \"menu_lifecycle.slint\";"));
+        assert!(app.contains(
+            "import { MenuLifecycle, MenuLifecycleController } from \"menu_lifecycle.slint\";"
+        ));
         assert!(menu_lifecycle.contains("export global MenuLifecycle"));
+        assert!(menu_lifecycle.contains("export component MenuLifecycleController"));
 
         for (kind, property) in state_properties {
             assert!(
@@ -1188,10 +1201,46 @@ mod tests {
                 "MenuLifecycle should expose {function}"
             );
             assert!(
-                app.contains(&format!("MenuLifecycle.{function}(")),
-                "AppWindow should call MenuLifecycle.{function}"
+                !app.contains(&format!("MenuLifecycle.{function}(")),
+                "AppWindow should not mutate low-level MenuLifecycle state through {function}"
             );
         }
+
+        for function in controller_functions {
+            assert!(
+                menu_lifecycle.contains(&format!("public function {function}(")),
+                "MenuLifecycleController should expose {function}"
+            );
+        }
+        for function in [
+            "close-child-submenus",
+            "set-child-submenu-hover",
+            "show-open-with-submenu",
+            "show-create-new-submenu",
+            "open-with-submenu-hover",
+            "create-new-submenu-hover",
+        ] {
+            assert!(
+                app.contains(&format!("menu-lifecycle.{function}(")),
+                "AppWindow should route {function} through MenuLifecycleController"
+            );
+        }
+        assert!(
+            menu_lifecycle.contains("close-timer := Timer"),
+            "MenuLifecycleController should own the delayed-close Timer"
+        );
+        assert!(
+            !app.contains("child-submenu-close-timer"),
+            "AppWindow should not own the child submenu close timer"
+        );
+        assert!(
+            !app.contains("interval: 240ms"),
+            "AppWindow should not own the child submenu delayed-close interval"
+        );
+        assert!(
+            app.contains("menu-lifecycle := MenuLifecycleController"),
+            "AppWindow should instantiate the menu lifecycle controller"
+        );
     }
 
     fn menu_metrics_input(kind: i32) -> MenuMetricsInput {

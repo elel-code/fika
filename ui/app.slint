@@ -12,7 +12,7 @@ export global DndApi {
 }
 
 import { DragKind } from "dnd_bridge.slint";
-import { MenuLifecycle } from "menu_lifecycle.slint";
+import { MenuLifecycle, MenuLifecycleController } from "menu_lifecycle.slint";
 import { ScrollView } from "std-widgets.slint";
 import {
     MenuDismissLayer,
@@ -307,63 +307,30 @@ export component AppWindow inherits Window {
     pure callback is_selected(string) -> bool;
     pure callback is_place(string) -> bool;
 
-    function stop-submenu-close-timer() {
-        child-submenu-close-timer.stop();
-        MenuLifecycle.cancel-close();
-    }
-
-    function close-child-submenu(menu: int) {
-        MenuLifecycle.close-child-submenu(menu);
-    }
-
     function close-child-submenus() {
-        root.stop-submenu-close-timer();
-        MenuLifecycle.close-child-submenus();
+        menu-lifecycle.close-child-submenus();
     }
 
     function set-child-submenu-hover(menu: int, is-hovered: bool) {
-        child-submenu-close-timer.stop();
-        if (is-hovered) {
-            MenuLifecycle.cancel-close();
-        } else if (menu == 1 || menu == 2) {
-            MenuLifecycle.begin-close(menu);
-            child-submenu-close-timer.start();
-        }
-    }
-
-    function show-child-submenu(menu: int, path: string, row-y: length) {
-        root.stop-submenu-close-timer();
-        if (menu == 1) {
-            root.prepare_open_with(path);
-            root.open_with_path = path;
-            MenuLifecycle.show-open-with(row-y);
-        } else if (menu == 2) {
-            MenuLifecycle.show-create-new(row-y);
-        }
+        menu-lifecycle.set-child-submenu-hover(menu, is-hovered);
     }
 
     function show-open-with-submenu(path: string, row-y: length) {
-        root.show-child-submenu(1, path, row-y);
+        root.open_with_path = path;
+        menu-lifecycle.show-open-with-submenu(path, row-y);
     }
 
     function show-create-new-submenu(row-y: length) {
-        root.show-child-submenu(2, "", row-y);
+        menu-lifecycle.show-create-new-submenu(row-y);
     }
 
     function open-with-submenu-hover(path: string, row-y: length, is-hovered: bool) {
-        if (is-hovered) {
-            root.show-open-with-submenu(path, row-y);
-        } else {
-            root.set-child-submenu-hover(1, false);
-        }
+        if (is-hovered) { root.open_with_path = path; }
+        menu-lifecycle.open-with-submenu-hover(path, row-y, is-hovered);
     }
 
     function create-new-submenu-hover(row-y: length, is-hovered: bool) {
-        if (is-hovered) {
-            root.show-create-new-submenu(row-y);
-        } else {
-            root.set-child-submenu-hover(2, false);
-        }
+        menu-lifecycle.create-new-submenu-hover(row-y, is-hovered);
     }
 
     function close-context-popups() {
@@ -471,15 +438,6 @@ export component AppWindow inherits Window {
         }
     }
 
-    child-submenu-close-timer := Timer {
-        running: false;
-        interval: 240ms;
-        triggered => {
-            self.running = false;
-            MenuLifecycle.close-pending-child-submenu();
-        }
-    }
-
     title: chooser_mode ? (chooser_title == "" ? "Fika File Chooser" : chooser_title) : "Fika File Manager";
     preferred-width: 1100px;
     preferred-height: 760px;
@@ -508,6 +466,10 @@ export component AppWindow inherits Window {
     app-focus := FocusScope {
         width: parent.width;
         height: parent.height;
+
+        menu-lifecycle := MenuLifecycleController {
+            prepare_open_with(path) => { root.prepare_open_with(path); }
+        }
 
         sidebar-foreground := Rectangle {
             x: 8px;

@@ -95,13 +95,13 @@
 - [x] Focused Rust split for selection and Places UI logic.
 - [x] Dolphin-style context menu hover polish.
   - Acceptance: submenu rows use explicit child indicators, child menus keep a timed grace area between parent and child, and drop operation menus include Cancel.
-  - Current: parent menu, Open With, and Create New timer handling is centralized in local Slint helper functions, so delay/keep-alive behavior is no longer repeated across individual menu callbacks.
+  - Current: parent menu, Open With, and Create New delayed-close handling is centralized in `MenuLifecycleController`, so delay/keep-alive behavior is no longer repeated across individual menu callbacks or owned directly by `AppWindow`.
   - Current: Open With and Create New now share one child-submenu hover/timer entrypoint; parent rows, hover bridges, and child menu bodies all use the same keep-alive contract.
   - Current: Open With and Create New child menu panels also include a reusable `MenuHoverRegion`, so moving across separators, list edges, or menu padding does not immediately start submenu dismissal.
   - Current: Open With now behaves like a normal child menu: no extra title row, first application row aligns with the parent submenu row, the app list is capped to 7 visible rows, and `Other Applications...` stays as the final fixed action.
   - Current: Open With and Create New also share one active child-menu hover bridge instance, so `ui/app.slint` no longer carries duplicate bridge layout for the two submenu types.
   - Current: `ChildSubmenuLayer` now owns child submenu sizing, child placement, and hover-bridge placement inputs, so `ui/app.slint` no longer carries the active child-menu / bridge intermediate layout properties.
-  - Current: Open With and Create New open/close state, row anchors, and pending delayed-close kind now live in the `MenuLifecycle` Slint global. `AppWindow` still prepares business data such as Open With candidates, but no longer owns the child-submenu state fields directly.
+  - Current: Open With and Create New open/close state, row anchors, and pending delayed-close kind now live in the `MenuLifecycle` Slint global, while `MenuLifecycleController` owns the 240ms delayed-close timer and hover/show helpers. `AppWindow` still prepares business data such as Open With candidates, but no longer owns the child-submenu state fields or timer directly.
   - Current: file item, Open With, Create New, Transfer, sidebar Places, Devices, Places blank-area, and main viewport context menus own their `PopupSurface` framing in `ui/menus.slint`, reducing repeated popup wrapper layout in `ui/app.slint`.
   - Current: root file, Places, Devices, Places blank-area, and main viewport context menu hosting is centralized in `RootContextMenuLayer`, so `ui/app.slint` keeps action wiring while `ui/menus.slint` owns the repeated root-menu placement shell.
   - Current: `RootContextMenuLayer` also owns root-menu width/height selection, flip/clamp placement, and Open With / Create New parent-row anchors before forwarding submenu hover/click events, so `ui/app.slint` no longer carries duplicate root-menu geometry properties.
@@ -425,7 +425,7 @@ Acceptance for all:
 
 - [x] Apply Dolphin-like context menu grouping and submenu grace.
   - Acceptance: context menus use grouped separators, submenu indicators are separate from labels, child menus anchor to their parent row and have a hover bridge to avoid accidental disappearance while moving between parent and child.
-  - Current: Open With and Create New submenus share delayed-close timers, one `ChildSubmenuLayer` placement/hover-bridge host, reusable invisible bridge hit areas, and panel-level hover regions; submenu open/anchor/close-pending state is owned by `MenuLifecycle`, while `AppWindow` only routes business actions such as preparing Open With candidates. Viewport menu order follows Dolphin more closely with Create New first.
+  - Current: Open With and Create New submenus share delayed-close handling through `MenuLifecycleController`, one `ChildSubmenuLayer` placement/hover-bridge host, reusable invisible bridge hit areas, and panel-level hover regions; submenu open/anchor/close-pending state is owned by `MenuLifecycle`, while `AppWindow` only routes business actions such as preparing Open With candidates. Viewport menu order follows Dolphin more closely with Create New first.
 
 - [x] Apply Dolphin/QMenu-style popup placement.
   - Acceptance: menus prefer the requested popup point, flip if they would overflow the safe rect, and clamp when the window is too small.
