@@ -34,7 +34,9 @@ use app::events::{
     ExternalEditResult, FileOpenResult, FileOpenSuccess, FileOperationProgress,
     FileOperationResult, FileUndoResult, RecursiveSearchProgress, RecursiveSearchResult,
 };
-use app::file_clipboard::sync_clipboard_ui;
+use app::file_clipboard::{
+    apply_clipboard_load_result, refresh_clipboard_availability_async, sync_clipboard_ui,
+};
 use app::geometry::{
     MainGridLayout, SelectionRect, place_drop_geometry, register_menu_geometry_callbacks,
 };
@@ -234,6 +236,7 @@ fn main() -> Result<(), slint::PlatformError> {
     };
     sync_devices(&ui, &state);
     refresh_devices_async(&state, &bridge);
+    refresh_clipboard_availability_async(&state, &bridge);
     start_device_monitor(&bridge);
 
     let async_rx = Rc::new(RefCell::new(async_rx));
@@ -1443,6 +1446,9 @@ fn apply_async_event(
         }
         AsyncEvent::DevicesLoaded(result) => {
             apply_devices_loaded_result(ui, state, result);
+        }
+        AsyncEvent::ClipboardLoaded(result) => {
+            apply_clipboard_load_result(ui, state, result);
         }
         AsyncEvent::PrivilegedOperationFinished(result) => {
             apply_privileged_operation_result(ui, state, bridge, result);

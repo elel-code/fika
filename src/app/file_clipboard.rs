@@ -1,4 +1,5 @@
-use crate::app::async_bridge::AsyncBridge;
+use crate::app::async_bridge::{AsyncBridge, send_async_event};
+use crate::app::events::{AsyncEvent, ClipboardLoadResult};
 use crate::app::state::AppState;
 use crate::app::transfer::{
     TransferStart, clear_accepted_cut_source, start_transfer_operation,
@@ -39,12 +40,10 @@ pub(crate) fn register_callbacks(
     }
 
     {
-        let ui_weak = ui.as_weak();
         let state = Rc::clone(state);
+        let bridge = bridge.clone();
         ui.on_refresh_clipboard_availability(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                refresh_clipboard_availability(&ui, &state);
-            }
+            refresh_clipboard_availability_async(&state, &bridge);
         });
     }
 }
@@ -68,6 +67,7 @@ fn copy_paths(ui: &AppWindow, state: &Rc<RefCell<AppState>>, context_path: &str,
 
     {
         let mut state = state.borrow_mut();
+        state.clipboard_generation.next();
         state.clipboard_paths = paths;
         state.clipboard_cut = cut;
     }
@@ -168,6 +168,37 @@ fn paste_into(
     }
 }
 
+pub(crate) fn refresh_clipboard_availability_async(
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+) {
+    let generation = state.borrow_mut().clipboard_generation.next();
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let result = tokio::task::spawn_blocking(clipboard::read_file_list)
+            .await
+            .unwrap_or_else(|err| Err(format!("clipboard read task failed: {err}")));
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::ClipboardLoaded(ClipboardLoadResult { generation, result }),
+        );
+    });
+}
+
+pub(crate) fn apply_clipboard_load_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    result: ClipboardLoadResult,
+) {
+    {
+        let mut state_ref = state.borrow_mut();
+        apply_clipboard_load(&mut state_ref, result, file_ops::path_exists);
+    }
+    sync_clipboard_ui(ui, state);
+}
+
 fn existing_clipboard_paths(
     paths: &[PathBuf],
     exists: impl Fn(&Path) -> bool,
@@ -185,11 +216,34 @@ fn existing_clipboard_paths(
 }
 
 fn refresh_clipboard_availability(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let generation = state.borrow_mut().clipboard_generation.next();
     if let Ok(clipboard) = clipboard::read_file_list() {
         let mut state_ref = state.borrow_mut();
-        merge_desktop_clipboard(&mut state_ref, clipboard, file_ops::path_exists);
+        apply_clipboard_load(
+            &mut state_ref,
+            ClipboardLoadResult {
+                generation,
+                result: Ok(clipboard),
+            },
+            file_ops::path_exists,
+        );
     }
     sync_clipboard_ui(ui, state);
+}
+
+fn apply_clipboard_load(
+    state: &mut AppState,
+    result: ClipboardLoadResult,
+    exists: impl Fn(&Path) -> bool,
+) -> bool {
+    if !state.clipboard_generation.is_current(result.generation) {
+        return false;
+    }
+    let Ok(clipboard) = result.result else {
+        return false;
+    };
+    merge_desktop_clipboard(state, clipboard, exists);
+    true
 }
 
 fn merge_desktop_clipboard(
@@ -230,9 +284,10 @@ fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clipboard_paths_for_context, existing_clipboard_paths, merge_desktop_clipboard,
-        unique_paths,
+        apply_clipboard_load, clipboard_paths_for_context, existing_clipboard_paths,
+        merge_desktop_clipboard, unique_paths,
     };
+    use crate::app::events::ClipboardLoadResult;
     use crate::app::state::AppState;
     use crate::app::transfer::target_is_source_or_descendant;
     use crate::desktop::clipboard::FileClipboard;
@@ -404,6 +459,55 @@ mod tests {
 
         assert_eq!(missing, 1);
         assert!(state.clipboard_paths.is_empty());
+        assert!(!state.clipboard_cut);
+    }
+
+    #[test]
+    fn stale_async_clipboard_load_does_not_replace_newer_internal_clipboard() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let stale_generation = state.clipboard_generation.next();
+        state.clipboard_generation.next();
+        state.clipboard_paths = vec![PathBuf::from("/tmp/internal")];
+        state.clipboard_cut = true;
+
+        let applied = apply_clipboard_load(
+            &mut state,
+            ClipboardLoadResult {
+                generation: stale_generation,
+                result: Ok(FileClipboard {
+                    paths: vec![PathBuf::from("/tmp/external")],
+                    cut: false,
+                    helper: "test".to_string(),
+                }),
+            },
+            |_| true,
+        );
+
+        assert!(!applied);
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/internal")]);
+        assert!(state.clipboard_cut);
+    }
+
+    #[test]
+    fn current_async_clipboard_load_updates_cached_paste_state() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let generation = state.clipboard_generation.next();
+
+        let applied = apply_clipboard_load(
+            &mut state,
+            ClipboardLoadResult {
+                generation,
+                result: Ok(FileClipboard {
+                    paths: vec![PathBuf::from("/tmp/external")],
+                    cut: false,
+                    helper: "test".to_string(),
+                }),
+            },
+            |_| true,
+        );
+
+        assert!(applied);
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/external")]);
         assert!(!state.clipboard_cut);
     }
 }

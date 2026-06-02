@@ -1,4 +1,5 @@
 use crate::DeviceEntry;
+use crate::desktop::clipboard;
 use crate::desktop::open_with;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_actions, file_ops, privilege, search, thumbnails};
@@ -97,6 +98,12 @@ pub(crate) struct DevicesLoadedResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct ClipboardLoadResult {
+    pub(crate) generation: u64,
+    pub(crate) result: Result<clipboard::FileClipboard, String>,
+}
+
+#[derive(Debug)]
 pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
     FileOpened(FileOpenResult),
@@ -113,6 +120,7 @@ pub(crate) enum AsyncEvent {
     DeviceActionFinished(DeviceActionResult),
     DevicesChanged,
     DevicesLoaded(DevicesLoadedResult),
+    ClipboardLoaded(ClipboardLoadResult),
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),
     ThumbnailLoaded {
