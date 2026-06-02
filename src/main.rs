@@ -25,11 +25,12 @@ use app::chooser::{
 };
 use app::device_monitor::start_device_monitor;
 use app::dnd::{
-    MainDndTrace, PlacesDndTrace, WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME,
-    dnd_debug_enabled_from_env, dnd_main_event_message, dnd_places_event_message,
-    dnd_startup_summary, drop_target_rejection_debug_reason, env_flag_is_truthy,
-    external_path_drop_from_payload, external_path_drop_rejection_reason,
-    is_external_path_drop_mime, winit_file_drop_fallback_enabled_from_env,
+    MainDndTrace, PlacesDndTrace, SLINT_DROPAREA_BACKEND_SOURCE,
+    WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME, dnd_debug_enabled_from_env,
+    dnd_main_event_message, dnd_places_event_message, dnd_startup_summary,
+    drop_target_rejection_debug_reason, env_flag_is_truthy, external_path_drop_from_payload,
+    external_path_drop_rejection_reason, is_external_path_drop_mime,
+    winit_file_drop_fallback_enabled_from_env,
 };
 use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
@@ -895,7 +896,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_trace_places_drop(
         |phase, mime_type, payload, x, y, slot, target, over_gap, over_item| {
             dnd_log_places_event(PlacesDndTrace {
-                backend: "Slint DropArea",
+                backend: SLINT_DROPAREA_BACKEND_SOURCE,
                 phase: phase.as_str(),
                 mime_type: mime_type.as_str(),
                 payload: payload.as_str(),
@@ -910,7 +911,7 @@ fn main() -> Result<(), slint::PlatformError> {
     );
     ui.on_trace_main_drop(|phase, mime_type, payload, x, y, rejected, target_path| {
         dnd_log_main_event(MainDndTrace {
-            backend: "Slint DropArea",
+            backend: SLINT_DROPAREA_BACKEND_SOURCE,
             phase: phase.as_str(),
             mime_type: mime_type.as_str(),
             payload: payload.as_str(),

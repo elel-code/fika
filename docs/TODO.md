@@ -165,7 +165,8 @@
   - Current: successful external Places drops include the handling backend in the status bar, so real desktop tests can distinguish Slint DropArea from the winit fallback before removing either path.
   - Current: winit fallback source/mime constants, disable-env parsing, startup diagnostics, DnD trace formatting, and rejection debug tag mapping now live in `src/app/dnd.rs`; `main.rs` only handles the actual winit event bridge.
   - Current: `FIKA_DISABLE_WINIT_DROP_FALLBACK=1` disables only the winit `DroppedFile` event bridge, allowing real desktop tests to prove whether the Slint DropArea `text/uri-list` path works independently.
-  - Current: `FIKA_DEBUG_DND=1` prints startup DnD configuration plus Slint DropArea and winit fallback drop traces with backend, phase, MIME type, coordinates, slot/target/gap/item state, and a compact payload summary for real desktop validation.
+  - Current: `FIKA_DEBUG_DND=1` prints startup DnD configuration plus Slint DropArea and winit fallback drop traces with backend role (`slint-primary` vs `winit-fallback`), phase, MIME type, external-path validation result, coordinates, slot/target/gap/item state, and a compact payload summary for real desktop validation.
+  - Current: the fallback-removal check is explicit: run with `FIKA_DISABLE_WINIT_DROP_FALLBACK=1 FIKA_DEBUG_DND=1` and confirm real external drops into Places and the main pane produce `role=slint-primary` with `validation=external-local-path`.
   - Current: Slint external-drop rejection diagnostics now distinguish unsupported MIME, empty payload, and payloads without a local file path; these reasons appear in debug traces and failed drops show specific status-bar guidance.
 
 - [x] Drag external local file or folder into main view.
@@ -173,7 +174,7 @@
   - Acceptance: dropping onto main-pane blank space opens the transfer menu targeting the current directory.
   - Current: `text/uri-list` and `text/plain` payloads are parsed in Rust through the same external local-path parser used by Places; ordinary files and folders are both accepted in the main pane.
   - Current: hover target highlighting uses the existing main-pane folder `drop-target` style and the same self/subdirectory rejection rules as internal drags.
-  - Current: `FIKA_DEBUG_DND=1` traces main-pane can-drop / dropped events with MIME type, coordinates, rejection state, target folder path, compact payload summary, and stable rejection tags such as `no-local-file-path`, `self-target`, and `descendant-target`.
+  - Current: `FIKA_DEBUG_DND=1` traces main-pane can-drop / dropped events with backend role, MIME type, coordinates, rejection state, target folder path, parsed local source path, compact payload summary, and stable rejection tags such as `no-local-file-path`, `self-target`, and `descendant-target`.
 
 - [x] Drag folder from main view into Places.
   - Acceptance: dropping into the gap between Places items inserts a new Place at that slot.
