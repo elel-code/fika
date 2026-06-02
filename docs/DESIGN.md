@@ -84,7 +84,7 @@ Slint UI 只在主线程更新。后台任务不持有 `AppWindow` 或 `Rc<RefCe
 
 Rust 代码当前按低耦合职责拆分为嵌套模块：
 
-- `src/app/`: UI 线程共享状态、异步事件/桥接、应用内 DnD trace、Places UI 逻辑、主栏几何和选择辅助。
+- `src/app/`: UI 线程共享状态、异步事件/桥接、目录加载状态准备、应用内 DnD trace、Places UI 逻辑、主栏几何和选择辅助。
 - `src/config/`: CLI 参数、路径归一化、settings 持久化。
 - `src/desktop/`: 内置 MIME/default app 解析、Open With 异步桥接。
 - `src/fs/`: entries、Places、文件动作、文件操作、递归搜索、缩略图流水线。

@@ -391,6 +391,10 @@ Acceptance for all:
   - Acceptance: large-directory viewport slicing and rebuild decisions are testable outside UI callback wiring.
   - Current: `src/app/virtual_view.rs` prepares clamped viewport state and the current virtual `FileEntry` slice; `main.rs` only applies Slint properties and schedules visible thumbnails.
 
+- [x] Split directory-load preparation out of `main.rs`.
+  - Acceptance: navigation vs same-directory refresh state transitions are testable outside UI callback wiring.
+  - Current: `src/app/directory_loading.rs` owns load generation updates, cache lookup, search cancellation, view-context reset rules, and thumbnail-pipeline preservation rules; `main.rs` applies the result to UI state and starts the async read task.
+
 - [x] Apply Dolphin DnD target validation.
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.
   - Current: transfer preparation and execution both reject self/descendant targets.
