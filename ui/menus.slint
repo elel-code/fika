@@ -626,9 +626,12 @@ export component ViewportContextMenu inherits PopupSurface {
 export component RootContextMenuLayer inherits Rectangle {
     in property <bool> menu-open;
     in property <int> menu-kind;
-    in property <length> menu-left;
-    in property <length> menu-top;
-    in property <length> menu-height;
+    in property <length> menu-x;
+    in property <length> menu-y;
+    in property <length> window-width;
+    in property <length> window-height;
+    in property <length> screen-margin;
+    in property <length> pointer-gap;
     in property <length> file-menu-width;
     in property <length> place-menu-width;
     in property <length> blank-menu-width;
@@ -652,10 +655,17 @@ export component RootContextMenuLayer inherits Rectangle {
     in property <bool> device-can-unmount;
     in property <bool> device-can-eject;
     in property <string> device-pending-action: "";
+    out property <length> active-menu-left: root.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
+    out property <length> active-menu-top: root.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
+    out property <length> active-menu-width: (root.menu-kind == 2 || root.menu-kind == 5) ? root.place-menu-width : ((root.menu-kind == 3 || root.menu-kind == 4) ? root.blank-menu-width : root.file-menu-width);
+    out property <length> active-menu-height: root.context_menu_height(root.menu-kind, root.selected-count, root.metrics-is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
     private property <bool> metrics-is-dir: root.menu-kind == 5 ? root.device-mounted : root.is-dir;
     private property <bool> metrics-device-pending: root.menu-kind == 5 && root.device-pending-action != "";
-    private property <length> open-with-row-y: root.menu-top + root.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.metrics-is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
-    private property <length> create-new-row-y: root.menu-top + root.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.metrics-is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    private property <length> open-with-row-y: root.active-menu-top + root.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.metrics-is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    private property <length> create-new-row-y: root.active-menu-top + root.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.metrics-is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
+    pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
+    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
     pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
     pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
     callback file_open_folder_with_hover(length, bool);
@@ -691,10 +701,10 @@ export component RootContextMenuLayer inherits Rectangle {
     background: transparent;
 
     if (root.menu-open && root.menu-kind == 1): FileContextMenu {
-        x: root.menu-left;
-        y: root.menu-top;
+        x: root.active-menu-left;
+        y: root.active-menu-top;
         width: root.file-menu-width;
-        height: root.menu-height;
+        height: root.active-menu-height;
         dark: root.dark;
         selected-count: root.selected-count;
         selected-status: root.selected-status;
@@ -703,8 +713,8 @@ export component RootContextMenuLayer inherits Rectangle {
         default-open-app-name: root.default-open-app-name;
         clipboard-has-paths: root.clipboard-has-paths;
         add-to-places-visible: root.add-to-places-visible;
-        open_folder_with_hover(is-hovered) => { root.file_open_folder_with_hover(root.menu-top, is-hovered); }
-        open_folder_with_clicked => { root.file_open_folder_with_clicked(root.menu-top); }
+        open_folder_with_hover(is-hovered) => { root.file_open_folder_with_hover(root.active-menu-top, is-hovered); }
+        open_folder_with_clicked => { root.file_open_folder_with_clicked(root.active-menu-top); }
         default_open_requested => { root.file_default_open_requested(); }
         open_with_hover(is-hovered) => { root.file_open_with_hover(root.open-with-row-y, is-hovered); }
         open_with_clicked => { root.file_open_with_clicked(root.open-with-row-y); }
@@ -720,10 +730,10 @@ export component RootContextMenuLayer inherits Rectangle {
     }
 
     if (root.menu-open && root.menu-kind == 2): PlaceContextMenu {
-        x: root.menu-left;
-        y: root.menu-top;
+        x: root.active-menu-left;
+        y: root.active-menu-top;
         width: root.place-menu-width;
-        height: root.menu-height;
+        height: root.active-menu-height;
         title: root.place-title;
         dark: root.dark;
         builtin: root.place-builtin;
@@ -733,10 +743,10 @@ export component RootContextMenuLayer inherits Rectangle {
     }
 
     if (root.menu-open && root.menu-kind == 5): DeviceContextMenu {
-        x: root.menu-left;
-        y: root.menu-top;
+        x: root.active-menu-left;
+        y: root.active-menu-top;
         width: root.place-menu-width;
-        height: root.menu-height;
+        height: root.active-menu-height;
         title: root.device-title;
         dark: root.dark;
         mounted: root.device-mounted;
@@ -751,10 +761,10 @@ export component RootContextMenuLayer inherits Rectangle {
     }
 
     if (root.menu-open && root.menu-kind == 4): PlacesBlankMenu {
-        x: root.menu-left;
-        y: root.menu-top;
+        x: root.active-menu-left;
+        y: root.active-menu-top;
         width: root.blank-menu-width;
-        height: root.menu-height;
+        height: root.active-menu-height;
         dark: root.dark;
         add-current-visible: root.add-to-places-visible;
         add_current_folder => { root.places_blank_add_current_folder(); }
@@ -762,10 +772,10 @@ export component RootContextMenuLayer inherits Rectangle {
     }
 
     if (root.menu-open && root.menu-kind == 3): ViewportContextMenu {
-        x: root.menu-left;
-        y: root.menu-top;
+        x: root.active-menu-left;
+        y: root.active-menu-top;
         width: root.blank-menu-width;
-        height: root.menu-height;
+        height: root.active-menu-height;
         dark: root.dark;
         clipboard-has-paths: root.clipboard-has-paths;
         clipboard-cut: root.clipboard-cut;

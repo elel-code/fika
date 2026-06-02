@@ -108,13 +108,6 @@ export component AppWindow inherits Window {
     private property <length> context-blank-menu-width: 220px;
     private property <bool> context-default-open-visible: root.default_open_app_name != "" && root.open_with_path == root.context-menu-path;
     private property <bool> context-add-place-visible: root.context-menu-kind == 4 ? (root.current_path != "" && !root.is_place(root.current_path)) : (root.context-menu-is-dir && !root.is_place(root.context-menu-path));
-    private property <bool> context-metrics-is-dir: root.context-menu-kind == 5 ? root.context-menu-device-mounted : root.context-menu-is-dir;
-    private property <bool> context-metrics-extra-bool: root.context-menu-place-builtin;
-    private property <length> active-context-menu-width: (root.context-menu-kind == 2 || root.context-menu-kind == 5) ? root.context-place-menu-width : ((root.context-menu-kind == 3 || root.context-menu-kind == 4) ? root.context-blank-menu-width : root.context-file-menu-width);
-    private property <bool> context-metrics-device-pending: root.context-menu-kind == 5 && root.context-menu-device-pending-action != "";
-    private property <length> active-context-menu-height: root.context_menu_height(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.context-menu-device-can-mount, root.context-menu-device-can-unmount, root.context-menu-device-can-eject, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
-    private property <length> context-menu-left: root.root_menu_left(root.width / 1px, root.height / 1px, root.context-menu-x / 1px, root.context-menu-y / 1px, root.active-context-menu-width / 1px, root.active-context-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px) * 1px;
-    private property <length> context-menu-top: root.root_menu_top(root.width / 1px, root.height / 1px, root.context-menu-x / 1px, root.context-menu-y / 1px, root.active-context-menu-width / 1px, root.active-context-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px) * 1px;
     private property <length> child-menu-gap: 3px;
     private property <length> open-with-menu-width: 260px;
     private property <length> open-with-menu-height: min(360px, root.menu-title-height + max(1, root.open_with_apps.length) * root.menu-item-height + root.menu-separator-height + root.menu-item-height);
@@ -1486,14 +1479,17 @@ export component AppWindow inherits Window {
         }
     }
 
-    RootContextMenuLayer {
+    root-context-menu := RootContextMenuLayer {
         width: parent.width;
         height: parent.height;
         menu-open: root.context-menu-open;
         menu-kind: root.context-menu-kind;
-        menu-left: root.context-menu-left;
-        menu-top: root.context-menu-top;
-        menu-height: root.active-context-menu-height;
+        menu-x: root.context-menu-x;
+        menu-y: root.context-menu-y;
+        window-width: root.width;
+        window-height: root.height;
+        screen-margin: root.menu-screen-margin;
+        pointer-gap: root.menu-pointer-gap;
         file-menu-width: root.context-file-menu-width;
         place-menu-width: root.context-place-menu-width;
         blank-menu-width: root.context-blank-menu-width;
@@ -1517,6 +1513,15 @@ export component AppWindow inherits Window {
         device-can-unmount: root.context-menu-device-can-unmount;
         device-can-eject: root.context-menu-device-can-eject;
         device-pending-action: root.context-menu-device-pending-action;
+        root_menu_left(a, b, c, d, e, f, g, h) => {
+            return root.root_menu_left(a, b, c, d, e, f, g, h);
+        }
+        root_menu_top(a, b, c, d, e, f, g, h) => {
+            return root.root_menu_top(a, b, c, d, e, f, g, h);
+        }
+        context_menu_height(a, b, c, d, e, f, g, h, i, j, k, l, m, n) => {
+            return root.context_menu_height(a, b, c, d, e, f, g, h, i, j, k, l, m, n);
+        }
         context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n) => {
             return root.context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n);
         }
@@ -1649,8 +1654,8 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
         context-menu-open: root.context-menu-open;
-        context-menu-left: root.context-menu-left;
-        context-menu-width: root.active-context-menu-width;
+        context-menu-left: root-context-menu.active-menu-left;
+        context-menu-width: root-context-menu.active-menu-width;
         window-width: root.width;
         window-height: root.height;
         screen-margin: root.menu-screen-margin;

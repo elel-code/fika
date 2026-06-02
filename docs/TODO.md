@@ -84,7 +84,7 @@
   - Current: `ChildSubmenuLayer` now owns child submenu and hover-bridge placement inputs, so `ui/app.slint` no longer carries the active child-menu / bridge intermediate layout properties.
   - Current: file item, Open With, Create New, Transfer, sidebar Places, Devices, Places blank-area, and main viewport context menus own their `PopupSurface` framing in `ui/menus.slint`, reducing repeated popup wrapper layout in `ui/app.slint`.
   - Current: root file, Places, Devices, Places blank-area, and main viewport context menu hosting is centralized in `RootContextMenuLayer`, so `ui/app.slint` keeps action wiring while `ui/menus.slint` owns the repeated root-menu placement shell.
-  - Current: `RootContextMenuLayer` also derives Open With / Create New parent-row anchors before forwarding submenu hover/click events, so `ui/app.slint` no longer carries duplicate root-menu row-offset properties.
+  - Current: `RootContextMenuLayer` also owns root-menu width/height selection, flip/clamp placement, and Open With / Create New parent-row anchors before forwarding submenu hover/click events, so `ui/app.slint` no longer carries duplicate root-menu geometry properties.
   - Current: chooser choice popups are hosted through `ChooserChoicePopupLayer`, keeping the choice popup loop and anchored placement formula out of `ui/app.slint`.
 - [x] Dolphin/QMenu-style menu placement.
   - Acceptance: root, child, and transfer menus share preferred-point, flip, and clamp placement rules; child hover bridge follows the clamped submenu position.
@@ -397,7 +397,7 @@ Acceptance for all:
 - [x] Apply Dolphin/QMenu-style popup placement.
   - Acceptance: menus prefer the requested popup point, flip if they would overflow the safe rect, and clamp when the window is too small.
   - Current: context, Open With, Create New, transfer, and chooser-choice popup surfaces use shared Rust `PopupPlacement` geometry, reusable popup surface styling, and a common outside-click dismiss layer.
-  - Current: root context placement, Transfer placement, Open With / Create New child placement plus hover bridge geometry, and chooser-choice above-button placement now use Rust helpers; child placement and bridge coordinate calculation are encapsulated by `ChildSubmenuLayer`, reducing duplicated popup positioning logic in `ui/app.slint`.
+  - Current: root context placement, Transfer placement, Open With / Create New child placement plus hover bridge geometry, and chooser-choice above-button placement now use Rust helpers; root menu coordinate calculation is encapsulated by `RootContextMenuLayer`, and child placement plus bridge coordinate calculation is encapsulated by `ChildSubmenuLayer`, reducing duplicated popup positioning logic in `ui/app.slint`.
 
 - [x] Per-method polkit authority check.
   - Acceptance: helper asks polkit authority for `org.fika.FileManager.privileged-helper` per protected operation when the packaged action is installed.
