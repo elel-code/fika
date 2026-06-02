@@ -5,6 +5,7 @@ use crate::app::transfer::{
     target_is_source_or_descendant,
 };
 use crate::desktop::clipboard;
+use crate::fs::file_ops;
 use crate::{AppWindow, set_status};
 use slint::ComponentHandle;
 use std::cell::RefCell;
@@ -106,7 +107,7 @@ fn paste_into(
             return;
         }
         let (existing_paths, missing_count) =
-            existing_clipboard_paths(&state_ref.clipboard_paths, |path| path.exists());
+            existing_clipboard_paths(&state_ref.clipboard_paths, file_ops::path_exists);
         if missing_count > 0 {
             state_ref.clipboard_paths = existing_paths;
             if state_ref.clipboard_paths.is_empty() {
@@ -186,7 +187,7 @@ fn existing_clipboard_paths(
 fn refresh_clipboard_availability(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     if let Ok(clipboard) = clipboard::read_file_list() {
         let mut state_ref = state.borrow_mut();
-        merge_desktop_clipboard(&mut state_ref, clipboard, |path| path.exists());
+        merge_desktop_clipboard(&mut state_ref, clipboard, file_ops::path_exists);
     }
     sync_clipboard_ui(ui, state);
 }

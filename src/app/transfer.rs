@@ -290,7 +290,7 @@ pub(crate) fn start_transfer_operation(
 }
 
 fn transfer_start_rejection(source: &Path, target_dir: &Path) -> Option<&'static str> {
-    if !source.exists() {
+    if !file_ops::path_exists(source) {
         return Some("Source no longer exists");
     }
     if !target_dir.is_dir() {
@@ -701,7 +701,7 @@ fn open_transfer_conflict(
 pub(crate) fn transfer_request_conflict_destination(
     request: &FileOperationRequest,
 ) -> Result<Option<PathBuf>, String> {
-    if !request.source.exists() {
+    if !file_ops::path_exists(&request.source) {
         return Err("source no longer exists".to_string());
     }
     if !request.target_dir.is_dir() {
@@ -711,7 +711,7 @@ pub(crate) fn transfer_request_conflict_destination(
         return Err(reason.to_string());
     }
     let destination = file_ops::base_destination(&request.source, &request.target_dir)?;
-    Ok(destination.exists().then_some(destination))
+    Ok(file_ops::path_exists(&destination).then_some(destination))
 }
 
 fn default_rename_suggestion(destination: &Path) -> String {
@@ -824,6 +824,29 @@ mod tests {
         assert_eq!(
             transfer_request_conflict_destination(&request).unwrap(),
             Some(target_dir.join("note.txt"))
+        );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queued_transfer_detects_conflict_with_broken_symlink_destination() {
+        let temp = test_dir("queued-broken-symlink-conflict");
+        let source = temp.join("source").join("note.txt");
+        let target_dir = temp.join("target");
+        let occupied = target_dir.join("note.txt");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&source, "new").unwrap();
+        std::os::unix::fs::symlink("missing-target.txt", &occupied).unwrap();
+
+        let request = transfer_request("copy", &source, &target_dir, "ask");
+
+        assert!(!occupied.exists());
+        assert_eq!(
+            transfer_request_conflict_destination(&request).unwrap(),
+            Some(occupied)
         );
 
         let _ = fs::remove_dir_all(temp);

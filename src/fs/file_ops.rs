@@ -53,7 +53,7 @@ pub fn perform_transfer_with_progress_outcome(
     cancel: Option<Arc<AtomicBool>>,
     mut progress: impl FnMut(TransferProgress),
 ) -> Result<TransferOutcome, String> {
-    if !source.exists() {
+    if !path_exists(source) {
         return Err("source no longer exists".to_string());
     }
     if !target_dir.is_dir() {
@@ -72,7 +72,7 @@ pub fn perform_transfer_with_progress_outcome(
         return Err(format!("unknown operation: {operation}"));
     }
 
-    let overwrite_backup = if conflict_policy == "overwrite" && destination.exists() {
+    let overwrite_backup = if conflict_policy == "overwrite" && path_exists(&destination) {
         Some(backup_existing_destination(&destination)?)
     } else {
         None
@@ -167,7 +167,7 @@ pub fn renamed_destination(target_dir: &Path, name: &str) -> Result<PathBuf, Str
     }
     let name = sanitize_child_name(name)?;
     let destination = target_dir.join(name);
-    if destination.exists() {
+    if path_exists(&destination) {
         return Err("an item with that name already exists".to_string());
     }
     Ok(destination)
@@ -193,17 +193,17 @@ pub fn undo_transfer_with_backup(
 
     match operation {
         "copy" | "link" => {
-            if !destination.exists() {
+            if !path_exists(destination) {
                 return Err("undo target no longer exists".to_string());
             }
             remove_path(destination).map_err(|err| err.to_string())?;
             Ok(format!("removed {}", destination.display()))
         }
         "move" => {
-            if !destination.exists() {
+            if !path_exists(destination) {
                 return Err("moved item no longer exists".to_string());
             }
-            if original_source.exists() {
+            if path_exists(original_source) {
                 return Err("original location is already occupied".to_string());
             }
             if let Some(parent) = original_source.parent() {
@@ -230,23 +230,23 @@ fn undo_overwrite_transfer(
     destination: &Path,
     backup: &Path,
 ) -> Result<String, String> {
-    if !backup.exists() {
+    if !path_exists(backup) {
         return Err("overwritten item backup no longer exists".to_string());
     }
 
     match operation {
         "copy" | "link" => {
-            if destination.exists() {
+            if path_exists(destination) {
                 remove_path(destination).map_err(|err| err.to_string())?;
             }
             fs::rename(backup, destination).map_err(|err| err.to_string())?;
             Ok(format!("restored overwritten {}", destination.display()))
         }
         "move" => {
-            if !destination.exists() {
+            if !path_exists(destination) {
                 return Err("moved item no longer exists".to_string());
             }
-            if original_source.exists() {
+            if path_exists(original_source) {
                 return Err("original location is already occupied".to_string());
             }
             if let Some(parent) = original_source.parent() {
@@ -283,7 +283,7 @@ pub fn create_folder(parent: &Path, name: &str) -> Result<PathBuf, String> {
 }
 
 pub fn rename_path(path: &Path, new_name: &str) -> Result<PathBuf, String> {
-    if !path.exists() {
+    if !path_exists(path) {
         return Err("item no longer exists".to_string());
     }
     let parent = path
@@ -294,7 +294,7 @@ pub fn rename_path(path: &Path, new_name: &str) -> Result<PathBuf, String> {
     if destination == path {
         return Ok(destination);
     }
-    if destination.exists() {
+    if path_exists(&destination) {
         return Err("an item with that name already exists".to_string());
     }
     fs::rename(path, &destination).map_err(|err| err.to_string())?;
@@ -302,7 +302,7 @@ pub fn rename_path(path: &Path, new_name: &str) -> Result<PathBuf, String> {
 }
 
 pub fn undo_create_folder(path: &Path) -> Result<String, String> {
-    if !path.exists() {
+    if !path_exists(path) {
         return Err("created folder no longer exists".to_string());
     }
     if !path.is_dir() {
@@ -313,10 +313,10 @@ pub fn undo_create_folder(path: &Path) -> Result<String, String> {
 }
 
 pub fn undo_rename(original_path: &Path, renamed_path: &Path) -> Result<String, String> {
-    if !renamed_path.exists() {
+    if !path_exists(renamed_path) {
         return Err("renamed item no longer exists".to_string());
     }
-    if original_path.exists() {
+    if path_exists(original_path) {
         return Err("original name is already occupied".to_string());
     }
     fs::rename(renamed_path, original_path).map_err(|err| err.to_string())?;
@@ -338,7 +338,7 @@ pub fn trash_paths(paths: &[PathBuf]) -> FileActionSummary {
 }
 
 pub fn trash_path(path: &Path) -> Result<PathBuf, String> {
-    if !path.exists() {
+    if !path_exists(path) {
         return Err("item no longer exists".to_string());
     }
 
@@ -372,13 +372,13 @@ pub fn undo_trash(items: &[(PathBuf, PathBuf)]) -> Result<String, String> {
     }
 
     for (original_path, trash_path) in items {
-        if !trash_path.exists() {
+        if !path_exists(trash_path) {
             return Err(format!(
                 "trash item no longer exists: {}",
                 trash_path.display()
             ));
         }
-        if original_path.exists() {
+        if path_exists(original_path) {
             return Err(format!(
                 "original location is already occupied: {}",
                 original_path.display()
@@ -452,16 +452,23 @@ fn copy_path(
     progress: &mut impl FnMut(TransferProgress),
 ) -> io::Result<()> {
     ensure_not_cancelled(cancel)?;
+    let destination_preexisting = fs::symlink_metadata(destination).is_ok();
     let bytes_total = path_size(source)?;
     let mut bytes_done = 0;
-    copy_path_inner(
+    let result = copy_path_inner(
         source,
         destination,
         cancel,
         &mut bytes_done,
         bytes_total,
         progress,
-    )
+    );
+
+    if result.is_err() && !destination_preexisting {
+        let _ = remove_path_if_present(destination);
+    }
+
+    result
 }
 
 fn copy_path_inner(
@@ -650,6 +657,14 @@ fn remove_path(path: &Path) -> io::Result<()> {
     }
 }
 
+fn remove_path_if_present(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => remove_path(path),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 fn transfer_destination(
     source: &Path,
     target_dir: &Path,
@@ -680,14 +695,14 @@ fn backup_existing_destination(destination: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn cleanup_overwrite_backup(backup: &Path) -> Result<(), String> {
-    if backup.exists() {
+    if path_exists(backup) {
         remove_path(backup).map_err(|err| err.to_string())?;
     }
     Ok(())
 }
 
 fn restore_overwrite_backup(destination: &Path, backup: &Path) -> Result<(), String> {
-    if destination.exists() {
+    if path_exists(destination) {
         remove_path(destination).map_err(|err| err.to_string())?;
     }
     fs::rename(backup, destination).map_err(|err| err.to_string())
@@ -699,7 +714,7 @@ fn remove_trashinfo(trash_path: &Path) -> Result<(), String> {
     };
     let trash_home = trash_home();
     let info_path = trash_home.join("info").join(format!("{name}.trashinfo"));
-    if info_path.exists() {
+    if path_exists(&info_path) {
         fs::remove_file(info_path).map_err(|err| err.to_string())?;
     }
     Ok(())
@@ -716,7 +731,7 @@ fn overwrite_backup_path(destination: &Path) -> Result<PathBuf, String> {
     let pid = std::process::id();
     for index in 0.. {
         let candidate = parent.join(format!(".{name}.fika-overwrite-backup-{pid}-{index}"));
-        if !candidate.exists() {
+        if !path_exists(&candidate) {
             return Ok(candidate);
         }
     }
@@ -792,7 +807,7 @@ fn percent_encode_path(path: &Path) -> String {
 
 pub fn unique_destination(target_dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
     let initial = target_dir.join(file_name);
-    if !initial.exists() {
+    if !path_exists(&initial) {
         return initial;
     }
 
@@ -816,12 +831,16 @@ pub fn unique_destination(target_dir: &Path, file_name: &std::ffi::OsStr) -> Pat
             _ => format!("{stem} {suffix}"),
         };
         let candidate = target_dir.join(candidate_name);
-        if !candidate.exists() {
+        if !path_exists(&candidate) {
             return candidate;
         }
     }
 
     unreachable!("unbounded destination search should always return")
+}
+
+pub fn path_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
 }
 
 #[cfg(test)]
@@ -881,6 +900,36 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!target.join("source.bin").exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn cancelled_directory_copy_removes_partial_destination_root() {
+        let temp = test_dir("cancel-directory");
+        fs::create_dir_all(&temp).unwrap();
+        let source = temp.join("source");
+        let nested = source.join("nested");
+        let target = temp.join("target");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(nested.join("first.bin"), vec![13_u8; 128 * 1024]).unwrap();
+        fs::write(source.join("second.bin"), vec![17_u8; 128 * 1024]).unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_from_progress = Arc::clone(&cancel);
+        let result = perform_transfer_with_progress(
+            "copy",
+            &source,
+            &target,
+            "keep-both",
+            Some(cancel),
+            move |_| cancel_from_progress.store(true, Ordering::Relaxed),
+        );
+
+        assert!(result.is_err());
+        assert!(!target.join("source").exists());
+        assert!(source.join("nested/first.bin").exists());
+        assert!(source.join("second.bin").exists());
         let _ = fs::remove_dir_all(temp);
     }
 
@@ -982,6 +1031,75 @@ mod tests {
         assert_eq!(
             fs::read_link(&copied_nested_folder_link).unwrap(),
             PathBuf::from("folder")
+        );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_preserves_broken_symlink_without_dereferencing() {
+        let temp = test_dir("copy-broken-symlink");
+        let source_dir = temp.join("source");
+        let target = temp.join("target");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir(&target).unwrap();
+        let source = source_dir.join("missing-link");
+        std::os::unix::fs::symlink("missing-target.txt", &source).unwrap();
+
+        assert!(!source.exists());
+        assert!(path_exists(&source));
+
+        let copied =
+            perform_transfer_with_progress("copy", &source, &target, "keep-both", None, |_| {})
+                .unwrap();
+
+        assert!(!copied.exists());
+        assert!(
+            fs::symlink_metadata(&copied)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&copied).unwrap(),
+            PathBuf::from("missing-target.txt")
+        );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keep_both_treats_broken_symlink_destination_as_conflict() {
+        let temp = test_dir("broken-symlink-conflict");
+        let source_dir = temp.join("source");
+        let target = temp.join("target");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir(&target).unwrap();
+        let source = source_dir.join("note.txt");
+        let occupied = target.join("note.txt");
+        fs::write(&source, "new").unwrap();
+        std::os::unix::fs::symlink("missing-target.txt", &occupied).unwrap();
+
+        assert!(!occupied.exists());
+        assert!(path_exists(&occupied));
+
+        let copied =
+            perform_transfer_with_progress("copy", &source, &target, "keep-both", None, |_| {})
+                .unwrap();
+
+        assert_eq!(copied, target.join("note copy.txt"));
+        assert_eq!(fs::read_to_string(copied).unwrap(), "new");
+        assert!(
+            fs::symlink_metadata(&occupied)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&occupied).unwrap(),
+            PathBuf::from("missing-target.txt")
         );
 
         let _ = fs::remove_dir_all(temp);
@@ -1230,6 +1348,27 @@ mod tests {
 
         assert!(original.exists());
         assert!(!renamed.exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_treats_broken_symlink_destination_as_occupied() {
+        let temp = test_dir("rename-broken-symlink-conflict");
+        fs::create_dir_all(&temp).unwrap();
+        let source = temp.join("source.txt");
+        let occupied = temp.join("taken.txt");
+        fs::write(&source, "contents").unwrap();
+        std::os::unix::fs::symlink("missing-target.txt", &occupied).unwrap();
+
+        assert_eq!(
+            rename_path(&source, "taken.txt").unwrap_err(),
+            "an item with that name already exists"
+        );
+        assert!(source.exists());
+        assert!(!occupied.exists());
+        assert!(path_exists(&occupied));
+
         let _ = fs::remove_dir_all(temp);
     }
 
