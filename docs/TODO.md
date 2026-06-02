@@ -470,6 +470,7 @@ Acceptance for all:
   - Current: TopBar follows COSMIC's previous/next/up navigation grouping. Home remains a Places/sidebar action rather than a top-bar button.
   - Current: Search follows COSMIC's header behavior more closely: the toolbar search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
   - Current: TopBar Split now uses the shared `ToolButton` selected state instead of a hand-drawn one-off rectangle, keeping header controls in one COSMIC-like component family.
+  - Current: the TopBar bottom divider now starts at the sidebar/main split instead of crossing the raised sidebar, so the header and main pane read as one shared layer behind the sidebar foreground.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.

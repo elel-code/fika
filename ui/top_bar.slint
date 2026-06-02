@@ -209,8 +209,9 @@ export component TopBar inherits Rectangle {
     }
 
     Rectangle {
+        x: root.sidebar-width-px * 1px + root.divider-offset;
         y: parent.height - 1px;
-        width: parent.width;
+        width: max(1px, parent.width - self.x);
         height: 1px;
         background: root.dark ? #242a30 : #e2e7ec;
     }
