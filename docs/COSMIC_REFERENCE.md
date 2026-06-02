@@ -15,6 +15,7 @@ Useful UI direction:
 - Prefer quieter surfaces with clearer row spacing, softer separators, and less dense menu groups where it helps scanning.
 - Keep primary panes visually simple: sidebar, toolbar, content, and footer should feel integrated instead of heavily framed.
 - Context menus should keep practical action grouping, but visual weight can move closer to COSMIC Files than Dolphin when the interaction rules are already covered by tests.
+- Fika's first visual pass keeps Dolphin-like pane layout, but shifts the surface colors toward COSMIC's quieter feel: off-white light backgrounds, lower-contrast separators, softer hover fills, 7-8px radii for controls/menus, and consistent selected/drop feedback between the sidebar and main pane.
 
 ## Terminal Launch
 

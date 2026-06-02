@@ -413,7 +413,7 @@ export component AppWindow inherits Window {
     preferred-height: 760px;
     min-width: 780px;
     min-height: 460px;
-    background: dark_mode ? #101314 : #ffffff;
+    background: dark_mode ? #0f1214 : #fbfcfd;
 
     changed width => { root.main_view_changed(); }
     changed height => { root.main_view_changed(); }
@@ -556,8 +556,8 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 width: root.sidebar_width_px * 1px;
-                background: root.dark_mode ? #222629 : #f3f6f8;
-                border-color: root.dark_mode ? #454a50 : #d6dce2;
+                background: root.dark_mode ? #191d20 : #f4f7fa;
+                border-color: root.dark_mode ? #303840 : #e0e6ec;
                 border-width: 1px;
 
                 TouchArea {
@@ -745,13 +745,13 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 width: root.sidebar-splitter-width;
-                background: root.dark_mode ? #15191c : #edf2f6;
+                background: root.dark_mode ? #111518 : #f4f7fa;
 
                 Rectangle {
                     x: root.sidebar-divider-offset;
                     width: 1px;
                     height: parent.height;
-                    background: root.dark_mode ? #454a50 : #cbd5e1;
+                    background: root.dark_mode ? #303840 : #d9e1e8;
                 }
 
                 resize-touch := TouchArea {
@@ -779,7 +779,7 @@ export component AppWindow inherits Window {
                 min-width: 0px;
                 preferred-width: 0px;
                 max-width: 100000px;
-                background: root.dark_mode ? #101314 : #ffffff;
+                background: root.dark_mode ? #0f1214 : #fbfcfd;
 
                 main-focus := FocusScope {
                     width: 0px;
@@ -847,7 +847,7 @@ export component AppWindow inherits Window {
                     if (root.entry_count == 0 && !root.directory_loading) : Rectangle {
                         horizontal-stretch: 1;
                         vertical-stretch: 1;
-                        background: root.dark_mode ? #101314 : #ffffff;
+                        background: root.dark_mode ? #0f1214 : #fbfcfd;
 
                         VerticalLayout {
                             alignment: center;
@@ -855,7 +855,7 @@ export component AppWindow inherits Window {
 
                             Text {
                                 text: root.search_loading ? "Searching..." : (root.search_query == "" ? "This folder is empty" : "No matching items");
-                                color: root.dark_mode ? #e6e6e6 : #334155;
+                                color: root.dark_mode ? #e8edf2 : #334155;
                                 font-size: 15px;
                                 font-weight: 600;
                                 horizontal-alignment: center;
@@ -863,7 +863,7 @@ export component AppWindow inherits Window {
 
                             Text {
                                 text: root.search_loading ? "Scanning subfolders." : (root.search_query == "" ? "This directory has no visible files." : "Try another search term.");
-                                color: root.dark_mode ? #a8a8a8 : #94a3b8;
+                                color: root.dark_mode ? #9aa5af : #94a3b8;
                                 font-size: 13px;
                                 horizontal-alignment: center;
                             }
@@ -1045,9 +1045,9 @@ export component AppWindow inherits Window {
                             y: min(root.selection_rect_start_y, root.selection_rect_current_y);
                             width: max(1px, max(root.selection_rect_start_x, root.selection_rect_current_x) - min(root.selection_rect_start_x, root.selection_rect_current_x));
                             height: max(1px, max(root.selection_rect_start_y, root.selection_rect_current_y) - min(root.selection_rect_start_y, root.selection_rect_current_y));
-                            background: root.dark_mode ? #38bdf833 : #0284c733;
+                            background: root.dark_mode ? #51a9d433 : #2b86b733;
                             border-width: 1px;
-                            border-color: root.dark_mode ? #38bdf8 : #0284c7;
+                            border-color: root.dark_mode ? #51a9d4 : #2b86b7;
                         }
                     }
 

@@ -5,8 +5,8 @@ export component ToolButton inherits Rectangle {
 
     width: 34px;
     height: 40px;
-    border-radius: 6px;
-    background: touch-area.has-hover ? (dark ? #33383d : #edf3f8) : transparent;
+    border-radius: 7px;
+    background: touch-area.has-hover ? (dark ? #2b3035 : #e9eef4) : transparent;
 
     touch-area := TouchArea {
         clicked => { root.clicked(); }
@@ -16,7 +16,7 @@ export component ToolButton inherits Rectangle {
         text: root.label;
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: root.dark ? #f5f5f5 : #17212b;
+        color: root.dark ? #edf2f7 : #1f2933;
         font-size: 17px;
         font-weight: 700;
     }
@@ -30,10 +30,10 @@ export component ActionButton inherits Rectangle {
 
     width: 92px;
     height: 28px;
-    border-radius: 6px;
+    border-radius: 7px;
     border-width: 1px;
-    border-color: root.enabled ? (root.dark ? #5b6670 : #b8c7d4) : (root.dark ? #3b4248 : #d6dce2);
-    background: !root.enabled ? (root.dark ? #1b2024 : #f1f5f9) : (touch-area.has-hover ? (root.dark ? #2f6f8e : #dbeafe) : (root.dark ? #285a73 : #e0f2fe));
+    border-color: root.enabled ? (root.dark ? #4d5963 : #c3ced8) : (root.dark ? #333a40 : #d9e1e8);
+    background: !root.enabled ? (root.dark ? #1b1f23 : #f1f4f7) : (touch-area.has-hover ? (root.dark ? #2d627b : #d9eaf8) : (root.dark ? #28566c : #e5f2fb));
 
     touch-area := TouchArea {
         enabled: root.enabled;
@@ -44,7 +44,7 @@ export component ActionButton inherits Rectangle {
         text: root.label;
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: root.enabled ? (root.dark ? #f8fafc : #0f172a) : (root.dark ? #6b7280 : #94a3b8);
+        color: root.enabled ? (root.dark ? #f8fafc : #17212b) : (root.dark ? #6b7280 : #94a3b8);
         font-size: 12px;
         font-weight: 700;
         overflow: elide;
@@ -74,8 +74,8 @@ export component PlaceButton inherits Rectangle {
 
     height: 34px;
     border-width: dragged || drop-target || error != "" || pending-action != "" ? 1px : 0px;
-    border-color: error != "" ? (dark ? #ef4444 : #dc2626) : (pending-action != "" ? (dark ? #38bdf8 : #0284c7) : (drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #4d5962 : #b9c7d3)));
-    background: error != "" ? (dark ? #351b1f : #fff1f2) : (pending-action != "" ? (dark ? #122d3a : #e0f2fe) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1f23 : #e8eef4) : (selected ? (dark ? #214f67 : #dceeff) : (touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent)))));
+    border-color: error != "" ? (dark ? #ef4444 : #dc2626) : (pending-action != "" ? (dark ? #51a9d4 : #2b86b7) : (drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #49545d : #bdc9d4)));
+    background: error != "" ? (dark ? #351b1f : #fff1f2) : (pending-action != "" ? (dark ? #102c38 : #e3f4fb) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1e22 : #e8edf3) : (selected ? (dark ? #223f4f : #e4f0f8) : (touch-area.has-hover ? (dark ? #262b30 : #edf2f6) : transparent)))));
     opacity: dragged ? 0.45 : (available ? 1 : 0.68);
 
     drag-area := DragArea {
@@ -108,7 +108,7 @@ export component PlaceButton inherits Rectangle {
                     width: 24px;
                     height: 22px;
                     border-radius: 3px;
-                    background: root.error != "" ? (root.dark ? #ef4444 : #dc2626) : (root.pending-action != "" ? (root.dark ? #38bdf8 : #0284c7) : (root.available ? (root.dark ? #4f93d9 : #4f94dc) : (root.dark ? #3f464d : #cbd5e1)));
+                    background: root.error != "" ? (root.dark ? #ef4444 : #dc2626) : (root.pending-action != "" ? (root.dark ? #51a9d4 : #2b86b7) : (root.available ? (root.dark ? #5f9fd3 : #5a9dda) : (root.dark ? #3f464d : #cbd5e1)));
 
                     Text {
                         text: root.error != "" ? "!" : (root.pending-action != "" ? "..." : root.marker);
@@ -123,7 +123,7 @@ export component PlaceButton inherits Rectangle {
 
             Text {
                 text: root.label;
-                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.pending-action != "" ? (root.dark ? #bae6fd : #075985) : (root.available ? (root.dark ? #eeeeee : #17212b) : (root.dark ? #8b949e : #64748b)));
+                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.pending-action != "" ? (root.dark ? #bce7f7 : #075985) : (root.available ? (root.dark ? #edf2f7 : #1f2933) : (root.dark ? #8b949e : #64748b)));
                 font-size: 14px;
                 overflow: elide;
                 vertical-alignment: center;
@@ -138,8 +138,8 @@ export component SidebarAction inherits Rectangle {
     callback clicked();
 
     height: 30px;
-    border-radius: 6px;
-    background: touch-area.has-hover ? (dark ? #2a2f34 : #edf3f8) : transparent;
+    border-radius: 7px;
+    background: touch-area.has-hover ? (dark ? #262b30 : #edf2f6) : transparent;
 
     touch-area := TouchArea {
         clicked => { root.clicked(); }
@@ -149,7 +149,7 @@ export component SidebarAction inherits Rectangle {
         text: root.label;
         x: 12px;
         width: parent.width - 24px;
-        color: root.dark ? #cfd6dd : #475569;
+        color: root.dark ? #ccd4dc : #526071;
         font-size: 13px;
         overflow: elide;
         vertical-alignment: center;
@@ -166,7 +166,7 @@ export component SidebarSection inherits Rectangle {
     Text {
         x: 12px;
         text: root.label;
-        color: root.dark ? #a8a8a8 : #6b7280;
+        color: root.dark ? #9aa5af : #697684;
         font-size: 13px;
         font-weight: 700;
         vertical-alignment: center;
@@ -180,8 +180,8 @@ export component CheckOption inherits Rectangle {
     callback toggled(bool);
 
     height: 32px;
-    border-radius: 6px;
-    background: touch-area.has-hover ? (dark ? #33383d : #edf3f8) : transparent;
+    border-radius: 7px;
+    background: touch-area.has-hover ? (dark ? #2b3035 : #edf2f6) : transparent;
 
     touch-area := TouchArea {
         clicked => {
@@ -201,8 +201,8 @@ export component CheckOption inherits Rectangle {
             height: 18px;
             border-radius: 4px;
             border-width: 1px;
-            border-color: root.dark ? #64748b : #94a3b8;
-            background: root.checked ? (root.dark ? #38bdf8 : #0284c7) : transparent;
+            border-color: root.dark ? #65727f : #9aa8b6;
+            background: root.checked ? (root.dark ? #51a9d4 : #2b86b7) : transparent;
 
             Text {
                 text: root.checked ? "X" : "";
@@ -216,7 +216,7 @@ export component CheckOption inherits Rectangle {
 
         Text {
             text: root.label;
-            color: root.dark ? #f1f1f1 : #17212b;
+            color: root.dark ? #edf2f7 : #1f2933;
             font-size: 13px;
             overflow: elide;
             vertical-alignment: center;
@@ -230,10 +230,10 @@ export component FilterButton inherits Rectangle {
     callback clicked();
 
     height: 32px;
-    border-radius: 6px;
+    border-radius: 7px;
     border-width: 1px;
-    border-color: root.dark ? #47515a : #cbd5e1;
-    background: touch-area.has-hover ? (root.dark ? #33383d : #edf3f8) : (root.dark ? #20252a : #ffffff);
+    border-color: root.dark ? #444d56 : #cfd8e2;
+    background: touch-area.has-hover ? (root.dark ? #2b3035 : #edf2f6) : (root.dark ? #1f2428 : #ffffff);
 
     touch-area := TouchArea {
         clicked => { root.clicked(); }
@@ -246,7 +246,7 @@ export component FilterButton inherits Rectangle {
 
         Text {
             text: root.label;
-            color: root.dark ? #f1f5f9 : #17212b;
+            color: root.dark ? #edf2f7 : #1f2933;
             font-size: 12px;
             overflow: elide;
             vertical-alignment: center;
@@ -254,7 +254,7 @@ export component FilterButton inherits Rectangle {
 
         Text {
             text: "v";
-            color: root.dark ? #aeb8c2 : #64748b;
+            color: root.dark ? #a6b0ba : #64748b;
             font-size: 11px;
             font-weight: 700;
             horizontal-alignment: center;
@@ -285,15 +285,15 @@ export component MenuItem inherits Rectangle {
         y: 3px;
         width: parent.width - 8px;
         height: parent.height - 6px;
-        border-radius: 4px;
-        background: root.enabled && touch-area.has-hover ? (root.dark ? #343a40 : #edf3f8) : transparent;
+        border-radius: 6px;
+        background: root.enabled && touch-area.has-hover ? (root.dark ? #30363c : #eef3f7) : transparent;
     }
 
     Text {
         text: root.label;
         x: 12px;
         width: parent.width - (root.submenu ? 34px : 24px);
-        color: root.enabled ? (root.dark ? #f1f1f1 : #17212b) : (root.dark ? #717b84 : #94a3b8);
+        color: root.enabled ? (root.dark ? #edf2f7 : #1f2933) : (root.dark ? #717b84 : #94a3b8);
         font-size: 13px;
         overflow: elide;
         vertical-alignment: center;
@@ -303,7 +303,7 @@ export component MenuItem inherits Rectangle {
         text: ">";
         x: parent.width - 24px;
         width: 12px;
-        color: root.enabled ? (root.dark ? #b8c0c8 : #64748b) : (root.dark ? #5f6871 : #cbd5e1);
+        color: root.enabled ? (root.dark ? #b6c0ca : #64748b) : (root.dark ? #5f6871 : #cbd5e1);
         font-size: 13px;
         font-weight: 700;
         horizontal-alignment: center;
@@ -322,7 +322,7 @@ export component MenuSeparator inherits Rectangle {
         y: 4px;
         width: parent.width - 16px;
         height: 1px;
-        background: root.dark ? #3a4147 : #e2e8f0;
+        background: root.dark ? #343b42 : #e5ebf0;
     }
 }
 
@@ -337,7 +337,7 @@ export component MenuTitle inherits Rectangle {
         text: root.label;
         x: 12px;
         width: parent.width - 24px;
-        color: root.dark ? #a8a8a8 : #64748b;
+        color: root.dark ? #9aa5af : #697684;
         font-size: 12px;
         font-weight: 700;
         overflow: elide;
@@ -361,7 +361,7 @@ export component MenuHoverTitle inherits Rectangle {
         text: root.label;
         x: 12px;
         width: parent.width - 24px;
-        color: root.dark ? #a8a8a8 : #64748b;
+        color: root.dark ? #9aa5af : #697684;
         font-size: 12px;
         font-weight: 700;
         overflow: elide;
@@ -371,12 +371,12 @@ export component MenuHoverTitle inherits Rectangle {
 
 export component PopupSurface inherits Rectangle {
     in property <bool> dark;
-    in property <length> radius: 6px;
+    in property <length> radius: 8px;
 
     border-radius: root.radius;
-    background: root.dark ? #24292d : #ffffff;
+    background: root.dark ? #24282c : #fcfdfe;
     border-width: 1px;
-    border-color: root.dark ? #4b5258 : #cbd5e1;
+    border-color: root.dark ? #3f474f : #d9e1e8;
 }
 
 export component MenuDismissLayer inherits TouchArea {
@@ -413,7 +413,7 @@ export component FolderGlyph inherits Rectangle {
         width: root.width * 0.475;
         height: root.height * 0.257;
         border-radius: 5px;
-        background: root.dir ? (root.dark ? #345b84 : #67a6e8) : (root.dark ? #858585 : #a4a4a4);
+        background: root.dir ? (root.dark ? #3b668b : #72aee6) : (root.dark ? #858b90 : #a8afb6);
     }
 
     Rectangle {
@@ -422,7 +422,7 @@ export component FolderGlyph inherits Rectangle {
         width: root.width;
         height: root.height * 0.686;
         border-radius: 4px;
-        background: root.dir ? (root.dark ? #37608d : #5a9be3) : (root.dark ? #8a8a8a : #a6a6a6);
+        background: root.dir ? (root.dark ? #3f6f98 : #609fe0) : (root.dark ? #8b9197 : #aeb4ba);
     }
 
     Rectangle {
@@ -432,7 +432,7 @@ export component FolderGlyph inherits Rectangle {
         width: root.width * 0.825;
         height: max(5px, root.height * 0.1);
         border-radius: 2px;
-        background: root.dark ? #9aa7b2 : #e8eef5;
+        background: root.dark ? #a9b8c4 : #edf4fa;
     }
 
     Text {

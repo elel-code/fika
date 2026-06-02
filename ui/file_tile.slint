@@ -17,10 +17,10 @@ export component FileTile inherits Rectangle {
     callback pan_horizontal(length);
 
     height: root.zoom-level == 0 ? 72px : (root.zoom-level == 1 ? 84px : (root.zoom-level == 2 ? 98px : (root.zoom-level == 3 ? 116px : 136px)));
-    border-radius: 6px;
+    border-radius: 7px;
     border-width: selected || drop-target ? 1px : 0px;
-    border-color: drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #38bdf8 : #0284c7);
-    background: drop-target ? (dark ? #3a2a12 : #fff7dd) : (selected ? (dark ? #132b3a : #e6f4ff) : (touch-area.has-hover ? (dark ? #191e23 : #f3f7fb) : transparent));
+    border-color: drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #51a9d4 : #2b86b7);
+    background: drop-target ? (dark ? #3a2a12 : #fff7dd) : (selected ? (dark ? #223f4f : #e4f0f8) : (touch-area.has-hover ? (dark ? #171b1f : #f0f4f8) : transparent));
 
     drag-area := DragArea {
         enabled: root.entry.path != "";
@@ -80,7 +80,7 @@ export component FileTile inherits Rectangle {
 
                 if (root.show-location && root.entry.group != ""): Text {
                     text: root.entry.group;
-                    color: root.dark ? #93c5fd : #2563eb;
+                    color: root.dark ? #9bc7ec : #2b6f9f;
                     font-size: root.zoom-level < 2 ? 10px : 11px;
                     font-weight: 700;
                     overflow: elide;
@@ -88,7 +88,7 @@ export component FileTile inherits Rectangle {
 
                 Text {
                     text: root.entry.name;
-                    color: root.dark ? #e7e7e7 : #17212b;
+                    color: root.dark ? #edf2f7 : #1f2933;
                     font-size: root.zoom-level == 0 ? 12px : (root.zoom-level == 1 ? 13px : (root.zoom-level == 2 ? 15px : (root.zoom-level == 3 ? 16px : 18px)));
                     overflow: elide;
                     vertical-alignment: center;
@@ -96,7 +96,7 @@ export component FileTile inherits Rectangle {
 
                 if (root.show-location && root.entry.location != ""): Text {
                     text: root.entry.location;
-                    color: root.dark ? #9ca3af : #64748b;
+                    color: root.dark ? #9aa5af : #697684;
                     font-size: root.zoom-level < 2 ? 10px : 11px;
                     overflow: elide;
                 }

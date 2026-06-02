@@ -1,5 +1,5 @@
 import { LineEdit } from "std-widgets.slint";
-import { ActionButton, ToolButton } from "widgets.slint";
+import { ActionButton } from "widgets.slint";
 import { ChooserChoice } from "models.slint";
 
 export component StatusBar inherits Rectangle {
@@ -29,8 +29,8 @@ export component StatusBar inherits Rectangle {
     callback chooser_choice_requested(int, length, length);
 
     height: 36px;
-    background: root.dark ? #111416 : #ffffff;
-    border-color: root.dark ? #454a50 : #d6dce2;
+    background: root.dark ? #111518 : #f8fafc;
+    border-color: root.dark ? #303840 : #e0e6ec;
     border-width: 1px;
 
     HorizontalLayout {
@@ -41,7 +41,7 @@ export component StatusBar inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.selected-count == 0 ? root.status : root.selected-status;
-            color: root.dark ? #f1f1f1 : #334155;
+            color: root.dark ? #dce3ea : #526071;
             font-size: 13px;
             overflow: elide;
             vertical-alignment: center;
@@ -55,13 +55,15 @@ export component StatusBar inherits Rectangle {
             vertical-alignment: center;
         }
 
-        if (root.external-edit-active): ToolButton {
+        if (root.external-edit-active): ActionButton {
+            width: 96px;
             label: "Save Back";
             dark: root.dark;
             clicked => { root.commit_external_edit(); }
         }
 
-        if (root.external-edit-active): ToolButton {
+        if (root.external-edit-active): ActionButton {
+            width: 86px;
             label: "Discard";
             dark: root.dark;
             clicked => { root.discard_external_edit(); }
