@@ -10,6 +10,10 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
+    discover_devices().devices
+}
+
+fn discover_devices() -> DeviceDiscovery {
     let roots = mount_roots();
     let (mounted, mount_source) = mounted_devices_from_mountinfo(&roots, "/proc/self/mountinfo")
         .map(|devices| {
@@ -27,41 +31,69 @@ pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
             )
         });
     let mounted_rows = mounted.len().saturating_sub(1);
-    let discovered = match udisks2_removable_devices() {
+    let (discovered, udisks_error) = match udisks2_removable_devices() {
         Ok(devices) => {
             device_debug_log(&format!(
                 "UDisks2 discovered {} external media row(s)",
                 devices.len()
             ));
-            devices
+            (devices, None)
         }
         Err(err) => {
             device_debug_log(&format!("UDisks2 discovery unavailable: {err}"));
-            Vec::new()
+            (Vec::new(), Some(err))
         }
     };
     let udisks_rows = discovered.len();
     let merged = merge_device_entries_with_stats(mounted, discovered);
-    device_debug_log(&device_merge_summary(&merged.stats));
-    device_debug_log(&device_discovery_summary(
+    let discovery = DeviceDiscovery {
+        devices: merged.devices,
         mount_source,
         mounted_rows,
         udisks_rows,
-        &merged.devices,
+        udisks_error,
+        merge_stats: merged.stats,
+    };
+    device_debug_log(&device_merge_summary(&discovery.merge_stats));
+    device_debug_log(&device_discovery_summary(
+        discovery.mount_source,
+        discovery.mounted_rows,
+        discovery.udisks_rows,
+        &discovery.devices,
     ));
-    device_debug_log_devices("merged", &merged.devices);
-    merged.devices
+    device_debug_log_devices("merged", &discovery.devices);
+    discovery
 }
 
 pub(crate) fn device_diagnostics_report() -> String {
-    format_device_diagnostics_report(&mounted_devices())
+    format_device_diagnostics_report(&discover_devices())
 }
 
-fn format_device_diagnostics_report(devices: &[DeviceEntry]) -> String {
+fn format_device_diagnostics_report(discovery: &DeviceDiscovery) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Fika Devices diagnostics");
-    let _ = writeln!(output, "rows: {}", devices.len());
-    for (index, device) in devices.iter().enumerate() {
+    let _ = writeln!(
+        output,
+        "{}",
+        device_discovery_summary(
+            discovery.mount_source,
+            discovery.mounted_rows,
+            discovery.udisks_rows,
+            &discovery.devices
+        )
+    );
+    let _ = writeln!(output, "{}", device_merge_summary(&discovery.merge_stats));
+    let _ = writeln!(
+        output,
+        "udisks_error=\"{}\"",
+        discovery
+            .udisks_error
+            .as_deref()
+            .map(diagnostic_value)
+            .unwrap_or_else(|| "<none>".to_string())
+    );
+    let _ = writeln!(output, "rows: {}", discovery.devices.len());
+    for (index, device) in discovery.devices.iter().enumerate() {
         let _ = writeln!(
             output,
             "[{index}] label=\"{}\" marker=\"{}\" path=\"{}\" device_path=\"{}\" mounted={} can_mount={} can_unmount={} can_eject={} error=\"{}\"",
@@ -193,6 +225,15 @@ fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
 struct DeviceMergeResult {
     devices: Vec<DeviceEntry>,
     stats: DeviceMergeStats,
+}
+
+struct DeviceDiscovery {
+    devices: Vec<DeviceEntry>,
+    mount_source: DeviceMountSource,
+    mounted_rows: usize,
+    udisks_rows: usize,
+    udisks_error: Option<String>,
+    merge_stats: DeviceMergeStats,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1057,25 +1098,46 @@ mod tests {
 
     #[test]
     fn device_diagnostics_report_lists_rows_and_escapes_fields() {
-        let devices = vec![device_entry(
-            "USB \"Disk\"".into(),
-            "/run/media/yk/USB\nDisk".into(),
-            "/dev/sdb1".into(),
-            "USB".into(),
-            true,
-            DeviceCapabilities {
-                can_unmount: true,
-                can_eject: true,
-                ..DeviceCapabilities::default()
+        let discovery = DeviceDiscovery {
+            devices: vec![
+                filesystem_entry(),
+                device_entry(
+                    "USB \"Disk\"".into(),
+                    "/run/media/yk/USB\nDisk".into(),
+                    "/dev/sdb1".into(),
+                    "USB".into(),
+                    true,
+                    DeviceCapabilities {
+                        can_unmount: true,
+                        can_eject: true,
+                        ..DeviceCapabilities::default()
+                    },
+                ),
+            ],
+            mount_source: DeviceMountSource::Mountinfo,
+            mounted_rows: 1,
+            udisks_rows: 0,
+            udisks_error: Some("cannot query \"UDisks2\"\nservice".to_string()),
+            merge_stats: DeviceMergeStats {
+                mounted_only: 1,
+                udisks_only: 0,
+                merged: 0,
             },
-        )];
+        };
 
-        let report = format_device_diagnostics_report(&devices);
+        let report = format_device_diagnostics_report(&discovery);
 
-        assert!(report.starts_with("Fika Devices diagnostics\nrows: 1\n"));
-        assert!(report.contains("label=\"USB \\\"Disk\\\"\""));
-        assert!(report.contains("path=\"/run/media/yk/USB\\nDisk\""));
-        assert!(report.contains("device_path=\"/dev/sdb1\""));
+        assert!(report.starts_with("Fika Devices diagnostics\nsummary mount_source=mountinfo"));
+        assert!(
+            report.contains(
+                "summary mount_source=mountinfo mounted_rows=1 udisks_rows=0 final_rows=1"
+            )
+        );
+        assert!(report.contains("merge mounted_only=1 udisks_only=0 merged=0"));
+        assert!(report.contains("udisks_error=\"cannot query \\\"UDisks2\\\"\\nservice\""));
+        assert!(report.contains("rows: 2"));
+        assert!(report.contains("[1] label=\"USB \\\"Disk\\\"\""));
+        assert!(report.contains("[1] label=\"USB \\\"Disk\\\"\" marker=\"USB\" path=\"/run/media/yk/USB\\nDisk\" device_path=\"/dev/sdb1\""));
         assert!(report.contains("mounted=true can_mount=false can_unmount=true can_eject=true"));
     }
 
