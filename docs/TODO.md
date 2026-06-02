@@ -204,7 +204,7 @@
   - Current: cache entries are capped and the oldest entry is evicted when the limit is exceeded.
   - Current: inspired by `cosmic-files/src/thumbnail_cacher.rs`, failed thumbnail attempts are also cached by path, mtime, and target size with capped LRU eviction, so broken/unsupported images do not repeatedly enqueue decode jobs while scrolling large directories.
   - Current: thumbnail loading also reads and writes freedesktop.org disk cache PNGs under `normal` / `large` / `x-large` / `xx-large`, and writes `fail/fika-$version` markers after decode errors so repeated visits do not decode the same broken image again until the source mtime changes.
-  - Current: thumbnail load results update only the thumbnail success/failure caches and pending map; visible tiles are refreshed by re-decorating the virtual slice, avoiding a full `entries` scan for every completed thumbnail.
+  - Current: thumbnail load results update only the shared thumbnail success/failure caches and the active pane's pending map; visible tiles are refreshed by re-decorating the virtual slice, avoiding a full `entries` scan for every completed thumbnail.
   - Current: same-directory refresh and watcher reload preserve the active thumbnail generation and pending jobs, following COSMIC Files' item/thumbnail separation; full navigation still cancels stale thumbnail work.
 
 - [x] Visible-first scheduling.
@@ -495,7 +495,7 @@ Acceptance for all:
   - Current: Back/Forward history is now isolated behind `PaneHistory` instead of naked AppState stacks. Fika still exposes one pane, but history push/pop/prune semantics are testable as a pane-owned state block, matching the direction of COSMIC's per-tab location/history model.
   - Current: Selection paths and range anchor are now isolated behind `PaneSelection`, so the next split-view pass can give each pane its own selected set without reworking clipboard, chooser, trash, and menu call sites at the same time.
   - Current: Search query, type/mtime/size filters, the filtered visible-index cache, and recursive-search cancel/progress/generation are now isolated behind the active `PaneState`.
-  - Current: Virtual range/cache metadata, active viewport position, and per-directory viewport restore cache are now isolated behind `PaneView`, so visible tile slicing, scroll restoration, and thumbnail-range checks can become per-pane before the split UI is exposed.
+  - Current: Virtual range/cache metadata, active viewport position, thumbnail pending map, and per-directory viewport restore cache are now isolated behind `PaneView`, so visible tile slicing, scroll restoration, and thumbnail-range checks can become per-pane before the split UI is exposed.
   - Current: Directory-load, open-file, and thumbnail generation counters are now owned by `PaneState`, so stale async results are scoped to the pane that started the work instead of a global app counter.
   - Current: The active main-pane directory, entries, history, selection, search, and virtual-view state are now grouped under `PaneState`. Fika still renders one pane, but most pane-owned data now has a single ownership boundary before the visible split UI is added.
 

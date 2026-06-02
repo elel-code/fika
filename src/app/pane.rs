@@ -1,5 +1,5 @@
 use crate::FileEntry;
-use crate::fs::search;
+use crate::fs::{search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -86,11 +86,44 @@ impl PaneSearch {
 pub(crate) struct PaneView {
     pub(crate) viewport_x: f32,
     pub(crate) virtual_view: VirtualViewCache,
+    thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
     state_cache: HashMap<PathBuf, DirectoryViewState>,
     state_cache_order: VecDeque<PathBuf>,
 }
 
 impl PaneView {
+    pub(crate) fn thumbnail_pending_key(&self, path: &str) -> Option<&thumbnails::ThumbnailKey> {
+        self.thumbnail_pending.get(path)
+    }
+
+    pub(crate) fn has_thumbnail_pending(&self, path: &str) -> bool {
+        self.thumbnail_pending.contains_key(path)
+    }
+
+    pub(crate) fn insert_thumbnail_pending(&mut self, path: String, key: thumbnails::ThumbnailKey) {
+        self.thumbnail_pending.insert(path, key);
+    }
+
+    pub(crate) fn remove_matching_thumbnail_pending(
+        &mut self,
+        path: &str,
+        key: &thumbnails::ThumbnailKey,
+    ) -> bool {
+        if self
+            .thumbnail_pending
+            .get(path)
+            .is_some_and(|pending_key| pending_key == key)
+        {
+            self.thumbnail_pending.remove(path);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn clear_thumbnail_pending(&mut self) {
+        self.thumbnail_pending.clear();
+    }
+
     pub(crate) fn cached_state(&mut self, path: &Path) -> Option<DirectoryViewState> {
         let view_state = self.state_cache.get(path).copied()?;
         self.refresh_state_cache_order(path);
@@ -366,6 +399,22 @@ mod tests {
         assert_eq!(view.virtual_view.rows_per_column, 8);
         assert_eq!(view.virtual_view.cell_width, 96.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
+    }
+
+    #[test]
+    fn pane_view_thumbnail_pending_removes_only_matching_key() {
+        let mut view = PaneView::default();
+        let path = "/tmp/photo.png";
+        let old_key = thumbnails::fallback_key(Path::new(path), 64);
+        let new_key = thumbnails::fallback_key(Path::new(path), 128);
+
+        view.insert_thumbnail_pending(path.to_string(), new_key.clone());
+
+        assert!(!view.remove_matching_thumbnail_pending(path, &old_key));
+        assert_eq!(view.thumbnail_pending_key(path), Some(&new_key));
+
+        assert!(view.remove_matching_thumbnail_pending(path, &new_key));
+        assert!(!view.has_thumbnail_pending(path));
     }
 
     #[test]

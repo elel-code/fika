@@ -75,12 +75,12 @@ Rust 侧核心状态在 `AppState`：
 - UI 侧把地址栏使用的 `current_path` 和主栏 item model 归属的 `items_path` 分开：uncached 导航时地址栏可以先显示目标路径，但 sidebar/Devices 选中态保持跟随旧 `items_path`，直到 cache hit 或新 entries 提交。这与 COSMIC Files 的 location / `items_opt` 分层一致，避免 Places 跳转时左侧先高亮新位置而右侧仍显示旧模型。
 - `places`: 左侧 Places。
 - `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。
-- `pane.view`: 当前 pane 的 viewport 坐标、虚拟 range/cache metadata，以及每个目录的 viewport 坐标 LRU cache，用于返回目录时恢复滚动位置；每个 pane 独立持有自己的 view-state cache，避免分屏后同一路径在不同 pane 之间互相覆盖滚动位置。
+- `pane.view`: 当前 pane 的 viewport 坐标、虚拟 range/cache metadata、thumbnail pending map，以及每个目录的 viewport 坐标 LRU cache，用于返回目录时恢复滚动位置；每个 pane 独立持有自己的 view-state / thumbnail-pending state，避免分屏后同一路径在不同 pane 之间互相覆盖滚动位置或 pending 状态。
 - uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。保留的旧模型在加载期间只作为视觉占位，不接受打开、选择、右键、滚轮或 drop 操作；cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。目录读取失败时不会清空已经提交的主栏模型：刷新失败保留当前视图，缓存刷新失败保留缓存视图，未缓存的 Places/Devices 跳转失败会把 `current_path` 回滚到最后提交的 `items_path`。
 - `thumbnail_cache`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图像素。
 - `thumbnail_failures`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图失败结果，避免坏图或不支持格式在大目录滚动时反复排队解码；文件修改后 key 变化，会重新尝试。
 - thumbnail load 会同时计算 freedesktop.org Thumbnail Managing Standard 的 cache identity：canonical `file://` URI、MD5 PNG 文件名、`normal` / `large` / `x-large` / `xx-large` 目录和 `fail/fika-$version` marker 路径。后台任务会先读取有效磁盘 cache 或 fresh fail marker；内置图片解码成功后写入对应 PNG cache，解码失败后写入 fail marker。对 PDF/SVG/AVIF 等非内置格式，Fika 会从 XDG thumbnailer 目录发现 `.thumbnailer` entry，校验 `TryExec`，匹配 `MimeType`，按 freedesktop field code 展开 `Exec`，让外部 thumbnailer 写入标准 cache 文件，再复用同一 cache 读取/缩放路径。UI 侧仍通过内存 LRU cache 装饰当前虚拟切片，磁盘 cache 作为跨目录/跨进程的持久加速层。
-- 缩略图完成事件只更新成功/失败缓存和 pending 状态，不扫描或改写完整 `entries`；如果结果落在当前虚拟切片内，Slint 模型通过缓存装饰重新同步可见项。
+- 缩略图完成事件只更新全局成功/失败缓存和当前 pane 的 pending 状态，不扫描或改写完整 `entries`；如果结果落在当前虚拟切片内，Slint 模型通过缓存装饰重新同步可见项。
 - `operation_queue`: Move/Copy/Link 操作队列，一次只启动一个后台文件操作。
 - `pane.load_generation` / `pane.open_generation` / `pane.search_generation` / `pane.thumbnail_generation`: 每个 pane 独立持有的 `GenerationCounter`，用于丢弃过期目录加载、打开、递归搜索和缩略图结果。
 
@@ -210,7 +210,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - 已访问目录会先从 `directory_cache` 即时显示，再启动异步刷新，兼顾“快”和新鲜度。
 - 本地目录读取借鉴 COSMIC Files 的后台同步 scan 思路：一次目录扫描整体放入 Tokio blocking pool，避免为每个 entry 创建独立异步 filesystem 调度。
 - refresh / watcher reload 如果得到的可见目录模型和当前模型一致，只更新 LRU 缓存与状态栏，不 invalidation 虚拟范围，也不重新提交 Slint model。
-- 借鉴 COSMIC Files 的 item/thumbnail 分层，同目录 refresh 和 watcher reload 只刷新目录条目，不推进 `pane.thumbnail_generation`、不清空 `thumbnail_pending`；已有和正在进行的缩略图任务继续回填缓存。只有真正的导航加载会取消旧目录的缩略图 generation 和 pending 队列。
+- 借鉴 COSMIC Files 的 item/thumbnail 分层，同目录 refresh 和 watcher reload 只刷新目录条目，不推进 `pane.thumbnail_generation`、不清空 `pane.view` 的 thumbnail pending map；已有和正在进行的缩略图任务继续回填缓存。只有真正的导航加载会取消旧目录的缩略图 generation 和 pending 队列。
 - 目录切换前会记录当前主栏滚动位置，进入已访问目录时恢复对应 viewport，减少 back/forward 后的视觉上下文丢失。
 - 鼠标 Back/Forward 只在右侧主栏范围触发，避免顶栏、侧栏或分隔条上的操作意外改变目录历史。
 

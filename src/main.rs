@@ -2854,7 +2854,10 @@ fn schedule_visible_thumbnails(
             let Some((path, key)) = thumbnail_schedule_candidate(&state, entry, size_px) else {
                 continue;
             };
-            state.thumbnail_pending.insert(entry.path.to_string(), key);
+            state
+                .pane
+                .view
+                .insert_thumbnail_pending(entry.path.to_string(), key);
             paths.push(path);
         }
 

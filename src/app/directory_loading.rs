@@ -29,7 +29,7 @@ pub(crate) fn prepare_directory_load(
     state.pane.search_generation.next();
     if !preserve_view {
         state.pane.thumbnail_generation.next();
-        state.thumbnail_pending.clear();
+        state.pane.view.clear_thumbnail_pending();
         reset_search_state(state);
         state.pane.selection.clear();
     }
@@ -107,8 +107,9 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp/current"), Vec::new());
         let pending_key = thumbnails::fallback_key(Path::new("/tmp/current/photo.png"), 64);
         state
-            .thumbnail_pending
-            .insert("/tmp/current/photo.png".to_string(), pending_key.clone());
+            .pane
+            .view
+            .insert_thumbnail_pending("/tmp/current/photo.png".to_string(), pending_key.clone());
         state.pane.search.query = "photo".to_string();
         state.pane.selection.paths = vec!["/tmp/current/photo.png".to_string()];
         state.pane.selection.anchor = Some("/tmp/current/photo.png".to_string());
@@ -134,7 +135,10 @@ mod tests {
             thumbnail_generation
         );
         assert_eq!(
-            state.thumbnail_pending.get("/tmp/current/photo.png"),
+            state
+                .pane
+                .view
+                .thumbnail_pending_key("/tmp/current/photo.png"),
             Some(&pending_key)
         );
         assert_eq!(state.pane.search.query, "photo");
@@ -150,8 +154,9 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp/current"), Vec::new());
         let pending_key = thumbnails::fallback_key(Path::new("/tmp/current/photo.png"), 64);
         state
-            .thumbnail_pending
-            .insert("/tmp/current/photo.png".to_string(), pending_key);
+            .pane
+            .view
+            .insert_thumbnail_pending("/tmp/current/photo.png".to_string(), pending_key);
         state.pane.search.query = "photo".to_string();
         state.pane.search.kind_filter = 3;
         state.pane.selection.paths = vec!["/tmp/current/photo.png".to_string()];
@@ -164,7 +169,12 @@ mod tests {
         assert!(preparation.cached_entries.is_none());
         assert!(preparation.defer_view_restore);
         assert!(state.pane.thumbnail_generation.current() > thumbnail_generation);
-        assert!(state.thumbnail_pending.is_empty());
+        assert!(
+            !state
+                .pane
+                .view
+                .has_thumbnail_pending("/tmp/current/photo.png")
+        );
         assert!(state.pane.search.query.is_empty());
         assert_eq!(state.pane.search.kind_filter, 0);
         assert!(state.pane.selection.paths.is_empty());

@@ -25,7 +25,7 @@ pub(crate) fn decorate_entries_with_cached_thumbnails(
             entry.thumbnail_state = 2;
         } else if state.thumbnail_failures.contains_key(&key) {
             entry.thumbnail_state = 0;
-        } else if state.thumbnail_pending.contains_key(entry.path.as_str()) {
+        } else if state.pane.view.has_thumbnail_pending(entry.path.as_str()) {
             entry.thumbnail_state = 1;
         }
     }
@@ -103,7 +103,7 @@ pub(crate) fn thumbnail_schedule_candidate(
     if state.thumbnail_cache.contains_key(&key) || state.thumbnail_failures.contains_key(&key) {
         return None;
     }
-    if state.thumbnail_pending.get(entry.path.as_str()) == Some(&key) {
+    if state.pane.view.thumbnail_pending_key(entry.path.as_str()) == Some(&key) {
         return None;
     }
 
@@ -152,13 +152,10 @@ pub(crate) fn remove_matching_thumbnail_pending(
     path_text: &str,
     key: &thumbnails::ThumbnailKey,
 ) {
-    if state
-        .thumbnail_pending
-        .get(path_text)
-        .is_some_and(|pending_key| pending_key == key)
-    {
-        state.thumbnail_pending.remove(path_text);
-    }
+    state
+        .pane
+        .view
+        .remove_matching_thumbnail_pending(path_text, key);
 }
 
 pub(crate) fn remove_thumbnail_failure(state: &mut AppState, key: &thumbnails::ThumbnailKey) {
@@ -369,13 +366,14 @@ mod tests {
         let new_key = thumbnails::fallback_key(Path::new(path), 128);
 
         state
-            .thumbnail_pending
-            .insert(path.to_string(), new_key.clone());
+            .pane
+            .view
+            .insert_thumbnail_pending(path.to_string(), new_key.clone());
         remove_matching_thumbnail_pending(&mut state, path, &old_key);
-        assert_eq!(state.thumbnail_pending.get(path), Some(&new_key));
+        assert_eq!(state.pane.view.thumbnail_pending_key(path), Some(&new_key));
 
         remove_matching_thumbnail_pending(&mut state, path, &new_key);
-        assert!(!state.thumbnail_pending.contains_key(path));
+        assert!(!state.pane.view.has_thumbnail_pending(path));
     }
 
     #[test]
@@ -393,8 +391,9 @@ mod tests {
         state.pane.entries = vec![test_entry("photo.png", path)];
         state.pane.view.virtual_view.range = 0..1;
         state
-            .thumbnail_pending
-            .insert(path.to_string(), key.clone());
+            .pane
+            .view
+            .insert_thumbnail_pending(path.to_string(), key.clone());
         insert_thumbnail_failure_with_limit(&mut state, key.clone(), "decode failed".to_string());
 
         let should_refresh = apply_thumbnail_load_to_state(
@@ -410,7 +409,7 @@ mod tests {
         );
 
         assert!(should_refresh);
-        assert!(!state.thumbnail_pending.contains_key(path));
+        assert!(!state.pane.view.has_thumbnail_pending(path));
         assert!(state.thumbnail_cache.contains_key(&key));
         assert!(!state.thumbnail_failures.contains_key(&key));
         assert_eq!(state.pane.entries[0].thumbnail_state, 0);
@@ -428,8 +427,9 @@ mod tests {
         state.pane.entries = vec![entry];
         state.pane.view.virtual_view.range = 0..1;
         state
-            .thumbnail_pending
-            .insert(path.to_string(), key.clone());
+            .pane
+            .view
+            .insert_thumbnail_pending(path.to_string(), key.clone());
 
         let should_refresh = apply_thumbnail_load_to_state(
             &mut state,
@@ -444,7 +444,7 @@ mod tests {
         );
 
         assert!(should_refresh);
-        assert!(!state.thumbnail_pending.contains_key(path));
+        assert!(!state.pane.view.has_thumbnail_pending(path));
         assert!(state.thumbnail_failures.contains_key(&key));
         assert_eq!(state.pane.entries[0].thumbnail_state, 1);
     }
@@ -462,8 +462,9 @@ mod tests {
             rgba: vec![0, 0, 0, 0],
         };
         state
-            .thumbnail_pending
-            .insert(path.to_string(), key.clone());
+            .pane
+            .view
+            .insert_thumbnail_pending(path.to_string(), key.clone());
 
         let should_refresh = apply_thumbnail_load_to_state(
             &mut state,
@@ -478,7 +479,7 @@ mod tests {
         );
 
         assert!(!should_refresh);
-        assert!(!state.thumbnail_pending.contains_key(path));
+        assert!(!state.pane.view.has_thumbnail_pending(path));
         assert!(!state.thumbnail_cache.contains_key(&key));
         assert!(!state.thumbnail_failures.contains_key(&key));
     }
