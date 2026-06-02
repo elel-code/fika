@@ -25,7 +25,8 @@ use app::chooser::{
 };
 use app::device_monitor::start_device_monitor;
 use app::directory_loading::{
-    DirectoryLoadPreparation, directory_entries_match, prepare_directory_load,
+    DirectoryLoadErrorRecovery, DirectoryLoadPreparation, directory_entries_match,
+    directory_load_error_recovery, prepare_directory_load,
 };
 use app::dnd::{
     MainDndTrace, PlacesDndTrace, SLINT_DROPAREA_BACKEND_SOURCE, dnd_debug_enabled_from_env,
@@ -1134,6 +1135,14 @@ fn restore_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path
     ui.set_main_viewport_offset(-view_state.viewport_x);
 }
 
+fn set_current_location_ui(ui: &AppWindow, path: &Path) {
+    let current_path = path.display().to_string();
+    ui.set_current_path(current_path.as_str().into());
+    ui.set_path_input_text(current_path.into());
+    ui.set_current_name(display_location_name(path).into());
+    ui.set_current_in_trash(fs::file_ops::is_in_trash_files_dir(path));
+}
+
 fn reset_search_controls(ui: &AppWindow) {
     ui.set_search_query(SharedString::new());
     ui.set_search_kind_filter(0);
@@ -1224,11 +1233,7 @@ fn load_directory_with_preservation(
         current_dir.display(),
         cached_entries.is_some()
     ));
-    let current_path = current_dir.display().to_string();
-    ui.set_current_path(current_path.as_str().into());
-    ui.set_path_input_text(current_path.into());
-    ui.set_current_name(display_location_name(&current_dir).into());
-    ui.set_current_in_trash(fs::file_ops::is_in_trash_files_dir(&current_dir));
+    set_current_location_ui(ui, &current_dir);
     ui.set_search_loading(false);
     if !preserve_view && !defer_view_restore {
         restore_view_state(ui, state, &current_dir);
@@ -1647,33 +1652,69 @@ fn apply_directory_result(
                 result.path.display(),
                 result.preserve_view
             ));
-            {
-                let mut state = state.borrow_mut();
-                state.entries.clear();
-                state.visible_entry_indices = None;
-                state.virtual_view.invalidate();
-                if !result.preserve_view {
-                    reset_search_state(&mut state);
-                    state.selected_paths.clear();
+            let recovery = {
+                let state_ref = state.borrow();
+                directory_load_error_recovery(
+                    result.preserve_view,
+                    &result.path,
+                    ui.get_items_path().as_str(),
+                    !state_ref.entries.is_empty(),
+                )
+            };
+            match recovery {
+                DirectoryLoadErrorRecovery::KeepVisibleModel => {
+                    ui.set_directory_loading(false);
+                    set_status(ui, &format!("Cannot refresh directory: {err}"));
+                }
+                DirectoryLoadErrorRecovery::RollBackToItemsPath(path) => {
+                    {
+                        let mut state = state.borrow_mut();
+                        state.current_dir = path.clone();
+                    }
+                    set_current_location_ui(ui, &path);
+                    watch_current_directory(&path, result.generation, bridge);
+                    save_current_settings(ui, state);
+                    sync_virtual_entries(ui, state, bridge, true);
+                    ui.set_directory_loading(false);
+                    set_status(
+                        ui,
+                        &format!(
+                            "Cannot read {}; stayed in {}: {err}",
+                            result.path.display(),
+                            path.display()
+                        ),
+                    );
+                }
+                DirectoryLoadErrorRecovery::ClearTarget => {
+                    {
+                        let mut state = state.borrow_mut();
+                        state.entries.clear();
+                        state.visible_entry_indices = None;
+                        state.virtual_view.invalidate();
+                        if !result.preserve_view {
+                            reset_search_state(&mut state);
+                            state.selected_paths.clear();
+                        }
+                    }
+                    ui.set_items_path(result.path.display().to_string().into());
+                    if !result.preserve_view {
+                        reset_search_controls(ui);
+                    }
+                    ui.set_entry_count(0);
+                    ui.set_virtual_start_index(0);
+                    ui.set_virtual_start_column(0);
+                    ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(
+                        Vec::<FileEntry>::new(),
+                    ))));
+                    ui.set_directory_loading(false);
+                    if result.preserve_view {
+                        retain_visible_selection(ui, state, &[]);
+                    } else {
+                        update_selection_ui(ui, &[]);
+                    }
+                    set_status(ui, &format!("Cannot read directory: {err}"));
                 }
             }
-            ui.set_items_path(result.path.display().to_string().into());
-            if !result.preserve_view {
-                reset_search_controls(ui);
-            }
-            ui.set_entry_count(0);
-            ui.set_virtual_start_index(0);
-            ui.set_virtual_start_column(0);
-            ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(
-                Vec::<FileEntry>::new(),
-            ))));
-            ui.set_directory_loading(false);
-            if result.preserve_view {
-                retain_visible_selection(ui, state, &[]);
-            } else {
-                update_selection_ui(ui, &[]);
-            }
-            set_status(ui, &format!("Cannot read directory: {err}"));
         }
     }
 }

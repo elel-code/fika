@@ -10,6 +10,8 @@ pub(crate) fn cancel_active_search(state: &mut AppState) {
 pub(crate) fn reset_search_state(state: &mut AppState) {
     state.search_query.clear();
     reset_search_filters(state);
+    state.visible_entry_indices = None;
+    state.virtual_view.invalidate();
 }
 
 pub(crate) fn reset_search_filters(state: &mut AppState) {
@@ -102,6 +104,8 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         state.search_query = "report".to_string();
         set_search_filters(&mut state, 1, 2, 3);
+        state.visible_entry_indices = Some(vec![0, 2, 4]);
+        state.virtual_view.range = 1..3;
 
         reset_search_state(&mut state);
 
@@ -109,6 +113,8 @@ mod tests {
         assert_eq!(state.search_kind_filter, 0);
         assert_eq!(state.search_modified_filter, 0);
         assert_eq!(state.search_size_filter, 0);
+        assert!(state.visible_entry_indices.is_none());
+        assert!(state.virtual_view.range.is_empty());
     }
 
     #[test]

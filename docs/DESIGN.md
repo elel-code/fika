@@ -79,7 +79,7 @@ Rust 侧核心状态在 `AppState`：
 - `selected_paths`: 当前选中项。
 - `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。
 - `view_state_cache`: 每个目录的主栏 viewport 坐标缓存，用于返回目录时恢复滚动位置；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留每个路径的视图状态。
-- uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。保留的旧模型在加载期间只作为视觉占位，不接受打开、选择、右键、滚轮或 drop 操作；cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。
+- uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。保留的旧模型在加载期间只作为视觉占位，不接受打开、选择、右键、滚轮或 drop 操作；cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。目录读取失败时不会清空已经提交的主栏模型：刷新失败保留当前视图，缓存刷新失败保留缓存视图，未缓存的 Places/Devices 跳转失败会把 `current_path` 回滚到最后提交的 `items_path`。
 - `thumbnail_cache`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图像素。
 - `thumbnail_failures`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图失败结果，避免坏图或不支持格式在大目录滚动时反复排队解码；文件修改后 key 变化，会重新尝试。
 - thumbnail load 会同时计算 freedesktop.org Thumbnail Managing Standard 的 cache identity：canonical `file://` URI、MD5 PNG 文件名、`normal` / `large` / `x-large` / `xx-large` 目录和 `fail/fika-$version` marker 路径。后台任务会先读取有效磁盘 cache 或 fresh fail marker；内置图片解码成功后写入对应 PNG cache，解码失败后写入 fail marker。对 PDF/SVG/AVIF 等非内置格式，Fika 会从 XDG thumbnailer 目录发现 `.thumbnailer` entry，校验 `TryExec`，匹配 `MimeType`，按 freedesktop field code 展开 `Exec`，让外部 thumbnailer 写入标准 cache 文件，再复用同一 cache 读取/缩放路径。UI 侧仍通过内存 LRU cache 装饰当前虚拟切片，磁盘 cache 作为跨目录/跨进程的持久加速层。
@@ -207,7 +207,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - `navigate_to()` 会把当前目录压入 back stack，并清空 forward stack。
 - refresh 和 watcher reload 不进入历史。
 - mouse Back/Forward 使用 back/forward stack，不等同于“上一级”。
-- 未缓存目录导航不会立即清空旧主栏，而是保留旧画面并显示轻量 loading 遮罩；新目录结果到达后再原子替换，避免短暂白屏闪烁。
+- 未缓存目录导航不会立即清空旧主栏，而是保留旧画面并只通过状态栏反馈加载状态；新目录结果到达后再原子替换，避免短暂白屏闪烁。主栏内部不显示左上角 loading 文案。
 - back/forward 不在 UI 线程同步 `stat` 历史目标，避免慢盘或网络挂载阻塞事件循环。
 - 已访问目录会先从 `directory_cache` 即时显示，再启动异步刷新，兼顾“快”和新鲜度。
 - 本地目录读取借鉴 COSMIC Files 的后台同步 scan 思路：一次目录扫描整体放入 Tokio blocking pool，避免为每个 entry 创建独立异步 filesystem 调度。

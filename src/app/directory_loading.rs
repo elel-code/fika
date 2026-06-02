@@ -2,7 +2,7 @@ use crate::FileEntry;
 use crate::app::search_ui::{cancel_active_search, reset_search_state};
 use crate::app::state::AppState;
 use crate::fs::entries::RawFileEntry;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(crate) struct DirectoryLoadPreparation {
@@ -10,6 +10,13 @@ pub(crate) struct DirectoryLoadPreparation {
     pub(crate) generation: u64,
     pub(crate) cached_entries: Option<Vec<FileEntry>>,
     pub(crate) defer_view_restore: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DirectoryLoadErrorRecovery {
+    KeepVisibleModel,
+    RollBackToItemsPath(PathBuf),
+    ClearTarget,
 }
 
 pub(crate) fn prepare_directory_load(
@@ -36,6 +43,31 @@ pub(crate) fn prepare_directory_load(
         generation,
         cached_entries,
         defer_view_restore,
+    }
+}
+
+pub(crate) fn directory_load_error_recovery(
+    preserve_view: bool,
+    target_path: &Path,
+    items_path: &str,
+    has_visible_entries: bool,
+) -> DirectoryLoadErrorRecovery {
+    let items_path = (!items_path.is_empty()).then(|| PathBuf::from(items_path));
+    if preserve_view {
+        return if items_path.is_some() || has_visible_entries {
+            DirectoryLoadErrorRecovery::KeepVisibleModel
+        } else {
+            DirectoryLoadErrorRecovery::ClearTarget
+        };
+    }
+
+    match items_path {
+        Some(items_path) if items_path.as_path() == target_path => {
+            DirectoryLoadErrorRecovery::KeepVisibleModel
+        }
+        Some(items_path) => DirectoryLoadErrorRecovery::RollBackToItemsPath(items_path),
+        None if has_visible_entries => DirectoryLoadErrorRecovery::KeepVisibleModel,
+        None => DirectoryLoadErrorRecovery::ClearTarget,
     }
 }
 
@@ -149,6 +181,43 @@ mod tests {
 
         assert!(preparation.cached_entries.is_some());
         assert!(!preparation.defer_view_restore);
+    }
+
+    #[test]
+    fn failed_uncached_navigation_rolls_back_to_last_committed_items_path() {
+        assert_eq!(
+            directory_load_error_recovery(
+                false,
+                Path::new("/run/media/yk/missing"),
+                "/home/yk",
+                true,
+            ),
+            DirectoryLoadErrorRecovery::RollBackToItemsPath(PathBuf::from("/home/yk"))
+        );
+    }
+
+    #[test]
+    fn failed_cached_navigation_keeps_cached_target_model() {
+        assert_eq!(
+            directory_load_error_recovery(false, Path::new("/home/yk"), "/home/yk", true),
+            DirectoryLoadErrorRecovery::KeepVisibleModel
+        );
+    }
+
+    #[test]
+    fn failed_refresh_keeps_existing_visible_model() {
+        assert_eq!(
+            directory_load_error_recovery(true, Path::new("/home/yk"), "/home/yk", true),
+            DirectoryLoadErrorRecovery::KeepVisibleModel
+        );
+    }
+
+    #[test]
+    fn failed_initial_load_without_visible_model_clears_target() {
+        assert_eq!(
+            directory_load_error_recovery(false, Path::new("/missing"), "", false),
+            DirectoryLoadErrorRecovery::ClearTarget
+        );
     }
 
     fn test_entry(name: &str, path: &str) -> FileEntry {
