@@ -51,6 +51,26 @@ impl ParentWindowStatus {
     }
 }
 
+fn parent_window_binding(status: ParentWindowStatus) -> &'static str {
+    match status {
+        ParentWindowStatus::Accepted => "metadata-only",
+        ParentWindowStatus::Empty => "none",
+        ParentWindowStatus::Malformed
+        | ParentWindowStatus::EmptyHandle
+        | ParentWindowStatus::UnsupportedScheme => "rejected",
+    }
+}
+
+fn parent_window_binding_reason(status: ParentWindowStatus) -> &'static str {
+    match status {
+        ParentWindowStatus::Accepted => "slint-parent-token-binding-unavailable",
+        ParentWindowStatus::Empty => "no-parent-window",
+        ParentWindowStatus::Malformed => "malformed-parent-window",
+        ParentWindowStatus::EmptyHandle => "empty-parent-window-handle",
+        ParentWindowStatus::UnsupportedScheme => "unsupported-parent-window-scheme",
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct ParentWindowDecision {
     handle: Option<String>,
@@ -642,7 +662,7 @@ fn portal_debug_log_request(request: PortalRequestDebug<'_>) {
 
 fn portal_request_summary(request: PortalRequestDebug<'_>) -> String {
     format!(
-        "request method={} handle={} start_dir={} directory={} multiple={} save_kind={} save_files={} portal_filters={} chooser_filters={} initial_filter={} portal_choices={} parent_status={} parent_forwarded={} native_transient=false",
+        "request method={} handle={} start_dir={} directory={} multiple={} save_kind={} save_files={} portal_filters={} chooser_filters={} initial_filter={} portal_choices={} parent_status={} parent_forwarded={} parent_binding={} parent_binding_reason={} native_transient=false",
         request.method,
         request.handle,
         request
@@ -662,6 +682,8 @@ fn portal_request_summary(request: PortalRequestDebug<'_>) -> String {
         request.portal_choices,
         request.parent_status.as_str(),
         request.parent_forwarded,
+        parent_window_binding(request.parent_status),
+        parent_window_binding_reason(request.parent_status),
     )
 }
 
@@ -715,9 +737,11 @@ fn portal_debug_log_parent(decision: &ParentWindowDecision) {
     }
 
     eprintln!(
-        "[fika portal] parent_window status={:?} handle={} native_transient=false",
-        decision.status,
-        decision.handle.as_deref().unwrap_or("")
+        "[fika portal] parent_window status={} handle={} parent_binding={} parent_binding_reason={} native_transient=false",
+        decision.status.as_str(),
+        decision.handle.as_deref().unwrap_or(""),
+        parent_window_binding(decision.status),
+        parent_window_binding_reason(decision.status),
     );
 }
 
@@ -1007,7 +1031,7 @@ mod tests {
 
         assert_eq!(
             summary,
-            "request method=OpenFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=/home/yk directory=true multiple=true save_kind=none save_files=0 portal_filters=2 chooser_filters=1 initial_filter=0 portal_choices=1 parent_status=accepted parent_forwarded=true native_transient=false"
+            "request method=OpenFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=/home/yk directory=true multiple=true save_kind=none save_files=0 portal_filters=2 chooser_filters=1 initial_filter=0 portal_choices=1 parent_status=accepted parent_forwarded=true parent_binding=metadata-only parent_binding_reason=slint-parent-token-binding-unavailable native_transient=false"
         );
     }
 
@@ -1031,7 +1055,7 @@ mod tests {
 
         assert_eq!(
             summary,
-            "request method=SaveFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=<none> directory=false multiple=false save_kind=file save_files=0 portal_filters=0 chooser_filters=0 initial_filter=<none> portal_choices=0 parent_status=empty parent_forwarded=false native_transient=false"
+            "request method=SaveFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=<none> directory=false multiple=false save_kind=file save_files=0 portal_filters=0 chooser_filters=0 initial_filter=<none> portal_choices=0 parent_status=empty parent_forwarded=false parent_binding=none parent_binding_reason=no-parent-window native_transient=false"
         );
     }
 

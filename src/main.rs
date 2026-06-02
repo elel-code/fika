@@ -1206,11 +1206,22 @@ fn log_chooser_parent_window(parent_window: Option<&str>) {
 }
 
 fn chooser_parent_window_log_message(parent_window: Option<&str>) -> String {
+    let (parent_binding, parent_binding_reason) = chooser_parent_window_binding(parent_window);
     format!(
-        "[fika chooser] parent_window received={} handle={} native_transient=false",
+        "[fika chooser] parent_window received={} handle={} parent_binding={} parent_binding_reason={} native_transient=false",
         parent_window.is_some(),
-        parent_window.unwrap_or("")
+        parent_window.unwrap_or(""),
+        parent_binding,
+        parent_binding_reason,
     )
+}
+
+fn chooser_parent_window_binding(parent_window: Option<&str>) -> (&'static str, &'static str) {
+    if parent_window.is_some() {
+        ("metadata-only", "slint-parent-token-binding-unavailable")
+    } else {
+        ("none", "no-parent-window")
+    }
 }
 
 fn sanitize_locale_for_icu4x() {
@@ -3484,11 +3495,11 @@ mod tests {
     fn chooser_parent_window_log_reports_native_transient_status() {
         assert_eq!(
             chooser_parent_window_log_message(Some("wayland:1_42")),
-            "[fika chooser] parent_window received=true handle=wayland:1_42 native_transient=false"
+            "[fika chooser] parent_window received=true handle=wayland:1_42 parent_binding=metadata-only parent_binding_reason=slint-parent-token-binding-unavailable native_transient=false"
         );
         assert_eq!(
             chooser_parent_window_log_message(None),
-            "[fika chooser] parent_window received=false handle= native_transient=false"
+            "[fika chooser] parent_window received=false handle= parent_binding=none parent_binding_reason=no-parent-window native_transient=false"
         );
     }
 
