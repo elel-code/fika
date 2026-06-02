@@ -150,6 +150,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - Open With 子菜单最后一项是 `Other Applications...`，会打开应用选择框。
 - 应用选择框支持指定 desktop app 打开、一次性自定义命令打开，以及写入用户级 `mimeapps.list` 设置默认应用。
 - `Other Applications` 弹窗使用一个对话框级别的 “Set selected application as default” 勾选框；候选列表只负责选择要打开的应用。
+- `Open Terminal Here` 参考 cosmic-files 的终端选择方式：保留 `FIKA_TERMINAL` / `TERMINAL` 显式覆盖优先级，然后查询 `xdg-mime query default x-scheme-handler/terminal` 并解析对应 `.desktop`；只有可见且 `Categories` 包含 `TerminalEmulator` 的 entry 会作为桌面终端候选。之后再优先尝试 `com.system76.CosmicTerm.desktop`、其它 `TerminalEmulator` desktop entries 和内置终端可执行文件 fallback。
 
 这个模块目前是同步实现，因此从 UI 调用时必须通过 `spawn_blocking()`。
 

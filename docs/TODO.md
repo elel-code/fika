@@ -307,6 +307,7 @@
   - Acceptance: default Open, Open With, and custom command can be started as transient user units/scopes.
   - Current: Fika spawns the application with current desktop Exec semantics, then attaches the child PID to a transient user `.scope` through `org.freedesktop.systemd1.Manager.StartTransientUnit`.
   - Current: if systemd user D-Bus is unavailable, the application still opens and Fika logs a diagnostic.
+  - Current: Open Terminal Here keeps explicit `FIKA_TERMINAL` / `TERMINAL` overrides first, then follows the cosmic-files-style terminal lookup by querying `x-scheme-handler/terminal`, resolving visible `TerminalEmulator` desktop entries, preferring CosmicTerm when present, and only then falling back to known terminal executable names.
 
 - [x] Observe systemd user scope lifecycle for protected edits.
   - Acceptance: protected external edits can tie scratch cleanup to the editor unit ending.
