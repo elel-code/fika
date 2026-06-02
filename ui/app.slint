@@ -286,6 +286,7 @@ export component AppWindow inherits Window {
     callback places_drop_force_gap(string) -> bool;
     callback places_drop_rejection_reason(string, string) -> string;
     callback trace_places_drop(string, string, string, float, float, int, int, bool, bool);
+    callback trace_main_drop(string, string, string, float, float, bool, string);
     pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
     pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
     pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
@@ -1082,20 +1083,24 @@ export component AppWindow inherits Window {
                                     root.main_drag_active = true;
                                     root.main_drag_rejected = !root.main_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data);
                                     root.place_drag_target_path = root.main_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data);
+                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected" : "can-drop-accepted", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
                                     true
                                 } else if (root.main_external_drop_supported(event.mime-type)) {
                                     root.main_drag_active = true;
                                     root.main_drag_rejected = !root.main_external_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data, event.mime-type);
                                     root.place_drag_target_path = root.main_external_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data, event.mime-type);
+                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected" : "can-drop-accepted", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
                                     true
                                 } else {
                                     root.main_drag_active = false;
                                     root.main_drag_rejected = false;
                                     root.place_drag_target_path = "";
+                                    root.trace_main_drop("can-drop-rejected:unsupported-mime", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
                                     false
                                 }
                             }
                             dropped(event) => {
+                                root.trace_main_drop("dropped", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
                                 root.main_drag_active = false;
                                 root.main_drag_rejected = false;
                                 if ((event.mime-type == "application/x-fika-folder-path" || event.mime-type == "application/x-fika-file-path" || event.mime-type == "application/x-fika-place-path") && root.prepare_path_main_transfer(event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {

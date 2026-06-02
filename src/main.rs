@@ -868,6 +868,18 @@ fn main() -> Result<(), slint::PlatformError> {
             });
         },
     );
+    ui.on_trace_main_drop(|phase, mime_type, payload, x, y, rejected, target_path| {
+        dnd_log_main_event(MainDndTrace {
+            backend: "Slint DropArea",
+            phase: phase.as_str(),
+            mime_type: mime_type.as_str(),
+            payload: payload.as_str(),
+            x,
+            y,
+            rejected,
+            target_path: target_path.as_str(),
+        });
+    });
 
     ui.on_root_menu_left(
         |view_width,
@@ -3893,6 +3905,17 @@ struct PlacesDndTrace<'a> {
     over_item: bool,
 }
 
+struct MainDndTrace<'a> {
+    backend: &'a str,
+    phase: &'a str,
+    mime_type: &'a str,
+    payload: &'a str,
+    x: f32,
+    y: f32,
+    rejected: bool,
+    target_path: &'a str,
+}
+
 fn dnd_log_places_event(trace: PlacesDndTrace<'_>) {
     if !dnd_debug_enabled() {
         return;
@@ -3911,6 +3934,28 @@ fn dnd_log_places_event(trace: PlacesDndTrace<'_>) {
         trace.over_item,
         dnd_payload_summary(trace.payload)
     );
+}
+
+fn dnd_log_main_event(trace: MainDndTrace<'_>) {
+    if !dnd_debug_enabled() {
+        return;
+    }
+
+    eprintln!("{}", dnd_main_event_message(&trace));
+}
+
+fn dnd_main_event_message(trace: &MainDndTrace<'_>) -> String {
+    format!(
+        "[fika dnd] backend={} area=main phase={} mime={} x={:.1} y={:.1} rejected={} target_path={} payload={}",
+        trace.backend,
+        trace.phase,
+        trace.mime_type,
+        trace.x,
+        trace.y,
+        trace.rejected,
+        dnd_payload_summary(trace.target_path),
+        dnd_payload_summary(trace.payload)
+    )
 }
 
 fn dnd_debug_enabled() -> bool {
@@ -4493,6 +4538,23 @@ mod tests {
         assert_eq!(
             dnd_payload_summary(&"a".repeat(97)),
             format!("{}...", "a".repeat(96))
+        );
+    }
+
+    #[test]
+    fn main_dnd_trace_message_reports_target_and_rejection_state() {
+        assert_eq!(
+            dnd_main_event_message(&MainDndTrace {
+                backend: "Slint DropArea",
+                phase: "can-drop-rejected",
+                mime_type: "text/uri-list",
+                payload: "file:///tmp/A\nfile:///tmp/B",
+                x: 12.25,
+                y: 99.75,
+                rejected: true,
+                target_path: "/tmp/Target Folder",
+            }),
+            "[fika dnd] backend=Slint DropArea area=main phase=can-drop-rejected mime=text/uri-list x=12.2 y=99.8 rejected=true target_path=/tmp/Target Folder payload=file:///tmp/A\\nfile:///tmp/B"
         );
     }
 

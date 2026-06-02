@@ -168,6 +168,7 @@
   - Acceptance: dropping onto main-pane blank space opens the transfer menu targeting the current directory.
   - Current: `text/uri-list` and `text/plain` payloads are parsed in Rust through the same external local-path parser used by Places; ordinary files and folders are both accepted in the main pane.
   - Current: hover target highlighting uses the existing main-pane folder `drop-target` style and the same self/subdirectory rejection rules as internal drags.
+  - Current: `FIKA_DEBUG_DND=1` traces main-pane can-drop / dropped events with MIME type, coordinates, rejection state, target folder path, and compact payload summary.
 
 - [x] Drag folder from main view into Places.
   - Acceptance: dropping into the gap between Places items inserts a new Place at that slot.
