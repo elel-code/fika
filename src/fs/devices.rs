@@ -96,8 +96,9 @@ fn format_device_diagnostics_report(discovery: &DeviceDiscovery) -> String {
     for (index, device) in discovery.devices.iter().enumerate() {
         let _ = writeln!(
             output,
-            "[{index}] label=\"{}\" marker=\"{}\" path=\"{}\" device_path=\"{}\" mounted={} can_mount={} can_unmount={} can_eject={} error=\"{}\"",
+            "[{index}] label=\"{}\" kind=\"{}\" marker=\"{}\" path=\"{}\" device_path=\"{}\" mounted={} can_mount={} can_unmount={} can_eject={} error=\"{}\"",
             diagnostic_value(device.label.as_str()),
+            diagnostic_value(device.kind.as_str()),
             diagnostic_value(device.marker.as_str()),
             diagnostic_value(device.path.as_str()),
             diagnostic_value(device.device_path.as_str()),
@@ -160,6 +161,7 @@ fn mounted_devices_from_paths(paths: Vec<PathBuf>) -> Vec<DeviceEntry> {
             mount_label(&path),
             path_text.clone(),
             path_text,
+            DeviceKind::LocalMount,
             mount_marker(&path),
             true,
             DeviceCapabilities::default(),
@@ -220,6 +222,11 @@ fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
     existing.can_mount |= discovered.can_mount;
     existing.can_unmount |= discovered.can_unmount;
     existing.mounted |= discovered.mounted;
+    if existing.kind.as_str() != DeviceKind::Filesystem.as_str()
+        && discovered.kind.as_str() == DeviceKind::RemovableMedia.as_str()
+    {
+        existing.kind = discovered.kind.clone();
+    }
 }
 
 struct DeviceMergeResult {
@@ -328,11 +335,29 @@ struct DeviceCapabilities {
     can_eject: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeviceKind {
+    Filesystem,
+    LocalMount,
+    RemovableMedia,
+}
+
+impl DeviceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Filesystem => "filesystem",
+            Self::LocalMount => "local-mount",
+            Self::RemovableMedia => "removable-media",
+        }
+    }
+}
+
 fn filesystem_entry() -> DeviceEntry {
     device_entry(
         "Filesystem".into(),
         "/".into(),
         "/".into(),
+        DeviceKind::Filesystem,
         "/".into(),
         true,
         DeviceCapabilities::default(),
@@ -343,6 +368,7 @@ fn device_entry(
     label: String,
     path: String,
     device_path: String,
+    kind: DeviceKind,
     marker: String,
     mounted: bool,
     capabilities: DeviceCapabilities,
@@ -351,6 +377,7 @@ fn device_entry(
         label: label.into(),
         path: path.into(),
         device_path: device_path.into(),
+        kind: kind.as_str().into(),
         marker: marker.into(),
         mounted,
         can_mount: capabilities.can_mount,
@@ -700,6 +727,7 @@ fn udisks2_removable_device_from_interfaces(
         label.clone(),
         path.clone(),
         device,
+        DeviceKind::RemovableMedia,
         marker,
         mounted,
         capabilities,
@@ -1052,8 +1080,9 @@ fn device_debug_log_devices(phase: &str, devices: &[DeviceEntry]) {
     }
     for (index, device) in devices.iter().enumerate() {
         device_debug_log(&format!(
-            "{phase}[{index}] label={} marker={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={} error={}",
+            "{phase}[{index}] label={} kind={} marker={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={} error={}",
             device.label,
+            device.kind,
             device.marker,
             device.path,
             device.device_path,
@@ -1092,6 +1121,7 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].label, "Filesystem");
         assert_eq!(devices[0].path, "/");
+        assert_eq!(devices[0].kind, "filesystem");
         assert_eq!(devices[0].marker, "/");
         assert!(devices[0].mounted);
     }
@@ -1105,6 +1135,7 @@ mod tests {
                     "USB \"Disk\"".into(),
                     "/run/media/yk/USB\nDisk".into(),
                     "/dev/sdb1".into(),
+                    DeviceKind::LocalMount,
                     "USB".into(),
                     true,
                     DeviceCapabilities {
@@ -1137,7 +1168,7 @@ mod tests {
         assert!(report.contains("udisks_error=\"cannot query \\\"UDisks2\\\"\\nservice\""));
         assert!(report.contains("rows: 2"));
         assert!(report.contains("[1] label=\"USB \\\"Disk\\\"\""));
-        assert!(report.contains("[1] label=\"USB \\\"Disk\\\"\" marker=\"USB\" path=\"/run/media/yk/USB\\nDisk\" device_path=\"/dev/sdb1\""));
+        assert!(report.contains("[1] label=\"USB \\\"Disk\\\"\" kind=\"local-mount\" marker=\"USB\" path=\"/run/media/yk/USB\\nDisk\" device_path=\"/dev/sdb1\""));
         assert!(report.contains("mounted=true can_mount=false can_unmount=true can_eject=true"));
     }
 
@@ -1152,6 +1183,7 @@ mod tests {
         assert_eq!(devices.len(), 2);
         assert_eq!(devices[1].label, "USB Disk");
         assert_eq!(devices[1].path, root.join("USB Disk").display().to_string());
+        assert_eq!(devices[1].kind, "local-mount");
         assert_eq!(devices[1].marker, "U");
 
         let _ = fs::remove_dir_all(root);
@@ -1178,6 +1210,7 @@ mod tests {
         assert_eq!(devices.len(), 2);
         assert_eq!(devices[1].label, "USB Disk");
         assert_eq!(devices[1].path, mount_point.display().to_string());
+        assert_eq!(devices[1].kind, "local-mount");
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1613,6 +1646,7 @@ mod tests {
                 "Mounted USB".into(),
                 "/run/media/yk/USB".into(),
                 "/dev/sdb1".into(),
+                DeviceKind::RemovableMedia,
                 "M".into(),
                 true,
                 DeviceCapabilities {
@@ -1624,6 +1658,7 @@ mod tests {
                 "Unmounted Card".into(),
                 "/dev/sdc1".into(),
                 "/dev/sdc1".into(),
+                DeviceKind::RemovableMedia,
                 "U".into(),
                 false,
                 DeviceCapabilities {
@@ -1652,6 +1687,7 @@ mod tests {
                 "Mounted USB".into(),
                 "/run/media/yk/USB".into(),
                 "/run/media/yk/USB".into(),
+                DeviceKind::LocalMount,
                 "M".into(),
                 true,
                 DeviceCapabilities::default(),
@@ -1662,6 +1698,7 @@ mod tests {
                 "Duplicate".into(),
                 "/run/media/yk/USB".into(),
                 "/dev/sdb1".into(),
+                DeviceKind::RemovableMedia,
                 "D".into(),
                 true,
                 DeviceCapabilities {
@@ -1674,6 +1711,7 @@ mod tests {
                 "Unmounted".into(),
                 "/dev/sdc1".into(),
                 "/dev/sdc1".into(),
+                DeviceKind::RemovableMedia,
                 "U".into(),
                 false,
                 DeviceCapabilities {
@@ -1691,10 +1729,12 @@ mod tests {
         assert_eq!(devices[1].label, "Mounted USB");
         assert_eq!(devices[1].path, "/run/media/yk/USB");
         assert_eq!(devices[1].device_path, "/dev/sdb1");
+        assert_eq!(devices[1].kind, "removable-media");
         assert_eq!(devices[1].marker, "M");
         assert!(devices[1].mounted);
         assert!(devices[1].can_eject);
         assert_eq!(devices[2].label, "Unmounted");
+        assert_eq!(devices[2].kind, "removable-media");
         assert_eq!(
             merged.stats,
             DeviceMergeStats {

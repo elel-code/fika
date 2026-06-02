@@ -6,6 +6,8 @@ This file records local `./cosmic-files` reference points for follow-up Fika pol
 
 Fika should prefer `./cosmic-files` as the Rust-side implementation and visual design reference when the behavior is not tied to the current Dolphin-like main-pane layout. Dolphin remains the reference for the column-first icon arrangement, mature context-menu edge cases, and selection semantics that are already documented in `docs/DOLPHIN_REFERENCE.md`.
 
+Alignment does not mean copying every implementation detail. If COSMIC's model produces a calmer UI or cleaner Rust boundary, Fika should move toward it; when Fika already has a stronger user-facing behavior, such as bounded directory LRU for instant revisit redraws or the current column-first virtual pane, keep the Fika behavior and document the reason.
+
 Keep the current Fika main-pane item arrangement:
 
 - Column-first icon layout.

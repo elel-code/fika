@@ -115,10 +115,11 @@ async fn device_snapshot_async() -> Vec<String> {
 
 fn device_snapshot_key(device: DeviceEntry) -> String {
     format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         device.label,
         device.path,
         device.device_path,
+        device.kind,
         device.marker,
         device.mounted,
         device.can_mount,
@@ -179,7 +180,7 @@ mod tests {
     #[test]
     fn device_snapshot_changed_updates_only_on_real_change() {
         let mut last = vec![
-            "USB\u{1f}/run/media/yk/USB\u{1f}/dev/sdb1\u{1f}USB\u{1f}true\u{1f}false\u{1f}true\u{1f}true"
+            "USB\u{1f}/run/media/yk/USB\u{1f}/dev/sdb1\u{1f}removable-media\u{1f}USB\u{1f}true\u{1f}false\u{1f}true\u{1f}true"
                 .into(),
         ];
 
@@ -188,7 +189,7 @@ mod tests {
         assert_eq!(last.len(), 1);
 
         let changed = vec![
-            "USB\u{1f}/run/media/yk/USB\u{1f}/dev/sdb1\u{1f}USB\u{1f}false\u{1f}true\u{1f}false\u{1f}true"
+            "USB\u{1f}/run/media/yk/USB\u{1f}/dev/sdb1\u{1f}removable-media\u{1f}USB\u{1f}false\u{1f}true\u{1f}false\u{1f}true"
                 .into(),
         ];
         assert!(device_snapshot_changed(&mut last, changed.clone()));
@@ -201,6 +202,7 @@ mod tests {
             label: "USB".into(),
             path: "/run/media/yk/USB".into(),
             device_path: "/dev/sdb1".into(),
+            kind: "removable-media".into(),
             marker: "U".into(),
             mounted: true,
             can_mount: false,
@@ -212,7 +214,7 @@ mod tests {
 
         assert_eq!(
             device_snapshot_key(device),
-            "USB\u{1f}/run/media/yk/USB\u{1f}/dev/sdb1\u{1f}U\u{1f}true\u{1f}false\u{1f}true\u{1f}true"
+            "USB\u{1f}/run/media/yk/USB\u{1f}/dev/sdb1\u{1f}removable-media\u{1f}U\u{1f}true\u{1f}false\u{1f}true\u{1f}true"
         );
     }
 }
