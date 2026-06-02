@@ -151,6 +151,14 @@ pub(crate) fn dnd_main_event_message(trace: &MainDndTrace<'_>) -> String {
     )
 }
 
+pub(crate) fn drop_target_rejection_debug_reason(reason: &str) -> &'static str {
+    match reason {
+        "Cannot drop an item onto itself" => "self-target",
+        "Cannot drop a folder into itself" => "descendant-target",
+        _ => "target-rejected",
+    }
+}
+
 pub(crate) fn env_flag_is_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -384,6 +392,22 @@ mod tests {
                 target_path: "/tmp/Target Folder",
             }),
             "[fika dnd] backend=Slint DropArea area=main phase=can-drop-rejected mime=text/uri-list x=12.2 y=99.8 rejected=true target_path=/tmp/Target Folder payload=file:///tmp/A\\nfile:///tmp/B"
+        );
+    }
+
+    #[test]
+    fn drop_target_rejection_debug_reason_is_stable() {
+        assert_eq!(
+            drop_target_rejection_debug_reason("Cannot drop an item onto itself"),
+            "self-target"
+        );
+        assert_eq!(
+            drop_target_rejection_debug_reason("Cannot drop a folder into itself"),
+            "descendant-target"
+        );
+        assert_eq!(
+            drop_target_rejection_debug_reason("Some future transfer rejection"),
+            "target-rejected"
         );
     }
 }

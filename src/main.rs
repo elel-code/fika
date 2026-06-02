@@ -22,9 +22,9 @@ use app::device_monitor::start_device_monitor;
 use app::dnd::{
     MainDndTrace, PlacesDndTrace, WINIT_DROPPED_FILE_FALLBACK_SOURCE, WINIT_DROPPED_FILE_MIME,
     dnd_debug_enabled_from_env, dnd_main_event_message, dnd_places_event_message,
-    dnd_startup_summary, env_flag_is_truthy, external_path_drop_from_payload,
-    external_path_drop_rejection_reason, is_external_path_drop_mime,
-    winit_file_drop_fallback_enabled_from_env,
+    dnd_startup_summary, drop_target_rejection_debug_reason, env_flag_is_truthy,
+    external_path_drop_from_payload, external_path_drop_rejection_reason,
+    is_external_path_drop_mime, winit_file_drop_fallback_enabled_from_env,
 };
 use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
@@ -3914,14 +3914,6 @@ fn dnd_log_main_event(trace: MainDndTrace<'_>) {
     eprintln!("{}", dnd_main_event_message(&trace));
 }
 
-fn drop_target_rejection_debug_reason(reason: &str) -> &'static str {
-    match reason {
-        "Cannot drop an item onto itself" => "self-target",
-        "Cannot drop a folder into itself" => "descendant-target",
-        _ => "target-rejected",
-    }
-}
-
 fn dnd_debug_enabled() -> bool {
     static DEBUG_DND: OnceLock<bool> = OnceLock::new();
     *DEBUG_DND.get_or_init(dnd_debug_enabled_from_env)
@@ -4450,22 +4442,6 @@ mod tests {
             ))
             .to_string_lossy(),
             "/tmp/Hello World"
-        );
-    }
-
-    #[test]
-    fn drop_target_rejection_debug_reason_is_stable() {
-        assert_eq!(
-            drop_target_rejection_debug_reason("Cannot drop an item onto itself"),
-            "self-target"
-        );
-        assert_eq!(
-            drop_target_rejection_debug_reason("Cannot drop a folder into itself"),
-            "descendant-target"
-        );
-        assert_eq!(
-            drop_target_rejection_debug_reason("Some future transfer rejection"),
-            "target-rejected"
         );
     }
 
