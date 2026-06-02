@@ -575,121 +575,54 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_context_menu_height(
-        |kind,
-         selected_count,
-         is_dir,
-         default_open_visible,
-         add_to_places_visible,
-         clipboard_has_paths,
-         in_trash,
-         place_builtin,
-         device_mounted,
-         device_pending,
-         device_can_mount,
-         device_can_unmount,
-         device_can_eject,
-         item_height,
-         separator_height,
-         title_height| {
-            context_menu_metrics(MenuMetricsInput {
-                kind,
-                selected_count,
-                is_dir,
-                default_open_visible,
-                add_to_places_visible,
-                clipboard_has_paths,
-                in_trash,
-                place_builtin,
-                device_mounted,
-                device_pending,
-                device_can_mount,
-                device_can_unmount,
-                device_can_eject,
-                item_height,
-                separator_height,
-                title_height,
-            })
-            .height
-        },
-    );
+    macro_rules! register_context_metric_callback {
+        ($method:ident, $field:ident) => {
+            ui.$method(
+                |kind,
+                 selected_count,
+                 is_dir,
+                 default_open_visible,
+                 add_to_places_visible,
+                 clipboard_has_paths,
+                 in_trash,
+                 place_builtin,
+                 device_mounted,
+                 device_pending,
+                 device_can_mount,
+                 device_can_unmount,
+                 device_can_eject,
+                 item_height,
+                 separator_height,
+                 title_height| {
+                    context_menu_metrics(MenuMetricsInput {
+                        kind,
+                        selected_count,
+                        is_dir,
+                        default_open_visible,
+                        add_to_places_visible,
+                        clipboard_has_paths,
+                        in_trash,
+                        place_builtin,
+                        device_mounted,
+                        device_pending,
+                        device_can_mount,
+                        device_can_unmount,
+                        device_can_eject,
+                        item_height,
+                        separator_height,
+                        title_height,
+                    })
+                    .$field
+                },
+            );
+        };
+    }
 
-    ui.on_context_menu_open_with_row_offset(
-        |kind,
-         selected_count,
-         is_dir,
-         default_open_visible,
-         add_to_places_visible,
-         clipboard_has_paths,
-         in_trash,
-         place_builtin,
-         device_mounted,
-         device_pending,
-         device_can_mount,
-         device_can_unmount,
-         device_can_eject,
-         item_height,
-         separator_height,
-         title_height| {
-            context_menu_metrics(MenuMetricsInput {
-                kind,
-                selected_count,
-                is_dir,
-                default_open_visible,
-                add_to_places_visible,
-                clipboard_has_paths,
-                in_trash,
-                place_builtin,
-                device_mounted,
-                device_pending,
-                device_can_mount,
-                device_can_unmount,
-                device_can_eject,
-                item_height,
-                separator_height,
-                title_height,
-            })
-            .open_with_row_y_offset
-        },
-    );
-
-    ui.on_context_menu_create_new_row_offset(
-        |kind,
-         selected_count,
-         is_dir,
-         default_open_visible,
-         add_to_places_visible,
-         clipboard_has_paths,
-         in_trash,
-         place_builtin,
-         device_mounted,
-         device_pending,
-         device_can_mount,
-         device_can_unmount,
-         device_can_eject,
-         item_height,
-         separator_height,
-         title_height| {
-            context_menu_metrics(MenuMetricsInput {
-                kind,
-                selected_count,
-                is_dir,
-                default_open_visible,
-                add_to_places_visible,
-                clipboard_has_paths,
-                in_trash,
-                place_builtin,
-                device_mounted,
-                device_pending,
-                device_can_mount,
-                device_can_unmount,
-                device_can_eject,
-                item_height,
-                separator_height,
-                title_height,
-            })
-            .create_new_row_y_offset
-        },
+    register_context_metric_callback!(on_context_menu_height, height);
+    register_context_metric_callback!(on_context_menu_open_with_row_offset, open_with_row_y_offset);
+    register_context_metric_callback!(
+        on_context_menu_create_new_row_offset,
+        create_new_row_y_offset
     );
 }
 
@@ -1142,6 +1075,31 @@ mod tests {
         place_drop_geometry, search_panel_height, virtual_entry_range, virtual_grid_plan,
     };
 
+    const MENU_ITEM_HEIGHT: f32 = 38.0;
+    const MENU_SEPARATOR_HEIGHT: f32 = 8.0;
+    const MENU_TITLE_HEIGHT: f32 = 30.0;
+
+    fn menu_metrics_input(kind: i32) -> MenuMetricsInput {
+        MenuMetricsInput {
+            kind,
+            selected_count: 0,
+            is_dir: false,
+            default_open_visible: false,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            in_trash: false,
+            place_builtin: false,
+            device_mounted: false,
+            device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
+            item_height: MENU_ITEM_HEIGHT,
+            separator_height: MENU_SEPARATOR_HEIGHT,
+            title_height: MENU_TITLE_HEIGHT,
+        }
+    }
+
     #[test]
     fn search_panel_height_matches_slint_visibility_rules() {
         assert_eq!(search_panel_height(false, "", 0, 0, 0, 900.0), 0.0);
@@ -1528,6 +1486,42 @@ mod tests {
     }
 
     #[test]
+    fn context_menu_submenu_offsets_match_parent_rows() {
+        let mut single_file = menu_metrics_input(1);
+        single_file.selected_count = 1;
+        single_file.default_open_visible = true;
+        let metrics = context_menu_metrics(single_file);
+        assert_eq!(metrics.open_with_row_y_offset, MENU_ITEM_HEIGHT);
+        assert_eq!(metrics.create_new_row_y_offset, 0.0);
+
+        single_file.default_open_visible = false;
+        let metrics_without_default = context_menu_metrics(single_file);
+        assert_eq!(metrics_without_default.open_with_row_y_offset, 0.0);
+
+        let mut single_folder = menu_metrics_input(1);
+        single_folder.selected_count = 1;
+        single_folder.is_dir = true;
+        single_folder.add_to_places_visible = true;
+        single_folder.clipboard_has_paths = true;
+        let folder_metrics = context_menu_metrics(single_folder);
+        assert_eq!(folder_metrics.open_with_row_y_offset, 0.0);
+        assert_eq!(folder_metrics.create_new_row_y_offset, 0.0);
+
+        let viewport_metrics = context_menu_metrics(menu_metrics_input(3));
+        assert_eq!(viewport_metrics.create_new_row_y_offset, 0.0);
+        assert_eq!(
+            viewport_metrics.open_with_row_y_offset,
+            3.0 * MENU_ITEM_HEIGHT + MENU_SEPARATOR_HEIGHT
+        );
+
+        let mut trash_viewport = menu_metrics_input(3);
+        trash_viewport.in_trash = true;
+        let trash_metrics = context_menu_metrics(trash_viewport);
+        assert_eq!(trash_metrics.open_with_row_y_offset, 0.0);
+        assert_eq!(trash_metrics.create_new_row_y_offset, 0.0);
+    }
+
+    #[test]
     fn virtual_grid_plan_clamps_viewport_and_reports_anchor_column() {
         let plan = virtual_grid_plan(100, 4, 350.0, 250.0, 100.0, 10.0, 2);
         assert_eq!(plan.viewport_x, 350.0);
@@ -1656,6 +1650,40 @@ mod tests {
                 height: 356.0,
             }
         );
+    }
+
+    #[test]
+    fn submenu_hover_bridge_keeps_clamped_child_reachable() {
+        let placement = PopupPlacement::new(420.0, 220.0, 12.0, 8.0);
+        let row_y = 150.0;
+        let row_height = 38.0;
+        let child = placement.child_popup(ChildPopupInput {
+            parent_left: 40.0,
+            parent_width: 180.0,
+            row_y,
+            child_width: 160.0,
+            child_height: 180.0,
+            child_gap: 3.0,
+        });
+        assert_eq!(child, PopupPoint { x: 223.0, y: 28.0 });
+
+        let bridge = placement.hover_bridge(HoverBridgeInput {
+            parent_left: 40.0,
+            parent_width: 180.0,
+            child_left: child.x,
+            child_width: 160.0,
+            row_y,
+            child_top: child.y,
+            row_height,
+            title_height: 0.0,
+            child_gap: 3.0,
+        });
+
+        assert_eq!(bridge.x, 220.0);
+        assert_eq!(bridge.width, 3.0);
+        assert!(bridge.y <= child.y);
+        assert!(bridge.y <= row_y);
+        assert!(bridge.y + bridge.height >= row_y + row_height);
     }
 
     #[test]

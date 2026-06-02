@@ -475,6 +475,7 @@ Acceptance for all:
   - Current: the Places blank-area menu also keeps Add Current Folder as a disabled row when the current folder is already present in Places, so Restore Defaults does not jump vertically between locations.
   - Current: shared Slint `MenuItem` rows now support COSMIC-style right-aligned shortcut hints, and context menus only display hints for actions already handled by `KeyBinding` (`Ctrl+A`, `Ctrl+V`, `Ctrl+C`, `Ctrl+X`, `Delete`).
   - Current: single-folder context menus now expose `Open Terminal Here` for that folder, matching COSMIC's selected-directory terminal action while reusing Fika's existing terminal discovery and systemd-scope launch path.
+  - Current: root menu metrics callbacks now share one Rust registration path, and geometry tests cover Open With / Create New parent-row offsets plus hover bridges when child menus are clamped by the window edge.
 
 - [~] Revisit clipboard behavior against COSMIC's cached Wayland model.
   - Reference: `cosmic-files/src/clipboard.rs` and clipboard handling in `cosmic-files/src/app.rs`.
