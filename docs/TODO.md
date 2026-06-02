@@ -495,6 +495,7 @@ Acceptance for all:
   - Current: Back/Forward history is now isolated behind `PaneHistory` instead of naked AppState stacks. Fika still exposes one pane, but history push/pop/prune semantics are testable as a pane-owned state block, matching the direction of COSMIC's per-tab location/history model.
   - Current: Selection paths and range anchor are now isolated behind `PaneSelection`, so the next split-view pass can give each pane its own selected set without reworking clipboard, chooser, trash, and menu call sites at the same time.
   - Current: Search query, type/mtime/size filters, and the filtered visible-index cache are now isolated behind `PaneSearch`. Recursive-search cancel/progress/generation are still shared and should move with active pane ownership before exposing the split UI.
+  - Current: Virtual range/cache metadata is now isolated behind `PaneView`, so visible tile slicing and thumbnail-range checks can become per-pane before the split UI is exposed.
 
 - [x] Expand Trash beyond first-pass move/undo.
   - Reference: `cosmic-files/src/trash.rs`, `cosmic-files/src/operation/mod.rs`, `cosmic-files/src/menu.rs`, and `cosmic-files/src/app.rs`.

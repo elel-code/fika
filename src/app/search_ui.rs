@@ -9,7 +9,7 @@ pub(crate) fn cancel_active_search(state: &mut AppState) {
 
 pub(crate) fn reset_search_state(state: &mut AppState) {
     state.search.reset_all();
-    state.virtual_view.invalidate();
+    state.view.virtual_view.invalidate();
 }
 
 pub(crate) fn set_search_filters(state: &mut AppState, kind: i32, modified: i32, size: i32) {
@@ -97,7 +97,7 @@ mod tests {
         state.search.query = "report".to_string();
         set_search_filters(&mut state, 1, 2, 3);
         state.search.visible_entry_indices = Some(vec![0, 2, 4]);
-        state.virtual_view.range = 1..3;
+        state.view.virtual_view.range = 1..3;
 
         reset_search_state(&mut state);
 
@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(state.search.modified_filter, 0);
         assert_eq!(state.search.size_filter, 0);
         assert!(state.search.visible_entry_indices.is_none());
-        assert!(state.virtual_view.range.is_empty());
+        assert!(state.view.virtual_view.range.is_empty());
     }
 
     #[test]

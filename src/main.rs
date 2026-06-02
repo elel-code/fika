@@ -1249,7 +1249,7 @@ fn load_directory_with_preservation(
         {
             let mut state = state.borrow_mut();
             state.entries = cached_entries;
-            state.virtual_view.invalidate();
+            state.view.virtual_view.invalidate();
         }
         reset_search_controls(ui);
         apply_filter(ui, state, bridge, false);
@@ -1621,7 +1621,7 @@ fn apply_directory_result(
                 } else {
                     state.entries = entries.into_iter().map(to_file_entry).collect();
                     let cache_entries = state.entries.clone();
-                    state.virtual_view.invalidate();
+                    state.view.virtual_view.invalidate();
                     state.insert_directory_cache(result.path.clone(), cache_entries);
                     if !result.preserve_view {
                         reset_search_state(&mut state);
@@ -1693,7 +1693,7 @@ fn apply_directory_result(
                         let mut state = state.borrow_mut();
                         state.entries.clear();
                         state.search.visible_entry_indices = None;
-                        state.virtual_view.invalidate();
+                        state.view.virtual_view.invalidate();
                         if !result.preserve_view {
                             reset_search_state(&mut state);
                             state.selection.clear();
@@ -1919,7 +1919,7 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         let current_dir = state.current_dir.clone();
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
             state.entries = entries;
-            state.virtual_view.invalidate();
+            state.view.virtual_view.invalidate();
         }
         (query, progress)
     };
@@ -1981,7 +1981,7 @@ fn start_recursive_search(
     {
         let mut state = state.borrow_mut();
         state.search.visible_entry_indices = None;
-        state.virtual_view.invalidate();
+        state.view.virtual_view.invalidate();
     }
     ui.set_entry_count(0);
     ui.set_virtual_start_index(0);
@@ -2082,7 +2082,7 @@ fn apply_recursive_search_result(
             {
                 let mut state = state.borrow_mut();
                 state.entries = entries.clone();
-                state.virtual_view.invalidate();
+                state.view.virtual_view.invalidate();
             }
             apply_filter(ui, state, bridge, true);
             let visible = filtered_entry_count(&state.borrow());
@@ -2691,7 +2691,7 @@ fn apply_filter(
     let (query, filters_active, total, summary) = {
         let mut state_ref = state.borrow_mut();
         let summary = rebuild_visible_entry_index(&mut state_ref, preserve_selection);
-        state_ref.virtual_view.invalidate();
+        state_ref.view.virtual_view.invalidate();
         (
             state_ref.search.query.to_ascii_lowercase(),
             search_filters_active(&state_ref),

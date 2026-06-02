@@ -1,4 +1,4 @@
-use crate::app::pane::{PaneHistory, PaneSearch, PaneSelection};
+use crate::app::pane::{PaneHistory, PaneSearch, PaneSelection, PaneView};
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::search;
@@ -6,7 +6,6 @@ use crate::fs::thumbnails;
 use crate::support::generation::GenerationCounter;
 use crate::{DesktopApp, DeviceEntry, FileEntry, PlaceEntry};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -18,7 +17,7 @@ pub(crate) const MAX_VIEW_STATE_CACHE_ENTRIES: usize = 128;
 pub(crate) struct AppState {
     pub(crate) current_dir: PathBuf,
     pub(crate) entries: Vec<FileEntry>,
-    pub(crate) virtual_view: VirtualViewCache,
+    pub(crate) view: PaneView,
     pub(crate) places: Vec<PlaceEntry>,
     pub(crate) other_application_apps: Vec<DesktopApp>,
     pub(crate) search: PaneSearch,
@@ -71,7 +70,7 @@ impl AppState {
         Self {
             current_dir,
             entries: Vec::new(),
-            virtual_view: VirtualViewCache::default(),
+            view: PaneView::default(),
             places,
             other_application_apps: Vec::new(),
             search: PaneSearch::default(),
@@ -172,33 +171,6 @@ impl AppState {
         self.view_state_cache_order
             .retain(|cached| cached.as_path() != path);
         self.view_state_cache_order.push_back(path.to_path_buf());
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct VirtualViewCache {
-    pub(crate) range: Range<usize>,
-    pub(crate) entry_count: usize,
-    pub(crate) rows_per_column: usize,
-    pub(crate) cell_width: f32,
-    pub(crate) thumbnail_size_px: u32,
-}
-
-impl Default for VirtualViewCache {
-    fn default() -> Self {
-        Self {
-            range: 0..0,
-            entry_count: 0,
-            rows_per_column: 0,
-            cell_width: 0.0,
-            thumbnail_size_px: 0,
-        }
-    }
-}
-
-impl VirtualViewCache {
-    pub(crate) fn invalidate(&mut self) {
-        self.range = 0..0;
     }
 }
 

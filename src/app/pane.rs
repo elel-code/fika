@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +36,38 @@ impl PaneSearch {
         self.modified_filter = 0;
         self.size_filter = 0;
         self.visible_entry_indices = None;
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PaneView {
+    pub(crate) virtual_view: VirtualViewCache,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct VirtualViewCache {
+    pub(crate) range: Range<usize>,
+    pub(crate) entry_count: usize,
+    pub(crate) rows_per_column: usize,
+    pub(crate) cell_width: f32,
+    pub(crate) thumbnail_size_px: u32,
+}
+
+impl Default for VirtualViewCache {
+    fn default() -> Self {
+        Self {
+            range: 0..0,
+            entry_count: 0,
+            rows_per_column: 0,
+            cell_width: 0.0,
+            thumbnail_size_px: 0,
+        }
+    }
+}
+
+impl VirtualViewCache {
+    pub(crate) fn invalidate(&mut self) {
+        self.range = 0..0;
     }
 }
 
@@ -180,5 +213,26 @@ mod tests {
         assert_eq!(search.modified_filter, 0);
         assert_eq!(search.size_filter, 0);
         assert!(search.visible_entry_indices.is_none());
+    }
+
+    #[test]
+    fn pane_view_virtual_cache_invalidate_keeps_metrics_but_clears_range() {
+        let mut view = PaneView {
+            virtual_view: VirtualViewCache {
+                range: 4..12,
+                entry_count: 64,
+                rows_per_column: 8,
+                cell_width: 96.0,
+                thumbnail_size_px: 128,
+            },
+        };
+
+        view.virtual_view.invalidate();
+
+        assert!(view.virtual_view.range.is_empty());
+        assert_eq!(view.virtual_view.entry_count, 64);
+        assert_eq!(view.virtual_view.rows_per_column, 8);
+        assert_eq!(view.virtual_view.cell_width, 96.0);
+        assert_eq!(view.virtual_view.thumbnail_size_px, 128);
     }
 }
