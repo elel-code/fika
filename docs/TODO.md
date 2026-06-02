@@ -16,6 +16,11 @@
   - Current: FlexboxLayout is limited to local responsive control rows; the main file view keeps its deterministic column-first virtual layout.
 - [x] UI entry lives in `ui/app.slint` and is compiled through `build.rs`; shared models/widgets/file tiles are split into focused `.slint` files.
 - [x] Dolphin-like shell: toolbar, Places sidebar, main icon area, status bar.
+- [x] COSMIC-style shell surface layering outside the main file arrangement.
+  - Current: `AppWindow` owns the shared base surface for the top bar and main pane.
+  - Current: `TopBar`, `SearchPanel`, and `StatusBar` render transparent backgrounds with only necessary separators, so they read as one layer with the main pane.
+  - Current: the sidebar is a full-height rounded foreground panel; its resize divider and the top-bar separator align at the main-pane boundary.
+  - Current: the main-pane item arrangement intentionally remains Fika's existing Dolphin-like column-first horizontal layout.
 - [x] Dark mode.
 - [x] Resizable sidebar.
 - [x] Column-first icon layout.

@@ -526,6 +526,17 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
 
+        sidebar-foreground := Rectangle {
+            x: 8px;
+            y: 6px;
+            width: max(1px, root.sidebar_width_px * 1px - 16px);
+            height: max(1px, parent.height - 12px);
+            border-radius: 14px;
+            background: root.dark_mode ? #181d22 : #eceff3;
+            border-color: root.dark_mode ? #2d343c : #d7dde4;
+            border-width: 1px;
+        }
+
         KeyBinding {
             keys: @keys(F5);
             activated => { root.refresh(); }
@@ -671,7 +682,7 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 width: root.sidebar_width_px * 1px;
-                background: root.dark_mode ? #101316 : #f7f8fa;
+                background: transparent;
 
                 sidebar-surface := Rectangle {
                 x: 8px;
@@ -679,9 +690,8 @@ export component AppWindow inherits Window {
                 width: max(1px, parent.width - 16px);
                 height: max(1px, parent.height - 12px);
                 border-radius: 14px;
-                background: root.dark_mode ? #181d22 : #eceff3;
-                border-color: root.dark_mode ? #2d343c : #d7dde4;
-                border-width: 1px;
+                background: transparent;
+                border-width: 0px;
 
                 TouchArea {
                     width: parent.width;

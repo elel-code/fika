@@ -38,6 +38,8 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 - `ui/file_tile.slint` 负责主栏文件项显示、选择、右键菜单、双击打开。
 - `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
 
+Shell surface layering now follows the COSMIC direction outside the main file arrangement: `AppWindow` owns the shared base surface for the top bar, search filter strip, main pane, and status bar; those child components render transparent backgrounds and keep only separators. The sidebar is a single full-height rounded foreground panel drawn by `AppWindow`, so it reads as a separate raised layer while the top bar and main pane remain on one flatter layer.
+
 主栏当前采用列优先布局：
 
 - `rows-per-column` 由可见高度和 `icon-row-height` 计算。
