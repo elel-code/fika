@@ -242,6 +242,42 @@ export component ChooserChoicePopupLayer inherits Rectangle {
     }
 }
 
+export component ChooserOptionPopupLayer inherits Rectangle {
+    in property <bool> menu-open;
+    in property <length> menu-x;
+    in property <length> menu-y;
+    in property <length> menu-width;
+    in property <length> window-width;
+    in property <length> window-height;
+    in property <length> screen-margin;
+    in property <length> pointer-gap;
+    in property <length> child-gap;
+    in property <bool> dark;
+    in property <string> title;
+    in property <[ChooserChoiceOption]> options;
+    in property <int> selected-index;
+    in property <length> title-height: 30px;
+    in property <length> item-height: 38px;
+    pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
+    pure callback anchored_menu_top(float, float, float, float, float, float, float, float, float) -> float;
+    callback option_selected(int);
+
+    background: transparent;
+
+    if (root.menu-open): ChooserChoicePopup {
+        x: root.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, root.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        y: root.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, root.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        width: root.menu-width;
+        dark: root.dark;
+        title: root.title;
+        options: root.options;
+        selected-index: root.selected-index;
+        title-height: root.title-height;
+        item-height: root.item-height;
+        option_selected(option-index) => { root.option_selected(option-index); }
+    }
+}
+
 export component TransferMenu inherits PopupSurface {
     in property <string> title;
     callback operation_selected(string);

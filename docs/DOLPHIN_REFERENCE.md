@@ -96,7 +96,7 @@ Current Fika mapping:
 - Submenu positioning has been changed to anchor to the actual parent menu item and avoid window edges.
 - File item, viewport, Open With, Create New, Transfer, Places, Devices, and Places blank-area menu content have been split into `ui/menus.slint`.
 - Root file / Places / Devices / blank-area menu hosting and root popup placement now go through `RootContextMenuLayer`, while `AppWindow` still owns action wiring and delayed-close timers.
-- Transfer operation menus and chooser choice popups now use `TransferMenuLayer` and `ChooserChoicePopupLayer`, keeping repeated popup shell, fixed sizing, coordinate conversion, and anchored positioning out of `AppWindow`.
+- Transfer operation menus and chooser filter/choice popups now use `TransferMenuLayer`, `ChooserOptionPopupLayer`, and `ChooserChoicePopupLayer`, keeping repeated popup shell, fixed sizing, coordinate conversion, and anchored positioning out of `AppWindow`.
 - Places/main-pane drag feedback now goes through `DragOverlayLayer`, keeping ghost, insertion-line, and rejection visuals out of `AppWindow`.
 - Root context placement, Transfer placement, Open With / Create New child submenu placement, hover bridge geometry, and chooser-choice popup clamping share Rust-side popup geometry helpers.
 

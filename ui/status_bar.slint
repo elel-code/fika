@@ -25,7 +25,7 @@ export component StatusBar inherits Rectangle {
     callback discard_external_edit();
     callback undo_last_operation();
     callback chooser_accept(string);
-    callback chooser_next_filter();
+    callback chooser_filter_requested(length, length);
     callback chooser_choice_requested(int, length, length);
 
     height: 36px;
@@ -90,7 +90,9 @@ export component StatusBar inherits Rectangle {
             width: 150px;
             label: root.chooser-filter-label == "" ? "Filter: All" : ("Filter: " + root.chooser-filter-label);
             dark: root.dark;
-            clicked => { root.chooser_next_filter(); }
+            clicked => {
+                root.chooser_filter_requested(self.absolute-position.x, self.absolute-position.y);
+            }
         }
 
         for choice[index] in root.chooser-choices: ActionButton {

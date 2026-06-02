@@ -85,7 +85,7 @@
   - Current: file item, Open With, Create New, Transfer, sidebar Places, Devices, Places blank-area, and main viewport context menus own their `PopupSurface` framing in `ui/menus.slint`, reducing repeated popup wrapper layout in `ui/app.slint`.
   - Current: root file, Places, Devices, Places blank-area, and main viewport context menu hosting is centralized in `RootContextMenuLayer`, so `ui/app.slint` keeps action wiring while `ui/menus.slint` owns the repeated root-menu placement shell.
   - Current: `RootContextMenuLayer` also owns root-menu width/height selection, flip/clamp placement, and Open With / Create New parent-row anchors before forwarding submenu hover/click events, so `ui/app.slint` no longer carries duplicate root-menu geometry properties.
-  - Current: chooser choice popups are hosted through `ChooserChoicePopupLayer`, keeping the choice popup loop and anchored placement formula out of `ui/app.slint`.
+  - Current: chooser filter and choice popups are hosted through `ChooserOptionPopupLayer` / `ChooserChoicePopupLayer`, keeping the popup loops and anchored placement formulae out of `ui/app.slint`.
 - [x] Dolphin/QMenu-style menu placement.
   - Acceptance: root, child, and transfer menus share preferred-point, flip, and clamp placement rules; child hover bridge follows the clamped submenu position.
   - Current: Escape and outside-click dismissal close both the parent context menu and any open child submenu together, avoiding orphaned child menus.
@@ -159,7 +159,7 @@
 
 - [ ] Drag external folder into Places.
   - Acceptance: dropping a folder path from another app on Places adds it.
-  - Current: deferred. Slint DnD is currently used only for app-internal `data-transfer` user data; external `text/uri-list` / `text/plain` parsing and winit `DroppedFile` fallback were removed to avoid maintaining a platform fallback path before Slint supports reliable cross-application DnD.
+  - Current: deferred. Slint DnD is currently used only for app-internal `data-transfer` user data; external `text/uri-list` / `text/plain` parsing and native-window drop fallback were removed to avoid maintaining a platform fallback path before Slint supports reliable cross-application DnD.
 
 - [ ] Drag external local file or folder into main view.
   - Acceptance: dropping onto a main-pane folder opens the transfer menu targeting that folder.
@@ -340,7 +340,7 @@ Acceptance for all:
   - Current: `fika-xdp-filechooser` owns `org.freedesktop.impl.portal.desktop.fika`, exposes `/org/freedesktop/portal/desktop`, implements OpenFile / SaveFile / SaveFiles through `fika --chooser`, and returns local `file://` URIs for the chooser-selected paths without resolving symlinks to their targets.
   - Current: the backend is independent of GNOME/KDE/COSMIC/GTK portal backends. Installing `fika.portal` registers Fika as a backend but does not make it active; validation requires `portals.conf` to select `fika` for `org.freedesktop.impl.portal.FileChooser`.
   - Current: OpenFile supports directory and multiple selection flags; SaveFile and SaveFiles support local-path save target selection.
-  - Current: the portal request title is passed to the chooser window title and accept_label is passed to the chooser confirmation button; portal glob filters are exposed as a chooser filter button, common MIME filters such as `image/png`, `image/*`, `text/plain`, `text/*`, archives, PDF, JSON, and XML are conservatively converted into extension glob patterns, current_filter chooses the initial filter when it matches an exposed chooser filter, and the selected filter is returned as the original portal filter with the result. Empty portal filter labels are mapped to stable chooser labels such as `Filter 1`, while result mapping still preserves the original portal filter.
+  - Current: the portal request title is passed to the chooser window title and accept_label is passed to the chooser confirmation button; portal glob filters are exposed as a chooser filter popup in the footer, common MIME filters such as `image/png`, `image/*`, `text/plain`, `text/*`, archives, PDF, JSON, and XML are conservatively converted into extension glob patterns, current_filter chooses the initial filter when it matches an exposed chooser filter, and the selected filter is returned as the original portal filter with the result. Empty portal filter labels are mapped to stable chooser labels such as `Filter 1`, while result mapping still preserves the original portal filter.
   - Current: unknown MIME-only portal filters remain hidden instead of appearing as empty chooser filters, because the current Fika chooser UI can only express glob-pattern filtering.
   - Current: portal choices are exposed as chooser footer controls; clicking a choice opens a small option menu instead of blindly cycling, and the selected choices are returned with the result.
   - Current: recognized `wayland:` `parent_window` handles are preserved and forwarded to `fika --chooser --chooser-parent-window`; empty, malformed, or unknown handles are dropped. `FIKA_DEBUG_PORTAL=1` logs the backend parse decision and the chooser-side received handle, and both diagnostics explicitly report `parent_binding=metadata-only`, `parent_binding_reason=slint-parent-token-binding-unavailable`, and `native_transient=false`. Native transient parent binding remains Wayland platform/window-backend work.
@@ -383,7 +383,7 @@ Acceptance for all:
 
 - [x] Split Places UI logic out of `main.rs`.
   - Acceptance: add/rename/remove/restore/reorder/drop handling for Places is grouped away from main callback wiring.
-  - Current: `src/app/places.rs` owns Places persistence and drop normalization helpers.
+  - Current: `src/app/places.rs` owns Places persistence, add/rename/remove/restore/reorder handling, and path normalization for Places additions.
 
 - [x] Split virtual main-view preparation out of `main.rs`.
   - Acceptance: large-directory viewport slicing and rebuild decisions are testable outside UI callback wiring.

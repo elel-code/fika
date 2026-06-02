@@ -503,9 +503,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_chooser_next_filter(move || {
+        ui.on_chooser_select_filter(move |filter_index| {
             if let Some(ui) = ui_weak.upgrade() {
-                cycle_chooser_filter(&ui, &state, &bridge);
+                select_chooser_filter(&ui, &state, &bridge, filter_index);
             }
         });
     }
@@ -2938,6 +2938,15 @@ fn sync_chooser_filter_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             .unwrap_or("")
             .into(),
     );
+    ui.set_chooser_filter_options(ModelRc::new(Rc::new(VecModel::from(
+        state
+            .chooser_filters
+            .iter()
+            .map(|filter| ChooserChoiceOption {
+                label: filter.label.as_str().into(),
+            })
+            .collect::<Vec<_>>(),
+    ))));
 }
 
 fn sync_chooser_choices_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -2970,14 +2979,21 @@ fn sync_chooser_choices_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_chooser_choices(ModelRc::new(Rc::new(VecModel::from(choices))));
 }
 
-fn cycle_chooser_filter(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+fn select_chooser_filter(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    filter_index: i32,
+) {
     {
         let mut state_ref = state.borrow_mut();
-        if state_ref.chooser_filters.is_empty() {
+        let Ok(filter_index) = usize::try_from(filter_index) else {
+            return;
+        };
+        if filter_index >= state_ref.chooser_filters.len() {
             return;
         }
-        state_ref.chooser_filter_index =
-            (state_ref.chooser_filter_index + 1) % state_ref.chooser_filters.len();
+        state_ref.chooser_filter_index = filter_index;
     }
     sync_chooser_filter_ui(ui, state);
     apply_filter(ui, state, bridge, true);

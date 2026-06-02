@@ -36,7 +36,7 @@ fn add_place_at_slot_inner(
     path: PathBuf,
     slot: i32,
 ) {
-    let path = normalize_dropped_path(path);
+    let path = normalize_place_path(path);
     if !path.is_dir() {
         ui.set_status("Only folders can be added to Places".into());
         return;
@@ -71,7 +71,7 @@ fn add_place_at_slot_inner(
     ui.set_status("Folder added to Places".into());
 }
 
-pub(crate) fn normalize_dropped_path(path: PathBuf) -> PathBuf {
+pub(crate) fn normalize_place_path(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     expand_user_path(text.as_ref())
 }
