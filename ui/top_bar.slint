@@ -3,6 +3,8 @@ import { ToolButton } from "widgets.slint";
 export component TopBar inherits Rectangle {
     in property <bool> dark;
     in property <string> current-path;
+    in property <float> sidebar-width-px;
+    in property <length> divider-offset: 3px;
     in-out property <string> path-text;
     in-out property <bool> path-focused;
     callback go_parent();
@@ -17,13 +19,15 @@ export component TopBar inherits Rectangle {
     border-width: 1px;
 
     HorizontalLayout {
-        padding-left: 18px;
         padding-right: 18px;
         padding-top: 12px;
         padding-bottom: 12px;
-        spacing: 14px;
+        spacing: 0px;
 
         HorizontalLayout {
+            width: root.sidebar-width-px * 1px + root.divider-offset;
+            padding-left: 18px;
+            padding-right: 18px;
             spacing: 6px;
 
             ToolButton {
@@ -83,6 +87,7 @@ export component TopBar inherits Rectangle {
         }
 
         HorizontalLayout {
+            padding-left: 14px;
             spacing: 16px;
 
             Text {

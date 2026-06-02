@@ -62,13 +62,15 @@ export component AppWindow inherits Window {
     in-out property <bool> directory_loading: false;
     in-out property <float> main_viewport_x: 0;
     in-out property <length> main_viewport_offset: 0px;
+    private property <length> sidebar-splitter-width: 8px;
+    private property <length> sidebar-divider-offset: 3px;
     private property <bool> search-filters-active: root.search_kind_filter != 0 || root.search_modified_filter != 0 || root.search_size_filter != 0;
     private property <bool> search-panel-visible: root.search_bar_open || root.search_query != "" || root.search-filters-active;
     private property <length> search-panel-height: root.search-panel-visible ? 134px : 0px;
     private property <string> search-kind-filter-label: root.search_kind_filter == 1 ? "Type: Folders" : (root.search_kind_filter == 2 ? "Type: Files" : (root.search_kind_filter == 3 ? "Type: Images" : "Type: All"));
     private property <string> search-modified-filter-label: root.search_modified_filter == 1 ? "Modified: Today" : (root.search_modified_filter == 2 ? "Modified: 7 days" : (root.search_modified_filter == 3 ? "Modified: 30 days" : "Modified: Any"));
     private property <string> search-size-filter-label: root.search_size_filter == 1 ? "Size: < 1 MB" : (root.search_size_filter == 2 ? "Size: 1-100 MB" : (root.search_size_filter == 3 ? "Size: > 100 MB" : "Size: Any"));
-    private property <length> main-pane-width: max(1px, root.width - root.sidebar_width_px * 1px - 8px);
+    private property <length> main-pane-width: max(1px, root.width - root.sidebar_width_px * 1px - root.sidebar-splitter-width);
     private property <length> main-available-grid-height: max(root.icon-row-height, root.height - 64px - 36px - root.search-panel-height - 2 * root.icon-grid-padding);
     private property <int> main-rows-per-column: max(1, floor(root.main-available-grid-height / root.icon-row-height));
     private property <int> main-column-count: max(1, ceil(root.entry_count / root.main-rows-per-column));
@@ -532,6 +534,8 @@ export component AppWindow inherits Window {
         TopBar {
             dark: root.dark_mode;
             current-path: root.current_path;
+            sidebar-width-px: root.sidebar_width_px;
+            divider-offset: root.sidebar-divider-offset;
             path-text <=> root.path_input_text;
             path-focused <=> root.path-input-focused;
             go_parent => { root.go_parent(); }
@@ -736,11 +740,11 @@ export component AppWindow inherits Window {
             }
 
             Rectangle {
-                width: 8px;
-                background: resize-touch.has-hover || resize-touch.pressed ? (root.dark_mode ? #2f6f91 : #c7ddea) : (root.dark_mode ? #15191c : #edf2f6);
+                width: root.sidebar-splitter-width;
+                background: root.dark_mode ? #15191c : #edf2f6;
 
                 Rectangle {
-                    x: 3px;
+                    x: root.sidebar-divider-offset;
                     width: 1px;
                     height: parent.height;
                     background: root.dark_mode ? #454a50 : #cbd5e1;
