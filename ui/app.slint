@@ -12,6 +12,7 @@ import {
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
+import { SearchPanel } from "search_panel.slint";
 import { ChildSubmenuLayer, ChooserChoicePopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
 import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
@@ -893,120 +894,34 @@ export component AppWindow inherits Window {
                     padding: 0px;
                     spacing: 0px;
 
-                    if (root.search-panel-visible) : Rectangle {
+                    if (root.search-panel-visible) : SearchPanel {
                         horizontal-stretch: 1;
                         height: root.search-panel-height;
-                        background: root.dark_mode ? #171b1f : #f8fafc;
-                        border-color: root.dark_mode ? #343a40 : #d6dce2;
-                        border-width: 1px;
-
-                        VerticalLayout {
-                            padding-left: 14px;
-                            padding-right: 14px;
-                            padding-top: 8px;
-                            padding-bottom: 8px;
-                            spacing: 6px;
-
-                            HorizontalLayout {
-                                spacing: 8px;
-
-                                LineEdit {
-                                    horizontal-stretch: 1;
-                                    min-width: 120px;
-                                    height: 34px;
-                                    text <=> root.search_query;
-                                    placeholder-text: "Search in current folder";
-                                    accepted => { root.search_submitted(self.text); }
-                                    changed has-focus => {
-                                        root.search-input-focused = self.has-focus;
-                                    }
-                                }
-
-                                if (root.search_loading): SidebarAction {
-                                    width: 70px;
-                                    label: "Cancel";
-                                    dark: root.dark_mode;
-                                    clicked => { root.cancel_search(); }
-                                }
-
-                                if (root.search_query != "" || root.search-filters-active): SidebarAction {
-                                    width: 64px;
-                                    label: "Clear";
-                                    dark: root.dark_mode;
-                                    clicked => {
-                                        root.search_query = "";
-                                        root.search_kind_filter = 0;
-                                        root.search_modified_filter = 0;
-                                        root.search_size_filter = 0;
-                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
-                                        root.search_submitted("");
-                                    }
-                                }
-
-                                ToolButton {
-                                    label: "X";
-                                    dark: root.dark_mode;
-                                    clicked => {
-                                        root.search_query = "";
-                                        root.search_kind_filter = 0;
-                                        root.search_modified_filter = 0;
-                                        root.search_size_filter = 0;
-                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
-                                        root.search_submitted("");
-                                        root.search_bar_open = false;
-                                    }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 8px;
-
-                                CheckOption {
-                                    width: 156px;
-                                    label: "Search subfolders";
-                                    dark: root.dark_mode;
-                                    checked <=> root.recursive_search;
-                                    toggled(_) => {
-                                        if (root.search_query != "") {
-                                            root.search_submitted(root.search_query);
-                                        }
-                                    }
-                                }
-
-                                FilterButton {
-                                    width: 126px;
-                                    label: root.search-kind-filter-label;
-                                    dark: root.dark_mode;
-                                    clicked => {
-                                        root.search_kind_filter = mod(root.search_kind_filter + 1, 4);
-                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
-                                    }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 8px;
-
-                                FilterButton {
-                                    width: 154px;
-                                    label: root.search-modified-filter-label;
-                                    dark: root.dark_mode;
-                                    clicked => {
-                                        root.search_modified_filter = mod(root.search_modified_filter + 1, 4);
-                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
-                                    }
-                                }
-
-                                FilterButton {
-                                    width: 144px;
-                                    label: root.search-size-filter-label;
-                                    dark: root.dark_mode;
-                                    clicked => {
-                                        root.search_size_filter = mod(root.search_size_filter + 1, 4);
-                                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
-                                    }
-                                }
-                            }
+                        dark: root.dark_mode;
+                        loading: root.search_loading;
+                        filters-active: root.search-filters-active;
+                        kind-label: root.search-kind-filter-label;
+                        modified-label: root.search-modified-filter-label;
+                        size-label: root.search-size-filter-label;
+                        query <=> root.search_query;
+                        recursive <=> root.recursive_search;
+                        kind-filter <=> root.search_kind_filter;
+                        modified-filter <=> root.search_modified_filter;
+                        size-filter <=> root.search_size_filter;
+                        focus_changed(focused) => {
+                            root.search-input-focused = focused;
+                        }
+                        submitted(query) => {
+                            root.search_submitted(query);
+                        }
+                        cancel_requested => {
+                            root.cancel_search();
+                        }
+                        filters_changed(kind, modified, size) => {
+                            root.search_filters_changed(kind, modified, size);
+                        }
+                        close_requested => {
+                            root.search_bar_open = false;
                         }
                     }
 

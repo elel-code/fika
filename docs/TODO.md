@@ -277,6 +277,7 @@
   - Acceptance: search can filter by broad type, modified age, and size without parsing display strings.
   - Current: the search strip exposes Type / Modified / Size cycle buttons; filters apply to current-directory filtering and recursive search results.
   - Current: when filters hide some recursive search matches, the completion status explicitly says the visible count is after filters.
+  - Current: search strip layout is split into `ui/search_panel.slint`, keeping query, clear/close, recursive, and filter controls out of `ui/app.slint`.
 
 ## Phase 8: Open With
 
@@ -371,7 +372,7 @@ Acceptance for all:
 
 - [x] Split common Slint data models, widgets, overlays, and menus.
   - Acceptance: reusable models, buttons, menu rows, Places rows, and file tiles are outside the main window file.
-  - Current: `ui/models.slint`, `ui/widgets.slint`, `ui/menus.slint`, `ui/file_tile.slint`, and `ui/dnd_overlay.slint` are imported by `ui/app.slint`; common menu rows and popup surface styling live in `ui/widgets.slint`, while file item, Open With, Create New, Transfer, Places, and viewport menu content is isolated in `ui/menus.slint`.
+  - Current: `ui/models.slint`, `ui/widgets.slint`, `ui/menus.slint`, `ui/file_tile.slint`, `ui/dnd_overlay.slint`, and `ui/search_panel.slint` are imported by `ui/app.slint`; common menu rows and popup surface styling live in `ui/widgets.slint`, while file item, Open With, Create New, Transfer, Places, and viewport menu content is isolated in `ui/menus.slint`.
   - Current: `DragOverlayLayer` owns Places insertion lines, drag ghost previews, and rejected-drop banners, so `ui/app.slint` keeps DnD state and action wiring without carrying repeated overlay drawing.
   - Current: dialog bodies and centered popup wrappers live in `ui/dialogs.slint`, so `ui/app.slint` keeps dialog action wiring without repeating the transparent centering shell for every modal.
 

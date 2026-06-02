@@ -1,0 +1,131 @@
+import { LineEdit } from "std-widgets.slint";
+import { CheckOption, FilterButton, SidebarAction, ToolButton } from "widgets.slint";
+
+export component SearchPanel inherits Rectangle {
+    in property <bool> dark;
+    in property <bool> loading;
+    in property <bool> filters-active;
+    in property <string> kind-label;
+    in property <string> modified-label;
+    in property <string> size-label;
+    in-out property <string> query;
+    in-out property <bool> recursive;
+    in-out property <int> kind-filter;
+    in-out property <int> modified-filter;
+    in-out property <int> size-filter;
+    callback focus_changed(bool);
+    callback submitted(string);
+    callback cancel_requested();
+    callback filters_changed(int, int, int);
+    callback close_requested();
+
+    function clear-search-state() {
+        root.query = "";
+        root.kind-filter = 0;
+        root.modified-filter = 0;
+        root.size-filter = 0;
+        root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+        root.submitted("");
+    }
+
+    background: root.dark ? #171b1f : #f8fafc;
+    border-color: root.dark ? #343a40 : #d6dce2;
+    border-width: 1px;
+
+    VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            LineEdit {
+                horizontal-stretch: 1;
+                min-width: 120px;
+                height: 34px;
+                text <=> root.query;
+                placeholder-text: "Search in current folder";
+                accepted => { root.submitted(self.text); }
+                changed has-focus => {
+                    root.focus_changed(self.has-focus);
+                }
+            }
+
+            if (root.loading): SidebarAction {
+                width: 70px;
+                label: "Cancel";
+                dark: root.dark;
+                clicked => { root.cancel_requested(); }
+            }
+
+            if (root.query != "" || root.filters-active): SidebarAction {
+                width: 64px;
+                label: "Clear";
+                dark: root.dark;
+                clicked => { root.clear-search-state(); }
+            }
+
+            ToolButton {
+                label: "X";
+                dark: root.dark;
+                clicked => {
+                    root.clear-search-state();
+                    root.close_requested();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            CheckOption {
+                width: 156px;
+                label: "Search subfolders";
+                dark: root.dark;
+                checked <=> root.recursive;
+                toggled(_) => {
+                    if (root.query != "") {
+                        root.submitted(root.query);
+                    }
+                }
+            }
+
+            FilterButton {
+                width: 126px;
+                label: root.kind-label;
+                dark: root.dark;
+                clicked => {
+                    root.kind-filter = mod(root.kind-filter + 1, 4);
+                    root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            FilterButton {
+                width: 154px;
+                label: root.modified-label;
+                dark: root.dark;
+                clicked => {
+                    root.modified-filter = mod(root.modified-filter + 1, 4);
+                    root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+                }
+            }
+
+            FilterButton {
+                width: 144px;
+                label: root.size-label;
+                dark: root.dark;
+                clicked => {
+                    root.size-filter = mod(root.size-filter + 1, 4);
+                    root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+                }
+            }
+        }
+    }
+}

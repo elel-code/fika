@@ -109,6 +109,7 @@ Useful interaction rules:
 
 - Search state is exposed as a real toolbar/panel state, not a modal.
 - Search options belong near the search field and are visible while searching.
+- Search strip layout now lives in `SearchPanel`, so future Dolphin-like filters can be added without expanding `AppWindow`.
 
 Current Fika mapping:
 
