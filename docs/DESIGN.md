@@ -67,6 +67,7 @@ Rust 侧核心状态在 `AppState`：
 
 - `current_dir`: 当前目录。
 - `entries`: 当前目录完整条目。
+- UI 侧把地址栏使用的 `current_path` 和主栏 item model 归属的 `items_path` 分开：uncached 导航时地址栏可以先显示目标路径，但 sidebar/Devices 选中态保持跟随旧 `items_path`，直到 cache hit 或新 entries 提交。这与 COSMIC Files 的 location / `items_opt` 分层一致，避免 Places 跳转时左侧先高亮新位置而右侧仍显示旧模型。
 - `places`: 左侧 Places。
 - `search_query`: 当前过滤关键字。
 - `selected_paths`: 当前选中项。
@@ -280,7 +281,7 @@ Places 分为内置项和用户项：
 - 桌面剪贴板：Cut / Copy 同时尝试写入 `x-special/gnome-copied-files`，payload 第一行为 `cut` 或 `copy`，后续为 `file://` URI。Copy 在该 MIME 发布失败时会回退到 `text/uri-list`，提高与只理解 URI list 的桌面组件互操作性；Cut 不回退，因为 URI list 本身没有 move/cut 语义。启动后和右键菜单打开前会后台读取 `x-special/gnome-copied-files` / `text/uri-list` 并更新缓存，菜单 Paste 可见性使用缓存状态而不在 transient menu 路径里同步等待 `wl-paste`；执行 Paste 时如果缓存仍为空，会再做一次同步兜底读取。导入 URI list 时额外读取 Dolphin/KDE 使用的 `application/x-kde-cutselection`，首字节为 `1` 时按 cut/move 处理。读取成功后复用现有 async move/copy 队列。内部和导入的剪贴板路径会按原顺序去重，避免同一源路径被重复 Paste。右键菜单后台刷新和 Paste 入队前都会过滤已经不存在的剪贴板路径，全部失效时清空内部剪贴板并隐藏 Paste。
 - 冲突处理：通过 drop、Paste 或内部 transfer 菜单发起的 copy/move/link，如果目标名称已存在，会先要求用户选择 Overwrite、Keep Both、Rename 或 Skip。Apply-to-remaining 只应用于 Skip、Keep Both 和 Overwrite；Rename 始终只处理当前冲突，避免把一个手写目标名复用到不相关的后续冲突。Overwrite 会先把旧目标移动到同目录临时备份；操作失败时尝试恢复旧目标，因此文件和目录覆盖走同一套路径。
 - Undo：成功的 copy/link 会在状态栏提供一次性 Undo，执行时删除刚创建的目标；成功的 move 会尝试把目标移回原路径。Overwrite 操作会把被替换的旧目标保留为当前 Undo 条目的临时备份；撤销 copy/link overwrite 时删除新目标并恢复旧目标，撤销 move overwrite 时先把移动来的目标移回原路径再恢复旧目标。新的 Undo 条目替换旧条目时会清理旧 overwrite 备份。Undo 失败时会恢复同一个 Undo 入口以便修正阻塞条件后重试；如果失败结果返回前已经产生了新的 Undo 条目，则保留新的 Undo，不用旧失败结果覆盖当前状态。
-- 移到回收站：右键菜单支持单项或多选项移动到 XDG Trash；多选菜单只调用批量 trash 路径，写入 `files/` 和对应 `.trashinfo`。Places 默认包含内置 Trash 项，路径指向 XDG Trash 的 `files/` 目录；点击时会先确保 `files/` 和 `info/` 目录存在，再作为普通目录导航。Trash 上下文中的文件菜单会把普通 `Move to Trash` 替换为显式 `Restore From Trash` 和 `Delete Permanently`，Restore 从 `.trashinfo` 的 `Path=` 恢复原位置，Permanent Delete 只接受 Trash `files/` 内的条目。Trash 空白区域菜单提供 `Empty Trash`，后端逐项删除 Trash `files/` 内条目并清理对应或孤立的 `.trashinfo` 文件。Delete Permanently 和 Empty Trash 都会先打开通用确认弹窗，确认后才调用后端。
+- 移到回收站：右键菜单支持单项或多选项移动到 XDG Trash；多选菜单只调用批量 trash 路径，写入 `files/` 和对应 `.trashinfo`。Places 默认包含内置 Trash 项，路径指向 XDG Trash 的 `files/` 目录；点击时会先确保 `files/` 和 `info/` 目录存在，再作为普通目录导航。Trash 上下文中的文件菜单会把普通 `Move to Trash` 替换为显式 `Restore From Trash` 和 `Delete Permanently`，Restore 从 `.trashinfo` 的 `Path=` 恢复原位置，Permanent Delete 只接受 Trash `files/` 内的条目。Trash 视图从 `.trashinfo` 读取原始位置和删除时间，并在条目副标题与属性弹窗中显示。Trash 空白区域菜单提供 `Empty Trash`，后端逐项删除 Trash `files/` 内条目并清理对应或孤立的 `.trashinfo` 文件。Delete Permanently 和 Empty Trash 都会先打开通用确认弹窗，确认后才调用后端。
 - 错误汇总：批量移动到回收站会汇总成功数量和失败原因，显示在状态栏。
 
 这些动作通过 `file_actions.rs` 进入 Tokio `spawn_blocking()`，完成后回到 UI 线程刷新当前目录。权限不足时和 transfer 操作走同一套提权确认：普通用户态尝试失败后显示管理员授权提示，用户确认后才调用 polkit helper。正式路径是 system bus D-Bus activation 启动 `fika-privileged-helper --system-bus`，helper 对每个方法调用 polkit authority；开发 checkout 没有安装 system bus service 时，会退回 `pkexec --disable-internal-agent fika-privileged-helper --session-bus ...`。

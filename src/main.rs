@@ -79,7 +79,7 @@ use desktop::{mime_open, open_with, terminal};
 use fs::devices::{
     device_diagnostics_report, eject_device, mount_device, mounted_devices, unmount_device,
 };
-use fs::entries::{read_entries_async, to_file_entry};
+use fs::entries::{RawFileEntry, read_entries_async, to_file_entry};
 use fs::places::default_places;
 use fs::{file_actions, privilege, search, thumbnails};
 
@@ -275,6 +275,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     load_directory(&ui, &state, &bridge);
+    prefetch_places_async(&state, &bridge);
 
     {
         let ui_weak = ui.as_weak();
@@ -637,9 +638,11 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_add_place(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 add_place(&ui, &state, PathBuf::from(path.as_str()));
+                prefetch_places_async(&state, &bridge);
             }
         });
     }
@@ -647,9 +650,11 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_add_place_at_slot(move |path, slot| {
             if let Some(ui) = ui_weak.upgrade() {
                 add_place_at_slot(&ui, &state, PathBuf::from(path.as_str()), slot);
+                prefetch_places_async(&state, &bridge);
             }
         });
     }
@@ -667,9 +672,11 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_remove_place(move |index| {
             if let Some(ui) = ui_weak.upgrade() {
                 remove_place(&ui, &state, index);
+                prefetch_places_async(&state, &bridge);
             }
         });
     }
@@ -677,9 +684,11 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_restore_default_places(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 restore_default_places(&ui, &state);
+                prefetch_places_async(&state, &bridge);
             }
         });
     }
@@ -991,9 +1000,11 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_reorder_place_path(move |path, to| {
             if let Some(ui) = ui_weak.upgrade() {
                 reorder_place_path(&ui, &state, path.as_str(), to);
+                prefetch_places_async(&state, &bridge);
             }
         });
     }
@@ -1140,6 +1151,47 @@ fn refresh_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Asy
     load_directory_with_preservation(ui, state, bridge, true);
 }
 
+fn prefetch_places_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    let paths = {
+        let state = state.borrow();
+        place_prefetch_paths(&state)
+    };
+    for path in paths {
+        let async_tx = bridge.tx.clone();
+        let notify_ui = bridge.ui_weak.clone();
+        bridge.handle.spawn(async move {
+            if fs::file_ops::is_trash_files_dir(&path) {
+                let _ = fs::file_ops::ensure_trash_dirs();
+            }
+            let result = read_entries_async(&path).await;
+            send_async_event(
+                async_tx,
+                notify_ui,
+                AsyncEvent::DirectoryPrefetched { path, result },
+            );
+        });
+    }
+}
+
+fn place_prefetch_paths(state: &AppState) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for place in &state.places {
+        let text = place.path.as_str();
+        if text.is_empty() {
+            continue;
+        }
+        let path = expand_user_path(text);
+        if path == state.current_dir
+            || state.directory_cache.contains_key(&path)
+            || paths.iter().any(|existing| existing == &path)
+        {
+            continue;
+        }
+        paths.push(path);
+    }
+    paths
+}
+
 fn load_directory_with_preservation(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -1181,6 +1233,7 @@ fn load_directory_with_preservation(
             state.entries = cached_entries;
             state.virtual_view.invalidate();
         }
+        ui.set_items_path(current_dir.display().to_string().into());
         ui.set_directory_loading(false);
         reset_search_controls(ui);
         apply_filter(ui, state, bridge, false);
@@ -1418,6 +1471,9 @@ fn apply_async_event(
 ) {
     match event {
         AsyncEvent::DirectoryLoaded(result) => apply_directory_result(ui, state, bridge, result),
+        AsyncEvent::DirectoryPrefetched { path, result } => {
+            apply_directory_prefetch_result(state, path, result);
+        }
         AsyncEvent::FileOpened(result) => apply_file_open_result(ui, state, result),
         AsyncEvent::RecursiveSearchProgress(progress) => {
             apply_recursive_search_progress(ui, state, progress);
@@ -1512,6 +1568,7 @@ fn apply_directory_result(
             if result.defer_view_restore {
                 restore_view_state(ui, state, &result.path);
             }
+            ui.set_items_path(result.path.display().to_string().into());
             let unchanged = {
                 let mut state = state.borrow_mut();
                 if directory_entries_match(&state.entries, &entries) {
@@ -1562,6 +1619,7 @@ fn apply_directory_result(
                     state.selected_paths.clear();
                 }
             }
+            ui.set_items_path(result.path.display().to_string().into());
             if !result.preserve_view {
                 reset_search_controls(ui);
             }
@@ -1577,6 +1635,37 @@ fn apply_directory_result(
                 update_selection_ui(ui, &[]);
             }
             set_status(ui, &format!("Cannot read directory: {err}"));
+        }
+    }
+}
+
+fn apply_directory_prefetch_result(
+    state: &Rc<RefCell<AppState>>,
+    path: PathBuf,
+    result: io::Result<Vec<RawFileEntry>>,
+) {
+    match result {
+        Ok(entries) => {
+            let mut state = state.borrow_mut();
+            if state.current_dir == path {
+                debug_log(&format!(
+                    "directory_prefetched ignored current path={}",
+                    path.display()
+                ));
+                return;
+            }
+            let entries = entries.into_iter().map(to_file_entry).collect();
+            state.insert_directory_cache(path.clone(), entries);
+            debug_log(&format!(
+                "directory_prefetched cached path={}",
+                path.display()
+            ));
+        }
+        Err(err) => {
+            debug_log(&format!(
+                "directory_prefetched skipped path={} error={err}",
+                path.display()
+            ));
         }
     }
 }
@@ -3719,6 +3808,34 @@ mod tests {
         assert_eq!(retained.operation, newer.operation);
         assert_eq!(retained.original_source, newer.original_source);
         assert_eq!(retained.destination, newer.destination);
+    }
+
+    #[test]
+    fn place_prefetch_paths_skip_current_cached_empty_and_duplicates() {
+        let mut state = AppState::new(
+            PathBuf::from("/tmp/current"),
+            vec![
+                crate::fs::places::place_entry("Current", PathBuf::from("/tmp/current"), "C"),
+                crate::fs::places::place_entry("Cached", PathBuf::from("/tmp/cached"), "A"),
+                crate::fs::places::place_entry("Target", PathBuf::from("/tmp/target"), "T"),
+                crate::fs::places::place_entry("Target Again", PathBuf::from("/tmp/target"), "T"),
+                PlaceEntry {
+                    label: "Empty".into(),
+                    path: "".into(),
+                    marker: "E".into(),
+                    is_builtin: false,
+                },
+            ],
+        );
+        state.insert_directory_cache(
+            PathBuf::from("/tmp/cached"),
+            vec![test_entry("a", "/tmp/a")],
+        );
+
+        assert_eq!(
+            place_prefetch_paths(&state),
+            vec![PathBuf::from("/tmp/target")]
+        );
     }
 
     fn test_undo(operation: &str, original_source: &str, destination: &str) -> FileUndo {

@@ -82,6 +82,7 @@ export component PropertiesDialog inherits Rectangle {
     in property <string> name;
     in property <string> kind;
     in property <string> size;
+    in property <string> modified-label: "Modified";
     in property <string> modified;
     in property <string> path;
     callback closed();
@@ -126,7 +127,7 @@ export component PropertiesDialog inherits Rectangle {
         }
 
         Text {
-            text: "Modified: " + root.modified;
+            text: root.modified-label + ": " + root.modified;
             color: root.dark ? #d8dee5 : #334155;
             font-size: 13px;
             overflow: elide;
@@ -160,6 +161,7 @@ export component PropertiesPopup inherits Rectangle {
     in property <string> name;
     in property <string> kind;
     in property <string> size;
+    in property <string> modified-label: "Modified";
     in property <string> modified;
     in property <string> path;
     callback closed();
@@ -175,6 +177,7 @@ export component PropertiesPopup inherits Rectangle {
         name: root.name;
         kind: root.kind;
         size: root.size;
+        modified-label: root.modified-label;
         modified: root.modified;
         path: root.path;
         closed => { root.closed(); }

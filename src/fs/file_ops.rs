@@ -17,6 +17,12 @@ pub struct TransferOutcome {
     pub overwritten_backup: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrashMetadata {
+    pub original_path: PathBuf,
+    pub deletion_date: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransferTargetRelation {
     Same,
@@ -885,6 +891,10 @@ fn remove_orphan_trashinfo_files(summary: &mut FileActionSummary) {
 }
 
 fn trash_original_path(trash_path: &Path) -> Result<PathBuf, String> {
+    trash_metadata(trash_path).map(|metadata| metadata.original_path)
+}
+
+pub(crate) fn trash_metadata(trash_path: &Path) -> Result<TrashMetadata, String> {
     let info_path =
         trash_info_path(trash_path).ok_or_else(|| "trash item has no metadata name".to_string())?;
     let contents = fs::read_to_string(&info_path).map_err(|err| {
@@ -893,10 +903,15 @@ fn trash_original_path(trash_path: &Path) -> Result<PathBuf, String> {
             info_path.display()
         )
     })?;
-    trash_original_path_from_info(&contents)
+    trash_metadata_from_info(&contents)
 }
 
+#[cfg(test)]
 fn trash_original_path_from_info(contents: &str) -> Result<PathBuf, String> {
+    trash_metadata_from_info(contents).map(|metadata| metadata.original_path)
+}
+
+fn trash_metadata_from_info(contents: &str) -> Result<TrashMetadata, String> {
     let encoded = contents
         .lines()
         .find_map(|line| line.strip_prefix("Path="))
@@ -908,7 +923,16 @@ fn trash_original_path_from_info(contents: &str) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    Ok(path)
+    let deletion_date = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("DeletionDate="))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    Ok(TrashMetadata {
+        original_path: path,
+        deletion_date,
+    })
 }
 
 fn trash_info_path(trash_path: &Path) -> Option<PathBuf> {

@@ -1,4 +1,5 @@
 use crate::FileEntry;
+use crate::fs::file_ops;
 use slint::{Image, SharedString};
 use std::cmp::Ordering;
 use std::fs::Metadata;
@@ -30,23 +31,63 @@ pub async fn read_entries_async(path: &Path) -> io::Result<Vec<RawFileEntry>> {
 pub fn read_entries_sync(path: &Path) -> io::Result<Vec<RawFileEntry>> {
     let mut entries = Vec::new();
     let dir = std::fs::read_dir(path)?;
+    let decorate_trash_metadata = file_ops::is_trash_files_dir(path);
 
     for item in dir {
         let Ok(item) = item else {
             continue;
         };
         if let Ok(metadata) = item.metadata() {
-            entries.push(to_raw_file_entry(
-                item.path(),
+            let item_path = item.path();
+            let mut entry = to_raw_file_entry(
+                item_path.clone(),
                 item.file_name().to_string_lossy().trim().to_string(),
                 String::new(),
                 metadata,
-            ));
+            );
+            if decorate_trash_metadata {
+                decorate_trash_entry(&mut entry, &item_path);
+            }
+            entries.push(entry);
         }
     }
 
     entries.sort_by(compare_raw_entries);
     Ok(entries)
+}
+
+fn decorate_trash_entry(entry: &mut RawFileEntry, path: &Path) {
+    let Ok(metadata) = file_ops::trash_metadata(path) else {
+        return;
+    };
+    entry.group = trash_group_label(&metadata.original_path, metadata.deletion_date.as_deref());
+    if let Some(deletion_date) = metadata.deletion_date {
+        entry.modified = format_trash_deletion_date(&deletion_date);
+        entry.modified_age_days = -1;
+    }
+}
+
+fn trash_group_label(original_path: &Path, deletion_date: Option<&str>) -> String {
+    let original_location = original_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(original_path);
+    match deletion_date {
+        Some(date) => format!(
+            "Original: {} - Deleted: {}",
+            original_location.display(),
+            format_trash_deletion_date(date)
+        ),
+        None => format!("Original: {}", original_location.display()),
+    }
+}
+
+fn format_trash_deletion_date(value: &str) -> String {
+    let normalized = value.replace('T', " ");
+    normalized
+        .strip_suffix(":00")
+        .unwrap_or(&normalized)
+        .to_string()
 }
 
 pub fn to_file_entry(entry: RawFileEntry) -> FileEntry {

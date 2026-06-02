@@ -27,6 +27,7 @@ import { ConfirmationPopup, OtherApplicationsPopup, PrivilegedPromptPopup, Prope
 
 export component AppWindow inherits Window {
     in-out property <string> current_path;
+    in-out property <string> items_path;
     in-out property <string> path_input_text;
     in property <string> current_name;
     in property <string> status;
@@ -151,6 +152,7 @@ export component AppWindow inherits Window {
     private property <string> properties-path;
     private property <string> properties-kind;
     private property <string> properties-size;
+    private property <string> properties-modified-label: "Modified";
     private property <string> properties-modified;
     private property <bool> open-with-menu-open: false;
     private property <length> open-with-menu-y: 0px;
@@ -676,7 +678,7 @@ export component AppWindow inherits Window {
                         path: place.path;
                         drag-data-source: DndApi.make-drag-place(place.path);
                         marker: place.marker;
-                        selected: root.current_path == place.path;
+                        selected: root.items_path == place.path;
                         dark: root.dark_mode;
                         index: index;
                         place_count: root.places.length;
@@ -721,7 +723,7 @@ export component AppWindow inherits Window {
                         label: device.label;
                         path: device.path;
                         marker: device.marker;
-                        selected: root.current_path == device.path;
+                        selected: root.items_path == device.path;
                         dark: root.dark_mode;
                         reorderable: false;
                         dragged: false;
@@ -1089,7 +1091,7 @@ export component AppWindow inherits Window {
                                 selected: root.selection_revision >= 0 && root.is_selected(item.path);
                                 dark: root.dark_mode;
                                 zoom-level: root.icon_zoom_level;
-                                show-location: root.recursive_search && root.search_query != "";
+                                show-location: root.current_in_trash || (root.recursive_search && root.search_query != "");
                                 interactive: !root.directory_loading;
                                 drop-target: root.main_drag_active && !root.main_drag_rejected && root.place_drag_target_path == item.path;
                                 request_select(path, toggle, range) => {
@@ -1327,6 +1329,7 @@ export component AppWindow inherits Window {
             root.properties-path = root.context-menu-path;
             root.properties-kind = root.context-menu-is-dir ? "Folder" : "File";
             root.properties-size = root.context-menu-properties-size;
+            root.properties-modified-label = root.current_in_trash ? "Deleted" : "Modified";
             root.properties-modified = root.context-menu-properties-modified;
             root.properties-open = true;
             root.close-context-popups();
@@ -1507,6 +1510,7 @@ export component AppWindow inherits Window {
         name: root.properties-name;
         kind: root.properties-kind;
         size: root.properties-size;
+        modified-label: root.properties-modified-label;
         modified: root.properties-modified;
         path: root.properties-path;
         closed => { root.properties-open = false; }

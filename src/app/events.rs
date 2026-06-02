@@ -107,6 +107,10 @@ pub(crate) struct ClipboardLoadResult {
 #[derive(Debug)]
 pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
+    DirectoryPrefetched {
+        path: PathBuf,
+        result: io::Result<Vec<RawFileEntry>>,
+    },
     FileOpened(FileOpenResult),
     RecursiveSearchProgress(RecursiveSearchProgress),
     RecursiveSearchFinished(RecursiveSearchResult),
