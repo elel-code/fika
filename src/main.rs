@@ -2649,16 +2649,13 @@ fn sync_virtual_entries_with_count(
 
     ui.set_virtual_start_index(update.range.start as i32);
     ui.set_virtual_start_column(update.start_column as i32);
-    ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(
-        update.entries.clone(),
-    ))));
-    ui.set_entry_count(update.entry_count as i32);
-
     if schedule_thumbnails {
         let thumbnail_entries =
             prioritize_thumbnail_entries(&update.entries, update.range.start, update.visible_range);
         schedule_visible_thumbnails(ui, state, bridge, &thumbnail_entries, size_px, false);
     }
+    ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
+    ui.set_entry_count(update.entry_count as i32);
 }
 
 fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
