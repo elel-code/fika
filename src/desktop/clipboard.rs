@@ -14,30 +14,12 @@ pub(crate) struct FileClipboard {
 }
 
 pub(crate) fn copy_text(text: &str) -> Result<String, String> {
-    let candidates = [
-        ("wl-copy", &[][..]),
-        ("xclip", &["-selection", "clipboard"][..]),
-        ("xsel", &["--clipboard", "--input"][..]),
-    ];
-
-    let mut missing = Vec::new();
-    let mut failures = Vec::new();
-
-    for (program, args) in candidates {
-        match copy_with(program, args, text) {
-            Ok(()) => return Ok(program.to_string()),
-            Err(CopyError::Missing) => missing.push(program),
-            Err(CopyError::Failed(err)) => failures.push(format!("{program}: {err}")),
+    match copy_with("wl-copy", &[], text) {
+        Ok(()) => Ok("wl-copy".to_string()),
+        Err(CopyError::Missing) => {
+            Err("no Wayland clipboard helper found; install wl-copy".to_string())
         }
-    }
-
-    if failures.is_empty() {
-        Err(format!(
-            "no clipboard helper found; install one of {}",
-            missing.join(", ")
-        ))
-    } else {
-        Err(failures.join("; "))
+        Err(CopyError::Failed(err)) => Err(format!("wl-copy: {err}")),
     }
 }
 
@@ -71,29 +53,12 @@ pub(crate) fn read_file_list() -> Result<FileClipboard, String> {
 }
 
 fn copy_mime(mime: &str, text: &str) -> Result<String, String> {
-    let candidates = [
-        ("wl-copy", vec!["--type", mime]),
-        ("xclip", vec!["-selection", "clipboard", "-t", mime]),
-    ];
-
-    let mut missing = Vec::new();
-    let mut failures = Vec::new();
-
-    for (program, args) in candidates {
-        match copy_with(program, &args, text) {
-            Ok(()) => return Ok(program.to_string()),
-            Err(CopyError::Missing) => missing.push(program),
-            Err(CopyError::Failed(err)) => failures.push(format!("{program}: {err}")),
-        }
-    }
-
-    if failures.is_empty() {
-        Err(format!(
-            "no clipboard helper found for {mime}; install one of {}",
-            missing.join(", ")
-        ))
-    } else {
-        Err(failures.join("; "))
+    match copy_with("wl-copy", &["--type", mime], text) {
+        Ok(()) => Ok("wl-copy".to_string()),
+        Err(CopyError::Missing) => Err(format!(
+            "no Wayland clipboard helper found for {mime}; install wl-copy"
+        )),
+        Err(CopyError::Failed(err)) => Err(format!("wl-copy: {err}")),
     }
 }
 
@@ -215,28 +180,12 @@ fn hex(value: u8) -> char {
 }
 
 fn read_mime(mime: &str) -> Result<(String, String), String> {
-    let candidates = [
-        ("wl-paste", vec!["--no-newline", "--type", mime]),
-        ("xclip", vec!["-selection", "clipboard", "-t", mime, "-o"]),
-    ];
-    let mut missing = Vec::new();
-    let mut failures = Vec::new();
-
-    for (program, args) in candidates {
-        match read_with(program, &args) {
-            Ok(payload) => return Ok((program.to_string(), payload)),
-            Err(CopyError::Missing) => missing.push(program),
-            Err(CopyError::Failed(err)) => failures.push(format!("{program}: {err}")),
-        }
-    }
-
-    if failures.is_empty() {
-        Err(format!(
-            "no clipboard helper found for {mime}; install one of {}",
-            missing.join(", ")
-        ))
-    } else {
-        Err(failures.join("; "))
+    match read_with("wl-paste", &["--no-newline", "--type", mime]) {
+        Ok(payload) => Ok(("wl-paste".to_string(), payload)),
+        Err(CopyError::Missing) => Err(format!(
+            "no Wayland clipboard helper found for {mime}; install wl-paste"
+        )),
+        Err(CopyError::Failed(err)) => Err(format!("wl-paste: {err}")),
     }
 }
 

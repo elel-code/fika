@@ -185,7 +185,6 @@ print_runtime_context() {
     echo "  desktop:    ${XDG_CURRENT_DESKTOP:-<unset>}"
     echo "  session:    ${XDG_SESSION_TYPE:-<unset>}"
     echo "  wayland:    ${WAYLAND_DISPLAY:-<unset>}"
-    echo "  display:    ${DISPLAY:-<unset>}"
     echo "  runtime:    ${XDG_RUNTIME_DIR:-<unset>}"
     echo "  session dbus: $(env_state DBUS_SESSION_BUS_ADDRESS)"
     echo "  systemd user: $(systemctl_user_probe)"

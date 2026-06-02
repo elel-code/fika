@@ -673,7 +673,7 @@ fn portal_parent_window(parent_window: String) -> ParentWindowDecision {
         return decision;
     }
 
-    let decision = if matches!(scheme, "wayland" | "x11") {
+    let decision = if scheme == "wayland" {
         ParentWindowDecision {
             handle: Some(parent_window.to_string()),
             status: ParentWindowStatus::Accepted,
@@ -895,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn portal_parent_window_accepts_only_known_platform_handles() {
+    fn portal_parent_window_accepts_wayland_handles() {
         assert_eq!(
             portal_parent_window("wayland:1_42".to_string()),
             ParentWindowDecision {
@@ -904,21 +904,7 @@ mod tests {
             }
         );
         assert_eq!(
-            portal_parent_window(" x11:0x4600007 ".to_string()),
-            ParentWindowDecision {
-                handle: Some("x11:0x4600007".to_string()),
-                status: ParentWindowStatus::Accepted,
-            }
-        );
-        assert_eq!(
             portal_parent_window("wayland:".to_string()),
-            ParentWindowDecision {
-                handle: None,
-                status: ParentWindowStatus::EmptyHandle,
-            }
-        );
-        assert_eq!(
-            portal_parent_window("x11:".to_string()),
             ParentWindowDecision {
                 handle: None,
                 status: ParentWindowStatus::EmptyHandle,

@@ -266,7 +266,7 @@ Places 分为内置项和用户项：
 - 新建文件夹：从主栏空白右键菜单 `Create New > Folder` 打开命名对话框，在当前目录创建；重名时自动生成 `copy` 后缀。
 - 重命名：文件/文件夹右键菜单打开对话框，只接受单级名称，拒绝路径分隔符。
 - Duplicate Here：右键单项后在同一父目录中排队执行 copy。
-- Copy Location：把当前条目的绝对路径写入桌面文本剪贴板，优先使用 Wayland `wl-copy`，再尝试 X11 helper。
+- Copy Location：把当前条目的绝对路径写入 Wayland 桌面文本剪贴板，使用 `wl-copy`。
 - Properties：显示名称、路径、类型、大小和修改时间。
 - 内部 Cut / Copy / Paste：单项和多选菜单可以暂存路径；主栏空白和目录项菜单在有内部剪贴板内容时显示 Paste，实际执行复用 async move/copy 队列。
 - 桌面剪贴板：Cut / Copy 同时尝试写入 `x-special/gnome-copied-files`，payload 第一行为 `cut` 或 `copy`，后续为 `file://` URI。Copy 在该 MIME 发布失败时会回退到 `text/uri-list`，提高与只理解 URI list 的桌面组件互操作性；Cut 不回退，因为 URI list 本身没有 move/cut 语义。打开右键菜单或执行 Paste 时会尝试读取 `x-special/gnome-copied-files`，失败后退到 `text/uri-list`；导入 URI list 时额外读取 Dolphin/KDE 使用的 `application/x-kde-cutselection`，首字节为 `1` 时按 cut/move 处理。读取成功后复用现有 async move/copy 队列。内部和导入的剪贴板路径会按原顺序去重，避免同一源路径被重复 Paste。右键菜单刷新和 Paste 入队前都会过滤已经不存在的剪贴板路径，全部失效时清空内部剪贴板并隐藏 Paste。
@@ -436,7 +436,7 @@ system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privi
 - `SaveFile` 支持 `current_folder`、`current_file` 和 `current_name`，通过 `--chooser-save NAME` 在当前目录下选择保存路径。
 - `SaveFiles` 支持 `current_folder` 和 `files`，通过 `--chooser-save-files` 先选择目标目录，再按 portal 传入的文件名返回完整目标 URI 列表。
 - portal `title` 会传给 chooser 窗口标题，`accept_label` 会传给 chooser 底部确认按钮；portal glob `filters` 会转换成 chooser 底部的过滤按钮，`current_filter` 会在匹配到受支持的 glob filter 时选择初始过滤器，用户切换后的当前过滤器会随结果返回。当前 chooser UI 只能表达 glob 过滤，因此 MIME-only portal filters 不会显示成空过滤器，也不会在未被用户选择时原样回传。portal `choices` 会转换成 chooser 底部的选择控件，点击后展开该 choice 的候选菜单，并随结果返回用户当前选择。
-- `wayland:` / `x11:` `parent_window` 会通过 `--chooser-parent-window` 传给 `fika --chooser` 并保存在 chooser 状态中；空值、格式错误或未知 scheme 会被 backend 丢弃。设置 `FIKA_DEBUG_PORTAL=1` 时，backend 会打印 `parent_window` 解析结果，chooser 进程也会打印收到的 handle，两侧都会标明 `native_transient=false`。当前 Slint 集成尚未把已保存 handle 绑定为原生 transient parent。
+- `wayland:` `parent_window` 会通过 `--chooser-parent-window` 传给 `fika --chooser` 并保存在 chooser 状态中；空值、格式错误或未知 scheme 会被 backend 丢弃。设置 `FIKA_DEBUG_PORTAL=1` 时，backend 会打印 `parent_window` 解析结果，chooser 进程也会打印收到的 handle，两侧都会标明 `native_transient=false`。当前 Slint 集成尚未把已保存 Wayland handle 绑定为原生 transient parent。
 - 设置 `FIKA_DEBUG_PORTAL=1` 时，backend 还会为每个 OpenFile / SaveFile / SaveFiles 请求打印一行请求摘要，包含 request handle、起始目录、选择/保存模式、filter/choice 数量、初始 filter、parent-window 转发状态，并继续显式标记 `native_transient=false`。
 - 返回 URI 统一为 `file://`，路径中的空格和非 ASCII 字节按百分号编码。
 - 用户关闭 chooser 时，`fika --chooser` 以专用取消码退出，backend 返回 response `1`；chooser 成功退出但无路径输出也按取消处理。其它非零退出会返回 D-Bus error，并带上 exit status 和 stderr，避免把崩溃或启动后异常静默伪装成用户取消。
@@ -447,7 +447,7 @@ system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privi
 
 后续：
 
-- 将已保存的 `parent_window` 接入具体平台窗口后端，处理原生 transient 关系。
+- 将已保存的 Wayland `parent_window` 接入具体窗口后端，处理原生 transient 关系。
 
 ## Engineering Rules
 
