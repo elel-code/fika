@@ -70,6 +70,7 @@ export component AppWindow inherits Window {
     in-out property <bool> current_in_trash: false;
     in-out property <bool> can_go_back: false;
     in-out property <bool> can_go_forward: false;
+    in-out property <bool> split_view_open: false;
 
     in-out property <int> icon_zoom_level: 2;
     in-out property <float> sidebar_width_px: 320;
@@ -265,6 +266,7 @@ export component AppWindow inherits Window {
     callback search_submitted(string);
     callback cancel_search();
     callback search_filters_changed(int, int, int);
+    callback toggle_split_view();
     callback select_path(string, bool, bool);
     callback select_rect(float, float, float, float, int, float, float, float, bool);
     callback select_all_visible();
@@ -641,6 +643,7 @@ export component AppWindow inherits Window {
             can-go-back: root.can_go_back;
             can-go-forward: root.can_go_forward;
             search-active: root.search-panel-visible;
+            split-view-open: root.split_view_open;
             path-text <=> root.path_input_text;
             path-focused <=> root.path-input-focused;
             search-query <=> root.search_query;
@@ -663,6 +666,7 @@ export component AppWindow inherits Window {
                 root.search_submitted("");
                 root.search_bar_open = false;
             }
+            toggle_split_view => { root.toggle_split_view(); }
             dark_toggled => {
                 root.dark_mode = !root.dark_mode;
                 root.persist_ui_state();

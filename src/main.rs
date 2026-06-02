@@ -569,6 +569,16 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_toggle_split_view(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                toggle_split_view(&ui, &state);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         ui.on_select_path(move |path, toggle, range| {
             if let Some(ui) = ui_weak.upgrade() {
                 select_path(&ui, &state, path.as_str(), toggle, range);
@@ -2461,12 +2471,7 @@ fn move_current_directory_home_if_inside_mount(
     mount_path: &Path,
 ) -> bool {
     let mut state = state.borrow_mut();
-    state.panes.active.history.prune_under(mount_path);
-    if !state.panes.active.current_dir.starts_with(mount_path) {
-        return false;
-    }
-    state.panes.active.current_dir = home_dir();
-    true
+    state.panes.prune_mount_path(mount_path, home_dir())
 }
 
 fn title_case_action(action: &str) -> Cow<'static, str> {
@@ -2988,6 +2993,31 @@ fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let state = state.borrow();
     ui.set_can_go_back(state.panes.active.history.back_len() > 0);
     ui.set_can_go_forward(state.panes.active.history.forward_len() > 0);
+    ui.set_split_view_open(state.panes.is_split());
+}
+
+fn toggle_split_view(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let (opened, current_dir) = {
+        let mut state = state.borrow_mut();
+        if state.panes.is_split() {
+            state.panes.close_inactive();
+            (false, state.panes.active.current_dir.clone())
+        } else {
+            let current_dir = state.panes.active.current_dir.clone();
+            state.panes.open_inactive(current_dir.clone());
+            (true, current_dir)
+        }
+    };
+
+    sync_navigation_ui(ui, state);
+    if opened {
+        set_status(
+            ui,
+            &format!("Split view opened at {}", current_dir.display()),
+        );
+    } else {
+        set_status(ui, "Split view closed");
+    }
 }
 
 fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge, path: PathBuf) {
@@ -3849,6 +3879,12 @@ mod tests {
                     PathBuf::from("/run/media/yk/USB-sibling"),
                 ],
             );
+            assert!(state.panes.open_inactive(mount_path.join("other")));
+            let inactive = state.panes.inactive_mut().expect("inactive pane");
+            inactive.history = PaneHistory::from_stacks(
+                vec![mount_path.join("other-old"), PathBuf::from("/tmp/keep")],
+                vec![mount_path.join("other-future")],
+            );
         }
 
         assert!(move_current_directory_home_if_inside_mount(
@@ -3866,6 +3902,10 @@ mod tests {
             state.panes.active.history.forward_paths(),
             &[PathBuf::from("/run/media/yk/USB-sibling")]
         );
+        let inactive = state.panes.inactive().expect("inactive pane");
+        assert_eq!(inactive.current_dir, home_dir());
+        assert_eq!(inactive.history.back_paths(), &[PathBuf::from("/tmp/keep")]);
+        assert!(inactive.history.forward_paths().is_empty());
     }
 
     #[test]

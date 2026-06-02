@@ -34,7 +34,7 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 - `AppWindow` 是主窗口。
 - `ui/models.slint` 定义 `FileEntry` / `PlaceEntry` / `DesktopApp`。
 - `ui/widgets.slint` 包含通用按钮、菜单项、popup surface、Places 行和 `FolderGlyph`。
-- `ui/top_bar.slint` 负责父目录/Home、路径输入、搜索入口和主题切换；`AppWindow` 只保留动作 callback、路径输入状态和持久化转发。
+- `ui/top_bar.slint` 负责 Back/Forward/Up 导航组、路径输入、COSMIC-style 搜索入口、Split 状态入口和主题切换；`AppWindow` 只保留动作 callback、路径输入状态和持久化转发。
 - `ui/file_tile.slint` 负责主栏文件项显示、选择、右键菜单、双击打开。
 - `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
 
@@ -72,7 +72,7 @@ Slint `FlexboxLayout` 采用策略：
 
 Rust 侧核心状态在 `AppState`：
 
-- `panes`: 主栏 pane 容器，当前只暴露 `active` pane slot。active pane 的目录、完整条目、历史、选择、搜索/filter、递归搜索运行态和虚拟视图 cache 封装在 `PaneState` 中。当前仍然只渲染一个主栏 pane，但 `AppState` 已经不再直接持有裸 `PaneState`，后续 split view 可以在 `PanesState` 内增加 second pane 与 focused-pane routing。UI 的 `main_viewport_x` 现在只是 active pane viewport 的 Slint 镜像，后续 split view 切换 focused pane 时需要把该镜像重绑定到目标 pane。
+- `panes`: 主栏 pane 容器，拥有 active pane 和可选 inactive pane。active pane 的目录、完整条目、历史、选择、搜索/filter、递归搜索运行态和虚拟视图 cache 封装在 `PaneState` 中；inactive pane 目前作为 split-view 状态 scaffold 存在，支持 open/close/focus/prune 测试路径。当前 UI 仍然只渲染 active pane，TopBar 的 Split 控制只同步 split 状态；后续真正双栏渲染需要把 `main_viewport_x`、快捷键、菜单、DnD、状态栏和目录加载回调都路由到 focused pane。
 - UI 侧把地址栏使用的 `current_path` 和主栏 item model 归属的 `items_path` 分开：uncached 导航时地址栏可以先显示目标路径，但 sidebar/Devices 选中态保持跟随旧 `items_path`，直到 cache hit 或新 entries 提交。这与 COSMIC Files 的 location / `items_opt` 分层一致，避免 Places 跳转时左侧先高亮新位置而右侧仍显示旧模型。
 - `places`: 左侧 Places。
 - `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。

@@ -47,14 +47,74 @@ impl PaneState {
 #[derive(Debug)]
 pub(crate) struct PanesState {
     pub(crate) active: PaneState,
+    inactive: Option<PaneState>,
 }
 
 impl PanesState {
     pub(crate) fn new(active_dir: PathBuf) -> Self {
         Self {
             active: PaneState::new(active_dir),
+            inactive: None,
         }
     }
+
+    pub(crate) fn is_split(&self) -> bool {
+        self.inactive.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pane_count(&self) -> usize {
+        1 + usize::from(self.inactive.is_some())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inactive(&self) -> Option<&PaneState> {
+        self.inactive.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inactive_mut(&mut self) -> Option<&mut PaneState> {
+        self.inactive.as_mut()
+    }
+
+    pub(crate) fn open_inactive(&mut self, current_dir: PathBuf) -> bool {
+        if self.inactive.is_some() {
+            return false;
+        }
+        self.inactive = Some(PaneState::new(current_dir));
+        true
+    }
+
+    pub(crate) fn close_inactive(&mut self) -> Option<PaneState> {
+        self.inactive.take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focus_inactive(&mut self) -> bool {
+        let Some(mut inactive) = self.inactive.take() else {
+            return false;
+        };
+        std::mem::swap(&mut self.active, &mut inactive);
+        self.inactive = Some(inactive);
+        true
+    }
+
+    pub(crate) fn prune_mount_path(&mut self, mount_path: &Path, fallback_dir: PathBuf) -> bool {
+        let active_moved = prune_pane_mount_path(&mut self.active, mount_path, &fallback_dir);
+        if let Some(inactive) = self.inactive.as_mut() {
+            prune_pane_mount_path(inactive, mount_path, &fallback_dir);
+        }
+        active_moved
+    }
+}
+
+fn prune_pane_mount_path(pane: &mut PaneState, mount_path: &Path, fallback_dir: &Path) -> bool {
+    pane.history.prune_under(mount_path);
+    if !pane.current_dir.starts_with(mount_path) {
+        return false;
+    }
+    pane.current_dir = fallback_dir.to_path_buf();
+    true
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -397,9 +457,68 @@ mod tests {
         let panes = PanesState::new(PathBuf::from("/tmp/active"));
 
         assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/active"));
+        assert_eq!(panes.pane_count(), 1);
+        assert!(!panes.is_split());
+        assert!(panes.inactive().is_none());
         assert!(panes.active.entries.is_empty());
         assert_eq!(panes.active.history.back_len(), 0);
         assert_eq!(panes.active.history.forward_len(), 0);
+    }
+
+    #[test]
+    fn panes_state_can_open_focus_and_close_inactive_pane() {
+        let mut panes = PanesState::new(PathBuf::from("/tmp/left"));
+
+        assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
+        assert!(!panes.open_inactive(PathBuf::from("/tmp/third")));
+        assert!(panes.is_split());
+        assert_eq!(panes.pane_count(), 2);
+        assert_eq!(
+            panes.inactive().map(|pane| pane.current_dir.as_path()),
+            Some(Path::new("/tmp/right"))
+        );
+
+        assert!(panes.focus_inactive());
+        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/right"));
+        assert_eq!(
+            panes.inactive().map(|pane| pane.current_dir.as_path()),
+            Some(Path::new("/tmp/left"))
+        );
+
+        let closed = panes.close_inactive().expect("inactive pane should close");
+        assert_eq!(closed.current_dir, PathBuf::from("/tmp/left"));
+        assert_eq!(panes.pane_count(), 1);
+        assert!(!panes.is_split());
+        assert!(panes.close_inactive().is_none());
+        assert!(!panes.focus_inactive());
+    }
+
+    #[test]
+    fn panes_state_prunes_removed_mount_from_both_panes() {
+        let mount_path = PathBuf::from("/run/media/yk/USB");
+        let mut panes = PanesState::new(mount_path.join("active"));
+        panes.active.history = PaneHistory::from_stacks(
+            vec![mount_path.join("active-old")],
+            vec![mount_path.join("active-future")],
+        );
+        assert!(panes.open_inactive(mount_path.join("inactive")));
+        {
+            let inactive = panes.inactive.as_mut().expect("inactive pane");
+            inactive.history = PaneHistory::from_stacks(
+                vec![mount_path.join("inactive-old"), PathBuf::from("/tmp/keep")],
+                vec![mount_path.join("inactive-future")],
+            );
+        }
+
+        assert!(panes.prune_mount_path(&mount_path, PathBuf::from("/home/yk")));
+
+        assert_eq!(panes.active.current_dir, PathBuf::from("/home/yk"));
+        assert!(panes.active.history.back_paths().is_empty());
+        assert!(panes.active.history.forward_paths().is_empty());
+        let inactive = panes.inactive().expect("inactive pane");
+        assert_eq!(inactive.current_dir, PathBuf::from("/home/yk"));
+        assert_eq!(inactive.history.back_paths(), &[PathBuf::from("/tmp/keep")]);
+        assert!(inactive.history.forward_paths().is_empty());
     }
 
     #[test]

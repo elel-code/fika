@@ -8,6 +8,7 @@ export component TopBar inherits Rectangle {
     in property <bool> can-go-back;
     in property <bool> can-go-forward;
     in property <bool> search-active;
+    in property <bool> split-view-open;
     in-out property <string> path-text;
     in-out property <bool> path-focused;
     in-out property <string> search-query;
@@ -19,6 +20,7 @@ export component TopBar inherits Rectangle {
     callback search_requested();
     callback search_submitted(string);
     callback search_close_requested();
+    callback toggle_split_view();
     callback dark_toggled();
 
     height: 64px;
@@ -106,14 +108,26 @@ export component TopBar inherits Rectangle {
             padding-left: 10px;
             spacing: 8px;
 
-            if (!root.search-active): Text {
-                text: "Split";
-                color: root.dark ? #dce3ea : #526071;
-                font-size: 14px;
-                font-weight: 500;
+            if (!root.search-active): Rectangle {
                 height: 40px;
-                min-width: 34px;
-                vertical-alignment: center;
+                width: 58px;
+                border-radius: 8px;
+                border-width: root.split-view-open ? 1px : 0px;
+                border-color: root.dark ? #3f7f99 : #9bcfe4;
+                background: root.split-view-open ? (root.dark ? #163444 : #e1f2f9) : (split-touch.has-hover ? (root.dark ? #2b3035 : #e9eef4) : transparent);
+
+                split-touch := TouchArea {
+                    clicked => { root.toggle_split_view(); }
+                }
+
+                Text {
+                    text: "Split";
+                    color: root.split-view-open ? (root.dark ? #e8f8ff : #0f526c) : (root.dark ? #dce3ea : #526071);
+                    font-size: 13px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
 
             if (!root.search-active): ToolButton {
