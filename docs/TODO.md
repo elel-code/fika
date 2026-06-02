@@ -464,6 +464,7 @@ Acceptance for all:
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.
   - Acceptance: context menu action grouping, disabled/hidden states, and current-folder actions are reviewed against COSMIC without changing the already-fixed submenu lifetime rules.
   - Current: the main-view blank context menu exposes Select All and keeps a disabled Paste row when no file clipboard is available, matching COSMIC's stable action layout instead of making lower rows jump as clipboard state changes.
+  - Current: single-folder context menus keep Paste Into Folder as a disabled row when no file clipboard is available, matching the main-view blank Paste behavior.
   - Current: the Places blank-area menu also keeps Add Current Folder as a disabled row when the current folder is already present in Places, so Restore Defaults does not jump vertically between locations.
   - Current: shared Slint `MenuItem` rows now support COSMIC-style right-aligned shortcut hints, and context menus only display hints for actions already handled by `KeyBinding` (`Ctrl+A`, `Ctrl+V`, `Ctrl+C`, `Ctrl+X`, `Delete`).
   - Current: single-folder context menus now expose `Open Terminal Here` for that folder, matching COSMIC's selected-directory terminal action while reusing Fika's existing terminal discovery and systemd-scope launch path.

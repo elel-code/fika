@@ -734,9 +734,7 @@ fn file_context_menu_metrics(
     }
 
     let mut item_count = if input.is_dir {
-        8 + i32::from(!input.in_trash)
-            + input.clipboard_has_paths as i32
-            + input.add_to_places_visible as i32
+        9 + i32::from(!input.in_trash) + input.add_to_places_visible as i32
     } else {
         8 + input.default_open_visible as i32
     };
@@ -1262,6 +1260,26 @@ mod tests {
         );
         assert_eq!(single_folder.open_with_row_y_offset, 0.0);
 
+        let single_folder_without_paste = context_menu_metrics(MenuMetricsInput {
+            kind: 1,
+            selected_count: 1,
+            is_dir: true,
+            default_open_visible: false,
+            add_to_places_visible: true,
+            clipboard_has_paths: false,
+            in_trash: false,
+            place_builtin: false,
+            device_mounted: false,
+            device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(single_folder_without_paste.height, single_folder.height);
+
         let single_folder_in_trash = context_menu_metrics(MenuMetricsInput {
             kind: 1,
             selected_count: 1,
@@ -1282,7 +1300,7 @@ mod tests {
         });
         assert_eq!(
             single_folder_in_trash.height,
-            9.0 * item_height + 2.0 * separator_height
+            10.0 * item_height + 2.0 * separator_height
         );
 
         let viewport_with_paste = context_menu_metrics(MenuMetricsInput {

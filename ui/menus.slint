@@ -571,10 +571,11 @@ export component FileContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.selected-count <= 1 && root.is-dir && root.clipboard-has-paths): MenuItem {
+        if (root.selected-count <= 1 && root.is-dir): MenuItem {
             label: "Paste Into Folder";
             shortcut: "Ctrl+V";
             dark: root.dark;
+            enabled: root.clipboard-has-paths;
             clicked => { root.paste_into_folder(); }
         }
 
