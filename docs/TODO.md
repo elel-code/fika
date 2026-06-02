@@ -369,9 +369,10 @@ Acceptance for all:
 
 ## Phase 11: Code Organization And Dolphin Parity Cleanup
 
-- [x] Split common Slint data models and widgets.
+- [x] Split common Slint data models, widgets, overlays, and menus.
   - Acceptance: reusable models, buttons, menu rows, Places rows, and file tiles are outside the main window file.
-  - Current: `ui/models.slint`, `ui/widgets.slint`, `ui/menus.slint`, and `ui/file_tile.slint` are imported by `ui/app.slint`; common menu rows and popup surface styling live in `ui/widgets.slint`, while file item, Open With, Create New, Transfer, Places, and viewport menu content is isolated in `ui/menus.slint`.
+  - Current: `ui/models.slint`, `ui/widgets.slint`, `ui/menus.slint`, `ui/file_tile.slint`, and `ui/dnd_overlay.slint` are imported by `ui/app.slint`; common menu rows and popup surface styling live in `ui/widgets.slint`, while file item, Open With, Create New, Transfer, Places, and viewport menu content is isolated in `ui/menus.slint`.
+  - Current: `DragOverlayLayer` owns Places insertion lines, drag ghost previews, and rejected-drop banners, so `ui/app.slint` keeps DnD state and action wiring without carrying repeated overlay drawing.
   - Current: dialog bodies and centered popup wrappers live in `ui/dialogs.slint`, so `ui/app.slint` keeps dialog action wiring without repeating the transparent centering shell for every modal.
 
 - [x] Split pure selection logic out of `main.rs`.

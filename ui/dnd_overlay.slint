@@ -1,0 +1,139 @@
+export component DragOverlayLayer inherits Rectangle {
+    in property <bool> dark;
+    in property <float> sidebar-width-px;
+    in property <int> places-count;
+    in property <length> place-list-y;
+    in property <bool> folder-drag-active;
+    in property <length> folder-drag-x;
+    in property <length> folder-drag-y;
+    in property <int> folder-drag-slot;
+    in property <int> folder-drag-place-target;
+    in property <string> folder-drag-label;
+    in property <bool> folder-drag-over-place-gap;
+    in property <bool> place-drag-active;
+    in property <length> place-drag-x;
+    in property <length> place-drag-y;
+    in property <int> place-drag-slot;
+    in property <string> place-drag-label;
+    in property <string> place-drag-marker;
+    in property <bool> place-drag-rejected;
+    in property <bool> main-drag-active;
+    in property <bool> main-drag-rejected;
+    private property <length> active-drag-x: root.place-drag-active ? root.place-drag-x : root.folder-drag-x;
+    private property <length> active-drag-y: root.place-drag-active ? root.place-drag-y : root.folder-drag-y;
+    private property <int> active-drag-slot: root.place-drag-active ? root.place-drag-slot : root.folder-drag-slot;
+    private property <bool> active-in-places: root.active-drag-x < root.sidebar-width-px * 1px && root.active-drag-y >= root.place-list-y && root.active-drag-y <= root.place-list-y + root.places-count * 38px;
+
+    background: transparent;
+
+    if ((root.place-drag-active || root.folder-drag-active) && root.folder-drag-over-place-gap && root.active-in-places): Rectangle {
+        x: 14px;
+        y: root.place-list-y + root.active-drag-slot * 38px - 2px;
+        width: max(120px, root.sidebar-width-px * 1px - 28px);
+        height: 4px;
+        border-radius: 2px;
+        background: root.dark ? #38bdf8 : #0284c7;
+    }
+
+    if ((root.folder-drag-active || root.place-drag-active) && root.place-drag-rejected && root.active-in-places): Rectangle {
+        x: 14px;
+        y: root.place-list-y + root.folder-drag-place-target * 38px + 2px;
+        width: max(120px, root.sidebar-width-px * 1px - 28px);
+        height: 30px;
+        border-radius: 6px;
+        background: root.dark ? #3a1818 : #fee2e2;
+        border-width: 1px;
+        border-color: root.dark ? #ef4444 : #dc2626;
+    }
+
+    if (root.place-drag-active): Rectangle {
+        x: root.place-drag-x + 10px;
+        y: root.place-drag-y + 10px;
+        width: 180px;
+        height: 34px;
+        border-radius: 6px;
+        background: root.dark ? #2c3339 : #ffffff;
+        border-width: 1px;
+        border-color: root.dark ? #5b6670 : #b8c7d4;
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 10px;
+            spacing: 10px;
+
+            Rectangle {
+                width: 24px;
+                height: parent.height;
+                background: transparent;
+
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 24px;
+                    height: 22px;
+                    border-radius: 3px;
+                    background: root.dark ? #4f93d9 : #4f94dc;
+
+                    Text {
+                        text: root.place-drag-marker;
+                        color: #102033;
+                        font-size: 11px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Text {
+                text: root.place-drag-label;
+                color: root.dark ? #f5f5f5 : #17212b;
+                font-size: 14px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    if (root.folder-drag-active): Rectangle {
+        x: root.folder-drag-x + 10px;
+        y: root.folder-drag-y + 10px;
+        width: 180px;
+        height: 34px;
+        border-radius: 6px;
+        background: root.dark ? #2c3339 : #ffffff;
+        border-width: 1px;
+        border-color: root.dark ? #5b6670 : #b8c7d4;
+
+        Text {
+            text: root.folder-drag-label;
+            x: 12px;
+            width: parent.width - 24px;
+            color: root.dark ? #f5f5f5 : #17212b;
+            font-size: 13px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    if (root.main-drag-active && root.main-drag-rejected): Rectangle {
+        x: root.sidebar-width-px * 1px + 20px;
+        y: 84px;
+        width: 250px;
+        height: 32px;
+        border-radius: 6px;
+        background: root.dark ? #3a1818 : #fee2e2;
+        border-width: 1px;
+        border-color: root.dark ? #ef4444 : #dc2626;
+
+        Text {
+            text: "Cannot drop item here";
+            x: 12px;
+            width: parent.width - 24px;
+            color: root.dark ? #fecaca : #991b1b;
+            font-size: 12px;
+            font-weight: 700;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+}

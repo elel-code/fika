@@ -11,6 +11,7 @@ import {
 } from "widgets.slint";
 import { ChooserChoice, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
+import { DragOverlayLayer } from "dnd_overlay.slint";
 import { ChildSubmenuLayer, ChooserChoicePopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
 import { OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
@@ -1343,124 +1344,29 @@ export component AppWindow inherits Window {
         }
     }
 
-    if (root.place_drag_active && root.folder_drag_over_place_gap && root.place_drag_x < root.sidebar_width_px * 1px && root.place_drag_y >= root.place_list_y && root.place_drag_y <= root.place_list_y + root.places.length * 38px): Rectangle {
-        x: 14px;
-        y: root.place_list_y + root.place_drag_slot * 38px - 2px;
-        width: max(120px, root.sidebar_width_px * 1px - 28px);
-        height: 4px;
-        border-radius: 2px;
-        background: root.dark_mode ? #38bdf8 : #0284c7;
-    }
-
-    if ((root.folder_drag_active || root.place_drag_active) && root.place_drag_rejected && root.place_drag_x < root.sidebar_width_px * 1px && root.place_drag_y >= root.place_list_y && root.place_drag_y <= root.place_list_y + root.places.length * 38px): Rectangle {
-        x: 14px;
-        y: root.place_list_y + root.folder_drag_place_target * 38px + 2px;
-        width: max(120px, root.sidebar_width_px * 1px - 28px);
-        height: 30px;
-        border-radius: 6px;
-        background: root.dark_mode ? #3a1818 : #fee2e2;
-        border-width: 1px;
-        border-color: root.dark_mode ? #ef4444 : #dc2626;
-    }
-
-    if (root.place_drag_active): Rectangle {
-        x: root.place_drag_x + 10px;
-        y: root.place_drag_y + 10px;
-        width: 180px;
-        height: 34px;
-        border-radius: 6px;
-        background: root.dark_mode ? #2c3339 : #ffffff;
-        border-width: 1px;
-        border-color: root.dark_mode ? #5b6670 : #b8c7d4;
-
-        HorizontalLayout {
-            padding-left: 12px;
-            padding-right: 10px;
-            spacing: 10px;
-
-            Rectangle {
-                width: 24px;
-                height: parent.height;
-                background: transparent;
-
-                Rectangle {
-                    y: (parent.height - self.height) / 2;
-                    width: 24px;
-                    height: 22px;
-                    border-radius: 3px;
-                    background: root.dark_mode ? #4f93d9 : #4f94dc;
-
-                    Text {
-                        text: root.place_drag_marker;
-                        color: #102033;
-                        font-size: 11px;
-                        font-weight: 800;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
-            Text {
-                text: root.place_drag_label;
-                color: root.dark_mode ? #f5f5f5 : #17212b;
-                font-size: 14px;
-                overflow: elide;
-                vertical-alignment: center;
-            }
-        }
-    }
-
-    if (root.folder_drag_active): Rectangle {
-        x: root.folder_drag_x + 10px;
-        y: root.folder_drag_y + 10px;
-        width: 180px;
-        height: 34px;
-        border-radius: 6px;
-        background: root.dark_mode ? #2c3339 : #ffffff;
-        border-width: 1px;
-        border-color: root.dark_mode ? #5b6670 : #b8c7d4;
-
-        Text {
-            text: root.folder_drag_label;
-            x: 12px;
-            width: parent.width - 24px;
-            color: root.dark_mode ? #f5f5f5 : #17212b;
-            font-size: 13px;
-            overflow: elide;
-            vertical-alignment: center;
-        }
-    }
-
-    if (root.main_drag_active && root.main_drag_rejected): Rectangle {
-        x: root.sidebar_width_px * 1px + 20px;
-        y: 84px;
-        width: 250px;
-        height: 32px;
-        border-radius: 6px;
-        background: root.dark_mode ? #3a1818 : #fee2e2;
-        border-width: 1px;
-        border-color: root.dark_mode ? #ef4444 : #dc2626;
-
-        Text {
-            text: "Cannot drop item here";
-            x: 12px;
-            width: parent.width - 24px;
-            color: root.dark_mode ? #fecaca : #991b1b;
-            font-size: 12px;
-            font-weight: 700;
-            overflow: elide;
-            vertical-alignment: center;
-        }
-    }
-
-    if (root.folder_drag_active && root.folder_drag_over_place_gap && root.folder_drag_x < root.sidebar_width_px * 1px && root.folder_drag_y >= root.place_list_y && root.folder_drag_y <= root.place_list_y + root.places.length * 38px): Rectangle {
-        x: 14px;
-        y: root.place_list_y + root.folder_drag_slot * 38px - 2px;
-        width: max(120px, root.sidebar_width_px * 1px - 28px);
-        height: 4px;
-        border-radius: 2px;
-        background: root.dark_mode ? #38bdf8 : #0284c7;
+    DragOverlayLayer {
+        width: parent.width;
+        height: parent.height;
+        dark: root.dark_mode;
+        sidebar-width-px: root.sidebar_width_px;
+        places-count: root.places.length;
+        place-list-y: root.place_list_y;
+        folder-drag-active: root.folder_drag_active;
+        folder-drag-x: root.folder_drag_x;
+        folder-drag-y: root.folder_drag_y;
+        folder-drag-slot: root.folder_drag_slot;
+        folder-drag-place-target: root.folder_drag_place_target;
+        folder-drag-label: root.folder_drag_label;
+        folder-drag-over-place-gap: root.folder_drag_over_place_gap;
+        place-drag-active: root.place_drag_active;
+        place-drag-x: root.place_drag_x;
+        place-drag-y: root.place_drag_y;
+        place-drag-slot: root.place_drag_slot;
+        place-drag-label: root.place_drag_label;
+        place-drag-marker: root.place_drag_marker;
+        place-drag-rejected: root.place_drag_rejected;
+        main-drag-active: root.main_drag_active;
+        main-drag-rejected: root.main_drag_rejected;
     }
 
     if (root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.custom-open-with-open || root.new-folder-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open): MenuDismissLayer {

@@ -214,6 +214,7 @@ Slint experimental `DragArea` / `DropArea` 引入策略：
 - Places 项也已使用 `DragArea` 发出 `application/x-fika-place-path` payload。
 - Places sidebar、主栏空白和主栏目录 tile 已使用 `DropArea` 接收主栏条目、Places 项和外部本地路径 drop，并根据目标区域决定 reorder、add place 或弹出 Move / Copy / Link 菜单。
 - 拖到 Places 缝隙时显示插入线；拖到 Places 项或主栏目录时高亮目标项，颜色与普通选中态区分。
+- Places 插入线、拖拽 ghost、拒绝提示和主栏拒绝提示统一由 `ui/dnd_overlay.slint` 的 `DragOverlayLayer` 承载；`ui/app.slint` 只保留 hover/drop 状态和动作转发。
 - Places DropArea 的 hover target、gap/item 判定和插入 slot 通过 Rust `PlaceDropGeometry` 计算；winit fallback 复用同一 helper，避免滚动后的视觉反馈和松手提交规则漂移。
 - Places DropArea 已接受 `text/uri-list` / `text/plain` payload，并按缝隙插入目录 Place；主栏 DropArea 也接受同类外部本地路径 payload，普通文件和目录都会进入 transfer 菜单；平台 `DroppedFile` 事件仍作为 fallback 保留。
 - 保留当前 ghost、插入线和松手提交模型；`DropArea.contains-drag` 只驱动 hover/slot 视觉，不直接修改 Rust 模型。
