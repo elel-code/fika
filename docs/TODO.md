@@ -189,12 +189,14 @@
   - Current: cache entries are capped and the oldest entry is evicted when the limit is exceeded.
   - Current: inspired by `cosmic-files/src/thumbnail_cacher.rs`, failed thumbnail attempts are also cached by path, mtime, and target size with capped LRU eviction, so broken/unsupported images do not repeatedly enqueue decode jobs while scrolling large directories.
   - Current: thumbnail load results update only the thumbnail success/failure caches and pending map; visible tiles are refreshed by re-decorating the virtual slice, avoiding a full `entries` scan for every completed thumbnail.
+  - Current: same-directory refresh and watcher reload preserve the active thumbnail generation and pending jobs, following COSMIC Files' item/thumbnail separation; full navigation still cancels stale thumbnail work.
 
 - [x] Visible-first scheduling.
   - Acceptance: thumbnails visible in the viewport are generated before offscreen items.
   - Current: only the current virtual slice plus overscan is scheduled; stale thumbnail results clear only their matching pending key, so viewport changes or zoom changes cannot leave an item permanently stuck as pending.
   - Current: thumbnail jobs for the actually visible columns are queued before left/right overscan thumbnails, keeping large-directory scrolling responsive when many image previews are pending.
   - Current: viewport-only thumbnail scheduling reuses the active directory/zoom generation instead of invalidating in-flight thumbnail work on every scroll.
+  - Current: refresh/reload also reuses the active thumbnail generation, so in-flight visible thumbnails are not thrown away while directory entries are refreshed.
 
 ## Phase 6: File Operations
 

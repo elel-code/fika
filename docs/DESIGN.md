@@ -194,6 +194,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - 未缓存目录导航不会立即清空旧主栏，而是保留旧画面并显示轻量 loading 遮罩；新目录结果到达后再原子替换，避免短暂白屏闪烁。
 - back/forward 不在 UI 线程同步 `stat` 历史目标，避免慢盘或网络挂载阻塞事件循环。
 - 已访问目录会先从 `directory_cache` 即时显示，再启动异步刷新，兼顾“快”和新鲜度。
+- 借鉴 COSMIC Files 的 item/thumbnail 分层，同目录 refresh 和 watcher reload 只刷新目录条目，不推进 `thumbnail_generation`、不清空 `thumbnail_pending`；已有和正在进行的缩略图任务继续回填缓存。只有真正的导航加载会取消旧目录的缩略图 generation 和 pending 队列。
 - 目录切换前会记录当前主栏滚动位置，进入已访问目录时恢复对应 viewport，减少 back/forward 后的视觉上下文丢失。
 - 鼠标 Back/Forward 只在右侧主栏范围触发，避免顶栏、侧栏或分隔条上的操作意外改变目录历史。
 

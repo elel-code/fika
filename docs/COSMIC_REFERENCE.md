@@ -21,6 +21,7 @@ Prefer COSMIC Files for the surrounding product feel and Rust implementation sha
 - Clipboard import/export details.
 - Operation controller/progress model.
 - Device/mounter abstraction.
+- Directory loading that keeps item refresh, view state, and thumbnail jobs as separate concerns.
 - Thumbnail cache and external thumbnailer integration.
 - Mouse-area event scoping.
 
@@ -86,6 +87,7 @@ Useful implementation direction:
 - Keep desktop app discovery and launch behavior close to COSMIC's `MimeAppCache`, while preserving Fika's no-large-XDG-library preference.
 - Revisit clipboard handling against COSMIC's cached Wayland clipboard model, especially popup-time paste availability and pasted image/text/video-to-file workflows.
 - Evolve Fika's operation queue toward COSMIC's controller/progress split: cancellable operations, clearer progress reporting, and less UI coupling.
+- Keep directory reloads close to COSMIC's `Location::scan` / `Tab::set_items` split: refresh item lists without tearing down unrelated view and thumbnail state.
 - Use COSMIC's mounter abstraction as a reference for device rows and network mounts, while keeping the current UDisks2 system-bus path for local removable devices.
 - Move thumbnail support closer to the freedesktop thumbnail cache model used by COSMIC, including failure markers and thumbnailer desktop entries.
 - Keep mouse side-button and pointer-scope logic close to COSMIC's mouse-area model, while preserving Fika's main-pane-only navigation rule.
