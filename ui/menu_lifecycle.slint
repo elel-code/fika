@@ -1,0 +1,52 @@
+export global MenuLifecycle {
+    in-out property <bool> open-with-open: false;
+    in-out property <length> open-with-row-y: 0px;
+    in-out property <bool> create-new-open: false;
+    in-out property <length> create-new-row-y: 0px;
+    in-out property <int> close-kind: 0;
+
+    public function cancel-close() {
+        root.close-kind = 0;
+    }
+
+    public function close-child-submenu(menu: int) {
+        if (menu == 1) {
+            root.open-with-open = false;
+        } else if (menu == 2) {
+            root.create-new-open = false;
+        }
+        if (root.close-kind == menu) {
+            root.close-kind = 0;
+        }
+    }
+
+    public function close-child-submenus() {
+        root.open-with-open = false;
+        root.create-new-open = false;
+        root.close-kind = 0;
+    }
+
+    public function begin-close(menu: int) {
+        if (menu == 1 || menu == 2) {
+            root.close-kind = menu;
+        }
+    }
+
+    public function show-open-with(row-y: length) {
+        root.close-child-submenu(2);
+        root.open-with-row-y = row-y;
+        root.open-with-open = true;
+        root.close-kind = 0;
+    }
+
+    public function show-create-new(row-y: length) {
+        root.close-child-submenu(1);
+        root.create-new-row-y = row-y;
+        root.create-new-open = true;
+        root.close-kind = 0;
+    }
+
+    public function close-pending-child-submenu() {
+        root.close-child-submenu(root.close-kind);
+    }
+}

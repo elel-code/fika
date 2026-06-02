@@ -1138,6 +1138,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn menu_lifecycle_state_is_global_owned() {
+        let app = include_str!("../../ui/app.slint");
+        let menu_lifecycle = include_str!("../../ui/menu_lifecycle.slint");
+        let state_properties = [
+            ("bool", "open-with-open"),
+            ("length", "open-with-row-y"),
+            ("bool", "create-new-open"),
+            ("length", "create-new-row-y"),
+            ("int", "close-kind"),
+        ];
+        let lifecycle_functions = [
+            "cancel-close",
+            "close-child-submenu",
+            "close-child-submenus",
+            "begin-close",
+            "show-open-with",
+            "show-create-new",
+            "close-pending-child-submenu",
+        ];
+
+        assert!(app.contains("export { MenuLifecycle } from \"menu_lifecycle.slint\";"));
+        assert!(app.contains("import { MenuLifecycle } from \"menu_lifecycle.slint\";"));
+        assert!(menu_lifecycle.contains("export global MenuLifecycle"));
+
+        for (kind, property) in state_properties {
+            assert!(
+                menu_lifecycle.contains(&format!("property <{kind}> {property}")),
+                "MenuLifecycle should own {property}"
+            );
+            assert!(
+                !app.contains(&format!("private property <bool> {property}")),
+                "AppWindow should not own {property}"
+            );
+            assert!(
+                !app.contains(&format!("private property <length> {property}")),
+                "AppWindow should not own {property}"
+            );
+            assert!(
+                !app.contains(&format!("private property <int> {property}")),
+                "AppWindow should not own {property}"
+            );
+        }
+
+        for function in lifecycle_functions {
+            assert!(
+                menu_lifecycle.contains(&format!("public function {function}(")),
+                "MenuLifecycle should expose {function}"
+            );
+            assert!(
+                app.contains(&format!("MenuLifecycle.{function}(")),
+                "AppWindow should call MenuLifecycle.{function}"
+            );
+        }
+    }
+
     fn menu_metrics_input(kind: i32) -> MenuMetricsInput {
         MenuMetricsInput {
             kind,

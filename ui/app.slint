@@ -1,6 +1,7 @@
 // Globals must be exported from app.slint (the root file) so that
 // `include_modules!()` generates Rust types for `ui.global::<...>()`.
 export { MenuGeometry } from "menu_geometry.slint";
+export { MenuLifecycle } from "menu_lifecycle.slint";
 
 export global DndApi {
     pure callback make-drag-place(path: string) -> data-transfer;
@@ -11,6 +12,7 @@ export global DndApi {
 }
 
 import { DragKind } from "dnd_bridge.slint";
+import { MenuLifecycle } from "menu_lifecycle.slint";
 import { ScrollView } from "std-widgets.slint";
 import {
     MenuDismissLayer,
@@ -132,7 +134,6 @@ export component AppWindow inherits Window {
     private property <bool> context-default-open-visible: root.default_open_app_name != "" && root.open_with_path == root.context-menu-path;
     private property <bool> context-add-place-visible: root.context-menu-kind == 4 ? (root.current_path != "" && !root.is_place(root.current_path)) : (root.context-menu-is-dir && !root.is_place(root.context-menu-path));
     private property <length> child-menu-gap: 3px;
-    private property <int> child-submenu-close-kind: 0;
     private property <bool> rename-place-open: false;
     private property <int> rename-place-index: -1;
     private property <string> rename-place-label;
@@ -161,10 +162,6 @@ export component AppWindow inherits Window {
     private property <string> properties-size;
     private property <string> properties-modified-label: "Modified";
     private property <string> properties-modified;
-    private property <bool> open-with-menu-open: false;
-    private property <length> open-with-menu-y: 0px;
-    private property <bool> create-new-menu-open: false;
-    private property <length> create-new-menu-y: 0px;
     private property <bool> chooser-choice-menu-open: false;
     private property <int> chooser-choice-menu-index: -1;
     private property <length> chooser-choice-menu-x: 0px;
@@ -227,8 +224,8 @@ export component AppWindow inherits Window {
     private property <bool> path-input-focused: false;
     private property <bool> search-input-focused: false;
     private property <bool> chooser-save-input-focused: false;
-    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || root.open-with-menu-open || root.create-new-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
-    private property <bool> file-operation-shortcuts-blocked: root.path-input-focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open;
+    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
+    private property <bool> file-operation-shortcuts-blocked: root.path-input-focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open;
 
     callback go_home();
     callback go_back();
@@ -312,32 +309,24 @@ export component AppWindow inherits Window {
 
     function stop-submenu-close-timer() {
         child-submenu-close-timer.stop();
-        root.child-submenu-close-kind = 0;
+        MenuLifecycle.cancel-close();
     }
 
     function close-child-submenu(menu: int) {
-        if (menu == 1) {
-            root.open-with-menu-open = false;
-        } else if (menu == 2) {
-            root.create-new-menu-open = false;
-        }
-        if (root.child-submenu-close-kind == menu) {
-            root.child-submenu-close-kind = 0;
-        }
+        MenuLifecycle.close-child-submenu(menu);
     }
 
     function close-child-submenus() {
-        root.open-with-menu-open = false;
-        root.create-new-menu-open = false;
         root.stop-submenu-close-timer();
+        MenuLifecycle.close-child-submenus();
     }
 
     function set-child-submenu-hover(menu: int, is-hovered: bool) {
         child-submenu-close-timer.stop();
         if (is-hovered) {
-            root.child-submenu-close-kind = 0;
+            MenuLifecycle.cancel-close();
         } else if (menu == 1 || menu == 2) {
-            root.child-submenu-close-kind = menu;
+            MenuLifecycle.begin-close(menu);
             child-submenu-close-timer.start();
         }
     }
@@ -347,13 +336,9 @@ export component AppWindow inherits Window {
         if (menu == 1) {
             root.prepare_open_with(path);
             root.open_with_path = path;
-            root.open-with-menu-y = row-y;
-            root.close-child-submenu(2);
-            root.open-with-menu-open = true;
+            MenuLifecycle.show-open-with(row-y);
         } else if (menu == 2) {
-            root.close-child-submenu(1);
-            root.create-new-menu-y = row-y;
-            root.create-new-menu-open = true;
+            MenuLifecycle.show-create-new(row-y);
         }
     }
 
@@ -449,10 +434,8 @@ export component AppWindow inherits Window {
         root.context-menu-kind = kind;
         root.context-menu-x = x;
         root.context-menu-y = y;
-        root.open-with-menu-open = false;
-        root.create-new-menu-open = false;
         root.close-chooser-popups();
-        root.stop-submenu-close-timer();
+        root.close-child-submenus();
         root.context-menu-open = true;
     }
 
@@ -493,7 +476,7 @@ export component AppWindow inherits Window {
         interval: 240ms;
         triggered => {
             self.running = false;
-            root.close-child-submenu(root.child-submenu-close-kind);
+            MenuLifecycle.close-pending-child-submenu();
         }
     }
 
@@ -609,7 +592,7 @@ export component AppWindow inherits Window {
         KeyBinding {
             keys: @keys(Escape);
             activated => {
-                if (root.context-menu-open || root.open-with-menu-open || root.create-new-menu-open) {
+                if (root.context-menu-open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open) {
                     root.close-context-popups();
                 } else if (root.chooser-choice-menu-open || root.chooser-filter-menu-open) {
                     root.close-chooser-popups();
@@ -1476,10 +1459,10 @@ export component AppWindow inherits Window {
         item-height: root.menu-item-height;
         title-height: root.menu-title-height;
         separator-height: root.menu-separator-height;
-        create-new-open: root.create-new-menu-open;
-        create-new-row-y: root.create-new-menu-y;
-        open-with-open: root.open-with-menu-open;
-        open-with-row-y: root.open-with-menu-y;
+        create-new-open: MenuLifecycle.create-new-open;
+        create-new-row-y: MenuLifecycle.create-new-row-y;
+        open-with-open: MenuLifecycle.open-with-open;
+        open-with-row-y: MenuLifecycle.open-with-row-y;
         open-with-apps: root.open_with_apps;
         dark: root.dark_mode;
         child_hovered(kind, is-hovered) => {

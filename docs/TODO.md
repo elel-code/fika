@@ -101,12 +101,12 @@
   - Current: Open With now behaves like a normal child menu: no extra title row, first application row aligns with the parent submenu row, the app list is capped to 7 visible rows, and `Other Applications...` stays as the final fixed action.
   - Current: Open With and Create New also share one active child-menu hover bridge instance, so `ui/app.slint` no longer carries duplicate bridge layout for the two submenu types.
   - Current: `ChildSubmenuLayer` now owns child submenu sizing, child placement, and hover-bridge placement inputs, so `ui/app.slint` no longer carries the active child-menu / bridge intermediate layout properties.
-  - Current: Open With and Create New open/close mutations now pass through shared AppWindow child-submenu helpers, so timer expiry, context-menu dismissal, and sibling submenu switching no longer duplicate raw property writes.
+  - Current: Open With and Create New open/close state, row anchors, and pending delayed-close kind now live in the `MenuLifecycle` Slint global. `AppWindow` still prepares business data such as Open With candidates, but no longer owns the child-submenu state fields directly.
   - Current: file item, Open With, Create New, Transfer, sidebar Places, Devices, Places blank-area, and main viewport context menus own their `PopupSurface` framing in `ui/menus.slint`, reducing repeated popup wrapper layout in `ui/app.slint`.
   - Current: root file, Places, Devices, Places blank-area, and main viewport context menu hosting is centralized in `RootContextMenuLayer`, so `ui/app.slint` keeps action wiring while `ui/menus.slint` owns the repeated root-menu placement shell.
   - Current: `RootContextMenuLayer` also owns root-menu width/height selection, flip/clamp placement, and Open With / Create New parent-row anchors before forwarding submenu hover/click events, so `ui/app.slint` no longer carries duplicate root-menu geometry properties.
   - Current: chooser filter and choice popups are hosted through `ChooserOptionPopupLayer` / `ChooserChoicePopupLayer`, keeping the popup loops and anchored placement formulae out of `ui/app.slint`.
-  - Current: menu geometry callback access now lives in the `MenuGeometry` Slint global (`ui/menu_geometry.slint`), so menu layers call the shared geometry API directly and `ui/app.slint` no longer forwards placement callbacks into each popup host.
+  - Current: menu geometry callback access now lives in the `MenuGeometry` Slint global (`ui/menu_geometry.slint`), and child submenu lifecycle state lives in `MenuLifecycle` (`ui/menu_lifecycle.slint`), so `ui/app.slint` no longer forwards placement callbacks or directly owns child-submenu open/anchor state.
 - [x] Dolphin/QMenu-style menu placement.
   - Acceptance: root, child, and transfer menus share preferred-point, flip, and clamp placement rules; child hover bridge follows the clamped submenu position.
   - Current: Escape and outside-click dismissal close both the parent context menu and any open child submenu together, avoiding orphaned child menus.
@@ -425,7 +425,7 @@ Acceptance for all:
 
 - [x] Apply Dolphin-like context menu grouping and submenu grace.
   - Acceptance: context menus use grouped separators, submenu indicators are separate from labels, child menus anchor to their parent row and have a hover bridge to avoid accidental disappearance while moving between parent and child.
-  - Current: Open With and Create New submenus share delayed-close timers, one `ChildSubmenuLayer` placement/hover-bridge host, reusable invisible bridge hit areas, and panel-level hover regions; timer start/stop, parent+child close behavior, and context-menu opening are routed through local Slint helper functions; viewport menu order follows Dolphin more closely with Create New first.
+  - Current: Open With and Create New submenus share delayed-close timers, one `ChildSubmenuLayer` placement/hover-bridge host, reusable invisible bridge hit areas, and panel-level hover regions; submenu open/anchor/close-pending state is owned by `MenuLifecycle`, while `AppWindow` only routes business actions such as preparing Open With candidates. Viewport menu order follows Dolphin more closely with Create New first.
 
 - [x] Apply Dolphin/QMenu-style popup placement.
   - Acceptance: menus prefer the requested popup point, flip if they would overflow the safe rect, and clamp when the window is too small.
