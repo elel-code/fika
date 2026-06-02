@@ -82,7 +82,7 @@ Rust 侧核心状态在 `AppState`：
 - uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。保留的旧模型在加载期间只作为视觉占位，不接受打开、选择、右键、滚轮或 drop 操作；cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。
 - `thumbnail_cache`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图像素。
 - `thumbnail_failures`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图失败结果，避免坏图或不支持格式在大目录滚动时反复排队解码；文件修改后 key 变化，会重新尝试。
-- thumbnail load 会同时计算 freedesktop.org Thumbnail Managing Standard 的 cache identity：canonical `file://` URI、MD5 PNG 文件名、`normal` / `large` / `x-large` / `xx-large` 目录和 `fail/fika-$version` marker 路径。后台任务会先读取有效磁盘 cache 或 fresh fail marker；原图解码成功后写入对应 PNG cache，解码失败后写入 fail marker。UI 侧仍通过内存 LRU cache 装饰当前虚拟切片，磁盘 cache 作为跨目录/跨进程的持久加速层。
+- thumbnail load 会同时计算 freedesktop.org Thumbnail Managing Standard 的 cache identity：canonical `file://` URI、MD5 PNG 文件名、`normal` / `large` / `x-large` / `xx-large` 目录和 `fail/fika-$version` marker 路径。后台任务会先读取有效磁盘 cache 或 fresh fail marker；内置图片解码成功后写入对应 PNG cache，解码失败后写入 fail marker。对 PDF/SVG/AVIF 等非内置格式，Fika 会从 XDG thumbnailer 目录发现 `.thumbnailer` entry，校验 `TryExec`，匹配 `MimeType`，按 freedesktop field code 展开 `Exec`，让外部 thumbnailer 写入标准 cache 文件，再复用同一 cache 读取/缩放路径。UI 侧仍通过内存 LRU cache 装饰当前虚拟切片，磁盘 cache 作为跨目录/跨进程的持久加速层。
 - 缩略图完成事件只更新成功/失败缓存和 pending 状态，不扫描或改写完整 `entries`；如果结果落在当前虚拟切片内，Slint 模型通过缓存装饰重新同步可见项。
 - `operation_queue`: Move/Copy/Link 操作队列，一次只启动一个后台文件操作。
 - `load_generation`: `GenerationCounter`，用于丢弃过期目录加载结果。

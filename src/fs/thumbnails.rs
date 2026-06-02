@@ -1,8 +1,11 @@
 use image::GenericImageView;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -74,7 +77,27 @@ pub(crate) struct FreedesktopThumbnailCachePaths {
     pub(crate) fail_marker_path: PathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ThumbnailerEntry {
+    exec: String,
+    mime_types: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ParsedThumbnailerEntry {
+    exec: String,
+    try_exec: Option<String>,
+    mime_types: Vec<String>,
+}
+
+static THUMBNAILER_REGISTRY: OnceLock<Vec<ThumbnailerEntry>> = OnceLock::new();
+
 pub(crate) fn is_thumbnail_candidate(path: &Path) -> bool {
+    is_builtin_thumbnail_candidate(path)
+        || thumbnailer_candidate_for_path(path, thumbnailer_registry()).is_some()
+}
+
+fn is_builtin_thumbnail_candidate(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| {
@@ -173,8 +196,36 @@ fn load_thumbnail_with_freedesktop_cache(
             resize_thumbnail_data(&cache_data, size_px)
         }
         Err(err) => {
-            let _ = write_thumbnail_fail_marker(cache_paths);
-            Err(err)
+            if !is_builtin_thumbnail_candidate(path)
+                && let Some(thumbnailer) =
+                    thumbnailer_candidate_for_path(path, thumbnailer_registry())
+            {
+                match run_external_thumbnailer(thumbnailer, path, cache_paths, cache_size_px) {
+                    Ok(()) => {
+                        if let Some(data) =
+                            read_thumbnail_cache(cache_paths, key.modified_secs, size_px)
+                        {
+                            let _ = remove_thumbnail_fail_marker(cache_paths);
+                            Ok(data)
+                        } else {
+                            let _ = write_thumbnail_fail_marker(cache_paths);
+                            Err(io::Error::other(format!(
+                                "external thumbnailer did not produce a fresh readable cache file: {}",
+                                cache_paths.thumbnail_path.display()
+                            )))
+                        }
+                    }
+                    Err(thumbnailer_err) => {
+                        let _ = write_thumbnail_fail_marker(cache_paths);
+                        Err(io::Error::other(format!(
+                            "{err}; external thumbnailer failed: {thumbnailer_err}"
+                        )))
+                    }
+                }
+            } else {
+                let _ = write_thumbnail_fail_marker(cache_paths);
+                Err(err)
+            }
         }
     }
 }
@@ -404,6 +455,314 @@ fn remove_thumbnail_fail_marker(cache_paths: &FreedesktopThumbnailCachePaths) ->
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
     }
+}
+
+fn thumbnailer_registry() -> &'static [ThumbnailerEntry] {
+    THUMBNAILER_REGISTRY.get_or_init(|| discover_thumbnailers(&thumbnailer_search_dirs()))
+}
+
+fn discover_thumbnailers(search_dirs: &[PathBuf]) -> Vec<ThumbnailerEntry> {
+    let mut entries = Vec::new();
+    for dir in search_dirs {
+        let Ok(read_dir) = fs::read_dir(dir) else {
+            continue;
+        };
+        let mut paths = read_dir
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().and_then(|extension| extension.to_str()) == Some("thumbnailer")
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            if let Some(entry) = thumbnailer_entry_from_file(&path) {
+                entries.push(entry);
+            }
+        }
+    }
+    entries
+}
+
+fn thumbnailer_entry_from_file(path: &Path) -> Option<ThumbnailerEntry> {
+    let content = fs::read_to_string(path).ok()?;
+    let parsed = parse_thumbnailer_entry(&content).ok()?;
+    if let Some(try_exec) = parsed.try_exec.as_deref()
+        && !try_exec_available(try_exec)
+    {
+        return None;
+    }
+    Some(ThumbnailerEntry {
+        exec: parsed.exec,
+        mime_types: parsed.mime_types,
+    })
+}
+
+fn parse_thumbnailer_entry(content: &str) -> Result<ParsedThumbnailerEntry, String> {
+    let sections = parse_ini_sections(content);
+    let section = sections
+        .get("Thumbnailer Entry")
+        .ok_or_else(|| "thumbnailer has no Thumbnailer Entry section".to_string())?;
+    let exec = section
+        .get("Exec")
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .ok_or_else(|| "thumbnailer has no Exec entry".to_string())?;
+    let mime_types = section
+        .get("MimeType")
+        .map(|value| desktop_list(value).map(str::to_string).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if mime_types.is_empty() {
+        return Err("thumbnailer has no MimeType entries".to_string());
+    }
+    Ok(ParsedThumbnailerEntry {
+        exec,
+        try_exec: section
+            .get("TryExec")
+            .filter(|value| !value.trim().is_empty())
+            .cloned(),
+        mime_types,
+    })
+}
+
+fn thumbnailer_search_dirs() -> Vec<PathBuf> {
+    let xdg_data_home = env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let xdg_data_dirs = env::var_os("XDG_DATA_DIRS").map(PathBuf::from);
+    thumbnailer_search_dirs_from_values(
+        xdg_data_home.as_deref(),
+        home.as_deref(),
+        xdg_data_dirs.as_deref(),
+    )
+}
+
+fn thumbnailer_search_dirs_from_values(
+    xdg_data_home: Option<&Path>,
+    home: Option<&Path>,
+    xdg_data_dirs: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(path) = xdg_data_home.filter(|path| !path.as_os_str().is_empty()) {
+        dirs.push(path.join("thumbnailers"));
+    } else if let Some(home) = home {
+        dirs.push(home.join(".local").join("share").join("thumbnailers"));
+    }
+
+    let data_dirs = xdg_data_dirs
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
+    for dir in data_dirs.split(':').filter(|dir| !dir.is_empty()) {
+        dirs.push(PathBuf::from(dir).join("thumbnailers"));
+    }
+    dirs
+}
+
+fn thumbnailer_candidate_for_path<'a>(
+    path: &Path,
+    entries: &'a [ThumbnailerEntry],
+) -> Option<&'a ThumbnailerEntry> {
+    let mime_type = thumbnailer_mime_from_extension(path.extension())?;
+    thumbnailer_for_mime(entries, mime_type)
+}
+
+fn thumbnailer_for_mime<'a>(
+    entries: &'a [ThumbnailerEntry],
+    mime_type: &str,
+) -> Option<&'a ThumbnailerEntry> {
+    entries.iter().find(|entry| {
+        entry
+            .mime_types
+            .iter()
+            .any(|candidate| thumbnailer_mime_matches(candidate, mime_type))
+    })
+}
+
+fn thumbnailer_mime_matches(candidate: &str, mime_type: &str) -> bool {
+    candidate == mime_type
+        || candidate
+            .strip_suffix("/*")
+            .is_some_and(|prefix| mime_type.starts_with(&format!("{prefix}/")))
+}
+
+fn thumbnailer_mime_from_extension(extension: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    let extension = extension?.to_str()?.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" | "jpe" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" | "svgz" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        "pdf" => "application/pdf",
+        _ => return None,
+    })
+}
+
+fn run_external_thumbnailer(
+    thumbnailer: &ThumbnailerEntry,
+    source_path: &Path,
+    cache_paths: &FreedesktopThumbnailCachePaths,
+    size_px: u32,
+) -> io::Result<()> {
+    let argv = expand_thumbnailer_exec(
+        &thumbnailer.exec,
+        source_path,
+        &cache_paths.source_uri,
+        &cache_paths.thumbnail_path,
+        size_px,
+    )
+    .map_err(io::Error::other)?;
+    let Some((program, args)) = argv.split_first() else {
+        return Err(io::Error::other(
+            "thumbnailer Exec expanded to an empty command",
+        ));
+    };
+    let parent = cache_paths
+        .thumbnail_path
+        .parent()
+        .ok_or_else(|| io::Error::other("thumbnail cache path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let status = Command::new(program).args(args).status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "thumbnailer exited with status {status}"
+        )));
+    }
+    if !cache_paths.thumbnail_path.exists() {
+        return Err(io::Error::other(format!(
+            "thumbnailer did not create {}",
+            cache_paths.thumbnail_path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn expand_thumbnailer_exec(
+    exec: &str,
+    source_path: &Path,
+    source_uri: &str,
+    output_path: &Path,
+    size_px: u32,
+) -> Result<Vec<String>, String> {
+    parse_exec_words(exec)?
+        .into_iter()
+        .map(|arg| expand_thumbnailer_exec_arg(&arg, source_path, source_uri, output_path, size_px))
+        .collect()
+}
+
+fn expand_thumbnailer_exec_arg(
+    arg: &str,
+    source_path: &Path,
+    source_uri: &str,
+    output_path: &Path,
+    size_px: u32,
+) -> Result<String, String> {
+    let mut expanded = String::new();
+    let mut chars = arg.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            expanded.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('%') => expanded.push('%'),
+            Some('i') => expanded.push_str(&source_path.to_string_lossy()),
+            Some('u') => expanded.push_str(source_uri),
+            Some('o') => expanded.push_str(&output_path.to_string_lossy()),
+            Some('s') => expanded.push_str(&size_px.to_string()),
+            Some(code) => return Err(format!("unsupported thumbnailer Exec field code %{code}")),
+            None => return Err("thumbnailer Exec ends with a bare %".to_string()),
+        }
+    }
+    Ok(expanded)
+}
+
+fn parse_exec_words(exec: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut chars = exec.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(ch) = chars.next() {
+        match (quote, ch) {
+            (None, '\'' | '"') => quote = Some(ch),
+            (Some(q), c) if c == q => quote = None,
+            (None, c) if c.is_whitespace() => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            (_, '\\') => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            (_, c) => current.push(c),
+        }
+    }
+    if quote.is_some() {
+        return Err("unterminated quote in thumbnailer Exec command".to_string());
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    if args.is_empty() {
+        return Err("empty thumbnailer Exec command".to_string());
+    }
+    Ok(args)
+}
+
+fn try_exec_available(command: &str) -> bool {
+    if command.contains('/') {
+        return Path::new(command).is_file();
+    }
+    env::var_os("PATH")
+        .map(|paths| try_exec_available_in_path(command, &paths.to_string_lossy()))
+        .unwrap_or(false)
+}
+
+fn try_exec_available_in_path(command: &str, path_env: &str) -> bool {
+    path_env
+        .split(':')
+        .filter(|path| !path.is_empty())
+        .any(|path| Path::new(path).join(command).is_file())
+}
+
+fn parse_ini_sections(content: &str) -> HashMap<String, HashMap<String, String>> {
+    let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut current = String::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(section) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            current = section.trim().to_string();
+            sections.entry(current.clone()).or_default();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !current.is_empty() {
+            sections
+                .entry(current.clone())
+                .or_default()
+                .insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+    sections
+}
+
+fn desktop_list(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(';')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
 }
 
 fn thumbnail_disk_entry_is_fresh(path: &Path, source_modified_secs: u64) -> bool {
@@ -637,9 +996,128 @@ mod tests {
 
     #[test]
     fn recognizes_supported_image_extensions() {
-        assert!(is_thumbnail_candidate(Path::new("photo.JPG")));
-        assert!(is_thumbnail_candidate(Path::new("photo.webp")));
-        assert!(!is_thumbnail_candidate(Path::new("notes.txt")));
+        assert!(is_builtin_thumbnail_candidate(Path::new("photo.JPG")));
+        assert!(is_builtin_thumbnail_candidate(Path::new("photo.webp")));
+        assert!(!is_builtin_thumbnail_candidate(Path::new("notes.txt")));
+    }
+
+    #[test]
+    fn parses_thumbnailer_entry_and_matches_mime_types() {
+        let entry = parse_thumbnailer_entry(
+            "[Thumbnailer Entry]\n\
+             TryExec=pdf-thumb\n\
+             Exec=pdf-thumb %u %o %s\n\
+             MimeType=application/pdf;image/svg+xml;video/*;\n",
+        )
+        .unwrap();
+
+        assert_eq!(entry.try_exec.as_deref(), Some("pdf-thumb"));
+        assert_eq!(entry.exec, "pdf-thumb %u %o %s");
+        assert_eq!(
+            entry.mime_types,
+            vec!["application/pdf", "image/svg+xml", "video/*"]
+        );
+
+        let entries = vec![ThumbnailerEntry {
+            exec: entry.exec,
+            mime_types: entry.mime_types,
+        }];
+        assert!(thumbnailer_for_mime(&entries, "application/pdf").is_some());
+        assert!(thumbnailer_for_mime(&entries, "video/mp4").is_some());
+        assert!(thumbnailer_for_mime(&entries, "text/plain").is_none());
+        assert!(thumbnailer_candidate_for_path(Path::new("document.pdf"), &entries).is_some());
+    }
+
+    #[test]
+    fn thumbnailer_exec_expands_freedesktop_field_codes_without_shell() {
+        assert_eq!(
+            expand_thumbnailer_exec(
+                "thumb --input %i --uri %u --output %o --size %s --literal %%",
+                Path::new("/tmp/source file.pdf"),
+                "file:///tmp/source%20file.pdf",
+                Path::new("/cache/thumb.png"),
+                256,
+            )
+            .unwrap(),
+            vec![
+                "thumb",
+                "--input",
+                "/tmp/source file.pdf",
+                "--uri",
+                "file:///tmp/source%20file.pdf",
+                "--output",
+                "/cache/thumb.png",
+                "--size",
+                "256",
+                "--literal",
+                "%",
+            ]
+        );
+        assert!(
+            expand_thumbnailer_exec(
+                "thumb %x",
+                Path::new("/tmp/a"),
+                "file:///tmp/a",
+                Path::new("/tmp/out"),
+                128
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn thumbnailer_search_dirs_follow_xdg_data_locations() {
+        assert_eq!(
+            thumbnailer_search_dirs_from_values(
+                Some(Path::new("/xdg-data")),
+                Some(Path::new("/home/user")),
+                Some(Path::new("/opt/share:/usr/share")),
+            ),
+            vec![
+                PathBuf::from("/xdg-data/thumbnailers"),
+                PathBuf::from("/opt/share/thumbnailers"),
+                PathBuf::from("/usr/share/thumbnailers"),
+            ]
+        );
+        assert_eq!(
+            thumbnailer_search_dirs_from_values(None, Some(Path::new("/home/user")), None)[0],
+            PathBuf::from("/home/user/.local/share/thumbnailers")
+        );
+    }
+
+    #[test]
+    fn discovers_thumbnailer_entries_and_honors_try_exec() {
+        let dir = test_dir("thumbnailer-discovery");
+        let thumbnailers = dir.join("thumbnailers");
+        fs::create_dir_all(&thumbnailers).unwrap();
+        let helper = dir.join("helper");
+        fs::write(&helper, "").unwrap();
+        fs::write(
+            thumbnailers.join("pdf.thumbnailer"),
+            format!(
+                "[Thumbnailer Entry]\nTryExec={}\nExec={} %u %o %s\nMimeType=application/pdf;\n",
+                helper.display(),
+                helper.display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            thumbnailers.join("missing.thumbnailer"),
+            "[Thumbnailer Entry]\nTryExec=definitely-missing-fika-thumb\nExec=missing %u %o %s\nMimeType=image/svg+xml;\n",
+        )
+        .unwrap();
+        fs::write(
+            thumbnailers.join("invalid.thumbnailer"),
+            "[Thumbnailer Entry]\nExec=broken %u %o\n",
+        )
+        .unwrap();
+
+        let entries = discover_thumbnailers(std::slice::from_ref(&thumbnailers));
+
+        assert_eq!(entries.len(), 1);
+        assert!(thumbnailer_for_mime(&entries, "application/pdf").is_some());
+        assert!(thumbnailer_for_mime(&entries, "image/svg+xml").is_none());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
