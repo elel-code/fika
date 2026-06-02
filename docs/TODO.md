@@ -72,7 +72,7 @@
 - [x] Patched non-fatal ICU4X CJK segmentation warning from `icu_segmenter 2.2.0`.
 - [x] Mouse Back/Forward scoped to the right-side main pane only.
 - [x] Adaptive Open With hover submenu placement.
-- [x] Enable Slint experimental built-ins for future `DragArea` / `DropArea` DnD work.
+- [x] Use Slint master `DragArea` / `DropArea` built-ins without the experimental compiler flag.
 - [x] Dolphin-style DnD self-drop rejection.
 - [x] Focused Slint split: `models.slint`, `widgets.slint`, and `file_tile.slint`.
 - [x] Focused Rust split for selection and Places UI logic.
@@ -160,12 +160,12 @@
 - [x] Drag external folder into Places.
   - Acceptance: dropping a folder path on Places adds it.
   - Current: Slint `DropArea` accepts `text/uri-list` / `text/plain`; winit `DroppedFile` remains as platform fallback for external file drops. Both paths share the same Rust-side drop path normalization for uri-list comments, first valid local file entry, `file:///...` / `file://localhost/...`, remote file URI rejection, and percent decoding.
-  - Current: Slint now passes payload plus MIME type to Rust; Rust owns MIME classification, parsing, force-gap policy, backend source labeling, and main-pane transfer target validation, so Slint DropArea and fallback behavior cannot drift in path semantics.
+  - Current: Slint internal drags use `data-transfer` user data for place/folder/file identity, while external drops are read as plaintext/URI payloads; Rust owns external parsing, force-gap policy, backend source labeling, and main-pane transfer target validation, so Slint DropArea and fallback behavior cannot drift in path semantics.
   - Current: Slint DropArea hover feedback and winit fallback slot selection both use the tested Rust `PlaceDropGeometry` over Places list geometry synchronized from Slint, so sidebar scrolling, target item detection, and visual insertion slots share one rule set.
   - Current: successful external Places drops include the handling backend in the status bar, so real desktop tests can distinguish Slint DropArea from the winit fallback before removing either path.
   - Current: winit fallback source/mime constants, disable-env parsing, startup diagnostics, DnD trace formatting, and rejection debug tag mapping now live in `src/app/dnd.rs`; `main.rs` only handles the actual winit event bridge.
   - Current: `FIKA_DISABLE_WINIT_DROP_FALLBACK=1` disables only the winit `DroppedFile` event bridge, allowing real desktop tests to prove whether the Slint DropArea `text/uri-list` path works independently.
-  - Current: `FIKA_DEBUG_DND=1` prints startup DnD configuration plus Slint DropArea and winit fallback drop traces with backend role (`slint-primary` vs `winit-fallback`), phase, MIME type, external-path validation result, coordinates, slot/target/gap/item state, and a compact payload summary for real desktop validation.
+  - Current: `FIKA_DEBUG_DND=1` prints startup DnD configuration plus Slint DropArea and winit fallback drop traces with backend role (`slint-primary` vs `winit-fallback`), phase, data-transfer kind or external payload type, external-path validation result, coordinates, slot/target/gap/item state, and a compact payload summary for real desktop validation.
   - Current: the fallback-removal check is explicit: run with `FIKA_DISABLE_WINIT_DROP_FALLBACK=1 FIKA_DEBUG_DND=1` and confirm real external drops into Places and the main pane produce `role=slint-primary` with `validation=external-local-path`.
   - Current: Slint external-drop rejection diagnostics now distinguish unsupported MIME, empty payload, and payloads without a local file path; these reasons appear in debug traces and failed drops show specific status-bar guidance.
 

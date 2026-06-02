@@ -7,7 +7,7 @@ pub(crate) const WINIT_DROPPED_FILE_MIME: &str = "winit/dropped-file";
 pub(crate) const SLINT_DROPAREA_BACKEND_SOURCE: &str = "Slint DropArea";
 const DISABLE_WINIT_DROP_FALLBACK_ENV: &str = "FIKA_DISABLE_WINIT_DROP_FALLBACK";
 const DEBUG_DND_ENV: &str = "FIKA_DEBUG_DND";
-const SLINT_DROPAREA_MIME_SUMMARY: &str = "text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path";
+const SLINT_DROPAREA_PAYLOAD_SUMMARY: &str = "internal-data-transfer,text/uri-list,text/plain";
 
 pub(crate) struct PlacesDndTrace<'a> {
     pub(crate) backend: &'a str,
@@ -111,8 +111,8 @@ pub(crate) fn dnd_debug_enabled_from_env() -> bool {
 
 pub(crate) fn dnd_startup_summary(winit_fallback_enabled: bool) -> String {
     format!(
-        "slint_droparea=primary slint_droparea_mime={} winit_fallback={} winit_fallback_role=compat disable_winit_env={}",
-        SLINT_DROPAREA_MIME_SUMMARY,
+        "slint_droparea=primary slint_droparea_payloads={} winit_fallback={} winit_fallback_role=compat disable_winit_env={}",
+        SLINT_DROPAREA_PAYLOAD_SUMMARY,
         if winit_fallback_enabled {
             "enabled"
         } else {
@@ -205,7 +205,10 @@ fn dnd_drop_validation_summary(payload: &str, mime_type: &str) -> String {
 fn is_internal_drag_mime(mime_type: &str) -> bool {
     matches!(
         mime_type,
-        "application/x-fika-folder-path"
+        "place"
+            | "folder"
+            | "file"
+            | "application/x-fika-folder-path"
             | "application/x-fika-file-path"
             | "application/x-fika-place-path"
     )
@@ -390,12 +393,22 @@ mod tests {
     fn dnd_startup_summary_reports_drop_backends() {
         assert_eq!(
             dnd_startup_summary(true),
-            "slint_droparea=primary slint_droparea_mime=text/uri-list,text/plain,application/x-fika-folder-path,application/x-fika-file-path,application/x-fika-place-path winit_fallback=enabled winit_fallback_role=compat disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK"
+            "slint_droparea=primary slint_droparea_payloads=internal-data-transfer,text/uri-list,text/plain winit_fallback=enabled winit_fallback_role=compat disable_winit_env=FIKA_DISABLE_WINIT_DROP_FALLBACK"
         );
         assert!(
             dnd_startup_summary(false).contains("winit_fallback=disabled"),
             "disabled fallback state should be visible in startup diagnostics"
         );
+    }
+
+    #[test]
+    fn dnd_validation_recognizes_data_transfer_internal_kinds() {
+        for mime_type in ["place", "folder", "file"] {
+            assert_eq!(
+                dnd_drop_validation_summary("/tmp/source", mime_type),
+                "internal-drag"
+            );
+        }
     }
 
     #[test]
