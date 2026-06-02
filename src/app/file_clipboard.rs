@@ -1,6 +1,9 @@
 use crate::app::async_bridge::AsyncBridge;
 use crate::app::state::AppState;
-use crate::app::transfer::{TransferStart, clear_accepted_cut_source, start_transfer_operation};
+use crate::app::transfer::{
+    TransferStart, clear_accepted_cut_source, start_transfer_operation,
+    target_is_source_or_descendant,
+};
 use crate::desktop::clipboard;
 use crate::{AppWindow, set_status};
 use slint::ComponentHandle;
@@ -131,7 +134,7 @@ fn paste_into(
     let mut accepted = 0usize;
     let mut cut_clipboard_changed = false;
     for path in &paths {
-        if would_paste_into_itself(path, &target_dir) {
+        if target_is_source_or_descendant(path, &target_dir) {
             set_status(ui, "Cannot paste an item into itself");
             continue;
         }
@@ -162,10 +165,6 @@ fn paste_into(
     if accepted > 1 {
         set_status(ui, &format!("Queued {accepted} paste operation(s)"));
     }
-}
-
-fn would_paste_into_itself(source: &Path, target_dir: &Path) -> bool {
-    source == target_dir || target_dir.starts_with(source)
 }
 
 fn existing_clipboard_paths(
@@ -231,23 +230,24 @@ fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 mod tests {
     use super::{
         clipboard_paths_for_context, existing_clipboard_paths, merge_desktop_clipboard,
-        unique_paths, would_paste_into_itself,
+        unique_paths,
     };
     use crate::app::state::AppState;
+    use crate::app::transfer::target_is_source_or_descendant;
     use crate::desktop::clipboard::FileClipboard;
     use std::path::{Path, PathBuf};
 
     #[test]
     fn paste_target_rejects_self_and_descendant() {
-        assert!(would_paste_into_itself(
+        assert!(target_is_source_or_descendant(
             Path::new("/home/user/folder"),
             Path::new("/home/user/folder")
         ));
-        assert!(would_paste_into_itself(
+        assert!(target_is_source_or_descendant(
             Path::new("/home/user/folder"),
             Path::new("/home/user/folder/child")
         ));
-        assert!(!would_paste_into_itself(
+        assert!(!target_is_source_or_descendant(
             Path::new("/home/user/folder"),
             Path::new("/home/user/other")
         ));

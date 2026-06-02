@@ -237,13 +237,44 @@ fn transfer_menu_position(
 }
 
 pub(crate) fn transfer_target_rejection(source: &Path, target_dir: &Path) -> Option<&'static str> {
-    if source == target_dir {
+    if source == target_dir || canonical_paths_equal(source, target_dir) {
         return Some("Cannot drop an item onto itself");
     }
-    if target_dir.starts_with(source) {
+    if target_is_source_descendant(source, target_dir) {
         return Some("Cannot drop a folder into itself");
     }
     None
+}
+
+pub(crate) fn target_is_source_or_descendant(source: &Path, target_dir: &Path) -> bool {
+    source == target_dir
+        || target_dir.starts_with(source)
+        || canonical_paths_equal(source, target_dir)
+        || target_is_source_descendant(source, target_dir)
+}
+
+fn canonical_paths_equal(source: &Path, target_dir: &Path) -> bool {
+    let Ok(source) = source.canonicalize() else {
+        return false;
+    };
+    let Ok(target_dir) = target_dir.canonicalize() else {
+        return false;
+    };
+    source == target_dir
+}
+
+fn target_is_source_descendant(source: &Path, target_dir: &Path) -> bool {
+    if target_dir.starts_with(source) {
+        return true;
+    }
+
+    let Ok(source) = source.canonicalize() else {
+        return false;
+    };
+    let Ok(target_dir) = target_dir.canonicalize() else {
+        return false;
+    };
+    target_dir.starts_with(source)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -799,7 +830,8 @@ mod tests {
     use super::{
         apply_conflict_decision_to_queue, clear_accepted_cut_source,
         clear_cut_sources_for_remaining_conflicts, default_rename_suggestion,
-        transfer_menu_position, transfer_request_conflict_destination, transfer_start_rejection,
+        target_is_source_or_descendant, transfer_menu_position,
+        transfer_request_conflict_destination, transfer_start_rejection,
     };
     use crate::app::geometry::PopupPoint;
     use crate::app::state::{AppState, FileOperationRequest};
@@ -897,6 +929,25 @@ mod tests {
             Some("Cannot drop a folder into itself")
         );
         assert_eq!(transfer_start_rejection(&source, &target_dir), None);
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transfer_target_rejects_symlinked_descendant_directory() {
+        let temp = test_dir("symlink-descendant");
+        let source = temp.join("source");
+        let child = source.join("child");
+        let link = temp.join("link-to-child");
+        fs::create_dir_all(&child).unwrap();
+        std::os::unix::fs::symlink(&child, &link).unwrap();
+
+        assert!(target_is_source_or_descendant(&source, &link));
+        assert_eq!(
+            transfer_start_rejection(&source, &link),
+            Some("Cannot drop a folder into itself")
+        );
 
         let _ = fs::remove_dir_all(temp);
     }
