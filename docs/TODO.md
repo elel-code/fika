@@ -84,6 +84,7 @@
   - Current: `ChildSubmenuLayer` now owns child submenu and hover-bridge placement inputs, so `ui/app.slint` no longer carries the active child-menu / bridge intermediate layout properties.
   - Current: file item, Open With, Create New, Transfer, sidebar Places, Devices, Places blank-area, and main viewport context menus own their `PopupSurface` framing in `ui/menus.slint`, reducing repeated popup wrapper layout in `ui/app.slint`.
   - Current: root file, Places, Devices, Places blank-area, and main viewport context menu hosting is centralized in `RootContextMenuLayer`, so `ui/app.slint` keeps action wiring while `ui/menus.slint` owns the repeated root-menu placement shell.
+  - Current: `RootContextMenuLayer` also derives Open With / Create New parent-row anchors before forwarding submenu hover/click events, so `ui/app.slint` no longer carries duplicate root-menu row-offset properties.
   - Current: chooser choice popups are hosted through `ChooserChoicePopupLayer`, keeping the choice popup loop and anchored placement formula out of `ui/app.slint`.
 - [x] Dolphin/QMenu-style menu placement.
   - Acceptance: root, child, and transfer menus share preferred-point, flip, and clamp placement rules; child hover bridge follows the clamped submenu position.

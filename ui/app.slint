@@ -113,8 +113,6 @@ export component AppWindow inherits Window {
     private property <length> active-context-menu-width: (root.context-menu-kind == 2 || root.context-menu-kind == 5) ? root.context-place-menu-width : ((root.context-menu-kind == 3 || root.context-menu-kind == 4) ? root.context-blank-menu-width : root.context-file-menu-width);
     private property <bool> context-metrics-device-pending: root.context-menu-kind == 5 && root.context-menu-device-pending-action != "";
     private property <length> active-context-menu-height: root.context_menu_height(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.context-menu-device-can-mount, root.context-menu-device-can-unmount, root.context-menu-device-can-eject, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
-    private property <length> context-open-with-row-offset: root.context_menu_open_with_row_offset(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.context-menu-device-can-mount, root.context-menu-device-can-unmount, root.context-menu-device-can-eject, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
-    private property <length> context-create-new-row-offset: root.context_menu_create_new_row_offset(root.context-menu-kind, root.selected_count, root.context-metrics-is-dir, root.context-default-open-visible, root.context-add-place-visible, root.clipboard_has_paths, root.context-metrics-extra-bool, root.context-metrics-device-pending, root.context-menu-device-can-mount, root.context-menu-device-can-unmount, root.context-menu-device-can-eject, root.menu-item-height / 1px, root.menu-separator-height / 1px, root.menu-title-height / 1px) * 1px;
     private property <length> context-menu-left: root.root_menu_left(root.width / 1px, root.height / 1px, root.context-menu-x / 1px, root.context-menu-y / 1px, root.active-context-menu-width / 1px, root.active-context-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px) * 1px;
     private property <length> context-menu-top: root.root_menu_top(root.width / 1px, root.height / 1px, root.context-menu-x / 1px, root.context-menu-y / 1px, root.active-context-menu-width / 1px, root.active-context-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px) * 1px;
     private property <length> child-menu-gap: 3px;
@@ -1499,6 +1497,9 @@ export component AppWindow inherits Window {
         file-menu-width: root.context-file-menu-width;
         place-menu-width: root.context-place-menu-width;
         blank-menu-width: root.context-blank-menu-width;
+        item-height: root.menu-item-height;
+        separator-height: root.menu-separator-height;
+        title-height: root.menu-title-height;
         dark: root.dark_mode;
         selected-count: root.selected_count;
         selected-status: root.selected_status;
@@ -1516,21 +1517,27 @@ export component AppWindow inherits Window {
         device-can-unmount: root.context-menu-device-can-unmount;
         device-can-eject: root.context-menu-device-can-eject;
         device-pending-action: root.context-menu-device-pending-action;
-        file_open_folder_with_hover(is-hovered) => {
-            root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top, is-hovered);
+        context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n) => {
+            return root.context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n);
         }
-        file_open_folder_with_clicked => {
-            root.show-open-with-submenu(root.context-menu-path, root.context-menu-top);
+        context_menu_create_new_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n) => {
+            return root.context_menu_create_new_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n);
+        }
+        file_open_folder_with_hover(row-y, is-hovered) => {
+            root.open-with-submenu-hover(root.context-menu-path, row-y, is-hovered);
+        }
+        file_open_folder_with_clicked(row-y) => {
+            root.show-open-with-submenu(root.context-menu-path, row-y);
         }
         file_default_open_requested => {
             root.open_path(root.context-menu-path);
             root.close-context-popups();
         }
-        file_open_with_hover(is-hovered) => {
-            root.open-with-submenu-hover(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
+        file_open_with_hover(row-y, is-hovered) => {
+            root.open-with-submenu-hover(root.context-menu-path, row-y, is-hovered);
         }
-        file_open_with_clicked => {
-            root.show-open-with-submenu(root.context-menu-path, root.context-menu-top + root.context-open-with-row-offset);
+        file_open_with_clicked(row-y) => {
+            root.show-open-with-submenu(root.context-menu-path, row-y);
         }
         file_paste_into_folder => {
             root.paste_into(root.context-menu-path);
@@ -1616,21 +1623,21 @@ export component AppWindow inherits Window {
             root.restore_default_places();
             root.close-context-popups();
         }
-        viewport_create_new_hover(is-hovered) => {
-            root.create-new-submenu-hover(root.context-menu-top, is-hovered);
+        viewport_create_new_hover(row-y, is-hovered) => {
+            root.create-new-submenu-hover(row-y, is-hovered);
         }
-        viewport_create_new_clicked => {
-            root.show-create-new-submenu(root.context-menu-top);
+        viewport_create_new_clicked(row-y) => {
+            root.show-create-new-submenu(row-y);
         }
         viewport_paste_requested => {
             root.paste_into(root.current_path);
             root.close-context-popups();
         }
-        viewport_open_folder_with_hover(is-hovered) => {
-            root.open-with-submenu-hover(root.current_path, root.context-menu-top + root.context-open-with-row-offset, is-hovered);
+        viewport_open_folder_with_hover(row-y, is-hovered) => {
+            root.open-with-submenu-hover(root.current_path, row-y, is-hovered);
         }
-        viewport_open_folder_with_clicked => {
-            root.show-open-with-submenu(root.current_path, root.context-menu-top + root.context-open-with-row-offset);
+        viewport_open_folder_with_clicked(row-y) => {
+            root.show-open-with-submenu(root.current_path, row-y);
         }
         viewport_open_terminal_here => {
             root.open_terminal_here();

@@ -632,6 +632,9 @@ export component RootContextMenuLayer inherits Rectangle {
     in property <length> file-menu-width;
     in property <length> place-menu-width;
     in property <length> blank-menu-width;
+    in property <length> item-height: 38px;
+    in property <length> separator-height: 8px;
+    in property <length> title-height: 30px;
     in property <bool> dark;
     in property <int> selected-count;
     in property <string> selected-status;
@@ -649,11 +652,17 @@ export component RootContextMenuLayer inherits Rectangle {
     in property <bool> device-can-unmount;
     in property <bool> device-can-eject;
     in property <string> device-pending-action: "";
-    callback file_open_folder_with_hover(bool);
-    callback file_open_folder_with_clicked();
+    private property <bool> metrics-is-dir: root.menu-kind == 5 ? root.device-mounted : root.is-dir;
+    private property <bool> metrics-device-pending: root.menu-kind == 5 && root.device-pending-action != "";
+    private property <length> open-with-row-y: root.menu-top + root.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.metrics-is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    private property <length> create-new-row-y: root.menu-top + root.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.metrics-is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.place-builtin, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    callback file_open_folder_with_hover(length, bool);
+    callback file_open_folder_with_clicked(length);
     callback file_default_open_requested();
-    callback file_open_with_hover(bool);
-    callback file_open_with_clicked();
+    callback file_open_with_hover(length, bool);
+    callback file_open_with_clicked(length);
     callback file_paste_into_folder();
     callback file_add_to_places();
     callback file_rename_requested();
@@ -672,11 +681,11 @@ export component RootContextMenuLayer inherits Rectangle {
     callback device_eject_requested();
     callback places_blank_add_current_folder();
     callback places_blank_restore_defaults();
-    callback viewport_create_new_hover(bool);
-    callback viewport_create_new_clicked();
+    callback viewport_create_new_hover(length, bool);
+    callback viewport_create_new_clicked(length);
     callback viewport_paste_requested();
-    callback viewport_open_folder_with_hover(bool);
-    callback viewport_open_folder_with_clicked();
+    callback viewport_open_folder_with_hover(length, bool);
+    callback viewport_open_folder_with_clicked(length);
     callback viewport_open_terminal_here();
 
     background: transparent;
@@ -694,11 +703,11 @@ export component RootContextMenuLayer inherits Rectangle {
         default-open-app-name: root.default-open-app-name;
         clipboard-has-paths: root.clipboard-has-paths;
         add-to-places-visible: root.add-to-places-visible;
-        open_folder_with_hover(is-hovered) => { root.file_open_folder_with_hover(is-hovered); }
-        open_folder_with_clicked => { root.file_open_folder_with_clicked(); }
+        open_folder_with_hover(is-hovered) => { root.file_open_folder_with_hover(root.menu-top, is-hovered); }
+        open_folder_with_clicked => { root.file_open_folder_with_clicked(root.menu-top); }
         default_open_requested => { root.file_default_open_requested(); }
-        open_with_hover(is-hovered) => { root.file_open_with_hover(is-hovered); }
-        open_with_clicked => { root.file_open_with_clicked(); }
+        open_with_hover(is-hovered) => { root.file_open_with_hover(root.open-with-row-y, is-hovered); }
+        open_with_clicked => { root.file_open_with_clicked(root.open-with-row-y); }
         paste_into_folder => { root.file_paste_into_folder(); }
         add_to_places => { root.file_add_to_places(); }
         rename_requested => { root.file_rename_requested(); }
@@ -760,11 +769,11 @@ export component RootContextMenuLayer inherits Rectangle {
         dark: root.dark;
         clipboard-has-paths: root.clipboard-has-paths;
         clipboard-cut: root.clipboard-cut;
-        create_new_hover(is-hovered) => { root.viewport_create_new_hover(is-hovered); }
-        create_new_clicked => { root.viewport_create_new_clicked(); }
+        create_new_hover(is-hovered) => { root.viewport_create_new_hover(root.create-new-row-y, is-hovered); }
+        create_new_clicked => { root.viewport_create_new_clicked(root.create-new-row-y); }
         paste_requested => { root.viewport_paste_requested(); }
-        open_folder_with_hover(is-hovered) => { root.viewport_open_folder_with_hover(is-hovered); }
-        open_folder_with_clicked => { root.viewport_open_folder_with_clicked(); }
+        open_folder_with_hover(is-hovered) => { root.viewport_open_folder_with_hover(root.open-with-row-y, is-hovered); }
+        open_folder_with_clicked => { root.viewport_open_folder_with_clicked(root.open-with-row-y); }
         open_terminal_here => { root.viewport_open_terminal_here(); }
     }
 }
