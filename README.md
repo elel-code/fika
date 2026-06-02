@@ -32,9 +32,17 @@ DESTDIR=/tmp/fika-root PREFIX=/usr BINDIR=/usr/lib/fika \
 
 After a real install, run `scripts/check-runtime-integration.sh` to verify the
 installed system-bus helper, Polkit action, and portal backend metadata. The
-script also prints a runtime context summary for distro/desktop comparison. Add
-`--activate-system-helper` to confirm D-Bus activation of the privileged helper
-without invoking a privileged file-operation method.
+script also prints a runtime context summary for distro/desktop comparison and
+reports which `portals.conf` file currently controls FileChooser backend
+selection. Add `--activate-system-helper` to confirm D-Bus activation of the
+privileged helper without invoking a privileged file-operation method.
+
+The Fika portal backend is independent of GNOME/KDE/COSMIC/GTK portal
+backends. Installing `fika.portal` only registers the backend; it does not make
+Fika the active FileChooser. To validate the backend, opt in through
+`xdg-desktop-portal` configuration, for example by copying the shape shown in
+`docs/examples/fika-portals.conf` into an appropriate user or system
+`portals.conf`.
 
 For Devices sidebar validation without starting the GUI, run
 `fika --diagnose-devices`. It prints the same Rust-discovered device rows and

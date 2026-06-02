@@ -103,6 +103,9 @@ require_contains \
 require_contains \
     /usr/share/xdg-desktop-portal/portals/fika.portal \
     "Interfaces=org.freedesktop.impl.portal.FileChooser;"
+require_contains \
+    /usr/share/xdg-desktop-portal/portals/fika.portal \
+    "UseIn=fika"
 
 if grep -R "@bindir@" "$tmpdir" >/dev/null; then
     echo "installed data still contains @bindir@ placeholder" >&2

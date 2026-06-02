@@ -337,12 +337,13 @@ Acceptance for all:
 - [x] Add XDP / `xdg-desktop-portal` integration design.
   - Acceptance: document how Fika maps to `org.freedesktop.impl.portal.FileChooser`.
   - Acceptance: identify process model, request lifecycle, cancellation, and chooser result format.
-  - Current: `docs/DESIGN.md` documents the backend bus name, object path, OpenFile flow, cancellation behavior, and packaging metadata.
+  - Current: `docs/DESIGN.md` documents the backend bus name, object path, OpenFile flow, cancellation behavior, packaging metadata, and the distinction between installed backend descriptors and active `portals.conf` FileChooser selection.
 
 - [x] Add `zbus` XDP portal backend prototype.
   - Acceptance: backend can launch `fika --chooser` and return selected files.
   - Acceptance: backend implements the needed `org.freedesktop.impl.portal.FileChooser` methods for initial local-file use.
   - Current: `fika-xdp-filechooser` owns `org.freedesktop.impl.portal.desktop.fika`, exposes `/org/freedesktop/portal/desktop`, implements OpenFile / SaveFile / SaveFiles through `fika --chooser`, and returns local `file://` URIs.
+  - Current: the backend is independent of GNOME/KDE/COSMIC/GTK portal backends. Installing `fika.portal` registers Fika as a backend but does not make it active; validation requires `portals.conf` to select `fika` for `org.freedesktop.impl.portal.FileChooser`.
   - Current: OpenFile supports directory and multiple selection flags; SaveFile and SaveFiles support local-path save target selection.
   - Current: the portal request title is passed to the chooser window title and accept_label is passed to the chooser confirmation button; portal glob filters are exposed as a chooser filter button, current_filter chooses the initial filter when it matches the supported glob filter list, and the selected filter is returned with the result.
   - Current: MIME-only portal filters are not exposed as empty chooser filters because the current Fika chooser UI can only express glob-pattern filtering.
@@ -420,7 +421,7 @@ Acceptance for all:
 
 - [x] Runtime integration diagnostic helper.
   - Acceptance: installed packages have a repeatable check for D-Bus activation metadata, Polkit action visibility, portal backend metadata, and helper binary placement.
-  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/UDisks2/tooling context in normal mode, probes UDisks2 ObjectManager visibility and `fika --diagnose-devices` output for Devices validation, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method, and supports `--record FILE` for saving comparable distro/desktop validation reports.
+  - Current: `scripts/check-runtime-integration.sh` validates staged metadata with `--metadata-only`, prints OS/session/systemd/portal/polkit-agent/UDisks2/tooling context in normal mode, probes UDisks2 ObjectManager visibility and `fika --diagnose-devices` output for Devices validation, reports the active `portals.conf` FileChooser backend selection, validates installed helper/portal executables and D-Bus activatable names, queries the installed polkit action when `pkaction` is available, can optionally activate-check the system helper via `--activate-system-helper` without calling any privileged file-operation method, and supports `--record FILE` for saving comparable distro/desktop validation reports.
   - Remaining: run this diagnostic with `--record` on target distributions/desktops and record any polkit/systemd/dbus activation differences.
 
 - [x] External editor writeback flow.
