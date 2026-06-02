@@ -19,6 +19,10 @@ mod support;
 
 use app::async_bridge::{AsyncBridge, build_async_runtime, send_async_event};
 use app::device_monitor::start_device_monitor;
+use app::dnd::{
+    external_path_drop_from_payload, external_path_drop_rejection_reason,
+    is_external_path_drop_mime,
+};
 use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
     ExternalEditResult, ExternalFileDrop, FileOpenResult, FileOpenSuccess, FileOperationProgress,
@@ -32,8 +36,7 @@ use app::geometry::{
 };
 use app::places::{
     add_place, add_place_at_slot, add_place_at_slot_from_external_payload,
-    apply_external_file_drop, contains_place_path, external_path_drop_from_payload,
-    external_path_drop_rejection_reason, is_external_path_drop_mime, is_supported_places_drop_mime,
+    apply_external_file_drop, contains_place_path, is_supported_places_drop_mime,
     open_place_new_window, places_drop_force_gap, remove_place, rename_place, reorder_place_path,
     restore_default_places, sync_places,
 };
