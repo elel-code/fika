@@ -38,8 +38,8 @@ use app::events::{
 };
 use app::file_clipboard::sync_clipboard_ui;
 use app::geometry::{
-    ChildPopupInput, HoverBridgeInput, MainGridLayout, MenuMetricsInput, PopupPlacement,
-    PopupPoint, PopupRect, SelectionRect, SideButtonDirection, context_menu_metrics,
+    AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, MainGridLayout, MenuMetricsInput,
+    RootMenuGeometry, SelectionRect, SideButtonDirection, context_menu_metrics,
     place_drop_geometry, side_button_navigation_in_main_pane,
 };
 use app::places::{
@@ -1454,138 +1454,6 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     ui.run()
-}
-
-#[derive(Clone, Copy)]
-struct RootMenuGeometry {
-    view_width: f32,
-    view_height: f32,
-    anchor_x: f32,
-    anchor_y: f32,
-    menu_width: f32,
-    menu_height: f32,
-    margin: f32,
-    pointer_gap: f32,
-}
-
-impl RootMenuGeometry {
-    fn popup(self) -> PopupPoint {
-        PopupPlacement::new(
-            self.view_width,
-            self.view_height,
-            self.margin,
-            self.pointer_gap,
-        )
-        .root_popup(
-            self.anchor_x,
-            self.anchor_y,
-            self.menu_width,
-            self.menu_height,
-        )
-    }
-}
-
-#[derive(Clone, Copy)]
-struct AnchoredMenuGeometry {
-    view_width: f32,
-    view_height: f32,
-    anchor_x: f32,
-    anchor_y: f32,
-    menu_width: f32,
-    menu_height: f32,
-    margin: f32,
-    pointer_gap: f32,
-    gap: f32,
-}
-
-impl AnchoredMenuGeometry {
-    fn popup(self) -> PopupPoint {
-        PopupPlacement::new(
-            self.view_width,
-            self.view_height,
-            self.margin,
-            self.pointer_gap,
-        )
-        .anchored_popup_above(
-            self.anchor_x,
-            self.anchor_y,
-            self.menu_width,
-            self.menu_height,
-            self.gap,
-        )
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ChildMenuGeometry {
-    view_width: f32,
-    view_height: f32,
-    parent_left: f32,
-    parent_width: f32,
-    row_y: f32,
-    child_width: f32,
-    child_height: f32,
-    margin: f32,
-    pointer_gap: f32,
-    child_gap: f32,
-}
-
-impl ChildMenuGeometry {
-    fn popup(self) -> PopupPoint {
-        PopupPlacement::new(
-            self.view_width,
-            self.view_height,
-            self.margin,
-            self.pointer_gap,
-        )
-        .child_popup(ChildPopupInput {
-            parent_left: self.parent_left,
-            parent_width: self.parent_width,
-            row_y: self.row_y,
-            child_width: self.child_width,
-            child_height: self.child_height,
-            child_gap: self.child_gap,
-        })
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ChildBridgeGeometry {
-    view_width: f32,
-    view_height: f32,
-    parent_left: f32,
-    parent_width: f32,
-    child_left: f32,
-    child_width: f32,
-    row_y: f32,
-    child_top: f32,
-    row_height: f32,
-    title_height: f32,
-    margin: f32,
-    pointer_gap: f32,
-    child_gap: f32,
-}
-
-impl ChildBridgeGeometry {
-    fn rect(self) -> PopupRect {
-        PopupPlacement::new(
-            self.view_width,
-            self.view_height,
-            self.margin,
-            self.pointer_gap,
-        )
-        .hover_bridge(HoverBridgeInput {
-            parent_left: self.parent_left,
-            parent_width: self.parent_width,
-            child_left: self.child_left,
-            child_width: self.child_width,
-            row_y: self.row_y,
-            child_top: self.child_top,
-            row_height: self.row_height,
-            title_height: self.title_height,
-            child_gap: self.child_gap,
-        })
-    }
 }
 
 fn select_winit_backend_for_external_drops(

@@ -530,6 +530,138 @@ pub(crate) struct HoverBridgeInput {
     pub(crate) child_gap: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RootMenuGeometry {
+    pub(crate) view_width: f32,
+    pub(crate) view_height: f32,
+    pub(crate) anchor_x: f32,
+    pub(crate) anchor_y: f32,
+    pub(crate) menu_width: f32,
+    pub(crate) menu_height: f32,
+    pub(crate) margin: f32,
+    pub(crate) pointer_gap: f32,
+}
+
+impl RootMenuGeometry {
+    pub(crate) fn popup(self) -> PopupPoint {
+        PopupPlacement::new(
+            self.view_width,
+            self.view_height,
+            self.margin,
+            self.pointer_gap,
+        )
+        .root_popup(
+            self.anchor_x,
+            self.anchor_y,
+            self.menu_width,
+            self.menu_height,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AnchoredMenuGeometry {
+    pub(crate) view_width: f32,
+    pub(crate) view_height: f32,
+    pub(crate) anchor_x: f32,
+    pub(crate) anchor_y: f32,
+    pub(crate) menu_width: f32,
+    pub(crate) menu_height: f32,
+    pub(crate) margin: f32,
+    pub(crate) pointer_gap: f32,
+    pub(crate) gap: f32,
+}
+
+impl AnchoredMenuGeometry {
+    pub(crate) fn popup(self) -> PopupPoint {
+        PopupPlacement::new(
+            self.view_width,
+            self.view_height,
+            self.margin,
+            self.pointer_gap,
+        )
+        .anchored_popup_above(
+            self.anchor_x,
+            self.anchor_y,
+            self.menu_width,
+            self.menu_height,
+            self.gap,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ChildMenuGeometry {
+    pub(crate) view_width: f32,
+    pub(crate) view_height: f32,
+    pub(crate) parent_left: f32,
+    pub(crate) parent_width: f32,
+    pub(crate) row_y: f32,
+    pub(crate) child_width: f32,
+    pub(crate) child_height: f32,
+    pub(crate) margin: f32,
+    pub(crate) pointer_gap: f32,
+    pub(crate) child_gap: f32,
+}
+
+impl ChildMenuGeometry {
+    pub(crate) fn popup(self) -> PopupPoint {
+        PopupPlacement::new(
+            self.view_width,
+            self.view_height,
+            self.margin,
+            self.pointer_gap,
+        )
+        .child_popup(ChildPopupInput {
+            parent_left: self.parent_left,
+            parent_width: self.parent_width,
+            row_y: self.row_y,
+            child_width: self.child_width,
+            child_height: self.child_height,
+            child_gap: self.child_gap,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ChildBridgeGeometry {
+    pub(crate) view_width: f32,
+    pub(crate) view_height: f32,
+    pub(crate) parent_left: f32,
+    pub(crate) parent_width: f32,
+    pub(crate) child_left: f32,
+    pub(crate) child_width: f32,
+    pub(crate) row_y: f32,
+    pub(crate) child_top: f32,
+    pub(crate) row_height: f32,
+    pub(crate) title_height: f32,
+    pub(crate) margin: f32,
+    pub(crate) pointer_gap: f32,
+    pub(crate) child_gap: f32,
+}
+
+impl ChildBridgeGeometry {
+    pub(crate) fn rect(self) -> PopupRect {
+        PopupPlacement::new(
+            self.view_width,
+            self.view_height,
+            self.margin,
+            self.pointer_gap,
+        )
+        .hover_bridge(HoverBridgeInput {
+            parent_left: self.parent_left,
+            parent_width: self.parent_width,
+            child_left: self.child_left,
+            child_width: self.child_width,
+            row_y: self.row_y,
+            child_top: self.child_top,
+            row_height: self.row_height,
+            title_height: self.title_height,
+            child_gap: self.child_gap,
+        })
+    }
+}
+
 impl PopupPlacement {
     pub(crate) fn new(view_width: f32, view_height: f32, margin: f32, pointer_gap: f32) -> Self {
         let safe_min = margin.max(0.0);
@@ -654,10 +786,11 @@ pub(crate) fn clamp_popup(position: f32, popup_size: f32, safe_min: f32, safe_ma
 #[cfg(test)]
 mod tests {
     use super::{
-        ChildPopupInput, HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement,
-        PopupPoint, PopupRect, SideButtonDirection, SideButtonNavigation, context_menu_metrics,
-        main_pane_bounds, main_scroll_max_x, place_drop_geometry, point_in_main_pane,
-        search_panel_height, side_button_navigation_in_main_pane,
+        AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
+        HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
+        PopupRect, RootMenuGeometry, SideButtonDirection, SideButtonNavigation,
+        context_menu_metrics, main_pane_bounds, main_scroll_max_x, place_drop_geometry,
+        point_in_main_pane, search_panel_height, side_button_navigation_in_main_pane,
         side_button_should_navigate_main_pane, virtual_entry_range, virtual_grid_plan,
     };
 
@@ -1062,6 +1195,82 @@ mod tests {
                 title_height: 30.0,
                 child_gap: 3.0,
             }),
+            PopupRect {
+                x: 280.0,
+                width: 20.0,
+                y: 106.0,
+                height: 356.0,
+            }
+        );
+    }
+
+    #[test]
+    fn menu_geometry_wrappers_match_popup_placement() {
+        assert_eq!(
+            RootMenuGeometry {
+                view_width: 512.0,
+                view_height: 512.0,
+                anchor_x: 480.0,
+                anchor_y: 100.0,
+                menu_width: 180.0,
+                menu_height: 180.0,
+                margin: 12.0,
+                pointer_gap: 8.0,
+            }
+            .popup(),
+            PopupPoint { x: 292.0, y: 108.0 }
+        );
+
+        assert_eq!(
+            AnchoredMenuGeometry {
+                view_width: 512.0,
+                view_height: 512.0,
+                anchor_x: 480.0,
+                anchor_y: 300.0,
+                menu_width: 180.0,
+                menu_height: 120.0,
+                margin: 12.0,
+                pointer_gap: 8.0,
+                gap: 3.0,
+            }
+            .popup(),
+            PopupPoint { x: 320.0, y: 177.0 }
+        );
+
+        assert_eq!(
+            ChildMenuGeometry {
+                view_width: 512.0,
+                view_height: 512.0,
+                parent_left: 320.0,
+                parent_width: 160.0,
+                row_y: 160.0,
+                child_width: 170.0,
+                child_height: 100.0,
+                margin: 12.0,
+                pointer_gap: 8.0,
+                child_gap: 3.0,
+            }
+            .popup(),
+            PopupPoint { x: 147.0, y: 160.0 }
+        );
+
+        assert_eq!(
+            ChildBridgeGeometry {
+                view_width: 512.0,
+                view_height: 512.0,
+                parent_left: 300.0,
+                parent_width: 180.0,
+                child_left: 110.0,
+                child_width: 170.0,
+                row_y: 420.0,
+                child_top: 110.0,
+                row_height: 38.0,
+                title_height: 30.0,
+                margin: 12.0,
+                pointer_gap: 8.0,
+                child_gap: 3.0,
+            }
+            .rect(),
             PopupRect {
                 x: 280.0,
                 width: 20.0,

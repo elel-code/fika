@@ -836,7 +836,7 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    if (root.entry_count == 0) : Rectangle {
+                    if (root.entry_count == 0 && !root.directory_loading) : Rectangle {
                         horizontal-stretch: 1;
                         vertical-stretch: 1;
                         background: root.dark_mode ? #101314 : #ffffff;
@@ -846,7 +846,7 @@ export component AppWindow inherits Window {
                             spacing: 8px;
 
                             Text {
-                                text: root.directory_loading ? "Loading folder..." : (root.search_loading ? "Searching..." : (root.search_query == "" ? "This folder is empty" : "No matching items"));
+                                text: root.search_loading ? "Searching..." : (root.search_query == "" ? "This folder is empty" : "No matching items");
                                 color: root.dark_mode ? #e6e6e6 : #334155;
                                 font-size: 15px;
                                 font-weight: 600;
@@ -854,7 +854,7 @@ export component AppWindow inherits Window {
                             }
 
                             Text {
-                                text: root.directory_loading ? "Preparing the next view." : (root.search_loading ? "Scanning subfolders." : (root.search_query == "" ? "This directory has no visible files." : "Try another search term."));
+                                text: root.search_loading ? "Scanning subfolders." : (root.search_query == "" ? "This directory has no visible files." : "Try another search term.");
                                 color: root.dark_mode ? #a8a8a8 : #94a3b8;
                                 font-size: 13px;
                                 horizontal-alignment: center;
@@ -1078,43 +1078,6 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if (root.directory_loading && root.entry_count > 0): Rectangle {
-                    width: parent.width;
-                    height: parent.height - 36px;
-                    background: root.dark_mode ? #10131444 : #ffffff66;
-
-                    TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-
-                        pointer-event(event) => {
-                            // Side-button navigation is handled once in the winit event layer,
-                            // scoped to the whole main pane like cosmic-files' mouse area.
-                        }
-                    }
-
-                    Rectangle {
-                        x: 14px;
-                        y: 12px;
-                        width: 170px;
-                        height: 30px;
-                        border-radius: 6px;
-                        background: root.dark_mode ? #25292dcc : #f8fafccc;
-                        border-width: 1px;
-                        border-color: root.dark_mode ? #454a50 : #d6dce2;
-
-                        Text {
-                            text: "Loading folder...";
-                            x: 12px;
-                            width: parent.width - 24px;
-                            color: root.dark_mode ? #f1f1f1 : #334155;
-                            font-size: 12px;
-                            font-weight: 600;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
             }
         }
         }
