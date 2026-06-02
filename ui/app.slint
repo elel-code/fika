@@ -1608,11 +1608,21 @@ export component AppWindow inherits Window {
         menu-open: root.transfer-menu-open;
         menu-x: root.transfer_menu_x;
         menu-y: root.transfer_menu_y;
+        window-width: root.width;
+        window-height: root.height;
+        screen-margin: root.menu-screen-margin;
+        pointer-gap: root.menu-pointer-gap;
         item-height: root.menu-item-height;
         separator-height: root.menu-separator-height;
         title-height: root.menu-title-height;
         title: root.transfer_source_label + " -> " + root.transfer_target_label;
         dark: root.dark_mode;
+        root_menu_left(a, b, c, d, e, f, g, h) => {
+            return root.root_menu_left(a, b, c, d, e, f, g, h);
+        }
+        root_menu_top(a, b, c, d, e, f, g, h) => {
+            return root.root_menu_top(a, b, c, d, e, f, g, h);
+        }
         operation_selected(operation) => {
             root.transfer_operation(operation, root.transfer_source_path, root.transfer_target_path);
             root.transfer-menu-open = false;

@@ -1,6 +1,6 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::file_clipboard::sync_clipboard_ui;
-use crate::app::geometry::{MainGridLayout, PopupPlacement, PopupPoint};
+use crate::app::geometry::MainGridLayout;
 use crate::app::operation_controller::{
     OperationQueuePosition, operation_cancel_status, operation_queued_status,
     operation_started_status,
@@ -11,16 +11,10 @@ use crate::fs::{file_ops, privilege};
 use crate::{
     AppWindow, AsyncEvent, FileEntry, FileOperationProgress, FileOperationResult, set_status,
 };
-use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-
-const MENU_SCREEN_MARGIN: f32 = 12.0;
-const MENU_POINTER_GAP: f32 = 8.0;
-const TRANSFER_MENU_WIDTH: f32 = 240.0;
-const TRANSFER_MENU_HEIGHT: f32 = 30.0 + 4.0 * 38.0 + 8.0;
 
 pub(crate) fn prepare_place_transfer(
     ui: &AppWindow,
@@ -211,31 +205,9 @@ fn prepare_transfer_menu(
     ui.set_transfer_source_label(source_label.into());
     ui.set_transfer_target_path(target_path.into());
     ui.set_transfer_target_label(target_label.into());
-    let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-    let menu_position = transfer_menu_position(window_size.width, window_size.height, x, y);
-    ui.set_transfer_menu_x(menu_position.x);
-    ui.set_transfer_menu_y(menu_position.y);
+    ui.set_transfer_menu_x(x);
+    ui.set_transfer_menu_y(y);
     true
-}
-
-fn transfer_menu_position(
-    view_width: f32,
-    view_height: f32,
-    anchor_x: f32,
-    anchor_y: f32,
-) -> PopupPoint {
-    PopupPlacement::new(
-        view_width,
-        view_height,
-        MENU_SCREEN_MARGIN,
-        MENU_POINTER_GAP,
-    )
-    .root_popup(
-        anchor_x,
-        anchor_y,
-        TRANSFER_MENU_WIDTH,
-        TRANSFER_MENU_HEIGHT,
-    )
 }
 
 pub(crate) fn transfer_target_rejection(source: &Path, target_dir: &Path) -> Option<&'static str> {
@@ -742,10 +714,9 @@ mod tests {
     use super::{
         apply_conflict_decision_to_queue, clear_accepted_cut_source,
         clear_cut_sources_for_remaining_conflicts, default_rename_suggestion,
-        target_is_source_or_descendant, transfer_menu_position,
-        transfer_request_conflict_destination, transfer_start_rejection,
+        target_is_source_or_descendant, transfer_request_conflict_destination,
+        transfer_start_rejection,
     };
-    use crate::app::geometry::PopupPoint;
     use crate::app::state::{AppState, FileOperationRequest};
     use std::collections::VecDeque;
     use std::fs;
@@ -792,22 +763,6 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(temp);
-    }
-
-    #[test]
-    fn transfer_menu_position_flips_and_clamps_like_context_menus() {
-        assert_eq!(
-            transfer_menu_position(800.0, 600.0, 100.0, 100.0),
-            PopupPoint { x: 108.0, y: 108.0 }
-        );
-        assert_eq!(
-            transfer_menu_position(800.0, 600.0, 790.0, 590.0),
-            PopupPoint { x: 542.0, y: 392.0 }
-        );
-        assert_eq!(
-            transfer_menu_position(200.0, 120.0, 10.0, 10.0),
-            PopupPoint { x: 12.0, y: 12.0 }
-        );
     }
 
     #[test]

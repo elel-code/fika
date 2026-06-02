@@ -349,15 +349,21 @@ export component TransferMenuLayer inherits Rectangle {
     in property <bool> menu-open;
     in property <float> menu-x;
     in property <float> menu-y;
+    in property <length> window-width;
+    in property <length> window-height;
+    in property <length> screen-margin;
+    in property <length> pointer-gap;
     in property <length> item-height: 38px;
     in property <length> separator-height: 8px;
     in property <length> title-height: 30px;
     in property <string> title;
     in property <bool> dark;
-    private property <length> menu-left: root.menu-x * 1px;
-    private property <length> menu-top: root.menu-y * 1px;
     private property <length> menu-width: 240px;
     private property <length> menu-height: root.title-height + 4 * root.item-height + root.separator-height;
+    private property <length> menu-left: root.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x, root.menu-y, root.menu-width / 1px, root.menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
+    private property <length> menu-top: root.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x, root.menu-y, root.menu-width / 1px, root.menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
+    pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
+    pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
     callback operation_selected(string);
     callback cancelled();
 

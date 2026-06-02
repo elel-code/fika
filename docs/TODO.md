@@ -424,7 +424,7 @@ Acceptance for all:
 - [x] Apply Dolphin/QMenu-style popup placement.
   - Acceptance: menus prefer the requested popup point, flip if they would overflow the safe rect, and clamp when the window is too small.
   - Current: context, Open With, Create New, transfer, and chooser-choice popup surfaces use shared Rust `PopupPlacement` geometry, reusable popup surface styling, and a common outside-click dismiss layer.
-  - Current: root context placement, Transfer placement, Open With / Create New child placement plus hover bridge geometry, and chooser-choice above-button placement now use Rust helpers; root menu coordinate calculation is encapsulated by `RootContextMenuLayer`, Transfer fixed sizing and coordinate conversion are encapsulated by `TransferMenuLayer`, and child placement plus bridge coordinate calculation is encapsulated by `ChildSubmenuLayer`, reducing duplicated popup positioning logic in `ui/app.slint`.
+  - Current: root context placement, Transfer placement, Open With / Create New child placement plus hover bridge geometry, and chooser-choice above-button placement now use Rust helpers; root menu coordinate calculation is encapsulated by `RootContextMenuLayer`, Transfer fixed sizing plus root-menu flip/clamp placement is encapsulated by `TransferMenuLayer`, and child placement plus bridge coordinate calculation is encapsulated by `ChildSubmenuLayer`, reducing duplicated popup positioning logic in `ui/app.slint` and keeping transfer code focused on the drop anchor and target semantics.
 
 - [x] Per-method polkit authority check.
   - Acceptance: helper asks polkit authority for `org.fika.FileManager.privileged-helper` per protected operation when the packaged action is installed.

@@ -1735,6 +1735,55 @@ mod tests {
     }
 
     #[test]
+    fn transfer_menu_geometry_uses_shared_root_popup_rules() {
+        let menu_width = 240.0;
+        let menu_height = 30.0 + 4.0 * 38.0 + 8.0;
+
+        assert_eq!(
+            RootMenuGeometry {
+                view_width: 800.0,
+                view_height: 600.0,
+                anchor_x: 100.0,
+                anchor_y: 100.0,
+                menu_width,
+                menu_height,
+                margin: 12.0,
+                pointer_gap: 8.0,
+            }
+            .popup(),
+            PopupPoint { x: 108.0, y: 108.0 }
+        );
+        assert_eq!(
+            RootMenuGeometry {
+                view_width: 800.0,
+                view_height: 600.0,
+                anchor_x: 790.0,
+                anchor_y: 590.0,
+                menu_width,
+                menu_height,
+                margin: 12.0,
+                pointer_gap: 8.0,
+            }
+            .popup(),
+            PopupPoint { x: 542.0, y: 392.0 }
+        );
+        assert_eq!(
+            RootMenuGeometry {
+                view_width: 200.0,
+                view_height: 120.0,
+                anchor_x: 10.0,
+                anchor_y: 10.0,
+                menu_width,
+                menu_height,
+                margin: 12.0,
+                pointer_gap: 8.0,
+            }
+            .popup(),
+            PopupPoint { x: 12.0, y: 12.0 }
+        );
+    }
+
+    #[test]
     fn place_drop_geometry_distinguishes_gaps_and_items() {
         assert_eq!(
             place_drop_geometry(108.0, 3, 108.0, 38.0),
