@@ -52,7 +52,11 @@ pub fn read_entries_sync(path: &Path) -> io::Result<Vec<RawFileEntry>> {
         }
     }
 
-    entries.sort_by(compare_raw_entries);
+    if decorate_trash_metadata {
+        entries.sort_by(compare_trash_entries);
+    } else {
+        entries.sort_by(compare_raw_entries);
+    }
     Ok(entries)
 }
 
@@ -135,6 +139,35 @@ fn compare_raw_entries(left: &RawFileEntry, right: &RawFileEntry) -> Ordering {
     }
 }
 
+fn compare_trash_entries(left: &RawFileEntry, right: &RawFileEntry) -> Ordering {
+    let left_bucket = trash_sort_bucket(left);
+    let right_bucket = trash_sort_bucket(right);
+    left_bucket
+        .cmp(&right_bucket)
+        .then_with(|| {
+            if left_bucket == 0 && right_bucket == 0 {
+                right.modified.cmp(&left.modified)
+            } else {
+                Ordering::Equal
+            }
+        })
+        .then_with(|| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        })
+}
+
+fn trash_sort_bucket(entry: &RawFileEntry) -> u8 {
+    if entry.group.contains("Deleted: ") {
+        0
+    } else if !entry.group.is_empty() {
+        1
+    } else {
+        2
+    }
+}
+
 pub(crate) fn to_raw_file_entry(
     path: PathBuf,
     name: String,
@@ -207,9 +240,119 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::SystemTime;
 
     #[test]
     fn formats_unix_epoch() {
         assert_eq!(format_unix_time(0), "1970-01-01 00:00");
+    }
+
+    #[test]
+    fn regular_directory_sort_keeps_folders_before_files_by_name() {
+        let mut entries = vec![
+            test_entry("zeta.txt", false, "", "2026-06-01 10:00"),
+            test_entry("beta", true, "", "2026-06-01 10:00"),
+            test_entry("alpha.txt", false, "", "2026-06-01 10:00"),
+            test_entry("Alpha", true, "", "2026-06-01 10:00"),
+        ];
+
+        entries.sort_by(compare_raw_entries);
+
+        assert_eq!(
+            entry_names(&entries),
+            vec!["Alpha", "beta", "alpha.txt", "zeta.txt"]
+        );
+    }
+
+    #[test]
+    fn trash_sort_prefers_newer_deletion_dates_then_metadata_then_unknowns() {
+        let mut entries = vec![
+            test_entry("unknown.txt", false, "", "2026-06-02 11:00"),
+            test_entry(
+                "old.txt",
+                false,
+                "Original: /tmp - Deleted: 2026-05-30 12:00",
+                "2026-05-30 12:00",
+            ),
+            test_entry(
+                "new.txt",
+                false,
+                "Original: /tmp - Deleted: 2026-06-02 09:00",
+                "2026-06-02 09:00",
+            ),
+            test_entry(
+                "metadata-no-date.txt",
+                false,
+                "Original: /tmp",
+                "2026-06-03 09:00",
+            ),
+            test_entry(
+                "same-date-a.txt",
+                false,
+                "Original: /tmp - Deleted: 2026-06-02 09:00",
+                "2026-06-02 09:00",
+            ),
+        ];
+
+        entries.sort_by(compare_trash_entries);
+
+        assert_eq!(
+            entry_names(&entries),
+            vec![
+                "new.txt",
+                "same-date-a.txt",
+                "old.txt",
+                "metadata-no-date.txt",
+                "unknown.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn read_regular_directory_keeps_existing_sort_order() {
+        let temp = test_dir("regular-sort");
+        fs::create_dir_all(temp.join("beta")).unwrap();
+        fs::create_dir_all(temp.join("Alpha")).unwrap();
+        fs::write(temp.join("zeta.txt"), b"zeta").unwrap();
+        fs::write(temp.join("alpha.txt"), b"alpha").unwrap();
+
+        let entries = read_entries_sync(&temp).unwrap();
+
+        assert_eq!(
+            entry_names(&entries),
+            vec!["Alpha", "beta", "alpha.txt", "zeta.txt"]
+        );
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    fn test_entry(name: &str, is_dir: bool, group: &str, modified: &str) -> RawFileEntry {
+        RawFileEntry {
+            name: name.to_string(),
+            path: format!("/tmp/{name}"),
+            group: group.to_string(),
+            location: String::new(),
+            kind: if is_dir { "Folder" } else { "File" }.to_string(),
+            size: if is_dir { "-" } else { "1 B" }.to_string(),
+            size_bytes: u64::from(!is_dir),
+            modified: modified.to_string(),
+            modified_age_days: -1,
+            is_dir,
+        }
+    }
+
+    fn entry_names(entries: &[RawFileEntry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.name.as_str()).collect()
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        std::env::temp_dir().join(format!(
+            "fika-entries-{name}-{}-{nanos}",
+            std::process::id()
+        ))
     }
 }
