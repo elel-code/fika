@@ -750,15 +750,13 @@ fn file_context_menu_metrics(
 }
 
 fn viewport_context_menu_metrics(
-    input: MenuMetricsInput,
+    _input: MenuMetricsInput,
     item: f32,
     separator: f32,
 ) -> MenuMetrics {
     MenuMetrics {
-        height: (3 + input.clipboard_has_paths as i32) as f32 * item + separator,
-        open_with_row_y_offset: item
-            + separator
-            + if input.clipboard_has_paths { item } else { 0.0 },
+        height: 4.0 * item + separator,
+        open_with_row_y_offset: 2.0 * item + separator,
         create_new_row_y_offset: 0.0,
     }
 }
@@ -1225,6 +1223,28 @@ mod tests {
         assert_eq!(
             viewport_with_paste.open_with_row_y_offset,
             2.0 * item_height + separator_height
+        );
+        let viewport_without_paste = context_menu_metrics(MenuMetricsInput {
+            kind: 3,
+            selected_count: 0,
+            is_dir: false,
+            default_open_visible: false,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            place_builtin: false,
+            device_mounted: false,
+            device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(viewport_without_paste.height, viewport_with_paste.height);
+        assert_eq!(
+            viewport_without_paste.open_with_row_y_offset,
+            viewport_with_paste.open_with_row_y_offset
         );
 
         let builtin_place = context_menu_metrics(MenuMetricsInput {

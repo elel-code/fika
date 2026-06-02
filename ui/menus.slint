@@ -643,9 +643,10 @@ export component ViewportContextMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        if (root.clipboard-has-paths): MenuItem {
+        MenuItem {
             label: root.clipboard-cut ? "Paste Moved Items" : "Paste";
             dark: root.dark;
+            enabled: root.clipboard-has-paths;
             clicked => { root.paste_requested(); }
         }
 
