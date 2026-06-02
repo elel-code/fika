@@ -72,7 +72,7 @@ Rust 侧核心状态在 `AppState`：
 - `selected_paths`: 当前选中项。
 - `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。
 - `view_state_cache`: 每个目录的主栏 viewport 坐标缓存，用于返回目录时恢复滚动位置；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留每个路径的视图状态。
-- uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。
+- uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。保留的旧模型在加载期间只作为视觉占位，不接受打开、选择、右键、滚轮或 drop 操作；cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。
 - `thumbnail_cache`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图像素。
 - `thumbnail_failures`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图失败结果，避免坏图或不支持格式在大目录滚动时反复排队解码；文件修改后 key 变化，会重新尝试。
 - thumbnail load 会同时计算 freedesktop.org Thumbnail Managing Standard 的 cache identity：canonical `file://` URI、MD5 PNG 文件名、`normal` / `large` / `x-large` / `xx-large` 目录和 `fail/fika-$version` marker 路径。当前这些路径随异步结果返回，作为后续磁盘 cache 读写和外部 thumbnailer 接入的稳定入口；当前 UI 仍使用内存 LRU cache。

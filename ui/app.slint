@@ -981,6 +981,12 @@ export component AppWindow inherits Window {
                                 }
                             }
                             can-drop(event) => {
+                                if (root.directory_loading) {
+                                    root.main_drag_active = false;
+                                    root.main_drag_rejected = true;
+                                    root.place_drag_target_path = "";
+                                    return DragAction.none;
+                                }
                                 if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
                                     root.main_drag_active = true;
                                     root.main_drag_rejected = !root.main_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
@@ -999,7 +1005,7 @@ export component AppWindow inherits Window {
                                 root.trace_main_drop("dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
                                 root.main_drag_active = false;
                                 root.main_drag_rejected = false;
-                                if ((DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_path_main_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                                if (!root.directory_loading && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_path_main_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
                                     root.transfer-menu-open = true;
                                 }
                                 return DragAction.copy;
@@ -1013,6 +1019,8 @@ export component AppWindow inherits Window {
                                     root.go_back();
                                 } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
                                     root.go_forward();
+                                } else if (root.directory_loading) {
+                                    // Keep the previous visible model inert while an uncached directory is loading.
                                 } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                                     main-focus.focus();
                                     root.selection_rect_pending = true;
@@ -1057,7 +1065,9 @@ export component AppWindow inherits Window {
                                 }
                             }
                             scroll-event(event) => {
-                                root.handle-main-scroll(event.delta-x, event.delta-y, event.modifiers.control);
+                                if (!root.directory_loading) {
+                                    root.handle-main-scroll(event.delta-x, event.delta-y, event.modifiers.control);
+                                }
                                 return accept;
                             }
                         }
@@ -1080,6 +1090,7 @@ export component AppWindow inherits Window {
                                 dark: root.dark_mode;
                                 zoom-level: root.icon_zoom_level;
                                 show-location: root.recursive_search && root.search_query != "";
+                                interactive: !root.directory_loading;
                                 drop-target: root.main_drag_active && !root.main_drag_rejected && root.place_drag_target_path == item.path;
                                 request_select(path, toggle, range) => {
                                     main-focus.focus();
