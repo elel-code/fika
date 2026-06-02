@@ -1407,7 +1407,11 @@ fn device_action_async(
 fn watch_current_directory(path: &Path, generation: u64, bridge: &AsyncBridge) {
     use notify::Watcher;
 
+    if fs::file_ops::is_trash_files_dir(path) {
+        let _ = fs::file_ops::ensure_trash_dirs();
+    }
     let watched_path = path.to_path_buf();
+    let watch_paths = directory_watch_paths(path);
     let async_handle = bridge.handle.clone();
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -1453,13 +1457,36 @@ fn watch_current_directory(path: &Path, generation: u64, bridge: &AsyncBridge) {
         return;
     };
 
-    if watcher
-        .watch(path, notify::RecursiveMode::NonRecursive)
-        .is_ok()
-    {
+    let mut watched_any = false;
+    for watch_path in watch_paths {
+        match watcher.watch(&watch_path, notify::RecursiveMode::NonRecursive) {
+            Ok(()) => {
+                watched_any = true;
+            }
+            Err(err) => {
+                debug_log(&format!(
+                    "directory watcher skipped path={} error={err}",
+                    watch_path.display()
+                ));
+            }
+        }
+    }
+
+    if watched_any {
         *bridge.directory_watcher.borrow_mut() = Some(watcher);
     } else {
         *bridge.directory_watcher.borrow_mut() = None;
+    }
+}
+
+fn directory_watch_paths(path: &Path) -> Vec<PathBuf> {
+    if fs::file_ops::is_trash_files_dir(path) {
+        vec![
+            fs::file_ops::trash_files_dir(),
+            fs::file_ops::trash_info_dir(),
+        ]
+    } else {
+        vec![path.to_path_buf()]
     }
 }
 
@@ -3835,6 +3862,25 @@ mod tests {
         assert_eq!(
             place_prefetch_paths(&state),
             vec![PathBuf::from("/tmp/target")]
+        );
+    }
+
+    #[test]
+    fn directory_watch_paths_are_single_for_regular_directories() {
+        assert_eq!(
+            directory_watch_paths(Path::new("/tmp/project")),
+            vec![PathBuf::from("/tmp/project")]
+        );
+    }
+
+    #[test]
+    fn directory_watch_paths_include_trash_metadata_directory() {
+        let trash_files = fs::file_ops::trash_files_dir();
+        let trash_info = fs::file_ops::trash_info_dir();
+
+        assert_eq!(
+            directory_watch_paths(&trash_files),
+            vec![trash_files, trash_info]
         );
     }
 

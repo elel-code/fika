@@ -407,6 +407,10 @@ pub fn trash_files_dir() -> PathBuf {
     trash_home().join("files")
 }
 
+pub fn trash_info_dir() -> PathBuf {
+    trash_home().join("info")
+}
+
 pub fn is_trash_files_dir(path: &Path) -> bool {
     path == trash_files_dir()
 }
@@ -938,10 +942,6 @@ fn trash_metadata_from_info(contents: &str) -> Result<TrashMetadata, String> {
 fn trash_info_path(trash_path: &Path) -> Option<PathBuf> {
     let name = trash_path.file_name()?.to_str()?;
     Some(trash_info_dir().join(format!("{name}.trashinfo")))
-}
-
-fn trash_info_dir() -> PathBuf {
-    trash_home().join("info")
 }
 
 fn overwrite_backup_path(destination: &Path) -> Result<PathBuf, String> {
