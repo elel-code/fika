@@ -8,6 +8,7 @@ export component FileTile inherits Rectangle {
     in property <int> zoom-level;
     in property <bool> drop-target;
     in property <bool> show-location;
+    in property <data-transfer> drag-data-source;
     callback activated(string);
     callback request_select(string, bool, bool);
     callback request_context_menu(string, string, length, length);
@@ -23,8 +24,7 @@ export component FileTile inherits Rectangle {
 
     drag-area := DragArea {
         enabled: root.entry.path != "";
-        mime-type: root.entry.is_dir ? "application/x-fika-folder-path" : "application/x-fika-file-path";
-        data: root.entry.path;
+        data: root.drag-data-source;
 
         touch-area := TouchArea {
             width: parent.width;

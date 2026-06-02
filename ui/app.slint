@@ -1,3 +1,19 @@
+// DndApi must live in app.slint (the root file) so that `include_modules!()`
+// generates the Rust type `DndApi` for `ui.global::<DndApi>()`.
+export global DndApi {
+    pure callback make-drag-place(path: string) -> data-transfer;
+    pure callback make-drag-folder(path: string) -> data-transfer;
+    pure callback make-drag-file(path: string) -> data-transfer;
+    pure callback event-kind(event: DropEvent) -> DragKind;
+    pure callback event-path(event: DropEvent) -> string;
+    pure callback external-force-gap(event: DropEvent) -> bool;
+    pure callback external-drop-supported(event: DropEvent) -> bool;
+    pure callback external-drop-allowed(event: DropEvent, x: float, y: float) -> bool;
+    pure callback external-drop-target-path(event: DropEvent, x: float, y: float) -> string;
+    pure callback external-rejection-reason(event: DropEvent, x: float, y: float) -> string;
+}
+
+import { DragKind } from "dnd_bridge.slint";
 import { ScrollView } from "std-widgets.slint";
 import {
     MenuDismissLayer,
@@ -586,6 +602,7 @@ export component AppWindow inherits Window {
                     for place[index] in root.places: PlaceButton {
                         label: place.label;
                         path: place.path;
+                        drag-data-source: DndApi.make-drag-place(place.path);
                         marker: place.marker;
                         selected: root.current_path == place.path;
                         dark: root.dark_mode;
@@ -670,56 +687,56 @@ export component AppWindow inherits Window {
                         }
                     }
                     can-drop(event) => {
-                        root.trace_places_drop("can-drop", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
-                        if (root.places_drop_supported(event.mime-type)) {
-                            root.folder_drag_path = event.data;
-                            root.folder_drag_label = event.data;
+                        root.trace_places_drop("can-drop", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                        if (DndApi.event-kind(event) != DragKind.external || DndApi.external-drop-supported(event)) {
+                            root.folder_drag_path = DndApi.event-path(event);
+                            root.folder_drag_label = DndApi.event-path(event);
                             root.folder_drag_x = self.absolute-position.x + event.position.x;
                             root.folder_drag_y = self.absolute-position.y + event.position.y;
                             root.place_drag_x = root.folder_drag_x;
                             root.place_drag_y = root.folder_drag_y;
-                            root.folder_drag_active = event.mime-type == "application/x-fika-folder-path" || event.mime-type == "application/x-fika-file-path" || root.places_drop_force_gap(event.mime-type);
-                            root.place_drag_active = event.mime-type == "application/x-fika-place-path";
-                            root.place_drag_label = event.data;
+                            root.folder_drag_active = DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.external-force-gap(event);
+                            root.place_drag_active = DndApi.event-kind(event) == DragKind.place;
+                            root.place_drag_label = DndApi.event-path(event);
                             root.place_drag_marker = "P";
                             root.place_list_y = self.absolute-position.y + 44px - sidebar-scroll.viewport-y;
                             root.places_list_y_px = root.place_list_y / 1px;
-                            root.folder_drag_place_target = root.place_drop_target((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
-                            root.folder_drag_over_place_gap = root.place_drop_over_gap((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
-                            root.folder_drag_over_place_item = root.place_drop_over_item((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
-                            root.place_drag_rejected = root.folder_drag_over_place_item && !root.place_drop_allowed(event.data, root.folder_drag_place_target);
-                            root.folder_drag_slot = root.place_drop_slot((self.absolute-position.y + event.position.y) / 1px, root.places_drop_force_gap(event.mime-type));
+                            root.folder_drag_place_target = root.place_drop_target((self.absolute-position.y + event.position.y) / 1px, DndApi.external-force-gap(event));
+                            root.folder_drag_over_place_gap = root.place_drop_over_gap((self.absolute-position.y + event.position.y) / 1px, DndApi.external-force-gap(event));
+                            root.folder_drag_over_place_item = root.place_drop_over_item((self.absolute-position.y + event.position.y) / 1px, DndApi.external-force-gap(event));
+                            root.place_drag_rejected = root.folder_drag_over_place_item && !root.place_drop_allowed(DndApi.event-path(event), root.folder_drag_place_target);
+                            root.folder_drag_slot = root.place_drop_slot((self.absolute-position.y + event.position.y) / 1px, DndApi.external-force-gap(event));
                             root.place_drag_slot = root.folder_drag_slot;
-                            if (event.mime-type == "application/x-fika-file-path" && !root.folder_drag_over_place_item) {
+                            if (DndApi.event-kind(event) == DragKind.file && !root.folder_drag_over_place_item) {
                                 root.folder_drag_active = false;
                                 root.place_drag_rejected = false;
-                                root.trace_places_drop("can-drop-rejected:file-gap", event.mime-type, event.data, root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
-                                false
+                                root.trace_places_drop("can-drop-rejected:file-gap", "file", DndApi.event-path(event), root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                                return DragAction.none;
                             } else {
-                                root.trace_places_drop("can-drop-accepted", event.mime-type, event.data, root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
-                                true
+                                root.trace_places_drop("can-drop-accepted", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                                return DragAction.copy;
                             }
                         } else {
                             root.folder_drag_active = false;
                             root.folder_drag_over_place_item = false;
                             root.place_drag_rejected = false;
-                            root.trace_places_drop("can-drop-rejected:" + root.places_drop_rejection_reason(event.data, event.mime-type), event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
-                            false
+                            root.trace_places_drop("can-drop-rejected:" + DndApi.external-rejection-reason(event, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px), "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
+                            return DragAction.none;
                         }
                     }
                     dropped(event) => {
-                        root.trace_places_drop("dropped", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                        root.trace_places_drop("dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
                         if (event.position.y + sidebar-scroll.viewport-y >= 44px && event.position.y + sidebar-scroll.viewport-y <= 44px + root.places.length * 38px) {
                             if (root.folder_drag_over_place_gap || root.folder_drag_slot >= root.places.length) {
-                                if (event.mime-type == "application/x-fika-place-path") {
-                                    root.reorder_place_path(event.data, root.folder_drag_slot);
-                                } else if (root.places_drop_force_gap(event.mime-type)) {
-                                    root.add_external_place_at_slot(event.data, root.folder_drag_slot, event.mime-type);
-                                } else if (event.mime-type == "application/x-fika-folder-path") {
-                                    root.add_place_at_slot(event.data, root.folder_drag_slot);
+                                if (DndApi.event-kind(event) == DragKind.place) {
+                                    root.reorder_place_path(DndApi.event-path(event), root.folder_drag_slot);
+                                } else if (DndApi.external-force-gap(event)) {
+                                    root.add_external_place_at_slot(DndApi.event-path(event), root.folder_drag_slot, DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")));
+                                } else if (DndApi.event-kind(event) == DragKind.folder) {
+                                    root.add_place_at_slot(DndApi.event-path(event), root.folder_drag_slot);
                                 }
                             } else {
-                                if (root.prepare_place_transfer(event.data, root.folder_drag_place_target, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                                if (root.prepare_place_transfer(DndApi.event-path(event), root.folder_drag_place_target, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
                                     root.transfer-menu-open = true;
                                 }
                             }
@@ -728,6 +745,7 @@ export component AppWindow inherits Window {
                         root.place_drag_active = false;
                         root.folder_drag_over_place_item = false;
                         root.place_drag_rejected = false;
+                        return DragAction.copy;
                     }
                 }
             }
@@ -889,35 +907,36 @@ export component AppWindow inherits Window {
                                 }
                             }
                             can-drop(event) => {
-                                if (event.mime-type == "application/x-fika-folder-path" || event.mime-type == "application/x-fika-file-path" || event.mime-type == "application/x-fika-place-path") {
+                                if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
                                     root.main_drag_active = true;
-                                    root.main_drag_rejected = !root.main_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data);
-                                    root.place_drag_target_path = root.main_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data);
-                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected" : "can-drop-accepted", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
-                                    true
-                                } else if (root.main_external_drop_supported(event.mime-type)) {
+                                    root.main_drag_rejected = !root.main_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                                    root.place_drag_target_path = root.main_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected" : "can-drop-accepted", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
+                                    return DragAction.copy;
+                                } else if (DndApi.external-drop-supported(event)) {
                                     root.main_drag_active = true;
-                                    root.main_drag_rejected = !root.main_external_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data, event.mime-type);
-                                    root.place_drag_target_path = root.main_external_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, event.data, event.mime-type);
-                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected:" + root.main_external_drop_rejection_reason(event.data, event.mime-type, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px) : "can-drop-accepted", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
-                                    true
+                                    root.main_drag_rejected = !DndApi.external-drop-allowed(event, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px);
+                                    root.place_drag_target_path = DndApi.external-drop-target-path(event, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px);
+                                    root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected:" + DndApi.external-rejection-reason(event, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px) : "can-drop-accepted", "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
+                                    return DragAction.copy;
                                 } else {
                                     root.main_drag_active = false;
                                     root.main_drag_rejected = false;
                                     root.place_drag_target_path = "";
-                                    root.trace_main_drop("can-drop-rejected:unsupported-mime", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
-                                    false
+                                    root.trace_main_drop("can-drop-rejected:unsupported-mime", "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
+                                    return DragAction.none;
                                 }
                             }
                             dropped(event) => {
-                                root.trace_main_drop("dropped", event.mime-type, event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
+                                root.trace_main_drop("dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
                                 root.main_drag_active = false;
                                 root.main_drag_rejected = false;
-                                if ((event.mime-type == "application/x-fika-folder-path" || event.mime-type == "application/x-fika-file-path" || event.mime-type == "application/x-fika-place-path") && root.prepare_path_main_transfer(event.data, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                                if ((DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_path_main_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
                                     root.transfer-menu-open = true;
-                                } else if (root.main_external_drop_supported(event.mime-type) && root.prepare_external_main_transfer(event.data, event.mime-type, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                                } else if (DndApi.external-drop-supported(event) && root.prepare_external_main_transfer(DndApi.event-path(event), DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
                                     root.transfer-menu-open = true;
                                 }
+                                return DragAction.copy;
                             }
 
                         TouchArea {
@@ -981,6 +1000,7 @@ export component AppWindow inherits Window {
                             height: grid.viewport-height;
 
                             for item[index] in root.virtual_entries: FileTile {
+                                drag-data-source: item.is_dir ? DndApi.make-drag-folder(item.path) : DndApi.make-drag-file(item.path);
                                 property <int> local-index: index + root.virtual_start_index - root.virtual_start_column * grid.rows-per-column;
                                 x: floor(local-index / grid.rows-per-column) * root.icon-cell-width;
                                 y: root.icon-grid-padding + mod(local-index, grid.rows-per-column) * root.icon-row-height;

@@ -62,6 +62,7 @@ export component PlaceButton inherits Rectangle {
     in property <bool> reorderable;
     in property <bool> dragged;
     in property <int> place_count;
+    in property <data-transfer> drag-data-source;
     in property <bool> builtin;
     in property <bool> drop-target;
     in property <bool> available: true;
@@ -79,8 +80,7 @@ export component PlaceButton inherits Rectangle {
 
     drag-area := DragArea {
         enabled: root.reorderable && root.path != "";
-        mime-type: "application/x-fika-place-path";
-        data: root.path;
+        data: root.drag-data-source;
 
         touch-area := TouchArea {
             clicked => { root.clicked(); }

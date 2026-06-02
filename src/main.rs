@@ -113,6 +113,108 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let ui = AppWindow::new()?;
     *external_drop_ui_weak.borrow_mut() = Some(ui.as_weak());
+
+    // ── DndApi bridge ──────────────────────────────────────────────
+    // Maps Slint's opaque `data-transfer` ↔ `DropEvent` ↔ our internal drag info.
+    {
+        use slint::DataTransfer;
+        use slint::language::DropEvent;
+        use std::rc::Rc;
+
+        #[derive(Clone, Debug)]
+        enum FikaDragInfo {
+            Place(String),
+            Folder(String),
+            File(String),
+        }
+
+        let dnd_api = ui.global::<DndApi>();
+
+        // ── DragArea.data constructors ──────────────────────────
+        dnd_api.on_make_drag_place(|path: SharedString| -> DataTransfer {
+            let mut dt = DataTransfer::default();
+            dt.set_user_data(Rc::new(FikaDragInfo::Place(path.to_string())));
+            dt
+        });
+        dnd_api.on_make_drag_folder(|path: SharedString| -> DataTransfer {
+            let mut dt = DataTransfer::default();
+            dt.set_user_data(Rc::new(FikaDragInfo::Folder(path.to_string())));
+            dt
+        });
+        dnd_api.on_make_drag_file(|path: SharedString| -> DataTransfer {
+            let mut dt = DataTransfer::default();
+            dt.set_user_data(Rc::new(FikaDragInfo::File(path.to_string())));
+            dt
+        });
+
+        // ── DropEvent inspectors ────────────────────────────────
+        dnd_api.on_event_kind(|event: DropEvent| -> DragKind {
+            if let Some(rc) = event.data.user_data() {
+                match rc.downcast_ref::<FikaDragInfo>() {
+                    Some(FikaDragInfo::Place(_)) => return DragKind::Place,
+                    Some(FikaDragInfo::Folder(_)) => return DragKind::Folder,
+                    Some(FikaDragInfo::File(_)) => return DragKind::File,
+                    None => {}
+                }
+            }
+            if event.data.has_plaintext() {
+                DragKind::External
+            } else {
+                DragKind::File // fallback, shouldn't normally happen
+            }
+        });
+
+        dnd_api.on_event_path(|event: DropEvent| -> SharedString {
+            if let Some(rc) = event.data.user_data() {
+                if let Some(info) = rc.downcast_ref::<FikaDragInfo>() {
+                    return match info {
+                        FikaDragInfo::Place(p)
+                        | FikaDragInfo::Folder(p)
+                        | FikaDragInfo::File(p) => SharedString::from(p.as_str()),
+                    };
+                }
+            }
+            if let Ok(text) = event.data.fetch_plaintext() {
+                return text;
+            }
+            SharedString::new()
+        });
+
+        // ── External drop helpers (stateless) ──────────────────
+        dnd_api.on_external_force_gap(|event: DropEvent| -> bool {
+            if let Some(rc) = event.data.user_data() {
+                rc.downcast_ref::<FikaDragInfo>().is_none()
+            } else {
+                event.data.has_plaintext()
+            }
+        });
+
+        dnd_api
+            .on_external_drop_supported(|event: DropEvent| -> bool { event.data.has_plaintext() });
+
+        // ── External drop helpers (stateful, captures ui + state) ──
+        {
+            let ui_weak = ui.as_weak();
+            let state_rc = Rc::clone(&state);
+            dnd_api.on_external_drop_allowed(move |event: DropEvent, x, y| -> bool {
+                dnd_external_drop_allowed_impl(&ui_weak, &state_rc, &event, x, y)
+            });
+        }
+        {
+            let ui_weak = ui.as_weak();
+            let state_rc = Rc::clone(&state);
+            dnd_api.on_external_drop_target_path(move |event: DropEvent, x, y| -> SharedString {
+                dnd_external_drop_target_impl(&ui_weak, &state_rc, &event, x, y)
+            });
+        }
+        {
+            let ui_weak = ui.as_weak();
+            let state_rc = Rc::clone(&state);
+            dnd_api.on_external_rejection_reason(move |event: DropEvent, x, y| -> SharedString {
+                dnd_external_rejection_impl(&ui_weak, &state_rc, &event, x, y)
+            });
+        }
+    }
     ui.set_chooser_mode(matches!(args.mode, Mode::Chooser));
     ui.set_chooser_select_directories(args.chooser_select_directories);
     ui.set_chooser_multiple(args.chooser_multiple);
@@ -1059,6 +1161,79 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     ui.run()
+}
+
+// ── DndApi external drop helpers ──────────────────────────────────
+
+/// Extract a local file path from an external `DropEvent` (plaintext URI).
+fn dnd_extract_external_path(event: &slint::language::DropEvent) -> Option<PathBuf> {
+    // Internal drops carry FikaDragInfo user_data — those are not external.
+    if event.data.user_data().is_some() {
+        return None;
+    }
+    let text = event.data.fetch_plaintext().ok()?;
+    app::dnd::external_path_drop_from_payload(&text, "text/plain")
+        .ok()
+        .map(|drop| drop.path)
+}
+
+fn dnd_external_drop_allowed_impl(
+    ui_weak: &slint::Weak<AppWindow>,
+    state: &Rc<RefCell<AppState>>,
+    event: &slint::language::DropEvent,
+    x: f32,
+    y: f32,
+) -> bool {
+    let Some(ui) = ui_weak.upgrade() else {
+        return false;
+    };
+    let Some(path) = dnd_extract_external_path(event) else {
+        return false;
+    };
+    let state = state.borrow();
+    app::transfer::main_drop_allowed(&ui, &state, x, y, &path)
+}
+
+fn dnd_external_drop_target_impl(
+    ui_weak: &slint::Weak<AppWindow>,
+    state: &Rc<RefCell<AppState>>,
+    event: &slint::language::DropEvent,
+    x: f32,
+    y: f32,
+) -> SharedString {
+    let Some(ui) = ui_weak.upgrade() else {
+        return SharedString::new();
+    };
+    let Some(path) = dnd_extract_external_path(event) else {
+        return SharedString::new();
+    };
+    let source = path.to_string_lossy();
+    let state = state.borrow();
+    entry_at_main_point(&ui, &state, x, y)
+        .filter(|entry| entry.is_dir && entry.path.as_str() != source.as_ref())
+        .map_or_else(SharedString::new, |entry| entry.path)
+}
+
+fn dnd_external_rejection_impl(
+    ui_weak: &slint::Weak<AppWindow>,
+    state: &Rc<RefCell<AppState>>,
+    event: &slint::language::DropEvent,
+    x: f32,
+    y: f32,
+) -> SharedString {
+    let Some(ui) = ui_weak.upgrade() else {
+        return "no-window".into();
+    };
+    let Some(path) = dnd_extract_external_path(event) else {
+        return app::dnd::external_path_drop_rejection_reason("", "text/plain")
+            .unwrap_or_else(|| "no-local-file-path".to_string())
+            .into();
+    };
+    let state = state.borrow();
+    app::transfer::main_drop_rejection(&ui, &state, x, y, &path)
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "none".to_string())
+        .into()
 }
 
 fn select_winit_backend_for_external_drops(
