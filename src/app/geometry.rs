@@ -293,6 +293,7 @@ pub(crate) struct MenuMetricsInput {
     pub(crate) add_to_places_visible: bool,
     pub(crate) clipboard_has_paths: bool,
     pub(crate) place_builtin: bool,
+    pub(crate) device_mounted: bool,
     pub(crate) device_pending: bool,
     pub(crate) device_can_mount: bool,
     pub(crate) device_can_unmount: bool,
@@ -362,8 +363,8 @@ fn device_context_menu_height(
         return title + item;
     }
 
-    let open_rows = i32::from(input.is_dir)
-        + i32::from(!input.is_dir && input.device_can_mount)
+    let open_rows = i32::from(input.device_mounted)
+        + i32::from(!input.device_mounted && input.device_can_mount)
         + i32::from(input.device_can_unmount)
         + i32::from(input.device_can_eject);
     if open_rows == 0 {
@@ -919,6 +920,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: false,
+            device_mounted: false,
             device_pending: false,
             device_can_mount: false,
             device_can_unmount: false,
@@ -941,6 +943,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: true,
             place_builtin: false,
+            device_mounted: false,
             device_pending: false,
             device_can_mount: false,
             device_can_unmount: false,
@@ -966,6 +969,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: true,
+            device_mounted: false,
             device_pending: false,
             device_can_mount: false,
             device_can_unmount: false,
@@ -984,6 +988,7 @@ mod tests {
             add_to_places_visible: true,
             clipboard_has_paths: false,
             place_builtin: false,
+            device_mounted: false,
             device_pending: false,
             device_can_mount: false,
             device_can_unmount: false,
@@ -1005,6 +1010,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: true,
+            device_mounted: true,
             device_pending: false,
             device_can_mount: false,
             device_can_unmount: false,
@@ -1023,6 +1029,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: true,
+            device_mounted: false,
             device_pending: false,
             device_can_mount: false,
             device_can_unmount: false,
@@ -1041,6 +1048,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: false,
+            device_mounted: true,
             device_pending: false,
             device_can_mount: false,
             device_can_unmount: true,
@@ -1062,6 +1070,7 @@ mod tests {
             add_to_places_visible: false,
             clipboard_has_paths: false,
             place_builtin: true,
+            device_mounted: true,
             device_pending: true,
             device_can_mount: false,
             device_can_unmount: true,
