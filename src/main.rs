@@ -1679,7 +1679,7 @@ fn apply_async_event(
                 register_undo(ui, state, undo);
             }
             if let Some(status) = applied.status {
-                refresh_directory(ui, state, bridge);
+                refresh_affected_directories(ui, state, bridge, &applied.affected_dirs);
                 set_status(ui, &status);
             }
         }

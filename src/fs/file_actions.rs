@@ -20,6 +20,7 @@ pub(crate) struct FileActionResult {
 pub(crate) struct FileActionApplyResult {
     pub(crate) status: Option<String>,
     pub(crate) undo: Option<FileUndo>,
+    pub(crate) affected_dirs: Vec<PathBuf>,
 }
 
 pub(crate) fn register_callbacks(
@@ -430,32 +431,64 @@ pub(crate) fn apply_file_action_result(
     state: &Rc<RefCell<AppState>>,
     result: FileActionResult,
 ) -> FileActionApplyResult {
-    state
-        .borrow_mut()
-        .remove_directory_cache(&result.affected_dir);
-    match result.result {
-        Ok(message) => FileActionApplyResult {
-            status: Some(format!("{} complete: {message}", result.action)),
-            undo: result.undo,
-        },
+    let (apply, privileged_request) = file_action_apply_result(result);
+    if let Some((command, reason)) = privileged_request {
+        request_privileged_action(ui, state, command, &reason);
+    }
+    apply
+}
+
+fn file_action_apply_result(
+    result: FileActionResult,
+) -> (
+    FileActionApplyResult,
+    Option<(privilege::PrivilegedCommand, String)>,
+) {
+    let FileActionResult {
+        action,
+        affected_dir,
+        privileged_command,
+        result,
+        undo,
+    } = result;
+    match result {
+        Ok(message) => (
+            FileActionApplyResult {
+                status: Some(format!("{action} complete: {message}")),
+                undo,
+                affected_dirs: vec![affected_dir],
+            },
+            None,
+        ),
         Err(err) if privilege::is_permission_error(&err) => {
-            if let Some(command) = result.privileged_command {
-                request_privileged_action(ui, state, command, &err);
-                FileActionApplyResult {
-                    status: None,
-                    undo: None,
-                }
+            if let Some(command) = privileged_command {
+                (
+                    FileActionApplyResult {
+                        status: None,
+                        undo: None,
+                        affected_dirs: Vec::new(),
+                    },
+                    Some((command, err)),
+                )
             } else {
-                FileActionApplyResult {
-                    status: Some(format!("{} failed: {err}", result.action)),
-                    undo: None,
-                }
+                (
+                    FileActionApplyResult {
+                        status: Some(format!("{action} failed: {err}")),
+                        undo: None,
+                        affected_dirs: vec![affected_dir],
+                    },
+                    None,
+                )
             }
         }
-        Err(err) => FileActionApplyResult {
-            status: Some(format!("{} failed: {err}", result.action)),
-            undo: None,
-        },
+        Err(err) => (
+            FileActionApplyResult {
+                status: Some(format!("{action} failed: {err}")),
+                undo: None,
+                affected_dirs: vec![affected_dir],
+            },
+            None,
+        ),
     }
 }
 
@@ -521,6 +554,61 @@ impl SummaryMessage for file_ops::FileActionSummary {
                 self.failures.len(),
                 self.failures.join("; ")
             )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_action_apply_result_preserves_affected_dir_for_routed_refresh() {
+        let (applied, privileged_request) = file_action_apply_result(FileActionResult {
+            action: "Create file",
+            affected_dir: PathBuf::from("/tmp/right"),
+            privileged_command: None,
+            result: Ok("note.txt".to_string()),
+            undo: None,
+        });
+
+        assert_eq!(
+            applied.status,
+            Some("Create file complete: note.txt".to_string())
+        );
+        assert!(applied.undo.is_none());
+        assert_eq!(applied.affected_dirs, vec![PathBuf::from("/tmp/right")]);
+        assert!(privileged_request.is_none());
+    }
+
+    #[test]
+    fn file_action_apply_result_defers_refresh_when_privilege_is_requested() {
+        let command = privilege::PrivilegedCommand::CreateFolder {
+            parent: PathBuf::from("/tmp/protected"),
+            name: "new".to_string(),
+        };
+        let (applied, privileged_request) = file_action_apply_result(FileActionResult {
+            action: "Create folder",
+            affected_dir: PathBuf::from("/tmp/protected"),
+            privileged_command: Some(command),
+            result: Err("Permission denied".to_string()),
+            undo: None,
+        });
+
+        assert!(applied.status.is_none());
+        assert!(applied.undo.is_none());
+        assert!(applied.affected_dirs.is_empty());
+
+        let Some((request, reason)) = privileged_request else {
+            panic!("permission error should request privileged action");
+        };
+        assert_eq!(reason, "Permission denied");
+        match request {
+            privilege::PrivilegedCommand::CreateFolder { parent, name } => {
+                assert_eq!(parent, PathBuf::from("/tmp/protected"));
+                assert_eq!(name, "new");
+            }
+            other => panic!("unexpected privileged request: {other:?}"),
         }
     }
 }
