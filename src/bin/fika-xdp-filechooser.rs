@@ -602,15 +602,106 @@ fn chooser_filter_map(
 }
 
 fn chooser_filter_spec((label, patterns): &PortalFilter) -> Option<String> {
-    let globs = patterns
-        .iter()
-        .filter(|(kind, pattern)| *kind == 0 && !pattern.is_empty())
-        .map(|(_kind, pattern)| pattern.as_str())
-        .collect::<Vec<_>>();
+    let globs = chooser_filter_globs(patterns);
     if globs.is_empty() {
         return None;
     }
     Some(format!("{label}\t{}", globs.join(";")))
+}
+
+fn chooser_filter_globs(patterns: &[(u32, String)]) -> Vec<String> {
+    let mut globs = Vec::new();
+    for (kind, pattern) in patterns {
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            continue;
+        }
+
+        match kind {
+            0 => push_unique_glob(&mut globs, pattern),
+            1 => {
+                for glob in mime_filter_globs(pattern) {
+                    push_unique_glob(&mut globs, glob);
+                }
+            }
+            _ => {}
+        }
+    }
+    globs
+}
+
+fn push_unique_glob(globs: &mut Vec<String>, glob: &str) {
+    if !globs.iter().any(|existing| existing == glob) {
+        globs.push(glob.to_string());
+    }
+}
+
+fn mime_filter_globs(mime_type: &str) -> &'static [&'static str] {
+    match mime_type.trim().to_ascii_lowercase().as_str() {
+        "image/*" => &[
+            "*.avif", "*.bmp", "*.gif", "*.heic", "*.heif", "*.jpeg", "*.jpg", "*.png", "*.svg",
+            "*.webp",
+        ],
+        "image/avif" => &["*.avif"],
+        "image/bmp" | "image/x-bmp" => &["*.bmp"],
+        "image/gif" => &["*.gif"],
+        "image/heic" => &["*.heic"],
+        "image/heif" => &["*.heif"],
+        "image/jpeg" | "image/pjpeg" => &["*.jpg", "*.jpeg"],
+        "image/png" | "image/x-png" => &["*.png"],
+        "image/svg+xml" => &["*.svg"],
+        "image/webp" => &["*.webp"],
+        "text/*" => &[
+            "*.txt",
+            "*.text",
+            "*.md",
+            "*.markdown",
+            "*.rst",
+            "*.csv",
+            "*.tsv",
+            "*.log",
+            "*.ini",
+            "*.conf",
+            "*.toml",
+            "*.json",
+            "*.yaml",
+            "*.yml",
+            "*.xml",
+            "*.html",
+            "*.htm",
+            "*.css",
+            "*.js",
+            "*.rs",
+            "*.c",
+            "*.h",
+            "*.cpp",
+            "*.hpp",
+            "*.py",
+            "*.sh",
+        ],
+        "text/plain" => &[
+            "*.txt",
+            "*.text",
+            "*.md",
+            "*.markdown",
+            "*.rst",
+            "*.log",
+            "*.ini",
+            "*.conf",
+        ],
+        "text/csv" => &["*.csv"],
+        "text/html" => &["*.html", "*.htm"],
+        "text/markdown" | "text/x-markdown" => &["*.md", "*.markdown"],
+        "text/xml" | "application/xml" => &["*.xml"],
+        "application/json" => &["*.json"],
+        "application/pdf" => &["*.pdf"],
+        "application/zip" => &["*.zip"],
+        "application/gzip" => &["*.gz"],
+        "application/x-tar" => &["*.tar"],
+        "application/x-7z-compressed" => &["*.7z"],
+        "application/vnd.rar" | "application/x-rar-compressed" => &["*.rar"],
+        _ => &[],
+    }
 }
 
 fn chooser_choice_specs(choices: &[PortalChoice]) -> Vec<String> {
@@ -1118,7 +1209,10 @@ mod tests {
         let filter_map = chooser_filter_map(&HashMap::new(), filters.clone());
         assert_eq!(
             filter_map.chooser_specs,
-            vec!["Text\t*.txt".to_string(), "Images\t*.png".to_string()]
+            vec![
+                "Text\t*.txt;*.text;*.md;*.markdown;*.rst;*.log;*.ini;*.conf".to_string(),
+                "Images\t*.png".to_string()
+            ]
         );
 
         let result = results_for_paths(
@@ -1135,7 +1229,7 @@ mod tests {
     }
 
     #[test]
-    fn portal_mime_only_filters_are_not_exposed_as_empty_chooser_filters() {
+    fn portal_mime_only_filters_map_to_chooser_specs() {
         let filters = vec![
             ("MIME only".to_string(), vec![(1, "image/png".to_string())]),
             ("Images".to_string(), vec![(0, "*.png".to_string())]),
@@ -1148,24 +1242,53 @@ mod tests {
 
         let filter_map = chooser_filter_map(&options, filters.clone());
 
-        assert_eq!(filter_map.chooser_specs, vec!["Images\t*.png".to_string()]);
-        assert_eq!(filter_map.portal_indices, vec![1]);
-        assert_eq!(filter_map.initial_chooser_index, None);
+        assert_eq!(
+            filter_map.chooser_specs,
+            vec!["MIME only\t*.png".to_string(), "Images\t*.png".to_string()]
+        );
+        assert_eq!(filter_map.portal_indices, vec![0, 1]);
+        assert_eq!(filter_map.initial_chooser_index, Some(0));
 
         let result = results_for_paths(
             ChooserResult {
                 paths: vec![PathBuf::from("/tmp/a.png")],
-                filter_index: None,
+                filter_index: Some(0),
                 choices: Vec::new(),
             },
             &options,
             &filter_map,
         );
-        assert!(!result.contains_key("current_filter"));
+        let current_filter = result.get("current_filter").cloned().unwrap();
+        assert_eq!(PortalFilter::try_from(current_filter).unwrap(), filters[0]);
     }
 
     #[test]
-    fn portal_result_filter_maps_only_supported_chooser_indices() {
+    fn portal_unknown_mime_only_filters_stay_hidden() {
+        let filters = vec![
+            (
+                "Unknown".to_string(),
+                vec![(1, "application/x-fika-unknown".to_string())],
+            ),
+            (
+                "Any text".to_string(),
+                vec![(1, "text/*".to_string()), (1, "text/plain".to_string())],
+            ),
+        ];
+
+        let filter_map = chooser_filter_map(&HashMap::new(), filters.clone());
+
+        assert_eq!(
+            filter_map.chooser_specs,
+            vec![
+                "Any text\t*.txt;*.text;*.md;*.markdown;*.rst;*.csv;*.tsv;*.log;*.ini;*.conf;*.toml;*.json;*.yaml;*.yml;*.xml;*.html;*.htm;*.css;*.js;*.rs;*.c;*.h;*.cpp;*.hpp;*.py;*.sh"
+                    .to_string()
+            ]
+        );
+        assert_eq!(filter_map.portal_indices, vec![1]);
+    }
+
+    #[test]
+    fn portal_result_filter_maps_supported_chooser_indices() {
         let filters = vec![
             ("MIME only".to_string(), vec![(1, "image/png".to_string())]),
             (
@@ -1177,14 +1300,18 @@ mod tests {
         let filter_map = chooser_filter_map(&HashMap::new(), filters.clone());
         assert_eq!(
             filter_map.chooser_specs,
-            vec!["Text\t*.txt".to_string(), "Images\t*.png".to_string()]
+            vec![
+                "MIME only\t*.png".to_string(),
+                "Text\t*.txt;*.text;*.md;*.markdown;*.rst;*.log;*.ini;*.conf".to_string(),
+                "Images\t*.png".to_string()
+            ]
         );
-        assert_eq!(filter_map.portal_indices, vec![1, 2]);
+        assert_eq!(filter_map.portal_indices, vec![0, 1, 2]);
 
         let result = results_for_paths(
             ChooserResult {
                 paths: vec![PathBuf::from("/tmp/a.txt")],
-                filter_index: Some(0),
+                filter_index: Some(1),
                 choices: Vec::new(),
             },
             &HashMap::new(),
