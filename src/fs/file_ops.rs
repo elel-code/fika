@@ -17,6 +17,12 @@ pub struct TransferOutcome {
     pub overwritten_backup: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransferTargetRelation {
+    Same,
+    Descendant,
+}
+
 pub fn perform_transfer_with_progress(
     operation: &str,
     source: &Path,
@@ -52,6 +58,9 @@ pub fn perform_transfer_with_progress_outcome(
     }
     if !target_dir.is_dir() {
         return Err("target is not a folder".to_string());
+    }
+    if let Some(relation) = transfer_target_relation(source, target_dir) {
+        return Err(transfer_target_relation_error(relation).to_string());
     }
 
     let file_name = source
@@ -102,6 +111,54 @@ pub fn base_destination(source: &Path, target_dir: &Path) -> Result<PathBuf, Str
         .file_name()
         .ok_or_else(|| "source has no file name".to_string())?;
     Ok(target_dir.join(file_name))
+}
+
+pub fn transfer_target_relation(
+    source: &Path,
+    target_dir: &Path,
+) -> Option<TransferTargetRelation> {
+    if source == target_dir || canonical_paths_equal(source, target_dir) {
+        return Some(TransferTargetRelation::Same);
+    }
+    if target_is_source_descendant(source, target_dir) {
+        return Some(TransferTargetRelation::Descendant);
+    }
+    None
+}
+
+pub fn target_is_source_or_descendant(source: &Path, target_dir: &Path) -> bool {
+    transfer_target_relation(source, target_dir).is_some()
+}
+
+fn transfer_target_relation_error(relation: TransferTargetRelation) -> &'static str {
+    match relation {
+        TransferTargetRelation::Same => "cannot transfer an item onto itself",
+        TransferTargetRelation::Descendant => "cannot transfer a folder into itself",
+    }
+}
+
+fn canonical_paths_equal(source: &Path, target_dir: &Path) -> bool {
+    let Ok(source) = source.canonicalize() else {
+        return false;
+    };
+    let Ok(target_dir) = target_dir.canonicalize() else {
+        return false;
+    };
+    source == target_dir
+}
+
+fn target_is_source_descendant(source: &Path, target_dir: &Path) -> bool {
+    if target_dir.starts_with(source) {
+        return true;
+    }
+
+    let Ok(source) = source.canonicalize() else {
+        return false;
+    };
+    let Ok(target_dir) = target_dir.canonicalize() else {
+        return false;
+    };
+    target_dir.starts_with(source)
 }
 
 pub fn renamed_destination(target_dir: &Path, name: &str) -> Result<PathBuf, String> {
@@ -779,6 +836,61 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!target.join("source.bin").exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn transfer_core_rejects_self_and_descendant_targets() {
+        let temp = test_dir("target-relation");
+        let source = temp.join("source");
+        let child = source.join("child");
+        let sibling = temp.join("sibling");
+        fs::create_dir_all(&child).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+
+        assert_eq!(
+            transfer_target_relation(&source, &source),
+            Some(TransferTargetRelation::Same)
+        );
+        assert_eq!(
+            transfer_target_relation(&source, &child),
+            Some(TransferTargetRelation::Descendant)
+        );
+        assert_eq!(transfer_target_relation(&source, &sibling), None);
+        assert_eq!(
+            perform_transfer_with_progress("copy", &source, &source, "keep-both", None, |_| {})
+                .unwrap_err(),
+            "cannot transfer an item onto itself"
+        );
+        assert_eq!(
+            perform_transfer_with_progress("copy", &source, &child, "keep-both", None, |_| {})
+                .unwrap_err(),
+            "cannot transfer a folder into itself"
+        );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transfer_core_rejects_symlinked_descendant_target() {
+        let temp = test_dir("symlink-target-relation");
+        let source = temp.join("source");
+        let child = source.join("child");
+        let link = temp.join("link-to-child");
+        fs::create_dir_all(&child).unwrap();
+        std::os::unix::fs::symlink(&child, &link).unwrap();
+
+        assert_eq!(
+            transfer_target_relation(&source, &link),
+            Some(TransferTargetRelation::Descendant)
+        );
+        assert_eq!(
+            perform_transfer_with_progress("copy", &source, &link, "keep-both", None, |_| {})
+                .unwrap_err(),
+            "cannot transfer a folder into itself"
+        );
+
         let _ = fs::remove_dir_all(temp);
     }
 

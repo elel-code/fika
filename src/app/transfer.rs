@@ -237,44 +237,14 @@ fn transfer_menu_position(
 }
 
 pub(crate) fn transfer_target_rejection(source: &Path, target_dir: &Path) -> Option<&'static str> {
-    if source == target_dir || canonical_paths_equal(source, target_dir) {
-        return Some("Cannot drop an item onto itself");
-    }
-    if target_is_source_descendant(source, target_dir) {
-        return Some("Cannot drop a folder into itself");
-    }
-    None
+    file_ops::transfer_target_relation(source, target_dir).map(|relation| match relation {
+        file_ops::TransferTargetRelation::Same => "Cannot drop an item onto itself",
+        file_ops::TransferTargetRelation::Descendant => "Cannot drop a folder into itself",
+    })
 }
 
 pub(crate) fn target_is_source_or_descendant(source: &Path, target_dir: &Path) -> bool {
-    source == target_dir
-        || target_dir.starts_with(source)
-        || canonical_paths_equal(source, target_dir)
-        || target_is_source_descendant(source, target_dir)
-}
-
-fn canonical_paths_equal(source: &Path, target_dir: &Path) -> bool {
-    let Ok(source) = source.canonicalize() else {
-        return false;
-    };
-    let Ok(target_dir) = target_dir.canonicalize() else {
-        return false;
-    };
-    source == target_dir
-}
-
-fn target_is_source_descendant(source: &Path, target_dir: &Path) -> bool {
-    if target_dir.starts_with(source) {
-        return true;
-    }
-
-    let Ok(source) = source.canonicalize() else {
-        return false;
-    };
-    let Ok(target_dir) = target_dir.canonicalize() else {
-        return false;
-    };
-    target_dir.starts_with(source)
+    file_ops::target_is_source_or_descendant(source, target_dir)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -237,6 +237,7 @@
   - Current: context-menu clipboard refresh and Paste both validate clipboard paths before exposing or queueing transfers, drop entries that no longer exist, and clear the Paste affordance if all clipboard items are stale.
   - Current: Paste counts only transfers accepted by the transfer layer; rejected self/descendant, missing-source, or invalid-target entries do not inflate the queued count, and Cut clipboard state is cleared only after at least one move is accepted.
   - Current: Paste and drag/drop transfer acceptance share the same self/descendant rejection helper, including canonical path checks so symlinked targets that resolve inside the source folder are rejected before queueing.
+  - Current: the same self/descendant rejection also lives in the core file operation path, so privileged helper calls or future non-UI transfer entrypoints cannot bypass the safety check.
 
 - [x] First-pass conflict handling.
   - Acceptance: copy/move/link transfers do not silently pick a conflict policy when the destination name exists.
