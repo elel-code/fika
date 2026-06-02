@@ -159,11 +159,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     None => {}
                 }
             }
-            if event.data.has_plaintext() {
-                DragKind::External
-            } else {
-                DragKind::File // fallback, shouldn't normally happen
-            }
+            DragKind::Unsupported
         });
 
         dnd_api.on_event_path(|event: DropEvent| -> SharedString {
@@ -175,9 +171,6 @@ fn main() -> Result<(), slint::PlatformError> {
                         SharedString::from(p.as_str())
                     }
                 };
-            }
-            if let Ok(text) = event.data.fetch_plaintext() {
-                return text;
             }
             SharedString::new()
         });

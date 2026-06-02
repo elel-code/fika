@@ -77,7 +77,7 @@ fn dnd_drop_validation_summary(_payload: &str, mime_type: &str) -> String {
         return "internal-drag".to_string();
     }
 
-    "rejected reason=external-dnd-unsupported".to_string()
+    "rejected reason=unsupported-dnd-payload".to_string()
 }
 
 fn is_internal_drag_mime(mime_type: &str) -> bool {
@@ -144,7 +144,7 @@ mod tests {
     fn dnd_validation_rejects_non_internal_drop_payloads() {
         assert_eq!(
             dnd_drop_validation_summary("file:///tmp/source", "text/uri-list"),
-            "rejected reason=external-dnd-unsupported"
+            "rejected reason=unsupported-dnd-payload"
         );
     }
 

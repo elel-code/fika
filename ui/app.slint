@@ -811,7 +811,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     can-drop(event) => {
-                        root.trace_places_drop("can-drop", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                        root.trace_places_drop("can-drop", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
                         if (DndApi.event-kind(event) == DragKind.place || DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file) {
                             root.folder_drag_path = DndApi.event-path(event);
                             root.folder_drag_label = DndApi.event-path(event);
@@ -837,19 +837,19 @@ export component AppWindow inherits Window {
                                 root.trace_places_drop("can-drop-rejected:file-gap", "file", DndApi.event-path(event), root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
                                 return DragAction.none;
                             } else {
-                                root.trace_places_drop("can-drop-accepted", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                                root.trace_places_drop("can-drop-accepted", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), root.folder_drag_x / 1px, root.folder_drag_y / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
                                 return DragAction.copy;
                             }
                         } else {
                             root.folder_drag_active = false;
                             root.folder_drag_over_place_item = false;
                             root.place_drag_rejected = false;
-                            root.trace_places_drop("can-drop-rejected:slint-external-dnd-unsupported", "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
+                            root.trace_places_drop("can-drop-rejected:unsupported-dnd-payload", "unsupported", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, -1, -1, false, false);
                             return DragAction.none;
                         }
                     }
                     dropped(event) => {
-                        root.trace_places_drop("dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
+                        root.trace_places_drop("dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.folder_drag_slot, root.folder_drag_place_target, root.folder_drag_over_place_gap, root.folder_drag_over_place_item);
                         if (event.position.y + sidebar-scroll.viewport-y >= 44px && event.position.y + sidebar-scroll.viewport-y <= 44px + root.places.length * 38px) {
                             if (root.folder_drag_over_place_gap || root.folder_drag_slot >= root.places.length) {
                                 if (DndApi.event-kind(event) == DragKind.place) {
@@ -1047,12 +1047,12 @@ export component AppWindow inherits Window {
                                     root.main_drag_active = false;
                                     root.main_drag_rejected = false;
                                     root.place_drag_target_path = "";
-                                    root.trace_main_drop("can-drop-rejected:slint-external-dnd-unsupported", "external", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
+                                    root.trace_main_drop("can-drop-rejected:unsupported-dnd-payload", "unsupported", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
                                     return DragAction.none;
                                 }
                             }
                             dropped(event) => {
-                                root.trace_main_drop("dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "external")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
+                                root.trace_main_drop("dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
                                 root.main_drag_active = false;
                                 root.main_drag_rejected = false;
                                 if (!root.directory_loading && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_path_main_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
