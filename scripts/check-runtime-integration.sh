@@ -3,7 +3,7 @@ set -u
 
 usage() {
     cat <<'EOF'
-Usage: check-runtime-integration.sh [--metadata-only] [--activate-system-helper]
+Usage: check-runtime-integration.sh [--metadata-only] [--activate-system-helper] [--record FILE]
 
 Checks an installed Fika desktop integration setup.
 
@@ -23,11 +23,17 @@ Options:
       Also introspect org.fika.FileManager1.Privileged on the system bus.
       This may start the root D-Bus activated helper, but does not call any
       privileged file-operation method.
+
+  --record FILE
+      Tee stdout and stderr to FILE with a small report header. This is meant
+      for distro/desktop validation runs that need to be compared later.
 EOF
 }
 
+original_args=("$@")
 metadata_only=false
 activate_system_helper=false
+record_path=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -36,6 +42,23 @@ while [[ $# -gt 0 ]]; do
             ;;
         --activate-system-helper)
             activate_system_helper=true
+            ;;
+        --record)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "--record requires a file path" >&2
+                usage >&2
+                exit 2
+            fi
+            record_path="$2"
+            shift
+            ;;
+        --record=*)
+            record_path="${1#--record=}"
+            if [[ -z "$record_path" ]]; then
+                echo "--record requires a file path" >&2
+                usage >&2
+                exit 2
+            fi
             ;;
         -h|--help)
             usage
@@ -85,6 +108,40 @@ warn() {
 fail() {
     printf 'fail: %s\n' "$*" >&2
     failures=$((failures + 1))
+}
+
+start_recording() {
+    local path="$1"
+    if [[ -z "$path" ]]; then
+        return
+    fi
+
+    local dir
+    dir="$(dirname -- "$path")"
+    if [[ "$dir" != "." ]]; then
+        mkdir -p -- "$dir" || {
+            echo "cannot create report directory: $dir" >&2
+            exit 1
+        }
+    fi
+
+    : > "$path" || {
+        echo "cannot write report file: $path" >&2
+        exit 1
+    }
+
+    exec > >(tee -a "$path") 2> >(tee -a "$path" >&2)
+
+    echo "Fika runtime integration report"
+    echo "  recorded_at: $(date -Is 2>/dev/null || date)"
+    printf '  command:    %q' "$0"
+    local arg
+    for arg in "${original_args[@]}"; do
+        printf ' %q' "$arg"
+    done
+    echo
+    echo "  report:     $path"
+    echo
 }
 
 first_line() {
@@ -418,6 +475,18 @@ check_devices_runtime() {
     echo
 }
 
+print_live_validation_notes() {
+    if [[ "$metadata_only" == true ]]; then
+        return
+    fi
+
+    echo "Live validation notes"
+    echo "  - Keep this output with the distro name, desktop, session type, and package version."
+    echo "  - Re-run with --activate-system-helper when validating packaged system-bus activation."
+    echo "  - Test with real removable media before closing UDisks2 mount/unmount/eject validation."
+    echo
+}
+
 fika_diagnostics_command() {
     if [[ -x "$fika_binary" ]]; then
         printf '%s' "$fika_binary"
@@ -464,17 +533,21 @@ check_fika_device_model() {
     echo
 }
 
+start_recording "$record_path"
+
 echo "Checking Fika integration metadata"
 echo "  bindir:     $bindir"
 echo "  datadir:    $datadir"
 echo "  sysconfdir: $sysconfdir"
 echo "  destdir:    ${destdir:-<none>}"
+echo "  record:     ${record_path:-<none>}"
 echo
 
 if [[ "$metadata_only" == false ]]; then
     print_runtime_context
     check_devices_runtime
     check_fika_device_model
+    print_live_validation_notes
 fi
 
 require_file "$privileged_service"
