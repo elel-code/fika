@@ -1244,10 +1244,10 @@ fn load_directory_with_preservation(
             state.entries = cached_entries;
             state.virtual_view.invalidate();
         }
-        ui.set_items_path(current_dir.display().to_string().into());
-        ui.set_directory_loading(false);
         reset_search_controls(ui);
         apply_filter(ui, state, bridge, false);
+        ui.set_items_path(current_dir.display().to_string().into());
+        ui.set_directory_loading(false);
         set_status(ui, "Refreshing cached folder...");
     } else {
         ui.set_directory_loading(true);
@@ -1595,7 +1595,6 @@ fn apply_directory_result(
 
     match result.result {
         Ok(entries) => {
-            ui.set_directory_loading(false);
             debug_log(&format!(
                 "directory_loaded ok generation={} path={} entries={} preserve_view={}",
                 result.generation,
@@ -1606,7 +1605,6 @@ fn apply_directory_result(
             if result.defer_view_restore {
                 restore_view_state(ui, state, &result.path);
             }
-            ui.set_items_path(result.path.display().to_string().into());
             let unchanged = {
                 let mut state = state.borrow_mut();
                 if directory_entries_match(&state.entries, &entries) {
@@ -1632,15 +1630,18 @@ fn apply_directory_result(
                     result.path.display()
                 ));
                 set_directory_status_from_entries(ui, state);
+                ui.set_items_path(result.path.display().to_string().into());
+                ui.set_directory_loading(false);
                 return;
             }
             if !result.preserve_view {
                 reset_search_controls(ui);
             }
             apply_filter(ui, state, bridge, result.preserve_view);
+            ui.set_items_path(result.path.display().to_string().into());
+            ui.set_directory_loading(false);
         }
         Err(err) => {
-            ui.set_directory_loading(false);
             debug_log(&format!(
                 "directory_loaded error generation={} path={} preserve_view={} error={err}",
                 result.generation,
@@ -1667,6 +1668,7 @@ fn apply_directory_result(
             ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(
                 Vec::<FileEntry>::new(),
             ))));
+            ui.set_directory_loading(false);
             if result.preserve_view {
                 retain_visible_selection(ui, state, &[]);
             } else {
@@ -2600,9 +2602,8 @@ fn sync_virtual_entries_with_count(
         ui.set_main_viewport_x(update.viewport_x);
         ui.set_main_viewport_offset(-update.viewport_x);
     }
-    ui.set_entry_count(update.entry_count as i32);
-
     if !update.rebuild_model {
+        ui.set_entry_count(update.entry_count as i32);
         return;
     }
 
@@ -2611,6 +2612,7 @@ fn sync_virtual_entries_with_count(
     ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(
         update.entries.clone(),
     ))));
+    ui.set_entry_count(update.entry_count as i32);
 
     if schedule_thumbnails {
         let thumbnail_entries =
@@ -2662,7 +2664,6 @@ fn apply_filter(
             summary,
         )
     };
-    ui.set_entry_count(summary.count as i32);
     sync_virtual_entries_with_count(ui, state, bridge, true, Some(summary.count));
     if preserve_selection {
         let empty_paths = Vec::new();
