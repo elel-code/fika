@@ -473,7 +473,16 @@ fn copy_path_inner(
     progress: &mut impl FnMut(TransferProgress),
 ) -> io::Result<()> {
     let metadata = fs::symlink_metadata(source)?;
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+    if metadata.file_type().is_symlink() {
+        copy_symlink(
+            source,
+            destination,
+            cancel,
+            bytes_done,
+            bytes_total,
+            progress,
+        )
+    } else if metadata.is_dir() {
         copy_directory(
             source,
             destination,
@@ -492,6 +501,40 @@ fn copy_path_inner(
             progress,
         )
     }
+}
+
+fn copy_symlink(
+    source: &Path,
+    destination: &Path,
+    cancel: Option<&Arc<AtomicBool>>,
+    bytes_done: &mut u64,
+    bytes_total: u64,
+    progress: &mut impl FnMut(TransferProgress),
+) -> io::Result<()> {
+    ensure_not_cancelled(cancel)?;
+    let target = fs::read_link(source)?;
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, destination)?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let metadata = fs::metadata(source)?;
+        if metadata.is_dir() {
+            std::os::windows::fs::symlink_dir(&target, destination)?;
+        } else {
+            std::os::windows::fs::symlink_file(&target, destination)?;
+        }
+    }
+
+    *bytes_done = bytes_total;
+    progress(TransferProgress {
+        bytes_done: *bytes_done,
+        bytes_total,
+    });
+    Ok(())
 }
 
 fn copy_directory(
@@ -836,6 +879,96 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!target.join("source.bin").exists());
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_preserves_symlinks_instead_of_dereferencing() {
+        let temp = test_dir("copy-symlink");
+        let source_dir = temp.join("source");
+        let target = temp.join("target");
+        let nested_target = temp.join("nested-target");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::create_dir(&nested_target).unwrap();
+        fs::write(source_dir.join("file.txt"), "linked file").unwrap();
+        fs::create_dir(source_dir.join("folder")).unwrap();
+        std::os::unix::fs::symlink("file.txt", source_dir.join("file-link")).unwrap();
+        std::os::unix::fs::symlink("folder", source_dir.join("folder-link")).unwrap();
+
+        let copied_file_link = perform_transfer_with_progress(
+            "copy",
+            &source_dir.join("file-link"),
+            &target,
+            "keep-both",
+            None,
+            |_| {},
+        )
+        .unwrap();
+        let copied_folder_link = perform_transfer_with_progress(
+            "copy",
+            &source_dir.join("folder-link"),
+            &target,
+            "keep-both",
+            None,
+            |_| {},
+        )
+        .unwrap();
+
+        assert!(
+            fs::symlink_metadata(&copied_file_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&copied_file_link).unwrap(),
+            PathBuf::from("file.txt")
+        );
+        assert!(
+            fs::symlink_metadata(&copied_folder_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&copied_folder_link).unwrap(),
+            PathBuf::from("folder")
+        );
+
+        let copied_dir = perform_transfer_with_progress(
+            "copy",
+            &source_dir,
+            &nested_target,
+            "keep-both",
+            None,
+            |_| {},
+        )
+        .unwrap();
+        let copied_nested_file_link = copied_dir.join("file-link");
+        let copied_nested_folder_link = copied_dir.join("folder-link");
+        assert!(
+            fs::symlink_metadata(&copied_nested_file_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&copied_nested_file_link).unwrap(),
+            PathBuf::from("file.txt")
+        );
+        assert!(
+            fs::symlink_metadata(&copied_nested_folder_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&copied_nested_folder_link).unwrap(),
+            PathBuf::from("folder")
+        );
+
         let _ = fs::remove_dir_all(temp);
     }
 
