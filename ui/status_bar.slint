@@ -29,13 +29,13 @@ export component StatusBar inherits Rectangle {
     callback chooser_choice_requested(int, length, length);
 
     height: 36px;
-    background: root.dark ? #0f1214 : #fbfcfd;
+    background: root.dark ? #101316 : #f7f8fa;
     border-width: 0px;
 
     Rectangle {
         width: parent.width;
         height: 1px;
-        background: root.dark ? #252b31 : #e7edf3;
+        background: root.dark ? #242a30 : #e2e7ec;
     }
 
     HorizontalLayout {
@@ -46,7 +46,7 @@ export component StatusBar inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.selected-count == 0 ? root.status : root.selected-status;
-            color: root.dark ? #dce3ea : #526071;
+            color: root.dark ? #d9e0e7 : #526071;
             font-size: 13px;
             overflow: elide;
             vertical-alignment: center;

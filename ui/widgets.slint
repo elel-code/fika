@@ -4,10 +4,10 @@ export component ToolButton inherits Rectangle {
     in property <bool> enabled: true;
     callback clicked();
 
-    width: 36px;
-    height: 36px;
+    width: 34px;
+    height: 34px;
     border-radius: 8px;
-    background: root.enabled && touch-area.has-hover ? (dark ? #2a3036 : #edf1f5) : transparent;
+    background: root.enabled && touch-area.has-hover ? (dark ? #282f36 : #e9edf2) : transparent;
     opacity: root.enabled ? 1 : 0.45;
 
     touch-area := TouchArea {
@@ -19,8 +19,8 @@ export component ToolButton inherits Rectangle {
         text: root.label;
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: root.enabled ? (root.dark ? #eef3f7 : #202832) : (root.dark ? #6f7780 : #9aa3ad);
-        font-size: 16px;
+        color: root.enabled ? (root.dark ? #eef3f7 : #202832) : (root.dark ? #68727c : #9aa3ad);
+        font-size: 15px;
         font-weight: 700;
     }
 }
@@ -35,8 +35,8 @@ export component ActionButton inherits Rectangle {
     height: 28px;
     border-radius: 7px;
     border-width: 1px;
-    border-color: root.enabled ? (root.dark ? #4d5963 : #c3ced8) : (root.dark ? #333a40 : #d9e1e8);
-    background: !root.enabled ? (root.dark ? #1b1f23 : #f1f4f7) : (touch-area.has-hover ? (root.dark ? #2d627b : #d9eaf8) : (root.dark ? #28566c : #e5f2fb));
+    border-color: root.enabled ? (root.dark ? #4b5660 : #cbd3dc) : (root.dark ? #333a40 : #dde3e9);
+    background: !root.enabled ? (root.dark ? #1b1f23 : #f0f2f5) : (touch-area.has-hover ? (root.dark ? #283039 : #e7ecf1) : (root.dark ? #20262c : #f5f7f9));
 
     touch-area := TouchArea {
         enabled: root.enabled;
@@ -47,7 +47,7 @@ export component ActionButton inherits Rectangle {
         text: root.label;
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: root.enabled ? (root.dark ? #f8fafc : #17212b) : (root.dark ? #6b7280 : #94a3b8);
+        color: root.enabled ? (root.dark ? #eef3f7 : #202832) : (root.dark ? #6b7280 : #94a3b8);
         font-size: 12px;
         font-weight: 700;
         overflow: elide;
@@ -76,10 +76,10 @@ export component PlaceButton inherits Rectangle {
     callback drag_cancelled();
 
     height: 34px;
-    border-radius: 9px;
+    border-radius: 8px;
     border-width: dragged || drop-target || error != "" || pending-action != "" ? 1px : 0px;
-    border-color: error != "" ? (dark ? #ef4444 : #dc2626) : (pending-action != "" ? (dark ? #51a9d4 : #2b86b7) : (drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #49545d : #bdc9d4)));
-    background: error != "" ? (dark ? #351b1f : #fff1f2) : (pending-action != "" ? (dark ? #102c38 : #e3f4fb) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #1a1e22 : #e8edf3) : (selected ? (dark ? #213f4e : #e7f2fb) : (touch-area.has-hover ? (dark ? #262c31 : #edf1f5) : transparent)))));
+    border-color: error != "" ? (dark ? #ef4444 : #dc2626) : (pending-action != "" ? (dark ? #51a9d4 : #2b86b7) : (drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #49545d : #c5ced8)));
+    background: error != "" ? (dark ? #351b1f : #fff1f2) : (pending-action != "" ? (dark ? #102c38 : #e3f4fb) : (drop-target ? (dark ? #3a2a12 : #fff7dd) : (dragged ? (dark ? #20262c : #dfe5eb) : (selected ? (dark ? #25323d : #dfe6ee) : (touch-area.has-hover ? (dark ? #232930 : #e2e7ed) : transparent)))));
     opacity: dragged ? 0.45 : (available ? 1 : 0.68);
 
     drag-area := DragArea {
@@ -112,7 +112,7 @@ export component PlaceButton inherits Rectangle {
                     width: 24px;
                     height: 22px;
                     border-radius: 3px;
-                    background: root.error != "" ? (root.dark ? #ef4444 : #dc2626) : (root.pending-action != "" ? (root.dark ? #51a9d4 : #2b86b7) : (root.available ? (root.dark ? #5f9fd3 : #5a9dda) : (root.dark ? #3f464d : #cbd5e1)));
+                    background: root.error != "" ? (root.dark ? #ef4444 : #dc2626) : (root.pending-action != "" ? (root.dark ? #51a9d4 : #2b86b7) : (root.available ? (root.dark ? #5a96c7 : #5b9bd5) : (root.dark ? #3f464d : #cbd5e1)));
 
                     Text {
                         text: root.error != "" ? "!" : (root.pending-action != "" ? "..." : root.marker);
@@ -127,7 +127,7 @@ export component PlaceButton inherits Rectangle {
 
             Text {
                 text: root.label;
-                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.pending-action != "" ? (root.dark ? #bce7f7 : #075985) : (root.available ? (root.dark ? #eef3f7 : #202832) : (root.dark ? #8b949e : #64748b)));
+                color: root.error != "" ? (root.dark ? #fecaca : #991b1b) : (root.pending-action != "" ? (root.dark ? #bce7f7 : #075985) : (root.available ? (root.dark ? #eef3f7 : #202832) : (root.dark ? #89939d : #64748b)));
                 font-size: 14px;
                 overflow: elide;
                 vertical-alignment: center;
@@ -143,7 +143,7 @@ export component SidebarAction inherits Rectangle {
 
     height: 30px;
     border-radius: 8px;
-    background: touch-area.has-hover ? (dark ? #262c31 : #edf1f5) : transparent;
+    background: touch-area.has-hover ? (dark ? #232930 : #e2e7ed) : transparent;
 
     touch-area := TouchArea {
         clicked => { root.clicked(); }
@@ -153,7 +153,7 @@ export component SidebarAction inherits Rectangle {
         text: root.label;
         x: 12px;
         width: parent.width - 24px;
-        color: root.dark ? #cbd3dc : #596473;
+        color: root.dark ? #cbd3dc : #526071;
         font-size: 13px;
         overflow: elide;
         vertical-alignment: center;
@@ -185,7 +185,7 @@ export component CheckOption inherits Rectangle {
 
     height: 32px;
     border-radius: 7px;
-    background: touch-area.has-hover ? (dark ? #2b3035 : #edf2f6) : transparent;
+    background: touch-area.has-hover ? (dark ? #232930 : #e2e7ed) : transparent;
 
     touch-area := TouchArea {
         clicked => {
@@ -236,8 +236,8 @@ export component FilterButton inherits Rectangle {
     height: 32px;
     border-radius: 7px;
     border-width: 1px;
-    border-color: root.dark ? #444d56 : #cfd8e2;
-    background: touch-area.has-hover ? (root.dark ? #2b3035 : #edf2f6) : (root.dark ? #1f2428 : #ffffff);
+    border-color: root.dark ? #3d4650 : #cbd3dc;
+    background: touch-area.has-hover ? (root.dark ? #232930 : #e2e7ed) : (root.dark ? #191e23 : #eef1f4);
 
     touch-area := TouchArea {
         clicked => { root.clicked(); }

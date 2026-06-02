@@ -464,6 +464,7 @@ Acceptance for all:
   - Current direction: shell visuals should move closer to COSMIC Files: top bar and main pane share one calm surface with only necessary divider lines, the sidebar reads as the raised/foreground layer with Fika-friendly rounded treatment, and address/search/navigation placement follows COSMIC unless it conflicts with Fika's column-first main pane.
   - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, search placement, and transient surface styling; the sidebar may keep Fika's rounded foreground treatment on top of COSMIC proportions.
   - Current: first shell pass aligns the top bar, search panel, status bar, and main pane to one shared surface while the sidebar uses a rounded foreground component color and a softer divider, keeping the main pane's column-first layout untouched.
+  - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 60px top bar and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
   - Current: TopBar follows COSMIC's previous/next/up navigation grouping. Home remains a Places/sidebar action rather than a top-bar button.
   - Current: Search follows COSMIC's header behavior more closely: the toolbar search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
 

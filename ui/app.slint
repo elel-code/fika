@@ -79,16 +79,18 @@ export component AppWindow inherits Window {
     in-out property <bool> directory_loading: false;
     in-out property <float> main_viewport_x: 0;
     in-out property <length> main_viewport_offset: 0px;
+    private property <length> top-bar-height: 60px;
+    private property <length> status-bar-height: 36px;
     private property <length> sidebar-splitter-width: 8px;
     private property <length> sidebar-divider-offset: 3px;
     private property <bool> search-filters-active: root.search_kind_filter != 0 || root.search_modified_filter != 0 || root.search_size_filter != 0;
     private property <bool> search-panel-visible: root.search_bar_open || root.search_query != "" || root.search-filters-active;
-    private property <length> search-panel-height: root.search-panel-visible ? (root.main-pane-width < 760px ? 88px : 50px) : 0px;
+    private property <length> search-panel-height: root.search-panel-visible ? (root.main-pane-width < 760px ? 78px : 44px) : 0px;
     private property <string> search-kind-filter-label: root.search_kind_filter == 1 ? "Type: Folders" : (root.search_kind_filter == 2 ? "Type: Files" : (root.search_kind_filter == 3 ? "Type: Images" : "Type: All"));
     private property <string> search-modified-filter-label: root.search_modified_filter == 1 ? "Modified: Today" : (root.search_modified_filter == 2 ? "Modified: 7 days" : (root.search_modified_filter == 3 ? "Modified: 30 days" : "Modified: Any"));
     private property <string> search-size-filter-label: root.search_size_filter == 1 ? "Size: < 1 MB" : (root.search_size_filter == 2 ? "Size: 1-100 MB" : (root.search_size_filter == 3 ? "Size: > 100 MB" : "Size: Any"));
     private property <length> main-pane-width: max(1px, root.width - root.sidebar_width_px * 1px - root.sidebar-splitter-width);
-    private property <length> main-available-grid-height: max(root.icon-row-height, root.height - 64px - 36px - root.search-panel-height - 2 * root.icon-grid-padding);
+    private property <length> main-available-grid-height: max(root.icon-row-height, root.height - root.top-bar-height - root.status-bar-height - root.search-panel-height - 2 * root.icon-grid-padding);
     private property <int> main-rows-per-column: max(1, floor(root.main-available-grid-height / root.icon-row-height));
     private property <int> main-column-count: max(1, ceil(root.entry_count / root.main-rows-per-column));
     private property <length> main-viewport-width: 2 * root.icon-grid-padding + root.main-column-count * root.icon-cell-width;
@@ -511,7 +513,7 @@ export component AppWindow inherits Window {
     preferred-height: 760px;
     min-width: 780px;
     min-height: 460px;
-    background: dark_mode ? #0f1214 : #fbfcfd;
+    background: dark_mode ? #101316 : #f7f8fa;
 
     changed width => { root.main_view_changed(); }
     changed height => { root.main_view_changed(); }
@@ -636,6 +638,7 @@ export component AppWindow inherits Window {
             spacing: 0px;
 
         TopBar {
+            height: root.top-bar-height;
             dark: root.dark_mode;
             current-path: root.current_path;
             sidebar-width-px: root.sidebar_width_px;
@@ -679,16 +682,16 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 width: root.sidebar_width_px * 1px;
-                background: root.dark_mode ? #0f1214 : #fbfcfd;
+                background: root.dark_mode ? #101316 : #f7f8fa;
 
                 sidebar-surface := Rectangle {
                 x: 8px;
-                y: 8px;
+                y: 6px;
                 width: max(1px, parent.width - 16px);
-                height: max(1px, parent.height - 16px);
-                border-radius: 12px;
-                background: root.dark_mode ? #171b1f : #eef3f7;
-                border-color: root.dark_mode ? #2b333b : #d9e2ea;
+                height: max(1px, parent.height - 12px);
+                border-radius: 14px;
+                background: root.dark_mode ? #181d22 : #eceff3;
+                border-color: root.dark_mode ? #2d343c : #d7dde4;
                 border-width: 1px;
 
                 TouchArea {
@@ -875,13 +878,13 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 width: root.sidebar-splitter-width;
-                background: root.dark_mode ? #0f1214 : #fbfcfd;
+                background: root.dark_mode ? #101316 : #f7f8fa;
 
                 Rectangle {
                     x: root.sidebar-divider-offset;
                     width: 1px;
                     height: parent.height;
-                    background: root.dark_mode ? #252b31 : #dfe7ee;
+                    background: root.dark_mode ? #242a30 : #e2e7ec;
                 }
 
                 resize-touch := TouchArea {
@@ -909,7 +912,7 @@ export component AppWindow inherits Window {
                 min-width: 0px;
                 preferred-width: 0px;
                 max-width: 100000px;
-                background: root.dark_mode ? #0f1214 : #fbfcfd;
+                background: root.dark_mode ? #101316 : #f7f8fa;
 
                 main-focus := FocusScope {
                     width: 0px;
@@ -978,7 +981,7 @@ export component AppWindow inherits Window {
                     if (root.entry_count == 0 && !root.directory_loading) : Rectangle {
                         horizontal-stretch: 1;
                         vertical-stretch: 1;
-                        background: root.dark_mode ? #0f1214 : #fbfcfd;
+                        background: root.dark_mode ? #101316 : #f7f8fa;
 
                         VerticalLayout {
                             alignment: center;
@@ -1197,7 +1200,7 @@ export component AppWindow inherits Window {
 
                     StatusBar {
                         horizontal-stretch: 1;
-                        height: 36px;
+                        height: root.status-bar-height;
                         dark: root.dark_mode;
                         status: root.status;
                         selected-count: root.selected_count;

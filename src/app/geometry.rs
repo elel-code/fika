@@ -2,6 +2,12 @@ use crate::AppWindow;
 use slint::ComponentHandle;
 use std::ops::Range;
 
+const TOP_BAR_HEIGHT: f32 = 60.0;
+const STATUS_BAR_HEIGHT: f32 = 36.0;
+const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
+const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
+const SEARCH_PANEL_NARROW_WIDTH: f32 = 760.0;
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MainGridLayout {
     pub(crate) main_x: f32,
@@ -50,7 +56,8 @@ impl MainGridLayout {
             pane.right - pane.left,
         );
         let available_grid_height =
-            (pane.bottom - pane.top - 36.0 - search_panel_height - 2.0 * padding).max(row_height);
+            (pane.bottom - pane.top - STATUS_BAR_HEIGHT - search_panel_height - 2.0 * padding)
+                .max(row_height);
         let rows_per_column = (available_grid_height / row_height).floor().max(1.0) as usize;
 
         Self {
@@ -93,9 +100,9 @@ pub(crate) fn main_pane_bounds(
 ) -> MainPaneBounds {
     MainPaneBounds {
         left: sidebar_width_px + 8.0,
-        top: 64.0,
+        top: TOP_BAR_HEIGHT,
         right: window_width.max(sidebar_width_px + 8.0),
-        bottom: window_height.max(64.0),
+        bottom: window_height.max(TOP_BAR_HEIGHT),
     }
 }
 
@@ -174,7 +181,11 @@ pub(crate) fn search_panel_height(
     let filters_active =
         search_kind_filter != 0 || search_modified_filter != 0 || search_size_filter != 0;
     if search_bar_open || !search_query.is_empty() || filters_active {
-        if main_pane_width < 760.0 { 88.0 } else { 50.0 }
+        if main_pane_width < SEARCH_PANEL_NARROW_WIDTH {
+            SEARCH_PANEL_NARROW_HEIGHT
+        } else {
+            SEARCH_PANEL_WIDE_HEIGHT
+        }
     } else {
         0.0
     }
@@ -1071,8 +1082,9 @@ mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
-        PopupRect, RootMenuGeometry, context_menu_metrics, main_pane_bounds, main_scroll_max_x,
-        place_drop_geometry, search_panel_height, virtual_entry_range, virtual_grid_plan,
+        PopupRect, RootMenuGeometry, TOP_BAR_HEIGHT, context_menu_metrics, main_pane_bounds,
+        main_scroll_max_x, place_drop_geometry, search_panel_height, virtual_entry_range,
+        virtual_grid_plan,
     };
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
@@ -1103,12 +1115,12 @@ mod tests {
     #[test]
     fn search_panel_height_matches_slint_visibility_rules() {
         assert_eq!(search_panel_height(false, "", 0, 0, 0, 900.0), 0.0);
-        assert_eq!(search_panel_height(true, "", 0, 0, 0, 900.0), 50.0);
-        assert_eq!(search_panel_height(true, "", 0, 0, 0, 700.0), 88.0);
-        assert_eq!(search_panel_height(false, "png", 0, 0, 0, 900.0), 50.0);
-        assert_eq!(search_panel_height(false, "", 1, 0, 0, 900.0), 50.0);
-        assert_eq!(search_panel_height(false, "", 0, 2, 0, 900.0), 50.0);
-        assert_eq!(search_panel_height(false, "", 0, 0, 3, 900.0), 50.0);
+        assert_eq!(search_panel_height(true, "", 0, 0, 0, 900.0), 44.0);
+        assert_eq!(search_panel_height(true, "", 0, 0, 0, 700.0), 78.0);
+        assert_eq!(search_panel_height(false, "png", 0, 0, 0, 900.0), 44.0);
+        assert_eq!(search_panel_height(false, "", 1, 0, 0, 900.0), 44.0);
+        assert_eq!(search_panel_height(false, "", 0, 2, 0, 900.0), 44.0);
+        assert_eq!(search_panel_height(false, "", 0, 0, 3, 900.0), 44.0);
     }
 
     #[test]
@@ -1116,7 +1128,7 @@ mod tests {
         let bounds = main_pane_bounds(320.0, 1100.0, 760.0);
 
         assert_eq!(bounds.left, 328.0);
-        assert_eq!(bounds.top, 64.0);
+        assert_eq!(bounds.top, TOP_BAR_HEIGHT);
         assert_eq!(bounds.right, 1100.0);
         assert_eq!(bounds.bottom, 760.0);
     }

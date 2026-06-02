@@ -23,14 +23,14 @@ export component TopBar inherits Rectangle {
     callback toggle_split_view();
     callback dark_toggled();
 
-    height: 64px;
-    background: root.dark ? #0f1214 : #fbfcfd;
+    height: 60px;
+    background: root.dark ? #101316 : #f7f8fa;
     border-width: 0px;
 
     HorizontalLayout {
-        padding-right: 16px;
-        padding-top: 14px;
-        padding-bottom: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
         spacing: 0px;
 
         Rectangle {
@@ -39,9 +39,9 @@ export component TopBar inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 4px;
-            padding-right: 12px;
-            spacing: 6px;
+            padding-left: 0px;
+            padding-right: 10px;
+            spacing: 5px;
 
             ToolButton {
                 label: "<";
@@ -67,27 +67,27 @@ export component TopBar inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             min-width: 120px;
-            height: 36px;
-            border-radius: 9px;
+            height: 34px;
+            border-radius: 8px;
             border-width: 1px;
-            border-color: root.path-focused ? (root.dark ? #56b6dd : #2b86b7) : (root.dark ? #303840 : #d8e0e8);
-            background: root.path-focused ? (root.dark ? #14181c : #ffffff) : (root.dark ? #161b20 : #f3f6f9);
+            border-color: root.path-focused ? (root.dark ? #56b6dd : #2b86b7) : (root.dark ? #333a42 : #d6dde5);
+            background: root.path-focused ? (root.dark ? #15191d : #ffffff) : (root.dark ? #191e23 : #eef1f4);
 
             Text {
                 visible: root.path-text == "";
-                x: 13px;
-                width: parent.width - 26px;
+                x: 12px;
+                width: parent.width - 24px;
                 height: parent.height;
                 text: "/path/to/folder";
-                color: root.dark ? #74808a : #687381;
+                color: root.dark ? #7f8a94 : #687381;
                 font-size: 14px;
                 overflow: elide;
                 vertical-alignment: center;
             }
 
             TextInput {
-                x: 13px;
-                width: parent.width - 26px;
+                x: 12px;
+                width: parent.width - 24px;
                 height: parent.height;
                 text <=> root.path-text;
                 single-line: true;
@@ -109,25 +109,25 @@ export component TopBar inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 10px;
-            spacing: 6px;
+            padding-left: 8px;
+            spacing: 5px;
 
             if (!root.search-active): Rectangle {
-                height: 36px;
-                width: 62px;
-                border-radius: 9px;
+                height: 34px;
+                width: 38px;
+                border-radius: 8px;
                 border-width: root.split-view-open ? 1px : 0px;
                 border-color: root.dark ? #3f829e : #9bcfe4;
-                background: root.split-view-open ? (root.dark ? #173443 : #e1f2f9) : (split-touch.has-hover ? (root.dark ? #2a3036 : #edf1f5) : transparent);
+                background: root.split-view-open ? (root.dark ? #173443 : #e1f2f9) : (split-touch.has-hover ? (root.dark ? #282f36 : #e9edf2) : transparent);
 
                 split-touch := TouchArea {
                     clicked => { root.toggle_split_view(); }
                 }
 
                 Text {
-                    text: "Split";
+                    text: "||";
                     color: root.split-view-open ? (root.dark ? #e8f8ff : #0f526c) : (root.dark ? #dce3ea : #526071);
-                    font-size: 13px;
+                    font-size: 15px;
                     font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -141,12 +141,12 @@ export component TopBar inherits Rectangle {
             }
 
             if (root.search-active): Rectangle {
-                width: 248px;
-                height: 36px;
-                border-radius: 9px;
+                width: 246px;
+                height: 34px;
+                border-radius: 8px;
                 border-width: 1px;
-                border-color: root.search-focused ? (root.dark ? #56b6dd : #2b86b7) : (root.dark ? #303840 : #d8e0e8);
-                background: root.search-focused ? (root.dark ? #14181c : #ffffff) : (root.dark ? #161b20 : #f3f6f9);
+                border-color: root.search-focused ? (root.dark ? #56b6dd : #2b86b7) : (root.dark ? #333a42 : #d6dde5);
+                background: root.search-focused ? (root.dark ? #15191d : #ffffff) : (root.dark ? #191e23 : #eef1f4);
 
                 Text {
                     x: 12px;
@@ -190,19 +190,19 @@ export component TopBar inherits Rectangle {
                 }
 
                 close-search-touch := TouchArea {
-                    x: parent.width - 32px;
-                    width: 32px;
+                    x: parent.width - 30px;
+                    width: 30px;
                     height: parent.height;
                     clicked => { root.search_close_requested(); }
                 }
 
                 Rectangle {
-                    x: parent.width - 27px;
+                    x: parent.width - 26px;
                     y: (parent.height - self.height) / 2;
-                    width: 22px;
-                    height: 22px;
-                    border-radius: 7px;
-                    background: close-search-touch.has-hover ? (root.dark ? #2a3036 : #edf1f5) : transparent;
+                    width: 21px;
+                    height: 21px;
+                    border-radius: 6px;
+                    background: close-search-touch.has-hover ? (root.dark ? #282f36 : #e9edf2) : transparent;
 
                     Text {
                         text: "X";
@@ -227,6 +227,6 @@ export component TopBar inherits Rectangle {
         y: parent.height - 1px;
         width: parent.width;
         height: 1px;
-        background: root.dark ? #252b31 : #e7edf3;
+        background: root.dark ? #242a30 : #e2e7ec;
     }
 }
