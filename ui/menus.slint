@@ -666,10 +666,12 @@ export component FileContextMenu inherits PopupSurface {
 export component ViewportContextMenu inherits PopupSurface {
     in property <bool> clipboard-has-paths;
     in property <bool> clipboard-cut;
+    in property <bool> in-trash;
     callback create_new_hover(bool);
     callback create_new_clicked();
     callback select_all_requested();
     callback paste_requested();
+    callback empty_trash_requested();
     callback open_folder_with_hover(bool);
     callback open_folder_with_clicked();
     callback open_terminal_here();
@@ -677,7 +679,13 @@ export component ViewportContextMenu inherits PopupSurface {
     VerticalLayout {
         spacing: 0px;
 
-        MenuItem {
+        if (root.in-trash): MenuItem {
+            label: "Empty Trash";
+            dark: root.dark;
+            clicked => { root.empty_trash_requested(); }
+        }
+
+        if (!root.in-trash): MenuItem {
             label: "Create New";
             dark: root.dark;
             submenu: true;
@@ -696,7 +704,7 @@ export component ViewportContextMenu inherits PopupSurface {
             clicked => { root.select_all_requested(); }
         }
 
-        MenuItem {
+        if (!root.in-trash): MenuItem {
             label: root.clipboard-cut ? "Paste Moved Items" : "Paste";
             shortcut: "Ctrl+V";
             dark: root.dark;
@@ -704,7 +712,7 @@ export component ViewportContextMenu inherits PopupSurface {
             clicked => { root.paste_requested(); }
         }
 
-        MenuItem {
+        if (!root.in-trash): MenuItem {
             label: "Open Folder With";
             dark: root.dark;
             submenu: true;
@@ -712,7 +720,7 @@ export component ViewportContextMenu inherits PopupSurface {
             clicked => { root.open_folder_with_clicked(); }
         }
 
-        MenuItem {
+        if (!root.in-trash): MenuItem {
             label: "Open Terminal Here";
             dark: root.dark;
             clicked => { root.open_terminal_here(); }
@@ -794,6 +802,7 @@ export component RootContextMenuLayer inherits Rectangle {
     callback viewport_create_new_clicked(length);
     callback viewport_select_all_requested();
     callback viewport_paste_requested();
+    callback viewport_empty_trash_requested();
     callback viewport_open_folder_with_hover(length, bool);
     callback viewport_open_folder_with_clicked(length);
     callback viewport_open_terminal_here();
@@ -882,10 +891,12 @@ export component RootContextMenuLayer inherits Rectangle {
         dark: root.dark;
         clipboard-has-paths: root.clipboard-has-paths;
         clipboard-cut: root.clipboard-cut;
+        in-trash: root.in-trash;
         create_new_hover(is-hovered) => { root.viewport_create_new_hover(root.create-new-row-y, is-hovered); }
         create_new_clicked => { root.viewport_create_new_clicked(root.create-new-row-y); }
         select_all_requested => { root.viewport_select_all_requested(); }
         paste_requested => { root.viewport_paste_requested(); }
+        empty_trash_requested => { root.viewport_empty_trash_requested(); }
         open_folder_with_hover(is-hovered) => { root.viewport_open_folder_with_hover(root.open-with-row-y, is-hovered); }
         open_folder_with_clicked => { root.viewport_open_folder_with_clicked(root.open-with-row-y); }
         open_terminal_here => { root.viewport_open_terminal_here(); }

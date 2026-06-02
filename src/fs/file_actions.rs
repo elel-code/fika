@@ -376,6 +376,26 @@ pub(crate) fn register_callbacks(
             }
         });
     }
+
+    {
+        let ui_weak = ui.as_weak();
+        let bridge = bridge.clone();
+        ui.on_empty_trash(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                spawn_action(
+                    &ui,
+                    &bridge,
+                    "Empty Trash",
+                    file_ops::trash_files_dir(),
+                    move || {
+                        let summary = file_ops::empty_trash();
+                        Ok((summary.to_result_message("removed from Trash")?, None))
+                    },
+                    None,
+                );
+            }
+        });
+    }
 }
 
 fn trash_undo_from_summary(summary: &file_ops::FileActionSummary) -> Option<FileUndo> {

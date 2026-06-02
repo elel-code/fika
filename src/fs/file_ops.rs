@@ -462,6 +462,38 @@ pub fn permanently_delete_trash_paths(paths: &[PathBuf]) -> FileActionSummary {
     summary
 }
 
+pub fn empty_trash() -> FileActionSummary {
+    let mut summary = FileActionSummary::default();
+    let files_dir = trash_files_dir();
+    if !path_exists(&files_dir) {
+        return summary;
+    }
+
+    let entries = match fs::read_dir(&files_dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            summary
+                .failures
+                .push(format!("{}: {err}", files_dir.display()));
+            return summary;
+        }
+    };
+
+    for entry in entries {
+        match entry {
+            Ok(entry) => match permanently_delete_trash_path(&entry.path()) {
+                Ok(record) => summary.successes.push(record),
+                Err(err) => summary
+                    .failures
+                    .push(format!("{}: {err}", entry.path().display())),
+            },
+            Err(err) => summary.failures.push(format!("trash entry: {err}")),
+        }
+    }
+    remove_orphan_trashinfo_files(&mut summary);
+    summary
+}
+
 fn restore_trash_path(trash_path: &Path) -> Result<TrashRecord, String> {
     if is_trash_files_dir(trash_path) || !is_in_trash_files_dir(trash_path) {
         return Err("item is not inside Trash".to_string());
@@ -828,6 +860,28 @@ fn remove_trashinfo(trash_path: &Path) -> Result<(), String> {
         fs::remove_file(info_path).map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+fn remove_orphan_trashinfo_files(summary: &mut FileActionSummary) {
+    let info_dir = trash_info_dir();
+    let Ok(entries) = fs::read_dir(&info_dir) else {
+        return;
+    };
+    for entry in entries {
+        match entry {
+            Ok(entry) => {
+                let path = entry.path();
+                if path.extension().and_then(|extension| extension.to_str()) == Some("trashinfo")
+                    && let Err(err) = fs::remove_file(&path)
+                {
+                    summary.failures.push(format!("{}: {err}", path.display()));
+                }
+            }
+            Err(err) => summary
+                .failures
+                .push(format!("trash metadata entry: {err}")),
+        }
+    }
 }
 
 fn trash_original_path(trash_path: &Path) -> Result<PathBuf, String> {

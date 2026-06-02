@@ -761,10 +761,18 @@ fn file_context_menu_metrics(
 }
 
 fn viewport_context_menu_metrics(
-    _input: MenuMetricsInput,
+    input: MenuMetricsInput,
     item: f32,
     separator: f32,
 ) -> MenuMetrics {
+    if input.in_trash {
+        return MenuMetrics {
+            height: 2.0 * item + separator,
+            open_with_row_y_offset: 0.0,
+            create_new_row_y_offset: 0.0,
+        };
+    }
+
     MenuMetrics {
         height: 5.0 * item + separator,
         open_with_row_y_offset: 3.0 * item + separator,
@@ -1283,6 +1291,27 @@ mod tests {
             viewport_without_paste.open_with_row_y_offset,
             viewport_with_paste.open_with_row_y_offset
         );
+
+        let trash_viewport = context_menu_metrics(MenuMetricsInput {
+            kind: 3,
+            selected_count: 0,
+            is_dir: false,
+            default_open_visible: false,
+            add_to_places_visible: false,
+            clipboard_has_paths: false,
+            in_trash: true,
+            place_builtin: false,
+            device_mounted: false,
+            device_pending: false,
+            device_can_mount: false,
+            device_can_unmount: false,
+            device_can_eject: false,
+            item_height,
+            separator_height,
+            title_height,
+        });
+        assert_eq!(trash_viewport.height, 2.0 * item_height + separator_height);
+        assert_eq!(trash_viewport.open_with_row_y_offset, 0.0);
 
         let builtin_place = context_menu_metrics(MenuMetricsInput {
             kind: 2,

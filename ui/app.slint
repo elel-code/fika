@@ -239,6 +239,7 @@ export component AppWindow inherits Window {
     callback restore_trash_selected();
     callback delete_permanently_path(string);
     callback delete_permanently_selected();
+    callback empty_trash();
     callback prepare_open_with(string);
     callback prepare_other_applications(string);
     callback filter_other_applications(string);
@@ -1347,6 +1348,10 @@ export component AppWindow inherits Window {
         }
         viewport_paste_requested => {
             root.paste_into(root.current_path);
+            root.close-context-popups();
+        }
+        viewport_empty_trash_requested => {
+            root.empty_trash();
             root.close-context-popups();
         }
         viewport_open_folder_with_hover(row-y, is-hovered) => {
