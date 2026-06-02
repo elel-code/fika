@@ -1,5 +1,7 @@
-// DndApi must live in app.slint (the root file) so that `include_modules!()`
-// generates the Rust type `DndApi` for `ui.global::<DndApi>()`.
+// Globals must be exported from app.slint (the root file) so that
+// `include_modules!()` generates Rust types for `ui.global::<...>()`.
+export { MenuGeometry } from "menu_geometry.slint";
+
 export global DndApi {
     pure callback make-drag-place(path: string) -> data-transfer;
     pure callback make-drag-folder(path: string) -> data-transfer;
@@ -295,19 +297,6 @@ export component AppWindow inherits Window {
     callback place_drop_over_item(float) -> bool;
     callback trace_places_drop(string, string, string, float, float, int, int, bool, bool);
     callback trace_main_drop(string, string, string, float, float, bool, string);
-    pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
-    pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
-    pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
-    pure callback anchored_menu_top(float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_menu_left(float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_menu_top(float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_bridge_left(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_bridge_top(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_bridge_width(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_bridge_height(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
     callback transfer_operation(string, string, string);
     callback transfer_conflict_choice(string);
     callback privileged_prompt_accept();
@@ -1314,21 +1303,6 @@ export component AppWindow inherits Window {
         device-can-unmount: root.context-menu-device-can-unmount;
         device-can-eject: root.context-menu-device-can-eject;
         device-pending-action: root.context-menu-device-pending-action;
-        root_menu_left(a, b, c, d, e, f, g, h) => {
-            return root.root_menu_left(a, b, c, d, e, f, g, h);
-        }
-        root_menu_top(a, b, c, d, e, f, g, h) => {
-            return root.root_menu_top(a, b, c, d, e, f, g, h);
-        }
-        context_menu_height(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) => {
-            return root.context_menu_height(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p);
-        }
-        context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) => {
-            return root.context_menu_open_with_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p);
-        }
-        context_menu_create_new_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) => {
-            return root.context_menu_create_new_row_offset(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p);
-        }
         file_open_folder_with_hover(row-y, is-hovered) => {
             root.open-with-submenu-hover(root.context-menu-path, row-y, is-hovered);
         }
@@ -1498,24 +1472,6 @@ export component AppWindow inherits Window {
         open-with-row-y: root.open-with-menu-y;
         open-with-apps: root.open_with_apps;
         dark: root.dark_mode;
-        child_menu_left(a, b, c, d, e, f, g, h, i, j) => {
-            return root.child_menu_left(a, b, c, d, e, f, g, h, i, j);
-        }
-        child_menu_top(a, b, c, d, e, f, g, h, i, j) => {
-            return root.child_menu_top(a, b, c, d, e, f, g, h, i, j);
-        }
-        child_bridge_left(a, b, c, d, e, f, g, h, i, j, k, l, m) => {
-            return root.child_bridge_left(a, b, c, d, e, f, g, h, i, j, k, l, m);
-        }
-        child_bridge_top(a, b, c, d, e, f, g, h, i, j, k, l, m) => {
-            return root.child_bridge_top(a, b, c, d, e, f, g, h, i, j, k, l, m);
-        }
-        child_bridge_width(a, b, c, d, e, f, g, h, i, j, k, l, m) => {
-            return root.child_bridge_width(a, b, c, d, e, f, g, h, i, j, k, l, m);
-        }
-        child_bridge_height(a, b, c, d, e, f, g, h, i, j, k, l, m) => {
-            return root.child_bridge_height(a, b, c, d, e, f, g, h, i, j, k, l, m);
-        }
         child_hovered(kind, is-hovered) => {
             root.set-child-submenu-hover(kind, is-hovered);
         }
@@ -1620,12 +1576,6 @@ export component AppWindow inherits Window {
         title-height: root.menu-title-height;
         title: root.transfer_source_label + " -> " + root.transfer_target_label;
         dark: root.dark_mode;
-        root_menu_left(a, b, c, d, e, f, g, h) => {
-            return root.root_menu_left(a, b, c, d, e, f, g, h);
-        }
-        root_menu_top(a, b, c, d, e, f, g, h) => {
-            return root.root_menu_top(a, b, c, d, e, f, g, h);
-        }
         operation_selected(operation) => {
             root.transfer_operation(operation, root.transfer_source_path, root.transfer_target_path);
             root.transfer-menu-open = false;
@@ -1694,12 +1644,6 @@ export component AppWindow inherits Window {
         choices: root.chooser_choices;
         title-height: root.menu-title-height;
         item-height: root.menu-item-height;
-        anchored_menu_left(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap) => {
-            root.anchored_menu_left(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap)
-        }
-        anchored_menu_top(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap) => {
-            root.anchored_menu_top(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap)
-        }
         option_selected(choice-index, option-index) => {
             root.chooser_select_choice(choice-index, option-index);
             root.chooser-choice-menu-open = false;
@@ -1724,12 +1668,6 @@ export component AppWindow inherits Window {
         selected-index: root.chooser_filter_index;
         title-height: root.menu-title-height;
         item-height: root.menu-item-height;
-        anchored_menu_left(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap) => {
-            root.anchored_menu_left(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap)
-        }
-        anchored_menu_top(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap) => {
-            root.anchored_menu_top(window-width, window-height, anchor-x, anchor-y, menu-width, menu-height, screen-margin, pointer-gap, child-gap)
-        }
         option_selected(option-index) => {
             root.chooser_select_filter(option-index);
             root.chooser-filter-menu-open = false;

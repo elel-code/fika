@@ -1,4 +1,5 @@
 import { ScrollView } from "std-widgets.slint";
+import { MenuGeometry } from "menu_geometry.slint";
 import { ChooserChoice, ChooserChoiceOption, DesktopApp } from "models.slint";
 import { MenuHoverBridge, MenuHoverRegion, MenuItem, MenuSeparator, MenuTitle, PopupSurface } from "widgets.slint";
 
@@ -116,18 +117,12 @@ export component ChildSubmenuLayer inherits Rectangle {
     private property <length> active-row-y: root.open-with-open ? root.open-with-row-y : root.create-new-row-y;
     private property <length> active-width: root.open-with-open ? root.open-with-width : root.create-new-width;
     private property <length> active-height: root.open-with-open ? root.open-with-height : root.create-new-height;
-    private property <length> active-left: root.child_menu_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-row-y / 1px, root.active-width / 1px, root.active-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> active-top: root.child_menu_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-row-y / 1px, root.active-width / 1px, root.active-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> bridge-left: root.child_bridge_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> bridge-top: root.child_bridge_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> bridge-width: root.child_bridge_width(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    private property <length> bridge-height: root.child_bridge_height(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-    pure callback child_menu_left(float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_menu_top(float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_bridge_left(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_bridge_top(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_bridge_width(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
-    pure callback child_bridge_height(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    private property <length> active-left: MenuGeometry.child_menu_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-row-y / 1px, root.active-width / 1px, root.active-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> active-top: MenuGeometry.child_menu_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-row-y / 1px, root.active-width / 1px, root.active-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-left: MenuGeometry.child_bridge_left(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-top: MenuGeometry.child_bridge_top(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-width: MenuGeometry.child_bridge_width(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+    private property <length> bridge-height: MenuGeometry.child_bridge_height(root.window-width / 1px, root.window-height / 1px, root.context-menu-left / 1px, root.context-menu-width / 1px, root.active-left / 1px, root.active-width / 1px, root.active-row-y / 1px, root.active-top / 1px, root.item-height / 1px, 0, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
     callback child_hovered(int, bool);
     callback create_folder_selected();
     callback create_file_selected();
@@ -245,16 +240,14 @@ export component ChooserChoicePopupLayer inherits Rectangle {
     in property <[ChooserChoice]> choices;
     in property <length> title-height: 30px;
     in property <length> item-height: 38px;
-    pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
-    pure callback anchored_menu_top(float, float, float, float, float, float, float, float, float) -> float;
     callback option_selected(int, int);
 
     background: transparent;
 
     for choice[index] in root.choices: ChooserChoicePopup {
         visible: root.menu-open && root.menu-index == index;
-        x: root.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, choice.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-        y: root.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, choice.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        x: MenuGeometry.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, choice.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        y: MenuGeometry.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, choice.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
         width: root.menu-width;
         dark: root.dark;
         title: choice.label;
@@ -282,15 +275,13 @@ export component ChooserOptionPopupLayer inherits Rectangle {
     in property <int> selected-index;
     in property <length> title-height: 30px;
     in property <length> item-height: 38px;
-    pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
-    pure callback anchored_menu_top(float, float, float, float, float, float, float, float, float) -> float;
     callback option_selected(int);
 
     background: transparent;
 
     if (root.menu-open): ChooserChoicePopup {
-        x: root.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, root.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
-        y: root.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, root.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        x: MenuGeometry.anchored_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, root.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
+        y: MenuGeometry.anchored_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.menu-width / 1px, (root.title-height + max(1, root.options.length) * root.item-height) / 1px, root.screen-margin / 1px, root.pointer-gap / 1px, root.child-gap / 1px) * 1px;
         width: root.menu-width;
         dark: root.dark;
         title: root.title;
@@ -360,10 +351,8 @@ export component TransferMenuLayer inherits Rectangle {
     in property <bool> dark;
     private property <length> menu-width: 240px;
     private property <length> menu-height: root.title-height + 4 * root.item-height + root.separator-height;
-    private property <length> menu-left: root.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x, root.menu-y, root.menu-width / 1px, root.menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
-    private property <length> menu-top: root.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x, root.menu-y, root.menu-width / 1px, root.menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
-    pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
-    pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
+    private property <length> menu-left: MenuGeometry.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x, root.menu-y, root.menu-width / 1px, root.menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
+    private property <length> menu-top: MenuGeometry.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x, root.menu-y, root.menu-width / 1px, root.menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     callback operation_selected(string);
     callback cancelled();
 
@@ -776,18 +765,13 @@ export component RootContextMenuLayer inherits Rectangle {
     in property <bool> device-can-unmount;
     in property <bool> device-can-eject;
     in property <string> device-pending-action: "";
-    out property <length> active-menu-left: root.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
-    out property <length> active-menu-top: root.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
+    out property <length> active-menu-left: MenuGeometry.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
+    out property <length> active-menu-top: MenuGeometry.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     out property <length> active-menu-width: (root.menu-kind == 2 || root.menu-kind == 5) ? root.place-menu-width : ((root.menu-kind == 3 || root.menu-kind == 4) ? root.blank-menu-width : root.file-menu-width);
-    out property <length> active-menu-height: root.context_menu_height(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    out property <length> active-menu-height: MenuGeometry.context_menu_height(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
     private property <bool> metrics-device-pending: root.menu-kind == 5 && root.device-pending-action != "";
-    private property <length> open-with-row-y: root.active-menu-top + root.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
-    private property <length> create-new-row-y: root.active-menu-top + root.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
-    pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
-    pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
-    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
-    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    private property <length> open-with-row-y: root.active-menu-top + MenuGeometry.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    private property <length> create-new-row-y: root.active-menu-top + MenuGeometry.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
     callback file_open_folder_with_hover(length, bool);
     callback file_open_folder_with_clicked(length);
     callback file_default_open_requested();

@@ -1,0 +1,15 @@
+export global MenuGeometry {
+    pure callback root_menu_left(float, float, float, float, float, float, float, float) -> float;
+    pure callback root_menu_top(float, float, float, float, float, float, float, float) -> float;
+    pure callback anchored_menu_left(float, float, float, float, float, float, float, float, float) -> float;
+    pure callback anchored_menu_top(float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_menu_left(float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_menu_top(float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_left(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_top(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_width(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback child_bridge_height(float, float, float, float, float, float, float, float, float, float, float, float, float) -> float;
+    pure callback context_menu_height(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_open_with_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+    pure callback context_menu_create_new_row_offset(int, int, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, float, float, float) -> float;
+}

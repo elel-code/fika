@@ -1,4 +1,4 @@
-use crate::AppWindow;
+use crate::{AppWindow, MenuGeometry};
 use slint::ComponentHandle;
 use std::ops::Range;
 
@@ -294,7 +294,9 @@ pub(crate) fn context_menu_metrics(input: MenuMetricsInput) -> MenuMetrics {
 }
 
 pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
-    ui.on_root_menu_left(
+    let menu_geometry = ui.global::<MenuGeometry>();
+
+    menu_geometry.on_root_menu_left(
         |view_width,
          view_height,
          anchor_x,
@@ -318,7 +320,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_root_menu_top(
+    menu_geometry.on_root_menu_top(
         |view_width,
          view_height,
          anchor_x,
@@ -342,7 +344,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_anchored_menu_left(
+    menu_geometry.on_anchored_menu_left(
         |view_width,
          view_height,
          anchor_x,
@@ -368,7 +370,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_anchored_menu_top(
+    menu_geometry.on_anchored_menu_top(
         |view_width,
          view_height,
          anchor_x,
@@ -394,7 +396,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_child_menu_left(
+    menu_geometry.on_child_menu_left(
         |view_width,
          view_height,
          parent_left,
@@ -422,7 +424,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_child_menu_top(
+    menu_geometry.on_child_menu_top(
         |view_width,
          view_height,
          parent_left,
@@ -450,7 +452,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_child_bridge_left(
+    menu_geometry.on_child_bridge_left(
         |view_width,
          view_height,
          parent_left,
@@ -484,7 +486,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_child_bridge_top(
+    menu_geometry.on_child_bridge_top(
         |view_width,
          view_height,
          parent_left,
@@ -518,7 +520,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_child_bridge_width(
+    menu_geometry.on_child_bridge_width(
         |view_width,
          view_height,
          parent_left,
@@ -552,7 +554,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
         },
     );
 
-    ui.on_child_bridge_height(
+    menu_geometry.on_child_bridge_height(
         |view_width,
          view_height,
          parent_left,
@@ -588,7 +590,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
 
     macro_rules! register_context_metric_callback {
         ($method:ident, $field:ident) => {
-            ui.$method(
+            menu_geometry.$method(
                 |kind,
                  selected_count,
                  is_dir,
@@ -1090,6 +1092,51 @@ mod tests {
     const MENU_ITEM_HEIGHT: f32 = 38.0;
     const MENU_SEPARATOR_HEIGHT: f32 = 8.0;
     const MENU_TITLE_HEIGHT: f32 = 30.0;
+
+    #[test]
+    fn menu_geometry_callbacks_are_global_owned() {
+        let app = include_str!("../../ui/app.slint");
+        let menus = include_str!("../../ui/menus.slint");
+        let menu_geometry = include_str!("../../ui/menu_geometry.slint");
+        let callbacks = [
+            "root_menu_left",
+            "root_menu_top",
+            "anchored_menu_left",
+            "anchored_menu_top",
+            "child_menu_left",
+            "child_menu_top",
+            "child_bridge_left",
+            "child_bridge_top",
+            "child_bridge_width",
+            "child_bridge_height",
+            "context_menu_height",
+            "context_menu_open_with_row_offset",
+            "context_menu_create_new_row_offset",
+        ];
+
+        assert!(app.contains("export { MenuGeometry } from \"menu_geometry.slint\";"));
+        assert!(menus.contains("import { MenuGeometry } from \"menu_geometry.slint\";"));
+        assert!(menu_geometry.contains("export global MenuGeometry"));
+
+        for callback in callbacks {
+            assert!(
+                menu_geometry.contains(&format!("callback {callback}(")),
+                "MenuGeometry should declare {callback}"
+            );
+            assert!(
+                !app.contains(&format!("callback {callback}(")),
+                "AppWindow should not declare {callback}"
+            );
+            assert!(
+                !app.contains(&format!("root.{callback}(")),
+                "AppWindow should not forward {callback}"
+            );
+            assert!(
+                menus.contains(&format!("MenuGeometry.{callback}(")),
+                "menus.slint should consume {callback} through MenuGeometry"
+            );
+        }
+    }
 
     fn menu_metrics_input(kind: i32) -> MenuMetricsInput {
         MenuMetricsInput {
