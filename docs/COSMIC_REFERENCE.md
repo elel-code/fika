@@ -41,6 +41,8 @@ Useful UI direction:
 - Keep primary panes visually simple: sidebar, toolbar, content, and footer should feel integrated instead of heavily framed.
 - Context menus should keep practical action grouping, but visual weight can move closer to COSMIC Files than Dolphin when the interaction rules are already covered by tests.
 - Fika's first visual pass keeps Dolphin-like pane layout, but shifts the surface colors toward COSMIC's quieter feel: off-white light backgrounds, lower-contrast separators, softer hover fills, 7-8px radii for controls/menus, and consistent selected/drop feedback between the sidebar and main pane.
+- Current shell direction: the top bar and main pane share one calm base surface, while the sidebar is treated as a raised foreground panel with Fika's rounded treatment and only a narrow resize divider between the two layers.
+- Search follows COSMIC's header pattern more closely: the search button becomes a fixed-width top-bar search field when active, while the main-pane strip only carries recursive/filter actions.
 
 Follow-up candidates:
 

@@ -1,14 +1,17 @@
 export component ToolButton inherits Rectangle {
     in property <string> label;
     in property <bool> dark;
+    in property <bool> enabled: true;
     callback clicked();
 
     width: 34px;
     height: 40px;
     border-radius: 7px;
-    background: touch-area.has-hover ? (dark ? #2b3035 : #e9eef4) : transparent;
+    background: root.enabled && touch-area.has-hover ? (dark ? #2b3035 : #e9eef4) : transparent;
+    opacity: root.enabled ? 1 : 0.45;
 
     touch-area := TouchArea {
+        enabled: root.enabled;
         clicked => { root.clicked(); }
     }
 
@@ -16,7 +19,7 @@ export component ToolButton inherits Rectangle {
         text: root.label;
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: root.dark ? #edf2f7 : #1f2933;
+        color: root.enabled ? (root.dark ? #edf2f7 : #1f2933) : (root.dark ? #6b7580 : #9aa8b6);
         font-size: 17px;
         font-weight: 700;
     }

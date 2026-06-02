@@ -5,12 +5,20 @@ export component TopBar inherits Rectangle {
     in property <string> current-path;
     in property <float> sidebar-width-px;
     in property <length> divider-offset: 3px;
+    in property <bool> can-go-back;
+    in property <bool> can-go-forward;
+    in property <bool> search-active;
     in-out property <string> path-text;
     in-out property <bool> path-focused;
+    in-out property <string> search-query;
+    in-out property <bool> search-focused;
+    callback go_back();
+    callback go_forward();
     callback go_parent();
-    callback go_home();
     callback path_submitted(string);
     callback search_requested();
+    callback search_submitted(string);
+    callback search_close_requested();
     callback dark_toggled();
 
     height: 64px;
@@ -32,19 +40,27 @@ export component TopBar inherits Rectangle {
             ToolButton {
                 label: "<";
                 dark: root.dark;
-                clicked => { root.go_parent(); }
+                enabled: root.can-go-back;
+                clicked => { root.go_back(); }
             }
 
             ToolButton {
-                label: "H";
+                label: ">";
                 dark: root.dark;
-                clicked => { root.go_home(); }
+                enabled: root.can-go-forward;
+                clicked => { root.go_forward(); }
+            }
+
+            ToolButton {
+                label: "^";
+                dark: root.dark;
+                clicked => { root.go_parent(); }
             }
         }
 
         Rectangle {
             horizontal-stretch: 1;
-            min-width: 260px;
+            min-width: 120px;
             height: 40px;
             border-radius: 8px;
             border-width: 1px;
@@ -87,10 +103,10 @@ export component TopBar inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 14px;
-            spacing: 16px;
+            padding-left: 10px;
+            spacing: 8px;
 
-            Text {
+            if (!root.search-active): Text {
                 text: "Split";
                 color: root.dark ? #dce3ea : #526071;
                 font-size: 14px;
@@ -100,10 +116,85 @@ export component TopBar inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            ToolButton {
+            if (!root.search-active): ToolButton {
                 label: "S";
                 dark: root.dark;
                 clicked => { root.search_requested(); }
+            }
+
+            if (root.search-active): Rectangle {
+                width: 240px;
+                height: 40px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: root.search-focused ? (root.dark ? #58b6dd : #2b86b7) : (root.dark ? #30363c : #d8e0e8);
+                background: root.search-focused ? (root.dark ? #15191c : #ffffff) : (root.dark ? #15191c : #f5f7fa);
+
+                Text {
+                    x: 11px;
+                    width: 18px;
+                    height: parent.height;
+                    text: "S";
+                    color: root.dark ? #8b98a5 : #667586;
+                    font-size: 13px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    visible: root.search-query == "";
+                    x: 36px;
+                    width: parent.width - 72px;
+                    height: parent.height;
+                    text: "Search";
+                    color: root.dark ? #74808a : #697684;
+                    font-size: 14px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                TextInput {
+                    x: 36px;
+                    width: parent.width - 72px;
+                    height: parent.height;
+                    text <=> root.search-query;
+                    single-line: true;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                    color: root.dark ? #f4f7fa : #1f2933;
+                    selection-background-color: root.dark ? #51a9d4 : #2b86b7;
+                    selection-foreground-color: root.dark ? #0f172a : #ffffff;
+                    accepted => { root.search_submitted(self.text); }
+                    changed has-focus => {
+                        root.search-focused = self.has-focus;
+                    }
+                }
+
+                close-search-touch := TouchArea {
+                    x: parent.width - 34px;
+                    width: 34px;
+                    height: parent.height;
+                    clicked => { root.search_close_requested(); }
+                }
+
+                Rectangle {
+                    x: parent.width - 28px;
+                    y: (parent.height - self.height) / 2;
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 6px;
+                    background: close-search-touch.has-hover ? (root.dark ? #2b3035 : #e9eef4) : transparent;
+
+                    Text {
+                        text: "X";
+                        color: root.dark ? #dce3ea : #526071;
+                        font-size: 12px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
 
             ToolButton {

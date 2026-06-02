@@ -278,6 +278,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     load_directory(&ui, &state, &bridge);
+    sync_navigation_ui(&ui, &state);
     prefetch_sidebar_locations_async(&state, &bridge);
 
     {
@@ -2413,8 +2414,10 @@ fn apply_device_action_result(
             if let Some(mount_path) = &result.mount_path
                 && move_current_directory_home_if_inside_mount(state, mount_path)
             {
+                sync_navigation_ui(ui, state);
                 load_directory(ui, state, bridge);
             } else {
+                sync_navigation_ui(ui, state);
                 refresh_directory(ui, state, bridge);
             }
             set_status(
@@ -2981,6 +2984,12 @@ fn update_selection_ui(ui: &AppWindow, selected_paths: &[String]) {
     ui.set_selection_revision(ui.get_selection_revision() + 1);
 }
 
+fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let state = state.borrow();
+    ui.set_can_go_back(state.panes.active.history.back_len() > 0);
+    ui.set_can_go_forward(state.panes.active.history.forward_len() > 0);
+}
+
 fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge, path: PathBuf) {
     remember_current_view_state(ui, state);
     {
@@ -2991,6 +3000,7 @@ fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBrid
                 path.display()
             ));
             drop(state_ref);
+            sync_navigation_ui(ui, state);
             refresh_directory(ui, state, bridge);
             return;
         }
@@ -3006,6 +3016,7 @@ fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBrid
         let nav = state_ref.panes.active.history.navigate_from(previous, path);
         state_ref.panes.active.current_dir = nav.target;
     }
+    sync_navigation_ui(ui, state);
     load_directory(ui, state, bridge);
 }
 
@@ -3028,20 +3039,22 @@ fn go_parent(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge
 fn go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     remember_current_view_state(ui, state);
     {
-        let mut state = state.borrow_mut();
+        let mut state_ref = state.borrow_mut();
         debug_log(&format!(
             "go_back requested current={} back_len={} forward_len={}",
-            state.panes.active.current_dir.display(),
-            state.panes.active.history.back_len(),
-            state.panes.active.history.forward_len()
+            state_ref.panes.active.current_dir.display(),
+            state_ref.panes.active.history.back_len(),
+            state_ref.panes.active.history.forward_len()
         ));
-        let previous = state.panes.active.current_dir.clone();
-        let Some(nav) = state.panes.active.history.go_back_from(previous) else {
+        let previous = state_ref.panes.active.current_dir.clone();
+        let Some(nav) = state_ref.panes.active.history.go_back_from(previous) else {
             debug_log("go_back ignored: empty back stack");
+            drop(state_ref);
+            sync_navigation_ui(ui, state);
             set_status(ui, "No previous location");
             return;
         };
-        state.panes.active.current_dir = nav.target.clone();
+        state_ref.panes.active.current_dir = nav.target.clone();
 
         debug_log(&format!(
             "go_back accepted target={} previous_current={}",
@@ -3049,26 +3062,29 @@ fn go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) 
             nav.previous.display()
         ));
     }
+    sync_navigation_ui(ui, state);
     load_directory(ui, state, bridge);
 }
 
 fn go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     remember_current_view_state(ui, state);
     {
-        let mut state = state.borrow_mut();
+        let mut state_ref = state.borrow_mut();
         debug_log(&format!(
             "go_forward requested current={} back_len={} forward_len={}",
-            state.panes.active.current_dir.display(),
-            state.panes.active.history.back_len(),
-            state.panes.active.history.forward_len()
+            state_ref.panes.active.current_dir.display(),
+            state_ref.panes.active.history.back_len(),
+            state_ref.panes.active.history.forward_len()
         ));
-        let previous = state.panes.active.current_dir.clone();
-        let Some(nav) = state.panes.active.history.go_forward_from(previous) else {
+        let previous = state_ref.panes.active.current_dir.clone();
+        let Some(nav) = state_ref.panes.active.history.go_forward_from(previous) else {
             debug_log("go_forward ignored: empty forward stack");
+            drop(state_ref);
+            sync_navigation_ui(ui, state);
             set_status(ui, "No next location");
             return;
         };
-        state.panes.active.current_dir = nav.target.clone();
+        state_ref.panes.active.current_dir = nav.target.clone();
 
         debug_log(&format!(
             "go_forward accepted target={} previous_current={}",
@@ -3076,6 +3092,7 @@ fn go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridg
             nav.previous.display()
         ));
     }
+    sync_navigation_ui(ui, state);
     load_directory(ui, state, bridge);
 }
 

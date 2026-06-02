@@ -68,6 +68,8 @@ export component AppWindow inherits Window {
     in-out property <bool> clipboard_has_paths: false;
     in-out property <bool> clipboard_cut: false;
     in-out property <bool> current_in_trash: false;
+    in-out property <bool> can_go_back: false;
+    in-out property <bool> can_go_forward: false;
 
     in-out property <int> icon_zoom_level: 2;
     in-out property <float> sidebar_width_px: 320;
@@ -80,7 +82,7 @@ export component AppWindow inherits Window {
     private property <length> sidebar-divider-offset: 3px;
     private property <bool> search-filters-active: root.search_kind_filter != 0 || root.search_modified_filter != 0 || root.search_size_filter != 0;
     private property <bool> search-panel-visible: root.search_bar_open || root.search_query != "" || root.search-filters-active;
-    private property <length> search-panel-height: root.search-panel-visible ? 134px : 0px;
+    private property <length> search-panel-height: root.search-panel-visible ? (root.main-pane-width < 760px ? 88px : 50px) : 0px;
     private property <string> search-kind-filter-label: root.search_kind_filter == 1 ? "Type: Folders" : (root.search_kind_filter == 2 ? "Type: Files" : (root.search_kind_filter == 3 ? "Type: Images" : "Type: All"));
     private property <string> search-modified-filter-label: root.search_modified_filter == 1 ? "Modified: Today" : (root.search_modified_filter == 2 ? "Modified: 7 days" : (root.search_modified_filter == 3 ? "Modified: 30 days" : "Modified: Any"));
     private property <string> search-size-filter-label: root.search_size_filter == 1 ? "Size: < 1 MB" : (root.search_size_filter == 2 ? "Size: 1-100 MB" : (root.search_size_filter == 3 ? "Size: > 100 MB" : "Size: Any"));
@@ -636,12 +638,31 @@ export component AppWindow inherits Window {
             current-path: root.current_path;
             sidebar-width-px: root.sidebar_width_px;
             divider-offset: root.sidebar-divider-offset;
+            can-go-back: root.can_go_back;
+            can-go-forward: root.can_go_forward;
+            search-active: root.search-panel-visible;
             path-text <=> root.path_input_text;
             path-focused <=> root.path-input-focused;
+            search-query <=> root.search_query;
+            search-focused <=> root.search-input-focused;
+            go_back => { root.go_back(); }
+            go_forward => { root.go_forward(); }
             go_parent => { root.go_parent(); }
-            go_home => { root.go_home(); }
             path_submitted(path) => { root.path_submitted(path); }
             search_requested => { root.search_bar_open = true; }
+            search_submitted(query) => {
+                root.search_bar_open = true;
+                root.search_submitted(query);
+            }
+            search_close_requested => {
+                root.search_query = "";
+                root.search_kind_filter = 0;
+                root.search_modified_filter = 0;
+                root.search_size_filter = 0;
+                root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                root.search_submitted("");
+                root.search_bar_open = false;
+            }
             dark_toggled => {
                 root.dark_mode = !root.dark_mode;
                 root.persist_ui_state();
@@ -654,9 +675,16 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 width: root.sidebar_width_px * 1px;
+                background: root.dark_mode ? #0f1214 : #fbfcfd;
+
+                sidebar-surface := Rectangle {
+                x: 8px;
+                y: 8px;
+                width: max(1px, parent.width - 12px);
+                height: max(1px, parent.height - 16px);
                 border-radius: 10px;
                 background: root.dark_mode ? #171b1f : #f2f5f8;
-                border-color: root.dark_mode ? #2b333a : #d8e1e9;
+                border-color: root.dark_mode ? #273039 : #dce4ec;
                 border-width: 1px;
 
                 TouchArea {
@@ -838,6 +866,7 @@ export component AppWindow inherits Window {
                         return DragAction.copy;
                     }
                 }
+                }
             }
 
             Rectangle {
@@ -928,9 +957,6 @@ export component AppWindow inherits Window {
                         kind-filter <=> root.search_kind_filter;
                         modified-filter <=> root.search_modified_filter;
                         size-filter <=> root.search_size_filter;
-                        focus_changed(focused) => {
-                            root.search-input-focused = focused;
-                        }
                         submitted(query) => {
                             root.search_submitted(query);
                         }

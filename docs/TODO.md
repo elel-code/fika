@@ -290,8 +290,9 @@
   - Acceptance: search can filter by broad type, modified age, and size without parsing display strings.
   - Current: the search strip exposes Type / Modified / Size cycle buttons; filters apply to current-directory filtering and recursive search results.
   - Current: when filters hide some recursive search matches, the completion status explicitly says the visible count is after filters.
-  - Current: search strip layout is split into `ui/search_panel.slint`, keeping query, clear/close, recursive, and filter controls out of `ui/app.slint`.
-  - Current: search strip control rows use scoped `FlexboxLayout`, so the query row can reserve fixed action buttons while the filter controls wrap inside the panel instead of forcing the main pane width.
+  - Current: COSMIC-style search query input lives in `TopBar`: the search button turns into a fixed-width header search field while active.
+  - Current: `ui/search_panel.slint` is now a lightweight main-pane filter strip for recursive search, Type, Modified, Size, Cancel, Clear, and Close.
+  - Current: search filter controls use scoped `FlexboxLayout`, so they wrap inside the filter strip instead of forcing or narrowing the main pane width.
   - Current: search UI state helpers, recursive-search cancellation token handling, and search status text live in `src/app/search_ui.rs`, keeping `main.rs` focused on callback wiring and async search startup.
 
 ## Phase 8: Open With
@@ -462,6 +463,8 @@ Acceptance for all:
   - Current: `docs/COSMIC_REFERENCE.md` records the policy and concrete source files to inspect.
   - Current direction: shell visuals should move closer to COSMIC Files: top bar and main pane share one calm surface with only necessary divider lines, the sidebar reads as the raised/foreground layer with Fika-friendly rounded treatment, and address/search/navigation placement follows COSMIC unless it conflicts with Fika's column-first main pane.
   - Current: first shell pass aligns the top bar, search panel, status bar, and main pane to one shared surface while the sidebar uses a rounded foreground component color and a softer divider, keeping the main pane's column-first layout untouched.
+  - Current: TopBar follows COSMIC's previous/next/up navigation grouping. Home remains a Places/sidebar action rather than a top-bar button.
+  - Current: Search follows COSMIC's header behavior more closely: the toolbar search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.

@@ -47,6 +47,7 @@ impl MainGridLayout {
             ui.get_search_kind_filter(),
             ui.get_search_modified_filter(),
             ui.get_search_size_filter(),
+            pane.right - pane.left,
         );
         let available_grid_height =
             (pane.bottom - pane.top - 36.0 - search_panel_height - 2.0 * padding).max(row_height);
@@ -168,11 +169,12 @@ pub(crate) fn search_panel_height(
     search_kind_filter: i32,
     search_modified_filter: i32,
     search_size_filter: i32,
+    main_pane_width: f32,
 ) -> f32 {
     let filters_active =
         search_kind_filter != 0 || search_modified_filter != 0 || search_size_filter != 0;
     if search_bar_open || !search_query.is_empty() || filters_active {
-        134.0
+        if main_pane_width < 760.0 { 88.0 } else { 50.0 }
     } else {
         0.0
     }
@@ -1142,12 +1144,13 @@ mod tests {
 
     #[test]
     fn search_panel_height_matches_slint_visibility_rules() {
-        assert_eq!(search_panel_height(false, "", 0, 0, 0), 0.0);
-        assert_eq!(search_panel_height(true, "", 0, 0, 0), 134.0);
-        assert_eq!(search_panel_height(false, "png", 0, 0, 0), 134.0);
-        assert_eq!(search_panel_height(false, "", 1, 0, 0), 134.0);
-        assert_eq!(search_panel_height(false, "", 0, 2, 0), 134.0);
-        assert_eq!(search_panel_height(false, "", 0, 0, 3), 134.0);
+        assert_eq!(search_panel_height(false, "", 0, 0, 0, 900.0), 0.0);
+        assert_eq!(search_panel_height(true, "", 0, 0, 0, 900.0), 50.0);
+        assert_eq!(search_panel_height(true, "", 0, 0, 0, 700.0), 88.0);
+        assert_eq!(search_panel_height(false, "png", 0, 0, 0, 900.0), 50.0);
+        assert_eq!(search_panel_height(false, "", 1, 0, 0, 900.0), 50.0);
+        assert_eq!(search_panel_height(false, "", 0, 2, 0, 900.0), 50.0);
+        assert_eq!(search_panel_height(false, "", 0, 0, 3, 900.0), 50.0);
     }
 
     #[test]
