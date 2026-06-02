@@ -43,8 +43,8 @@ use app::geometry::{
     MainGridLayout, SelectionRect, place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::operation_controller::{
-    operation_complete_status, operation_failed_status, operation_finished_label,
-    operation_progress_status,
+    OperationResultDisposition, operation_finished_label, operation_progress_status,
+    operation_result_disposition,
 };
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
@@ -1936,32 +1936,38 @@ fn apply_file_operation_result(
         (refresh_current_dir, state.operation_queue.len())
     };
 
+    let disposition = operation_result_disposition(
+        &result.operation,
+        result.result,
+        result.privileged_command.is_some(),
+    );
     let mut requested_privilege = false;
-    let status_message = match result.result {
-        Ok(outcome) => {
+    let status_message = match disposition {
+        OperationResultDisposition::Completed {
+            destination,
+            overwritten_backup,
+            status,
+        } => {
             register_file_undo(
                 ui,
                 state,
                 &result_operation,
                 &result_source,
-                &outcome.destination,
-                outcome.overwritten_backup.clone(),
+                &destination,
+                overwritten_backup,
             );
-            Some(operation_complete_status(
-                &result_operation,
-                &outcome.destination,
-            ))
+            Some(status)
         }
-        Err(err) if privilege::is_permission_error(&err) => {
+        OperationResultDisposition::RequestPrivilege { error } => {
             if let Some(command) = result.privileged_command {
-                file_actions::request_privileged_action(ui, state, command, &err);
+                file_actions::request_privileged_action(ui, state, command, &error);
                 requested_privilege = true;
                 None
             } else {
-                Some(operation_failed_status(&result.operation, &err))
+                Some("Operation failed: missing privileged command".to_string())
             }
         }
-        Err(err) => Some(operation_failed_status(&result.operation, &err)),
+        OperationResultDisposition::Failed { status } => Some(status),
     };
 
     if refresh_current_dir {

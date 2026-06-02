@@ -243,7 +243,7 @@ Slint `DragArea` / `DropArea` 引入策略：
 - 拖到自身或自身子目录不会打开 transfer 菜单；Rust 侧准备菜单和执行操作都会拒绝这类目标并在状态栏提示。
 - Drop transfer 菜单提供 Move / Copy / Link / Cancel，Cancel 只关闭菜单不入队操作。
 
-Move / Copy / Link 通过 Tokio `spawn_blocking()` 执行真实文件系统操作，完成后回到 UI 线程更新状态。操作会先检查目标目录中是否已有同名条目；存在冲突时弹出对话框，由用户选择 Overwrite、Keep Both、Rename 或 Skip，之后才进入 `operation_queue`。Paste 会复用同一套 transfer 接受/拒绝规则，只统计真正被接受的传输；Cut 剪贴板只在至少一个 move 被接受后清空，拒绝项不会误报为已排队。队列一次启动一个任务；copy 和跨文件系统 move 会按字节汇报进度。`src/app/operation_controller.rs` 集中处理入队快照、是否可启动、active id/cancel flag 生命周期、取消摘要以及 queued/start/progress/complete/failed 状态文本，`transfer.rs` 仍负责冲突判断与实际任务派发。用户可以取消尚未开始的排队任务，也可以取消正在复制的活动任务。当前目录受影响时会触发刷新。权限不足时，UI 会保存待执行命令并弹出确认框；确认后通过受限 D-Bus helper 重试，GUI 进程本身不做 root 写入。
+Move / Copy / Link 通过 Tokio `spawn_blocking()` 执行真实文件系统操作，完成后回到 UI 线程更新状态。操作会先检查目标目录中是否已有同名条目；存在冲突时弹出对话框，由用户选择 Overwrite、Keep Both、Rename 或 Skip，之后才进入 `operation_queue`。Paste 会复用同一套 transfer 接受/拒绝规则，只统计真正被接受的传输；Cut 剪贴板只在至少一个 move 被接受后清空，拒绝项不会误报为已排队。队列一次启动一个任务；copy 和跨文件系统 move 会按字节汇报进度。`src/app/operation_controller.rs` 集中处理入队快照、是否可启动、active id/cancel flag 生命周期、取消摘要、queued/start/progress/complete/failed 状态文本，以及完成 / 提权重试 / 普通失败的 result disposition；`transfer.rs` 仍负责冲突判断与实际任务派发，`main.rs` 只执行 Undo 注册、权限弹窗、目录刷新等 UI 副作用。用户可以取消尚未开始的排队任务，也可以取消正在复制的活动任务。当前目录受影响时会触发刷新。权限不足时，UI 会保存待执行命令并弹出确认框；确认后通过受限 D-Bus helper 重试，GUI 进程本身不做 root 写入。
 
 ### External Drag And Drop
 

@@ -1,5 +1,6 @@
 use crate::app::state::{AppState, FileOperationRequest};
-use std::path::Path;
+use crate::fs::{file_ops, privilege};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -21,6 +22,21 @@ pub(crate) struct OperationQueueSnapshot {
 pub(crate) struct OperationCancelSummary {
     pub(crate) queued_cancelled: usize,
     pub(crate) active_cancelled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OperationResultDisposition {
+    Completed {
+        destination: PathBuf,
+        overwritten_backup: Option<PathBuf>,
+        status: String,
+    },
+    RequestPrivilege {
+        error: String,
+    },
+    Failed {
+        status: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +182,26 @@ pub(crate) fn operation_complete_status(operation: &str, destination: &Path) -> 
 
 pub(crate) fn operation_failed_status(operation: &str, error: &str) -> String {
     format!("{} failed: {error}", operation_finished_label(operation))
+}
+
+pub(crate) fn operation_result_disposition(
+    operation: &str,
+    result: Result<file_ops::TransferOutcome, String>,
+    can_request_privilege: bool,
+) -> OperationResultDisposition {
+    match result {
+        Ok(outcome) => OperationResultDisposition::Completed {
+            status: operation_complete_status(operation, &outcome.destination),
+            destination: outcome.destination,
+            overwritten_backup: outcome.overwritten_backup,
+        },
+        Err(error) if can_request_privilege && privilege::is_permission_error(&error) => {
+            OperationResultDisposition::RequestPrivilege { error }
+        }
+        Err(error) => OperationResultDisposition::Failed {
+            status: operation_failed_status(operation, &error),
+        },
+    }
 }
 
 pub(crate) fn operation_label(operation: &str) -> &'static str {
@@ -316,6 +352,40 @@ mod tests {
         assert_eq!(
             operation_failed_status("link", "permission denied"),
             "Link failed: permission denied"
+        );
+    }
+
+    #[test]
+    fn operation_result_disposition_separates_completion_privilege_and_failure() {
+        let completed = operation_result_disposition(
+            "copy",
+            Ok(file_ops::TransferOutcome {
+                destination: PathBuf::from("/tmp/copied.txt"),
+                overwritten_backup: Some(PathBuf::from("/tmp/backup")),
+            }),
+            true,
+        );
+        assert_eq!(
+            completed,
+            OperationResultDisposition::Completed {
+                destination: PathBuf::from("/tmp/copied.txt"),
+                overwritten_backup: Some(PathBuf::from("/tmp/backup")),
+                status: "Copy complete: /tmp/copied.txt".to_string(),
+            }
+        );
+
+        assert_eq!(
+            operation_result_disposition("move", Err("Permission denied".to_string()), true),
+            OperationResultDisposition::RequestPrivilege {
+                error: "Permission denied".to_string(),
+            }
+        );
+
+        assert_eq!(
+            operation_result_disposition("move", Err("Permission denied".to_string()), false),
+            OperationResultDisposition::Failed {
+                status: "Move failed: Permission denied".to_string(),
+            }
         );
     }
 }
