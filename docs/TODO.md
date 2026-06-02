@@ -154,7 +154,7 @@
 ## Phase 4: Places Management
 
 - [x] Right-click Places menu.
-  - Acceptance: user-added places show Rename, Remove, and Open in New Window.
+  - Acceptance: user-added places show Rename, Remove, and Open in New Window backed by a real launch path.
   - Acceptance: built-in places do not expose destructive actions unless explicitly supported.
   - Current: Open in New Window launches a new Fika process in a systemd user scope when systemd user D-Bus is available, reports non-fatal scope diagnostics in the status bar, and records the unit name in app state.
 
@@ -170,13 +170,13 @@
   - Current: Restore Defaults is available from the Places blank-area context menu.
   - Current: the Places blank-area context menu also offers Add Current Folder when the current directory is not already in Places.
 
-- [ ] Drag external folder into Places.
-  - Acceptance: dropping a folder path from another app on Places adds it.
-  - Current: deferred. Slint DnD is currently used only for app-internal `data-transfer` user data; external `text/uri-list` / `text/plain` parsing and native-window drop fallback were removed to avoid maintaining a platform fallback path before Slint supports reliable cross-application DnD.
+- [~] Cross-application folder drop into Places.
+  - Future acceptance: once Slint exposes stable cross-application DnD, dropping a folder path from another app on Places adds it.
+  - Current: deferred by project decision. Slint DnD is currently used only for app-internal `data-transfer` user data; external `text/uri-list` / `text/plain` parsing and native-window drop fallback are intentionally absent to avoid maintaining a platform fallback path before Slint supports reliable cross-application DnD.
 
-- [ ] Drag external local file or folder into main view.
-  - Acceptance: dropping onto a main-pane folder opens the transfer menu targeting that folder.
-  - Acceptance: dropping onto main-pane blank space opens the transfer menu targeting the current directory.
+- [~] Cross-application local file or folder drop into main view.
+  - Future acceptance: once Slint exposes stable cross-application DnD, dropping onto a main-pane folder opens the transfer menu targeting that folder.
+  - Future acceptance: dropping onto main-pane blank space opens the transfer menu targeting the current directory.
   - Current: deferred with external Places drop. Internal file/folder/place drags already use the same target highlighting and transfer-menu rules; external desktop payloads are rejected as unsupported until Slint exposes stable cross-application DnD.
 
 - [x] Drag folder from main view into Places.
