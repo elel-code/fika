@@ -446,10 +446,10 @@ Acceptance for all:
   - Acceptance: the current Dolphin-like column-first main-pane arrangement, horizontal scrolling, and virtualized Slint tile model stay intact.
   - Current: `docs/COSMIC_REFERENCE.md` records the policy and concrete source files to inspect.
 
-- [ ] Align menu/action enablement with COSMIC where it fits Fika.
+- [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.
   - Acceptance: context menu action grouping, disabled/hidden states, and current-folder actions are reviewed against COSMIC without changing the already-fixed submenu lifetime rules.
-  - Current: the main-view blank context menu keeps a disabled Paste row when no file clipboard is available, matching COSMIC's stable action layout instead of making lower rows jump as clipboard state changes.
+  - Current: the main-view blank context menu exposes Select All and keeps a disabled Paste row when no file clipboard is available, matching COSMIC's stable action layout instead of making lower rows jump as clipboard state changes.
 
 - [~] Revisit clipboard behavior against COSMIC's cached Wayland model.
   - Reference: `cosmic-files/src/clipboard.rs` and clipboard handling in `cosmic-files/src/app.rs`.

@@ -755,8 +755,8 @@ fn viewport_context_menu_metrics(
     separator: f32,
 ) -> MenuMetrics {
     MenuMetrics {
-        height: 4.0 * item + separator,
-        open_with_row_y_offset: 2.0 * item + separator,
+        height: 5.0 * item + separator,
+        open_with_row_y_offset: 3.0 * item + separator,
         create_new_row_y_offset: 0.0,
     }
 }
@@ -1218,11 +1218,11 @@ mod tests {
         });
         assert_eq!(
             viewport_with_paste.height,
-            4.0 * item_height + separator_height
+            5.0 * item_height + separator_height
         );
         assert_eq!(
             viewport_with_paste.open_with_row_y_offset,
-            2.0 * item_height + separator_height
+            3.0 * item_height + separator_height
         );
         let viewport_without_paste = context_menu_metrics(MenuMetricsInput {
             kind: 3,

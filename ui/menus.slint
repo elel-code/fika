@@ -623,6 +623,7 @@ export component ViewportContextMenu inherits PopupSurface {
     in property <bool> clipboard-cut;
     callback create_new_hover(bool);
     callback create_new_clicked();
+    callback select_all_requested();
     callback paste_requested();
     callback open_folder_with_hover(bool);
     callback open_folder_with_clicked();
@@ -641,6 +642,12 @@ export component ViewportContextMenu inherits PopupSurface {
 
         MenuSeparator {
             dark: root.dark;
+        }
+
+        MenuItem {
+            label: "Select All";
+            dark: root.dark;
+            clicked => { root.select_all_requested(); }
         }
 
         MenuItem {
@@ -735,6 +742,7 @@ export component RootContextMenuLayer inherits Rectangle {
     callback places_blank_restore_defaults();
     callback viewport_create_new_hover(length, bool);
     callback viewport_create_new_clicked(length);
+    callback viewport_select_all_requested();
     callback viewport_paste_requested();
     callback viewport_open_folder_with_hover(length, bool);
     callback viewport_open_folder_with_clicked(length);
@@ -823,6 +831,7 @@ export component RootContextMenuLayer inherits Rectangle {
         clipboard-cut: root.clipboard-cut;
         create_new_hover(is-hovered) => { root.viewport_create_new_hover(root.create-new-row-y, is-hovered); }
         create_new_clicked => { root.viewport_create_new_clicked(root.create-new-row-y); }
+        select_all_requested => { root.viewport_select_all_requested(); }
         paste_requested => { root.viewport_paste_requested(); }
         open_folder_with_hover(is-hovered) => { root.viewport_open_folder_with_hover(root.open-with-row-y, is-hovered); }
         open_folder_with_clicked => { root.viewport_open_folder_with_clicked(root.open-with-row-y); }

@@ -1310,6 +1310,10 @@ export component AppWindow inherits Window {
         viewport_create_new_clicked(row-y) => {
             root.show-create-new-submenu(row-y);
         }
+        viewport_select_all_requested => {
+            root.select_all_visible();
+            root.close-context-popups();
+        }
         viewport_paste_requested => {
             root.paste_into(root.current_path);
             root.close-context-popups();
