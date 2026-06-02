@@ -111,6 +111,7 @@ export component AppWindow inherits Window {
     private property <bool> context-default-open-visible: root.default_open_app_name != "" && root.open_with_path == root.context-menu-path;
     private property <bool> context-add-place-visible: root.context-menu-kind == 4 ? (root.current_path != "" && !root.is_place(root.current_path)) : (root.context-menu-is-dir && !root.is_place(root.context-menu-path));
     private property <length> child-menu-gap: 3px;
+    private property <int> child-submenu-close-kind: 0;
     private property <bool> rename-place-open: false;
     private property <int> rename-place-index: -1;
     private property <string> rename-place-label;
@@ -288,27 +289,23 @@ export component AppWindow inherits Window {
     pure callback is_selected(string) -> bool;
     pure callback is_place(string) -> bool;
 
-    function stop-submenu-close-timers() {
-        open-with-close-timer.stop();
-        create-new-close-timer.stop();
+    function stop-submenu-close-timer() {
+        child-submenu-close-timer.stop();
+        root.child-submenu-close-kind = 0;
     }
 
     function set-child-submenu-hover(menu: int, is-hovered: bool) {
-        if (menu == 1) {
-            open-with-close-timer.stop();
-            if (!is-hovered) {
-                open-with-close-timer.start();
-            }
-        } else if (menu == 2) {
-            create-new-close-timer.stop();
-            if (!is-hovered) {
-                create-new-close-timer.start();
-            }
+        child-submenu-close-timer.stop();
+        if (is-hovered) {
+            root.child-submenu-close-kind = 0;
+        } else if (menu == 1 || menu == 2) {
+            root.child-submenu-close-kind = menu;
+            child-submenu-close-timer.start();
         }
     }
 
     function show-open-with-submenu(path: string, row-y: length) {
-        root.stop-submenu-close-timers();
+        root.stop-submenu-close-timer();
         root.prepare_open_with(path);
         root.open_with_path = path;
         root.open-with-menu-y = row-y;
@@ -317,7 +314,7 @@ export component AppWindow inherits Window {
     }
 
     function show-create-new-submenu(row-y: length) {
-        root.stop-submenu-close-timers();
+        root.stop-submenu-close-timer();
         root.open-with-menu-open = false;
         root.create-new-menu-y = row-y;
         root.create-new-menu-open = true;
@@ -343,7 +340,7 @@ export component AppWindow inherits Window {
         root.context-menu-open = false;
         root.open-with-menu-open = false;
         root.create-new-menu-open = false;
-        root.stop-submenu-close-timers();
+        root.stop-submenu-close-timer();
     }
 
     function show-context-menu(kind: int, x: length, y: length) {
@@ -352,7 +349,7 @@ export component AppWindow inherits Window {
         root.context-menu-y = y;
         root.open-with-menu-open = false;
         root.create-new-menu-open = false;
-        root.stop-submenu-close-timers();
+        root.stop-submenu-close-timer();
         root.context-menu-open = true;
     }
 
@@ -388,21 +385,17 @@ export component AppWindow inherits Window {
         }
     }
 
-    open-with-close-timer := Timer {
+    child-submenu-close-timer := Timer {
         running: false;
         interval: 240ms;
         triggered => {
             self.running = false;
-            root.open-with-menu-open = false;
-        }
-    }
-
-    create-new-close-timer := Timer {
-        running: false;
-        interval: 240ms;
-        triggered => {
-            self.running = false;
-            root.create-new-menu-open = false;
+            if (root.child-submenu-close-kind == 1) {
+                root.open-with-menu-open = false;
+            } else if (root.child-submenu-close-kind == 2) {
+                root.create-new-menu-open = false;
+            }
+            root.child-submenu-close-kind = 0;
         }
     }
 
