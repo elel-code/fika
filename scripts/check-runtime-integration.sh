@@ -779,7 +779,7 @@ print_dnd_validation_plan() {
         echo "  command: FIKA_DISABLE_WINIT_DROP_FALLBACK=1 FIKA_DEBUG_DND=1 $fika_cmd"
     fi
 
-    echo "  expected startup: slint_droparea=primary, winit_fallback=disabled"
+    echo "  expected startup: slint_droparea=primary slint_droparea_payloads=internal-data-transfer,text/uri-list,text/plain winit_fallback=disabled"
     echo "  expected Places drop: role=slint-primary area=places validation=external-local-path"
     echo "  expected main-pane drop: role=slint-primary area=main validation=external-local-path"
     echo "  keep fallback if any real external drop only appears with role=winit-fallback"
