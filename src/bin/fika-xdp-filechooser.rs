@@ -21,6 +21,8 @@ struct ChooserFilterMap {
     chooser_specs: Vec<String>,
     portal_indices: Vec<usize>,
     initial_chooser_index: Option<usize>,
+    mime_mapped_filters: usize,
+    hidden_filters: usize,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +90,8 @@ struct PortalRequestDebug<'a> {
     save_files: usize,
     portal_filters: usize,
     chooser_filters: usize,
+    mime_mapped_filters: usize,
+    hidden_filters: usize,
     initial_filter_index: Option<usize>,
     portal_choices: usize,
     parent_status: ParentWindowStatus,
@@ -201,6 +205,8 @@ impl FileChooser {
             save_files: 0,
             portal_filters: filter_map.portal_filters.len(),
             chooser_filters: filter_map.chooser_specs.len(),
+            mime_mapped_filters: filter_map.mime_mapped_filters,
+            hidden_filters: filter_map.hidden_filters,
             initial_filter_index: filter_map.initial_chooser_index,
             portal_choices: choices.len(),
             parent_status: parent_window.status,
@@ -257,6 +263,8 @@ impl FileChooser {
             save_files: 0,
             portal_filters: filter_map.portal_filters.len(),
             chooser_filters: filter_map.chooser_specs.len(),
+            mime_mapped_filters: filter_map.mime_mapped_filters,
+            hidden_filters: filter_map.hidden_filters,
             initial_filter_index: filter_map.initial_chooser_index,
             portal_choices: choices.len(),
             parent_status: parent_window.status,
@@ -313,6 +321,8 @@ impl FileChooser {
             save_files: files.len(),
             portal_filters: filter_map.portal_filters.len(),
             chooser_filters: filter_map.chooser_specs.len(),
+            mime_mapped_filters: filter_map.mime_mapped_filters,
+            hidden_filters: filter_map.hidden_filters,
             initial_filter_index: filter_map.initial_chooser_index,
             portal_choices: choices.len(),
             parent_status: parent_window.status,
@@ -585,7 +595,8 @@ fn chooser_filter_map(
     };
 
     for (portal_index, filter) in map.portal_filters.iter().enumerate() {
-        let Some(spec) = chooser_filter_spec(filter) else {
+        let Some((spec, mime_mapped)) = chooser_filter_spec(filter) else {
+            map.hidden_filters += 1;
             continue;
         };
         if current_filter
@@ -596,21 +607,25 @@ fn chooser_filter_map(
         }
         map.chooser_specs.push(spec);
         map.portal_indices.push(portal_index);
+        if mime_mapped {
+            map.mime_mapped_filters += 1;
+        }
     }
 
     map
 }
 
-fn chooser_filter_spec((label, patterns): &PortalFilter) -> Option<String> {
-    let globs = chooser_filter_globs(patterns);
+fn chooser_filter_spec((label, patterns): &PortalFilter) -> Option<(String, bool)> {
+    let (globs, mime_mapped) = chooser_filter_globs(patterns);
     if globs.is_empty() {
         return None;
     }
-    Some(format!("{label}\t{}", globs.join(";")))
+    Some((format!("{label}\t{}", globs.join(";")), mime_mapped))
 }
 
-fn chooser_filter_globs(patterns: &[(u32, String)]) -> Vec<String> {
+fn chooser_filter_globs(patterns: &[(u32, String)]) -> (Vec<String>, bool) {
     let mut globs = Vec::new();
+    let mut mime_mapped = false;
     for (kind, pattern) in patterns {
         let pattern = pattern.trim();
         if pattern.is_empty() {
@@ -620,14 +635,18 @@ fn chooser_filter_globs(patterns: &[(u32, String)]) -> Vec<String> {
         match kind {
             0 => push_unique_glob(&mut globs, pattern),
             1 => {
-                for glob in mime_filter_globs(pattern) {
+                let mime_globs = mime_filter_globs(pattern);
+                if !mime_globs.is_empty() {
+                    mime_mapped = true;
+                }
+                for glob in mime_globs {
                     push_unique_glob(&mut globs, glob);
                 }
             }
             _ => {}
         }
     }
-    globs
+    (globs, mime_mapped)
 }
 
 fn push_unique_glob(globs: &mut Vec<String>, glob: &str) {
@@ -753,7 +772,7 @@ fn portal_debug_log_request(request: PortalRequestDebug<'_>) {
 
 fn portal_request_summary(request: PortalRequestDebug<'_>) -> String {
     format!(
-        "request method={} handle={} start_dir={} directory={} multiple={} save_kind={} save_files={} portal_filters={} chooser_filters={} initial_filter={} portal_choices={} parent_status={} parent_forwarded={} parent_binding={} parent_binding_reason={} native_transient=false",
+        "request method={} handle={} start_dir={} directory={} multiple={} save_kind={} save_files={} portal_filters={} chooser_filters={} mime_mapped_filters={} hidden_filters={} initial_filter={} portal_choices={} parent_status={} parent_forwarded={} parent_binding={} parent_binding_reason={} native_transient=false",
         request.method,
         request.handle,
         request
@@ -766,6 +785,8 @@ fn portal_request_summary(request: PortalRequestDebug<'_>) -> String {
         request.save_files,
         request.portal_filters,
         request.chooser_filters,
+        request.mime_mapped_filters,
+        request.hidden_filters,
         request
             .initial_filter_index
             .map(|index| index.to_string())
@@ -1114,6 +1135,8 @@ mod tests {
             save_files: 0,
             portal_filters: 2,
             chooser_filters: 1,
+            mime_mapped_filters: 1,
+            hidden_filters: 1,
             initial_filter_index: Some(0),
             portal_choices: 1,
             parent_status: ParentWindowStatus::Accepted,
@@ -1122,7 +1145,7 @@ mod tests {
 
         assert_eq!(
             summary,
-            "request method=OpenFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=/home/yk directory=true multiple=true save_kind=none save_files=0 portal_filters=2 chooser_filters=1 initial_filter=0 portal_choices=1 parent_status=accepted parent_forwarded=true parent_binding=metadata-only parent_binding_reason=slint-parent-token-binding-unavailable native_transient=false"
+            "request method=OpenFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=/home/yk directory=true multiple=true save_kind=none save_files=0 portal_filters=2 chooser_filters=1 mime_mapped_filters=1 hidden_filters=1 initial_filter=0 portal_choices=1 parent_status=accepted parent_forwarded=true parent_binding=metadata-only parent_binding_reason=slint-parent-token-binding-unavailable native_transient=false"
         );
     }
 
@@ -1138,6 +1161,8 @@ mod tests {
             save_files: 0,
             portal_filters: 0,
             chooser_filters: 0,
+            mime_mapped_filters: 0,
+            hidden_filters: 0,
             initial_filter_index: None,
             portal_choices: 0,
             parent_status: ParentWindowStatus::Empty,
@@ -1146,7 +1171,7 @@ mod tests {
 
         assert_eq!(
             summary,
-            "request method=SaveFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=<none> directory=false multiple=false save_kind=file save_files=0 portal_filters=0 chooser_filters=0 initial_filter=<none> portal_choices=0 parent_status=empty parent_forwarded=false parent_binding=none parent_binding_reason=no-parent-window native_transient=false"
+            "request method=SaveFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=<none> directory=false multiple=false save_kind=file save_files=0 portal_filters=0 chooser_filters=0 mime_mapped_filters=0 hidden_filters=0 initial_filter=<none> portal_choices=0 parent_status=empty parent_forwarded=false parent_binding=none parent_binding_reason=no-parent-window native_transient=false"
         );
     }
 
@@ -1214,6 +1239,8 @@ mod tests {
                 "Images\t*.png".to_string()
             ]
         );
+        assert_eq!(filter_map.mime_mapped_filters, 1);
+        assert_eq!(filter_map.hidden_filters, 0);
 
         let result = results_for_paths(
             ChooserResult {
@@ -1248,6 +1275,8 @@ mod tests {
         );
         assert_eq!(filter_map.portal_indices, vec![0, 1]);
         assert_eq!(filter_map.initial_chooser_index, Some(0));
+        assert_eq!(filter_map.mime_mapped_filters, 1);
+        assert_eq!(filter_map.hidden_filters, 0);
 
         let result = results_for_paths(
             ChooserResult {
@@ -1285,6 +1314,8 @@ mod tests {
             ]
         );
         assert_eq!(filter_map.portal_indices, vec![1]);
+        assert_eq!(filter_map.mime_mapped_filters, 1);
+        assert_eq!(filter_map.hidden_filters, 1);
     }
 
     #[test]
@@ -1307,6 +1338,8 @@ mod tests {
             ]
         );
         assert_eq!(filter_map.portal_indices, vec![0, 1, 2]);
+        assert_eq!(filter_map.mime_mapped_filters, 2);
+        assert_eq!(filter_map.hidden_filters, 0);
 
         let result = results_for_paths(
             ChooserResult {
