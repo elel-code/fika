@@ -1469,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn cosmic_shell_chrome_keeps_sidebar_as_foreground_layer() {
+    fn cosmic_shell_chrome_uses_unified_top_bar_with_below_header_sidebar_panel() {
         let app = include_str!("../../ui/app.slint");
         let top_bar = include_str!("../../ui/top_bar.slint");
         let search_panel = include_str!("../../ui/search_panel.slint");
@@ -1506,8 +1506,26 @@ mod tests {
             "window, splitter, main pane, and empty view should share the shell base"
         );
         assert!(
-            app.contains("sidebar-foreground := Rectangle"),
-            "sidebar foreground panel should remain explicit"
+            !app.contains("sidebar-foreground := Rectangle"),
+            "sidebar panel should not be a window-level full-height foreground overlay"
+        );
+        assert!(
+            app.contains("sidebar-surface := Rectangle"),
+            "sidebar panel should be explicit inside the content area below the unified top bar"
+        );
+        let top_bar_index = app
+            .find("TopBar {")
+            .expect("AppWindow should instantiate the unified TopBar");
+        let content_layout_index = app[top_bar_index..]
+            .find("HorizontalLayout {\n                vertical-stretch: 1;")
+            .map(|index| top_bar_index + index)
+            .expect("content layout should start after the unified TopBar");
+        let sidebar_surface_index = app
+            .find("sidebar-surface := Rectangle")
+            .expect("sidebar content panel should be present");
+        assert!(
+            top_bar_index < content_layout_index && content_layout_index < sidebar_surface_index,
+            "sidebar panel should live in the content row below the unified TopBar"
         );
         assert!(
             !app.contains("SidebarSection { label: \"Remote\""),
@@ -1519,11 +1537,11 @@ mod tests {
         );
         assert!(
             app.contains("background: root.sidebar-surface-color;"),
-            "sidebar foreground should use the raised sidebar surface"
+            "sidebar panel should use the raised sidebar surface"
         );
         assert!(
             app.contains("border-color: root.sidebar-border-color;"),
-            "sidebar foreground should keep a subtle border"
+            "sidebar panel should keep a subtle border"
         );
         assert!(
             app.contains("private property <length> top-bar-height: 56px;"),
@@ -1537,7 +1555,7 @@ mod tests {
             top_bar.contains("in property <length> main-start-x;")
                 && top_bar.contains("width: root.main-start-x;")
                 && top_bar.contains("x: root.main-start-x;"),
-            "TopBar controls and separator should start from the same main content edge as the main pane"
+            "unified TopBar should span the sidebar area while controls and separator start from the main content edge"
         );
         assert!(
             app.contains(
@@ -1557,7 +1575,7 @@ mod tests {
         );
         assert!(
             app.contains("padding-left: 8px;") && app.contains("padding-right: 8px;"),
-            "sidebar rows should be inset inside the rounded foreground panel"
+            "sidebar rows should be inset inside the rounded below-header panel"
         );
         assert!(
             app.contains("in-out property <float> sidebar_width_px: 280;"),
@@ -1570,7 +1588,7 @@ mod tests {
         assert!(
             app.contains("private property <length> sidebar-panel-margin: 10px;")
                 && app.contains("private property <length> sidebar-panel-radius: 16px;"),
-            "sidebar foreground should keep the roomier rounded COSMIC-like panel treatment"
+            "sidebar content panel should keep the roomier rounded COSMIC-like treatment"
         );
 
         for (name, slint) in [

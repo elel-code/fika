@@ -506,17 +506,6 @@ export component AppWindow inherits Window {
             prepare_open_with(path) => { root.prepare_open_with(path); }
         }
 
-        sidebar-foreground := Rectangle {
-            x: root.sidebar-panel-margin;
-            y: root.sidebar-panel-margin;
-            width: max(1px, root.sidebar_width_px * 1px - 2 * root.sidebar-panel-margin);
-            height: max(1px, parent.height - 2 * root.sidebar-panel-margin);
-            border-radius: root.sidebar-panel-radius;
-            background: root.sidebar-surface-color;
-            border-color: root.sidebar-border-color;
-            border-width: 1px;
-        }
-
         KeyBinding {
             keys: @keys(F5);
             activated => { root.refresh(); }
@@ -617,60 +606,61 @@ export component AppWindow inherits Window {
             padding: 0px;
             spacing: 0px;
 
-        TopBar {
-            height: root.top-bar-height;
-            dark: root.dark_mode;
-            current-path: root.current_path;
-            main-start-x: root.main-content-left;
-            can-go-back: root.can_go_back;
-            can-go-forward: root.can_go_forward;
-            search-active: root.search-panel-visible;
-            split-view-open: root.split_view_open;
-            path-text <=> root.path_input_text;
-            path-focused <=> root.path-input-focused;
-            search-query <=> root.search_query;
-            search-focused <=> root.search-input-focused;
-            go_back => { root.go_back(); }
-            go_forward => { root.go_forward(); }
-            go_parent => { root.go_parent(); }
-            path_submitted(path) => { root.path_submitted(path); }
-            search_requested => { root.search_bar_open = true; }
-            search_submitted(query) => {
-                root.search_bar_open = true;
-                root.search_submitted(query);
+            TopBar {
+                height: root.top-bar-height;
+                dark: root.dark_mode;
+                current-path: root.current_path;
+                main-start-x: root.main-content-left;
+                can-go-back: root.can_go_back;
+                can-go-forward: root.can_go_forward;
+                search-active: root.search-panel-visible;
+                split-view-open: root.split_view_open;
+                path-text <=> root.path_input_text;
+                path-focused <=> root.path-input-focused;
+                search-query <=> root.search_query;
+                search-focused <=> root.search-input-focused;
+                go_back => { root.go_back(); }
+                go_forward => { root.go_forward(); }
+                go_parent => { root.go_parent(); }
+                path_submitted(path) => { root.path_submitted(path); }
+                search_requested => { root.search_bar_open = true; }
+                search_submitted(query) => {
+                    root.search_bar_open = true;
+                    root.search_submitted(query);
+                }
+                search_close_requested => {
+                    root.search_query = "";
+                    root.search_kind_filter = 0;
+                    root.search_modified_filter = 0;
+                    root.search_size_filter = 0;
+                    root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                    root.search_submitted("");
+                    root.search_bar_open = false;
+                }
+                toggle_split_view => { root.toggle_split_view(); }
+                dark_toggled => {
+                    root.dark_mode = !root.dark_mode;
+                    root.persist_ui_state();
+                }
             }
-            search_close_requested => {
-                root.search_query = "";
-                root.search_kind_filter = 0;
-                root.search_modified_filter = 0;
-                root.search_size_filter = 0;
-                root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
-                root.search_submitted("");
-                root.search_bar_open = false;
-            }
-            toggle_split_view => { root.toggle_split_view(); }
-            dark_toggled => {
-                root.dark_mode = !root.dark_mode;
-                root.persist_ui_state();
-            }
-        }
 
-        HorizontalLayout {
-            vertical-stretch: 1;
-            spacing: 0px;
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 0px;
 
-            Rectangle {
-                width: root.sidebar_width_px * 1px;
-                background: transparent;
+                Rectangle {
+                    width: root.sidebar_width_px * 1px;
+                    background: transparent;
 
-                sidebar-surface := Rectangle {
-                x: root.sidebar-panel-margin;
-                y: root.sidebar-panel-margin;
-                width: max(1px, parent.width - 2 * root.sidebar-panel-margin);
-                height: max(1px, parent.height - 2 * root.sidebar-panel-margin);
-                border-radius: root.sidebar-panel-radius;
-                background: transparent;
-                border-width: 0px;
+                    sidebar-surface := Rectangle {
+                        x: root.sidebar-panel-margin;
+                        y: root.sidebar-panel-margin;
+                        width: max(1px, parent.width - 2 * root.sidebar-panel-margin);
+                        height: max(1px, parent.height - 2 * root.sidebar-panel-margin);
+                        border-radius: root.sidebar-panel-radius;
+                        background: root.sidebar-surface-color;
+                        border-color: root.sidebar-border-color;
+                        border-width: 1px;
 
                 TouchArea {
                     width: parent.width;
