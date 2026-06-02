@@ -366,12 +366,13 @@ pub fn trash_path(path: &Path) -> Result<PathBuf, String> {
     if !path_exists(path) {
         return Err("item no longer exists".to_string());
     }
+    if is_in_trash_files_dir(path) {
+        return Err("item is already in Trash".to_string());
+    }
 
-    let trash_home = trash_home();
-    let files_dir = trash_home.join("files");
-    let info_dir = trash_home.join("info");
-    fs::create_dir_all(&files_dir).map_err(|err| err.to_string())?;
-    fs::create_dir_all(&info_dir).map_err(|err| err.to_string())?;
+    ensure_trash_dirs()?;
+    let files_dir = trash_files_dir();
+    let info_dir = trash_info_dir();
 
     let file_name = path
         .file_name()
@@ -389,6 +390,23 @@ pub fn trash_path(path: &Path) -> Result<PathBuf, String> {
     )
     .map_err(|err| err.to_string())?;
     Ok(destination)
+}
+
+pub fn ensure_trash_dirs() -> Result<(), String> {
+    fs::create_dir_all(trash_files_dir()).map_err(|err| err.to_string())?;
+    fs::create_dir_all(trash_info_dir()).map_err(|err| err.to_string())
+}
+
+pub fn trash_files_dir() -> PathBuf {
+    trash_home().join("files")
+}
+
+pub fn is_trash_files_dir(path: &Path) -> bool {
+    path == trash_files_dir()
+}
+
+pub fn is_in_trash_files_dir(path: &Path) -> bool {
+    path.starts_with(trash_files_dir())
 }
 
 pub fn undo_trash(items: &[(PathBuf, PathBuf)]) -> Result<String, String> {
@@ -743,6 +761,10 @@ fn remove_trashinfo(trash_path: &Path) -> Result<(), String> {
         fs::remove_file(info_path).map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+fn trash_info_dir() -> PathBuf {
+    trash_home().join("info")
 }
 
 fn overwrite_backup_path(destination: &Path) -> Result<PathBuf, String> {
@@ -1460,6 +1482,17 @@ mod tests {
             )]);
         }
         let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn trash_path_helpers_identify_xdg_trash_files_location() {
+        let trash_files = trash_files_dir();
+
+        assert!(is_trash_files_dir(&trash_files));
+        assert!(is_in_trash_files_dir(&trash_files.join("trashed.txt")));
+        assert!(!is_in_trash_files_dir(
+            &trash_files.with_file_name("outside-trash")
+        ));
     }
 
     fn test_dir(name: &str) -> PathBuf {

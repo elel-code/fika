@@ -344,7 +344,12 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_open_place(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let requested = expand_user_path(path.as_str());
-                if requested.is_dir() {
+                if fs::file_ops::is_trash_files_dir(&requested) {
+                    match fs::file_ops::ensure_trash_dirs() {
+                        Ok(()) => navigate_to(&ui, &state, &bridge, requested),
+                        Err(err) => set_status(&ui, &format!("Trash is not available: {err}")),
+                    }
+                } else if requested.is_dir() {
                     navigate_to(&ui, &state, &bridge, requested);
                 } else {
                     set_status(&ui, "Place is not available");

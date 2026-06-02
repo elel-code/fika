@@ -478,7 +478,7 @@ Acceptance for all:
   - Reference: `cosmic-files/src/trash.rs`, `cosmic-files/src/operation/mod.rs`, `cosmic-files/src/menu.rs`, and `cosmic-files/src/app.rs`.
   - Acceptance: Trash has a navigable location/sidebar entry with Empty Trash, Restore From Trash, Delete Permanently, trash-specific sorting/metadata where practical, and a rescan/watch path after trash operations.
   - Acceptance: normal Delete continues to prefer Move to Trash for local files; permanent delete requires explicit Trash-context action or confirmation.
-  - Current: Fika can move single/multiple paths to XDG Trash, write `.trashinfo`, summarize failures, and undo by restoring trashed paths. Missing pieces are a Trash location view, restore/permanent-delete menus, empty-trash confirmation, and trash change monitoring.
+  - Current: Fika can move single/multiple paths to XDG Trash, write `.trashinfo`, summarize failures, and undo by restoring trashed paths. Places now includes a built-in Trash entry pointing at XDG Trash `files/`, and clicking it ensures the XDG Trash directories exist before navigation. Missing pieces are trash-specific restore/permanent-delete menus, empty-trash confirmation, original-location/deletion-date metadata, and trash change monitoring.
 
 - [ ] Continue device and mount polish with COSMIC's mounter abstraction in mind.
   - Reference: `cosmic-files/src/mounter/mod.rs` and `mounter/gvfs.rs`.
