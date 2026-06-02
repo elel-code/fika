@@ -320,6 +320,23 @@ export component AppWindow inherits Window {
         root.child-submenu-close-kind = 0;
     }
 
+    function close-child-submenu(menu: int) {
+        if (menu == 1) {
+            root.open-with-menu-open = false;
+        } else if (menu == 2) {
+            root.create-new-menu-open = false;
+        }
+        if (root.child-submenu-close-kind == menu) {
+            root.child-submenu-close-kind = 0;
+        }
+    }
+
+    function close-child-submenus() {
+        root.open-with-menu-open = false;
+        root.create-new-menu-open = false;
+        root.stop-submenu-close-timer();
+    }
+
     function set-child-submenu-hover(menu: int, is-hovered: bool) {
         child-submenu-close-timer.stop();
         if (is-hovered) {
@@ -330,20 +347,27 @@ export component AppWindow inherits Window {
         }
     }
 
-    function show-open-with-submenu(path: string, row-y: length) {
+    function show-child-submenu(menu: int, path: string, row-y: length) {
         root.stop-submenu-close-timer();
-        root.prepare_open_with(path);
-        root.open_with_path = path;
-        root.open-with-menu-y = row-y;
-        root.create-new-menu-open = false;
-        root.open-with-menu-open = true;
+        if (menu == 1) {
+            root.prepare_open_with(path);
+            root.open_with_path = path;
+            root.open-with-menu-y = row-y;
+            root.close-child-submenu(2);
+            root.open-with-menu-open = true;
+        } else if (menu == 2) {
+            root.close-child-submenu(1);
+            root.create-new-menu-y = row-y;
+            root.create-new-menu-open = true;
+        }
+    }
+
+    function show-open-with-submenu(path: string, row-y: length) {
+        root.show-child-submenu(1, path, row-y);
     }
 
     function show-create-new-submenu(row-y: length) {
-        root.stop-submenu-close-timer();
-        root.open-with-menu-open = false;
-        root.create-new-menu-y = row-y;
-        root.create-new-menu-open = true;
+        root.show-child-submenu(2, "", row-y);
     }
 
     function open-with-submenu-hover(path: string, row-y: length, is-hovered: bool) {
@@ -364,9 +388,7 @@ export component AppWindow inherits Window {
 
     function close-context-popups() {
         root.context-menu-open = false;
-        root.open-with-menu-open = false;
-        root.create-new-menu-open = false;
-        root.stop-submenu-close-timer();
+        root.close-child-submenus();
     }
 
     function close-chooser-popups() {
@@ -476,12 +498,7 @@ export component AppWindow inherits Window {
         interval: 240ms;
         triggered => {
             self.running = false;
-            if (root.child-submenu-close-kind == 1) {
-                root.open-with-menu-open = false;
-            } else if (root.child-submenu-close-kind == 2) {
-                root.create-new-menu-open = false;
-            }
-            root.child-submenu-close-kind = 0;
+            root.close-child-submenu(root.child-submenu-close-kind);
         }
     }
 
