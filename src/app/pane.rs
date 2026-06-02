@@ -19,6 +19,9 @@ pub(crate) struct PaneState {
     pub(crate) search_cancel: Option<Arc<AtomicBool>>,
     pub(crate) search_progress: search::SearchProgress,
     pub(crate) search_generation: GenerationCounter,
+    pub(crate) load_generation: GenerationCounter,
+    pub(crate) open_generation: GenerationCounter,
+    pub(crate) thumbnail_generation: GenerationCounter,
     pub(crate) view: PaneView,
 }
 
@@ -33,6 +36,9 @@ impl PaneState {
             search_cancel: None,
             search_progress: search::SearchProgress::default(),
             search_generation: GenerationCounter::default(),
+            load_generation: GenerationCounter::default(),
+            open_generation: GenerationCounter::default(),
+            thumbnail_generation: GenerationCounter::default(),
             view: PaneView::default(),
         }
     }
@@ -325,6 +331,19 @@ mod tests {
         assert_eq!(pane.search_progress.directories_scanned, 4);
         assert_eq!(pane.search_progress.matches_found, 2);
         assert!(pane.search_generation.is_current(generation));
+    }
+
+    #[test]
+    fn pane_state_owns_async_generations() {
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+
+        let load = pane.load_generation.next();
+        let open = pane.open_generation.next();
+        let thumbnail = pane.thumbnail_generation.next();
+
+        assert!(pane.load_generation.is_current(load));
+        assert!(pane.open_generation.is_current(open));
+        assert!(pane.thumbnail_generation.is_current(thumbnail));
     }
 
     #[test]

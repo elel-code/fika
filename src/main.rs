@@ -1591,7 +1591,7 @@ fn apply_directory_result(
 ) {
     {
         let state = state.borrow();
-        if !state.load_generation.is_current(result.generation)
+        if !state.pane.load_generation.is_current(result.generation)
             || result.path != state.pane.current_dir
         {
             debug_log(&format!(
@@ -1599,7 +1599,7 @@ fn apply_directory_result(
                 result.generation,
                 result.path.display(),
                 state.pane.current_dir.display(),
-                state.load_generation.is_current(result.generation)
+                state.pane.load_generation.is_current(result.generation)
             ));
             return;
         }
@@ -1767,7 +1767,7 @@ fn open_file_async(
 ) {
     let generation = {
         let mut state = state.borrow_mut();
-        state.open_generation.next()
+        state.pane.open_generation.next()
     };
     let label = path
         .file_name()
@@ -1795,7 +1795,7 @@ fn open_file_async(
 fn apply_file_open_result(ui: &AppWindow, state: &Rc<RefCell<AppState>>, result: FileOpenResult) {
     {
         let state = state.borrow();
-        if !state.open_generation.is_current(result.generation) {
+        if !state.pane.open_generation.is_current(result.generation) {
             return;
         }
     }
@@ -2847,7 +2847,7 @@ fn schedule_visible_thumbnails(
 ) {
     let (generation, paths) = {
         let mut state = state.borrow_mut();
-        let generation = state.thumbnail_generation.current();
+        let generation = state.pane.thumbnail_generation.current();
         let mut paths = Vec::new();
 
         for entry in entries.iter().take(96) {

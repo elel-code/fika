@@ -46,10 +46,7 @@ pub(crate) struct AppState {
     pub(crate) launched_units: Vec<String>,
     pub(crate) next_operation_id: u64,
     pub(crate) clipboard_generation: GenerationCounter,
-    pub(crate) load_generation: GenerationCounter,
     pub(crate) device_generation: GenerationCounter,
-    pub(crate) open_generation: GenerationCounter,
-    pub(crate) thumbnail_generation: GenerationCounter,
 }
 
 impl AppState {
@@ -89,10 +86,7 @@ impl AppState {
             launched_units: Vec::new(),
             next_operation_id: 1,
             clipboard_generation: GenerationCounter::default(),
-            load_generation: GenerationCounter::default(),
             device_generation: GenerationCounter::default(),
-            open_generation: GenerationCounter::default(),
-            thumbnail_generation: GenerationCounter::default(),
         }
     }
 

@@ -122,7 +122,7 @@ fn open_file_with_app_async(
 ) {
     let generation = {
         let mut state = state.borrow_mut();
-        state.open_generation.next()
+        state.pane.open_generation.next()
     };
     set_status(ui, &format!("Opening with {desktop_id}..."));
 
@@ -151,7 +151,7 @@ fn open_file_with_custom_command_async(
 ) {
     let generation = {
         let mut state = state.borrow_mut();
-        state.open_generation.next()
+        state.pane.open_generation.next()
     };
     set_status(ui, "Opening with custom command...");
 

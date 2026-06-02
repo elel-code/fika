@@ -24,11 +24,11 @@ pub(crate) fn prepare_directory_load(
     preserve_view: bool,
 ) -> DirectoryLoadPreparation {
     cancel_active_search(state);
-    let generation = state.load_generation.next();
-    state.open_generation.next();
+    let generation = state.pane.load_generation.next();
+    state.pane.open_generation.next();
     state.pane.search_generation.next();
     if !preserve_view {
-        state.thumbnail_generation.next();
+        state.pane.thumbnail_generation.next();
         state.thumbnail_pending.clear();
         reset_search_state(state);
         state.pane.selection.clear();
@@ -116,7 +116,7 @@ mod tests {
             PathBuf::from("/tmp/current"),
             vec![test_entry("photo.png", "/tmp/current/photo.png")],
         );
-        let thumbnail_generation = state.thumbnail_generation.current();
+        let thumbnail_generation = state.pane.thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, true);
 
@@ -129,7 +129,10 @@ mod tests {
             Some(1)
         );
         assert!(!preparation.defer_view_restore);
-        assert_eq!(state.thumbnail_generation.current(), thumbnail_generation);
+        assert_eq!(
+            state.pane.thumbnail_generation.current(),
+            thumbnail_generation
+        );
         assert_eq!(
             state.thumbnail_pending.get("/tmp/current/photo.png"),
             Some(&pending_key)
@@ -153,14 +156,14 @@ mod tests {
         state.pane.search.kind_filter = 3;
         state.pane.selection.paths = vec!["/tmp/current/photo.png".to_string()];
         state.pane.selection.anchor = Some("/tmp/current/photo.png".to_string());
-        let thumbnail_generation = state.thumbnail_generation.current();
+        let thumbnail_generation = state.pane.thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, false);
 
         assert_eq!(preparation.current_dir, PathBuf::from("/tmp/current"));
         assert!(preparation.cached_entries.is_none());
         assert!(preparation.defer_view_restore);
-        assert!(state.thumbnail_generation.current() > thumbnail_generation);
+        assert!(state.pane.thumbnail_generation.current() > thumbnail_generation);
         assert!(state.thumbnail_pending.is_empty());
         assert!(state.pane.search.query.is_empty());
         assert_eq!(state.pane.search.kind_filter, 0);

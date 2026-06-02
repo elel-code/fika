@@ -496,6 +496,7 @@ Acceptance for all:
   - Current: Selection paths and range anchor are now isolated behind `PaneSelection`, so the next split-view pass can give each pane its own selected set without reworking clipboard, chooser, trash, and menu call sites at the same time.
   - Current: Search query, type/mtime/size filters, the filtered visible-index cache, and recursive-search cancel/progress/generation are now isolated behind the active `PaneState`.
   - Current: Virtual range/cache metadata, active viewport position, and per-directory viewport restore cache are now isolated behind `PaneView`, so visible tile slicing, scroll restoration, and thumbnail-range checks can become per-pane before the split UI is exposed.
+  - Current: Directory-load, open-file, and thumbnail generation counters are now owned by `PaneState`, so stale async results are scoped to the pane that started the work instead of a global app counter.
   - Current: The active main-pane directory, entries, history, selection, search, and virtual-view state are now grouped under `PaneState`. Fika still renders one pane, but most pane-owned data now has a single ownership boundary before the visible split UI is added.
 
 - [x] Expand Trash beyond first-pass move/undo.

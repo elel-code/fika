@@ -116,7 +116,7 @@ pub(crate) fn apply_thumbnail_load_to_state(
     path_text: &str,
     load: thumbnails::ThumbnailLoad,
 ) -> bool {
-    if !state.thumbnail_generation.is_current(generation) {
+    if !state.pane.thumbnail_generation.is_current(generation) {
         remove_matching_thumbnail_pending(state, path_text, &load.key);
         return false;
     }
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn thumbnail_success_result_updates_cache_without_mutating_full_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let generation = state.thumbnail_generation.current();
+        let generation = state.pane.thumbnail_generation.current();
         let path = "/tmp/photo.png";
         let key = thumbnails::fallback_key(Path::new(path), 64);
         let data = thumbnails::ThumbnailData {
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn thumbnail_failure_result_updates_failure_cache_without_mutating_full_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let generation = state.thumbnail_generation.current();
+        let generation = state.pane.thumbnail_generation.current();
         let path = "/tmp/photo.png";
         let key = thumbnails::fallback_key(Path::new(path), 64);
 
@@ -452,8 +452,8 @@ mod tests {
     #[test]
     fn stale_thumbnail_result_does_not_update_thumbnail_caches() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let stale_generation = state.thumbnail_generation.current();
-        state.thumbnail_generation.next();
+        let stale_generation = state.pane.thumbnail_generation.current();
+        state.pane.thumbnail_generation.next();
         let path = "/tmp/photo.png";
         let key = thumbnails::fallback_key(Path::new(path), 64);
         let data = thumbnails::ThumbnailData {
