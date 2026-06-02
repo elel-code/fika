@@ -1,4 +1,4 @@
-use crate::app::pane::{PaneHistory, PaneSelection};
+use crate::app::pane::{PaneHistory, PaneSearch, PaneSelection};
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::search;
@@ -18,14 +18,10 @@ pub(crate) const MAX_VIEW_STATE_CACHE_ENTRIES: usize = 128;
 pub(crate) struct AppState {
     pub(crate) current_dir: PathBuf,
     pub(crate) entries: Vec<FileEntry>,
-    pub(crate) visible_entry_indices: Option<Vec<usize>>,
     pub(crate) virtual_view: VirtualViewCache,
     pub(crate) places: Vec<PlaceEntry>,
     pub(crate) other_application_apps: Vec<DesktopApp>,
-    pub(crate) search_query: String,
-    pub(crate) search_kind_filter: i32,
-    pub(crate) search_modified_filter: i32,
-    pub(crate) search_size_filter: i32,
+    pub(crate) search: PaneSearch,
     pub(crate) selection: PaneSelection,
     pub(crate) clipboard_paths: Vec<PathBuf>,
     pub(crate) clipboard_cut: bool,
@@ -75,14 +71,10 @@ impl AppState {
         Self {
             current_dir,
             entries: Vec::new(),
-            visible_entry_indices: None,
             virtual_view: VirtualViewCache::default(),
             places,
             other_application_apps: Vec::new(),
-            search_query: String::new(),
-            search_kind_filter: 0,
-            search_modified_filter: 0,
-            search_size_filter: 0,
+            search: PaneSearch::default(),
             selection: PaneSelection::default(),
             clipboard_paths: Vec::new(),
             clipboard_cut: false,

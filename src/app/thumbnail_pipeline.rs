@@ -59,7 +59,7 @@ pub(crate) fn path_is_in_virtual_range(state: &AppState, path_text: &str) -> boo
         return false;
     }
 
-    if let Some(indices) = state.visible_entry_indices.as_ref() {
+    if let Some(indices) = state.search.visible_entry_indices.as_ref() {
         let start = range_start.min(indices.len());
         let end = range_end.min(indices.len());
         if start >= end {
@@ -536,7 +536,7 @@ mod tests {
             test_entry("beta.png", "/tmp/beta.png"),
             test_entry("gamma.png", "/tmp/gamma.png"),
         ];
-        state.visible_entry_indices = Some(vec![0, 2, 3]);
+        state.search.visible_entry_indices = Some(vec![0, 2, 3]);
         state.virtual_view.range = 1..3;
 
         assert!(path_is_in_virtual_range(&state, "/tmp/beta.png"));

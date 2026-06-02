@@ -20,6 +20,25 @@ impl PaneSelection {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PaneSearch {
+    pub(crate) query: String,
+    pub(crate) kind_filter: i32,
+    pub(crate) modified_filter: i32,
+    pub(crate) size_filter: i32,
+    pub(crate) visible_entry_indices: Option<Vec<usize>>,
+}
+
+impl PaneSearch {
+    pub(crate) fn reset_all(&mut self) {
+        self.query.clear();
+        self.kind_filter = 0;
+        self.modified_filter = 0;
+        self.size_filter = 0;
+        self.visible_entry_indices = None;
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PaneHistory {
     back_stack: Vec<PathBuf>,
     forward_stack: Vec<PathBuf>,
@@ -142,5 +161,24 @@ mod tests {
 
         assert!(selection.paths.is_empty());
         assert!(selection.anchor.is_none());
+    }
+
+    #[test]
+    fn pane_search_reset_all_clears_query_filters_and_visible_indices() {
+        let mut search = PaneSearch {
+            query: "report".to_string(),
+            kind_filter: 1,
+            modified_filter: 2,
+            size_filter: 3,
+            visible_entry_indices: Some(vec![0, 2, 4]),
+        };
+
+        search.reset_all();
+
+        assert_eq!(search.query, "");
+        assert_eq!(search.kind_filter, 0);
+        assert_eq!(search.modified_filter, 0);
+        assert_eq!(search.size_filter, 0);
+        assert!(search.visible_entry_indices.is_none());
     }
 }

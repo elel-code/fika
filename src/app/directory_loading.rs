@@ -109,7 +109,7 @@ mod tests {
         state
             .thumbnail_pending
             .insert("/tmp/current/photo.png".to_string(), pending_key.clone());
-        state.search_query = "photo".to_string();
+        state.search.query = "photo".to_string();
         state.selection.paths = vec!["/tmp/current/photo.png".to_string()];
         state.selection.anchor = Some("/tmp/current/photo.png".to_string());
         state.insert_directory_cache(
@@ -134,7 +134,7 @@ mod tests {
             state.thumbnail_pending.get("/tmp/current/photo.png"),
             Some(&pending_key)
         );
-        assert_eq!(state.search_query, "photo");
+        assert_eq!(state.search.query, "photo");
         assert_eq!(state.selection.paths, vec!["/tmp/current/photo.png"]);
         assert_eq!(
             state.selection.anchor.as_deref(),
@@ -149,8 +149,8 @@ mod tests {
         state
             .thumbnail_pending
             .insert("/tmp/current/photo.png".to_string(), pending_key);
-        state.search_query = "photo".to_string();
-        state.search_kind_filter = 3;
+        state.search.query = "photo".to_string();
+        state.search.kind_filter = 3;
         state.selection.paths = vec!["/tmp/current/photo.png".to_string()];
         state.selection.anchor = Some("/tmp/current/photo.png".to_string());
         let thumbnail_generation = state.thumbnail_generation.current();
@@ -162,8 +162,8 @@ mod tests {
         assert!(preparation.defer_view_restore);
         assert!(state.thumbnail_generation.current() > thumbnail_generation);
         assert!(state.thumbnail_pending.is_empty());
-        assert!(state.search_query.is_empty());
-        assert_eq!(state.search_kind_filter, 0);
+        assert!(state.search.query.is_empty());
+        assert_eq!(state.search.kind_filter, 0);
         assert!(state.selection.paths.is_empty());
         assert!(state.selection.anchor.is_none());
     }

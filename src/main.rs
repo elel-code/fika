@@ -1692,7 +1692,7 @@ fn apply_directory_result(
                     {
                         let mut state = state.borrow_mut();
                         state.entries.clear();
-                        state.visible_entry_indices = None;
+                        state.search.visible_entry_indices = None;
                         state.virtual_view.invalidate();
                         if !result.preserve_view {
                             reset_search_state(&mut state);
@@ -1891,7 +1891,7 @@ fn submit_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBr
     {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
-        state.search_query = query.clone();
+        state.search.query = query.clone();
         state.search_generation.next();
     }
 
@@ -1914,7 +1914,7 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
         state.search_generation.next();
-        let query = state.search_query.clone();
+        let query = state.search.query.clone();
         let progress = state.search_progress;
         let current_dir = state.current_dir.clone();
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
@@ -1955,7 +1955,7 @@ fn update_search_filters(
 
     apply_filter(ui, state, bridge, true);
     if ui.get_search_loading() {
-        let query = state.borrow().search_query.clone();
+        let query = state.borrow().search.query.clone();
         set_status(ui, &recursive_search_status(&query));
     }
 }
@@ -1980,7 +1980,7 @@ fn start_recursive_search(
     set_status(ui, &recursive_search_status(&query));
     {
         let mut state = state.borrow_mut();
-        state.visible_entry_indices = None;
+        state.search.visible_entry_indices = None;
         state.virtual_view.invalidate();
     }
     ui.set_entry_count(0);
@@ -2034,7 +2034,7 @@ fn apply_recursive_search_progress(
         let state = state.borrow();
         let stale = !state.search_generation.is_current(progress.generation)
             || state.current_dir != progress.root
-            || state.search_query != progress.query
+            || state.search.query != progress.query
             || !ui.get_search_loading();
         if stale {
             return;
@@ -2062,7 +2062,7 @@ fn apply_recursive_search_result(
         let mut state = state.borrow_mut();
         let stale = !state.search_generation.is_current(result.generation)
             || state.current_dir != result.root
-            || state.search_query != result.query;
+            || state.search.query != result.query;
         if stale {
             return;
         }
@@ -2660,7 +2660,7 @@ fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState
     let (query, filters_active, total, summary) = {
         let state_ref = state.borrow();
         (
-            state_ref.search_query.to_ascii_lowercase(),
+            state_ref.search.query.to_ascii_lowercase(),
             search_filters_active(&state_ref),
             state_ref.entries.len(),
             filtered_entry_summary(&state_ref, false),
@@ -2693,7 +2693,7 @@ fn apply_filter(
         let summary = rebuild_visible_entry_index(&mut state_ref, preserve_selection);
         state_ref.virtual_view.invalidate();
         (
-            state_ref.search_query.to_ascii_lowercase(),
+            state_ref.search.query.to_ascii_lowercase(),
             search_filters_active(&state_ref),
             state_ref.entries.len(),
             summary,
@@ -3283,7 +3283,7 @@ mod tests {
             test_entry("Beta.txt", "/tmp/Beta.txt"),
             test_entry("notes.md", "/tmp/project-notes.md"),
         ];
-        state.search_query = "project".to_string();
+        state.search.query = "project".to_string();
 
         assert_eq!(
             filtered_entry_paths(&state),
@@ -3310,27 +3310,27 @@ mod tests {
 
         state.entries = vec![folder, image, archive];
 
-        state.search_kind_filter = 1;
+        state.search.kind_filter = 1;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/Images".to_string()]
         );
 
-        state.search_kind_filter = 3;
+        state.search.kind_filter = 3;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/photo.png".to_string()]
         );
 
-        state.search_kind_filter = 0;
-        state.search_size_filter = 3;
+        state.search.kind_filter = 0;
+        state.search.size_filter = 3;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/archive.zip".to_string()]
         );
 
-        state.search_size_filter = 0;
-        state.search_modified_filter = 2;
+        state.search.size_filter = 0;
+        state.search.modified_filter = 2;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/Images".to_string(), "/tmp/photo.png".to_string()]
@@ -3343,7 +3343,7 @@ mod tests {
         state.entries = (0..8)
             .map(|index| test_entry(&format!("item-{index}.txt"), &format!("/tmp/item-{index}")))
             .collect();
-        state.search_query = "item".to_string();
+        state.search.query = "item".to_string();
 
         assert_eq!(filtered_entry_count(&state), 8);
         assert_eq!(
@@ -3367,7 +3367,7 @@ mod tests {
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
         ];
-        state.search_query = ".txt".to_string();
+        state.search.query = ".txt".to_string();
 
         assert_eq!(
             filtered_entry_at(&state, 1)
@@ -3388,7 +3388,7 @@ mod tests {
             test_entry("item-file.txt", "/tmp/item-file.txt"),
             test_entry("hidden.log", "/tmp/hidden.log"),
         ];
-        state.search_query = "item".to_string();
+        state.search.query = "item".to_string();
 
         let summary = filtered_entry_summary(&state, true);
 
@@ -3415,7 +3415,7 @@ mod tests {
         let summary = rebuild_visible_entry_index(&mut state, true);
 
         assert_eq!(summary.count, 2);
-        assert!(state.visible_entry_indices.is_none());
+        assert!(state.search.visible_entry_indices.is_none());
         assert_eq!(
             filtered_entries_range(&state, 1..2)
                 .into_iter()
@@ -3434,12 +3434,15 @@ mod tests {
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.search_query = ".txt".to_string();
+        state.search.query = ".txt".to_string();
 
         let summary = rebuild_visible_entry_index(&mut state, false);
 
         assert_eq!(summary.count, 3);
-        assert_eq!(state.visible_entry_indices.as_deref(), Some(&[0, 2, 3][..]));
+        assert_eq!(
+            state.search.visible_entry_indices.as_deref(),
+            Some(&[0, 2, 3][..])
+        );
         assert_eq!(filtered_entry_count(&state), 3);
         assert_eq!(
             filtered_entry_at(&state, 1)
@@ -3466,7 +3469,7 @@ mod tests {
         visible_file.location = "docs".into();
         visible_file.modified_age_days = 0;
         state.entries = vec![old_file, visible_file];
-        state.search_modified_filter = 1;
+        state.search.modified_filter = 1;
 
         let summary = rebuild_visible_entry_index(&mut state, false);
 
@@ -3570,7 +3573,7 @@ mod tests {
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.search_query = ".txt".to_string();
+        state.search.query = ".txt".to_string();
 
         assert_eq!(
             selection_range_paths_filtered(&state, "/tmp/gamma", "/tmp/alpha"),
@@ -3638,7 +3641,7 @@ mod tests {
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.search_query = ".txt".to_string();
+        state.search.query = ".txt".to_string();
 
         let selected = selection_rect_paths_filtered(
             &state,

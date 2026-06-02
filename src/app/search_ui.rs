@@ -8,28 +8,20 @@ pub(crate) fn cancel_active_search(state: &mut AppState) {
 }
 
 pub(crate) fn reset_search_state(state: &mut AppState) {
-    state.search_query.clear();
-    reset_search_filters(state);
-    state.visible_entry_indices = None;
+    state.search.reset_all();
     state.virtual_view.invalidate();
 }
 
-pub(crate) fn reset_search_filters(state: &mut AppState) {
-    state.search_kind_filter = 0;
-    state.search_modified_filter = 0;
-    state.search_size_filter = 0;
-}
-
 pub(crate) fn set_search_filters(state: &mut AppState, kind: i32, modified: i32, size: i32) {
-    state.search_kind_filter = kind.clamp(0, 3);
-    state.search_modified_filter = modified.clamp(0, 3);
-    state.search_size_filter = size.clamp(0, 3);
+    state.search.kind_filter = kind.clamp(0, 3);
+    state.search.modified_filter = modified.clamp(0, 3);
+    state.search.size_filter = size.clamp(0, 3);
 }
 
 pub(crate) fn search_filters_active(state: &AppState) -> bool {
-    state.search_kind_filter != 0
-        || state.search_modified_filter != 0
-        || state.search_size_filter != 0
+    state.search.kind_filter != 0
+        || state.search.modified_filter != 0
+        || state.search.size_filter != 0
 }
 
 pub(crate) fn recursive_search_status(query: &str) -> String {
@@ -86,34 +78,34 @@ mod tests {
 
         set_search_filters(&mut state, -1, 2, 99);
 
-        assert_eq!(state.search_kind_filter, 0);
-        assert_eq!(state.search_modified_filter, 2);
-        assert_eq!(state.search_size_filter, 3);
+        assert_eq!(state.search.kind_filter, 0);
+        assert_eq!(state.search.modified_filter, 2);
+        assert_eq!(state.search.size_filter, 3);
         assert!(search_filters_active(&state));
 
-        reset_search_filters(&mut state);
+        set_search_filters(&mut state, 0, 0, 0);
 
-        assert_eq!(state.search_kind_filter, 0);
-        assert_eq!(state.search_modified_filter, 0);
-        assert_eq!(state.search_size_filter, 0);
+        assert_eq!(state.search.kind_filter, 0);
+        assert_eq!(state.search.modified_filter, 0);
+        assert_eq!(state.search.size_filter, 0);
         assert!(!search_filters_active(&state));
     }
 
     #[test]
     fn reset_search_state_clears_query_and_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.search_query = "report".to_string();
+        state.search.query = "report".to_string();
         set_search_filters(&mut state, 1, 2, 3);
-        state.visible_entry_indices = Some(vec![0, 2, 4]);
+        state.search.visible_entry_indices = Some(vec![0, 2, 4]);
         state.virtual_view.range = 1..3;
 
         reset_search_state(&mut state);
 
-        assert_eq!(state.search_query, "");
-        assert_eq!(state.search_kind_filter, 0);
-        assert_eq!(state.search_modified_filter, 0);
-        assert_eq!(state.search_size_filter, 0);
-        assert!(state.visible_entry_indices.is_none());
+        assert_eq!(state.search.query, "");
+        assert_eq!(state.search.kind_filter, 0);
+        assert_eq!(state.search.modified_filter, 0);
+        assert_eq!(state.search.size_filter, 0);
+        assert!(state.search.visible_entry_indices.is_none());
         assert!(state.virtual_view.range.is_empty());
     }
 
