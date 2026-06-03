@@ -16,7 +16,6 @@ export component TopBar inherits Rectangle {
     background: transparent;
     border-width: 0px;
 
-    private property <color> separator-color: root.dark ? #242b33 : #e5eaf0;
     private property <color> field-background: root.dark ? #151b20 : #ffffff;
     private property <color> field-focus-background: root.dark ? #12181d : #ffffff;
     private property <color> field-border: root.dark ? #2f3841 : #d8e1ea;
@@ -131,13 +130,6 @@ export component TopBar inherits Rectangle {
             dark: root.dark;
             clicked => { root.dark_toggled(); }
         }
-    }
-
-    Rectangle {
-        y: parent.height - 1px;
-        width: parent.width;
-        height: 1px;
-        background: root.separator-color;
     }
 }
 

@@ -18,8 +18,8 @@
 - [x] Dolphin-like shell: toolbar, Places sidebar, main icon area, status bar.
 - [x] COSMIC-style shell surface layering outside the main file arrangement.
   - Current: `AppWindow` owns one shared base surface with a separate window-wide shell/header row.
-  - Current: `TopBar`, `PathBar`, `SearchPanel`, and `StatusBar` render transparent backgrounds with only necessary separators, so they read as one layer with the main pane.
-  - Current: `TopBar` lives in the shell/header row and owns global search, split, and theme controls.
+  - Current: `TopBar`, `PathBar`, `SearchPanel`, and `StatusBar` render transparent backgrounds, so they read as one layer with the main pane.
+  - Current: `TopBar` lives in the shell/header row, owns global search/split/theme controls, and deliberately does not draw a bottom separator between the shell tool area and main content.
   - Current: below the shell/header row, the rounded sidebar panel and right main pane share one equal-height content row; the navigation/address `PathBar` is the first row inside that right main pane.
   - Current: the main-pane item arrangement intentionally remains Fika's existing Dolphin-like column-first horizontal layout.
 - [x] Dark mode.

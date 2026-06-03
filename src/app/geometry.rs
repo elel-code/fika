@@ -1495,6 +1495,11 @@ mod tests {
         let bars = include_str!("../../ui/top_bar.slint");
         let search_panel = include_str!("../../ui/search_panel.slint");
         let status_bar = include_str!("../../ui/status_bar.slint");
+        let path_bar_marker = "export component PathBar inherits Rectangle";
+        let (top_bar_component, path_bar_component) = bars
+            .split_once(path_bar_marker)
+            .map(|(top_bar, path_bar)| (top_bar, path_bar))
+            .expect("top_bar.slint should export TopBar followed by PathBar");
 
         assert!(
             app.contains("private property <color> shell-base-color"),
@@ -1668,6 +1673,18 @@ mod tests {
                 slint.contains("background: transparent;"),
                 "{name} should stay transparent over the shared shell base"
             );
+        }
+
+        assert!(
+            !top_bar_component.contains("background: root.separator-color;"),
+            "TopBar should not draw a separator between the shell tool area and main content"
+        );
+
+        for (name, slint) in [
+            ("PathBar", path_bar_component),
+            ("SearchPanel", search_panel),
+            ("StatusBar", status_bar),
+        ] {
             assert!(
                 slint.contains("private property <color> separator-color"),
                 "{name} should define a local separator color instead of a panel surface"
