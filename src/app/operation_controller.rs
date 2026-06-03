@@ -51,6 +51,7 @@ pub(crate) struct OperationCompletionSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OperationProgressUpdate {
     pub(crate) status: String,
+    pub(crate) pane_ids: Vec<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -102,12 +103,22 @@ impl AppState {
         self.active_operation.is_none() && self.pending_transfer_conflict.is_none()
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_file_operation(&mut self, id: u64) -> Arc<AtomicBool> {
+        self.begin_file_operation_for_panes(id, Vec::new())
+    }
+
+    pub(crate) fn begin_file_operation_for_panes(
+        &mut self,
+        id: u64,
+        pane_ids: Vec<u64>,
+    ) -> Arc<AtomicBool> {
         let controller = FileOperationController::new(id);
         let cancel = controller.cancel_handle();
         self.active_operation = Some(controller.id());
         self.active_operation_cancel = Some(controller.cancel_handle());
         self.active_operation_progress_key = None;
+        self.active_operation_pane_ids = pane_ids;
         cancel
     }
 
@@ -120,6 +131,7 @@ impl AppState {
             self.active_operation = None;
             self.active_operation_cancel = None;
             self.active_operation_progress_key = None;
+            self.active_operation_pane_ids.clear();
             true
         } else {
             false
@@ -197,6 +209,7 @@ impl AppState {
                 progress.bytes_done,
                 progress.bytes_total,
             ),
+            pane_ids: self.active_operation_pane_ids.clone(),
         })
     }
 }
@@ -628,7 +641,7 @@ mod tests {
     #[test]
     fn operation_progress_update_ignores_stale_progress_ids() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.begin_file_operation(7);
+        state.begin_file_operation_for_panes(7, vec![3, 5]);
 
         let stale = FileOperationProgress {
             id: 6,
@@ -650,6 +663,7 @@ mod tests {
             state.file_operation_progress_update(&current),
             Some(OperationProgressUpdate {
                 status: "Copying photo.jpg: 25% (512 B/2.0 KB)".to_string(),
+                pane_ids: vec![3, 5],
             })
         );
         assert_eq!(state.file_operation_progress_update(&current), None);
@@ -674,10 +688,12 @@ mod tests {
             state.file_operation_progress_update(&next_bucket),
             Some(OperationProgressUpdate {
                 status: "Copying photo.jpg: 50% (1.0 KB/2.0 KB)".to_string(),
+                pane_ids: vec![3, 5],
             })
         );
         assert!(state.finish_file_operation(7));
         assert_eq!(state.active_operation_progress_key, None);
+        assert!(state.active_operation_pane_ids.is_empty());
     }
 
     #[test]
@@ -696,6 +712,7 @@ mod tests {
             state.file_operation_progress_update(&unknown),
             Some(OperationProgressUpdate {
                 status: "Copying photo.jpg...".to_string(),
+                pane_ids: Vec::new(),
             })
         );
         assert_eq!(state.file_operation_progress_update(&unknown), None);
@@ -709,6 +726,7 @@ mod tests {
             state.file_operation_progress_update(&known),
             Some(OperationProgressUpdate {
                 status: "Copying photo.jpg: 0% (0 B/2.0 KB)".to_string(),
+                pane_ids: Vec::new(),
             })
         );
     }

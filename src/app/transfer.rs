@@ -5,8 +5,8 @@ use crate::app::geometry::{
     icon_row_height, inactive_main_pane_width, main_pane_bounds,
 };
 use crate::app::operation_controller::{
-    OperationQueuePosition, operation_cancel_status, operation_queued_status,
-    operation_started_status, transfer_conflict_apply_remaining_status,
+    OperationQueuePosition, affected_directory_pane_ids, operation_cancel_status,
+    operation_queued_status, operation_started_status, transfer_conflict_apply_remaining_status,
     transfer_conflict_skip_status, transfer_request_conflict_destination,
     transfer_target_rejection,
 };
@@ -16,6 +16,7 @@ use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
 use crate::fs::{file_ops, privilege};
 use crate::{
     AppWindow, AsyncEvent, FileEntry, FileOperationProgress, FileOperationResult, set_status,
+    set_status_for_panes,
 };
 use slint::ComponentHandle;
 use std::cell::RefCell;
@@ -838,13 +839,21 @@ pub(crate) fn start_next_operation(
                 }
             }
         };
-        let cancel = state.begin_file_operation(request.id);
-        (request, cancel)
+        let pane_ids = affected_directory_pane_ids(
+            &state,
+            [Some(request.target_dir.as_path()), request.source.parent()]
+                .into_iter()
+                .flatten(),
+        );
+        let cancel = state.begin_file_operation_for_panes(request.id, pane_ids.clone());
+        (request, cancel, pane_ids)
     };
-    let (request, cancel) = request;
+    let (request, cancel, pane_ids) = request;
 
-    set_status(
+    set_status_for_panes(
         ui,
+        state,
+        &pane_ids,
         &operation_started_status(request.operation.as_str(), &request.source),
     );
 
@@ -1464,6 +1473,29 @@ mod tests {
         assert!(state.clipboard_cut);
 
         let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn started_transfer_status_uses_affected_pane_route() {
+        let source = include_str!("transfer.rs");
+        let body = source
+            .split_once("pub(crate) fn start_next_operation(")
+            .and_then(|(_, rest)| rest.split_once("fn open_transfer_conflict("))
+            .map(|(body, _)| body)
+            .expect("start_next_operation body should be present");
+
+        assert!(
+            body.contains("let pane_ids = affected_directory_pane_ids(")
+                && body.contains(
+                    "let cancel = state.begin_file_operation_for_panes(request.id, pane_ids.clone());"
+                )
+                && body.contains("set_status_for_panes(\n        ui,\n        state,\n        &pane_ids,"),
+            "file operation start status should use the same affected-pane route as progress and completion"
+        );
+        assert!(
+            !body.contains("set_status(\n        ui,\n        &operation_started_status"),
+            "file operation start status must not jump to whichever pane is focused when the queued operation starts"
+        );
     }
 
     fn transfer_request(

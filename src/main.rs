@@ -2915,7 +2915,7 @@ fn apply_file_operation_progress(
     progress: FileOperationProgress,
 ) {
     if let Some(update) = state.borrow_mut().file_operation_progress_update(&progress) {
-        set_status(ui, &update.status);
+        set_status_for_panes(ui, state, &update.pane_ids, &update.status);
     }
 }
 
@@ -4955,6 +4955,25 @@ mod tests {
         assert!(
             !body.contains("set_status(ui, &status_message);"),
             "file operation completion status must not jump to whichever pane is focused when the async result returns"
+        );
+    }
+
+    #[test]
+    fn file_operation_progress_status_uses_affected_pane_route() {
+        let source = include_str!("main.rs");
+        let body = source
+            .split_once("fn apply_file_operation_progress(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_privileged_operation_result("))
+            .map(|(body, _)| body)
+            .expect("apply_file_operation_progress body should be present");
+
+        assert!(
+            body.contains("set_status_for_panes(ui, state, &update.pane_ids, &update.status);"),
+            "file operation progress status should write to the panes captured when the operation started"
+        );
+        assert!(
+            !body.contains("set_status(ui, &update.status);"),
+            "file operation progress status must not jump to whichever pane is focused while progress events arrive"
         );
     }
 
