@@ -63,9 +63,9 @@ use app::search_ui::{
     search_filters_active, set_search_filters,
 };
 use app::selection::{
-    append_unique_paths, filtered_entry_count, filtered_entry_paths, filtered_entry_summary,
-    rebuild_visible_entry_index, retained_visible_paths, selection_range_paths_filtered,
-    selection_rect_paths, selection_rect_paths_filtered,
+    append_unique_paths, entries_have_locations, filtered_entry_count, filtered_entry_paths,
+    filtered_entry_summary, rebuild_visible_entry_index, retained_visible_paths,
+    selection_range_paths_filtered, selection_rect_paths, selection_rect_paths_filtered,
 };
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui,
@@ -1645,6 +1645,7 @@ fn load_prepared_pane_directory(
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
                 pane.entries = cached_entries;
+                pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
                 pane.view.virtual_view.invalidate();
             }
         }
@@ -1654,6 +1655,7 @@ fn load_prepared_pane_directory(
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
                 pane.entries.clear();
+                pane.search.visible_entries_have_locations = false;
                 pane.view.virtual_view.invalidate();
             }
         }
@@ -1775,6 +1777,7 @@ fn load_directory_with_preservation(
             let mut state = state.borrow_mut();
             let pane = state.panes.active_mut();
             pane.entries = cached_entries;
+            pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
             pane.view.virtual_view.invalidate();
         }
         reset_search_controls(ui);
@@ -2171,6 +2174,8 @@ fn apply_directory_result(
                     let cache_entries = {
                         let pane = state.panes.active_mut();
                         pane.entries = entries.into_iter().map(to_file_entry).collect();
+                        pane.search.visible_entries_have_locations =
+                            entries_have_locations(&pane.entries);
                         pane.view.virtual_view.invalidate();
                         pane.entries.clone()
                     };
@@ -2251,6 +2256,7 @@ fn apply_directory_result(
                             let pane = state.panes.active_mut();
                             pane.entries.clear();
                             pane.search.visible_entry_indices = None;
+                            pane.search.visible_entries_have_locations = false;
                             pane.view.virtual_view.invalidate();
                         }
                         if !result.preserve_view {
@@ -2323,6 +2329,8 @@ fn apply_pane_directory_result(
                         .into_iter()
                         .map(to_file_entry)
                         .collect();
+                    pane.search.visible_entries_have_locations =
+                        entries_have_locations(&pane.entries);
                     pane.view.virtual_view.invalidate();
                     if !result.preserve_view {
                         pane.search.reset_all();
@@ -2569,6 +2577,7 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
             let pane = state.panes.active_mut();
             pane.entries = entries;
+            pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
             pane.view.virtual_view.invalidate();
         }
         (query, progress)
@@ -2743,6 +2752,7 @@ fn apply_recursive_search_result(
                 let mut state = state.borrow_mut();
                 let pane = state.panes.active_mut();
                 pane.entries = entries.clone();
+                pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
                 pane.view.virtual_view.invalidate();
             }
             apply_filter(ui, state, bridge, true);
@@ -4622,6 +4632,29 @@ mod tests {
                 .map(|entry| entry.path.to_string())
                 .collect::<Vec<_>>(),
             vec!["/tmp/beta".to_string(), "/tmp/gamma".to_string()]
+        );
+    }
+
+    #[test]
+    fn visible_location_group_flag_tracks_only_visible_entries() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let mut hidden = test_entry("hidden.log", "/tmp/docs/hidden.log");
+        hidden.location = "docs".into();
+        let visible = test_entry("visible.txt", "/tmp/visible.txt");
+        state.panes.active_mut().entries = vec![hidden, visible];
+        state.panes.active_mut().search.query = ".txt".to_string();
+
+        let summary = rebuild_visible_entry_index(&mut state, false);
+
+        assert_eq!(summary.count, 1);
+        assert!(!summary.has_locations);
+        assert!(!state.panes.active().search.visible_entries_have_locations);
+        assert_eq!(
+            filtered_entries_range(&state, 0..1)
+                .into_iter()
+                .map(|entry| (entry.group.to_string(), entry.path.to_string()))
+                .collect::<Vec<_>>(),
+            vec![("".to_string(), "/tmp/visible.txt".to_string())]
         );
     }
 

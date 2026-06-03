@@ -8,7 +8,12 @@ pub(crate) struct FilteredEntrySummary {
     pub(crate) count: usize,
     pub(crate) folders: usize,
     pub(crate) files: usize,
+    pub(crate) has_locations: bool,
     pub(crate) visible_paths: Option<Vec<String>>,
+}
+
+pub(crate) fn entries_have_locations(entries: &[FileEntry]) -> bool {
+    entries.iter().any(|entry| !entry.location.is_empty())
 }
 
 pub(crate) fn retained_visible_paths(
@@ -118,10 +123,16 @@ pub(crate) fn rebuild_visible_entry_index(
             } else {
                 summary.files += 1;
             }
+            summary.has_locations |= !entry.location.is_empty();
             if let Some(paths) = summary.visible_paths.as_mut() {
                 paths.push(entry.path.to_string());
             }
         }
+        state
+            .panes
+            .active_mut()
+            .search
+            .visible_entries_have_locations = summary.has_locations;
         return summary;
     }
 
@@ -146,13 +157,18 @@ pub(crate) fn rebuild_visible_entry_index(
         } else {
             summary.files += 1;
         }
+        summary.has_locations |= !entry.location.is_empty();
         if let Some(paths) = summary.visible_paths.as_mut() {
             paths.push(entry.path.to_string());
         }
         indices.push(index);
     }
 
-    state.panes.active_mut().search.visible_entry_indices = Some(indices);
+    {
+        let search = &mut state.panes.active_mut().search;
+        search.visible_entry_indices = Some(indices);
+        search.visible_entries_have_locations = summary.has_locations;
+    }
     summary
 }
 
@@ -179,6 +195,7 @@ pub(crate) fn filtered_entry_summary(
         } else {
             summary.files += 1;
         }
+        summary.has_locations |= !entry.location.is_empty();
         if let Some(paths) = summary.visible_paths.as_mut() {
             paths.push(entry.path.to_string());
         }
@@ -232,13 +249,7 @@ fn annotate_visible_location_groups(
     start_visible_index: usize,
     entries: &mut [FileEntry],
 ) {
-    if !state
-        .panes
-        .active()
-        .entries
-        .iter()
-        .any(|entry| !entry.location.is_empty())
-    {
+    if !state.panes.active().search.visible_entries_have_locations {
         return;
     }
 

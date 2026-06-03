@@ -261,6 +261,7 @@ pub(crate) struct PaneSearch {
     pub(crate) modified_filter: i32,
     pub(crate) size_filter: i32,
     pub(crate) visible_entry_indices: Option<Vec<usize>>,
+    pub(crate) visible_entries_have_locations: bool,
 }
 
 impl PaneSearch {
@@ -270,6 +271,7 @@ impl PaneSearch {
         self.modified_filter = 0;
         self.size_filter = 0;
         self.visible_entry_indices = None;
+        self.visible_entries_have_locations = false;
     }
 }
 
@@ -529,6 +531,7 @@ mod tests {
             modified_filter: 2,
             size_filter: 3,
             visible_entry_indices: Some(vec![0, 2, 4]),
+            visible_entries_have_locations: true,
         };
 
         search.reset_all();
@@ -538,6 +541,7 @@ mod tests {
         assert_eq!(search.modified_filter, 0);
         assert_eq!(search.size_filter, 0);
         assert!(search.visible_entry_indices.is_none());
+        assert!(!search.visible_entries_have_locations);
     }
 
     #[test]
@@ -747,6 +751,7 @@ mod tests {
             modified_filter: 1,
             size_filter: 3,
             visible_entry_indices: Some(vec![0]),
+            visible_entries_have_locations: true,
         };
         panes.active_mut().selection.paths = vec!["/tmp/active/one.txt".to_string()];
         panes.active_mut().selection.anchor = Some("/tmp/active/one.txt".to_string());
