@@ -266,14 +266,6 @@ component FilePane inherits Rectangle {
                     root.is_selected(root.pane-side, path)
                 }
             }
-
-            if (root.drag-active): Rectangle {
-                width: parent.width;
-                height: parent.height;
-                background: root.drag-rejected ? (root.dark ? #3a1515aa : #fee2e2aa) : (root.dark ? #243b4daa : #dff0faaa);
-                border-width: 1px;
-                border-color: root.drag-rejected ? (root.dark ? #ef4444 : #dc2626) : (root.dark ? #58b4d8 : #2f8dbc);
-            }
         }
 
         StatusBar {

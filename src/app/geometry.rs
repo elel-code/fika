@@ -1919,6 +1919,12 @@ mod tests {
             "FilePane should expose address, content, drag, selection, and status through pane-local bindings"
         );
         assert!(
+            !file_pane.contains("if (root.drag-active): Rectangle")
+                && !file_pane.contains("background: root.drag-rejected ?")
+                && !file_pane.contains("border-color: root.drag-rejected ?"),
+            "FilePane should not tint the entire pane during drag; only concrete drop targets should show feedback"
+        );
+        assert!(
             file_pane.contains("callback request_context_menu")
                 && file_pane.contains("callback request_blank_context_menu")
                 && file_pane.contains("callback select_rect")
