@@ -32,6 +32,7 @@
   - Current: virtual slice preparation lives in `src/app/virtual_view.rs`, so range planning, viewport clamping, rebuild decisions, filtered slicing, and thumbnail-cache decoration are testable away from Slint property updates.
   - Current: virtual tiles are placed inside a local virtual layer anchored at the first virtualized column, so large directories do not force Slint to maintain huge per-tile global coordinates.
   - Current: virtual range metadata is cached; scrolling inside the same range does not reset the Slint model.
+  - Current: ordinary wheel scrolling requests pane focus only once per event path before panning, while Ctrl+wheel still focuses before zooming.
   - Current: Rust uses a tested `VirtualGridPlan` to calculate clamped viewport position, scroll extent, visible range, overscan range, and Slint anchor column from one source of truth.
   - Current: offscreen thumbnail completions update the cache without resetting the Slint model; visible completions still refresh the current virtual slice.
   - Current: thumbnail scheduling for each virtual-slice sync is capped and owned by `src/app/thumbnail_pipeline.rs`, so large directories cannot enqueue an unbounded number of decode jobs from a single viewport update.

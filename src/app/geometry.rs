@@ -2227,6 +2227,26 @@ mod tests {
         assert!(split_pane.contains("callback zoom_in();"));
         assert!(split_pane.contains("callback zoom_out();"));
         assert!(split_pane.contains("function handle-scroll("));
+        assert!(
+            split_pane.contains(
+                "function pan-horizontal(delta: length) {\n        root.focus_requested();\n        root.viewport-x = root.entry-count == 0"
+            ),
+            "ordinary pane scrolling should request focus through pan-horizontal"
+        );
+        assert!(
+            !split_pane.contains(
+                "function handle-scroll(delta-x: length, delta-y: length, control: bool) {\n        root.focus_requested();"
+            ),
+            "ordinary wheel events should not request pane focus twice before panning"
+        );
+        assert!(
+            split_pane.contains(
+                "if (control && delta-y < 0px) {\n            root.focus_requested();\n            root.zoom_out();"
+            ) && split_pane.contains(
+                "} else if (control && delta-y > 0px) {\n            root.focus_requested();\n            root.zoom_in();"
+            ),
+            "Ctrl+wheel zoom should still request pane focus before changing zoom"
+        );
         assert!(split_pane.contains("scroll-event(event)"));
         assert!(split_pane.contains("for item[index] in root.entries: FileTile"));
         assert!(

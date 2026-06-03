@@ -62,10 +62,11 @@ export component SplitPaneView inherits Rectangle {
     }
 
     function handle-scroll(delta-x: length, delta-y: length, control: bool) {
-        root.focus_requested();
         if (control && delta-y < 0px) {
+            root.focus_requested();
             root.zoom_out();
         } else if (control && delta-y > 0px) {
+            root.focus_requested();
             root.zoom_in();
         } else {
             root.pan-horizontal(-(delta-y + delta-x));
