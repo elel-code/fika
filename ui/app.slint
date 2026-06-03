@@ -390,6 +390,7 @@ export component AppWindow inherits Window {
     private property <length> path-bar-height: 56px;
     private property <length> status-bar-height: 36px;
     private property <length> sidebar-resize-hit-width: 8px;
+    private property <string> sidebar-selected-path: root.focused_pane == 1 && root.split_view_open ? root.inactive_pane_path : root.left_pane_path;
     private property <length> main-content-left: root.sidebar_width_px * 1px;
     private property <bool> search-filters-active: root.search_kind_filter != 0 || root.search_modified_filter != 0 || root.search_size_filter != 0;
     private property <bool> search-panel-visible: root.search_bar_open || root.search_query != "" || root.search-filters-active;
@@ -1149,7 +1150,7 @@ export component AppWindow inherits Window {
                         path: place.path;
                         drag-data-source: DndApi.make-drag-place(place.path);
                         marker: place.marker;
-                        selected: root.current_path == place.path;
+                        selected: root.sidebar-selected-path == place.path;
                         dark: root.dark_mode;
                         index: index;
                         place_count: root.places.length;
@@ -1184,7 +1185,7 @@ export component AppWindow inherits Window {
                         label: device.label;
                         path: device.path;
                         marker: device.marker;
-                        selected: root.current_path == device.path;
+                        selected: root.sidebar-selected-path == device.path;
                         dark: root.dark_mode;
                         reorderable: false;
                         dragged: false;

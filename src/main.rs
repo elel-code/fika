@@ -4443,9 +4443,18 @@ mod tests {
 
     #[test]
     fn virtual_entry_range_keeps_visible_columns_with_overscan() {
-        assert_eq!(virtual_entry_range(100, 4, 0.0, 250.0, 100.0, 1), 0..20);
-        assert_eq!(virtual_entry_range(100, 4, 350.0, 250.0, 100.0, 1), 8..32);
-        assert_eq!(virtual_entry_range(10, 4, 800.0, 250.0, 100.0, 1), 10..10);
+        assert_eq!(
+            virtual_entry_range(100, 4, 0.0, 250.0, 100.0, 10.0, 1),
+            0..16
+        );
+        assert_eq!(
+            virtual_entry_range(100, 4, 350.0, 250.0, 100.0, 10.0, 1),
+            8..28
+        );
+        assert_eq!(
+            virtual_entry_range(10, 4, 800.0, 250.0, 100.0, 10.0, 1),
+            10..10
+        );
     }
 
     #[test]

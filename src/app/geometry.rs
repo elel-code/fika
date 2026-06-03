@@ -189,6 +189,7 @@ pub(crate) fn virtual_grid_plan(
         viewport_x,
         viewport_width,
         cell_width,
+        padding,
         overscan_columns,
     );
     let visible_range = virtual_entry_range(
@@ -197,6 +198,7 @@ pub(crate) fn virtual_grid_plan(
         viewport_x,
         viewport_width,
         cell_width,
+        padding,
         0,
     );
     let start_column = range.start / rows_per_column.max(1);
@@ -283,6 +285,7 @@ pub(crate) fn virtual_entry_range(
     viewport_x: f32,
     viewport_width: f32,
     cell_width: f32,
+    padding: f32,
     overscan_columns: usize,
 ) -> Range<usize> {
     if entry_count == 0 {
@@ -291,10 +294,16 @@ pub(crate) fn virtual_entry_range(
 
     let rows_per_column = rows_per_column.max(1);
     let cell_width = cell_width.max(1.0);
-    let first_visible_column = (viewport_x.max(0.0) / cell_width).floor().max(0.0) as usize;
-    let visible_columns = (viewport_width.max(1.0) / cell_width).ceil().max(1.0) as usize;
+    let viewport_x = viewport_x.max(0.0);
+    let viewport_width = viewport_width.max(1.0);
+    let content_x = (viewport_x - padding.max(0.0)).max(0.0);
+    let content_end_x = (viewport_x + viewport_width - padding.max(0.0)).max(content_x + 1.0);
+    let first_visible_column = (content_x / cell_width).floor() as usize;
+    let visible_end_column = (content_end_x / cell_width)
+        .ceil()
+        .max(first_visible_column as f32 + 1.0) as usize;
     let start_column = first_visible_column.saturating_sub(overscan_columns);
-    let end_column = first_visible_column + visible_columns + overscan_columns + 1;
+    let end_column = visible_end_column + overscan_columns;
 
     let start = (start_column * rows_per_column).min(entry_count);
     let end = (end_column * rows_per_column).min(entry_count);
@@ -1571,6 +1580,14 @@ mod tests {
             "sidebar resize should keep a transparent edge hit area without taking layout width"
         );
         assert!(
+            app.contains("private property <string> sidebar-selected-path: root.focused_pane == 1 && root.split_view_open ? root.inactive_pane_path : root.left_pane_path;")
+                && app.contains("selected: root.sidebar-selected-path == place.path;")
+                && app.contains("selected: root.sidebar-selected-path == device.path;")
+                && !app.contains("selected: root.current_path == place.path;")
+                && !app.contains("selected: root.current_path == device.path;"),
+            "sidebar places/devices highlight should follow the focused pane path immediately"
+        );
+        assert!(
             app.contains("shell-layout := Rectangle"),
             "AppWindow should own one explicit shell surface"
         );
@@ -2365,9 +2382,18 @@ mod tests {
 
     #[test]
     fn virtual_entry_range_keeps_visible_columns_with_overscan() {
-        assert_eq!(virtual_entry_range(100, 4, 0.0, 250.0, 100.0, 1), 0..20);
-        assert_eq!(virtual_entry_range(100, 4, 350.0, 250.0, 100.0, 1), 8..32);
-        assert_eq!(virtual_entry_range(10, 4, 800.0, 250.0, 100.0, 1), 10..10);
+        assert_eq!(
+            virtual_entry_range(100, 4, 0.0, 250.0, 100.0, 10.0, 1),
+            0..16
+        );
+        assert_eq!(
+            virtual_entry_range(100, 4, 350.0, 250.0, 100.0, 10.0, 1),
+            8..28
+        );
+        assert_eq!(
+            virtual_entry_range(10, 4, 800.0, 250.0, 100.0, 10.0, 1),
+            10..10
+        );
     }
 
     #[test]
@@ -2760,8 +2786,8 @@ mod tests {
         let plan = virtual_grid_plan(100, 4, 350.0, 250.0, 100.0, 10.0, 2);
         assert_eq!(plan.viewport_x, 350.0);
         assert_eq!(plan.scroll_max_x, 2270.0);
-        assert_eq!(plan.visible_range, 12..28);
-        assert_eq!(plan.range, 4..36);
+        assert_eq!(plan.visible_range, 12..24);
+        assert_eq!(plan.range, 4..32);
         assert_eq!(plan.start_column, 1);
 
         let clamped = virtual_grid_plan(10, 4, 800.0, 250.0, 100.0, 10.0, 2);
@@ -2777,8 +2803,8 @@ mod tests {
         let plan = split_preview_plan(1_000, 420.0, 704.0, 1_200.0, 1);
 
         assert_eq!(plan.viewport_x, 1200.0);
-        assert_eq!(plan.visible_range, 35..63);
-        assert_eq!(plan.range, 21..77);
+        assert_eq!(plan.visible_range, 35..56);
+        assert_eq!(plan.range, 21..70);
         assert_eq!(plan.start_column, 3);
 
         let clamped = split_preview_plan(12, 420.0, 704.0, 4_000.0, 1);

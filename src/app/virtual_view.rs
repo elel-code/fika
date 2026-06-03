@@ -251,8 +251,8 @@ mod tests {
             },
         );
         assert!(first.rebuild_model);
-        assert_eq!(first.range, 0..24);
-        assert_eq!(first.entries.len(), 24);
+        assert_eq!(first.range, 0..20);
+        assert_eq!(first.entries.len(), 20);
         assert_eq!(state.panes.active.view.viewport_x, 0.0);
 
         let second = prepare_virtual_view_update(
@@ -319,10 +319,10 @@ mod tests {
         assert_eq!(update.current_dir, PathBuf::from("/tmp/inactive"));
         assert_eq!(update.entry_count, 100);
         assert_eq!(update.viewport_x, 1_200.0);
-        assert_eq!(update.range, 21..77);
+        assert_eq!(update.range, 21..70);
         assert_eq!(update.start_column, 3);
         assert!(update.rebuild_model);
-        assert_eq!(update.entries.len(), 56);
+        assert_eq!(update.entries.len(), 49);
         assert_eq!(update.entries[0].name.as_str(), "item-21.txt");
         assert_eq!(
             state.panes.inactive().unwrap().view.viewport_x,
@@ -366,10 +366,10 @@ mod tests {
         )
         .unwrap();
         assert!(first.rebuild_model);
-        assert_eq!(first.range, 0..42);
+        assert_eq!(first.range, 0..28);
         assert_eq!(first.entries.len(), first.range.len());
 
-        state.panes.inactive_mut().unwrap().view.viewport_x = 40.0;
+        state.panes.inactive_mut().unwrap().view.viewport_x = 10.0;
         let second = prepare_split_preview_update(
             &mut state,
             SplitPreviewInput {
