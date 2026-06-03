@@ -17,9 +17,9 @@
 - [x] UI entry lives in `ui/app.slint` and is compiled through `build.rs`; shared models/widgets/file tiles are split into focused `.slint` files.
 - [x] Dolphin-like shell: toolbar, Places sidebar, main icon area, status bar.
 - [x] COSMIC-style shell surface layering outside the main file arrangement.
-  - Current: `AppWindow` owns the shared base surface for the global shell/header row and main pane.
+  - Current: `AppWindow` owns one shared base surface with a separate window-wide shell/header row.
   - Current: `TopBar`, `SearchPanel`, and `StatusBar` render transparent backgrounds with only necessary separators, so they read as one layer with the main pane.
-  - Current: the global shell/header row is separate from the navigation/address `TopBar`; the rounded sidebar panel starts below that shell row, while the `TopBar` is the first row inside the main pane.
+  - Current: below the shell/header row, the rounded sidebar panel and right main pane share one equal-height content row; the navigation/address `TopBar` is the first row inside that right main pane, not in the shell/header.
   - Current: the main-pane item arrangement intentionally remains Fika's existing Dolphin-like column-first horizontal layout.
 - [x] Dark mode.
 - [x] Resizable sidebar.
@@ -106,6 +106,7 @@
   - Current: file item, Open With, Create New, Transfer, sidebar Places, Devices, Places blank-area, and main viewport context menus own their `PopupSurface` framing in `ui/menus.slint`, reducing repeated popup wrapper layout in `ui/app.slint`.
   - Current: root file, Places, Devices, Places blank-area, and main viewport context menu hosting is centralized in `RootContextMenuLayer`, so `ui/app.slint` keeps action wiring while `ui/menus.slint` owns the repeated root-menu placement shell.
   - Current: `RootContextMenuLayer` also owns root-menu width/height selection, flip/clamp placement, and Open With / Create New parent-row anchors before forwarding submenu hover/click events, so `ui/app.slint` no longer carries duplicate root-menu geometry properties.
+  - Current: ordinary root-menu action rows do not forward hover events, so moving over a non-submenu item does not start child-submenu dismissal; only `SubmenuMenuRow`, child popup hover regions, hover bridges, and child-menu `HoverActionMenuRow` rows participate in keep-alive / delayed-close behavior.
   - Current: chooser filter and choice popups are hosted through `ChooserOptionPopupLayer` / `ChooserChoicePopupLayer`, keeping the popup loops and anchored placement formulae out of `ui/app.slint`.
   - Current: chooser filter and choice popups now share an internal `AnchoredChooserPopup` shell in `ui/menus.slint`, so their above-anchor flip/clamp placement formula is defined once instead of repeated across both chooser popup layers.
   - Current: menu geometry callback access now lives in the `MenuGeometry` Slint global (`ui/menu_geometry.slint`), and child submenu lifecycle state lives in `MenuLifecycle` (`ui/menu_lifecycle.slint`), so `ui/app.slint` no longer forwards placement callbacks or directly owns child-submenu open/anchor state.
@@ -470,23 +471,23 @@ Acceptance for all:
   - Acceptance: new UI polish and desktop-integration work first checks `./cosmic-files` before reaching for Dolphin-specific behavior.
   - Acceptance: the current Dolphin-like column-first main-pane arrangement, horizontal scrolling, and virtualized Slint tile model stay intact.
   - Current: `docs/COSMIC_REFERENCE.md` records the policy and concrete source files to inspect.
-  - Current direction: shell visuals should move closer to COSMIC Files: the global shell/header row is separate, the main-pane toolbar and main pane share one calm surface with only necessary divider lines, the sidebar content reads as a raised rounded panel below the shell row, and address/search/navigation placement follows COSMIC unless it conflicts with Fika's column-first main pane.
-  - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, search placement, and transient surface styling; the sidebar keeps Fika's rounded below-header panel treatment on top of COSMIC proportions.
+  - Current direction: shell visuals should move closer to COSMIC Files: below the window-wide shell/header, the main-pane toolbar and main pane share one calm surface, the sidebar content reads as a raised rounded panel in the same content row, and address/search/navigation placement follows COSMIC unless it conflicts with Fika's column-first main pane.
+  - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, search placement, and transient surface styling; the sidebar keeps Fika's rounded panel treatment on top of COSMIC proportions.
   - Current direction: once the current structural/menu/performance work is stable, all non-main-pane chrome may move further toward COSMIC Files directly: colors, layout rhythm, address-bar position, Back/Forward affordances, search field position/display, and sidebar treatment should follow COSMIC where practical, while preserving Fika's rounded raised sidebar content panel and the existing main-pane arrangement.
   - Current direction: future UI work should freely copy COSMIC Files for all chrome outside the main file arrangement, including color tokens, top-bar/main-pane layer treatment, address-bar alignment, navigation/search placement, menus, dialogs, and sidebar rhythm. The main pane's item arrangement remains the explicit exception.
-  - Current direction: the main-pane toolbar and main pane should continue to read as one flat content layer below the global shell/header row, while the sidebar remains a rounded raised content panel in that same below-header content row; the sidebar may be more Fika-specific, but its spacing and rhythm should still start from COSMIC.
-  - Current: first shell pass aligns the main-pane toolbar, search panel, status bar, and main pane to one shared surface while the sidebar uses a rounded below-header panel color and a softer divider, keeping the main pane's column-first layout untouched.
+  - Current direction: the main-pane toolbar and main pane should continue to read as one flat content layer inside the below-header right pane, while the sidebar remains a rounded raised content panel in the same row; the sidebar may be more Fika-specific, but its spacing and rhythm should still start from COSMIC.
+  - Current: first shell pass aligns the main-pane toolbar, search panel, status bar, and main pane to one shared surface while the sidebar uses a rounded panel color and a softer divider, keeping the main pane's column-first layout untouched.
   - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 56px top bar and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
   - Current: header controls now use a lighter 32px shared `ToolButton`, 32px path/search input surfaces, and softer light-theme sidebar colors, moving non-main-pane chrome closer to COSMIC while leaving the main file arrangement unchanged.
   - Current: TopBar follows COSMIC's previous/next/up navigation grouping. Home remains a Places/sidebar action rather than a top-bar button.
   - Current: Search follows COSMIC's header behavior more closely: the toolbar search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
   - Current: TopBar Split now uses the shared `ToolButton` selected state instead of a hand-drawn one-off rectangle, keeping header controls in one COSMIC-like component family.
-  - Current: the TopBar now lives as the first row inside the main pane, matching COSMIC's address/navigation placement while the sidebar panel begins below the global shell/header row.
+  - Current: the TopBar now lives as the first row inside the right main pane in the below-header content row, matching COSMIC's address/navigation placement while keeping it out of the window-wide shell/header.
   - Current: the default sidebar width is now 280px to better match COSMIC's narrower navigation rhythm, while persisted user widths still override it.
   - Current: the top-bar search field now follows COSMIC's 240px header search rhythm through min/preferred/max layout constraints, and the path field relaxes its minimum width while search is active so search mode cannot squeeze the main-pane geometry or create Slint layout recursion.
-  - Current: `AppWindow` now owns a single `main-content-left` edge shared by the sidebar panel and main pane; the sidebar panel starts below the global shell/header row, and its right border is the visible divider.
+  - Current: `AppWindow` now owns a single `main-content-left` edge shared by the sidebar panel and main pane; the sidebar panel starts in the below-header content row, and its right border is the visible divider.
   - Current: the light shell base is subtly distinct from the raised white sidebar, the sidebar border is stronger than the flat top/main separators, and Places/Devices rows are inset inside the rounded sidebar panel.
-  - Current: sidebar content geometry now uses a below-header panel with a 16px radius, keeping the COSMIC-style raised sidebar panel equal-height with the below-header main pane while the main-pane toolbar and main content remain a shared flat base.
+  - Current: sidebar content geometry now uses a below-header same-row panel with a 16px radius, while the main-pane toolbar and main content remain a shared flat base inside the right pane.
   - Current: shared header controls now use quieter COSMIC-like 32px icon-button styling with 8px radius and lighter text weight, and path/search fields use calmer light/dark tokens without changing the main file arrangement.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.

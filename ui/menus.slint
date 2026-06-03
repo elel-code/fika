@@ -28,6 +28,27 @@ component ActionMenuRow inherits Rectangle {
     in property <string> shortcut: "";
     in property <bool> dark;
     in property <bool> enabled: true;
+    callback clicked();
+
+    horizontal-stretch: 1;
+    height: 38px;
+
+    MenuItem {
+        width: parent.width;
+        height: parent.height;
+        label: root.label;
+        shortcut: root.shortcut;
+        dark: root.dark;
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+component HoverActionMenuRow inherits Rectangle {
+    in property <string> label;
+    in property <string> shortcut: "";
+    in property <bool> dark;
+    in property <bool> enabled: true;
     callback hovered(bool);
     callback clicked();
 
@@ -119,7 +140,7 @@ export component OpenWithMenu inherits PopupSurface {
             viewport-width: root.width;
             viewport-height: max(root.item-height, root.apps.length * root.item-height);
 
-            if (root.apps.length == 0): ActionMenuRow {
+            if (root.apps.length == 0): HoverActionMenuRow {
                 width: root.width;
                 label: "Loading applications...";
                 dark: root.dark;
@@ -127,7 +148,7 @@ export component OpenWithMenu inherits PopupSurface {
                 clicked => { }
             }
 
-            for app[index] in root.apps: ActionMenuRow {
+            for app[index] in root.apps: HoverActionMenuRow {
                 y: index * root.item-height;
                 width: root.width;
                 label: (app.is_default ? "Default: " : "") + app.name;
@@ -141,7 +162,7 @@ export component OpenWithMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        ActionMenuRow {
+        HoverActionMenuRow {
             label: "Other Applications...";
             dark: root.dark;
             hovered(is-hovered) => { root.keep_alive(is-hovered); }
@@ -164,14 +185,14 @@ export component CreateNewMenu inherits PopupSurface {
     VerticalLayout {
         spacing: 0px;
 
-        ActionMenuRow {
+        HoverActionMenuRow {
             label: "Folder";
             dark: root.dark;
             hovered(is-hovered) => { root.keep_alive(is-hovered); }
             clicked => { root.folder_selected(); }
         }
 
-        ActionMenuRow {
+        HoverActionMenuRow {
             label: "File";
             dark: root.dark;
             hovered(is-hovered) => { root.keep_alive(is-hovered); }

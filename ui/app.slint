@@ -500,8 +500,8 @@ export component AppWindow inherits Window {
     }
 
     app-focus := FocusScope {
-        width: parent.width;
-        height: parent.height;
+        width: 0px;
+        height: 0px;
 
         menu-lifecycle := MenuLifecycleController {
             prepare_open_with(path) => { root.prepare_open_with(path); }
@@ -602,8 +602,14 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
 
-        shell-layout := VerticalLayout {
+    shell-layout := Rectangle {
+        width: root.width;
+        height: root.height;
+        background: root.shell-base-color;
+
+        VerticalLayout {
             width: parent.width;
             height: parent.height;
             padding: 0px;
@@ -618,9 +624,9 @@ export component AppWindow inherits Window {
                 vertical-stretch: 1;
                 spacing: 0px;
 
-                Rectangle {
-                    width: root.sidebar_width_px * 1px;
-                    background: transparent;
+            sidebar-column := Rectangle {
+                width: root.main-content-left;
+                background: transparent;
 
                     sidebar-surface := Rectangle {
                         width: parent.width;
@@ -800,7 +806,7 @@ export component AppWindow inherits Window {
                         root.place_drag_rejected = false;
                         return DragAction.copy;
                     }
-                }
+                    }
                 }
 
                 resize-touch := TouchArea {
@@ -826,12 +832,12 @@ export component AppWindow inherits Window {
                 }
             }
 
-            main-pane := Rectangle {
-                horizontal-stretch: 1;
-                min-width: 0px;
-                preferred-width: 0px;
-                max-width: 100000px;
-                background: root.shell-base-color;
+        main-pane := Rectangle {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            preferred-width: 0px;
+            max-width: 100000px;
+            background: root.shell-base-color;
 
                 main-focus := FocusScope {
                     width: 0px;
@@ -1230,8 +1236,8 @@ export component AppWindow inherits Window {
                     }
                 }
 
-            }
         }
+            }
         }
     }
 

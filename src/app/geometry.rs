@@ -1294,6 +1294,7 @@ mod tests {
 
         for component in [
             "ActionMenuRow",
+            "HoverActionMenuRow",
             "SubmenuMenuRow",
             "PasteMenuRow",
             "CutCopyMenuRows",
@@ -1315,8 +1316,8 @@ mod tests {
         );
         assert_eq!(
             menus.matches("MenuItem {").count(),
-            2,
-            "raw MenuItem usage should stay limited to ActionMenuRow and SubmenuMenuRow"
+            3,
+            "raw MenuItem usage should stay limited to ActionMenuRow, HoverActionMenuRow, and SubmenuMenuRow"
         );
         assert_eq!(
             menus.matches("shortcut: \"Ctrl+V\";").count(),
@@ -1367,14 +1368,24 @@ mod tests {
         let action_row_start = menus
             .find("component ActionMenuRow")
             .expect("ActionMenuRow should exist");
+        let hover_action_row_start = menus
+            .find("component HoverActionMenuRow")
+            .expect("HoverActionMenuRow should exist after ActionMenuRow");
         let paste_row_start = menus
             .find("component PasteMenuRow")
-            .expect("PasteMenuRow should exist after ActionMenuRow");
-        let action_row = &menus[action_row_start..paste_row_start];
+            .expect("PasteMenuRow should exist after HoverActionMenuRow");
+        let action_row = &menus[action_row_start..hover_action_row_start];
+        let hover_action_row = &menus[hover_action_row_start..paste_row_start];
         assert!(
-            action_row.contains("callback hovered(bool);")
-                && action_row.contains("hovered(is-hovered) => { root.hovered(is-hovered); }"),
-            "ActionMenuRow may expose passive hover for child menu panels"
+            !action_row.contains("callback hovered(bool);")
+                && !action_row.contains("hovered(is-hovered) =>"),
+            "ordinary ActionMenuRow must not participate in child-submenu keep-alive or delayed close"
+        );
+        assert!(
+            hover_action_row.contains("callback hovered(bool);")
+                && hover_action_row
+                    .contains("hovered(is-hovered) => { root.hovered(is-hovered); }"),
+            "HoverActionMenuRow should be the only ordinary action row variant that forwards passive hover"
         );
 
         let file_menu_start = menus
@@ -1433,6 +1444,11 @@ mod tests {
             menu_lifecycle.contains("} else if (menu == 1 || menu == 2) {\n            MenuLifecycle.begin-close(menu);\n            close-timer.start();\n        }"),
             "delayed close should only start from explicit child submenu hover loss"
         );
+        assert!(
+            !file_menu.contains("HoverActionMenuRow {")
+                && !viewport_menu.contains("HoverActionMenuRow {"),
+            "root context menus should not use passive-hover action rows; only child submenu bodies should keep alive on ordinary row hover"
+        );
     }
 
     #[test]
@@ -1474,7 +1490,7 @@ mod tests {
     }
 
     #[test]
-    fn cosmic_shell_chrome_uses_shell_header_with_main_pane_toolbar() {
+    fn cosmic_shell_chrome_places_toolbar_at_main_pane_top() {
         let app = include_str!("../../ui/app.slint");
         let top_bar = include_str!("../../ui/top_bar.slint");
         let search_panel = include_str!("../../ui/search_panel.slint");
@@ -1507,8 +1523,14 @@ mod tests {
             "sidebar resize should keep a transparent edge hit area without taking layout width"
         );
         assert!(
-            app.contains("private property <length> shell-header-height: 56px;"),
-            "AppWindow should reserve a shell/header row above the sidebar and main pane"
+            app.contains("shell-layout := Rectangle"),
+            "AppWindow should own one explicit shell surface"
+        );
+        assert!(
+            app.contains("private property <length> shell-header-height: 56px;")
+                && app.contains("shell-header := Rectangle")
+                && app.contains("content-row := HorizontalLayout"),
+            "AppWindow should keep a shell/header row separate from the main-pane navigation bar"
         );
         assert!(
             !app.contains("sidebar-splitter-width")
@@ -1526,11 +1548,11 @@ mod tests {
         );
         assert!(
             app.contains("sidebar-surface := Rectangle"),
-            "sidebar panel should be explicit in the content row below the header"
+            "sidebar panel should be explicit in the content row below the shell header"
         );
         assert!(
             app.contains("width: parent.width;\n                        height: parent.height;"),
-            "sidebar panel should fill the full content-row height so it is equal-height with the main pane"
+            "sidebar panel should fill the content row so it is equal-height with the right main pane"
         );
         let main_pane_index = app
             .find("main-pane := Rectangle")
@@ -1540,7 +1562,7 @@ mod tests {
             .expect("AppWindow should reserve the top shell/header row");
         let content_row_index = app
             .find("content-row := HorizontalLayout")
-            .expect("AppWindow should place sidebar and main content below the shell header");
+            .expect("AppWindow should place sidebar and main pane below the shell header");
         let top_bar_index = app
             .find("TopBar {")
             .expect("AppWindow should instantiate the main-pane internal TopBar");
@@ -1550,9 +1572,10 @@ mod tests {
         assert!(
             shell_header_index < content_row_index
                 && content_row_index < sidebar_surface_index
-                && sidebar_surface_index < main_pane_index
-                && main_pane_index < top_bar_index,
-            "address/navigation toolbar should be inside the main pane below the shell header, not in the shell header"
+                && content_row_index < main_pane_index
+                && main_pane_index < top_bar_index
+                && app.contains("main-pane := Rectangle {\n            horizontal-stretch: 1;"),
+            "address/navigation toolbar should be the first row inside the right main pane below the shell header, not in the shell header"
         );
         assert!(
             !app.contains("SidebarSection { label: \"Remote\""),
@@ -1589,7 +1612,8 @@ mod tests {
             "main grid component height and virtual viewport height should share one available-height binding"
         );
         assert!(
-            app.contains("root.main-content-height - root.top-bar-height - root.status-bar-height - root.search-panel-height"),
+            app.contains("private property <length> main-content-height: max(1px, root.height - root.shell-header-height);")
+                && app.contains("root.main-content-height - root.top-bar-height - root.status-bar-height - root.search-panel-height"),
             "main grid height should subtract the main-pane toolbar, search strip, and status bar from the below-shell content row"
         );
         assert!(
@@ -1610,7 +1634,7 @@ mod tests {
         );
         assert!(
             app.contains("padding-left: 8px;") && app.contains("padding-right: 8px;"),
-            "sidebar rows should be inset inside the rounded below-header sidebar panel"
+            "sidebar rows should be inset inside the rounded content-row sidebar panel"
         );
         assert!(
             app.contains("in-out property <float> sidebar_width_px: 280;"),
