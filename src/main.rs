@@ -184,6 +184,7 @@ fn main() -> Result<(), slint::PlatformError> {
             SharedString::new()
         });
     }
+    register_pane_routing_callbacks(&ui);
     ui.set_chooser_mode(matches!(args.mode, Mode::Chooser));
     ui.set_chooser_select_directories(args.chooser_select_directories);
     ui.set_chooser_multiple(args.chooser_multiple);
@@ -275,19 +276,12 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_main_view_changed(move || {
+        ui.on_pane_view_changed(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                sync_virtual_entries(&ui, &state, &bridge, true);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_inactive_pane_view_changed(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                sync_inactive_pane_view_from_ui(&ui, &state);
+                match pane_side_from_slot(slot) {
+                    PaneSide::Active => sync_virtual_entries(&ui, &state, &bridge, true),
+                    PaneSide::Inactive => sync_inactive_pane_view_from_ui(&ui, &state),
+                }
             }
         });
     }
@@ -344,34 +338,17 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_left_pane_path_submitted(move |path| {
+        ui.on_pane_path_submitted(move |slot, path| {
             if let Some(ui) = ui_weak.upgrade() {
-                let requested = expand_user_path(path.as_str());
-                if requested.is_dir() {
-                    focus_left_pane(&ui, &state);
-                    navigate_to(&ui, &state, &bridge, requested);
-                } else {
-                    ui.set_left_pane_path_input_text(ui.get_left_pane_path());
-                    set_status(&ui, "Path is not a readable directory");
-                }
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_inactive_path_submitted(move |path| {
-            if let Some(ui) = ui_weak.upgrade() {
+                let side = pane_side_from_slot(slot);
+                focus_pane(&ui, &state, side);
                 let requested = expand_user_path(path.as_str());
                 if !requested.is_dir() {
-                    ui.set_inactive_pane_path_input_text(ui.get_inactive_pane_path());
+                    reset_pane_path_input(&ui, side);
                     set_status(&ui, "Path is not a readable directory");
                     return;
                 }
-                focus_right_pane(&ui, &state);
-                navigate_inactive_to(&ui, &state, &bridge, requested);
+                navigate_pane_to(&ui, &state, &bridge, side, requested);
             }
         });
     }
@@ -593,17 +570,6 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_left_pane_go_back(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                go_active_back(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
         ui.on_go_forward(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 go_forward(&ui, &state, &bridge);
@@ -615,9 +581,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_left_pane_go_forward(move || {
+        ui.on_pane_go_back(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                go_active_forward(&ui, &state, &bridge);
+                go_pane_back(&ui, &state, &bridge, pane_side_from_slot(slot));
             }
         });
     }
@@ -626,9 +592,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_inactive_go_back(move || {
+        ui.on_pane_go_forward(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                inactive_go_back(&ui, &state, &bridge);
+                go_pane_forward(&ui, &state, &bridge, pane_side_from_slot(slot));
             }
         });
     }
@@ -636,30 +602,9 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_inactive_go_forward(move || {
+        ui.on_pane_focus(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                inactive_go_forward(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_focus_left_pane(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                focus_left_pane(&ui, &state);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_focus_right_pane(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                focus_right_pane(&ui, &state);
+                focus_pane(&ui, &state, pane_side_from_slot(slot));
             }
         });
     }
@@ -679,9 +624,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_open_inactive_path(move |path| {
+        ui.on_pane_activated(move |slot, path| {
             if let Some(ui) = ui_weak.upgrade() {
-                open_inactive_path(&ui, &state, path.as_str(), &bridge);
+                open_path_for_side(
+                    &ui,
+                    &state,
+                    pane_side_from_slot(slot),
+                    path.as_str(),
+                    &bridge,
+                );
             }
         });
     }
@@ -689,9 +640,16 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_select_path(move |path, toggle, range| {
+        ui.on_pane_request_select(move |slot, path, toggle, range| {
             if let Some(ui) = ui_weak.upgrade() {
-                select_path(&ui, &state, path.as_str(), toggle, range);
+                select_path_for_side(
+                    &ui,
+                    &state,
+                    pane_side_from_slot(slot),
+                    path.as_str(),
+                    toggle,
+                    range,
+                );
             }
         });
     }
@@ -699,48 +657,22 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_select_inactive_path(move |path, toggle, range| {
-            if let Some(ui) = ui_weak.upgrade() {
-                select_inactive_path(&ui, &state, path.as_str(), toggle, range);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_select_rect(
-            move |x1, y1, x2, y2, rows_per_column, cell_width, row_height, padding, toggle| {
+        ui.on_pane_select_rect(
+            move |slot,
+                  x1,
+                  y1,
+                  x2,
+                  y2,
+                  rows_per_column,
+                  cell_width,
+                  row_height,
+                  padding,
+                  toggle| {
                 if let Some(ui) = ui_weak.upgrade() {
-                    select_rect(
+                    select_rect_for_side(
                         &ui,
                         &state,
-                        SelectionRect {
-                            x1,
-                            y1,
-                            x2,
-                            y2,
-                            rows_per_column,
-                            cell_width,
-                            row_height,
-                            padding,
-                        },
-                        toggle,
-                    );
-                }
-            },
-        );
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_select_inactive_rect(
-            move |x1, y1, x2, y2, rows_per_column, cell_width, row_height, padding, toggle| {
-                if let Some(ui) = ui_weak.upgrade() {
-                    select_inactive_rect(
-                        &ui,
-                        &state,
+                        pane_side_from_slot(slot),
                         SelectionRect {
                             x1,
                             y1,
@@ -770,22 +702,10 @@ fn main() -> Result<(), slint::PlatformError> {
 
     {
         let state = Rc::clone(&state);
-        ui.on_is_selected(move |path| {
-            state
-                .borrow()
-                .panes
-                .active
-                .selection
-                .paths
-                .iter()
-                .any(|selected| selected == path.as_str())
-        });
-    }
-
-    {
-        let state = Rc::clone(&state);
-        ui.on_is_inactive_selected(move |path| {
-            state.borrow().panes.inactive().is_some_and(|pane| {
+        ui.on_pane_is_selected(move |slot, path| {
+            let state = state.borrow();
+            let target = pane_target_from_slot(slot);
+            state.panes.pane_for_target(target).is_some_and(|pane| {
                 pane.selection
                     .paths
                     .iter()
@@ -920,13 +840,13 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_prepare_path_main_transfer(move |source, x, y| {
+        ui.on_pane_prepare_transfer(move |slot, source, x, y| {
             ui_weak.upgrade().is_some_and(|ui| {
-                prepare_main_transfer(
+                prepare_pane_transfer(
                     &ui,
                     &state,
+                    pane_side_from_slot(slot),
                     source.as_str(),
-                    path_label(source.as_str()).as_str(),
                     x,
                     y,
                 )
@@ -937,62 +857,39 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_prepare_inactive_pane_transfer(move |source, x, y| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                prepare_inactive_pane_transfer(&ui, &state, source.as_str(), x, y)
-            })
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_main_drop_target_path(move |x, y, source| {
+        ui.on_pane_drop_target_path(move |slot, x, y, source| {
             let Some(ui) = ui_weak.upgrade() else {
                 return SharedString::new();
             };
             let state = state.borrow();
-            entry_at_main_point(&ui, &state, x, y)
-                .filter(|entry| entry.is_dir && entry.path.as_str() != source.as_str())
-                .map_or_else(SharedString::new, |entry| entry.path)
+            pane_drop_target_path(
+                &ui,
+                &state,
+                pane_side_from_slot(slot),
+                x,
+                y,
+                Path::new(source.as_str()),
+            )
+            .map_or_else(SharedString::new, Into::into)
         });
     }
 
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_main_drop_allowed(move |x, y, source| {
+        ui.on_pane_drop_allowed(move |slot, x, y, source| {
             let Some(ui) = ui_weak.upgrade() else {
                 return false;
             };
             let state = state.borrow();
-            let source = Path::new(source.as_str());
-            main_drop_allowed(&ui, &state, x, y, source)
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_inactive_pane_drop_target_path(move |x, y, source| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return SharedString::new();
-            };
-            let state = state.borrow();
-            inactive_pane_drop_target_path(&ui, &state, x, y, Path::new(source.as_str()))
-                .map_or_else(SharedString::new, Into::into)
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_inactive_pane_drop_allowed(move |x, y, source| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return false;
-            };
-            let state = state.borrow();
-            inactive_pane_drop_allowed(&ui, &state, x, y, Path::new(source.as_str()))
+            pane_drop_allowed(
+                &ui,
+                &state,
+                pane_side_from_slot(slot),
+                x,
+                y,
+                Path::new(source.as_str()),
+            )
         });
     }
 
@@ -1256,6 +1153,304 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     ui.run()
+}
+
+fn register_pane_routing_callbacks(ui: &AppWindow) {
+    let routing = ui.global::<PaneRouting>();
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_focus(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_focus(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_path_submitted(move |slot, path| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_path_submitted(slot, path);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_go_back(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_go_back(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_go_forward(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_go_forward(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_search_submitted(move |query| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_search_submitted(query);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_cancel_search(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_cancel_search();
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_search_filters_changed(move |kind, modified, size| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_search_filters_changed(kind, modified, size);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_search_close_requested(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_search_bar_open(false);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_view_changed(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_view_changed(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_activated(move |slot, path| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_activated(slot, path);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_request_select(move |slot, path, toggle, range| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_request_select(slot, path, toggle, range);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_select_rect(
+            move |slot,
+                  x1,
+                  y1,
+                  x2,
+                  y2,
+                  rows_per_column,
+                  cell_width,
+                  row_height,
+                  padding,
+                  toggle| {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_route_pane_select_rect(
+                        slot,
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        rows_per_column,
+                        cell_width,
+                        row_height,
+                        padding,
+                        toggle,
+                    );
+                }
+            },
+        );
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_clear_selection(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_clear_selection(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_request_context_menu(move |slot, path, name, size, modified, is_dir, x, y| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_request_context_menu(
+                    slot, path, name, size, modified, is_dir, x, y,
+                );
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_request_blank_context_menu(move |slot, x, y| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_request_blank_context_menu(slot, x, y);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_zoom_in(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_zoom_in(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_zoom_out(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_zoom_out(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_drop_target_path(move |slot, x, y, source| {
+            ui_weak.upgrade().map_or_else(SharedString::new, |ui| {
+                ui.invoke_route_pane_drop_target_path(slot, x, y, source)
+            })
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_drop_allowed(move |slot, x, y, source| {
+            ui_weak
+                .upgrade()
+                .is_some_and(|ui| ui.invoke_route_pane_drop_allowed(slot, x, y, source))
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_prepare_transfer(move |slot, source, x, y| {
+            ui_weak
+                .upgrade()
+                .is_some_and(|ui| ui.invoke_route_pane_prepare_transfer(slot, source, x, y))
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_transfer_menu_requested(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_transfer_menu_requested(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_trace_drop(move |action, kind, path, x, y, rejected, target| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_trace_main_drop(action, kind, path, x, y, rejected, target);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_save_focus_changed(move |slot, focused| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_save_focus_changed(slot, focused);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_commit_external_edit(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_commit_external_edit(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_discard_external_edit(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_discard_external_edit(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_undo_last_operation(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_undo_last_operation();
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_chooser_accept(move |value| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_chooser_accept(value);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_chooser_filter_requested(move |slot, x, y| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_chooser_filter_requested(slot, x, y);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_chooser_choice_requested(move |slot, index, x, y| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_chooser_choice_requested(slot, index, x, y);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_is_selected(move |slot, path| {
+            ui_weak
+                .upgrade()
+                .is_some_and(|ui| ui.invoke_pane_is_selected(slot, path))
+        });
+    }
 }
 
 fn log_chooser_parent_window(parent_window: Option<&str>) {
@@ -3429,6 +3624,20 @@ fn select_inactive_path(
     update_selection_ui_for_side(ui, PaneSide::Inactive, &selected_paths);
 }
 
+fn select_path_for_side(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    side: PaneSide,
+    path: &str,
+    toggle: bool,
+    range: bool,
+) {
+    match side {
+        PaneSide::Active => select_path(ui, state, path, toggle, range),
+        PaneSide::Inactive => select_inactive_path(ui, state, path, toggle, range),
+    }
+}
+
 fn selection_range_paths_in_entries(
     entries: &[FileEntry],
     anchor: &str,
@@ -3525,6 +3734,19 @@ fn select_inactive_rect(
         pane.selection.paths.clone()
     };
     update_selection_ui_for_side(ui, PaneSide::Inactive, &selected_paths);
+}
+
+fn select_rect_for_side(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    side: PaneSide,
+    rect: SelectionRect,
+    toggle: bool,
+) {
+    match side {
+        PaneSide::Active => select_rect(ui, state, rect, toggle),
+        PaneSide::Inactive => select_inactive_rect(ui, state, rect, toggle),
+    }
 }
 
 fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -3663,6 +3885,81 @@ fn selection_status_text(selected_paths: &[String]) -> SharedString {
     }
 }
 
+fn pane_side_from_slot(slot: i32) -> PaneSide {
+    if slot == 1 {
+        PaneSide::Inactive
+    } else {
+        PaneSide::Active
+    }
+}
+
+fn pane_target_from_slot(slot: i32) -> PaneTarget {
+    match pane_side_from_slot(slot) {
+        PaneSide::Active => PaneTarget::Active,
+        PaneSide::Inactive => PaneTarget::Inactive,
+    }
+}
+
+fn focus_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>, side: PaneSide) {
+    match side {
+        PaneSide::Active => focus_left_pane(ui, state),
+        PaneSide::Inactive => focus_right_pane(ui, state),
+    }
+}
+
+fn reset_pane_path_input(ui: &AppWindow, side: PaneSide) {
+    match side {
+        PaneSide::Active => ui.set_left_pane_path_input_text(ui.get_left_pane_path()),
+        PaneSide::Inactive => ui.set_inactive_pane_path_input_text(ui.get_inactive_pane_path()),
+    }
+}
+
+fn prepare_pane_transfer(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    side: PaneSide,
+    source: &str,
+    x: f32,
+    y: f32,
+) -> bool {
+    match side {
+        PaneSide::Active => {
+            prepare_main_transfer(ui, state, source, path_label(source).as_str(), x, y)
+        }
+        PaneSide::Inactive => prepare_inactive_pane_transfer(ui, state, source, x, y),
+    }
+}
+
+fn pane_drop_target_path(
+    ui: &AppWindow,
+    state: &AppState,
+    side: PaneSide,
+    x: f32,
+    y: f32,
+    source: &Path,
+) -> Option<String> {
+    match side {
+        PaneSide::Active => entry_at_main_point(ui, state, x, y)
+            .filter(|entry| entry.is_dir && Path::new(entry.path.as_str()) != source)
+            .map(|entry| entry.path.to_string()),
+        PaneSide::Inactive => inactive_pane_drop_target_path(ui, state, x, y, source),
+    }
+}
+
+fn pane_drop_allowed(
+    ui: &AppWindow,
+    state: &AppState,
+    side: PaneSide,
+    x: f32,
+    y: f32,
+    source: &Path,
+) -> bool {
+    match side {
+        PaneSide::Active => main_drop_allowed(ui, state, x, y, source),
+        PaneSide::Inactive => inactive_pane_drop_allowed(ui, state, x, y, source),
+    }
+}
+
 fn focus_left_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     {
         let mut state = state.borrow_mut();
@@ -3724,6 +4021,19 @@ fn navigate_focused_to(
     }
 }
 
+fn navigate_pane_to(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    side: PaneSide,
+    path: PathBuf,
+) {
+    match side {
+        PaneSide::Active => navigate_to(ui, state, bridge, path),
+        PaneSide::Inactive => navigate_inactive_to(ui, state, bridge, path),
+    }
+}
+
 fn navigate_inactive_to(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -3746,7 +4056,7 @@ fn navigate_inactive_to(
                 path.display()
             ));
             drop(state_ref);
-            sync_inactive_pane_ui(ui, state);
+            sync_navigation_ui(ui, state);
             load_inactive_current_directory(ui, state, bridge, true);
             return;
         }
@@ -3762,6 +4072,7 @@ fn navigate_inactive_to(
         let nav = pane.history.navigate_from(previous, path);
         pane.current_dir = nav.target;
     }
+    sync_navigation_ui(ui, state);
     load_inactive_current_directory(ui, state, bridge, false);
 }
 
@@ -3811,6 +4122,15 @@ fn go_parent(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge
 
 fn go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     let side = { state.borrow().panes.focused_side() };
+    go_pane_back(ui, state, bridge, side);
+}
+
+fn go_pane_back(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    side: PaneSide,
+) {
     match side {
         PaneSide::Active => go_active_back(ui, state, bridge),
         PaneSide::Inactive => inactive_go_back(ui, state, bridge),
@@ -3868,7 +4188,7 @@ fn inactive_go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Asyn
         let Some(nav) = pane.history.go_back_from(previous) else {
             debug_log("inactive_go_back ignored: empty back stack");
             drop(state_ref);
-            sync_inactive_pane_ui(ui, state);
+            sync_navigation_ui(ui, state);
             set_status(ui, "No previous split location");
             return;
         };
@@ -3880,11 +4200,21 @@ fn inactive_go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Asyn
             nav.previous.display()
         ));
     }
+    sync_navigation_ui(ui, state);
     load_inactive_current_directory(ui, state, bridge, false);
 }
 
 fn go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     let side = { state.borrow().panes.focused_side() };
+    go_pane_forward(ui, state, bridge, side);
+}
+
+fn go_pane_forward(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    side: PaneSide,
+) {
     match side {
         PaneSide::Active => go_active_forward(ui, state, bridge),
         PaneSide::Inactive => inactive_go_forward(ui, state, bridge),
@@ -3942,7 +4272,7 @@ fn inactive_go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &A
         let Some(nav) = pane.history.go_forward_from(previous) else {
             debug_log("inactive_go_forward ignored: empty forward stack");
             drop(state_ref);
-            sync_inactive_pane_ui(ui, state);
+            sync_navigation_ui(ui, state);
             set_status(ui, "No next split location");
             return;
         };
@@ -3954,15 +4284,34 @@ fn inactive_go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &A
             nav.previous.display()
         ));
     }
+    sync_navigation_ui(ui, state);
     load_inactive_current_directory(ui, state, bridge, false);
 }
 
 fn open_path(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &str, bridge: &AsyncBridge) {
-    if state.borrow().panes.focused_side() == PaneSide::Inactive {
-        open_inactive_path(ui, state, path, bridge);
-        return;
-    }
+    let side = { state.borrow().panes.focused_side() };
+    open_path_for_side(ui, state, side, path, bridge);
+}
 
+fn open_path_for_side(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    side: PaneSide,
+    path: &str,
+    bridge: &AsyncBridge,
+) {
+    match side {
+        PaneSide::Active => open_active_path(ui, state, path, bridge),
+        PaneSide::Inactive => open_inactive_path(ui, state, path, bridge),
+    }
+}
+
+fn open_active_path(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    path: &str,
+    bridge: &AsyncBridge,
+) {
     let (path, is_known_dir) = {
         let state = state.borrow();
         let entry = state

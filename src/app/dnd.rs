@@ -240,22 +240,32 @@ mod tests {
             .split_once("component FilePane inherits Rectangle {")
             .expect("app.slint should define the reusable FilePane component")
             .1
-            .split_once("export component AppWindow inherits Window")
-            .expect("FilePane should be defined before AppWindow")
+            .split_once("component PaneSlot inherits FilePane")
+            .expect("FilePane should be defined before PaneSlot")
             .0;
         assert!(file_pane.contains("navigate_back => { root.go_back(root.pane-side); }"));
         assert!(file_pane.contains("navigate_forward => { root.go_forward(root.pane-side); }"));
 
+        let pane_slot = app
+            .split_once("component PaneSlot inherits FilePane {")
+            .expect("app.slint should define the routed PaneSlot component")
+            .1
+            .split_once("export component AppWindow inherits Window")
+            .expect("PaneSlot should be defined before AppWindow")
+            .0;
+        assert!(pane_slot.contains("go_back(side) => { PaneRouting.go-back(side); }"));
+        assert!(pane_slot.contains("go_forward(side) => { PaneRouting.go-forward(side); }"));
+
         let main_pane = &app[main_pane_start..];
-        assert!(main_pane.contains("FilePane {"));
-        assert!(main_pane.contains("go_back(side) => { root.pane-go-back(side); }"));
-        assert!(main_pane.contains("go_forward(side) => { root.pane-go-forward(side); }"));
-        assert!(app.contains("function pane-go-back(side: int)"));
-        assert!(app.contains("root.inactive_go_back();"));
-        assert!(app.contains("root.left_pane_go_back();"));
-        assert!(app.contains("function pane-go-forward(side: int)"));
-        assert!(app.contains("root.inactive_go_forward();"));
-        assert!(app.contains("root.left_pane_go_forward();"));
+        assert_eq!(main_pane.matches("PaneSlot {").count(), 2);
+        assert!(app.contains("public function route-pane-go-back(side: int)"));
+        assert!(app.contains("root.pane_go_back(side);"));
+        assert!(app.contains("public function route-pane-go-forward(side: int)"));
+        assert!(app.contains("root.pane_go_forward(side);"));
+        assert!(!app.contains("root.inactive_go_back();"));
+        assert!(!app.contains("root.left_pane_go_back();"));
+        assert!(!app.contains("root.inactive_go_forward();"));
+        assert!(!app.contains("root.left_pane_go_forward();"));
 
         let split_pane = include_str!("../../ui/split_pane.slint");
         assert!(split_pane.contains("PointerEventButton.back"));

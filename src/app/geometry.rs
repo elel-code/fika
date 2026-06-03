@@ -1851,20 +1851,64 @@ mod tests {
         let app = include_str!("../../ui/app.slint");
         let split_pane = include_str!("../../ui/split_pane.slint");
 
-        assert!(app.contains("component FilePane inherits Rectangle"));
+        let pane_routing = app
+            .split_once("export global PaneRouting {")
+            .expect("app.slint should export a global pane routing surface")
+            .1
+            .split_once("import { DragKind }")
+            .expect("PaneRouting should be declared before imports")
+            .0;
+        let file_pane = app
+            .split_once("component FilePane inherits Rectangle {")
+            .expect("reusable FilePane component should exist")
+            .1
+            .split_once("component PaneSlot inherits FilePane")
+            .expect("FilePane component should be before PaneSlot")
+            .0;
+        let pane_slot = app
+            .split_once("component PaneSlot inherits FilePane {")
+            .expect("PaneSlot should wrap FilePane with shared routing")
+            .1
+            .split_once("export component AppWindow inherits Window")
+            .expect("PaneSlot should be defined before AppWindow")
+            .0;
+        let route_functions = app
+            .split_once("public function route-pane-focus(side: int) {")
+            .expect("AppWindow should expose shared pane route functions")
+            .1
+            .split_once("title: chooser_mode")
+            .expect("pane route functions should be defined before the window body")
+            .0;
+
         assert!(app.contains("import { SplitPaneView } from \"split_pane.slint\";"));
-        assert!(app.contains("in property <[FileEntry]> inactive_pane_entries;"));
-        assert!(app.contains("callback open_inactive_path(string);"));
         assert!(app.contains("private property <length> active-pane-width"));
         assert!(app.contains("width: root.active-pane-width;"));
-        assert!(app.contains("callback inactive_pane_view_changed();"));
         assert!(app.contains("in-out property <float> inactive_pane_viewport_x"));
         assert!(app.contains("pane-shells := Rectangle"));
         assert!(app.contains("left-pane-shell := Rectangle"));
         assert!(app.contains("if (root.split_view_open) : right-pane-shell := Rectangle"));
         assert!(app.contains("virtual-start-index: root.inactive_pane_virtual_start_index;"));
         assert!(app.contains("viewport-offset <=> root.inactive_pane_viewport_offset;"));
-        assert!(app.contains("root.open_inactive_path(path);"));
+        assert!(!app.contains("callback left_pane_path_submitted(string);"));
+        assert!(!app.contains("callback left_pane_go_back();"));
+        assert!(!app.contains("callback left_pane_go_forward();"));
+        assert!(!app.contains("callback inactive_path_submitted(string);"));
+        assert!(!app.contains("callback inactive_go_back();"));
+        assert!(!app.contains("callback inactive_go_forward();"));
+        assert!(!app.contains("callback open_inactive_path(string);"));
+        assert!(!app.contains("callback inactive_pane_view_changed();"));
+        assert!(!app.contains("callback main_view_changed();"));
+        assert!(
+            !app.contains("callback prepare_inactive_pane_transfer(string, float, float) -> bool;")
+        );
+        assert!(
+            !app.contains(
+                "callback inactive_pane_drop_target_path(float, float, string) -> string;"
+            )
+        );
+        assert!(
+            !app.contains("callback inactive_pane_drop_allowed(float, float, string) -> bool;")
+        );
         assert!(!app.contains("right-pane-content := Rectangle"));
         assert!(!app.contains("active-grid-clip := Rectangle"));
         assert!(!app.contains("active-pane-clip := Rectangle"));
@@ -1879,13 +1923,24 @@ mod tests {
             !app.contains("main-blank-touch := TouchArea"),
             "active pane blank input layer should be scoped inside the active pane shell"
         );
-        let file_pane = app
-            .split_once("component FilePane inherits Rectangle {")
-            .expect("reusable FilePane component should exist")
-            .1
-            .split_once("export component AppWindow inherits Window")
-            .expect("FilePane component should be before AppWindow")
-            .0;
+        assert!(
+            pane_routing.contains("callback focus(int);")
+                && pane_routing.contains("callback path-submitted(int, string);")
+                && pane_routing.contains("callback go-back(int);")
+                && pane_routing.contains("callback go-forward(int);")
+                && pane_routing.contains("callback view-changed(int);")
+                && pane_routing.contains("callback activated(int, string);")
+                && pane_routing.contains("callback request-select(int, string, bool, bool);")
+                && pane_routing.contains("callback select-rect(int, float, float, float, float, int, float, float, float, bool);")
+                && pane_routing.contains("callback clear-selection(int);")
+                && pane_routing.contains("callback request-context-menu(int, string, string, string, string, bool, length, length);")
+                && pane_routing.contains("callback request-blank-context-menu(int, length, length);")
+                && pane_routing.contains("callback drop-target-path(int, float, float, string) -> string;")
+                && pane_routing.contains("callback drop-allowed(int, float, float, string) -> bool;")
+                && pane_routing.contains("callback prepare-transfer(int, string, float, float) -> bool;")
+                && pane_routing.contains("pure callback is-selected(int, string) -> bool;"),
+            "PaneRouting should expose one side-aware surface for every pane interaction"
+        );
         assert_eq!(
             file_pane.matches("PathBar {").count(),
             1,
@@ -1970,6 +2025,43 @@ mod tests {
                     .contains("save_focus_changed(focused) => { root.save_focus_changed(root.pane-side, focused); }"),
             "FilePane should route address bar, content, side buttons, context menus, selection, and status through pane-side"
         );
+        let pane_slot_bindings = [
+            "focus_requested(side) => { PaneRouting.focus(side); }",
+            "path_submitted(side, path) => { PaneRouting.path-submitted(side, path); }",
+            "go_back(side) => { PaneRouting.go-back(side); }",
+            "go_forward(side) => { PaneRouting.go-forward(side); }",
+            "search_submitted(query) => { PaneRouting.search-submitted(query); }",
+            "cancel_search => { PaneRouting.cancel-search(); }",
+            "search_close_requested => { PaneRouting.search-close-requested(); }",
+            "view_changed(side) => { PaneRouting.view-changed(side); }",
+            "activated(side, path) => { PaneRouting.activated(side, path); }",
+            "request_select(side, path, toggle, range) => {\n        PaneRouting.request-select(side, path, toggle, range);\n    }",
+            "clear_selection(side) => { PaneRouting.clear-selection(side); }",
+            "request_context_menu(side, path, name, size, modified, is-dir, x, y) => {\n        PaneRouting.request-context-menu(side, path, name, size, modified, is-dir, x, y);\n    }",
+            "request_blank_context_menu(side, x, y) => {\n        PaneRouting.request-blank-context-menu(side, x, y);\n    }",
+            "zoom_in(side) => { PaneRouting.zoom-in(side); }",
+            "zoom_out(side) => { PaneRouting.zoom-out(side); }",
+            "drop_target_path(side, x, y, source) => {\n        PaneRouting.drop-target-path(side, x, y, source)\n    }",
+            "drop_allowed(side, x, y, source) => {\n        PaneRouting.drop-allowed(side, x, y, source)\n    }",
+            "prepare_transfer(side, source, x, y) => {\n        PaneRouting.prepare-transfer(side, source, x, y)\n    }",
+            "transfer_menu_requested(side) => { PaneRouting.transfer-menu-requested(side); }",
+            "trace_drop(action, kind, path, x, y, rejected, target) => {\n        PaneRouting.trace-drop(action, kind, path, x, y, rejected, target);\n    }",
+            "save_focus_changed(side, focused) => { PaneRouting.save-focus-changed(side, focused); }",
+            "commit_external_edit(side) => { PaneRouting.commit-external-edit(side); }",
+            "discard_external_edit(side) => { PaneRouting.discard-external-edit(side); }",
+            "undo_last_operation => { PaneRouting.undo-last-operation(); }",
+            "chooser_accept(value) => { PaneRouting.chooser-accept(value); }",
+            "chooser_filter_requested(side, x, y) => { PaneRouting.chooser-filter-requested(side, x, y); }",
+            "chooser_choice_requested(side, index, x, y) => {\n        PaneRouting.chooser-choice-requested(side, index, x, y);\n    }",
+            "is_selected(side, path) => {\n        PaneRouting.is-selected(side, path)\n    }",
+            "make_drag_data(side, path, is-dir) => {\n        is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)\n    }",
+        ];
+        for binding in pane_slot_bindings {
+            assert!(
+                pane_slot.contains(binding),
+                "PaneSlot should own shared pane event routing: {binding}"
+            );
+        }
         let pane_row_header = app
             .split_once("pane-row := Rectangle {")
             .expect("split panes should live inside an explicit row")
@@ -2008,9 +2100,14 @@ mod tests {
             .expect("split pane shell row should be before overlay layers")
             .0;
         assert_eq!(
-            pane_shells.matches("FilePane {").count(),
+            pane_shells.matches("PaneSlot {").count(),
             2,
-            "split view must render both physical panes with the same reusable FilePane component"
+            "split view must render both physical panes through the same reusable PaneSlot component"
+        );
+        assert_eq!(
+            pane_shells.matches("FilePane {").count(),
+            0,
+            "physical pane instances should not bypass PaneSlot routing"
         );
         assert!(
             !pane_shells.contains("PathBar {")
@@ -2019,81 +2116,68 @@ mod tests {
                 && !pane_shells.contains("right-pane-content := Rectangle"),
             "pane shells should not hand-roll pane chrome or content outside FilePane"
         );
-        let pane_router = app
-            .split_once("function pane-focus(side: int) {")
-            .expect("AppWindow should centralize pane event routing")
-            .1
-            .split_once("title: chooser_mode")
-            .expect("pane event routing should be defined before the window body")
-            .0;
         assert!(
-            pane_router.contains("root.focus_right_pane();")
-                && pane_router.contains("root.focus_left_pane();")
-                && pane_router.contains("function pane-path-submitted(side: int, path: string)")
-                && pane_router.contains("root.inactive_path_submitted(path);")
-                && pane_router.contains("root.left_pane_path_submitted(path);")
-                && pane_router.contains("function pane-go-back(side: int)")
-                && pane_router.contains("root.inactive_go_back();")
-                && pane_router.contains("root.left_pane_go_back();")
-                && pane_router.contains("function pane-go-forward(side: int)")
-                && pane_router.contains("root.inactive_go_forward();")
-                && pane_router.contains("root.left_pane_go_forward();"),
-            "shared pane router should focus and navigate either pane from the same side-aware code"
+            route_functions.contains("main-focus.focus();")
+                && route_functions.contains("root.pane_focus(side);")
+                && route_functions
+                    .contains("public function route-pane-path-submitted(side: int, path: string)")
+                && route_functions.contains("root.pane_path_submitted(side, path);")
+                && route_functions.contains("public function route-pane-go-back(side: int)")
+                && route_functions.contains("root.pane_go_back(side);")
+                && route_functions.contains("public function route-pane-go-forward(side: int)")
+                && route_functions.contains("root.pane_go_forward(side);"),
+            "shared pane route functions should focus and navigate any pane from the same side-aware code"
         );
         assert!(
-            pane_router.contains("function pane-view-changed(side: int)")
-                && pane_router.contains("root.inactive_pane_view_changed();")
-                && pane_router.contains("root.main_view_changed();")
-                && pane_router.contains("function pane-activated(side: int, path: string)")
-                && pane_router.contains("root.open_inactive_path(path);")
-                && pane_router.contains("root.open_path(path);")
-                && pane_router.contains(
-                    "function pane-request-select(side: int, path: string, toggle: bool, range: bool)"
+            route_functions.contains("public function route-pane-view-changed(side: int)")
+                && route_functions.contains("root.pane_view_changed(side);")
+                && route_functions.contains("public function route-pane-activated(side: int, path: string)")
+                && route_functions.contains("root.pane_activated(side, path);")
+                && route_functions.contains(
+                    "public function route-pane-request-select(side: int, path: string, toggle: bool, range: bool)"
                 )
-                && pane_router.contains("root.select_inactive_path(path, toggle, range);")
-                && pane_router.contains("root.select_path(path, toggle, range);")
-                && pane_router.contains("function pane-select-rect(side: int,")
-                && pane_router.contains("root.select_inactive_rect(")
-                && pane_router.contains("root.select_rect("),
-            "shared pane router should dispatch activation, selection, and view state by side"
+                && route_functions.contains("root.pane_request_select(side, path, toggle, range);")
+                && route_functions.contains("public function route-pane-select-rect(side: int,")
+                && route_functions.contains("root.pane_select_rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);"),
+            "shared pane route functions should dispatch activation, selection, and view state by side"
         );
         assert!(
-            pane_router.contains("function pane-request-context-menu(side: int,")
-                && pane_router.contains("root.refresh_clipboard_availability();")
-                && pane_router.contains("root.select_inactive_path(path, false, false);")
-                && pane_router.contains("root.select_path(path, false, false);")
-                && pane_router.contains("root.show-context-menu(1, x, y);")
-                && pane_router.contains("function pane-request-blank-context-menu(side: int,")
-                && pane_router.contains("root.show-context-menu(3, x, y);")
-                && pane_router.contains("function pane-drop-target-path(side: int,")
-                && pane_router.contains("root.inactive_pane_drop_target_path(x, y, source)")
-                && pane_router.contains("root.main_drop_target_path(x, y, source)")
-                && pane_router.contains("function pane-drop-allowed(side: int,")
-                && pane_router.contains("root.inactive_pane_drop_allowed(x, y, source)")
-                && pane_router.contains("root.main_drop_allowed(x, y, source)")
-                && pane_router.contains("function pane-prepare-transfer(side: int,")
-                && pane_router.contains("root.prepare_inactive_pane_transfer(source, x, y)")
-                && pane_router.contains("root.prepare_path_main_transfer(source, x, y)")
-                && pane_router.contains("function pane-transfer-menu-requested(side: int)"),
-            "shared pane router should dispatch context menus and drag/drop by side"
+            route_functions.contains("public function route-pane-request-context-menu(side: int,")
+                && route_functions.contains("root.refresh_clipboard_availability();")
+                && route_functions.contains("if (!root.pane_is_selected(side, path))")
+                && route_functions.contains("root.pane_request_select(side, path, false, false);")
+                && route_functions.contains("root.show-context-menu(1, x, y);")
+                && route_functions
+                    .contains("public function route-pane-request-blank-context-menu(side: int,")
+                && route_functions.contains("root.show-context-menu(3, x, y);")
+                && route_functions
+                    .contains("public function route-pane-drop-target-path(side: int,")
+                && route_functions
+                    .contains("return root.pane_drop_target_path(side, x, y, source);")
+                && route_functions.contains("public function route-pane-drop-allowed(side: int,")
+                && route_functions.contains("return root.pane_drop_allowed(side, x, y, source);")
+                && route_functions
+                    .contains("public function route-pane-prepare-transfer(side: int,")
+                && route_functions
+                    .contains("return root.pane_prepare_transfer(side, source, x, y);")
+                && route_functions
+                    .contains("public function route-pane-transfer-menu-requested(side: int)"),
+            "shared pane route functions should dispatch context menus and drag/drop by side"
         );
         assert!(
-            pane_router.contains("function pane-save-focus-changed(side: int, focused: bool)")
-                && pane_router
-                    .contains("function pane-chooser-filter-requested(side: int, x: length, y: length)")
-                && pane_router.contains(
-                    "function pane-chooser-choice-requested(side: int, index: int, x: length, y: length)"
+            route_functions.contains("public function route-pane-save-focus-changed(side: int, focused: bool)")
+                && route_functions
+                    .contains("public function route-pane-chooser-filter-requested(side: int, x: length, y: length)")
+                && route_functions.contains(
+                    "public function route-pane-chooser-choice-requested(side: int, index: int, x: length, y: length)"
                 ),
-            "shared pane router should dispatch status bar and chooser controls by side"
+            "shared pane route functions should dispatch status bar and chooser controls by side"
         );
         assert!(app.contains("in-out property <string> left_pane_path;"));
         assert!(app.contains("in-out property <string> left_pane_path_input_text;"));
         assert!(app.contains("in-out property <bool> left_pane_path_focused: false;"));
         assert!(app.contains("in-out property <bool> left_pane_can_go_back: false;"));
         assert!(app.contains("in-out property <bool> left_pane_can_go_forward: false;"));
-        assert!(app.contains("callback left_pane_path_submitted(string);"));
-        assert!(app.contains("callback left_pane_go_back();"));
-        assert!(app.contains("callback left_pane_go_forward();"));
         let left_pane = app
             .split_once("left-pane-shell := Rectangle {")
             .expect("active pane shell should exist")
@@ -2101,31 +2185,8 @@ mod tests {
             .split_once("if (root.split_view_open) : split-divider")
             .expect("left pane should be before the split divider")
             .0;
-        let pane_event_bindings = [
-            "focus_requested(side) => { root.pane-focus(side); }",
-            "path_submitted(side, path) => { root.pane-path-submitted(side, path); }",
-            "go_back(side) => { root.pane-go-back(side); }",
-            "go_forward(side) => { root.pane-go-forward(side); }",
-            "search_submitted(query) => { root.search_submitted(query); }",
-            "cancel_search => { root.cancel_search(); }",
-            "search_close_requested => { root.search_bar_open = false; }",
-            "view_changed(side) => { root.pane-view-changed(side); }",
-            "activated(side, path) => { root.pane-activated(side, path); }",
-            "request_select(side, path, toggle, range) => { root.pane-request-select(side, path, toggle, range); }",
-            "clear_selection(side) => { root.pane-clear-selection(side); }",
-            "request_context_menu(side, path, name, size, modified, is-dir, x, y) => { root.pane-request-context-menu(side, path, name, size, modified, is-dir, x, y); }",
-            "request_blank_context_menu(side, x, y) => { root.pane-request-blank-context-menu(side, x, y); }",
-            "zoom_in(side) => { root.pane-zoom-in(side); }",
-            "zoom_out(side) => { root.pane-zoom-out(side); }",
-            "transfer_menu_requested(side) => { root.pane-transfer-menu-requested(side); }",
-            "save_focus_changed(side, focused) => { root.pane-save-focus-changed(side, focused); }",
-            "commit_external_edit(side) => { root.commit_external_edit(side); }",
-            "discard_external_edit(side) => { root.discard_external_edit(side); }",
-            "chooser_filter_requested(side, x, y) => { root.pane-chooser-filter-requested(side, x, y); }",
-            "chooser_choice_requested(side, index, x, y) => { root.pane-chooser-choice-requested(side, index, x, y); }",
-        ];
         assert!(
-            left_pane.contains("FilePane {")
+            left_pane.contains("PaneSlot {")
                 && left_pane.contains("pane-side: 0;")
                 && left_pane.contains("current-path: root.left_pane_path;")
                 && left_pane.contains("path-text <=> root.left_pane_path_input_text;")
@@ -2139,29 +2200,21 @@ mod tests {
                 && left_pane.contains("external-edit-status: root.left_pane_external_edit_status;")
                 && left_pane
                     .contains("selected-path: root.focused_pane == 0 ? root.selected_path : \"\";"),
-            "left FilePane instance should bind only left-pane address, status, selection, and focus-owned state"
+            "pane slot 0 should bind only pane-local address, status, selection, and focus-owned state"
         );
-        for binding in pane_event_bindings {
-            assert!(
-                left_pane.contains(binding),
-                "left FilePane should use shared side-aware event binding: {binding}"
-            );
-        }
         assert!(
             !left_pane.contains("current-path: root.inactive_pane_path;")
                 && !left_pane.contains("path-text <=> root.inactive_pane_path_input_text;")
                 && !left_pane.contains("path-focused <=> root.inactive_pane_path_focused;")
                 && !left_pane.contains("status: root.inactive_pane_status;")
                 && !left_pane.contains("selected-count: root.inactive_pane_selected_count;")
-                && !left_pane.contains("selected-status: root.inactive_pane_selected_status;"),
-            "left FilePane instance must not bind its pane-local state to right-pane data"
+                && !left_pane.contains("selected-status: root.inactive_pane_selected_status;")
+                && !left_pane.contains("PaneRouting."),
+            "pane slot 0 must not bind another pane's data or duplicate shared routing"
         );
         assert!(app.contains("current-path: root.inactive_pane_path;"));
         assert!(app.contains("path-text <=> root.inactive_pane_path_input_text;"));
         assert!(app.contains("path-focused <=> root.inactive_pane_path_focused;"));
-        assert!(app.contains("callback inactive_path_submitted(string);"));
-        assert!(app.contains("callback inactive_go_back();"));
-        assert!(app.contains("callback inactive_go_forward();"));
         let inactive_pane = app
             .split_once("if (root.split_view_open) : right-pane-shell := Rectangle {")
             .expect("right pane shell should exist")
@@ -2170,7 +2223,7 @@ mod tests {
             .expect("right pane should be before the divider touch area")
             .0;
         assert!(
-            inactive_pane.contains("FilePane {")
+            inactive_pane.contains("PaneSlot {")
                 && inactive_pane.contains("pane-side: 1;")
                 && inactive_pane.contains("current-path: root.inactive_pane_path;")
                 && inactive_pane.contains("path-text <=> root.inactive_pane_path_input_text;")
@@ -2186,35 +2239,25 @@ mod tests {
                     .contains("external-edit-status: root.inactive_pane_external_edit_status;")
                 && inactive_pane
                     .contains("selected-path: root.focused_pane == 1 ? root.selected_path : \"\";"),
-            "right FilePane instance should bind only right-pane address, status, selection, and focus-owned state"
+            "pane slot 1 should bind only pane-local address, status, selection, and focus-owned state"
         );
-        for binding in pane_event_bindings {
-            assert!(
-                inactive_pane.contains(binding),
-                "right FilePane should use shared side-aware event binding: {binding}"
-            );
-        }
         assert!(
             !inactive_pane.contains("root.go_back();")
                 && !inactive_pane.contains("root.go_forward();")
-                && !inactive_pane.contains("root.left_pane_")
                 && !inactive_pane.contains("root.current_path")
                 && !inactive_pane.contains("root.path_input_text")
-                && !inactive_pane.contains("root.focus_inactive_pane();"),
-            "right FilePane instance must not use shared active/global address state"
+                && !inactive_pane.contains("root.focus_inactive_pane();")
+                && !inactive_pane.contains("PaneRouting."),
+            "pane slot 1 must not use shared active/global address state or duplicate shared routing"
         );
+        assert!(app.contains("callback pane_prepare_transfer(int, string, float, float) -> bool;"));
         assert!(
-            app.contains("callback prepare_inactive_pane_transfer(string, float, float) -> bool;")
+            app.contains("callback pane_drop_target_path(int, float, float, string) -> string;")
         );
-        assert!(
-            app.contains(
-                "callback inactive_pane_drop_target_path(float, float, string) -> string;"
-            )
-        );
-        assert!(app.contains("callback inactive_pane_drop_allowed(float, float, string) -> bool;"));
-        assert!(app.contains("root.prepare_inactive_pane_transfer("));
-        assert!(app.contains("root.inactive_pane_drop_target_path("));
-        assert!(app.contains("root.inactive_pane_drop_allowed("));
+        assert!(app.contains("callback pane_drop_allowed(int, float, float, string) -> bool;"));
+        assert!(app.contains("root.pane_prepare_transfer(side, source, x, y)"));
+        assert!(app.contains("root.pane_drop_target_path(side, x, y, source)"));
+        assert!(app.contains("root.pane_drop_allowed(side, x, y, source)"));
         assert!(app.contains("inactive-pane-drag-active"));
         assert!(app.contains("in-out property <bool> left_pane_in_trash: false;"));
         assert!(app.contains("in-out property <bool> inactive_pane_in_trash: false;"));
@@ -2227,11 +2270,9 @@ mod tests {
         assert!(!split_pane.contains("SplitPreviewTile"));
         assert!(split_pane.contains("callback view_changed();"));
         assert!(split_pane.contains("callback focus_requested();"));
-        assert!(
-            split_pane.contains(
-                "root.focus_requested();\n        root.viewport-x = root.entry-count == 0"
-            )
-        );
+        assert!(split_pane.contains(
+            "root.focus_requested();\n        root.pan-target-viewport-x = root.entry-count == 0"
+        ));
         assert!(
             split_pane
                 .contains("root.focus_requested();\n                    root.activated(path);")
@@ -2261,9 +2302,15 @@ mod tests {
         );
         assert!(
             split_pane.contains(
-                "function pan-horizontal(delta: length) {\n        root.focus_requested();\n        root.viewport-x = root.entry-count == 0"
+                "function pan-horizontal(delta: length) {\n        root.focus_requested();\n        root.pan-target-viewport-x = root.entry-count == 0"
             ),
             "ordinary pane scrolling should request focus through pan-horizontal"
+        );
+        assert!(
+            split_pane.contains("private property <float> pan-target-viewport-x: 0;")
+                && split_pane.contains("if (root.pan-target-viewport-x != root.viewport-x) {")
+                && split_pane.contains("root.view_changed();"),
+            "pane scrolling should skip virtual refreshes when wheel input clamps to the current viewport"
         );
         assert!(
             !split_pane.contains(
@@ -2304,12 +2351,23 @@ mod tests {
         );
         assert!(split_pane.contains("virtual-layer := Rectangle"));
         assert!(split_pane.contains(
-            "private property <int> virtual-column-count: max(1, ceil(root.entries.length / root.rows-per-column));"
+            "private property <length> virtual-layer-width: root.viewport-content-width;"
         ));
-        assert!(split_pane.contains(
-            "private property <length> virtual-layer-width: max(1px, root.virtual-column-count * root.cell-width);"
-        ));
-        assert!(split_pane.contains("width: root.virtual-layer-width;"));
+        assert!(
+            split_pane.contains("x: 0px;")
+                && split_pane.contains("width: root.virtual-layer-width;")
+                && split_pane
+                    .contains("property <int> global-index: index + root.virtual-start-index;")
+                && split_pane.contains(
+                    "x: root.preview-padding + floor(global-index / root.rows-per-column) * root.cell-width;"
+                )
+                && split_pane.contains(
+                    "y: root.preview-padding + mod(global-index, root.rows-per-column) * root.row-height;"
+                )
+                && !split_pane.contains("property <int> local-index:")
+                && !split_pane.contains("root.virtual-start-column * root.cell-width"),
+            "virtualized pane slices should keep a stable full-width layer and move only tile positions"
+        );
         assert!(!split_pane.contains("root.viewport-content-width - self.x"));
         assert!(split_pane.contains("clip: true;"));
         assert!(
@@ -2360,7 +2418,7 @@ mod tests {
             "closing split view should clear any active divider drag state"
         );
         assert!(
-            app.contains("changed split_pane_ratio => {\n        root.sync-main-viewport();\n        root.main_view_changed();\n        root.inactive_pane_view_changed();\n    }"),
+            app.contains("changed split_pane_ratio => {\n        root.sync-main-viewport();\n        root.pane_view_changed(0);\n        root.pane_view_changed(1);\n    }"),
             "dragging the divider should resync both pane virtual views as the ratio changes"
         );
 
