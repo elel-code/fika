@@ -176,7 +176,7 @@ impl AppState {
         );
         let refresh_current_dir = refresh_pane_ids
             .iter()
-            .any(|id| *id == self.panes.active.id);
+            .any(|id| *id == self.panes.active().id);
         Some(OperationCompletionSummary {
             disposition: operation_result_disposition(operation, result, can_request_privilege),
             refresh_current_dir,
@@ -222,9 +222,9 @@ pub(crate) fn affected_directory_pane_ids<'a>(
     let mut pane_ids = Vec::new();
     if affected_dirs
         .iter()
-        .any(|dir| *dir == state.panes.active.current_dir.as_path())
+        .any(|dir| *dir == state.panes.active().current_dir.as_path())
     {
-        pane_ids.push(state.panes.active.id);
+        pane_ids.push(state.panes.active().id);
     }
     if let Some(inactive) = state.panes.inactive()
         && affected_dirs
@@ -791,7 +791,7 @@ mod tests {
             .unwrap();
 
         assert!(summary.refresh_current_dir);
-        assert_eq!(summary.refresh_pane_ids, vec![state.panes.active.id]);
+        assert_eq!(summary.refresh_pane_ids, vec![state.panes.active().id]);
         assert_eq!(summary.remaining, 1);
         assert_eq!(
             summary.disposition,
@@ -858,7 +858,7 @@ mod tests {
     fn complete_file_operation_marks_all_affected_split_panes_for_refresh() {
         let mut state = AppState::new(PathBuf::from("/tmp/source"), Vec::new());
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/target")));
-        let active_id = state.panes.active.id;
+        let active_id = state.panes.active().id;
         let inactive_id = state.panes.inactive().expect("inactive pane").id;
         state.begin_file_operation(7);
 
@@ -884,7 +884,7 @@ mod tests {
     fn affected_directory_pane_ids_deduplicates_matching_split_panes() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
-        let active_id = state.panes.active.id;
+        let active_id = state.panes.active().id;
         let inactive_id = state.panes.inactive().expect("inactive pane").id;
 
         let pane_ids = affected_directory_pane_ids(

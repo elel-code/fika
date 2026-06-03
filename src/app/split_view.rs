@@ -2,7 +2,7 @@ use crate::app::async_bridge::AsyncBridge;
 use crate::app::geometry::{
     PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, inactive_main_pane_width, main_pane_bounds,
 };
-use crate::app::pane::{PaneSide, PaneTarget};
+use crate::app::pane::PaneTarget;
 use crate::app::state::AppState;
 use crate::app::virtual_view::{PanePreviewInput, prepare_pane_preview_update};
 use crate::config::paths::home_dir;
@@ -15,27 +15,25 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-pub(crate) fn sync_inactive_pane_view_from_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    {
-        let mut state = state.borrow_mut();
-        let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Inactive) else {
-            return;
-        };
-        pane.view.viewport_x = ui.get_inactive_pane_viewport_x();
+pub(crate) fn pane_viewport_x_from_ui(ui: &AppWindow, slot: i32) -> Option<f32> {
+    match slot {
+        0 => Some(ui.get_main_viewport_x()),
+        1 => Some(ui.get_inactive_pane_viewport_x()),
+        _ => None,
     }
-    sync_inactive_pane_ui(ui, state);
 }
 
-pub(crate) fn set_pane_viewport_ui(ui: &AppWindow, side: PaneSide, viewport_x: f32) {
-    match side {
-        PaneSide::Active => {
+pub(crate) fn set_pane_viewport_ui(ui: &AppWindow, slot: i32, viewport_x: f32) {
+    match slot {
+        0 => {
             ui.set_main_viewport_x(viewport_x);
             ui.set_main_viewport_offset(-viewport_x);
         }
-        PaneSide::Inactive => {
+        1 => {
             ui.set_inactive_pane_viewport_x(viewport_x);
             ui.set_inactive_pane_viewport_offset(-viewport_x);
         }
+        _ => {}
     }
     sync_pane_slots_ui(ui);
 }
@@ -303,16 +301,21 @@ fn active_empty_subtitle(ui: &AppWindow, search_query: &SharedString) -> SharedS
 
 pub(crate) fn set_pane_viewport_ui_if_clamped(
     ui: &AppWindow,
-    side: PaneSide,
+    slot: i32,
     viewport_x: f32,
     viewport_clamped: bool,
 ) {
     if viewport_clamped {
-        set_pane_viewport_ui(ui, side, viewport_x);
+        set_pane_viewport_ui(ui, slot, viewport_x);
     }
 }
 
-pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+pub(crate) fn sync_pane_slot_preview_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    if slot == 0 {
+        sync_pane_slots_ui(ui);
+        return;
+    }
+
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let pane_bounds = main_pane_bounds(
         ui.get_sidebar_width_px(),
@@ -320,109 +323,202 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
         window_size.height,
     );
     let main_width = (pane_bounds.right - pane_bounds.left).max(1.0);
-    let inactive_width = inactive_main_pane_width(
+    let pane_width = inactive_main_pane_width(
         main_width,
         ui.get_split_view_open(),
         ui.get_split_pane_ratio(),
     )
     .max(1.0);
-    let inactive_height =
+    let pane_height =
         (pane_bounds.bottom - pane_bounds.top - PATH_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(1.0);
 
     let snapshot = {
         let mut state = state.borrow_mut();
         prepare_pane_preview_update(
             &mut state,
-            PaneTarget::Inactive,
+            PaneTarget::Slot(slot),
             PanePreviewInput {
-                pane_width: inactive_width,
-                pane_height: inactive_height,
+                pane_width,
+                pane_height,
                 zoom_level: ui.get_icon_zoom_level(),
                 thumbnail_size_px: thumbnail_size_px(ui),
-                force_rebuild_model: ui.get_inactive_pane_entry_count() == 0,
+                force_rebuild_model: pane_slot_entry_count(ui, slot) == 0,
             },
         )
     };
 
     let Some(update) = snapshot else {
-        ui.set_inactive_pane_path(SharedString::new());
-        ui.set_inactive_pane_path_input_text(SharedString::new());
-        ui.set_inactive_pane_status(SharedString::new());
-        ui.set_inactive_pane_in_trash(false);
-        ui.set_inactive_pane_selected_count(0);
-        ui.set_inactive_pane_selected_status(SharedString::new());
-        ui.set_inactive_pane_can_go_back(false);
-        ui.set_inactive_pane_can_go_forward(false);
-        ui.set_inactive_pane_entry_count(0);
-        ui.set_inactive_pane_virtual_start_index(0);
-        ui.set_inactive_pane_virtual_start_column(0);
-        set_pane_viewport_ui(ui, PaneSide::Inactive, 0.0);
-        ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(
-            Vec::<FileEntry>::new(),
-        ))));
+        clear_pane_slot_cache(ui, slot);
         sync_pane_slots_ui(ui);
         return;
     };
 
     let path = update.current_dir.display().to_string();
-    ui.set_inactive_pane_path(path.as_str().into());
-    ui.set_inactive_pane_in_trash(fs::file_ops::is_in_trash_files_dir(&update.current_dir));
-    if !ui.get_inactive_pane_path_focused() {
-        ui.set_inactive_pane_path_input_text(path.into());
+    set_pane_slot_path(ui, slot, path.as_str(), &update.current_dir);
+    if !pane_slot_path_focused(ui, slot) {
+        set_pane_slot_path_text(ui, slot, path.as_str());
     }
-    let (can_go_back, can_go_forward) = {
+    let (can_go_back, can_go_forward, selected_paths, needs_status) = {
         let state = state.borrow();
         state
             .panes
-            .inactive()
-            .map(|pane| (pane.history.back_len() > 0, pane.history.forward_len() > 0))
-            .unwrap_or((false, false))
+            .pane_for_slot(slot)
+            .map(|pane| {
+                (
+                    pane.history.back_len() > 0,
+                    pane.history.forward_len() > 0,
+                    pane.selection.paths.clone(),
+                    pane_slot_status(ui, slot)
+                        .is_empty()
+                        .then(|| directory_status_text(pane.entries.iter())),
+                )
+            })
+            .unwrap_or((false, false, Vec::new(), None))
     };
-    ui.set_inactive_pane_can_go_back(can_go_back);
-    ui.set_inactive_pane_can_go_forward(can_go_forward);
-    {
-        let state = state.borrow();
-        if let Some(pane) = state.panes.inactive() {
-            if ui.get_inactive_pane_status().is_empty() {
-                ui.set_inactive_pane_status(directory_status_text(pane.entries.iter()).into());
-            }
-            let selected_paths = pane.selection.paths.clone();
-            ui.set_inactive_pane_selected_count(selected_paths.len() as i32);
-            ui.set_inactive_pane_selected_status(selection_status_text(&selected_paths));
-        }
+    set_pane_slot_history_ui(ui, slot, can_go_back, can_go_forward);
+    if let Some(status) = needs_status {
+        set_pane_slot_status(ui, slot, status.as_str());
     }
-    set_pane_viewport_ui_if_clamped(
-        ui,
-        PaneSide::Inactive,
-        update.viewport_x,
-        update.viewport_clamped,
-    );
+    set_pane_slot_selection_ui(ui, slot, &selected_paths);
+    set_pane_viewport_ui_if_clamped(ui, slot, update.viewport_x, update.viewport_clamped);
     if update.rebuild_model {
-        ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
-        ui.set_inactive_pane_virtual_start_index(update.range.start as i32);
-        ui.set_inactive_pane_virtual_start_column(update.start_column as i32);
+        set_pane_slot_entries_ui(ui, slot, update.entries);
+        set_pane_slot_virtual_range_ui(
+            ui,
+            slot,
+            update.range.start as i32,
+            update.start_column as i32,
+        );
     }
-    ui.set_inactive_pane_entry_count(update.entry_count as i32);
+    set_pane_slot_entry_count_ui(ui, slot, update.entry_count as i32);
     sync_pane_slots_ui(ui);
+}
+
+fn clear_pane_slot_cache(ui: &AppWindow, slot: i32) {
+    match slot {
+        0 => {}
+        1 => {
+            ui.set_inactive_pane_path(SharedString::new());
+            ui.set_inactive_pane_path_input_text(SharedString::new());
+            ui.set_inactive_pane_status(SharedString::new());
+            ui.set_inactive_pane_in_trash(false);
+            ui.set_inactive_pane_selected_count(0);
+            ui.set_inactive_pane_selected_status(SharedString::new());
+            ui.set_inactive_pane_can_go_back(false);
+            ui.set_inactive_pane_can_go_forward(false);
+            ui.set_inactive_pane_entry_count(0);
+            ui.set_inactive_pane_virtual_start_index(0);
+            ui.set_inactive_pane_virtual_start_column(0);
+            set_pane_viewport_ui(ui, slot, 0.0);
+            ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(
+                Vec::<FileEntry>::new(),
+            ))));
+        }
+        _ => {}
+    }
+}
+
+fn set_pane_slot_path(ui: &AppWindow, slot: i32, path: &str, current_dir: &Path) {
+    match slot {
+        0 => {
+            ui.set_left_pane_path(path.into());
+            ui.set_left_pane_in_trash(fs::file_ops::is_in_trash_files_dir(current_dir));
+        }
+        1 => {
+            ui.set_inactive_pane_path(path.into());
+            ui.set_inactive_pane_in_trash(fs::file_ops::is_in_trash_files_dir(current_dir));
+        }
+        _ => {}
+    }
+}
+
+fn set_pane_slot_path_text(ui: &AppWindow, slot: i32, path: &str) {
+    match slot {
+        0 => ui.set_left_pane_path_input_text(path.into()),
+        1 => ui.set_inactive_pane_path_input_text(path.into()),
+        _ => {}
+    }
+}
+
+fn set_pane_slot_history_ui(ui: &AppWindow, slot: i32, can_go_back: bool, can_go_forward: bool) {
+    match slot {
+        0 => {
+            ui.set_left_pane_can_go_back(can_go_back);
+            ui.set_left_pane_can_go_forward(can_go_forward);
+        }
+        1 => {
+            ui.set_inactive_pane_can_go_back(can_go_back);
+            ui.set_inactive_pane_can_go_forward(can_go_forward);
+        }
+        _ => {}
+    }
+}
+
+fn set_pane_slot_status(ui: &AppWindow, slot: i32, status: &str) {
+    match slot {
+        0 => ui.set_left_pane_status(status.into()),
+        1 => ui.set_inactive_pane_status(status.into()),
+        _ => {}
+    }
+}
+
+fn set_pane_slot_selection_ui(ui: &AppWindow, slot: i32, selected_paths: &[String]) {
+    let selected_count = selected_paths.len() as i32;
+    let selected_status = selection_status_text(selected_paths);
+    match slot {
+        0 => {
+            ui.set_left_pane_selected_count(selected_count);
+            ui.set_left_pane_selected_status(selected_status);
+        }
+        1 => {
+            ui.set_inactive_pane_selected_count(selected_count);
+            ui.set_inactive_pane_selected_status(selected_status);
+        }
+        _ => {}
+    }
+}
+
+fn set_pane_slot_entries_ui(ui: &AppWindow, slot: i32, entries: Vec<FileEntry>) {
+    match slot {
+        1 => ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(entries)))),
+        _ => {}
+    }
+}
+
+fn set_pane_slot_virtual_range_ui(ui: &AppWindow, slot: i32, start_index: i32, start_column: i32) {
+    match slot {
+        1 => {
+            ui.set_inactive_pane_virtual_start_index(start_index);
+            ui.set_inactive_pane_virtual_start_column(start_column);
+        }
+        _ => {}
+    }
+}
+
+fn set_pane_slot_entry_count_ui(ui: &AppWindow, slot: i32, entry_count: i32) {
+    match slot {
+        1 => ui.set_inactive_pane_entry_count(entry_count),
+        _ => {}
+    }
 }
 
 pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let snapshot = {
         let state = state.borrow();
-        let focused_side = state.panes.focused_side();
+        let focused_slot = state.panes.focused_slot();
         let focused = state
             .panes
             .pane_for_target(PaneTarget::Focused)
-            .unwrap_or(&state.panes.active);
+            .unwrap_or(&state.panes.active());
         NavigationUiSnapshot {
             split_open: state.panes.is_split(),
-            focused_side,
+            focused_slot,
             focused_dir: focused.current_dir.clone(),
             focused_selection: focused.selection.paths.clone(),
-            left_dir: state.panes.active.current_dir.clone(),
-            left_can_go_back: state.panes.active.history.back_len() > 0,
-            left_can_go_forward: state.panes.active.history.forward_len() > 0,
-            left_selection: state.panes.active.selection.paths.clone(),
+            left_dir: state.panes.active().current_dir.clone(),
+            left_can_go_back: state.panes.active().history.back_len() > 0,
+            left_can_go_forward: state.panes.active().history.forward_len() > 0,
+            left_selection: state.panes.active().selection.paths.clone(),
         }
     };
 
@@ -437,7 +533,7 @@ pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
     if ui.get_left_pane_status().is_empty() {
         let left_status = {
             let state = state.borrow();
-            directory_status_text(state.panes.active.entries.iter())
+            directory_status_text(state.panes.active().entries.iter())
         };
         ui.set_left_pane_status(left_status.into());
     }
@@ -446,11 +542,11 @@ pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
     ui.set_split_view_open(snapshot.split_open);
     sync_focused_ui(
         ui,
-        snapshot.focused_side,
+        snapshot.focused_slot,
         &snapshot.focused_dir,
         &snapshot.focused_selection,
     );
-    sync_inactive_pane_ui(ui, state);
+    sync_pane_slot_preview_ui(ui, state, 1);
     sync_pane_slots_ui(ui);
 }
 
@@ -461,28 +557,32 @@ pub(crate) fn toggle_split_view(
 ) {
     let was_split = state.borrow().panes.is_split();
     if was_split {
-        crate::remember_current_view_state(ui, state);
-        crate::remember_inactive_view_state(ui, state);
+        let slots = state
+            .borrow()
+            .panes
+            .iter()
+            .map(|(slot, _)| slot)
+            .collect::<Vec<_>>();
+        for slot in slots {
+            crate::remember_pane_view_state(ui, state, slot);
+        }
     }
 
     let (opened, status) = {
         let mut state = state.borrow_mut();
         if state.panes.is_split() {
-            let closed_side = state
+            let closed_slot = state
                 .panes
-                .close_focused_split_pane()
-                .map(|(side, _)| side)
-                .unwrap_or(PaneSide::Inactive);
-            let status = match closed_side {
-                PaneSide::Active => "Split view closed; slot 1 kept".to_string(),
-                PaneSide::Inactive => "Split view closed; slot 0 kept".to_string(),
-            };
+                .close_focused_pane_slot()
+                .map(|(slot, _)| slot)
+                .unwrap_or(1);
+            let status = format!("Split view closed; slot {closed_slot} closed");
             (false, status)
         } else {
-            let current_dir = state.panes.active.current_dir.clone();
+            let current_dir = state.panes.active().current_dir.clone();
             state.panes.open_inactive_from_active();
-            state.panes.active.view.viewport_x = 0.0;
-            state.panes.active.view.virtual_view.invalidate();
+            state.panes.active_mut().view.viewport_x = 0.0;
+            state.panes.active_mut().view.virtual_view.invalidate();
             if let Some(inactive) = state.panes.inactive_mut() {
                 inactive.view.viewport_x = 0.0;
                 inactive.view.virtual_view.invalidate();
@@ -495,12 +595,12 @@ pub(crate) fn toggle_split_view(
     };
 
     if opened {
-        set_pane_viewport_ui(ui, PaneSide::Active, 0.0);
-        set_pane_viewport_ui(ui, PaneSide::Inactive, 0.0);
+        set_pane_viewport_ui(ui, 0, 0.0);
+        set_pane_viewport_ui(ui, 1, 0.0);
     }
     if !opened {
-        let viewport_x = state.borrow().panes.active.view.viewport_x;
-        set_pane_viewport_ui(ui, PaneSide::Active, viewport_x);
+        let viewport_x = state.borrow().panes.active().view.viewport_x;
+        set_pane_viewport_ui(ui, 0, viewport_x);
     }
     sync_navigation_ui(ui, state);
     sync_virtual_entries(ui, state, bridge, true);
@@ -510,7 +610,7 @@ pub(crate) fn toggle_split_view(
 #[derive(Debug)]
 struct NavigationUiSnapshot {
     split_open: bool,
-    focused_side: PaneSide,
+    focused_slot: i32,
     focused_dir: PathBuf,
     focused_selection: Vec<String>,
     left_dir: PathBuf,
@@ -519,11 +619,8 @@ struct NavigationUiSnapshot {
     left_selection: Vec<String>,
 }
 
-fn sync_focused_ui(ui: &AppWindow, side: PaneSide, current_dir: &Path, selected_paths: &[String]) {
-    ui.set_focused_pane(match side {
-        PaneSide::Active => 0,
-        PaneSide::Inactive => 1,
-    });
+fn sync_focused_ui(ui: &AppWindow, slot: i32, current_dir: &Path, selected_paths: &[String]) {
+    ui.set_focused_pane(slot);
     let current_path = current_dir.display().to_string();
     ui.set_focused_pane_path(current_path.as_str().into());
     ui.set_current_path(current_path.into());

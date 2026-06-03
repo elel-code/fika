@@ -387,7 +387,7 @@ fn focused_current_dir(state: &Rc<RefCell<AppState>>) -> PathBuf {
     state
         .panes
         .pane_for_target(PaneTarget::Focused)
-        .unwrap_or(&state.panes.active)
+        .unwrap_or(&state.panes.active())
         .current_dir
         .clone()
 }
@@ -397,7 +397,7 @@ fn focused_selection_and_dir(state: &Rc<RefCell<AppState>>) -> (Vec<PathBuf>, Pa
     let pane = state
         .panes
         .pane_for_target(PaneTarget::Focused)
-        .unwrap_or(&state.panes.active);
+        .unwrap_or(&state.panes.active());
     (
         pane.selection.paths.iter().map(PathBuf::from).collect(),
         pane.current_dir.clone(),

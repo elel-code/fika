@@ -112,7 +112,7 @@ pub(crate) fn selected_directory_or_current(state: &AppState) -> PathBuf {
     let focused = state
         .panes
         .pane_for_target(PaneTarget::Focused)
-        .unwrap_or(&state.panes.active);
+        .unwrap_or(&state.panes.active());
     focused
         .selection
         .paths
@@ -238,7 +238,7 @@ mod tests {
             PathBuf::from("/tmp/fika-left")
         );
 
-        assert!(state.panes.focus_inactive());
+        assert!(state.panes.focus_slot(1));
         assert_eq!(
             selected_directory_or_current(&state),
             PathBuf::from("/tmp/fika-right")

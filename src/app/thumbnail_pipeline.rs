@@ -28,7 +28,7 @@ pub(crate) fn decorate_entries_with_cached_thumbnails(
             entry.thumbnail_state = 0;
         } else if state
             .panes
-            .active
+            .active()
             .view
             .has_thumbnail_pending(entry.path.as_str())
         {
@@ -59,13 +59,13 @@ pub(crate) fn prioritize_thumbnail_entries(
 }
 
 pub(crate) fn path_is_in_virtual_range(state: &AppState, path_text: &str) -> bool {
-    let range_start = state.panes.active.view.virtual_view.range.start;
-    let range_end = state.panes.active.view.virtual_view.range.end;
+    let range_start = state.panes.active().view.virtual_view.range.start;
+    let range_end = state.panes.active().view.virtual_view.range.end;
     if range_start >= range_end {
         return false;
     }
 
-    if let Some(indices) = state.panes.active.search.visible_entry_indices.as_ref() {
+    if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
         let start = range_start.min(indices.len());
         let end = range_end.min(indices.len());
         if start >= end {
@@ -74,17 +74,17 @@ pub(crate) fn path_is_in_virtual_range(state: &AppState, path_text: &str) -> boo
 
         return indices[start..end]
             .iter()
-            .filter_map(|entry_index| state.panes.active.entries.get(*entry_index))
+            .filter_map(|entry_index| state.panes.active().entries.get(*entry_index))
             .any(|entry| entry.path.as_str() == path_text);
     }
 
-    let start = range_start.min(state.panes.active.entries.len());
-    let end = range_end.min(state.panes.active.entries.len());
+    let start = range_start.min(state.panes.active().entries.len());
+    let end = range_end.min(state.panes.active().entries.len());
     if start >= end {
         return false;
     }
 
-    state.panes.active.entries[start..end]
+    state.panes.active().entries[start..end]
         .iter()
         .any(|entry| entry.path.as_str() == path_text)
 }
@@ -111,7 +111,7 @@ pub(crate) fn thumbnail_schedule_candidate(
     }
     if state
         .panes
-        .active
+        .active()
         .view
         .thumbnail_pending_key(entry.path.as_str())
         == Some(&key)
@@ -138,7 +138,7 @@ pub(crate) fn thumbnail_schedule_batch(
         };
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending(entry.path.to_string(), key);
         paths.push(path);
@@ -154,7 +154,7 @@ pub(crate) fn apply_thumbnail_load_to_state(
 ) -> bool {
     if !state
         .panes
-        .active
+        .active()
         .thumbnail_generation
         .is_current(generation)
     {
@@ -195,7 +195,7 @@ pub(crate) fn remove_matching_thumbnail_pending(
 ) {
     state
         .panes
-        .active
+        .active_mut()
         .view
         .remove_matching_thumbnail_pending(path_text, key);
 }
@@ -423,23 +423,23 @@ mod tests {
 
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending(path.to_string(), new_key.clone());
         remove_matching_thumbnail_pending(&mut state, path, &old_key);
         assert_eq!(
-            state.panes.active.view.thumbnail_pending_key(path),
+            state.panes.active().view.thumbnail_pending_key(path),
             Some(&new_key)
         );
 
         remove_matching_thumbnail_pending(&mut state, path, &new_key);
-        assert!(!state.panes.active.view.has_thumbnail_pending(path));
+        assert!(!state.panes.active().view.has_thumbnail_pending(path));
     }
 
     #[test]
     fn thumbnail_success_result_updates_cache_without_mutating_full_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let generation = state.panes.active.thumbnail_generation.current();
+        let generation = state.panes.active().thumbnail_generation.current();
         let path = "/tmp/photo.png";
         let key = thumbnails::fallback_key(Path::new(path), 64);
         let data = thumbnails::ThumbnailData {
@@ -448,11 +448,11 @@ mod tests {
             rgba: vec![255, 0, 0, 255],
         };
 
-        state.panes.active.entries = vec![test_entry("photo.png", path)];
-        state.panes.active.view.virtual_view.range = 0..1;
+        state.panes.active_mut().entries = vec![test_entry("photo.png", path)];
+        state.panes.active_mut().view.virtual_view.range = 0..1;
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending(path.to_string(), key.clone());
         insert_thumbnail_failure_with_limit(&mut state, key.clone(), "decode failed".to_string());
@@ -470,26 +470,26 @@ mod tests {
         );
 
         assert!(should_refresh);
-        assert!(!state.panes.active.view.has_thumbnail_pending(path));
+        assert!(!state.panes.active().view.has_thumbnail_pending(path));
         assert!(state.thumbnail_cache.contains_key(&key));
         assert!(!state.thumbnail_failures.contains_key(&key));
-        assert_eq!(state.panes.active.entries[0].thumbnail_state, 0);
+        assert_eq!(state.panes.active().entries[0].thumbnail_state, 0);
     }
 
     #[test]
     fn thumbnail_failure_result_updates_failure_cache_without_mutating_full_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let generation = state.panes.active.thumbnail_generation.current();
+        let generation = state.panes.active().thumbnail_generation.current();
         let path = "/tmp/photo.png";
         let key = thumbnails::fallback_key(Path::new(path), 64);
 
         let mut entry = test_entry("photo.png", path);
         entry.thumbnail_state = 1;
-        state.panes.active.entries = vec![entry];
-        state.panes.active.view.virtual_view.range = 0..1;
+        state.panes.active_mut().entries = vec![entry];
+        state.panes.active_mut().view.virtual_view.range = 0..1;
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending(path.to_string(), key.clone());
 
@@ -506,16 +506,16 @@ mod tests {
         );
 
         assert!(should_refresh);
-        assert!(!state.panes.active.view.has_thumbnail_pending(path));
+        assert!(!state.panes.active().view.has_thumbnail_pending(path));
         assert!(state.thumbnail_failures.contains_key(&key));
-        assert_eq!(state.panes.active.entries[0].thumbnail_state, 1);
+        assert_eq!(state.panes.active().entries[0].thumbnail_state, 1);
     }
 
     #[test]
     fn stale_thumbnail_result_does_not_update_thumbnail_caches() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let stale_generation = state.panes.active.thumbnail_generation.current();
-        state.panes.active.thumbnail_generation.next();
+        let stale_generation = state.panes.active().thumbnail_generation.current();
+        state.panes.active_mut().thumbnail_generation.next();
         let path = "/tmp/photo.png";
         let key = thumbnails::fallback_key(Path::new(path), 64);
         let data = thumbnails::ThumbnailData {
@@ -525,7 +525,7 @@ mod tests {
         };
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending(path.to_string(), key.clone());
 
@@ -542,7 +542,7 @@ mod tests {
         );
 
         assert!(!should_refresh);
-        assert!(!state.panes.active.view.has_thumbnail_pending(path));
+        assert!(!state.panes.active().view.has_thumbnail_pending(path));
         assert!(!state.thumbnail_cache.contains_key(&key));
         assert!(!state.thumbnail_failures.contains_key(&key));
     }
@@ -602,19 +602,19 @@ mod tests {
         assert!(
             state
                 .panes
-                .active
+                .active()
                 .view
                 .has_thumbnail_pending(temp_dir.join("item-4.png").to_str().unwrap())
         );
         assert!(
             state
                 .panes
-                .active
+                .active()
                 .view
                 .has_thumbnail_pending(temp_dir.join("item-0.png").to_str().unwrap())
         );
         assert!(
-            !state.panes.active.view.has_thumbnail_pending(
+            !state.panes.active().view.has_thumbnail_pending(
                 temp_dir
                     .join(format!("item-{}.png", MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC + 7))
                     .to_str()
@@ -654,7 +654,7 @@ mod tests {
         insert_thumbnail_failure_with_limit(&mut state, failed_key, "decode failed".to_string());
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending(pending_path.to_string_lossy().to_string(), pending_key);
 
@@ -674,28 +674,28 @@ mod tests {
         assert!(
             state
                 .panes
-                .active
+                .active()
                 .view
                 .has_thumbnail_pending(ready_path.to_str().unwrap())
         );
         assert!(
             !state
                 .panes
-                .active
+                .active()
                 .view
                 .has_thumbnail_pending(cached_path.to_str().unwrap())
         );
         assert!(
             !state
                 .panes
-                .active
+                .active()
                 .view
                 .has_thumbnail_pending(failed_path.to_str().unwrap())
         );
         assert!(
             !state
                 .panes
-                .active
+                .active()
                 .view
                 .has_thumbnail_pending(dir_path.to_str().unwrap())
         );
@@ -706,10 +706,10 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_uses_identity_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active.entries = (0..6)
+        state.panes.active_mut().entries = (0..6)
             .map(|index| test_entry(&format!("{index}.png"), &format!("/tmp/{index}.png")))
             .collect();
-        state.panes.active.view.virtual_view.range = 2..5;
+        state.panes.active_mut().view.virtual_view.range = 2..5;
 
         assert!(path_is_in_virtual_range(&state, "/tmp/2.png"));
         assert!(path_is_in_virtual_range(&state, "/tmp/4.png"));
@@ -720,14 +720,14 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_uses_filtered_visible_indices() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active.entries = vec![
+        state.panes.active_mut().entries = vec![
             test_entry("alpha.png", "/tmp/alpha.png"),
             test_entry("skip.log", "/tmp/skip.log"),
             test_entry("beta.png", "/tmp/beta.png"),
             test_entry("gamma.png", "/tmp/gamma.png"),
         ];
-        state.panes.active.search.visible_entry_indices = Some(vec![0, 2, 3]);
-        state.panes.active.view.virtual_view.range = 1..3;
+        state.panes.active_mut().search.visible_entry_indices = Some(vec![0, 2, 3]);
+        state.panes.active_mut().view.virtual_view.range = 1..3;
 
         assert!(path_is_in_virtual_range(&state, "/tmp/beta.png"));
         assert!(path_is_in_virtual_range(&state, "/tmp/gamma.png"));
@@ -738,11 +738,11 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_rejects_empty_or_stale_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active.entries = vec![test_entry("alpha.png", "/tmp/alpha.png")];
-        state.panes.active.view.virtual_view.range = 0..0;
+        state.panes.active_mut().entries = vec![test_entry("alpha.png", "/tmp/alpha.png")];
+        state.panes.active_mut().view.virtual_view.range = 0..0;
         assert!(!path_is_in_virtual_range(&state, "/tmp/alpha.png"));
 
-        state.panes.active.view.virtual_view.range = 9..12;
+        state.panes.active_mut().view.virtual_view.range = 9..12;
         assert!(!path_is_in_virtual_range(&state, "/tmp/alpha.png"));
     }
 }

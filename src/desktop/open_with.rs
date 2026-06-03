@@ -482,8 +482,8 @@ mod tests {
                 "Open With launches should use the focused pane id and write start status to that pane"
             );
             assert!(
-                !body.contains("state.panes.active.id")
-                    && !body.contains("state.panes.active.open_generation.next()"),
+                !body.contains("state.panes.active().id")
+                    && !body.contains("state.panes.active().open_generation.next()"),
                 "Open With launches must not hard-code the left/active pane"
             );
         }

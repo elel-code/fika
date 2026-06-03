@@ -62,9 +62,8 @@ impl PaneState {
 
 #[derive(Debug)]
 pub(crate) struct PanesState {
-    pub(crate) active: PaneState,
-    inactive: Option<PaneState>,
-    focused: PaneSide,
+    panes: Vec<PaneState>,
+    focused_slot: usize,
     next_pane_id: u64,
 }
 
@@ -72,189 +71,158 @@ pub(crate) struct PanesState {
 pub(crate) enum PaneTarget {
     Active,
     Focused,
-    Inactive,
+    Slot(i32),
     Id(u64),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PaneSide {
-    Active,
-    Inactive,
 }
 
 impl PanesState {
     pub(crate) fn new(active_dir: PathBuf) -> Self {
         Self {
-            active: PaneState::new_with_id(1, active_dir),
-            inactive: None,
-            focused: PaneSide::Active,
+            panes: vec![PaneState::new_with_id(1, active_dir)],
+            focused_slot: 0,
             next_pane_id: 2,
         }
     }
 
     pub(crate) fn is_split(&self) -> bool {
-        self.inactive.is_some()
+        self.panes.len() > 1
     }
 
     #[cfg(test)]
     pub(crate) fn pane_count(&self) -> usize {
-        1 + usize::from(self.inactive.is_some())
+        self.panes.len()
+    }
+
+    pub(crate) fn active(&self) -> &PaneState {
+        &self.panes[0]
+    }
+
+    pub(crate) fn active_mut(&mut self) -> &mut PaneState {
+        &mut self.panes[0]
     }
 
     pub(crate) fn inactive(&self) -> Option<&PaneState> {
-        self.inactive.as_ref()
+        self.panes.get(1)
     }
 
     pub(crate) fn pane_by_id(&self, id: u64) -> Option<&PaneState> {
-        if self.active.id == id {
-            return Some(&self.active);
-        }
-        self.inactive.as_ref().filter(|pane| pane.id == id)
+        self.panes.iter().find(|pane| pane.id == id)
     }
 
     pub(crate) fn pane_mut_by_id(&mut self, id: u64) -> Option<&mut PaneState> {
-        if self.active.id == id {
-            return Some(&mut self.active);
-        }
-        self.inactive.as_mut().filter(|pane| pane.id == id)
+        self.panes.iter_mut().find(|pane| pane.id == id)
     }
 
     pub(crate) fn inactive_mut(&mut self) -> Option<&mut PaneState> {
-        self.inactive.as_mut()
+        self.panes.get_mut(1)
+    }
+
+    pub(crate) fn slot_for_id(&self, id: u64) -> Option<i32> {
+        self.panes
+            .iter()
+            .position(|pane| pane.id == id)
+            .map(|slot| slot as i32)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (i32, &PaneState)> + '_ {
+        self.panes
+            .iter()
+            .enumerate()
+            .map(|(slot, pane)| (slot as i32, pane))
     }
 
     pub(crate) fn focused_slot(&self) -> i32 {
-        match self.focused_side() {
-            PaneSide::Active => 0,
-            PaneSide::Inactive => 1,
-        }
+        self.focused_slot_index() as i32
     }
 
     pub(crate) fn focus_slot(&mut self, slot: i32) -> bool {
-        match slot {
-            0 => {
-                self.focus_active();
-                true
-            }
-            1 => self.focus_inactive(),
-            _ => false,
+        let Ok(slot) = usize::try_from(slot) else {
+            return false;
+        };
+        if slot >= self.panes.len() {
+            return false;
         }
+        self.focused_slot = slot;
+        true
     }
 
     pub(crate) fn pane_for_slot(&self, slot: i32) -> Option<&PaneState> {
-        match slot {
-            0 => Some(&self.active),
-            1 => self.inactive(),
-            _ => None,
-        }
+        usize::try_from(slot)
+            .ok()
+            .and_then(|slot| self.panes.get(slot))
     }
 
     pub(crate) fn pane_mut_for_slot(&mut self, slot: i32) -> Option<&mut PaneState> {
-        match slot {
-            0 => Some(&mut self.active),
-            1 => self.inactive_mut(),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn focused_side(&self) -> PaneSide {
-        if self.inactive.is_none() {
-            PaneSide::Active
-        } else {
-            self.focused
-        }
-    }
-
-    pub(crate) fn focus_active(&mut self) {
-        self.focused = PaneSide::Active;
-    }
-
-    pub(crate) fn focus_inactive(&mut self) -> bool {
-        if self.inactive.is_none() {
-            self.focused = PaneSide::Active;
-            return false;
-        }
-        self.focused = PaneSide::Inactive;
-        true
+        usize::try_from(slot)
+            .ok()
+            .and_then(|slot| self.panes.get_mut(slot))
     }
 
     pub(crate) fn pane_for_target(&self, target: PaneTarget) -> Option<&PaneState> {
         match target {
-            PaneTarget::Active => Some(&self.active),
-            PaneTarget::Focused => match self.focused_side() {
-                PaneSide::Active => Some(&self.active),
-                PaneSide::Inactive => self.inactive(),
-            },
-            PaneTarget::Inactive => self.inactive(),
+            PaneTarget::Active => self.pane_for_slot(0),
+            PaneTarget::Focused => self.pane_for_slot(self.focused_slot()),
+            PaneTarget::Slot(slot) => self.pane_for_slot(slot),
             PaneTarget::Id(id) => self.pane_by_id(id),
         }
     }
 
     pub(crate) fn pane_mut_for_target(&mut self, target: PaneTarget) -> Option<&mut PaneState> {
         match target {
-            PaneTarget::Active => Some(&mut self.active),
-            PaneTarget::Focused => match self.focused_side() {
-                PaneSide::Active => Some(&mut self.active),
-                PaneSide::Inactive => self.inactive_mut(),
-            },
-            PaneTarget::Inactive => self.inactive_mut(),
+            PaneTarget::Active => self.pane_mut_for_slot(0),
+            PaneTarget::Focused => self.pane_mut_for_slot(self.focused_slot()),
+            PaneTarget::Slot(slot) => self.pane_mut_for_slot(slot),
             PaneTarget::Id(id) => self.pane_mut_by_id(id),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn open_inactive(&mut self, current_dir: PathBuf) -> bool {
-        if self.inactive.is_some() {
+        if self.panes.len() > 1 {
             return false;
         }
         let id = self.allocate_pane_id();
-        self.inactive = Some(PaneState::new_with_id(id, current_dir));
+        self.panes.push(PaneState::new_with_id(id, current_dir));
         true
     }
 
     pub(crate) fn open_inactive_from_active(&mut self) -> bool {
-        if self.inactive.is_some() {
+        if self.panes.len() > 1 {
             return false;
         }
         let id = self.allocate_pane_id();
-        self.inactive = Some(self.active.split_snapshot(id));
-        self.focused = PaneSide::Active;
+        self.panes.push(self.active().split_snapshot(id));
+        self.focused_slot = 0;
         true
     }
 
-    pub(crate) fn close_inactive(&mut self) -> Option<PaneState> {
-        let closed = self.inactive.take();
-        self.focused = PaneSide::Active;
-        closed
-    }
-
-    pub(crate) fn close_focused_split_pane(&mut self) -> Option<(PaneSide, PaneState)> {
-        let focused = self.focused_side();
-        match focused {
-            PaneSide::Active => {
-                let replacement = self.inactive.take()?;
-                let closed = std::mem::replace(&mut self.active, replacement);
-                self.focused = PaneSide::Active;
-                Some((PaneSide::Active, closed))
-            }
-            PaneSide::Inactive => self
-                .close_inactive()
-                .map(|closed| (PaneSide::Inactive, closed)),
+    pub(crate) fn close_focused_pane_slot(&mut self) -> Option<(i32, PaneState)> {
+        if self.panes.len() <= 1 {
+            return None;
         }
+        let slot = self.focused_slot_index();
+        let closed = self.panes.remove(slot);
+        self.focused_slot = slot.saturating_sub(1).min(self.panes.len() - 1);
+        Some((slot as i32, closed))
     }
 
     pub(crate) fn prune_mount_path(&mut self, mount_path: &Path, fallback_dir: PathBuf) -> bool {
-        let active_moved = prune_pane_mount_path(&mut self.active, mount_path, &fallback_dir);
-        if let Some(inactive) = self.inactive.as_mut() {
-            prune_pane_mount_path(inactive, mount_path, &fallback_dir);
+        let mut slot_zero_moved = false;
+        for (slot, pane) in self.panes.iter_mut().enumerate() {
+            let moved = prune_pane_mount_path(pane, mount_path, &fallback_dir);
+            slot_zero_moved |= slot == 0 && moved;
         }
-        active_moved
+        slot_zero_moved
     }
 
     fn allocate_pane_id(&mut self) -> u64 {
         let id = self.next_pane_id;
         self.next_pane_id += 1;
         id
+    }
+
+    fn focused_slot_index(&self) -> usize {
+        self.focused_slot.min(self.panes.len().saturating_sub(1))
     }
 }
 
@@ -607,20 +575,20 @@ mod tests {
     fn panes_state_starts_with_active_pane() {
         let panes = PanesState::new(PathBuf::from("/tmp/active"));
 
-        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/active"));
-        assert_eq!(panes.active.id, 1);
+        assert_eq!(panes.active().current_dir, PathBuf::from("/tmp/active"));
+        assert_eq!(panes.active().id, 1);
         assert_eq!(panes.pane_count(), 1);
         assert!(!panes.is_split());
         assert!(panes.inactive().is_none());
-        assert!(panes.active.entries.is_empty());
-        assert_eq!(panes.active.history.back_len(), 0);
-        assert_eq!(panes.active.history.forward_len(), 0);
+        assert!(panes.active().entries.is_empty());
+        assert_eq!(panes.active().history.back_len(), 0);
+        assert_eq!(panes.active().history.forward_len(), 0);
     }
 
     #[test]
-    fn panes_state_can_open_focus_and_close_inactive_pane() {
+    fn panes_state_can_open_focus_and_close_pane_slot() {
         let mut panes = PanesState::new(PathBuf::from("/tmp/left"));
-        let active_id = panes.active.id;
+        let active_id = panes.active().id;
 
         assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
         assert!(!panes.open_inactive(PathBuf::from("/tmp/third")));
@@ -633,60 +601,63 @@ mod tests {
             Some(Path::new("/tmp/right"))
         );
 
-        assert!(panes.focus_inactive());
-        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/left"));
-        assert_eq!(panes.active.id, active_id);
+        assert!(panes.focus_slot(1));
+        assert_eq!(panes.active().current_dir, PathBuf::from("/tmp/left"));
+        assert_eq!(panes.active().id, active_id);
         assert_eq!(
             panes.inactive().map(|pane| pane.current_dir.as_path()),
             Some(Path::new("/tmp/right"))
         );
         assert_eq!(panes.inactive().expect("inactive pane").id, inactive_id);
 
-        let closed = panes.close_inactive().expect("inactive pane should close");
+        let (closed_slot, closed) = panes
+            .close_focused_pane_slot()
+            .expect("focused slot 1 should close");
+        assert_eq!(closed_slot, 1);
         assert_eq!(closed.current_dir, PathBuf::from("/tmp/right"));
         assert_eq!(closed.id, inactive_id);
         assert_eq!(panes.pane_count(), 1);
         assert!(!panes.is_split());
-        assert!(panes.close_inactive().is_none());
-        assert!(!panes.focus_inactive());
+        assert!(panes.close_focused_pane_slot().is_none());
+        assert!(!panes.focus_slot(1));
     }
 
     #[test]
     fn panes_state_closes_focused_split_pane_without_swapping_on_focus() {
         let mut panes = PanesState::new(PathBuf::from("/tmp/left"));
-        let left_id = panes.active.id;
+        let left_id = panes.active().id;
         assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
         let right_id = panes.inactive().expect("inactive pane").id;
 
-        assert!(panes.focus_inactive());
-        let (closed_side, closed) = panes
-            .close_focused_split_pane()
+        assert!(panes.focus_slot(1));
+        let (closed_slot, closed) = panes
+            .close_focused_pane_slot()
             .expect("focused slot 1 should close");
-        assert_eq!(closed_side, PaneSide::Inactive);
+        assert_eq!(closed_slot, 1);
         assert_eq!(closed.current_dir, PathBuf::from("/tmp/right"));
         assert_eq!(closed.id, right_id);
-        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/left"));
-        assert_eq!(panes.active.id, left_id);
+        assert_eq!(panes.active().current_dir, PathBuf::from("/tmp/left"));
+        assert_eq!(panes.active().id, left_id);
         assert!(!panes.is_split());
 
         assert!(panes.open_inactive(PathBuf::from("/tmp/next-right")));
         let next_right_id = panes.inactive().expect("inactive pane").id;
-        panes.focus_active();
-        let (closed_side, closed) = panes
-            .close_focused_split_pane()
+        assert!(panes.focus_slot(0));
+        let (closed_slot, closed) = panes
+            .close_focused_pane_slot()
             .expect("focused slot 0 should close");
-        assert_eq!(closed_side, PaneSide::Active);
+        assert_eq!(closed_slot, 0);
         assert_eq!(closed.current_dir, PathBuf::from("/tmp/left"));
         assert_eq!(closed.id, left_id);
-        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/next-right"));
-        assert_eq!(panes.active.id, next_right_id);
+        assert_eq!(panes.active().current_dir, PathBuf::from("/tmp/next-right"));
+        assert_eq!(panes.active().id, next_right_id);
         assert!(!panes.is_split());
     }
 
     #[test]
-    fn pane_targets_resolve_focused_inactive_and_stable_ids() {
+    fn pane_targets_resolve_focused_slots_and_stable_ids() {
         let mut panes = PanesState::new(PathBuf::from("/tmp/left"));
-        let left_id = panes.active.id;
+        let left_id = panes.active().id;
         assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
         let right_id = panes.inactive().expect("inactive pane").id;
 
@@ -698,7 +669,7 @@ mod tests {
         );
         assert_eq!(
             panes
-                .pane_for_target(PaneTarget::Inactive)
+                .pane_for_target(PaneTarget::Slot(1))
                 .map(|pane| pane.current_dir.as_path()),
             Some(Path::new("/tmp/right"))
         );
@@ -710,8 +681,8 @@ mod tests {
         );
 
         panes
-            .pane_mut_for_target(PaneTarget::Inactive)
-            .expect("inactive pane")
+            .pane_mut_for_target(PaneTarget::Slot(1))
+            .expect("slot 1 pane")
             .search
             .query = "right".to_string();
         assert_eq!(
@@ -721,7 +692,7 @@ mod tests {
             Some("right")
         );
 
-        assert!(panes.focus_inactive());
+        assert!(panes.focus_slot(1));
         assert_eq!(
             panes
                 .pane_for_target(PaneTarget::Focused)
@@ -730,7 +701,7 @@ mod tests {
         );
         assert_eq!(
             panes
-                .pane_for_target(PaneTarget::Inactive)
+                .pane_for_target(PaneTarget::Slot(1))
                 .map(|pane| pane.current_dir.as_path()),
             Some(Path::new("/tmp/right"))
         );
@@ -751,7 +722,8 @@ mod tests {
         assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
         let first_inactive_id = panes.inactive().expect("inactive pane").id;
         assert_eq!(first_inactive_id, 2);
-        panes.close_inactive();
+        assert!(panes.focus_slot(1));
+        panes.close_focused_pane_slot();
 
         assert!(panes.open_inactive(PathBuf::from("/tmp/next")));
         let second_inactive_id = panes.inactive().expect("inactive pane").id;
@@ -764,26 +736,26 @@ mod tests {
     #[test]
     fn inactive_pane_snapshot_copies_directory_view_and_search_not_history_or_selection() {
         let mut panes = PanesState::new(PathBuf::from("/tmp/active"));
-        let active_id = panes.active.id;
-        panes.active.entries = vec![
+        let active_id = panes.active().id;
+        panes.active_mut().entries = vec![
             test_entry("one.txt", "/tmp/active/one.txt"),
             test_entry("two.txt", "/tmp/active/two.txt"),
         ];
-        panes.active.search = PaneSearch {
+        panes.active_mut().search = PaneSearch {
             query: "one".to_string(),
             kind_filter: 2,
             modified_filter: 1,
             size_filter: 3,
             visible_entry_indices: Some(vec![0]),
         };
-        panes.active.selection.paths = vec!["/tmp/active/one.txt".to_string()];
-        panes.active.selection.anchor = Some("/tmp/active/one.txt".to_string());
-        panes.active.history = PaneHistory::from_stacks(
+        panes.active_mut().selection.paths = vec!["/tmp/active/one.txt".to_string()];
+        panes.active_mut().selection.anchor = Some("/tmp/active/one.txt".to_string());
+        panes.active_mut().history = PaneHistory::from_stacks(
             vec![PathBuf::from("/tmp/back")],
             vec![PathBuf::from("/tmp/forward")],
         );
-        panes.active.view.viewport_x = 128.0;
-        panes.active.view.virtual_view = VirtualViewCache {
+        panes.active_mut().view.viewport_x = 128.0;
+        panes.active_mut().view.virtual_view = VirtualViewCache {
             range: 4..12,
             entry_count: 24,
             rows_per_column: 4,
@@ -808,7 +780,7 @@ mod tests {
                 ("two.txt", "/tmp/active/two.txt")
             ]
         );
-        assert_eq!(inactive.search, panes.active.search);
+        assert_eq!(inactive.search, panes.active().search);
         assert_eq!(inactive.view.viewport_x, 128.0);
         assert_eq!(inactive.view.virtual_view.range, 4..12);
         assert_eq!(inactive.view.virtual_view.entry_count, 24);
@@ -825,13 +797,13 @@ mod tests {
     fn panes_state_prunes_removed_mount_from_both_panes() {
         let mount_path = PathBuf::from("/run/media/yk/USB");
         let mut panes = PanesState::new(mount_path.join("active"));
-        panes.active.history = PaneHistory::from_stacks(
+        panes.active_mut().history = PaneHistory::from_stacks(
             vec![mount_path.join("active-old")],
             vec![mount_path.join("active-future")],
         );
         assert!(panes.open_inactive(mount_path.join("inactive")));
         {
-            let inactive = panes.inactive.as_mut().expect("inactive pane");
+            let inactive = panes.inactive_mut().expect("inactive pane");
             inactive.history = PaneHistory::from_stacks(
                 vec![mount_path.join("inactive-old"), PathBuf::from("/tmp/keep")],
                 vec![mount_path.join("inactive-future")],
@@ -840,9 +812,9 @@ mod tests {
 
         assert!(panes.prune_mount_path(&mount_path, PathBuf::from("/home/yk")));
 
-        assert_eq!(panes.active.current_dir, PathBuf::from("/home/yk"));
-        assert!(panes.active.history.back_paths().is_empty());
-        assert!(panes.active.history.forward_paths().is_empty());
+        assert_eq!(panes.active().current_dir, PathBuf::from("/home/yk"));
+        assert!(panes.active().history.back_paths().is_empty());
+        assert!(panes.active().history.forward_paths().is_empty());
         let inactive = panes.inactive().expect("inactive pane");
         assert_eq!(inactive.current_dir, PathBuf::from("/home/yk"));
         assert_eq!(inactive.history.back_paths(), &[PathBuf::from("/tmp/keep")]);

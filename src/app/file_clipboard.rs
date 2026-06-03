@@ -355,7 +355,7 @@ fn clipboard_paths_for_focused_context(state: &AppState, context_path: &str) -> 
         .panes
         .pane_for_target(PaneTarget::Focused)
         .map(|pane| pane.selection.paths.as_slice())
-        .unwrap_or_else(|| state.panes.active.selection.paths.as_slice());
+        .unwrap_or_else(|| state.panes.active().selection.paths.as_slice());
     clipboard_paths_for_context(selected_paths, context_path)
 }
 
@@ -455,10 +455,10 @@ mod tests {
     #[test]
     fn clipboard_context_uses_focused_pane_selection() {
         let mut state = AppState::new(PathBuf::from("/tmp/left"), Vec::new());
-        state.panes.active.selection.paths =
+        state.panes.active_mut().selection.paths =
             vec!["/tmp/left/a".to_string(), "/tmp/left/b".to_string()];
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
-        state.panes.focus_inactive();
+        assert!(state.panes.focus_slot(1));
         state
             .panes
             .inactive_mut()

@@ -90,15 +90,16 @@ pub(crate) fn prepare_current_dir_transfer(
     prepare_current_dir_transfer_with_state(ui, &state, source, source_label, x, y)
 }
 
-pub(crate) fn prepare_inactive_pane_transfer(
+pub(crate) fn prepare_pane_transfer(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
+    slot: i32,
     source: &str,
     x: f32,
     y: f32,
 ) -> bool {
     let state = state.borrow();
-    if let Some(target) = entry_at_inactive_pane_point(ui, &state, x, y)
+    if let Some(target) = entry_at_pane_point(ui, &state, slot, x, y)
         .filter(|target| target.is_dir && target.path.as_str() != source)
     {
         return prepare_transfer_menu(
@@ -115,7 +116,7 @@ pub(crate) fn prepare_inactive_pane_transfer(
     prepare_current_dir_transfer_for_target_with_state(
         ui,
         &state,
-        PaneTarget::Inactive,
+        PaneTarget::Slot(slot),
         source,
         path_label(source).as_str(),
         x,
@@ -149,53 +150,34 @@ pub(crate) fn prepare_main_transfer(
     prepare_current_dir_transfer_with_state(ui, &state, source, source_label, x, y)
 }
 
-pub(crate) fn main_drop_allowed(
+pub(crate) fn pane_drop_allowed(
     ui: &AppWindow,
     state: &AppState,
+    slot: i32,
     x: f32,
     y: f32,
     source: &Path,
 ) -> bool {
-    main_drop_rejection(ui, state, x, y, source).is_none()
-}
-
-pub(crate) fn inactive_pane_drop_allowed(
-    ui: &AppWindow,
-    state: &AppState,
-    x: f32,
-    y: f32,
-    source: &Path,
-) -> bool {
-    inactive_pane_drop_rejection(ui, state, x, y, source).is_none()
+    pane_drop_rejection(ui, state, slot, x, y, source).is_none()
 }
 
 #[cfg(test)]
-fn inactive_pane_current_dir_drop_allowed(state: &AppState, source: &Path) -> bool {
-    pane_current_dir(state, PaneTarget::Inactive)
+fn pane_current_dir_drop_allowed(state: &AppState, slot: i32, source: &Path) -> bool {
+    pane_current_dir(state, PaneTarget::Slot(slot))
         .is_some_and(|target_dir| transfer_target_rejection(source, target_dir).is_none())
 }
 
-pub(crate) fn inactive_pane_drop_target_path(
+pub(crate) fn pane_drop_target_path(
     ui: &AppWindow,
     state: &AppState,
+    slot: i32,
     x: f32,
     y: f32,
     source: &Path,
 ) -> Option<String> {
-    entry_at_inactive_pane_point(ui, state, x, y)
+    entry_at_pane_point(ui, state, slot, x, y)
         .filter(|target| target.is_dir && Path::new(target.path.as_str()) != source)
         .map(|target| target.path.to_string())
-}
-
-pub(crate) fn main_drop_rejection(
-    ui: &AppWindow,
-    state: &AppState,
-    x: f32,
-    y: f32,
-    source: &Path,
-) -> Option<&'static str> {
-    let target_dir = main_drop_target_dir(ui, state, x, y, source);
-    transfer_target_rejection(source, &target_dir)
 }
 
 pub(crate) fn place_drop_allowed(state: &AppState, source: &Path, target_index: i32) -> bool {
@@ -219,41 +201,44 @@ pub(crate) fn entry_at_main_point(
     filtered_entry_at(state, index)
 }
 
-fn main_drop_target_dir(
+pub(crate) fn entry_at_pane_point(
     ui: &AppWindow,
     state: &AppState,
+    slot: i32,
     x: f32,
     y: f32,
-    source: &Path,
-) -> PathBuf {
-    entry_at_main_point(ui, state, x, y)
-        .filter(|target| target.is_dir && Path::new(target.path.as_str()) != source)
-        .map(|target| PathBuf::from(target.path.as_str()))
-        .unwrap_or_else(|| focused_current_dir(state).to_path_buf())
+) -> Option<FileEntry> {
+    match slot {
+        0 => entry_at_main_point(ui, state, x, y),
+        1 => entry_at_inactive_pane_point(ui, state, x, y),
+        _ => None,
+    }
 }
 
-fn inactive_pane_drop_rejection(
+fn pane_drop_rejection(
     ui: &AppWindow,
     state: &AppState,
+    slot: i32,
     x: f32,
     y: f32,
     source: &Path,
 ) -> Option<&'static str> {
-    let target_dir = inactive_pane_drop_target_dir(ui, state, x, y, source)?;
+    let target_dir = pane_drop_target_dir(ui, state, slot, x, y, source)?;
     transfer_target_rejection(source, &target_dir)
 }
 
-fn inactive_pane_drop_target_dir(
+fn pane_drop_target_dir(
     ui: &AppWindow,
     state: &AppState,
+    slot: i32,
     x: f32,
     y: f32,
     source: &Path,
 ) -> Option<PathBuf> {
-    entry_at_inactive_pane_point(ui, state, x, y)
+    entry_at_pane_point(ui, state, slot, x, y)
         .filter(|target| target.is_dir && Path::new(target.path.as_str()) != source)
         .map(|target| PathBuf::from(target.path.as_str()))
-        .or_else(|| pane_current_dir(state, PaneTarget::Inactive).map(Path::to_path_buf))
+        .or_else(|| pane_current_dir(state, PaneTarget::Slot(slot)).map(Path::to_path_buf))
 }
 
 pub(crate) fn entry_at_inactive_pane_point(
@@ -409,7 +394,7 @@ fn prepare_current_dir_transfer_for_target_with_state(
 
 fn focused_current_dir(state: &AppState) -> &Path {
     pane_current_dir(state, PaneTarget::Focused)
-        .unwrap_or_else(|| state.panes.active.current_dir.as_path())
+        .unwrap_or_else(|| state.panes.active().current_dir.as_path())
 }
 
 fn pane_current_dir(state: &AppState, target: PaneTarget) -> Option<&Path> {
@@ -1008,7 +993,7 @@ mod tests {
         apply_conflict_decision_to_queue, apply_rename_to_remaining_conflicts,
         clear_accepted_cut_source, clear_cut_sources_for_remaining_conflicts,
         default_rename_suggestion, default_rename_suggestion_with_reserved, focused_current_dir,
-        inactive_pane_current_dir_drop_allowed, target_is_source_or_descendant,
+        pane_current_dir_drop_allowed, target_is_source_or_descendant,
         transfer_request_conflict_destination, transfer_start_rejection,
     };
     use crate::app::state::{AppState, FileOperationRequest};
@@ -1125,47 +1110,47 @@ mod tests {
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/fika-right")));
         assert_eq!(focused_current_dir(&state), Path::new("/tmp/fika-left"));
 
-        assert!(state.panes.focus_inactive());
+        assert!(state.panes.focus_slot(1));
         assert_eq!(focused_current_dir(&state), Path::new("/tmp/fika-right"));
     }
 
     #[test]
-    fn inactive_pane_drop_allowed_requires_split_target() {
+    fn pane_current_dir_drop_allowed_requires_existing_slot() {
         let state = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
 
-        assert!(!inactive_pane_current_dir_drop_allowed(
+        assert!(!pane_current_dir_drop_allowed(
             &state,
+            1,
             Path::new("/tmp/fika-source")
         ));
     }
 
     #[test]
-    fn inactive_pane_drop_allowed_accepts_file_into_inactive_directory() {
+    fn pane_current_dir_drop_allowed_accepts_file_into_slot_directory() {
         let mut state = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/fika-right")));
 
-        assert!(inactive_pane_current_dir_drop_allowed(
+        assert!(pane_current_dir_drop_allowed(
             &state,
+            1,
             Path::new("/tmp/fika-left/note.txt")
         ));
     }
 
     #[test]
-    fn inactive_pane_drop_allowed_rejects_self_and_descendant_targets() {
+    fn pane_current_dir_drop_allowed_rejects_self_and_descendant_targets() {
         let source = PathBuf::from("/tmp/fika-source");
         let mut same_target = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
         assert!(same_target.panes.open_inactive(source.clone()));
 
-        assert!(!inactive_pane_current_dir_drop_allowed(
-            &same_target,
-            &source
-        ));
+        assert!(!pane_current_dir_drop_allowed(&same_target, 1, &source));
 
         let mut descendant_target = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
         assert!(descendant_target.panes.open_inactive(source.join("child")));
 
-        assert!(!inactive_pane_current_dir_drop_allowed(
+        assert!(!pane_current_dir_drop_allowed(
             &descendant_target,
+            1,
             &source
         ));
     }

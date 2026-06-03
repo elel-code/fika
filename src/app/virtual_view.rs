@@ -69,7 +69,7 @@ pub(crate) fn prepare_virtual_view_update(
         2,
     );
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
-    state.panes.active.view.viewport_x = plan.viewport_x;
+    state.panes.active_mut().view.viewport_x = plan.viewport_x;
 
     let rebuild_model = should_rebuild_virtual_model(
         state,
@@ -93,11 +93,14 @@ pub(crate) fn prepare_virtual_view_update(
 
     let mut entries = filtered_entries_range(state, plan.range.clone());
     decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
-    state.panes.active.view.virtual_view.range = plan.range.clone();
-    state.panes.active.view.virtual_view.entry_count = visible_count;
-    state.panes.active.view.virtual_view.rows_per_column = input.layout.rows_per_column;
-    state.panes.active.view.virtual_view.cell_width = input.layout.cell_width;
-    state.panes.active.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
+    {
+        let pane = state.panes.active_mut();
+        pane.view.virtual_view.range = plan.range.clone();
+        pane.view.virtual_view.entry_count = visible_count;
+        pane.view.virtual_view.rows_per_column = input.layout.rows_per_column;
+        pane.view.virtual_view.cell_width = input.layout.cell_width;
+        pane.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
+    }
 
     VirtualViewUpdate {
         entry_count: visible_count,
@@ -183,7 +186,7 @@ fn should_rebuild_virtual_model(
 ) -> bool {
     !schedule_thumbnails
         || should_rebuild_virtual_cache(
-            &state.panes.active.view.virtual_view,
+            &state.panes.active().view.virtual_view,
             plan,
             visible_count,
             thumbnail_size_px,
@@ -254,7 +257,7 @@ mod tests {
     #[test]
     fn virtual_view_update_reuses_model_inside_same_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active.entries = (0..100).map(test_entry).collect();
+        state.panes.active_mut().entries = (0..100).map(test_entry).collect();
 
         let first = prepare_virtual_view_update(
             &mut state,
@@ -270,7 +273,7 @@ mod tests {
         assert!(first.rebuild_model);
         assert_eq!(first.range, 0..20);
         assert_eq!(first.entries.len(), 20);
-        assert_eq!(state.panes.active.view.viewport_x, 0.0);
+        assert_eq!(state.panes.active().view.viewport_x, 0.0);
 
         let second = prepare_virtual_view_update(
             &mut state,
@@ -285,13 +288,13 @@ mod tests {
         );
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
-        assert_eq!(state.panes.active.view.viewport_x, 40.0);
+        assert_eq!(state.panes.active().view.viewport_x, 40.0);
     }
 
     #[test]
     fn virtual_view_update_reuses_model_while_cached_range_covers_visible_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active.entries = (0..160).map(test_entry).collect();
+        state.panes.active_mut().entries = (0..160).map(test_entry).collect();
 
         let first = prepare_virtual_view_update(
             &mut state,
@@ -323,13 +326,13 @@ mod tests {
         assert_eq!(second.range, 0..24);
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
-        assert_eq!(state.panes.active.view.virtual_view.range, first.range);
+        assert_eq!(state.panes.active().view.virtual_view.range, first.range);
     }
 
     #[test]
     fn virtual_view_update_clamps_out_of_bounds_viewport() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active.entries = (0..10).map(test_entry).collect();
+        state.panes.active_mut().entries = (0..10).map(test_entry).collect();
 
         let update = prepare_virtual_view_update(
             &mut state,
@@ -346,7 +349,7 @@ mod tests {
         assert!(update.viewport_clamped);
         assert_eq!(update.viewport_x, 70.0);
         assert_eq!(update.range, 0..10);
-        assert_eq!(state.panes.active.view.viewport_x, 70.0);
+        assert_eq!(state.panes.active().view.viewport_x, 70.0);
     }
 
     #[test]
@@ -361,7 +364,7 @@ mod tests {
 
         let update = prepare_pane_preview_update(
             &mut state,
-            PaneTarget::Inactive,
+            PaneTarget::Slot(1),
             PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
@@ -389,7 +392,7 @@ mod tests {
         state.panes.inactive_mut().unwrap().view.viewport_x = 4_000.0;
         let clamped = prepare_pane_preview_update(
             &mut state,
-            PaneTarget::Inactive,
+            PaneTarget::Slot(1),
             PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
@@ -415,7 +418,7 @@ mod tests {
 
         let first = prepare_pane_preview_update(
             &mut state,
-            PaneTarget::Inactive,
+            PaneTarget::Slot(1),
             PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
@@ -432,7 +435,7 @@ mod tests {
         state.panes.inactive_mut().unwrap().view.viewport_x = 10.0;
         let second = prepare_pane_preview_update(
             &mut state,
-            PaneTarget::Inactive,
+            PaneTarget::Slot(1),
             PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
@@ -449,7 +452,7 @@ mod tests {
 
         let forced = prepare_pane_preview_update(
             &mut state,
-            PaneTarget::Inactive,
+            PaneTarget::Slot(1),
             PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
@@ -473,7 +476,7 @@ mod tests {
 
         let first = prepare_pane_preview_update(
             &mut state,
-            PaneTarget::Inactive,
+            PaneTarget::Slot(1),
             PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
@@ -489,7 +492,7 @@ mod tests {
         state.panes.inactive_mut().unwrap().view.viewport_x = 230.0;
         let second = prepare_pane_preview_update(
             &mut state,
-            PaneTarget::Inactive,
+            PaneTarget::Slot(1),
             PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
@@ -516,7 +519,7 @@ mod tests {
         assert!(
             prepare_pane_preview_update(
                 &mut state,
-                PaneTarget::Inactive,
+                PaneTarget::Slot(1),
                 PanePreviewInput {
                     pane_width: 420.0,
                     pane_height: 704.0,

@@ -126,17 +126,17 @@ mod tests {
         let pending_key = thumbnails::fallback_key(Path::new("/tmp/current/photo.png"), 64);
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending("/tmp/current/photo.png".to_string(), pending_key.clone());
-        state.panes.active.search.query = "photo".to_string();
-        state.panes.active.selection.paths = vec!["/tmp/current/photo.png".to_string()];
-        state.panes.active.selection.anchor = Some("/tmp/current/photo.png".to_string());
+        state.panes.active_mut().search.query = "photo".to_string();
+        state.panes.active_mut().selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.panes.active_mut().selection.anchor = Some("/tmp/current/photo.png".to_string());
         state.insert_directory_cache(
             PathBuf::from("/tmp/current"),
             vec![test_entry("photo.png", "/tmp/current/photo.png")],
         );
-        let thumbnail_generation = state.panes.active.thumbnail_generation.current();
+        let thumbnail_generation = state.panes.active().thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, true);
 
@@ -150,24 +150,24 @@ mod tests {
         );
         assert!(!preparation.defer_view_restore);
         assert_eq!(
-            state.panes.active.thumbnail_generation.current(),
+            state.panes.active().thumbnail_generation.current(),
             thumbnail_generation
         );
         assert_eq!(
             state
                 .panes
-                .active
+                .active()
                 .view
                 .thumbnail_pending_key("/tmp/current/photo.png"),
             Some(&pending_key)
         );
-        assert_eq!(state.panes.active.search.query, "photo");
+        assert_eq!(state.panes.active().search.query, "photo");
         assert_eq!(
-            state.panes.active.selection.paths,
+            state.panes.active().selection.paths,
             vec!["/tmp/current/photo.png"]
         );
         assert_eq!(
-            state.panes.active.selection.anchor.as_deref(),
+            state.panes.active().selection.anchor.as_deref(),
             Some("/tmp/current/photo.png")
         );
     }
@@ -178,43 +178,43 @@ mod tests {
         let pending_key = thumbnails::fallback_key(Path::new("/tmp/current/photo.png"), 64);
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending("/tmp/current/photo.png".to_string(), pending_key);
-        state.panes.active.search.query = "photo".to_string();
-        state.panes.active.search.kind_filter = 3;
-        state.panes.active.selection.paths = vec!["/tmp/current/photo.png".to_string()];
-        state.panes.active.selection.anchor = Some("/tmp/current/photo.png".to_string());
-        let thumbnail_generation = state.panes.active.thumbnail_generation.current();
+        state.panes.active_mut().search.query = "photo".to_string();
+        state.panes.active_mut().search.kind_filter = 3;
+        state.panes.active_mut().selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.panes.active_mut().selection.anchor = Some("/tmp/current/photo.png".to_string());
+        let thumbnail_generation = state.panes.active().thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, false);
 
         assert_eq!(preparation.current_dir, PathBuf::from("/tmp/current"));
         assert!(preparation.cached_entries.is_none());
         assert!(preparation.defer_view_restore);
-        assert!(state.panes.active.thumbnail_generation.current() > thumbnail_generation);
+        assert!(state.panes.active().thumbnail_generation.current() > thumbnail_generation);
         assert!(
             !state
                 .panes
-                .active
+                .active()
                 .view
                 .has_thumbnail_pending("/tmp/current/photo.png")
         );
-        assert!(state.panes.active.search.query.is_empty());
-        assert_eq!(state.panes.active.search.kind_filter, 0);
-        assert!(state.panes.active.selection.paths.is_empty());
-        assert!(state.panes.active.selection.anchor.is_none());
+        assert!(state.panes.active().search.query.is_empty());
+        assert_eq!(state.panes.active().search.kind_filter, 0);
+        assert!(state.panes.active().selection.paths.is_empty());
+        assert!(state.panes.active().selection.anchor.is_none());
     }
 
     #[test]
     fn targeted_directory_load_updates_only_requested_pane() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
-        state.panes.active.search.query = "active-query".to_string();
-        state.panes.active.selection.paths = vec!["/tmp/active/keep.txt".to_string()];
+        state.panes.active_mut().search.query = "active-query".to_string();
+        state.panes.active_mut().selection.paths = vec!["/tmp/active/keep.txt".to_string()];
         let active_pending_key = thumbnails::fallback_key(Path::new("/tmp/active/keep.txt"), 64);
         state
             .panes
-            .active
+            .active_mut()
             .view
             .insert_thumbnail_pending("/tmp/active/keep.txt".to_string(), active_pending_key);
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
@@ -236,15 +236,15 @@ mod tests {
 
         assert_eq!(preparation.pane_id, inactive_id);
         assert_eq!(preparation.current_dir, PathBuf::from("/tmp/inactive"));
-        assert_eq!(state.panes.active.search.query, "active-query");
+        assert_eq!(state.panes.active().search.query, "active-query");
         assert_eq!(
-            state.panes.active.selection.paths,
+            state.panes.active().selection.paths,
             vec!["/tmp/active/keep.txt"]
         );
         assert!(
             state
                 .panes
-                .active
+                .active()
                 .view
                 .has_thumbnail_pending("/tmp/active/keep.txt")
         );

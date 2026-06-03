@@ -426,6 +426,8 @@ component PaneSlotSurface inherits Rectangle {
 
     private property <string> live-path-text: root.pane.path_text;
     private property <bool> live-path-focused: root.pane.path_focused;
+    private property <int> live-slot: root.pane.slot;
+    private property <string> live-current-path: root.pane.current_path;
     private property <float> live-viewport-x: root.pane.viewport_x;
     private property <length> live-viewport-offset: -root.pane.viewport_x * 1px;
     private property <bool> live-drag-active: false;
@@ -440,8 +442,12 @@ component PaneSlotSurface inherits Rectangle {
             root.live-path-text = root.pane.path_text;
         }
         root.live-path-focused = root.pane.path_focused;
-        root.live-viewport-x = root.pane.viewport_x;
-        root.live-viewport-offset = -root.pane.viewport_x * 1px;
+        if (root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path) {
+            root.live-viewport-x = root.pane.viewport_x;
+            root.live-viewport-offset = -root.pane.viewport_x * 1px;
+        }
+        root.live-slot = root.pane.slot;
+        root.live-current-path = root.pane.current_path;
     }
 
     PaneSlot {
