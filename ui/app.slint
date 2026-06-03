@@ -30,6 +30,7 @@ import { ChildSubmenuLayer, ChooserChoicePopupLayer, ChooserOptionPopupLayer, Ro
 import { ConfirmationPopup, OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
 component FilePane inherits Rectangle {
+    in property <int> pane-side: 0;
     in property <bool> dark;
     in property <color> shell-base-color;
     in property <length> path-bar-height;
@@ -86,37 +87,37 @@ component FilePane inherits Rectangle {
     in property <[ChooserChoice]> chooser-choices;
     in-out property <string> chooser-save-name;
 
-    callback focus_requested();
-    callback path_submitted(string);
-    callback go_back();
-    callback go_forward();
+    callback focus_requested(int);
+    callback path_submitted(int, string);
+    callback go_back(int);
+    callback go_forward(int);
     callback search_submitted(string);
     callback cancel_search();
     callback search_filters_changed(int, int, int);
     callback search_close_requested();
-    callback view_changed();
-    callback activated(string);
-    callback request_select(string, bool, bool);
-    callback select_rect(float, float, float, float, int, float, float, float, bool);
-    callback clear_selection();
-    callback request_context_menu(string, string, string, string, bool, length, length);
-    callback request_blank_context_menu(length, length);
-    callback zoom_in();
-    callback zoom_out();
-    callback drop_target_path(float, float, string) -> string;
-    callback drop_allowed(float, float, string) -> bool;
-    callback prepare_transfer(string, float, float) -> bool;
-    callback transfer_menu_requested();
+    callback view_changed(int);
+    callback activated(int, string);
+    callback request_select(int, string, bool, bool);
+    callback select_rect(int, float, float, float, float, int, float, float, float, bool);
+    callback clear_selection(int);
+    callback request_context_menu(int, string, string, string, string, bool, length, length);
+    callback request_blank_context_menu(int, length, length);
+    callback zoom_in(int);
+    callback zoom_out(int);
+    callback drop_target_path(int, float, float, string) -> string;
+    callback drop_allowed(int, float, float, string) -> bool;
+    callback prepare_transfer(int, string, float, float) -> bool;
+    callback transfer_menu_requested(int);
     callback trace_drop(string, string, string, float, float, bool, string);
-    callback save_focus_changed(bool);
+    callback save_focus_changed(int, bool);
     callback commit_external_edit();
     callback discard_external_edit();
     callback undo_last_operation();
     callback chooser_accept(string);
-    callback chooser_filter_requested(length, length);
-    callback chooser_choice_requested(int, length, length);
-    pure callback is_selected(string) -> bool;
-    pure callback make_drag_data(string, bool) -> data-transfer;
+    callback chooser_filter_requested(int, length, length);
+    callback chooser_choice_requested(int, int, length, length);
+    pure callback is_selected(int, string) -> bool;
+    pure callback make_drag_data(int, string, bool) -> data-transfer;
 
     background: root.shell-base-color;
     clip: true;
@@ -136,10 +137,10 @@ component FilePane inherits Rectangle {
             can-go-forward: root.can-go-forward;
             path-text <=> root.path-text;
             path-focused <=> root.path-focused;
-            focus_requested => { root.focus_requested(); }
-            go_back => { root.go_back(); }
-            go_forward => { root.go_forward(); }
-            path_submitted(path) => { root.path_submitted(path); }
+            focus_requested => { root.focus_requested(root.pane-side); }
+            go_back => { root.go_back(root.pane-side); }
+            go_forward => { root.go_forward(root.pane-side); }
+            path_submitted(path) => { root.path_submitted(root.pane-side, path); }
         }
 
         if (root.search-panel-visible) : SearchPanel {
@@ -184,7 +185,7 @@ component FilePane inherits Rectangle {
                     }
                 }
                 can-drop(event) => {
-                    root.focus_requested();
+                    root.focus_requested(root.pane-side);
                     if (!root.drop-ready) {
                         root.drag-active = false;
                         root.drag-rejected = true;
@@ -193,8 +194,8 @@ component FilePane inherits Rectangle {
                     }
                     if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
                         root.drag-active = true;
-                        root.drag-target-path = root.drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
-                        root.drag-rejected = !root.drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                        root.drag-target-path = root.drop_target_path(root.pane-side, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                        root.drag-rejected = !root.drop_allowed(root.pane-side, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                         root.trace_drop(root.drop-trace-prefix + (root.drag-rejected ? "can-drop-rejected" : "can-drop-accepted"), DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.drag-rejected, root.drag-target-path);
                         return DragAction.copy;
                     } else {
@@ -206,10 +207,10 @@ component FilePane inherits Rectangle {
                     }
                 }
                 dropped(event) => {
-                    root.focus_requested();
+                    root.focus_requested(root.pane-side);
                     root.trace_drop(root.drop-trace-prefix + "dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.drag-rejected, root.drag-target-path);
-                    if (!root.drag-rejected && root.drop-ready && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
-                        root.transfer_menu_requested();
+                    if (!root.drag-rejected && root.drop-ready && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_transfer(root.pane-side, DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                        root.transfer_menu_requested(root.pane-side);
                     }
                     root.drag-active = false;
                     root.drag-rejected = false;
@@ -239,30 +240,30 @@ component FilePane inherits Rectangle {
                 drag-rejected: root.drag-rejected;
                 drag-target-path: root.drag-target-path;
                 make_drag_data(path, is-dir) => {
-                    root.make_drag_data(path, is-dir)
+                    root.make_drag_data(root.pane-side, path, is-dir)
                 }
-                focus_requested => { root.focus_requested(); }
-                view_changed => { root.view_changed(); }
-                zoom_in => { root.zoom_in(); }
-                zoom_out => { root.zoom_out(); }
-                activated(path) => { root.activated(path); }
+                focus_requested => { root.focus_requested(root.pane-side); }
+                view_changed => { root.view_changed(root.pane-side); }
+                zoom_in => { root.zoom_in(root.pane-side); }
+                zoom_out => { root.zoom_out(root.pane-side); }
+                activated(path) => { root.activated(root.pane-side, path); }
                 request_select(path, toggle, range) => {
-                    root.request_select(path, toggle, range);
+                    root.request_select(root.pane-side, path, toggle, range);
                 }
                 select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
-                    root.select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+                    root.select_rect(root.pane-side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
                 }
-                clear_selection => { root.clear_selection(); }
+                clear_selection => { root.clear_selection(root.pane-side); }
                 request_context_menu(path, name, size, modified, is-dir, x, y) => {
-                    root.request_context_menu(path, name, size, modified, is-dir, x, y);
+                    root.request_context_menu(root.pane-side, path, name, size, modified, is-dir, x, y);
                 }
                 request_blank_context_menu(x, y) => {
-                    root.request_blank_context_menu(x, y);
+                    root.request_blank_context_menu(root.pane-side, x, y);
                 }
-                navigate_back => { root.go_back(); }
-                navigate_forward => { root.go_forward(); }
+                navigate_back => { root.go_back(root.pane-side); }
+                navigate_forward => { root.go_forward(root.pane-side); }
                 is_selected(path) => {
-                    root.is_selected(path)
+                    root.is_selected(root.pane-side, path)
                 }
             }
 
@@ -295,14 +296,14 @@ component FilePane inherits Rectangle {
             chooser-filter-label: root.chooser-filter-label;
             chooser-choices: root.chooser-choices;
             chooser-save-name <=> root.chooser-save-name;
-            save_focus_changed(focused) => { root.save_focus_changed(focused); }
+            save_focus_changed(focused) => { root.save_focus_changed(root.pane-side, focused); }
             commit_external_edit => { root.commit_external_edit(); }
             discard_external_edit => { root.discard_external_edit(); }
             undo_last_operation => { root.undo_last_operation(); }
             chooser_accept(value) => { root.chooser_accept(value); }
-            chooser_filter_requested(x, y) => { root.chooser_filter_requested(x, y); }
+            chooser_filter_requested(x, y) => { root.chooser_filter_requested(root.pane-side, x, y); }
             chooser_choice_requested(index, x, y) => {
-                root.chooser_choice_requested(index, x, y);
+                root.chooser_choice_requested(root.pane-side, index, x, y);
             }
         }
     }
@@ -742,6 +743,155 @@ export component AppWindow inherits Window {
         root.icon_zoom_level = max(0, root.icon_zoom_level - 1);
         root.sync-main-viewport();
         root.persist_ui_state();
+    }
+
+    function pane-focus(side: int) {
+        main-focus.focus();
+        if (side == 1) {
+            root.focus_right_pane();
+        } else {
+            root.focus_left_pane();
+        }
+    }
+
+    function pane-path-submitted(side: int, path: string) {
+        if (side == 1) {
+            root.inactive_path_submitted(path);
+        } else {
+            root.left_pane_path_submitted(path);
+        }
+    }
+
+    function pane-go-back(side: int) {
+        if (side == 1) {
+            root.inactive_go_back();
+        } else {
+            root.left_pane_go_back();
+        }
+    }
+
+    function pane-go-forward(side: int) {
+        if (side == 1) {
+            root.inactive_go_forward();
+        } else {
+            root.left_pane_go_forward();
+        }
+    }
+
+    function pane-view-changed(side: int) {
+        if (side == 1) {
+            root.inactive_pane_view_changed();
+        } else {
+            root.main_view_changed();
+        }
+    }
+
+    function pane-activated(side: int, path: string) {
+        if (side == 1) {
+            root.open_inactive_path(path);
+        } else {
+            root.open_path(path);
+        }
+    }
+
+    function pane-request-select(side: int, path: string, toggle: bool, range: bool) {
+        if (side == 1) {
+            root.select_inactive_path(path, toggle, range);
+        } else {
+            root.select_path(path, toggle, range);
+        }
+    }
+
+    function pane-select-rect(side: int, x1: float, y1: float, x2: float, y2: float, rows-per-column: int, cell-width: float, row-height: float, padding: float, toggle: bool) {
+        if (side == 1) {
+            root.select_inactive_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+        } else {
+            root.select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+        }
+    }
+
+    function pane-clear-selection(side: int) {
+        root.pane-focus(side);
+        root.clear_selection();
+    }
+
+    function pane-request-context-menu(side: int, path: string, name: string, size: string, modified: string, is-dir: bool, x: length, y: length) {
+        root.pane-focus(side);
+        root.refresh_clipboard_availability();
+        if (side == 1 && !root.is_inactive_selected(path)) {
+            root.select_inactive_path(path, false, false);
+        } else if (side != 1 && !root.is_selected(path)) {
+            root.select_path(path, false, false);
+        }
+        root.context-menu-kind = 1;
+        root.context-menu-path = path;
+        root.context-menu-name = name;
+        root.context-menu-properties-size = size;
+        root.context-menu-properties-modified = modified;
+        root.context-menu-is-dir = is-dir;
+        if (!is-dir && root.selected_count <= 1) {
+            root.open_with_path = path;
+            root.default_open_app_name = "";
+            root.prepare_open_with(path);
+        }
+        root.show-context-menu(1, x, y);
+    }
+
+    function pane-request-blank-context-menu(side: int, x: length, y: length) {
+        root.pane-clear-selection(side);
+        root.refresh_clipboard_availability();
+        root.show-context-menu(3, x, y);
+    }
+
+    function pane-zoom-in(side: int) {
+        root.pane-focus(side);
+        root.zoom-main-in();
+    }
+
+    function pane-zoom-out(side: int) {
+        root.pane-focus(side);
+        root.zoom-main-out();
+    }
+
+    function pane-drop-target-path(side: int, x: float, y: float, source: string) -> string {
+        return side == 1 ? root.inactive_pane_drop_target_path(x, y, source) : root.main_drop_target_path(x, y, source);
+    }
+
+    function pane-drop-allowed(side: int, x: float, y: float, source: string) -> bool {
+        return side == 1 ? root.inactive_pane_drop_allowed(x, y, source) : root.main_drop_allowed(x, y, source);
+    }
+
+    function pane-prepare-transfer(side: int, source: string, x: float, y: float) -> bool {
+        return side == 1 ? root.prepare_inactive_pane_transfer(source, x, y) : root.prepare_path_main_transfer(source, x, y);
+    }
+
+    function pane-transfer-menu-requested(side: int) {
+        root.pane-focus(side);
+        root.transfer-menu-open = true;
+    }
+
+    function pane-save-focus-changed(side: int, focused: bool) {
+        root.chooser-save-input-focused = focused;
+        if (focused) {
+            root.pane-focus(side);
+        }
+    }
+
+    function pane-chooser-filter-requested(side: int, x: length, y: length) {
+        root.pane-focus(side);
+        root.chooser-choice-menu-open = false;
+        root.chooser-filter-menu-x = x;
+        root.chooser-filter-menu-y = y;
+        root.chooser-filter-menu-open = true;
+    }
+
+    function pane-chooser-choice-requested(side: int, index: int, x: length, y: length) {
+        root.pane-focus(side);
+        root.chooser-filter-menu-open = false;
+        root.chooser-choice-menu-index = index;
+        root.chooser-choice-menu-x = x;
+        root.chooser-choice-menu-y = y;
+        root.chooser-choice-menu-open = true;
     }
 
     title: chooser_mode ? (chooser_title == "" ? "Fika File Chooser" : chooser_title) : "Fika File Manager";
@@ -1186,6 +1336,7 @@ export component AppWindow inherits Window {
                         clip: true;
 
                         FilePane {
+                            pane-side: 0;
                             width: parent.width;
                             height: parent.height;
                             dark: root.dark_mode;
@@ -1243,95 +1394,51 @@ export component AppWindow inherits Window {
                             chooser-filter-label: root.chooser_filter_label;
                             chooser-choices: root.chooser_choices;
                             chooser-save-name <=> root.chooser_save_name;
-                            focus_requested => {
-                                main-focus.focus();
-                                root.focus_left_pane();
-                            }
-                            path_submitted(path) => { root.left_pane_path_submitted(path); }
-                            go_back => { root.left_pane_go_back(); }
-                            go_forward => { root.left_pane_go_forward(); }
+                            focus_requested(side) => { root.pane-focus(side); }
+                            path_submitted(side, path) => { root.pane-path-submitted(side, path); }
+                            go_back(side) => { root.pane-go-back(side); }
+                            go_forward(side) => { root.pane-go-forward(side); }
                             search_submitted(query) => { root.search_submitted(query); }
                             cancel_search => { root.cancel_search(); }
                             search_filters_changed(kind, modified, size) => {
                                 root.search_filters_changed(kind, modified, size);
                             }
                             search_close_requested => { root.search_bar_open = false; }
-                            view_changed => { root.main_view_changed(); }
-                            activated(path) => { root.open_path(path); }
-                            request_select(path, toggle, range) => {
-                                root.select_path(path, toggle, range);
+                            view_changed(side) => { root.pane-view-changed(side); }
+                            activated(side, path) => { root.pane-activated(side, path); }
+                            request_select(side, path, toggle, range) => { root.pane-request-select(side, path, toggle, range); }
+                            select_rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
+                                root.pane-select-rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
                             }
-                            select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
-                                root.select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+                            clear_selection(side) => { root.pane-clear-selection(side); }
+                            request_context_menu(side, path, name, size, modified, is-dir, x, y) => { root.pane-request-context-menu(side, path, name, size, modified, is-dir, x, y); }
+                            request_blank_context_menu(side, x, y) => { root.pane-request-blank-context-menu(side, x, y); }
+                            zoom_in(side) => { root.pane-zoom-in(side); }
+                            zoom_out(side) => { root.pane-zoom-out(side); }
+                            drop_target_path(side, x, y, source) => {
+                                root.pane-drop-target-path(side, x, y, source)
                             }
-                            clear_selection => { root.clear_selection(); }
-                            request_context_menu(path, name, size, modified, is-dir, x, y) => {
-                                root.refresh_clipboard_availability();
-                                if (!root.is_selected(path)) {
-                                    root.select_path(path, false, false);
-                                }
-                                root.context-menu-kind = 1;
-                                root.context-menu-path = path;
-                                root.context-menu-name = name;
-                                root.context-menu-properties-size = size;
-                                root.context-menu-properties-modified = modified;
-                                root.context-menu-is-dir = is-dir;
-                                if (!is-dir && root.selected_count <= 1) {
-                                    root.open_with_path = path;
-                                    root.default_open_app_name = "";
-                                    root.prepare_open_with(path);
-                                }
-                                root.show-context-menu(1, x, y);
+                            drop_allowed(side, x, y, source) => {
+                                root.pane-drop-allowed(side, x, y, source)
                             }
-                            request_blank_context_menu(x, y) => {
-                                root.clear_selection();
-                                root.refresh_clipboard_availability();
-                                root.show-context-menu(3, x, y);
+                            prepare_transfer(side, source, x, y) => {
+                                root.pane-prepare-transfer(side, source, x, y)
                             }
-                            zoom_in => { root.zoom-main-in(); }
-                            zoom_out => { root.zoom-main-out(); }
-                            drop_target_path(x, y, source) => {
-                                root.main_drop_target_path(x, y, source)
-                            }
-                            drop_allowed(x, y, source) => {
-                                root.main_drop_allowed(x, y, source)
-                            }
-                            prepare_transfer(source, x, y) => {
-                                root.prepare_path_main_transfer(source, x, y)
-                            }
-                            transfer_menu_requested => { root.transfer-menu-open = true; }
+                            transfer_menu_requested(side) => { root.pane-transfer-menu-requested(side); }
                             trace_drop(action, kind, path, x, y, rejected, target) => {
                                 root.trace_main_drop(action, kind, path, x, y, rejected, target);
                             }
-                            save_focus_changed(focused) => {
-                                root.chooser-save-input-focused = focused;
-                                if (focused) {
-                                    root.focus_left_pane();
-                                }
-                            }
+                            save_focus_changed(side, focused) => { root.pane-save-focus-changed(side, focused); }
                             commit_external_edit => { root.commit_external_edit(); }
                             discard_external_edit => { root.discard_external_edit(); }
                             undo_last_operation => { root.undo_last_operation(); }
                             chooser_accept(value) => { root.chooser_accept(value); }
-                            chooser_filter_requested(x, y) => {
-                                root.focus_left_pane();
-                                root.chooser-choice-menu-open = false;
-                                root.chooser-filter-menu-x = x;
-                                root.chooser-filter-menu-y = y;
-                                root.chooser-filter-menu-open = true;
+                            chooser_filter_requested(side, x, y) => { root.pane-chooser-filter-requested(side, x, y); }
+                            chooser_choice_requested(side, index, x, y) => { root.pane-chooser-choice-requested(side, index, x, y); }
+                            is_selected(side, path) => {
+                                side == 1 ? root.is_inactive_selected(path) : root.is_selected(path)
                             }
-                            chooser_choice_requested(index, x, y) => {
-                                root.focus_left_pane();
-                                root.chooser-filter-menu-open = false;
-                                root.chooser-choice-menu-index = index;
-                                root.chooser-choice-menu-x = x;
-                                root.chooser-choice-menu-y = y;
-                                root.chooser-choice-menu-open = true;
-                            }
-                            is_selected(path) => {
-                                root.is_selected(path)
-                            }
-                            make_drag_data(path, is-dir) => {
+                            make_drag_data(side, path, is-dir) => {
                                 is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)
                             }
                         }
@@ -1352,6 +1459,7 @@ export component AppWindow inherits Window {
                         clip: true;
 
                         FilePane {
+                            pane-side: 1;
                             width: parent.width;
                             height: parent.height;
                             dark: root.dark_mode;
@@ -1395,91 +1503,51 @@ export component AppWindow inherits Window {
                             chooser-filter-label: root.chooser_filter_label;
                             chooser-choices: root.chooser_choices;
                             chooser-save-name <=> root.chooser_save_name;
-                            focus_requested => {
-                                main-focus.focus();
-                                root.focus_right_pane();
+                            focus_requested(side) => { root.pane-focus(side); }
+                            path_submitted(side, path) => { root.pane-path-submitted(side, path); }
+                            go_back(side) => { root.pane-go-back(side); }
+                            go_forward(side) => { root.pane-go-forward(side); }
+                            search_submitted(query) => { root.search_submitted(query); }
+                            cancel_search => { root.cancel_search(); }
+                            search_filters_changed(kind, modified, size) => {
+                                root.search_filters_changed(kind, modified, size);
                             }
-                            path_submitted(path) => { root.inactive_path_submitted(path); }
-                            go_back => { root.inactive_go_back(); }
-                            go_forward => { root.inactive_go_forward(); }
-                            view_changed => { root.inactive_pane_view_changed(); }
-                            activated(path) => { root.open_inactive_path(path); }
-                            request_select(path, toggle, range) => {
-                                root.select_inactive_path(path, toggle, range);
+                            search_close_requested => { root.search_bar_open = false; }
+                            view_changed(side) => { root.pane-view-changed(side); }
+                            activated(side, path) => { root.pane-activated(side, path); }
+                            request_select(side, path, toggle, range) => { root.pane-request-select(side, path, toggle, range); }
+                            select_rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
+                                root.pane-select-rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
                             }
-                            select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
-                                root.select_inactive_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+                            clear_selection(side) => { root.pane-clear-selection(side); }
+                            request_context_menu(side, path, name, size, modified, is-dir, x, y) => { root.pane-request-context-menu(side, path, name, size, modified, is-dir, x, y); }
+                            request_blank_context_menu(side, x, y) => { root.pane-request-blank-context-menu(side, x, y); }
+                            zoom_in(side) => { root.pane-zoom-in(side); }
+                            zoom_out(side) => { root.pane-zoom-out(side); }
+                            drop_target_path(side, x, y, source) => {
+                                root.pane-drop-target-path(side, x, y, source)
                             }
-                            clear_selection => { root.clear_selection(); }
-                            request_context_menu(path, name, size, modified, is-dir, x, y) => {
-                                root.focus_right_pane();
-                                root.refresh_clipboard_availability();
-                                if (!root.is_inactive_selected(path)) {
-                                    root.select_inactive_path(path, false, false);
-                                }
-                                root.context-menu-kind = 1;
-                                root.context-menu-path = path;
-                                root.context-menu-name = name;
-                                root.context-menu-properties-size = size;
-                                root.context-menu-properties-modified = modified;
-                                root.context-menu-is-dir = is-dir;
-                                if (!is-dir && root.selected_count <= 1) {
-                                    root.open_with_path = path;
-                                    root.default_open_app_name = "";
-                                    root.prepare_open_with(path);
-                                }
-                                root.show-context-menu(1, x, y);
+                            drop_allowed(side, x, y, source) => {
+                                root.pane-drop-allowed(side, x, y, source)
                             }
-                            request_blank_context_menu(x, y) => {
-                                root.focus_right_pane();
-                                root.clear_selection();
-                                root.refresh_clipboard_availability();
-                                root.show-context-menu(3, x, y);
+                            prepare_transfer(side, source, x, y) => {
+                                root.pane-prepare-transfer(side, source, x, y)
                             }
-                            zoom_in => { root.zoom-main-in(); }
-                            zoom_out => { root.zoom-main-out(); }
-                            drop_target_path(x, y, source) => {
-                                root.inactive_pane_drop_target_path(x, y, source)
-                            }
-                            drop_allowed(x, y, source) => {
-                                root.inactive_pane_drop_allowed(x, y, source)
-                            }
-                            prepare_transfer(source, x, y) => {
-                                root.prepare_inactive_pane_transfer(source, x, y)
-                            }
-                            transfer_menu_requested => { root.transfer-menu-open = true; }
+                            transfer_menu_requested(side) => { root.pane-transfer-menu-requested(side); }
                             trace_drop(action, kind, path, x, y, rejected, target) => {
                                 root.trace_main_drop(action, kind, path, x, y, rejected, target);
                             }
-                            save_focus_changed(focused) => {
-                                root.chooser-save-input-focused = focused;
-                                if (focused) {
-                                    root.focus_right_pane();
-                                }
-                            }
+                            save_focus_changed(side, focused) => { root.pane-save-focus-changed(side, focused); }
                             commit_external_edit => { root.commit_external_edit(); }
                             discard_external_edit => { root.discard_external_edit(); }
                             undo_last_operation => { root.undo_last_operation(); }
                             chooser_accept(value) => { root.chooser_accept(value); }
-                            chooser_filter_requested(x, y) => {
-                                root.focus_right_pane();
-                                root.chooser-choice-menu-open = false;
-                                root.chooser-filter-menu-x = x;
-                                root.chooser-filter-menu-y = y;
-                                root.chooser-filter-menu-open = true;
+                            chooser_filter_requested(side, x, y) => { root.pane-chooser-filter-requested(side, x, y); }
+                            chooser_choice_requested(side, index, x, y) => { root.pane-chooser-choice-requested(side, index, x, y); }
+                            is_selected(side, path) => {
+                                side == 1 ? root.is_inactive_selected(path) : root.is_selected(path)
                             }
-                            chooser_choice_requested(index, x, y) => {
-                                root.focus_right_pane();
-                                root.chooser-filter-menu-open = false;
-                                root.chooser-choice-menu-index = index;
-                                root.chooser-choice-menu-x = x;
-                                root.chooser-choice-menu-y = y;
-                                root.chooser-choice-menu-open = true;
-                            }
-                            is_selected(path) => {
-                                root.is_inactive_selected(path)
-                            }
-                            make_drag_data(path, is-dir) => {
+                            make_drag_data(side, path, is-dir) => {
                                 is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)
                             }
                         }
