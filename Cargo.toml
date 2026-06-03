@@ -19,6 +19,3 @@ zbus_polkit = "5.0.0"
 
 [build-dependencies]
 slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
-
-[patch.crates-io]
-icu_segmenter = { path = "vendor/icu_segmenter-2.2.0" }

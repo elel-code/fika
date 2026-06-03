@@ -111,9 +111,9 @@ pub(crate) fn main_pane_bounds(
     window_height: f32,
 ) -> MainPaneBounds {
     MainPaneBounds {
-        left: sidebar_width_px + 8.0,
+        left: sidebar_width_px,
         top: TOP_BAR_HEIGHT,
-        right: window_width.max(sidebar_width_px + 8.0),
+        right: window_width.max(sidebar_width_px),
         bottom: window_height.max(TOP_BAR_HEIGHT),
     }
 }
@@ -1489,21 +1489,27 @@ mod tests {
         );
         assert!(
             app.contains(
-                "private property <length> main-content-left: root.sidebar_width_px * 1px + root.sidebar-splitter-width;"
+                "private property <length> main-content-left: root.sidebar_width_px * 1px;"
             ),
-            "AppWindow should expose the main content edge used by both top bar and main pane"
+            "AppWindow should expose the sidebar panel right edge as the main content edge"
         );
         assert!(
             app.contains("private property <length> main-pane-width: max(1px, root.width - root.main-content-left);"),
             "main pane width should derive from the same content edge as the header"
         );
         assert!(
-            app.contains("private property <length> sidebar-divider-offset: 7px;"),
-            "sidebar divider should sit on the main-pane side of the resize gutter"
+            app.contains("private property <length> sidebar-resize-hit-width: 8px;"),
+            "sidebar resize should keep a transparent edge hit area without taking layout width"
         );
         assert!(
-            app.matches("background: root.shell-base-color;").count() >= 4,
-            "window, splitter, main pane, and empty view should share the shell base"
+            !app.contains("sidebar-splitter-width")
+                && !app.contains("sidebar-divider-offset")
+                && !app.contains("background: root.shell-separator-color;"),
+            "sidebar panel border should be the visible divider instead of a separate splitter line"
+        );
+        assert!(
+            app.matches("background: root.shell-base-color;").count() >= 3,
+            "window, main pane, and empty view should share the shell base"
         );
         assert!(
             !app.contains("sidebar-foreground := Rectangle"),
@@ -1512,6 +1518,10 @@ mod tests {
         assert!(
             app.contains("sidebar-surface := Rectangle"),
             "sidebar panel should be explicit inside the content area below the unified top bar"
+        );
+        assert!(
+            app.contains("width: parent.width;\n                        height: parent.height;"),
+            "sidebar panel should fill the full content-row height so it is equal-height with the main pane"
         );
         let top_bar_index = app
             .find("TopBar {")
@@ -1586,9 +1596,9 @@ mod tests {
             "sidebar resize state should initialize from the same COSMIC-like default"
         );
         assert!(
-            app.contains("private property <length> sidebar-panel-margin: 10px;")
-                && app.contains("private property <length> sidebar-panel-radius: 16px;"),
-            "sidebar content panel should keep the roomier rounded COSMIC-like treatment"
+            app.contains("private property <length> sidebar-panel-radius: 16px;")
+                && !app.contains("sidebar-panel-margin"),
+            "sidebar content panel should keep the rounded COSMIC-like treatment without an inset that makes it shorter than the main pane"
         );
 
         for (name, slint) in [
@@ -1747,7 +1757,7 @@ mod tests {
     fn main_pane_bounds_match_slint_shell_layout() {
         let bounds = main_pane_bounds(320.0, 1100.0, 760.0);
 
-        assert_eq!(bounds.left, 328.0);
+        assert_eq!(bounds.left, 320.0);
         assert_eq!(bounds.top, TOP_BAR_HEIGHT);
         assert_eq!(bounds.right, 1100.0);
         assert_eq!(bounds.bottom, 760.0);

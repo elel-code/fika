@@ -382,11 +382,9 @@ Chooser 的纯数据逻辑集中在 `src/app/chooser.rs`：portal filter / choic
 
 - 根据文件操作队列减少本进程引起的重复刷新。
 
-### Locale Workaround
+### Locale Handling
 
-Slint `1.16.1` 的文本栈在部分系统 locale 或 CJK 文本路径下会通过 Parley / ICU4X 请求 CJK complex segmentation。`icu_segmenter 2.2.0` 在缺少 `ja` 模型时会记录 `No segmentation model for language: ja` warning，并继续 fallback。项目通过 `[patch.crates-io]` vendor 了 `icu_segmenter 2.2.0` 的最小补丁，只移除这条非致命 warning，不改变分段 fallback 行为。
-
-应用启动时仍在创建 Slint 窗口前强制设置 `LC_ALL` / `LANG` 等变量为 `C.UTF-8`，作为 Slint 1.16.1 下的保守 workaround。升级 Slint 或 ICU4X 后应重新评估并尽量移除该 patch。
+Fika no longer vendors `icu_segmenter` or forces `LC_ALL` / `LANG` at startup. The earlier ICU4X CJK segmentation warning workaround was removed after the upstream fix landed, so text segmentation now follows the process locale and the Slint/ICU stack supplied by Cargo.
 
 ### Thumbnail Pipeline
 

@@ -93,7 +93,6 @@ use fs::{file_actions, privilege, search, thumbnails};
 slint::include_modules!();
 
 fn main() -> Result<(), slint::PlatformError> {
-    sanitize_locale_for_icu4x();
     let raw_args = env::args().skip(1).collect::<Vec<_>>();
     let args = Args::parse(raw_args.into_iter());
 
@@ -1109,19 +1108,6 @@ fn chooser_parent_window_binding(parent_window: Option<&str>) -> (&'static str, 
         ("metadata-only", "slint-parent-token-binding-unavailable")
     } else {
         ("none", "no-parent-window")
-    }
-}
-
-fn sanitize_locale_for_icu4x() {
-    // This runs before Slint creates windows or worker threads. Slint 1.16.1's
-    // text stack can ask ICU4X for segmentation models that are not shipped in
-    // the selected data set, so force a neutral UTF-8 locale for now.
-    unsafe {
-        env::set_var("LC_ALL", "C.UTF-8");
-        env::set_var("LC_CTYPE", "C.UTF-8");
-        env::set_var("LC_MESSAGES", "C.UTF-8");
-        env::set_var("LANG", "C.UTF-8");
-        env::set_var("LANGUAGE", "C");
     }
 }
 
@@ -2838,7 +2824,7 @@ fn sync_virtual_entries_with_count(
     let size_px = thumbnail_size_px(ui);
     let layout = MainGridLayout::from_ui(ui);
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-    let main_width = (window_size.width - ui.get_sidebar_width_px() - 8.0).max(1.0);
+    let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
     let viewport_width = active_main_pane_width(main_width, ui.get_split_view_open());
     let update = {
         let mut state_ref = state.borrow_mut();

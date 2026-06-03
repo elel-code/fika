@@ -87,7 +87,7 @@
 - [x] Dolphin-style delayed main-view clearing for uncached directory navigation.
 - [x] Per-directory main-view scroll position memory.
   - Current: remembered view states are cached with an LRU cap so long browsing sessions cannot keep every visited path's viewport state forever.
-- [x] Patched non-fatal ICU4X CJK segmentation warning from `icu_segmenter 2.2.0`.
+- [x] Removed local `icu_segmenter` vendor patch after the upstream ICU4X segmentation warning fix landed.
 - [x] Mouse Back/Forward scoped to the right-side main pane only.
 - [x] Adaptive Open With hover submenu placement.
 - [x] Use Slint master `DragArea` / `DropArea` built-ins without the experimental compiler flag.
@@ -484,9 +484,9 @@ Acceptance for all:
   - Current: the TopBar bottom divider now starts at the sidebar/main split, so the header and main pane read as one shared layer while the sidebar panel begins below the header.
   - Current: the default sidebar width is now 280px to better match COSMIC's narrower navigation rhythm, while persisted user widths still override it.
   - Current: the top-bar search field now follows COSMIC's 240px header search rhythm through min/preferred/max layout constraints, and the path field relaxes its minimum width while search is active so search mode cannot squeeze the main-pane geometry or create Slint layout recursion.
-  - Current: `AppWindow` now owns a single `main-content-left` edge shared by the top bar and main pane; the sidebar divider sits at the main-pane side of the resize gutter, while the raised rounded sidebar content panel starts below the unified top bar.
+  - Current: `AppWindow` now owns a single `main-content-left` edge shared by the top bar and main pane; the full-height sidebar panel starts below the unified top bar, and its right border is the visible divider.
   - Current: the light shell base is subtly distinct from the raised white sidebar, the sidebar border is stronger than the flat top/main separators, and Places/Devices rows are inset inside the rounded sidebar panel.
-  - Current: sidebar content geometry now uses explicit 10px panel margin and 16px radius tokens, keeping the COSMIC-style raised sidebar panel consistent below the unified top bar while the top bar and main pane remain a shared flat base.
+  - Current: sidebar content geometry now uses a full-height below-header panel with a 16px radius, keeping the COSMIC-style raised sidebar panel equal-height with the main pane while the top bar and main pane remain a shared flat base.
   - Current: shared header controls now use quieter COSMIC-like 32px icon-button styling with 8px radius and lighter text weight, and path/search fields use calmer light/dark tokens without changing the main file arrangement.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.

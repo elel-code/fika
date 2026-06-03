@@ -94,9 +94,8 @@ export component AppWindow inherits Window {
     in-out property <length> main_viewport_offset: 0px;
     private property <length> top-bar-height: 56px;
     private property <length> status-bar-height: 36px;
-    private property <length> sidebar-splitter-width: 8px;
-    private property <length> sidebar-divider-offset: 7px;
-    private property <length> main-content-left: root.sidebar_width_px * 1px + root.sidebar-splitter-width;
+    private property <length> sidebar-resize-hit-width: 8px;
+    private property <length> main-content-left: root.sidebar_width_px * 1px;
     private property <bool> search-filters-active: root.search_kind_filter != 0 || root.search_modified_filter != 0 || root.search_size_filter != 0;
     private property <bool> search-panel-visible: root.search_bar_open || root.search_query != "" || root.search-filters-active;
     private property <length> search-panel-height: root.search-panel-visible ? (root.active-pane-width < 760px ? 78px : 44px) : 0px;
@@ -118,7 +117,6 @@ export component AppWindow inherits Window {
     private property <color> sidebar-surface-color: root.dark_mode ? #181e24 : #ffffff;
     private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d8e1ea;
     private property <color> shell-separator-color: root.dark_mode ? #242b33 : #e5eaf0;
-    private property <length> sidebar-panel-margin: 10px;
     private property <length> sidebar-panel-radius: 16px;
     private property <float> sidebar-resize-start-width-px: 280;
     private property <length> sidebar-resize-press-x: 0px;
@@ -653,10 +651,8 @@ export component AppWindow inherits Window {
                     background: transparent;
 
                     sidebar-surface := Rectangle {
-                        x: root.sidebar-panel-margin;
-                        y: root.sidebar-panel-margin;
-                        width: max(1px, parent.width - 2 * root.sidebar-panel-margin);
-                        height: max(1px, parent.height - 2 * root.sidebar-panel-margin);
+                        width: parent.width;
+                        height: parent.height;
                         border-radius: root.sidebar-panel-radius;
                         background: root.sidebar-surface-color;
                         border-color: root.sidebar-border-color;
@@ -834,20 +830,11 @@ export component AppWindow inherits Window {
                     }
                 }
                 }
-            }
-
-            Rectangle {
-                width: root.sidebar-splitter-width;
-                background: root.shell-base-color;
-
-                Rectangle {
-                    x: root.sidebar-divider-offset;
-                    width: 1px;
-                    height: parent.height;
-                    background: root.shell-separator-color;
-                }
 
                 resize-touch := TouchArea {
+                    x: max(0px, parent.width - root.sidebar-resize-hit-width);
+                    width: root.sidebar-resize-hit-width;
+                    height: parent.height;
                     mouse-cursor: ew-resize;
 
                     pointer-event(event) => {
