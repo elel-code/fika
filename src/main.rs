@@ -2626,7 +2626,7 @@ fn apply_file_operation_result(
     if let Some(status_message) =
         operation_final_status(status_message, requested_privilege, summary.remaining)
     {
-        set_status(ui, &status_message);
+        set_status_for_panes(ui, state, &summary.refresh_pane_ids, &status_message);
     }
     start_next_operation(ui, state, bridge);
 }
@@ -4934,6 +4934,27 @@ mod tests {
                 inactive: false,
                 fallback: true,
             }
+        );
+    }
+
+    #[test]
+    fn file_operation_completion_status_uses_affected_pane_route() {
+        let source = include_str!("main.rs");
+        let body = source
+            .split_once("fn apply_file_operation_result(")
+            .and_then(|(_, rest)| rest.split_once("fn register_file_undo("))
+            .map(|(body, _)| body)
+            .expect("apply_file_operation_result body should be present");
+
+        assert!(
+            body.contains(
+                "set_status_for_panes(ui, state, &summary.refresh_pane_ids, &status_message);"
+            ),
+            "file operation completion status should write to the panes affected by the operation"
+        );
+        assert!(
+            !body.contains("set_status(ui, &status_message);"),
+            "file operation completion status must not jump to whichever pane is focused when the async result returns"
         );
     }
 
