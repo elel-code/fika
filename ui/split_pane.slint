@@ -46,6 +46,7 @@ export component SplitPaneView inherits Rectangle {
     private property <int> virtual-column-count: max(1, ceil(root.entries.length / root.rows-per-column));
     private property <length> virtual-layer-width: max(1px, root.virtual-column-count * root.cell-width);
     private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width)) / 1px);
+    private property <float> viewport-sync-epsilon: 0.5;
     private property <bool> selection-rect-active: false;
     private property <bool> selection-rect-pending: false;
     private property <bool> selection-rect-toggle: false;
@@ -131,7 +132,7 @@ export component SplitPaneView inherits Rectangle {
         viewport-y: 0px;
 
         changed viewport-x => {
-            if (root.viewport-x != max(0, -self.viewport-x / 1px)) {
+            if (root.viewport-x + root.viewport-sync-epsilon < max(0, -self.viewport-x / 1px) || root.viewport-x > max(0, -self.viewport-x / 1px) + root.viewport-sync-epsilon) {
                 root.focus_requested();
                 root.viewport-x = max(0, -self.viewport-x / 1px);
                 root.view_changed();

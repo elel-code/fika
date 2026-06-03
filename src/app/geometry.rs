@@ -2267,6 +2267,15 @@ mod tests {
         ));
         assert!(split_pane.contains("root.pan-horizontal(delta);"));
         assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
+        assert!(split_pane.contains("private property <float> viewport-sync-epsilon: 0.5;"));
+        assert!(
+            split_pane.contains("root.viewport-x + root.viewport-sync-epsilon <")
+                && split_pane.contains(
+                    "root.viewport-x > max(0, -self.viewport-x / 1px) + root.viewport-sync-epsilon"
+                )
+                && !split_pane.contains("root.viewport-x != max(0, -self.viewport-x / 1px)"),
+            "ScrollView viewport writeback should ignore sub-pixel drift instead of churning virtual slices"
+        );
         assert!(split_pane.contains("virtual-layer := Rectangle"));
         assert!(split_pane.contains(
             "private property <int> virtual-column-count: max(1, ceil(root.entries.length / root.rows-per-column));"

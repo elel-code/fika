@@ -32,6 +32,7 @@
   - Current: virtual slice preparation lives in `src/app/virtual_view.rs`, so range planning, viewport clamping, rebuild decisions, filtered slicing, and thumbnail-cache decoration are testable away from Slint property updates.
   - Current: virtual tiles are placed inside a local virtual layer anchored at the first virtualized column, so large directories do not force Slint to maintain huge per-tile global coordinates.
   - Current: virtual range metadata is cached; scrolling inside the same range does not reset the Slint model.
+  - Current: virtual range reuse now keeps the current Slint model while its cached overscan slice still covers the newly visible columns, and ScrollView viewport writeback ignores sub-pixel drift, reducing large-directory horizontal jitter during small scroll steps.
   - Current: ordinary wheel scrolling requests pane focus only once per event path before panning, while Ctrl+wheel still focuses before zooming.
   - Current: Rust uses a tested `VirtualGridPlan` to calculate clamped viewport position, scroll extent, visible range, overscan range, and Slint anchor column from one source of truth.
   - Current: offscreen thumbnail completions update the cache without resetting the Slint model; visible completions still refresh the current virtual slice.
@@ -542,6 +543,7 @@ Acceptance for all:
   - Current: the inactive-pane preview now uses the same `VirtualGridPlan` family as the main view and slices entries around its own horizontal viewport instead of sending a fixed first chunk, reducing Slint model/tile pressure for large split directories.
   - Current: inactive-pane preview slicing, viewport clamping, thumbnail decoration, and virtual-start metadata now live in `src/app/virtual_view.rs`, so `main.rs` only applies the prepared preview model to Slint properties.
   - Current: inactive-pane preview virtual range metadata is cached; scrolling inside the same preview range reuses the existing Slint model instead of resetting it on every viewport update.
+  - Current: inactive-pane preview scrolling also reuses its current model while the cached overscan slice covers the newly visible columns, so split panes avoid anchor/model churn on small scroll movements.
   - Current: the inactive-pane preview now handles ordinary wheel / horizontal wheel as horizontal scrolling on its own viewport, while Ctrl+wheel still uses the shared icon zoom action.
   - Current: double-clicking an inactive preview tile now routes focus to that pane and then reuses the active-pane `open_path()` flow, so split preview can open folders/files without duplicating navigation and file-open logic.
   - Current: clicking the inactive preview swaps active/inactive pane focus without a directory rescan, synchronizes address/search/selection/status state from the newly active pane, and rebuilds the active virtual slice for the focused pane.

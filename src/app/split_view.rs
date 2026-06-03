@@ -102,14 +102,14 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
             ui.set_inactive_pane_selected_status(selection_status_text(&selected_paths));
         }
     }
-    ui.set_inactive_pane_entry_count(update.entry_count as i32);
-    ui.set_inactive_pane_virtual_start_index(update.range.start as i32);
-    ui.set_inactive_pane_virtual_start_column(update.start_column as i32);
     ui.set_inactive_pane_viewport_x(update.viewport_x);
     ui.set_inactive_pane_viewport_offset(-update.viewport_x);
     if update.rebuild_model {
         ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
+        ui.set_inactive_pane_virtual_start_index(update.range.start as i32);
+        ui.set_inactive_pane_virtual_start_column(update.start_column as i32);
     }
+    ui.set_inactive_pane_entry_count(update.entry_count as i32);
 }
 
 pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {

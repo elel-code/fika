@@ -190,11 +190,22 @@ fn should_rebuild_virtual_cache(
     entry_count: usize,
     thumbnail_size_px: u32,
 ) -> bool {
-    cache.range != plan.range
-        || cache.entry_count != entry_count
+    cache.entry_count != entry_count
         || cache.rows_per_column != plan.rows_per_column
         || cache.cell_width != plan.cell_width
         || cache.thumbnail_size_px != thumbnail_size_px
+        || !cached_range_covers_visible_range(cache, &plan.visible_range)
+}
+
+fn cached_range_covers_visible_range(
+    cache: &VirtualViewCache,
+    visible_range: &Range<usize>,
+) -> bool {
+    if visible_range.is_empty() {
+        return cache.range.is_empty();
+    }
+
+    cache.range.start <= visible_range.start && cache.range.end >= visible_range.end
 }
 
 #[cfg(test)]
@@ -269,6 +280,44 @@ mod tests {
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
         assert_eq!(state.panes.active.view.viewport_x, 40.0);
+    }
+
+    #[test]
+    fn virtual_view_update_reuses_model_while_cached_range_covers_visible_range() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.panes.active.entries = (0..160).map(test_entry).collect();
+
+        let first = prepare_virtual_view_update(
+            &mut state,
+            VirtualViewInput {
+                layout: layout(),
+                requested_viewport_x: 0.0,
+                viewport_width: 250.0,
+                thumbnail_size_px: 64,
+                schedule_thumbnails: true,
+                visible_count_override: None,
+            },
+        );
+        assert!(first.rebuild_model);
+        assert_eq!(first.range, 0..20);
+        assert_eq!(first.visible_range, 0..12);
+
+        let second = prepare_virtual_view_update(
+            &mut state,
+            VirtualViewInput {
+                layout: layout(),
+                requested_viewport_x: 115.0,
+                viewport_width: 250.0,
+                thumbnail_size_px: 64,
+                schedule_thumbnails: true,
+                visible_count_override: None,
+            },
+        );
+        assert_eq!(second.visible_range, 4..16);
+        assert_eq!(second.range, 0..24);
+        assert!(!second.rebuild_model);
+        assert!(second.entries.is_empty());
+        assert_eq!(state.panes.active.view.virtual_view.range, first.range);
     }
 
     #[test]
@@ -401,6 +450,48 @@ mod tests {
         assert!(forced.rebuild_model);
         assert_eq!(forced.range, first.range);
         assert_eq!(forced.entries.len(), first.entries.len());
+    }
+
+    #[test]
+    fn split_preview_update_reuses_model_while_cached_range_covers_visible_range() {
+        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
+        assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
+        state.panes.inactive_mut().unwrap().entries = (0..160).map(test_entry).collect();
+
+        let first = prepare_split_preview_update(
+            &mut state,
+            SplitPreviewInput {
+                pane_width: 420.0,
+                pane_height: 704.0,
+                zoom_level: 1,
+                thumbnail_size_px: 80,
+                force_rebuild_model: false,
+            },
+        )
+        .unwrap();
+        assert!(first.rebuild_model);
+        assert_eq!(first.range, 0..28);
+
+        state.panes.inactive_mut().unwrap().view.viewport_x = 230.0;
+        let second = prepare_split_preview_update(
+            &mut state,
+            SplitPreviewInput {
+                pane_width: 420.0,
+                pane_height: 704.0,
+                zoom_level: 1,
+                thumbnail_size_px: 80,
+                force_rebuild_model: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(second.range, 0..42);
+        assert!(!second.rebuild_model);
+        assert!(second.entries.is_empty());
+        assert_eq!(
+            state.panes.inactive().unwrap().view.virtual_view.range,
+            first.range
+        );
     }
 
     #[test]
