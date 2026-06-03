@@ -2,6 +2,7 @@ use crate::{AppWindow, MenuGeometry};
 use slint::ComponentHandle;
 use std::ops::Range;
 
+const SHELL_HEADER_HEIGHT: f32 = 56.0;
 const TOP_BAR_HEIGHT: f32 = 56.0;
 const STATUS_BAR_HEIGHT: f32 = 36.0;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
@@ -58,14 +59,18 @@ impl MainGridLayout {
             ui.get_search_size_filter(),
             active_width,
         );
-        let available_grid_height =
-            (pane.bottom - pane.top - STATUS_BAR_HEIGHT - search_panel_height - 2.0 * padding)
-                .max(row_height);
+        let available_grid_height = (pane.bottom
+            - pane.top
+            - TOP_BAR_HEIGHT
+            - STATUS_BAR_HEIGHT
+            - search_panel_height
+            - 2.0 * padding)
+            .max(row_height);
         let rows_per_column = (available_grid_height / row_height).floor().max(1.0) as usize;
 
         Self {
             main_x: pane.left,
-            main_y: pane.top + search_panel_height,
+            main_y: pane.top + TOP_BAR_HEIGHT + search_panel_height,
             viewport_x: ui.get_main_viewport_x(),
             rows_per_column,
             cell_width,
@@ -112,9 +117,9 @@ pub(crate) fn main_pane_bounds(
 ) -> MainPaneBounds {
     MainPaneBounds {
         left: sidebar_width_px,
-        top: TOP_BAR_HEIGHT,
+        top: SHELL_HEADER_HEIGHT,
         right: window_width.max(sidebar_width_px),
-        bottom: window_height.max(TOP_BAR_HEIGHT),
+        bottom: window_height.max(SHELL_HEADER_HEIGHT),
     }
 }
 
@@ -1123,9 +1128,9 @@ mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
-        PopupRect, RootMenuGeometry, TOP_BAR_HEIGHT, active_main_pane_width, context_menu_metrics,
-        main_pane_bounds, main_scroll_max_x, place_drop_geometry, search_panel_height,
-        split_preview_plan, virtual_entry_range, virtual_grid_plan,
+        PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, active_main_pane_width,
+        context_menu_metrics, main_pane_bounds, main_scroll_max_x, place_drop_geometry,
+        search_panel_height, split_preview_plan, virtual_entry_range, virtual_grid_plan,
     };
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
@@ -1469,7 +1474,7 @@ mod tests {
     }
 
     #[test]
-    fn cosmic_shell_chrome_uses_main_pane_header_with_below_header_sidebar_panel() {
+    fn cosmic_shell_chrome_uses_shell_header_with_main_pane_toolbar() {
         let app = include_str!("../../ui/app.slint");
         let top_bar = include_str!("../../ui/top_bar.slint");
         let search_panel = include_str!("../../ui/search_panel.slint");
@@ -1502,6 +1507,10 @@ mod tests {
             "sidebar resize should keep a transparent edge hit area without taking layout width"
         );
         assert!(
+            app.contains("private property <length> shell-header-height: 56px;"),
+            "AppWindow should reserve a shell/header row above the sidebar and main pane"
+        );
+        assert!(
             !app.contains("sidebar-splitter-width")
                 && !app.contains("sidebar-divider-offset")
                 && !app.contains("background: root.shell-separator-color;"),
@@ -1526,28 +1535,24 @@ mod tests {
         let main_pane_index = app
             .find("main-pane := Rectangle")
             .expect("AppWindow should instantiate the main pane");
-        let header_row_index = app
-            .find("header-row := HorizontalLayout")
-            .expect("AppWindow should reserve a shared header row");
+        let shell_header_index = app
+            .find("shell-header := Rectangle")
+            .expect("AppWindow should reserve the top shell/header row");
         let content_row_index = app
             .find("content-row := HorizontalLayout")
-            .expect("AppWindow should place sidebar and main content below the header");
+            .expect("AppWindow should place sidebar and main content below the shell header");
         let top_bar_index = app
             .find("TopBar {")
-            .expect("AppWindow should instantiate the main-pane TopBar");
-        let sidebar_header_slot_index = app
-            .find("sidebar-header-slot := Rectangle")
-            .expect("left header slot should align the main-pane toolbar with the sidebar edge");
+            .expect("AppWindow should instantiate the main-pane internal TopBar");
         let sidebar_surface_index = app
             .find("sidebar-surface := Rectangle")
             .expect("sidebar content panel should be present");
         assert!(
-            header_row_index < sidebar_header_slot_index
-                && sidebar_header_slot_index < top_bar_index
-                && top_bar_index < content_row_index
+            shell_header_index < content_row_index
                 && content_row_index < sidebar_surface_index
-                && sidebar_surface_index < main_pane_index,
-            "toolbar should live in the header row on the main side, while sidebar panel starts in the below-header content row"
+                && sidebar_surface_index < main_pane_index
+                && main_pane_index < top_bar_index,
+            "address/navigation toolbar should be inside the main pane below the shell header, not in the shell header"
         );
         assert!(
             !app.contains("SidebarSection { label: \"Remote\""),
@@ -1582,6 +1587,10 @@ mod tests {
                 && app.contains("height: root.main-grid-height;")
                 && app.contains("viewport-height: root.main-grid-height;"),
             "main grid component height and virtual viewport height should share one available-height binding"
+        );
+        assert!(
+            app.contains("root.main-content-height - root.top-bar-height - root.status-bar-height - root.search-panel-height"),
+            "main grid height should subtract the main-pane toolbar, search strip, and status bar from the below-shell content row"
         );
         assert!(
             app.contains(
@@ -1774,7 +1783,7 @@ mod tests {
         let bounds = main_pane_bounds(320.0, 1100.0, 760.0);
 
         assert_eq!(bounds.left, 320.0);
-        assert_eq!(bounds.top, TOP_BAR_HEIGHT);
+        assert_eq!(bounds.top, SHELL_HEADER_HEIGHT);
         assert_eq!(bounds.right, 1100.0);
         assert_eq!(bounds.bottom, 760.0);
     }
