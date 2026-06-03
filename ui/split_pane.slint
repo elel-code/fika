@@ -79,7 +79,6 @@ export component SplitPaneView inherits Rectangle {
             root.viewport-offset = -root.viewport-x * 1px;
             root.view_changed();
         }
-        root.focus_requested();
     }
 
     function stable-viewport-x(raw: float) -> float {
@@ -168,7 +167,6 @@ export component SplitPaneView inherits Rectangle {
                 root.viewport-x = root.pan-target-viewport-x;
                 root.viewport-offset = -root.viewport-x * 1px;
                 root.view_changed();
-                root.focus_requested();
             }
         }
 

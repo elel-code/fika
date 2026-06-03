@@ -40,6 +40,7 @@ use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
     ExternalEditResult, FileOpenResult, FileOpenSuccess, FileOperationProgress,
     FileOperationResult, FileUndoResult, RecursiveSearchProgress, RecursiveSearchResult,
+    VirtualViewResult,
 };
 use app::file_clipboard::{
     apply_clipboard_load_result, refresh_clipboard_availability_async, sync_clipboard_ui,
@@ -72,8 +73,9 @@ use app::selection::{
 };
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui,
-    set_pane_viewport_ui_if_clamped, sync_navigation_ui, sync_pane_slot_preview_ui,
-    sync_pane_slot_preview_viewport_ui, sync_pane_slot_ui, sync_pane_slots_ui, toggle_split_view,
+    set_pane_viewport_ui_if_clamped, sync_focus_navigation_ui, sync_navigation_ui,
+    sync_pane_slot_preview_ui, sync_pane_slot_preview_viewport_ui, sync_pane_slot_ui,
+    sync_pane_slots_ui, toggle_split_view,
 };
 use app::state::{AppState, DeviceAction, FileUndo, PaneExternalEdit};
 use app::thumbnail_pipeline::{
@@ -86,7 +88,7 @@ use app::transfer::{
     prepare_pane_transfer, prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
     start_transfer_operation,
 };
-use app::virtual_view::{VirtualViewInput, prepare_virtual_view_update};
+use app::virtual_view::{VirtualViewSnapshotInput, prepare_virtual_view_snapshot_update};
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::settings::{AppSettings, load_settings, save_settings};
@@ -1736,7 +1738,7 @@ fn load_prepared_pane_directory(
         {
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
-                pane.entries = cached_entries;
+                pane.set_entries(cached_entries);
                 pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
                 pane.view.virtual_view.invalidate();
             }
@@ -1746,7 +1748,7 @@ fn load_prepared_pane_directory(
         {
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
-                pane.entries.clear();
+                pane.clear_entries();
                 pane.search.visible_entries_have_locations = false;
                 pane.view.virtual_view.invalidate();
             }
@@ -1868,7 +1870,7 @@ fn load_directory_with_preservation(
         {
             let mut state = state.borrow_mut();
             let pane = state.panes.active_mut();
-            pane.entries = cached_entries;
+            pane.set_entries(cached_entries);
             pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
             pane.view.virtual_view.invalidate();
         }
@@ -2194,6 +2196,9 @@ fn apply_async_event(
         AsyncEvent::ClipboardLoaded(result) => {
             apply_clipboard_load_result(ui, state, result);
         }
+        AsyncEvent::VirtualViewPrepared(result) => {
+            apply_virtual_view_result(ui, state, bridge, result);
+        }
         AsyncEvent::PrivilegedOperationFinished(result) => {
             apply_privileged_operation_result(ui, state, bridge, result);
         }
@@ -2264,7 +2269,7 @@ fn apply_directory_result(
                 } else {
                     let cache_entries = {
                         let pane = state.panes.active_mut();
-                        pane.entries = entries.into_iter().map(to_file_entry).collect();
+                        pane.set_entries(entries.into_iter().map(to_file_entry).collect());
                         pane.search.visible_entries_have_locations =
                             entries_have_locations(&pane.entries);
                         pane.view.virtual_view.invalidate();
@@ -2345,7 +2350,7 @@ fn apply_directory_result(
                         let mut state = state.borrow_mut();
                         {
                             let pane = state.panes.active_mut();
-                            pane.entries.clear();
+                            pane.clear_entries();
                             pane.search.visible_entry_indices = None;
                             pane.search.visible_entries_have_locations = false;
                             pane.view.virtual_view.invalidate();
@@ -2412,12 +2417,14 @@ fn apply_pane_directory_result(
                     let cache_entries = pane.entries.clone();
                     state.insert_directory_cache(result.path.clone(), cache_entries);
                 } else {
-                    pane.entries = entries
-                        .take()
-                        .expect("entries should be present")
-                        .into_iter()
-                        .map(to_file_entry)
-                        .collect();
+                    pane.set_entries(
+                        entries
+                            .take()
+                            .expect("entries should be present")
+                            .into_iter()
+                            .map(to_file_entry)
+                            .collect(),
+                    );
                     pane.search.visible_entries_have_locations =
                         entries_have_locations(&pane.entries);
                     pane.view.virtual_view.invalidate();
@@ -2665,7 +2672,7 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         let current_dir = state.panes.active().current_dir.clone();
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
             let pane = state.panes.active_mut();
-            pane.entries = entries;
+            pane.set_entries(entries);
             pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
             pane.view.virtual_view.invalidate();
         }
@@ -2838,7 +2845,7 @@ fn apply_recursive_search_result(
             {
                 let mut state = state.borrow_mut();
                 let pane = state.panes.active_mut();
-                pane.entries = entries.clone();
+                pane.set_entries(entries);
                 pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
                 pane.view.virtual_view.invalidate();
             }
@@ -3463,20 +3470,98 @@ fn sync_virtual_entries_with_count(
         ui.get_split_view_open(),
         ui.get_split_pane_ratio(),
     );
-    let update = {
+    let requested_viewport_x = ui.get_main_viewport_x();
+    let Some((pane_id, generation, input)) = ({
         let mut state_ref = state.borrow_mut();
-        prepare_virtual_view_update(
-            &mut state_ref,
-            VirtualViewInput {
+        let chooser_patterns = state_ref
+            .chooser_filters
+            .get(state_ref.chooser_filter_index)
+            .map(|filter| filter.patterns.clone())
+            .unwrap_or_default();
+        let pane = state_ref.panes.active_mut();
+        let generation = pane.view.virtual_generation.next();
+        pane.view.viewport_x = requested_viewport_x;
+        let query = pane.search.query.to_ascii_lowercase();
+        Some((
+            pane.id,
+            generation,
+            VirtualViewSnapshotInput {
                 layout,
-                requested_viewport_x: ui.get_main_viewport_x(),
+                requested_viewport_x,
                 viewport_width,
                 thumbnail_size_px: size_px,
                 schedule_thumbnails,
                 visible_count_override,
+                cache: pane.view.virtual_view.clone(),
+                entries: pane.entry_snapshot(),
+                visible_entry_indices: pane.search.visible_entry_indices.clone(),
+                visible_entries_have_locations: pane.search.visible_entries_have_locations,
+                query,
+                kind_filter: pane.search.kind_filter,
+                modified_filter: pane.search.modified_filter,
+                size_filter: pane.search.size_filter,
+                chooser_patterns,
             },
-        )
+        ))
+    }) else {
+        return;
     };
+
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let Ok(update) =
+            tokio::task::spawn_blocking(move || prepare_virtual_view_snapshot_update(input)).await
+        else {
+            return;
+        };
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::VirtualViewPrepared(VirtualViewResult {
+                pane_id,
+                generation,
+                thumbnail_size_px: size_px,
+                schedule_thumbnails,
+                rows_per_column: layout.rows_per_column,
+                cell_width: layout.cell_width,
+                update,
+            }),
+        );
+    });
+}
+
+fn apply_virtual_view_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: VirtualViewResult,
+) {
+    let update = result.update;
+    {
+        let mut state_ref = state.borrow_mut();
+        let Some(slot) = state_ref.panes.slot_for_id(result.pane_id) else {
+            return;
+        };
+        if slot != 0 {
+            return;
+        }
+        let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
+            return;
+        };
+        if !pane.view.virtual_generation.is_current(result.generation) {
+            return;
+        }
+        pane.view.viewport_x = update.viewport_x;
+        if update.rebuild_model {
+            pane.view.virtual_view.range = update.range.clone();
+            pane.view.virtual_view.entry_count = update.entry_count;
+            pane.view.virtual_view.rows_per_column = result.rows_per_column;
+            pane.view.virtual_view.cell_width = result.cell_width;
+            pane.view.virtual_view.thumbnail_size_px = result.thumbnail_size_px;
+        }
+    }
+
     set_pane_viewport_ui_if_clamped(ui, 0, update.viewport_x, update.viewport_clamped);
     if !update.rebuild_model {
         if ui.get_entry_count() != update.entry_count as i32 {
@@ -3486,12 +3571,29 @@ fn sync_virtual_entries_with_count(
         return;
     }
 
-    if schedule_thumbnails {
-        let thumbnail_entries =
-            prioritize_thumbnail_entries(&update.entries, update.range.start, update.visible_range);
-        schedule_visible_thumbnails(ui, state, bridge, &thumbnail_entries, size_px, false);
+    let mut entries = update
+        .entries
+        .into_iter()
+        .map(|entry| entry.to_file_entry())
+        .collect::<Vec<_>>();
+    {
+        let state_ref = state.borrow();
+        decorate_entries_with_cached_thumbnails(&state_ref, &mut entries, result.thumbnail_size_px);
     }
-    set_main_virtual_entries_ui(ui, update.range.start, update.entries);
+
+    if result.schedule_thumbnails {
+        let thumbnail_entries =
+            prioritize_thumbnail_entries(&entries, update.range.start, update.visible_range);
+        schedule_visible_thumbnails(
+            ui,
+            state,
+            bridge,
+            &thumbnail_entries,
+            result.thumbnail_size_px,
+            false,
+        );
+    }
+    set_main_virtual_entries_ui(ui, update.range.start, entries);
     ui.set_virtual_start_index(update.range.start as i32);
     ui.set_virtual_start_column(update.start_column as i32);
     ui.set_entry_count(update.entry_count as i32);
@@ -3942,7 +4044,7 @@ fn focus_pane_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
         state.panes.focus_slot(slot)
     };
     if focused && previous_slot != slot {
-        sync_navigation_ui(ui, state);
+        sync_focus_navigation_ui(ui, state);
     }
 }
 
@@ -5304,8 +5406,9 @@ mod tests {
         assert!(
             body.contains("let previous_slot = { state.borrow().panes.focused_slot() };")
                 && body.contains("if focused && previous_slot != slot {")
-                && body.contains("sync_navigation_ui(ui, state);"),
-            "clicking inside the already focused pane must not rebuild pane surfaces during double-click or drag gestures"
+                && body.contains("sync_focus_navigation_ui(ui, state);")
+                && !body.contains("sync_navigation_ui(ui, state);"),
+            "clicking inside the already focused pane must not rebuild pane surfaces, and focus changes should skip left-pane rewrites"
         );
     }
 

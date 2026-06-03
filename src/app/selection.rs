@@ -204,6 +204,7 @@ pub(crate) fn filtered_entry_summary(
     summary
 }
 
+#[cfg(test)]
 pub(crate) fn filtered_entries_range(state: &AppState, range: Range<usize>) -> Vec<FileEntry> {
     if range.is_empty() {
         return Vec::new();
@@ -244,6 +245,7 @@ pub(crate) fn filtered_entries_range(state: &AppState, range: Range<usize>) -> V
     entries
 }
 
+#[cfg(test)]
 fn annotate_visible_location_groups(
     state: &AppState,
     start_visible_index: usize,
@@ -266,6 +268,7 @@ fn annotate_visible_location_groups(
     }
 }
 
+#[cfg(test)]
 fn visible_entry_location_at(state: &AppState, visible_index: usize) -> Option<String> {
     if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
         return indices
@@ -294,6 +297,7 @@ fn visible_entry_location_at(state: &AppState, visible_index: usize) -> Option<S
         .map(|entry| entry.location.to_string())
 }
 
+#[cfg(test)]
 fn search_group_label(location: &str) -> String {
     if location == "." {
         "Current folder".to_string()

@@ -637,6 +637,24 @@ pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
     sync_pane_slots_ui(ui);
 }
 
+pub(crate) fn sync_focus_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let (focused_slot, focused_dir, focused_selection) = {
+        let state = state.borrow();
+        let focused_slot = state.panes.focused_slot();
+        let focused = state
+            .panes
+            .pane_for_target(PaneTarget::Focused)
+            .unwrap_or(&state.panes.active());
+        (
+            focused_slot,
+            focused.current_dir.clone(),
+            focused.selection.paths.clone(),
+        )
+    };
+
+    sync_focused_ui(ui, focused_slot, &focused_dir, &focused_selection);
+}
+
 pub(crate) fn toggle_split_view(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,

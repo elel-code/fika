@@ -2309,8 +2309,14 @@ mod tests {
             "function pan-horizontal(delta: length) {\n        root.pan-target-viewport-x = root.entry-count == 0"
         ));
         assert!(split_pane.contains(
-            "root.viewport-offset = -root.viewport-x * 1px;\n            root.view_changed();\n        }\n        root.focus_requested();"
+            "root.viewport-offset = -root.viewport-x * 1px;\n            root.view_changed();\n        }"
         ));
+        assert!(
+            !split_pane.contains(
+                "root.viewport-offset = -root.viewport-x * 1px;\n            root.view_changed();\n        }\n        root.focus_requested();"
+            ),
+            "ordinary pane scrolling should not request focus after every viewport change"
+        );
         assert!(
             split_pane
                 .contains("activated(path) => {\n                        root.focus_requested();\n                        root.activated(path);")

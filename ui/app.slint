@@ -1000,6 +1000,12 @@ export component AppWindow inherits Window {
     }
 
     public function route-pane-focus(slot: int) {
+        if (root.focused_pane == slot) {
+            if (root.left_pane_path_focused || root.inactive_pane_path_focused || root.search-input-focused || root.chooser-save-input-focused) {
+                main-focus.focus();
+            }
+            return;
+        }
         main-focus.focus();
         root.pane_focus(slot);
     }

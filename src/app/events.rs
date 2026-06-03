@@ -1,4 +1,5 @@
 use crate::DeviceEntry;
+use crate::app::virtual_view::VirtualViewSnapshotUpdate;
 use crate::desktop::clipboard;
 use crate::desktop::open_with;
 use crate::fs::entries::RawFileEntry;
@@ -108,6 +109,17 @@ pub(crate) struct ClipboardLoadResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct VirtualViewResult {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) thumbnail_size_px: u32,
+    pub(crate) schedule_thumbnails: bool,
+    pub(crate) rows_per_column: usize,
+    pub(crate) cell_width: f32,
+    pub(crate) update: VirtualViewSnapshotUpdate,
+}
+
+#[derive(Debug)]
 pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
     DirectoryPrefetched {
@@ -129,6 +141,7 @@ pub(crate) enum AsyncEvent {
     DevicesChanged,
     DevicesLoaded(DevicesLoadedResult),
     ClipboardLoaded(ClipboardLoadResult),
+    VirtualViewPrepared(VirtualViewResult),
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),
     ThumbnailLoaded {

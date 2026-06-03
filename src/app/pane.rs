@@ -14,6 +14,7 @@ pub(crate) struct PaneState {
     pub(crate) id: u64,
     pub(crate) current_dir: PathBuf,
     pub(crate) entries: Vec<FileEntry>,
+    pub(crate) entry_snapshot: Arc<[PaneEntrySnapshot]>,
     pub(crate) history: PaneHistory,
     pub(crate) selection: PaneSelection,
     pub(crate) search: PaneSearch,
@@ -37,6 +38,7 @@ impl PaneState {
             id,
             current_dir,
             entries: Vec::new(),
+            entry_snapshot: Arc::from([]),
             history: PaneHistory::default(),
             selection: PaneSelection::default(),
             search: PaneSearch::default(),
@@ -52,11 +54,87 @@ impl PaneState {
 
     pub(crate) fn split_snapshot(&self, id: u64) -> Self {
         let mut pane = Self::new_with_id(id, self.current_dir.clone());
-        pane.entries = self.entries.clone();
+        pane.set_entries(self.entries.clone());
         pane.search = self.search.clone();
         pane.view.viewport_x = self.view.viewport_x;
         pane.view.virtual_view = self.view.virtual_view.clone();
         pane
+    }
+
+    pub(crate) fn set_entries(&mut self, entries: Vec<FileEntry>) {
+        self.entries = entries;
+        self.refresh_entry_snapshot();
+        self.view.virtual_generation.next();
+    }
+
+    pub(crate) fn clear_entries(&mut self) {
+        self.entries.clear();
+        self.entry_snapshot = Arc::from([]);
+        self.view.virtual_generation.next();
+    }
+
+    pub(crate) fn entry_snapshot(&mut self) -> Arc<[PaneEntrySnapshot]> {
+        if self.entry_snapshot.len() != self.entries.len() {
+            self.refresh_entry_snapshot();
+        }
+        Arc::clone(&self.entry_snapshot)
+    }
+
+    fn refresh_entry_snapshot(&mut self) {
+        self.entry_snapshot = self
+            .entries
+            .iter()
+            .map(PaneEntrySnapshot::from_entry)
+            .collect::<Vec<_>>()
+            .into();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PaneEntrySnapshot {
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) group: String,
+    pub(crate) location: String,
+    pub(crate) kind: String,
+    pub(crate) size: String,
+    pub(crate) size_bytes: f32,
+    pub(crate) modified: String,
+    pub(crate) modified_age_days: i32,
+    pub(crate) is_dir: bool,
+}
+
+impl PaneEntrySnapshot {
+    pub(crate) fn from_entry(entry: &FileEntry) -> Self {
+        Self {
+            name: entry.name.to_string(),
+            path: entry.path.to_string(),
+            group: entry.group.to_string(),
+            location: entry.location.to_string(),
+            kind: entry.kind.to_string(),
+            size: entry.size.to_string(),
+            size_bytes: entry.size_bytes,
+            modified: entry.modified.to_string(),
+            modified_age_days: entry.modified_age_days,
+            is_dir: entry.is_dir,
+        }
+    }
+
+    pub(crate) fn to_file_entry(&self) -> FileEntry {
+        FileEntry {
+            name: self.name.as_str().into(),
+            path: self.path.as_str().into(),
+            group: self.group.as_str().into(),
+            location: self.location.as_str().into(),
+            kind: self.kind.as_str().into(),
+            size: self.size.as_str().into(),
+            size_bytes: self.size_bytes,
+            modified: self.modified.as_str().into(),
+            modified_age_days: self.modified_age_days,
+            is_dir: self.is_dir,
+            thumbnail_state: 0,
+            thumbnail: Default::default(),
+        }
     }
 }
 
@@ -279,6 +357,7 @@ impl PaneSearch {
 pub(crate) struct PaneView {
     pub(crate) viewport_x: f32,
     pub(crate) virtual_view: VirtualViewCache,
+    pub(crate) virtual_generation: GenerationCounter,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
     state_cache: HashMap<PathBuf, DirectoryViewState>,
     state_cache_order: VecDeque<PathBuf>,
