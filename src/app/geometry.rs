@@ -1616,8 +1616,33 @@ mod tests {
             "sidebar panel should be explicit in the content row below the shell header"
         );
         assert!(
-            app.contains("width: parent.width;\n                        height: parent.height;"),
-            "sidebar panel should fill the content row so it is equal-height with the right main pane"
+            app.contains("private property <length> sidebar-bottom-gap: 14px;")
+                && app.contains(
+                    "private property <length> sidebar-content-bottom-padding: 22px;"
+                )
+                && app.contains("private property <length> sidebar-content-height: 10px + 30px + root.places.length * 38px + 30px + 30px + root.devices.length * 38px + (root.places.length + root.devices.length + 2) * 4px + root.sidebar-content-bottom-padding;"),
+            "sidebar should define explicit outer and inner bottom spacing"
+        );
+        let sidebar_content = app
+            .split_once("sidebar-surface := Rectangle {")
+            .expect("sidebar content panel should be present")
+            .1
+            .split_once("places-folder-drop := DropArea {")
+            .expect("sidebar list should be before the places drop area")
+            .0;
+        assert!(
+            sidebar_content.contains("width: parent.width;")
+                && sidebar_content
+                    .contains("height: max(1px, parent.height - root.sidebar-bottom-gap);")
+                && sidebar_content
+                    .contains("viewport-height: max(parent.height, root.sidebar-content-height);")
+                && sidebar_content
+                    .contains("padding-bottom: root.sidebar-content-bottom-padding;")
+                && !sidebar_content.contains("Rectangle { vertical-stretch: 1; }")
+                && !app.contains(
+                    "viewport-height: max(parent.height, 480px + (root.places.length + root.devices.length) * 38px);"
+                ),
+            "sidebar panel should leave a visible bottom gap and avoid stretching the list to fill the window"
         );
         let main_pane_index = app
             .find("main-pane := Rectangle")

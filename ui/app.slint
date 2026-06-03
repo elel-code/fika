@@ -413,6 +413,9 @@ export component AppWindow inherits Window {
     private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d8e1ea;
     private property <color> shell-separator-color: root.dark_mode ? #242b33 : #e5eaf0;
     private property <length> sidebar-panel-radius: 16px;
+    private property <length> sidebar-bottom-gap: 14px;
+    private property <length> sidebar-content-bottom-padding: 22px;
+    private property <length> sidebar-content-height: 10px + 30px + root.places.length * 38px + 30px + 30px + root.devices.length * 38px + (root.places.length + root.devices.length + 2) * 4px + root.sidebar-content-bottom-padding;
     private property <float> sidebar-resize-start-width-px: 280;
     private property <length> sidebar-resize-press-x: 0px;
     private property <float> split-resize-start-ratio: 0.5;
@@ -1105,7 +1108,7 @@ export component AppWindow inherits Window {
 
                     sidebar-surface := Rectangle {
                         width: parent.width;
-                        height: parent.height;
+                        height: max(1px, parent.height - root.sidebar-bottom-gap);
                         border-radius: root.sidebar-panel-radius;
                         background: root.sidebar-surface-color;
                         border-color: root.sidebar-border-color;
@@ -1130,7 +1133,7 @@ export component AppWindow inherits Window {
                     horizontal-scrollbar-policy: always-off;
                     vertical-scrollbar-policy: as-needed;
                     viewport-width: parent.width;
-                    viewport-height: max(parent.height, 480px + (root.places.length + root.devices.length) * 38px);
+                    viewport-height: max(parent.height, root.sidebar-content-height);
                     changed viewport-y => {
                         root.places_list_y_px = (self.absolute-position.y + 44px - self.viewport-y) / 1px;
                     }
@@ -1139,6 +1142,7 @@ export component AppWindow inherits Window {
                     padding-left: 8px;
                     padding-right: 8px;
                     padding-top: 10px;
+                    padding-bottom: root.sidebar-content-bottom-padding;
                     spacing: 4px;
                     width: sidebar-scroll.viewport-width;
                     height: sidebar-scroll.viewport-height;
@@ -1207,8 +1211,6 @@ export component AppWindow inherits Window {
                             root.show-context-menu(5, x, y);
                         }
                     }
-
-                    Rectangle { vertical-stretch: 1; }
                 }
                 }
 
