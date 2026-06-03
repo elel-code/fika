@@ -30,7 +30,12 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
         window_size.height,
     );
     let main_width = (pane_bounds.right - pane_bounds.left).max(1.0);
-    let inactive_width = inactive_main_pane_width(main_width, ui.get_split_view_open()).max(1.0);
+    let inactive_width = inactive_main_pane_width(
+        main_width,
+        ui.get_split_view_open(),
+        ui.get_split_pane_ratio(),
+    )
+    .max(1.0);
     let inactive_height = (pane_bounds.bottom - pane_bounds.top - STATUS_BAR_HEIGHT).max(1.0);
 
     let snapshot = {

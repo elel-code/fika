@@ -1,4 +1,5 @@
 use super::{file_ops, privilege};
+use crate::app::pane::PaneTarget;
 use crate::app::state::{FileUndo, FileUndoItem};
 use crate::desktop::clipboard;
 use crate::{AppState, AppWindow, AsyncBridge, AsyncEvent, send_async_event, set_status};
@@ -34,7 +35,7 @@ pub(crate) fn register_callbacks(
         let bridge = bridge.clone();
         ui.on_create_folder(move |name| {
             if let Some(ui) = ui_weak.upgrade() {
-                let parent = state.borrow().panes.active.current_dir.clone();
+                let parent = focused_current_dir(&state);
                 let privileged_command = privilege::PrivilegedCommand::CreateFolder {
                     parent: parent.clone(),
                     name: name.to_string(),
@@ -69,7 +70,7 @@ pub(crate) fn register_callbacks(
         let bridge = bridge.clone();
         ui.on_create_file(move |name| {
             if let Some(ui) = ui_weak.upgrade() {
-                let parent = state.borrow().panes.active.current_dir.clone();
+                let parent = focused_current_dir(&state);
                 let privileged_command = privilege::PrivilegedCommand::CreateFile {
                     parent: parent.clone(),
                     name: name.to_string(),
@@ -246,16 +247,7 @@ pub(crate) fn register_callbacks(
         let bridge = bridge.clone();
         ui.on_trash_selected(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let paths = state
-                    .borrow()
-                    .panes
-                    .active
-                    .selection
-                    .paths
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<_>>();
-                let affected_dir = state.borrow().panes.active.current_dir.clone();
+                let (paths, affected_dir) = focused_selection_and_dir(&state);
                 let privileged_command = privilege::PrivilegedCommand::Trash {
                     paths: paths.clone(),
                 };
@@ -306,16 +298,7 @@ pub(crate) fn register_callbacks(
         let bridge = bridge.clone();
         ui.on_restore_trash_selected(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let paths = state
-                    .borrow()
-                    .panes
-                    .active
-                    .selection
-                    .paths
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<_>>();
-                let affected_dir = state.borrow().panes.active.current_dir.clone();
+                let (paths, affected_dir) = focused_selection_and_dir(&state);
                 spawn_action(
                     &ui,
                     &bridge,
@@ -362,16 +345,7 @@ pub(crate) fn register_callbacks(
         let bridge = bridge.clone();
         ui.on_delete_permanently_selected(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let paths = state
-                    .borrow()
-                    .panes
-                    .active
-                    .selection
-                    .paths
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<_>>();
-                let affected_dir = state.borrow().panes.active.current_dir.clone();
+                let (paths, affected_dir) = focused_selection_and_dir(&state);
                 spawn_action(
                     &ui,
                     &bridge,
@@ -406,6 +380,28 @@ pub(crate) fn register_callbacks(
             }
         });
     }
+}
+
+fn focused_current_dir(state: &Rc<RefCell<AppState>>) -> PathBuf {
+    let state = state.borrow();
+    state
+        .panes
+        .pane_for_target(PaneTarget::Focused)
+        .unwrap_or(&state.panes.active)
+        .current_dir
+        .clone()
+}
+
+fn focused_selection_and_dir(state: &Rc<RefCell<AppState>>) -> (Vec<PathBuf>, PathBuf) {
+    let state = state.borrow();
+    let pane = state
+        .panes
+        .pane_for_target(PaneTarget::Focused)
+        .unwrap_or(&state.panes.active);
+    (
+        pane.selection.paths.iter().map(PathBuf::from).collect(),
+        pane.current_dir.clone(),
+    )
 }
 
 fn trash_undo_from_summary(summary: &file_ops::FileActionSummary) -> Option<FileUndo> {

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub struct AppSettings {
     pub dark_mode: Option<bool>,
     pub sidebar_width_px: Option<f32>,
+    pub split_pane_ratio: Option<f32>,
     pub icon_zoom_level: Option<i32>,
     pub window_width_px: Option<f32>,
     pub window_height_px: Option<f32>,
@@ -26,6 +27,7 @@ pub fn load_settings() -> AppSettings {
         match key {
             "dark_mode" => settings.dark_mode = value.parse().ok(),
             "sidebar_width_px" => settings.sidebar_width_px = value.parse().ok(),
+            "split_pane_ratio" => settings.split_pane_ratio = value.parse().ok(),
             "icon_zoom_level" => settings.icon_zoom_level = value.parse().ok(),
             "window_width_px" => settings.window_width_px = value.parse().ok(),
             "window_height_px" => settings.window_height_px = value.parse().ok(),
@@ -48,6 +50,9 @@ pub fn save_settings(settings: &AppSettings) {
     }
     if let Some(sidebar_width_px) = settings.sidebar_width_px {
         lines.push(format!("sidebar_width_px\t{sidebar_width_px}"));
+    }
+    if let Some(split_pane_ratio) = settings.split_pane_ratio {
+        lines.push(format!("split_pane_ratio\t{split_pane_ratio}"));
     }
     if let Some(icon_zoom_level) = settings.icon_zoom_level {
         lines.push(format!("icon_zoom_level\t{icon_zoom_level}"));
@@ -83,6 +88,7 @@ mod tests {
         for line in [
             "dark_mode\tmaybe",
             "sidebar_width_px\twide",
+            "split_pane_ratio\tratio",
             "icon_zoom_level\tlarge",
             "window_width_px\twide",
             "window_height_px\ttall",
@@ -92,6 +98,7 @@ mod tests {
             match key {
                 "dark_mode" => settings.dark_mode = value.parse().ok(),
                 "sidebar_width_px" => settings.sidebar_width_px = value.parse().ok(),
+                "split_pane_ratio" => settings.split_pane_ratio = value.parse().ok(),
                 "icon_zoom_level" => settings.icon_zoom_level = value.parse().ok(),
                 "window_width_px" => settings.window_width_px = value.parse().ok(),
                 "window_height_px" => settings.window_height_px = value.parse().ok(),
@@ -102,6 +109,7 @@ mod tests {
 
         assert_eq!(settings.dark_mode, None);
         assert_eq!(settings.sidebar_width_px, None);
+        assert_eq!(settings.split_pane_ratio, None);
         assert_eq!(settings.icon_zoom_level, None);
         assert_eq!(settings.window_width_px, None);
         assert_eq!(settings.window_height_px, None);

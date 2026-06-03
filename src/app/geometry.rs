@@ -51,7 +51,11 @@ impl MainGridLayout {
             window_size.width,
             window_size.height,
         );
-        let active_width = active_main_pane_width(pane.right - pane.left, ui.get_split_view_open());
+        let active_width = active_main_pane_width(
+            pane.right - pane.left,
+            ui.get_split_view_open(),
+            ui.get_split_pane_ratio(),
+        );
         let search_panel_height = search_panel_height(
             ui.get_search_bar_open(),
             ui.get_search_query().as_str(),
@@ -102,24 +106,51 @@ impl MainGridLayout {
     }
 }
 
-pub(crate) fn active_main_pane_width(main_pane_width: f32, split_open: bool) -> f32 {
+pub(crate) fn active_main_pane_width(
+    main_pane_width: f32,
+    split_open: bool,
+    split_pane_ratio: f32,
+) -> f32 {
     let main_pane_width = main_pane_width.max(1.0);
     if split_open {
-        ((main_pane_width - SPLIT_DIVIDER_WIDTH).max(1.0) / 2.0)
+        let content_width = split_content_width(main_pane_width);
+        let min_width = split_pane_min_width(content_width);
+        let ratio_width = (content_width * clamped_split_pane_ratio(split_pane_ratio))
             .floor()
-            .max(1.0)
+            .max(1.0);
+        ratio_width.min(content_width - min_width).max(min_width)
     } else {
         main_pane_width
     }
 }
 
-pub(crate) fn inactive_main_pane_width(main_pane_width: f32, split_open: bool) -> f32 {
+pub(crate) fn inactive_main_pane_width(
+    main_pane_width: f32,
+    split_open: bool,
+    split_pane_ratio: f32,
+) -> f32 {
     if !split_open {
         return 0.0;
     }
     let main_pane_width = main_pane_width.max(1.0);
-    let active_width = active_main_pane_width(main_pane_width, true);
+    let active_width = active_main_pane_width(main_pane_width, true, split_pane_ratio);
     (main_pane_width - active_width - SPLIT_DIVIDER_WIDTH).max(1.0)
+}
+
+pub(crate) fn clamped_split_pane_ratio(split_pane_ratio: f32) -> f32 {
+    if split_pane_ratio.is_finite() {
+        split_pane_ratio.clamp(0.1, 0.9)
+    } else {
+        0.5
+    }
+}
+
+fn split_content_width(main_pane_width: f32) -> f32 {
+    (main_pane_width.max(1.0) - SPLIT_DIVIDER_WIDTH).max(1.0)
+}
+
+fn split_pane_min_width(content_width: f32) -> f32 {
+    260.0_f32.min((content_width / 2.0).max(1.0))
 }
 
 pub(crate) fn main_pane_bounds(
@@ -2045,17 +2076,24 @@ mod tests {
     }
 
     #[test]
-    fn active_main_pane_width_halves_only_when_split_is_open() {
-        assert_eq!(active_main_pane_width(900.0, false), 900.0);
-        assert_eq!(active_main_pane_width(900.0, true), 449.0);
-        assert_eq!(inactive_main_pane_width(900.0, true), 450.0);
+    fn active_main_pane_width_uses_split_ratio_only_when_split_is_open() {
+        assert_eq!(active_main_pane_width(900.0, false, 0.25), 900.0);
+        assert_eq!(active_main_pane_width(900.0, true, 0.5), 449.0);
+        assert_eq!(inactive_main_pane_width(900.0, true, 0.5), 450.0);
+        assert_eq!(active_main_pane_width(900.0, true, 0.25), 260.0);
+        assert_eq!(inactive_main_pane_width(900.0, true, 0.25), 639.0);
+        assert_eq!(active_main_pane_width(900.0, true, 0.75), 639.0);
+        assert_eq!(inactive_main_pane_width(900.0, true, 0.75), 260.0);
         assert_eq!(
-            active_main_pane_width(900.0, true) + 1.0 + inactive_main_pane_width(900.0, true),
+            active_main_pane_width(900.0, true, 0.5)
+                + 1.0
+                + inactive_main_pane_width(900.0, true, 0.5),
             900.0
         );
-        assert_eq!(inactive_main_pane_width(900.0, false), 0.0);
-        assert_eq!(active_main_pane_width(0.0, false), 1.0);
-        assert_eq!(active_main_pane_width(0.0, true), 1.0);
+        assert_eq!(inactive_main_pane_width(900.0, false, 0.5), 0.0);
+        assert_eq!(active_main_pane_width(0.0, false, 0.5), 1.0);
+        assert_eq!(active_main_pane_width(0.0, true, 0.5), 1.0);
+        assert_eq!(inactive_main_pane_width(0.0, true, 0.5), 1.0);
     }
 
     fn menu_metrics_input(kind: i32) -> MenuMetricsInput {

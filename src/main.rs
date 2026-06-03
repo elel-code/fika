@@ -41,8 +41,8 @@ use app::file_clipboard::{
     apply_clipboard_load_result, refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    MainGridLayout, SelectionRect, active_main_pane_width, place_drop_geometry,
-    register_menu_geometry_callbacks,
+    MainGridLayout, SelectionRect, active_main_pane_width, clamped_split_pane_ratio,
+    place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::operation_controller::{
     OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
@@ -222,6 +222,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_dark_mode(settings.dark_mode.unwrap_or(true));
     if let Some(sidebar_width_px) = settings.sidebar_width_px {
         ui.set_sidebar_width_px(sidebar_width_px.clamp(220.0, 1200.0));
+    }
+    if let Some(split_pane_ratio) = settings.split_pane_ratio {
+        ui.set_split_pane_ratio(clamped_split_pane_ratio(split_pane_ratio));
     }
     if let Some(icon_zoom_level) = settings.icon_zoom_level {
         ui.set_icon_zoom_level(icon_zoom_level.clamp(0, 4));
@@ -692,6 +695,16 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_select_inactive_path(move |path, toggle, range| {
+            if let Some(ui) = ui_weak.upgrade() {
+                select_inactive_path(&ui, &state, path.as_str(), toggle, range);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         ui.on_select_rect(
             move |x1, y1, x2, y2, rows_per_column, cell_width, row_height, padding, toggle| {
                 if let Some(ui) = ui_weak.upgrade() {
@@ -736,6 +749,18 @@ fn main() -> Result<(), slint::PlatformError> {
                 .paths
                 .iter()
                 .any(|selected| selected == path.as_str())
+        });
+    }
+
+    {
+        let state = Rc::clone(&state);
+        ui.on_is_inactive_selected(move |path| {
+            state.borrow().panes.inactive().is_some_and(|pane| {
+                pane.selection
+                    .paths
+                    .iter()
+                    .any(|selected| selected == path.as_str())
+            })
         });
     }
 
@@ -1233,6 +1258,7 @@ fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     save_settings(&AppSettings {
         dark_mode: Some(ui.get_dark_mode()),
         sidebar_width_px: Some(ui.get_sidebar_width_px()),
+        split_pane_ratio: Some(clamped_split_pane_ratio(ui.get_split_pane_ratio())),
         icon_zoom_level: Some(ui.get_icon_zoom_level()),
         window_width_px: Some(window_size.width),
         window_height_px: Some(window_size.height),
@@ -2993,7 +3019,11 @@ fn sync_virtual_entries_with_count(
     let layout = MainGridLayout::from_ui(ui);
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
-    let viewport_width = active_main_pane_width(main_width, ui.get_split_view_open());
+    let viewport_width = active_main_pane_width(
+        main_width,
+        ui.get_split_view_open(),
+        ui.get_split_pane_ratio(),
+    );
     let update = {
         let mut state_ref = state.borrow_mut();
         prepare_virtual_view_update(
@@ -3077,7 +3107,7 @@ fn apply_filter(
         let visible_paths = summary.visible_paths.as_ref().unwrap_or(&empty_paths);
         retain_visible_selection(ui, state, visible_paths);
     } else {
-        clear_selection(ui, state);
+        clear_active_selection(ui, state);
     }
 
     if query.is_empty() && !filters_active {
@@ -3118,7 +3148,7 @@ fn retain_visible_selection(
         }
         state.panes.active.selection.paths.clone()
     };
-    update_selection_ui(ui, &selected_paths);
+    update_selection_ui_for_side(ui, PaneSide::Active, &selected_paths);
 }
 
 fn select_path(
@@ -3178,20 +3208,118 @@ fn select_path(
         state.panes.active.selection.paths.clone()
     };
 
-    update_selection_ui(ui, &selected_paths);
+    update_selection_ui_for_side(ui, PaneSide::Active, &selected_paths);
+}
+
+fn select_inactive_path(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    path: &str,
+    toggle: bool,
+    range: bool,
+) {
+    let selected_paths = {
+        let mut state = state.borrow_mut();
+        let Some(pane) = state.panes.inactive_mut() else {
+            return;
+        };
+
+        if range {
+            let anchor = pane
+                .selection
+                .anchor
+                .as_deref()
+                .or_else(|| pane.selection.paths.last().map(String::as_str))
+                .unwrap_or(path);
+            let range_paths = selection_range_paths_in_entries(&pane.entries, anchor, path);
+            if toggle {
+                append_unique_paths(&mut pane.selection.paths, range_paths);
+            } else {
+                pane.selection.paths = range_paths;
+            }
+        } else if toggle {
+            if let Some(index) = pane
+                .selection
+                .paths
+                .iter()
+                .position(|selected| selected == path)
+            {
+                pane.selection.paths.remove(index);
+            } else {
+                pane.selection.paths.push(path.to_string());
+            }
+        } else {
+            pane.selection.paths.clear();
+            pane.selection.paths.push(path.to_string());
+        }
+
+        if !range {
+            pane.selection.anchor = Some(path.to_string());
+        }
+        pane.selection.paths.clone()
+    };
+
+    update_selection_ui_for_side(ui, PaneSide::Inactive, &selected_paths);
+}
+
+fn selection_range_paths_in_entries(
+    entries: &[FileEntry],
+    anchor: &str,
+    target: &str,
+) -> Vec<String> {
+    if anchor == target {
+        return vec![target.to_string()];
+    }
+
+    let Some(anchor_index) = entries
+        .iter()
+        .position(|entry| entry.path.as_str() == anchor)
+    else {
+        return vec![target.to_string()];
+    };
+    let Some(target_index) = entries
+        .iter()
+        .position(|entry| entry.path.as_str() == target)
+    else {
+        return vec![target.to_string()];
+    };
+    let start = anchor_index.min(target_index);
+    let end = anchor_index.max(target_index);
+    entries[start..=end]
+        .iter()
+        .map(|entry| entry.path.to_string())
+        .collect()
 }
 
 fn select_all_visible(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let selected_paths = {
-        let state = state.borrow();
-        filtered_entry_paths(&state)
+    let side = { state.borrow().panes.focused_side() };
+    let selected_paths = match side {
+        PaneSide::Active => {
+            let state = state.borrow();
+            filtered_entry_paths(&state)
+        }
+        PaneSide::Inactive => {
+            let state = state.borrow();
+            state
+                .panes
+                .inactive()
+                .map(|pane| {
+                    pane.entries
+                        .iter()
+                        .map(|entry| entry.path.to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
     };
     {
         let mut state = state.borrow_mut();
-        state.panes.active.selection.paths = selected_paths.clone();
-        state.panes.active.selection.anchor = selected_paths.last().cloned();
+        if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Focused) {
+            pane.selection.paths = selected_paths.clone();
+            pane.selection.anchor = selected_paths.last().cloned();
+        }
     }
-    update_selection_ui(ui, &selected_paths);
+    update_selection_ui_for_side(ui, side, &selected_paths);
 }
 
 fn select_rect(ui: &AppWindow, state: &Rc<RefCell<AppState>>, rect: SelectionRect, toggle: bool) {
@@ -3206,14 +3334,24 @@ fn select_rect(ui: &AppWindow, state: &Rc<RefCell<AppState>>, rect: SelectionRec
         state.panes.active.selection.anchor = state.panes.active.selection.paths.last().cloned();
         state.panes.active.selection.paths.clone()
     };
-    update_selection_ui(ui, &selected_paths);
+    update_selection_ui_for_side(ui, PaneSide::Active, &selected_paths);
 }
 
 fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let side = { state.borrow().panes.focused_side() };
+    let mut state = state.borrow_mut();
+    if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Focused) {
+        pane.selection.clear();
+    }
+    drop(state);
+    update_selection_ui_for_side(ui, side, &[]);
+}
+
+fn clear_active_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let mut state = state.borrow_mut();
     state.panes.active.selection.clear();
     drop(state);
-    update_selection_ui(ui, &[]);
+    update_selection_ui_for_side(ui, PaneSide::Active, &[]);
 }
 
 fn schedule_visible_thumbnails(
@@ -3294,14 +3432,32 @@ fn thumbnail_size_px(ui: &AppWindow) -> u32 {
 }
 
 fn update_selection_ui(ui: &AppWindow, selected_paths: &[String]) {
+    update_selection_ui_for_side(ui, PaneSide::Active, selected_paths);
+}
+
+fn update_selection_ui_for_side(ui: &AppWindow, side: PaneSide, selected_paths: &[String]) {
     let selected_path = selected_paths
         .last()
         .map_or_else(SharedString::new, |path| path.as_str().into());
     let selected_count = selected_paths.len() as i32;
     let selected_status = selection_status_text(selected_paths);
-    ui.set_left_pane_selected_count(selected_count);
-    ui.set_left_pane_selected_status(selected_status.clone());
-    if ui.get_focused_pane() == 0 || !ui.get_split_view_open() {
+
+    match side {
+        PaneSide::Active => {
+            ui.set_left_pane_selected_count(selected_count);
+            ui.set_left_pane_selected_status(selected_status.clone());
+        }
+        PaneSide::Inactive => {
+            ui.set_inactive_pane_selected_count(selected_count);
+            ui.set_inactive_pane_selected_status(selected_status.clone());
+        }
+    }
+
+    let selected_side_is_focused = match side {
+        PaneSide::Active => ui.get_focused_pane() == 0 || !ui.get_split_view_open(),
+        PaneSide::Inactive => ui.get_split_view_open() && ui.get_focused_pane() == 1,
+    };
+    if selected_side_is_focused {
         ui.set_selected_path(selected_path);
         ui.set_selected_count(selected_count);
         ui.set_selected_status(selected_status);
@@ -3612,6 +3768,11 @@ fn inactive_go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &A
 }
 
 fn open_path(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &str, bridge: &AsyncBridge) {
+    if state.borrow().panes.focused_side() == PaneSide::Inactive {
+        open_inactive_path(ui, state, path, bridge);
+        return;
+    }
+
     let (path, is_known_dir) = {
         let state = state.borrow();
         let entry = state
