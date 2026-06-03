@@ -901,7 +901,7 @@ export component AppWindow inherits Window {
 
                 VerticalLayout {
                     width: root.active-pane-width;
-                    height: 100%;
+                    height: max(1px, parent.height - root.status-bar-height);
                     padding: 0px;
                     spacing: 0px;
 
@@ -1167,53 +1167,12 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    StatusBar {
-                        horizontal-stretch: 1;
-                        height: root.status-bar-height;
-                        dark: root.dark_mode;
-                        status: root.status;
-                        selected-count: root.selected_count;
-                        selected-status: root.selected_status;
-                        external-edit-active: root.external_edit_active;
-                        external-edit-status: root.external_edit_status;
-                        undo-available: root.undo_available;
-                        undo-label: root.undo_label;
-                        chooser-mode: root.chooser_mode;
-                        chooser-select-directories: root.chooser_select_directories;
-                        chooser-save-mode: root.chooser_save_mode;
-                        chooser-accept-label: root.chooser_accept_label;
-                        selected-path: root.selected_path;
-                        chooser-filter-count: root.chooser_filter_count;
-                        chooser-filter-label: root.chooser_filter_label;
-                        chooser-choices: root.chooser_choices;
-                        chooser-save-name <=> root.chooser_save_name;
-                        save_focus_changed(focused) => {
-                            root.chooser-save-input-focused = focused;
-                        }
-                        commit_external_edit => { root.commit_external_edit(); }
-                        discard_external_edit => { root.discard_external_edit(); }
-                        undo_last_operation => { root.undo_last_operation(); }
-                        chooser_accept(value) => { root.chooser_accept(value); }
-                        chooser_filter_requested(x, y) => {
-                            root.chooser-choice-menu-open = false;
-                            root.chooser-filter-menu-x = x;
-                            root.chooser-filter-menu-y = y;
-                            root.chooser-filter-menu-open = true;
-                        }
-                        chooser_choice_requested(index, x, y) => {
-                            root.chooser-filter-menu-open = false;
-                            root.chooser-choice-menu-index = index;
-                            root.chooser-choice-menu-x = x;
-                            root.chooser-choice-menu-y = y;
-                            root.chooser-choice-menu-open = true;
-                        }
-                    }
                 }
 
                 if (root.split_view_open) : SplitPaneView {
                     x: root.active-pane-width;
                     width: max(1px, parent.width - root.active-pane-width);
-                    height: parent.height;
+                    height: max(1px, parent.height - root.status-bar-height);
                     dark: root.dark_mode;
                     path: root.inactive_pane_path;
                     name: root.inactive_pane_name;
@@ -1238,6 +1197,49 @@ export component AppWindow inherits Window {
                     }
                     activated(path) => {
                         root.open_inactive_path(path);
+                    }
+                }
+
+                StatusBar {
+                    y: max(0px, parent.height - root.status-bar-height);
+                    width: parent.width;
+                    height: root.status-bar-height;
+                    dark: root.dark_mode;
+                    status: root.status;
+                    selected-count: root.selected_count;
+                    selected-status: root.selected_status;
+                    external-edit-active: root.external_edit_active;
+                    external-edit-status: root.external_edit_status;
+                    undo-available: root.undo_available;
+                    undo-label: root.undo_label;
+                    chooser-mode: root.chooser_mode;
+                    chooser-select-directories: root.chooser_select_directories;
+                    chooser-save-mode: root.chooser_save_mode;
+                    chooser-accept-label: root.chooser_accept_label;
+                    selected-path: root.selected_path;
+                    chooser-filter-count: root.chooser_filter_count;
+                    chooser-filter-label: root.chooser_filter_label;
+                    chooser-choices: root.chooser_choices;
+                    chooser-save-name <=> root.chooser_save_name;
+                    save_focus_changed(focused) => {
+                        root.chooser-save-input-focused = focused;
+                    }
+                    commit_external_edit => { root.commit_external_edit(); }
+                    discard_external_edit => { root.discard_external_edit(); }
+                    undo_last_operation => { root.undo_last_operation(); }
+                    chooser_accept(value) => { root.chooser_accept(value); }
+                    chooser_filter_requested(x, y) => {
+                        root.chooser-choice-menu-open = false;
+                        root.chooser-filter-menu-x = x;
+                        root.chooser-filter-menu-y = y;
+                        root.chooser-filter-menu-open = true;
+                    }
+                    chooser_choice_requested(index, x, y) => {
+                        root.chooser-filter-menu-open = false;
+                        root.chooser-choice-menu-index = index;
+                        root.chooser-choice-menu-x = x;
+                        root.chooser-choice-menu-y = y;
+                        root.chooser-choice-menu-open = true;
                     }
                 }
 

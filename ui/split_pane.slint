@@ -61,7 +61,7 @@ export component SplitPaneView inherits Rectangle {
     callback zoom_in();
     callback zoom_out();
 
-    private property <length> header-height: 44px;
+    private property <length> header-height: 56px;
     private property <length> preview-padding: 14px;
     private property <length> cell-width: root.zoom-level == 0 ? 172px : (root.zoom-level == 1 ? 208px : (root.zoom-level == 2 ? 248px : (root.zoom-level == 3 ? 292px : 340px)));
     private property <length> row-height: root.zoom-level == 0 ? 78px : (root.zoom-level == 1 ? 90px : (root.zoom-level == 2 ? 104px : (root.zoom-level == 3 ? 124px : 146px)));
@@ -108,7 +108,7 @@ export component SplitPaneView inherits Rectangle {
 
         Text {
             x: 14px;
-            y: 6px;
+            y: 10px;
             width: max(1px, parent.width - 28px);
             height: 18px;
             text: root.name == "" ? "Split Pane" : root.name;
@@ -121,7 +121,7 @@ export component SplitPaneView inherits Rectangle {
 
         Text {
             x: 14px;
-            y: 24px;
+            y: 31px;
             width: max(1px, parent.width - 28px);
             height: 16px;
             text: root.path;

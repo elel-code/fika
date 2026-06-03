@@ -4,7 +4,8 @@ use std::ops::Range;
 
 const SHELL_HEADER_HEIGHT: f32 = 56.0;
 const PATH_BAR_HEIGHT: f32 = 56.0;
-const STATUS_BAR_HEIGHT: f32 = 36.0;
+pub(crate) const STATUS_BAR_HEIGHT: f32 = 36.0;
+const SPLIT_PANE_HEADER_HEIGHT: f32 = PATH_BAR_HEIGHT;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
 const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
 const SEARCH_PANEL_NARROW_WIDTH: f32 = 760.0;
@@ -179,7 +180,7 @@ pub(crate) fn split_preview_plan(
     let cell_width = icon_cell_width(zoom_level);
     let row_height = icon_row_height(zoom_level);
     let padding = 14.0;
-    let header_height = 44.0;
+    let header_height = SPLIT_PANE_HEADER_HEIGHT;
     let available_height = (pane_height - header_height - 2.0 * padding).max(row_height);
     let rows_per_column = (available_height / row_height).floor().max(1.0) as usize;
 
@@ -1780,6 +1781,15 @@ mod tests {
         assert!(split_pane.contains("root.handle-scroll(delta-x, delta-y, control);"));
         assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
         assert!(split_pane.contains("virtual-layer := Rectangle"));
+        assert!(split_pane.contains("private property <length> header-height: 56px;"));
+        assert!(
+            app.contains("height: max(1px, parent.height - root.status-bar-height);"),
+            "split panes should share the same content height above the full-width status bar"
+        );
+        assert!(
+            app.contains("StatusBar {\n                    y: max(0px, parent.height - root.status-bar-height);\n                    width: parent.width;"),
+            "status bar should span the whole main pane instead of only the active split pane"
+        );
     }
 
     #[test]
@@ -2254,8 +2264,8 @@ mod tests {
         let plan = split_preview_plan(1_000, 420.0, 704.0, 1_200.0, 1);
 
         assert_eq!(plan.viewport_x, 1200.0);
-        assert_eq!(plan.visible_range, 35..63);
-        assert_eq!(plan.range, 21..77);
+        assert_eq!(plan.visible_range, 30..54);
+        assert_eq!(plan.range, 18..66);
         assert_eq!(plan.start_column, 3);
 
         let clamped = split_preview_plan(12, 420.0, 704.0, 4_000.0, 1);

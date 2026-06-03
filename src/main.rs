@@ -41,8 +41,8 @@ use app::file_clipboard::{
     apply_clipboard_load_result, refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    MainGridLayout, SelectionRect, active_main_pane_width, main_pane_bounds, place_drop_geometry,
-    register_menu_geometry_callbacks,
+    MainGridLayout, STATUS_BAR_HEIGHT, SelectionRect, active_main_pane_width, main_pane_bounds,
+    place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::operation_controller::{
     OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
@@ -3161,7 +3161,7 @@ fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let main_width = (pane_bounds.right - pane_bounds.left).max(1.0);
     let active_width = active_main_pane_width(main_width, ui.get_split_view_open());
     let inactive_width = (main_width - active_width).max(1.0);
-    let inactive_height = (pane_bounds.bottom - pane_bounds.top).max(1.0);
+    let inactive_height = (pane_bounds.bottom - pane_bounds.top - STATUS_BAR_HEIGHT).max(1.0);
 
     let snapshot = {
         let mut state = state.borrow_mut();
