@@ -39,7 +39,7 @@ pub(crate) struct AppState {
     pub(crate) pending_transfer_conflict: Option<TransferConflict>,
     pub(crate) last_undo: Option<FileUndo>,
     pub(crate) pending_privileged_command: Option<PrivilegedCommand>,
-    pub(crate) external_edits: Vec<ExternalEditSession>,
+    pub(crate) external_edits: Vec<PaneExternalEdit>,
     pub(crate) devices: Vec<DeviceEntry>,
     pub(crate) pending_device_actions: Vec<DeviceAction>,
     pub(crate) device_errors: HashMap<String, String>,
@@ -47,6 +47,12 @@ pub(crate) struct AppState {
     pub(crate) next_operation_id: u64,
     pub(crate) clipboard_generation: GenerationCounter,
     pub(crate) device_generation: GenerationCounter,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PaneExternalEdit {
+    pub(crate) pane_id: u64,
+    pub(crate) session: ExternalEditSession,
 }
 
 impl AppState {

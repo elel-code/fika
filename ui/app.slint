@@ -110,8 +110,8 @@ component FilePane inherits Rectangle {
     callback transfer_menu_requested(int);
     callback trace_drop(string, string, string, float, float, bool, string);
     callback save_focus_changed(int, bool);
-    callback commit_external_edit();
-    callback discard_external_edit();
+    callback commit_external_edit(int);
+    callback discard_external_edit(int);
     callback undo_last_operation();
     callback chooser_accept(string);
     callback chooser_filter_requested(int, length, length);
@@ -289,8 +289,8 @@ component FilePane inherits Rectangle {
             chooser-choices: root.chooser-choices;
             chooser-save-name <=> root.chooser-save-name;
             save_focus_changed(focused) => { root.save_focus_changed(root.pane-side, focused); }
-            commit_external_edit => { root.commit_external_edit(); }
-            discard_external_edit => { root.discard_external_edit(); }
+            commit_external_edit => { root.commit_external_edit(root.pane-side); }
+            discard_external_edit => { root.discard_external_edit(root.pane-side); }
             undo_last_operation => { root.undo_last_operation(); }
             chooser_accept(value) => { root.chooser_accept(value); }
             chooser_filter_requested(x, y) => { root.chooser_filter_requested(root.pane-side, x, y); }
@@ -351,8 +351,10 @@ export component AppWindow inherits Window {
     in-out property <int> selected_count;
     in-out property <string> selected_status;
     in-out property <string> chooser_save_name;
-    in-out property <bool> external_edit_active: false;
-    in-out property <string> external_edit_status;
+    in-out property <bool> left_pane_external_edit_active: false;
+    in-out property <string> left_pane_external_edit_status;
+    in-out property <bool> inactive_pane_external_edit_active: false;
+    in-out property <string> inactive_pane_external_edit_status;
     in-out property <bool> undo_available: false;
     in-out property <string> undo_label;
     in-out property <int> selection_revision;
@@ -615,8 +617,8 @@ export component AppWindow inherits Window {
     callback transfer_conflict_choice(string);
     callback privileged_prompt_accept();
     callback privileged_prompt_dismiss();
-    callback commit_external_edit();
-    callback discard_external_edit();
+    callback commit_external_edit(int);
+    callback discard_external_edit(int);
     callback undo_last_operation();
     callback cancel_queued_operations();
     callback persist_ui_state();
@@ -1375,8 +1377,8 @@ export component AppWindow inherits Window {
                             status: root.left_pane_status;
                             selected-count: root.left_pane_selected_count;
                             selected-status: root.left_pane_selected_status;
-                            external-edit-active: root.focused_pane == 0 && root.external_edit_active;
-                            external-edit-status: root.external_edit_status;
+                            external-edit-active: root.left_pane_external_edit_active;
+                            external-edit-status: root.left_pane_external_edit_status;
                             undo-available: root.focused_pane == 0 && root.undo_available;
                             undo-label: root.undo_label;
                             chooser-mode: root.focused_pane == 0 && root.chooser_mode;
@@ -1423,8 +1425,8 @@ export component AppWindow inherits Window {
                                 root.trace_main_drop(action, kind, path, x, y, rejected, target);
                             }
                             save_focus_changed(side, focused) => { root.pane-save-focus-changed(side, focused); }
-                            commit_external_edit => { root.commit_external_edit(); }
-                            discard_external_edit => { root.discard_external_edit(); }
+                            commit_external_edit(side) => { root.commit_external_edit(side); }
+                            discard_external_edit(side) => { root.discard_external_edit(side); }
                             undo_last_operation => { root.undo_last_operation(); }
                             chooser_accept(value) => { root.chooser_accept(value); }
                             chooser_filter_requested(side, x, y) => { root.pane-chooser-filter-requested(side, x, y); }
@@ -1484,8 +1486,8 @@ export component AppWindow inherits Window {
                             status: root.inactive_pane_status;
                             selected-count: root.inactive_pane_selected_count;
                             selected-status: root.inactive_pane_selected_status;
-                            external-edit-active: root.focused_pane == 1 && root.external_edit_active;
-                            external-edit-status: root.external_edit_status;
+                            external-edit-active: root.inactive_pane_external_edit_active;
+                            external-edit-status: root.inactive_pane_external_edit_status;
                             undo-available: root.focused_pane == 1 && root.undo_available;
                             undo-label: root.undo_label;
                             chooser-mode: root.focused_pane == 1 && root.chooser_mode;
@@ -1532,8 +1534,8 @@ export component AppWindow inherits Window {
                                 root.trace_main_drop(action, kind, path, x, y, rejected, target);
                             }
                             save_focus_changed(side, focused) => { root.pane-save-focus-changed(side, focused); }
-                            commit_external_edit => { root.commit_external_edit(); }
-                            discard_external_edit => { root.discard_external_edit(); }
+                            commit_external_edit(side) => { root.commit_external_edit(side); }
+                            discard_external_edit(side) => { root.discard_external_edit(side); }
                             undo_last_operation => { root.undo_last_operation(); }
                             chooser_accept(value) => { root.chooser_accept(value); }
                             chooser_filter_requested(side, x, y) => { root.pane-chooser-filter-requested(side, x, y); }

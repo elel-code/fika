@@ -34,6 +34,7 @@ pub(crate) struct FileOpenSuccess {
 
 #[derive(Debug)]
 pub(crate) struct ExternalEditResult {
+    pub(crate) pane_id: u64,
     pub(crate) operation: String,
     pub(crate) session: privilege::ExternalEditSession,
     pub(crate) result: Result<PathBuf, String>,

@@ -69,7 +69,7 @@ use app::split_view::{
     directory_status_text, sync_inactive_pane_ui, sync_inactive_pane_view_from_ui,
     sync_navigation_ui, toggle_split_view,
 };
-use app::state::{AppState, DeviceAction, FileUndo};
+use app::state::{AppState, DeviceAction, FileUndo, PaneExternalEdit};
 use app::thumbnail_pipeline::{
     apply_thumbnail_load_to_state, decorate_entries_with_cached_thumbnails,
     prioritize_thumbnail_entries, thumbnail_schedule_batch,
@@ -1167,9 +1167,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_commit_external_edit(move || {
+        ui.on_commit_external_edit(move |pane_side| {
             if let Some(ui) = ui_weak.upgrade() {
-                start_external_edit_resolution(&ui, &state, &bridge, EXTERNAL_EDIT_SAVE_OPERATION);
+                start_external_edit_resolution(
+                    &ui,
+                    &state,
+                    &bridge,
+                    pane_side,
+                    EXTERNAL_EDIT_SAVE_OPERATION,
+                );
             }
         });
     }
@@ -1178,12 +1184,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_discard_external_edit(move || {
+        ui.on_discard_external_edit(move |pane_side| {
             if let Some(ui) = ui_weak.upgrade() {
                 start_external_edit_resolution(
                     &ui,
                     &state,
                     &bridge,
+                    pane_side,
                     EXTERNAL_EDIT_DISCARD_OPERATION,
                 );
             }
@@ -2221,7 +2228,7 @@ fn open_file_for_target_async(
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| path.to_str().unwrap_or("file"));
-    set_status(ui, &format!("Opening {label}..."));
+    set_status_for_panes(ui, state, &[pane_id], &format!("Opening {label}..."));
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -2258,17 +2265,21 @@ fn apply_file_open_result(ui: &AppWindow, state: &Rc<RefCell<AppState>>, result:
                 state.borrow_mut().launched_units.push(unit.clone());
             }
             if let Some(session) = success.external_edit {
-                register_external_edit(ui, state, session);
-                set_status(
+                register_external_edit(ui, state, result.pane_id, session);
+                set_status_for_panes(
                     ui,
+                    state,
+                    &[result.pane_id],
                     &format!(
                         "Opened protected scratch copy with default app for {}; auto writeback active{}",
                         success.mime_type, launch_suffix
                     ),
                 );
             } else {
-                set_status(
+                set_status_for_panes(
                     ui,
+                    state,
+                    &[result.pane_id],
                     &format!(
                         "Opened with default app for {}{}",
                         success.mime_type, launch_suffix
@@ -2283,7 +2294,12 @@ fn apply_file_open_result(ui: &AppWindow, state: &Rc<RefCell<AppState>>, result:
                 .and_then(|name| name.to_str())
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| result.path.to_str().unwrap_or("file"));
-            set_status(ui, &format!("Cannot open {label}: {err}"));
+            set_status_for_panes(
+                ui,
+                state,
+                &[result.pane_id],
+                &format!("Cannot open {label}: {err}"),
+            );
         }
     }
 }
@@ -2965,11 +2981,14 @@ fn apply_privileged_operation_result(
 fn register_external_edit(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
+    pane_id: u64,
     session: privilege::ExternalEditSession,
 ) {
     {
         let mut state = state.borrow_mut();
-        state.external_edits.push(session);
+        state
+            .external_edits
+            .push(PaneExternalEdit { pane_id, session });
     }
     sync_external_edit_ui(ui, state);
 }
@@ -2978,21 +2997,35 @@ fn start_external_edit_resolution(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
+    pane_side: i32,
     operation: &str,
 ) {
+    let pane_id = {
+        let state = state.borrow();
+        let Some(pane_id) = pane_id_for_ui_side(&state, pane_side) else {
+            set_status(ui, "No split pane target is available");
+            return;
+        };
+        pane_id
+    };
     let session = {
         let state = state.borrow();
-        state.external_edits.last().cloned()
+        state
+            .external_edits
+            .iter()
+            .rev()
+            .find(|edit| edit.pane_id == pane_id)
+            .map(|edit| edit.session.clone())
     };
     let Some(session) = session else {
-        ui.set_external_edit_active(false);
-        ui.set_external_edit_status(SharedString::new());
-        set_status(ui, "No admin write-back is pending");
+        set_status_for_panes(ui, state, &[pane_id], "No admin write-back is pending");
         return;
     };
 
-    set_status(
+    set_status_for_panes(
         ui,
+        state,
+        &[pane_id],
         match operation {
             EXTERNAL_EDIT_SAVE_OPERATION => "Saving admin write-back...",
             EXTERNAL_EDIT_DISCARD_OPERATION => "Discarding admin write-back...",
@@ -3013,6 +3046,7 @@ fn start_external_edit_resolution(
             async_tx,
             notify_ui,
             AsyncEvent::ExternalEditFinished(ExternalEditResult {
+                pane_id,
                 operation,
                 session,
                 result,
@@ -3031,7 +3065,7 @@ fn apply_external_edit_result(
         let mut state = state.borrow_mut();
         state
             .external_edits
-            .retain(|session| session.token != result.session.token);
+            .retain(|edit| edit.session.token != result.session.token);
     }
     sync_external_edit_ui(ui, state);
 
@@ -3043,39 +3077,80 @@ fn apply_external_edit_result(
                     .map(|parent| vec![parent.to_path_buf()])
                     .unwrap_or_default();
                 let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);
+                let status_pane_ids = if pane_ids.is_empty() {
+                    vec![result.pane_id]
+                } else {
+                    pane_ids
+                };
                 set_status_for_panes(
                     ui,
                     state,
-                    &pane_ids,
+                    &status_pane_ids,
                     &format!("Admin write-back saved: {}", path.display()),
                 );
             } else {
-                set_status(
+                set_status_for_panes(
                     ui,
+                    state,
+                    &[result.pane_id],
                     &format!("Admin write-back discarded: {}", path.display()),
                 );
             }
         }
-        Err(err) => set_status(ui, &format!("{} failed: {err}", result.operation)),
+        Err(err) => set_status_for_panes(
+            ui,
+            state,
+            &[result.pane_id],
+            &format!("{} failed: {err}", result.operation),
+        ),
     }
 }
 
 fn sync_external_edit_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let state = state.borrow();
-    let count = state.external_edits.len();
-    ui.set_external_edit_active(count > 0);
-    if count == 0 {
-        ui.set_external_edit_status(SharedString::new());
-    } else if count == 1 {
-        let label = state
-            .external_edits
-            .last()
-            .and_then(|session| session.original_path.file_name())
+    let (left_status, inactive_status) = {
+        let state = state.borrow();
+        let left_status =
+            external_edit_status_for_pane(&state.external_edits, state.panes.active.id);
+        let inactive_status = state
+            .panes
+            .inactive()
+            .map(|pane| external_edit_status_for_pane(&state.external_edits, pane.id))
+            .unwrap_or_default();
+        (left_status, inactive_status)
+    };
+    ui.set_left_pane_external_edit_active(!left_status.is_empty());
+    ui.set_left_pane_external_edit_status(left_status.into());
+    ui.set_inactive_pane_external_edit_active(!inactive_status.is_empty());
+    ui.set_inactive_pane_external_edit_status(inactive_status.into());
+}
+
+fn pane_id_for_ui_side(state: &AppState, pane_side: i32) -> Option<u64> {
+    state
+        .panes
+        .pane_for_target(if pane_side == 1 {
+            PaneTarget::Inactive
+        } else {
+            PaneTarget::Active
+        })
+        .map(|pane| pane.id)
+}
+
+fn external_edit_status_for_pane(edits: &[PaneExternalEdit], pane_id: u64) -> String {
+    let mut pane_edits = edits.iter().filter(|edit| edit.pane_id == pane_id);
+    let Some(first) = pane_edits.next() else {
+        return String::new();
+    };
+    let extra_count = pane_edits.count();
+    if extra_count == 0 {
+        let label = first
+            .session
+            .original_path
+            .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("protected file");
-        ui.set_external_edit_status(format!("Admin write-back: {label}").into());
+        format!("Admin write-back: {label}")
     } else {
-        ui.set_external_edit_status(format!("{count} admin write-backs pending").into());
+        format!("{} admin write-backs pending", extra_count + 1)
     }
 }
 
@@ -5054,6 +5129,40 @@ mod tests {
     }
 
     #[test]
+    fn file_open_status_uses_requesting_pane_route() {
+        let source = include_str!("main.rs");
+        let start_body = source
+            .split_once("fn open_file_for_target_async(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_file_open_result("))
+            .map(|(body, _)| body)
+            .expect("open_file_for_target_async body should be present");
+        let result_body = source
+            .split_once("fn apply_file_open_result(")
+            .and_then(|(_, rest)| rest.split_once("fn launch_status_suffix("))
+            .map(|(body, _)| body)
+            .expect("apply_file_open_result body should be present");
+
+        assert!(
+            start_body.contains(
+                "set_status_for_panes(ui, state, &[pane_id], &format!(\"Opening {label}...\"));"
+            ),
+            "file-open start status should write to the pane that requested the open"
+        );
+        assert!(
+            result_body.matches("set_status_for_panes(").count() == 3
+                && result_body.matches("&[result.pane_id]").count() == 3
+                && result_body
+                    .contains("register_external_edit(ui, state, result.pane_id, session);"),
+            "file-open success, protected external-edit registration, and failure status should use the requesting pane id"
+        );
+        assert!(
+            !result_body.contains("set_status(\n                    ui,\n                    &format!(\n                        \"Opened with default app")
+                && !result_body.contains("set_status(ui, &format!(\"Cannot open {label}: {err}\"));"),
+            "file-open result status must not jump to whichever pane is focused when the async result returns"
+        );
+    }
+
+    #[test]
     fn privileged_operation_status_uses_affected_pane_route() {
         let source = include_str!("main.rs");
         let body = source
@@ -5087,7 +5196,9 @@ mod tests {
         assert!(
             body.contains("let affected_dirs = path")
                 && body.contains("let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);")
-                && body.contains("set_status_for_panes(\n                    ui,\n                    state,\n                    &pane_ids,"),
+                && body.contains("let status_pane_ids = if pane_ids.is_empty()")
+                && body.contains("vec![result.pane_id]")
+                && body.contains("set_status_for_panes(\n                    ui,\n                    state,\n                    &status_pane_ids,"),
             "admin write-back save status should write to the pane whose directory was refreshed"
         );
         assert!(
@@ -5095,6 +5206,74 @@ mod tests {
                 "set_status(ui, &format!(\"Admin write-back saved: {}\", path.display()))"
             ),
             "admin write-back save status must not jump to whichever pane is focused when the helper returns"
+        );
+    }
+
+    #[test]
+    fn admin_writeback_pending_state_is_pane_local() {
+        let edits = vec![
+            test_pane_external_edit(7, "/etc/one.conf", "one"),
+            test_pane_external_edit(11, "/etc/two.conf", "two"),
+            test_pane_external_edit(11, "/etc/three.conf", "three"),
+        ];
+
+        assert_eq!(
+            external_edit_status_for_pane(&edits, 7),
+            "Admin write-back: one.conf"
+        );
+        assert_eq!(
+            external_edit_status_for_pane(&edits, 11),
+            "2 admin write-backs pending"
+        );
+        assert_eq!(external_edit_status_for_pane(&edits, 99), "");
+    }
+
+    fn test_pane_external_edit(pane_id: u64, original_path: &str, token: &str) -> PaneExternalEdit {
+        PaneExternalEdit {
+            pane_id,
+            session: privilege::ExternalEditSession {
+                original_path: PathBuf::from(original_path),
+                scratch_path: PathBuf::from(format!("/tmp/{token}")),
+                token: token.to_string(),
+                unit: None,
+            },
+        }
+    }
+
+    #[test]
+    fn admin_writeback_resolution_uses_pane_side_and_pane_id() {
+        let source = include_str!("main.rs");
+        let start_body = source
+            .split_once("fn start_external_edit_resolution(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_external_edit_result("))
+            .map(|(body, _)| body)
+            .expect("start_external_edit_resolution body should be present");
+        let sync_body = source
+            .split_once("fn sync_external_edit_ui(")
+            .and_then(|(_, rest)| rest.split_once("fn pane_id_for_ui_side("))
+            .map(|(body, _)| body)
+            .expect("sync_external_edit_ui body should be present");
+
+        assert!(
+            start_body.contains("pane_id_for_ui_side(&state, pane_side)")
+                && start_body.contains(".find(|edit| edit.pane_id == pane_id)")
+                && start_body.contains("ExternalEditResult {\n                pane_id,"),
+            "admin write-back resolution should select the pending session owned by the clicked pane"
+        );
+        assert!(
+            !start_body.contains("state.external_edits.last().cloned()")
+                && !start_body.contains("ui.set_external_edit_active")
+                && !start_body.contains("ui.set_external_edit_status"),
+            "admin write-back resolution must not fall back to the last global session or root-level pending state"
+        );
+        assert!(
+            sync_body.contains(
+                "external_edit_status_for_pane(&state.external_edits, state.panes.active.id)"
+            ) && sync_body
+                .contains("external_edit_status_for_pane(&state.external_edits, pane.id)")
+                && sync_body.contains("ui.set_left_pane_external_edit_active")
+                && sync_body.contains("ui.set_inactive_pane_external_edit_active"),
+            "admin write-back UI should publish separate left and right pane pending state"
         );
     }
 

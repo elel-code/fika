@@ -1960,6 +1960,12 @@ mod tests {
                 && file_pane.contains("navigate_back => { root.go_back(root.pane-side); }")
                 && file_pane.contains("navigate_forward => { root.go_forward(root.pane-side); }")
                 && file_pane.contains("root.is_selected(root.pane-side, path)")
+                && file_pane.contains(
+                    "commit_external_edit => { root.commit_external_edit(root.pane-side); }"
+                )
+                && file_pane.contains(
+                    "discard_external_edit => { root.discard_external_edit(root.pane-side); }"
+                )
                 && file_pane
                     .contains("save_focus_changed(focused) => { root.save_focus_changed(root.pane-side, focused); }"),
             "FilePane should route address bar, content, side buttons, context menus, selection, and status through pane-side"
@@ -2113,6 +2119,8 @@ mod tests {
             "zoom_out(side) => { root.pane-zoom-out(side); }",
             "transfer_menu_requested(side) => { root.pane-transfer-menu-requested(side); }",
             "save_focus_changed(side, focused) => { root.pane-save-focus-changed(side, focused); }",
+            "commit_external_edit(side) => { root.commit_external_edit(side); }",
+            "discard_external_edit(side) => { root.discard_external_edit(side); }",
             "chooser_filter_requested(side, x, y) => { root.pane-chooser-filter-requested(side, x, y); }",
             "chooser_choice_requested(side, index, x, y) => { root.pane-chooser-choice-requested(side, index, x, y); }",
         ];
@@ -2127,9 +2135,8 @@ mod tests {
                 && left_pane.contains("status: root.left_pane_status;")
                 && left_pane.contains("selected-count: root.left_pane_selected_count;")
                 && left_pane.contains("selected-status: root.left_pane_selected_status;")
-                && left_pane.contains(
-                    "external-edit-active: root.focused_pane == 0 && root.external_edit_active;"
-                )
+                && left_pane.contains("external-edit-active: root.left_pane_external_edit_active;")
+                && left_pane.contains("external-edit-status: root.left_pane_external_edit_status;")
                 && left_pane
                     .contains("selected-path: root.focused_pane == 0 ? root.selected_path : \"\";"),
             "left FilePane instance should bind only left-pane address, status, selection, and focus-owned state"
@@ -2173,9 +2180,10 @@ mod tests {
                 && inactive_pane.contains("status: root.inactive_pane_status;")
                 && inactive_pane.contains("selected-count: root.inactive_pane_selected_count;")
                 && inactive_pane.contains("selected-status: root.inactive_pane_selected_status;")
-                && inactive_pane.contains(
-                    "external-edit-active: root.focused_pane == 1 && root.external_edit_active;"
-                )
+                && inactive_pane
+                    .contains("external-edit-active: root.inactive_pane_external_edit_active;")
+                && inactive_pane
+                    .contains("external-edit-status: root.inactive_pane_external_edit_status;")
                 && inactive_pane
                     .contains("selected-path: root.focused_pane == 1 ? root.selected_path : \"\";"),
             "right FilePane instance should bind only right-pane address, status, selection, and focus-owned state"

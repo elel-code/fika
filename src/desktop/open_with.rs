@@ -2,7 +2,7 @@ use super::mime_open;
 use crate::fs::privilege;
 use crate::{
     AppState, AppWindow, AsyncBridge, AsyncEvent, DesktopApp, FileOpenResult, FileOpenSuccess,
-    send_async_event, set_status,
+    PaneTarget, send_async_event, set_status, set_status_for_panes,
 };
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -120,14 +120,22 @@ fn open_file_with_app_async(
     path: PathBuf,
     desktop_id: String,
 ) {
-    let (pane_id, generation) = {
+    let Some((pane_id, generation)) = ({
         let mut state = state.borrow_mut();
-        (
-            state.panes.active.id,
-            state.panes.active.open_generation.next(),
-        )
+        state
+            .panes
+            .pane_mut_for_target(PaneTarget::Focused)
+            .map(|pane| (pane.id, pane.open_generation.next()))
+    }) else {
+        set_status(ui, "No split pane target is available");
+        return;
     };
-    set_status(ui, &format!("Opening with {desktop_id}..."));
+    set_status_for_panes(
+        ui,
+        state,
+        &[pane_id],
+        &format!("Opening with {desktop_id}..."),
+    );
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -153,14 +161,17 @@ fn open_file_with_custom_command_async(
     path: PathBuf,
     command: String,
 ) {
-    let (pane_id, generation) = {
+    let Some((pane_id, generation)) = ({
         let mut state = state.borrow_mut();
-        (
-            state.panes.active.id,
-            state.panes.active.open_generation.next(),
-        )
+        state
+            .panes
+            .pane_mut_for_target(PaneTarget::Focused)
+            .map(|pane| (pane.id, pane.open_generation.next()))
+    }) else {
+        set_status(ui, "No split pane target is available");
+        return;
     };
-    set_status(ui, "Opening with custom command...");
+    set_status_for_panes(ui, state, &[pane_id], "Opening with custom command...");
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -443,4 +454,38 @@ fn to_desktop_apps(apps: Vec<mime_open::CandidateApp>) -> Vec<DesktopApp> {
             is_default: app.is_default,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn open_with_launches_use_focused_pane_and_pane_status() {
+        let source = include_str!("open_with.rs");
+        let app_body = source
+            .split_once("fn open_file_with_app_async(")
+            .and_then(|(_, rest)| rest.split_once("fn open_file_with_custom_command_async("))
+            .map(|(body, _)| body)
+            .expect("open_file_with_app_async body should be present");
+        let custom_body = source
+            .split_once("fn open_file_with_custom_command_async(")
+            .and_then(|(_, rest)| {
+                rest.split_once("async fn open_with_app_with_privilege_fallback(")
+            })
+            .map(|(body, _)| body)
+            .expect("open_file_with_custom_command_async body should be present");
+
+        for body in [app_body, custom_body] {
+            assert!(
+                body.contains(".pane_mut_for_target(PaneTarget::Focused)")
+                    && body.contains("set_status_for_panes(")
+                    && body.contains("&[pane_id],"),
+                "Open With launches should use the focused pane id and write start status to that pane"
+            );
+            assert!(
+                !body.contains("state.panes.active.id")
+                    && !body.contains("state.panes.active.open_generation.next()"),
+                "Open With launches must not hard-code the left/active pane"
+            );
+        }
+    }
 }
