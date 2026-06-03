@@ -17,8 +17,6 @@ export component DragOverlayLayer inherits Rectangle {
     in property <string> place-drag-label;
     in property <string> place-drag-marker;
     in property <bool> place-drag-rejected;
-    in property <bool> main-drag-active;
-    in property <bool> main-drag-rejected;
     private property <length> active-drag-x: root.place-drag-active ? root.place-drag-x : root.folder-drag-x;
     private property <length> active-drag-y: root.place-drag-active ? root.place-drag-y : root.folder-drag-y;
     private property <int> active-drag-slot: root.place-drag-active ? root.place-drag-slot : root.folder-drag-slot;
@@ -115,25 +113,4 @@ export component DragOverlayLayer inherits Rectangle {
         }
     }
 
-    if (root.main-drag-active && root.main-drag-rejected): Rectangle {
-        x: root.sidebar-width-px * 1px + 20px;
-        y: 84px;
-        width: 250px;
-        height: 32px;
-        border-radius: 6px;
-        background: root.dark ? #3a1818 : #fee2e2;
-        border-width: 1px;
-        border-color: root.dark ? #ef4444 : #dc2626;
-
-        Text {
-            text: "Cannot drop item here";
-            x: 12px;
-            width: parent.width - 24px;
-            color: root.dark ? #fecaca : #991b1b;
-            font-size: 12px;
-            font-weight: 700;
-            overflow: elide;
-            vertical-alignment: center;
-        }
-    }
 }

@@ -58,13 +58,13 @@ export component SplitPaneView inherits Rectangle {
     private property <length> selection-rect-current-y: 0px;
 
     function pan-horizontal(delta: length) {
-        root.focus_requested();
         root.pan-target-viewport-x = root.entry-count == 0 ? 0 : max(0, min(root.scroll-max-x, root.viewport-x + delta / 1px));
         if (root.pan-target-viewport-x != root.viewport-x) {
             root.viewport-x = root.pan-target-viewport-x;
             root.viewport-offset = -root.viewport-x * 1px;
             root.view_changed();
         }
+        root.focus_requested();
     }
 
     function scroll-pan-delta(delta-x: length, delta-y: length) -> length {
@@ -142,9 +142,10 @@ export component SplitPaneView inherits Rectangle {
 
         changed viewport-x => {
             if (root.viewport-x + root.viewport-sync-epsilon < max(0, -self.viewport-x / 1px) || root.viewport-x > max(0, -self.viewport-x / 1px) + root.viewport-sync-epsilon) {
-                root.focus_requested();
                 root.viewport-x = max(0, -self.viewport-x / 1px);
+                root.viewport-offset = -root.viewport-x * 1px;
                 root.view_changed();
+                root.focus_requested();
             }
         }
 

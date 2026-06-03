@@ -138,12 +138,15 @@ export component PathBar inherits Rectangle {
     in property <string> current-path;
     in property <bool> can-go-back;
     in property <bool> can-go-forward;
-    in-out property <string> path-text;
-    in-out property <bool> path-focused;
+    in property <string> path-text;
+    in property <bool> path-focused;
+    private property <string> editor-text: root.path-text;
     callback focus_requested();
     callback go_back();
     callback go_forward();
     callback path_submitted(string);
+    callback path_text_changed(string);
+    callback path_focus_changed(bool);
 
     height: 56px;
     background: transparent;
@@ -156,6 +159,10 @@ export component PathBar inherits Rectangle {
     private property <color> field-focus-border: root.dark ? #58b4d8 : #2f8dbc;
     private property <color> field-text-color: root.dark ? #eef3f7 : #24303b;
     private property <color> muted-text-color: root.dark ? #8b97a3 : #667381;
+
+    changed path-text => {
+        root.editor-text = root.path-text;
+    }
 
     HorizontalLayout {
         padding-left: 14px;
@@ -200,7 +207,7 @@ export component PathBar inherits Rectangle {
             background: root.path-focused ? root.field-focus-background : root.field-background;
 
             Text {
-                visible: root.path-text == "";
+                visible: root.editor-text == "";
                 x: 13px;
                 width: max(1px, parent.width - 26px);
                 height: parent.height;
@@ -215,7 +222,7 @@ export component PathBar inherits Rectangle {
                 x: 13px;
                 width: max(1px, parent.width - 26px);
                 height: parent.height;
-                text <=> root.path-text;
+                text <=> root.editor-text;
                 single-line: true;
                 font-size: 14px;
                 vertical-alignment: center;
@@ -223,15 +230,20 @@ export component PathBar inherits Rectangle {
                 selection-background-color: root.dark ? #58b4d8 : #2f8dbc;
                 selection-foreground-color: root.dark ? #0f172a : #ffffff;
                 accepted => { root.path_submitted(self.text); }
+                changed text => {
+                    root.path_text_changed(self.text);
+                }
                 changed has-focus => {
-                    root.path-focused = self.has-focus;
+                    root.path_focus_changed(self.has-focus);
                     if (self.has-focus) {
                         root.focus_requested();
                     } else {
-                        self.text = root.current-path;
+                        root.editor-text = root.current-path;
+                        root.path_text_changed(root.current-path);
                     }
-                    if (self.has-focus && self.text == "") {
-                        self.text = root.current-path;
+                    if (self.has-focus && root.editor-text == "") {
+                        root.editor-text = root.current-path;
+                        root.path_text_changed(root.current-path);
                     }
                 }
             }

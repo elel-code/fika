@@ -7,7 +7,9 @@ use crate::app::state::AppState;
 use crate::app::virtual_view::{PanePreviewInput, prepare_pane_preview_update};
 use crate::config::paths::home_dir;
 use crate::fs;
-use crate::{AppWindow, FileEntry, set_status, sync_virtual_entries, thumbnail_size_px};
+use crate::{
+    AppWindow, FileEntry, PaneSlotData, set_status, sync_virtual_entries, thumbnail_size_px,
+};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -34,6 +36,173 @@ pub(crate) fn set_pane_viewport_ui(ui: &AppWindow, side: PaneSide, viewport_x: f
             ui.set_inactive_pane_viewport_x(viewport_x);
             ui.set_inactive_pane_viewport_offset(-viewport_x);
         }
+    }
+    sync_pane_slots_ui(ui);
+}
+
+pub(crate) fn sync_pane_slots_ui(ui: &AppWindow) {
+    let search_query = ui.get_search_query();
+    let search_filters_active = ui.get_search_kind_filter() != 0
+        || ui.get_search_modified_filter() != 0
+        || ui.get_search_size_filter() != 0;
+    let search_panel_visible =
+        ui.get_search_bar_open() || !search_query.is_empty() || search_filters_active;
+    let chooser_choices = ui.get_chooser_choices();
+    let undo_available = ui.get_undo_available();
+    let undo_label = ui.get_undo_label();
+    let chooser_mode = ui.get_chooser_mode();
+    let chooser_select_directories = ui.get_chooser_select_directories();
+    let chooser_save_mode = ui.get_chooser_save_mode();
+    let chooser_accept_label = ui.get_chooser_accept_label();
+    let chooser_filter_count = ui.get_chooser_filter_count();
+    let chooser_filter_label = ui.get_chooser_filter_label();
+    let focused_selected_path = ui.get_selected_path();
+    let zoom_level = ui.get_icon_zoom_level();
+    let selection_revision = ui.get_selection_revision();
+
+    let mut slots = vec![PaneSlotData {
+        slot: 0,
+        current_path: ui.get_left_pane_path(),
+        path_text: ui.get_left_pane_path_input_text(),
+        path_focused: ui.get_left_pane_path_focused(),
+        can_go_back: ui.get_left_pane_can_go_back(),
+        can_go_forward: ui.get_left_pane_can_go_forward(),
+        search_panel_visible,
+        search_panel_height_px: 0.0,
+        search_loading: ui.get_search_loading(),
+        search_filters_active,
+        search_kind_label: active_search_kind_label(ui),
+        search_modified_label: active_search_modified_label(ui),
+        search_size_label: active_search_size_label(ui),
+        content_interactive: !ui.get_directory_loading(),
+        drop_ready: !ui.get_directory_loading(),
+        drop_trace_prefix: SharedString::new(),
+        entry_count: ui.get_entry_count(),
+        entries: ui.get_virtual_entries(),
+        virtual_start_index: ui.get_virtual_start_index(),
+        virtual_start_column: ui.get_virtual_start_column(),
+        viewport_x: ui.get_main_viewport_x(),
+        zoom_level,
+        selection_revision,
+        show_location: ui.get_left_pane_in_trash()
+            || (ui.get_recursive_search() && !search_query.is_empty()),
+        empty_message_visible: !ui.get_directory_loading(),
+        empty_title: active_empty_title(ui, &search_query),
+        empty_subtitle: active_empty_subtitle(ui, &search_query),
+        status: ui.get_left_pane_status(),
+        selected_count: ui.get_left_pane_selected_count(),
+        selected_status: ui.get_left_pane_selected_status(),
+        external_edit_active: ui.get_left_pane_external_edit_active(),
+        external_edit_status: ui.get_left_pane_external_edit_status(),
+        undo_available,
+        undo_label: undo_label.clone(),
+        chooser_mode,
+        chooser_select_directories,
+        chooser_save_mode,
+        chooser_accept_label: chooser_accept_label.clone(),
+        focused_selected_path: focused_selected_path.clone(),
+        chooser_filter_count,
+        chooser_filter_label: chooser_filter_label.clone(),
+        chooser_choices: chooser_choices.clone(),
+    }];
+
+    if ui.get_split_view_open() {
+        slots.push(PaneSlotData {
+            slot: 1,
+            current_path: ui.get_inactive_pane_path(),
+            path_text: ui.get_inactive_pane_path_input_text(),
+            path_focused: ui.get_inactive_pane_path_focused(),
+            can_go_back: ui.get_inactive_pane_can_go_back(),
+            can_go_forward: ui.get_inactive_pane_can_go_forward(),
+            search_panel_visible: false,
+            search_panel_height_px: 0.0,
+            search_loading: false,
+            search_filters_active: false,
+            search_kind_label: active_search_kind_label(ui),
+            search_modified_label: active_search_modified_label(ui),
+            search_size_label: active_search_size_label(ui),
+            content_interactive: true,
+            drop_ready: true,
+            drop_trace_prefix: "inactive-".into(),
+            entry_count: ui.get_inactive_pane_entry_count(),
+            entries: ui.get_inactive_pane_entries(),
+            virtual_start_index: ui.get_inactive_pane_virtual_start_index(),
+            virtual_start_column: ui.get_inactive_pane_virtual_start_column(),
+            viewport_x: ui.get_inactive_pane_viewport_x(),
+            zoom_level,
+            selection_revision,
+            show_location: ui.get_inactive_pane_in_trash(),
+            empty_message_visible: true,
+            empty_title: "This folder is empty".into(),
+            empty_subtitle: SharedString::new(),
+            status: ui.get_inactive_pane_status(),
+            selected_count: ui.get_inactive_pane_selected_count(),
+            selected_status: ui.get_inactive_pane_selected_status(),
+            external_edit_active: ui.get_inactive_pane_external_edit_active(),
+            external_edit_status: ui.get_inactive_pane_external_edit_status(),
+            undo_available,
+            undo_label,
+            chooser_mode,
+            chooser_select_directories,
+            chooser_save_mode,
+            chooser_accept_label,
+            focused_selected_path,
+            chooser_filter_count,
+            chooser_filter_label,
+            chooser_choices,
+        });
+    }
+
+    ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));
+}
+
+fn active_search_kind_label(ui: &AppWindow) -> SharedString {
+    match ui.get_search_kind_filter() {
+        1 => "Type: Folders",
+        2 => "Type: Files",
+        3 => "Type: Images",
+        _ => "Type: All",
+    }
+    .into()
+}
+
+fn active_search_modified_label(ui: &AppWindow) -> SharedString {
+    match ui.get_search_modified_filter() {
+        1 => "Modified: Today",
+        2 => "Modified: 7 days",
+        3 => "Modified: 30 days",
+        _ => "Modified: Any",
+    }
+    .into()
+}
+
+fn active_search_size_label(ui: &AppWindow) -> SharedString {
+    match ui.get_search_size_filter() {
+        1 => "Size: < 1 MB",
+        2 => "Size: 1-100 MB",
+        3 => "Size: > 100 MB",
+        _ => "Size: Any",
+    }
+    .into()
+}
+
+fn active_empty_title(ui: &AppWindow, search_query: &SharedString) -> SharedString {
+    if ui.get_search_loading() {
+        "Searching...".into()
+    } else if search_query.is_empty() {
+        "This folder is empty".into()
+    } else {
+        "No matching items".into()
+    }
+}
+
+fn active_empty_subtitle(ui: &AppWindow, search_query: &SharedString) -> SharedString {
+    if ui.get_search_loading() {
+        "Scanning subfolders.".into()
+    } else if search_query.is_empty() {
+        "This directory has no visible files.".into()
+    } else {
+        "Try another search term.".into()
     }
 }
 
@@ -96,6 +265,7 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
         ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(
             Vec::<FileEntry>::new(),
         ))));
+        sync_pane_slots_ui(ui);
         return;
     };
 
@@ -138,6 +308,7 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
         ui.set_inactive_pane_virtual_start_column(update.start_column as i32);
     }
     ui.set_inactive_pane_entry_count(update.entry_count as i32);
+    sync_pane_slots_ui(ui);
 }
 
 pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -185,6 +356,7 @@ pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
         &snapshot.focused_selection,
     );
     sync_inactive_pane_ui(ui, state);
+    sync_pane_slots_ui(ui);
 }
 
 pub(crate) fn toggle_split_view(
@@ -257,7 +429,9 @@ fn sync_focused_ui(ui: &AppWindow, side: PaneSide, current_dir: &Path, selected_
         PaneSide::Active => 0,
         PaneSide::Inactive => 1,
     });
-    ui.set_current_path(current_dir.display().to_string().into());
+    let current_path = current_dir.display().to_string();
+    ui.set_focused_pane_path(current_path.as_str().into());
+    ui.set_current_path(current_path.into());
     ui.set_current_name(display_location_name(current_dir).into());
     ui.set_current_in_trash(fs::file_ops::is_in_trash_files_dir(current_dir));
     ui.set_selected_path(
@@ -268,6 +442,7 @@ fn sync_focused_ui(ui: &AppWindow, side: PaneSide, current_dir: &Path, selected_
     ui.set_selected_count(selected_paths.len() as i32);
     ui.set_selected_status(selection_status_text(selected_paths));
     ui.set_selection_revision(ui.get_selection_revision() + 1);
+    sync_pane_slots_ui(ui);
 }
 
 pub(crate) fn directory_status_text<'a>(entries: impl Iterator<Item = &'a FileEntry>) -> String {

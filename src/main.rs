@@ -67,7 +67,8 @@ use app::selection::{
 };
 use app::split_view::{
     directory_status_text, set_pane_viewport_ui, set_pane_viewport_ui_if_clamped,
-    sync_inactive_pane_ui, sync_inactive_pane_view_from_ui, sync_navigation_ui, toggle_split_view,
+    sync_inactive_pane_ui, sync_inactive_pane_view_from_ui, sync_navigation_ui, sync_pane_slots_ui,
+    toggle_split_view,
 };
 use app::state::{AppState, DeviceAction, FileUndo, PaneExternalEdit};
 use app::thumbnail_pipeline::{
@@ -282,6 +283,15 @@ fn main() -> Result<(), slint::PlatformError> {
                     PaneSide::Active => sync_virtual_entries(&ui, &state, &bridge, true),
                     PaneSide::Inactive => sync_inactive_pane_view_from_ui(&ui, &state),
                 }
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_pane_slots_refresh_requested(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                sync_pane_slots_ui(&ui);
             }
         });
     }
@@ -1590,6 +1600,7 @@ fn reset_search_controls(ui: &AppWindow) {
     ui.set_search_kind_filter(0);
     ui.set_search_modified_filter(0);
     ui.set_search_size_filter(0);
+    sync_pane_slots_ui(ui);
 }
 
 fn load_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
@@ -1792,12 +1803,14 @@ fn load_directory_with_preservation(
     ));
     set_current_location_ui(ui, &current_dir);
     ui.set_search_loading(false);
+    sync_pane_slots_ui(ui);
     if !preserve_view && !defer_view_restore {
         restore_view_state(ui, state, &current_dir);
     }
     save_current_settings(ui, state);
     if preserve_view {
         ui.set_directory_loading(false);
+        sync_pane_slots_ui(ui);
         set_left_pane_status(ui, "Refreshing folder...");
     } else if let Some(cached_entries) = cached_entries {
         {
@@ -1809,9 +1822,11 @@ fn load_directory_with_preservation(
         apply_filter(ui, state, bridge, false);
         ui.set_items_path(current_dir.display().to_string().into());
         ui.set_directory_loading(false);
+        sync_pane_slots_ui(ui);
         set_left_pane_status(ui, "Refreshing cached folder...");
     } else {
         ui.set_directory_loading(true);
+        sync_pane_slots_ui(ui);
         reset_search_controls(ui);
         update_selection_ui(ui, &[]);
         set_left_pane_status(ui, "Loading folder...");
@@ -2211,6 +2226,7 @@ fn apply_directory_result(
                 set_left_directory_status_from_entries(ui, state);
                 ui.set_items_path(result.path.display().to_string().into());
                 ui.set_directory_loading(false);
+                sync_pane_slots_ui(ui);
                 return;
             }
             if !result.preserve_view {
@@ -2219,6 +2235,7 @@ fn apply_directory_result(
             apply_filter(ui, state, bridge, result.preserve_view);
             ui.set_items_path(result.path.display().to_string().into());
             ui.set_directory_loading(false);
+            sync_pane_slots_ui(ui);
         }
         Err(err) => {
             debug_log(&format!(
@@ -2239,6 +2256,7 @@ fn apply_directory_result(
             match recovery {
                 DirectoryLoadErrorRecovery::KeepVisibleModel => {
                     ui.set_directory_loading(false);
+                    sync_pane_slots_ui(ui);
                     set_left_pane_status(ui, &format!("Cannot refresh directory: {err}"));
                 }
                 DirectoryLoadErrorRecovery::RollBackToItemsPath(path) => {
@@ -2251,6 +2269,7 @@ fn apply_directory_result(
                     save_current_settings(ui, state);
                     sync_virtual_entries(ui, state, bridge, true);
                     ui.set_directory_loading(false);
+                    sync_pane_slots_ui(ui);
                     set_left_pane_status(
                         ui,
                         &format!(
@@ -2282,6 +2301,7 @@ fn apply_directory_result(
                         Vec::<FileEntry>::new(),
                     ))));
                     ui.set_directory_loading(false);
+                    sync_pane_slots_ui(ui);
                     if result.preserve_view {
                         retain_visible_selection(ui, state, &[]);
                     } else {
@@ -3315,6 +3335,7 @@ fn sync_external_edit_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_left_pane_external_edit_status(left_status.into());
     ui.set_inactive_pane_external_edit_active(!inactive_status.is_empty());
     ui.set_inactive_pane_external_edit_status(inactive_status.into());
+    sync_pane_slots_ui(ui);
 }
 
 fn pane_id_for_ui_side(state: &AppState, pane_side: i32) -> Option<u64> {
@@ -3406,6 +3427,7 @@ fn sync_virtual_entries_with_count(
     );
     if !update.rebuild_model {
         ui.set_entry_count(update.entry_count as i32);
+        sync_pane_slots_ui(ui);
         return;
     }
 
@@ -3418,6 +3440,7 @@ fn sync_virtual_entries_with_count(
     ui.set_virtual_start_index(update.range.start as i32);
     ui.set_virtual_start_column(update.start_column as i32);
     ui.set_entry_count(update.entry_count as i32);
+    sync_pane_slots_ui(ui);
 }
 
 fn set_left_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -3875,6 +3898,7 @@ fn update_selection_ui_for_side(ui: &AppWindow, side: PaneSide, selected_paths: 
         ui.set_selected_status(selected_status);
     }
     ui.set_selection_revision(ui.get_selection_revision() + 1);
+    sync_pane_slots_ui(ui);
 }
 
 fn selection_status_text(selected_paths: &[String]) -> SharedString {
@@ -4464,6 +4488,7 @@ fn sync_chooser_filter_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             })
             .collect::<Vec<_>>(),
     ))));
+    sync_pane_slots_ui(ui);
 }
 
 fn sync_chooser_choices_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -4494,6 +4519,7 @@ fn sync_chooser_choices_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         })
         .collect::<Vec<_>>();
     ui.set_chooser_choices(ModelRc::new(Rc::new(VecModel::from(choices))));
+    sync_pane_slots_ui(ui);
 }
 
 fn select_chooser_filter(
@@ -4553,6 +4579,7 @@ fn set_left_pane_status(ui: &AppWindow, message: &str) {
         ui.set_status(message.clone());
     }
     ui.set_left_pane_status(message);
+    sync_pane_slots_ui(ui);
 }
 
 fn set_inactive_pane_status(ui: &AppWindow, message: &str) {
@@ -4561,6 +4588,7 @@ fn set_inactive_pane_status(ui: &AppWindow, message: &str) {
         ui.set_status(message.clone());
     }
     ui.set_inactive_pane_status(message);
+    sync_pane_slots_ui(ui);
 }
 
 fn set_inactive_directory_status_from_entries(
@@ -4644,6 +4672,7 @@ fn set_status(ui: &AppWindow, message: &str) {
     } else {
         ui.set_left_pane_status(message);
     }
+    sync_pane_slots_ui(ui);
 }
 
 fn debug_log(message: &str) {
