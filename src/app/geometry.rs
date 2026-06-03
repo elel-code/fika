@@ -1762,7 +1762,9 @@ mod tests {
         assert!(app.contains("width: root.active-pane-width;"));
         assert!(app.contains("callback inactive_pane_view_changed();"));
         assert!(app.contains("in-out property <float> inactive_pane_viewport_x"));
-        assert!(app.contains("if (root.split_view_open) : SplitPaneView"));
+        assert!(app.contains("active-pane-clip := Rectangle"));
+        assert!(app.contains("if (root.split_view_open) : split-pane-clip := Rectangle"));
+        assert!(app.contains("SplitPaneView {\n                        width: parent.width;"));
         assert!(app.contains("virtual-start-index: root.inactive_pane_virtual_start_index;"));
         assert!(app.contains("viewport-offset <=> root.inactive_pane_viewport_offset;"));
         assert!(app.contains("root.focus_inactive_pane();"));
@@ -1781,10 +1783,15 @@ mod tests {
         assert!(split_pane.contains("root.handle-scroll(delta-x, delta-y, control);"));
         assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
         assert!(split_pane.contains("virtual-layer := Rectangle"));
+        assert!(split_pane.contains("clip: true;"));
         assert!(split_pane.contains("private property <length> header-height: 56px;"));
         assert!(
             app.contains("height: max(1px, parent.height - root.status-bar-height);"),
             "split panes should share the same content height above the full-width status bar"
+        );
+        assert!(
+            app.matches("clip: true;").count() >= 2,
+            "active and inactive split pane shells must be clipped at their pane boundaries"
         );
         assert!(
             app.contains("StatusBar {\n                    y: max(0px, parent.height - root.status-bar-height);\n                    width: parent.width;"),

@@ -899,9 +899,14 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                VerticalLayout {
+                active-pane-clip := Rectangle {
                     width: root.active-pane-width;
                     height: max(1px, parent.height - root.status-bar-height);
+                    clip: true;
+
+                VerticalLayout {
+                    width: parent.width;
+                    height: parent.height;
                     padding: 0px;
                     spacing: 0px;
 
@@ -1168,35 +1173,43 @@ export component AppWindow inherits Window {
                     }
 
                 }
+                }
 
-                if (root.split_view_open) : SplitPaneView {
+                if (root.split_view_open) : split-pane-clip := Rectangle {
                     x: root.active-pane-width;
                     width: max(1px, parent.width - root.active-pane-width);
                     height: max(1px, parent.height - root.status-bar-height);
-                    dark: root.dark_mode;
-                    path: root.inactive_pane_path;
-                    name: root.inactive_pane_name;
-                    entry-count: root.inactive_pane_entry_count;
-                    entries: root.inactive_pane_entries;
-                    virtual-start-index: root.inactive_pane_virtual_start_index;
-                    virtual-start-column: root.inactive_pane_virtual_start_column;
-                    viewport-x <=> root.inactive_pane_viewport_x;
-                    viewport-offset <=> root.inactive_pane_viewport_offset;
-                    zoom-level: root.icon_zoom_level;
-                    view_changed => {
-                        root.inactive_pane_view_changed();
-                    }
-                    zoom_in => {
-                        root.zoom-main-in();
-                    }
-                    zoom_out => {
-                        root.zoom-main-out();
-                    }
-                    focus_requested => {
-                        root.focus_inactive_pane();
-                    }
-                    activated(path) => {
-                        root.open_inactive_path(path);
+                    background: root.shell-base-color;
+                    clip: true;
+
+                    SplitPaneView {
+                        width: parent.width;
+                        height: parent.height;
+                        dark: root.dark_mode;
+                        path: root.inactive_pane_path;
+                        name: root.inactive_pane_name;
+                        entry-count: root.inactive_pane_entry_count;
+                        entries: root.inactive_pane_entries;
+                        virtual-start-index: root.inactive_pane_virtual_start_index;
+                        virtual-start-column: root.inactive_pane_virtual_start_column;
+                        viewport-x <=> root.inactive_pane_viewport_x;
+                        viewport-offset <=> root.inactive_pane_viewport_offset;
+                        zoom-level: root.icon_zoom_level;
+                        view_changed => {
+                            root.inactive_pane_view_changed();
+                        }
+                        zoom_in => {
+                            root.zoom-main-in();
+                        }
+                        zoom_out => {
+                            root.zoom-main-out();
+                        }
+                        focus_requested => {
+                            root.focus_inactive_pane();
+                        }
+                        activated(path) => {
+                            root.open_inactive_path(path);
+                        }
                     }
                 }
 
