@@ -2925,11 +2925,21 @@ fn apply_privileged_operation_result(
     bridge: &AsyncBridge,
     result: privilege::PrivilegedOperationResult,
 ) {
-    refresh_affected_directories(ui, state, bridge, &result.affected_dirs);
+    let pane_ids = refresh_affected_directories(ui, state, bridge, &result.affected_dirs);
 
     match result.result {
-        Ok(message) => set_status(ui, &format!("{} complete: {message}", result.label)),
-        Err(err) => set_status(ui, &format!("{} failed: {err}", result.label)),
+        Ok(message) => set_status_for_panes(
+            ui,
+            state,
+            &pane_ids,
+            &format!("{} complete: {message}", result.label),
+        ),
+        Err(err) => set_status_for_panes(
+            ui,
+            state,
+            &pane_ids,
+            &format!("{} failed: {err}", result.label),
+        ),
     }
 }
 
@@ -3009,10 +3019,17 @@ fn apply_external_edit_result(
     match result.result {
         Ok(path) => {
             if result.operation == EXTERNAL_EDIT_SAVE_OPERATION {
-                if let Some(parent) = path.parent() {
-                    refresh_affected_directories(ui, state, bridge, &[parent.to_path_buf()]);
-                }
-                set_status(ui, &format!("Admin write-back saved: {}", path.display()));
+                let affected_dirs = path
+                    .parent()
+                    .map(|parent| vec![parent.to_path_buf()])
+                    .unwrap_or_default();
+                let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);
+                set_status_for_panes(
+                    ui,
+                    state,
+                    &pane_ids,
+                    &format!("Admin write-back saved: {}", path.display()),
+                );
             } else {
                 set_status(
                     ui,
@@ -4974,6 +4991,51 @@ mod tests {
         assert!(
             !body.contains("set_status(ui, &update.status);"),
             "file operation progress status must not jump to whichever pane is focused while progress events arrive"
+        );
+    }
+
+    #[test]
+    fn privileged_operation_status_uses_affected_pane_route() {
+        let source = include_str!("main.rs");
+        let body = source
+            .split_once("fn apply_privileged_operation_result(")
+            .and_then(|(_, rest)| rest.split_once("fn register_external_edit("))
+            .map(|(body, _)| body)
+            .expect("apply_privileged_operation_result body should be present");
+
+        assert!(
+            body.contains(
+                "let pane_ids = refresh_affected_directories(ui, state, bridge, &result.affected_dirs);"
+            ) && body.matches("set_status_for_panes(").count() == 2,
+            "privileged operation result status should use the same affected-pane route as its refresh"
+        );
+        assert!(
+            !body.contains("set_status(ui, &format!(\"{} complete: {message}\", result.label))")
+                && !body.contains("set_status(ui, &format!(\"{} failed: {err}\", result.label))"),
+            "privileged operation result status must not jump to whichever pane is focused when the helper returns"
+        );
+    }
+
+    #[test]
+    fn admin_writeback_save_status_uses_affected_pane_route() {
+        let source = include_str!("main.rs");
+        let body = source
+            .split_once("fn apply_external_edit_result(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_external_edit_ui("))
+            .map(|(body, _)| body)
+            .expect("apply_external_edit_result body should be present");
+
+        assert!(
+            body.contains("let affected_dirs = path")
+                && body.contains("let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);")
+                && body.contains("set_status_for_panes(\n                    ui,\n                    state,\n                    &pane_ids,"),
+            "admin write-back save status should write to the pane whose directory was refreshed"
+        );
+        assert!(
+            !body.contains(
+                "set_status(ui, &format!(\"Admin write-back saved: {}\", path.display()))"
+            ),
+            "admin write-back save status must not jump to whichever pane is focused when the helper returns"
         );
     }
 
