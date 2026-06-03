@@ -1866,8 +1866,8 @@ mod tests {
             app.contains("private property <length> split-divider-width: root.split_view_open ? 1px : 0px;")
                 && app.contains("private property <length> inactive-pane-x: root.active-pane-width + root.split-divider-width;")
                 && app.contains("private property <length> inactive-pane-width: root.split_view_open ? max(1px, root.main-pane-width - root.inactive-pane-x) : 0px;")
-                && app.contains("if (root.split_view_open) : split-divider := Rectangle {\n                        x: root.active-pane-width;\n                        width: root.split-divider-width;\n                        height: parent.height;\n                        background: root.shell-separator-color;"),
-            "split divider should be a single pane-level line between the active and inactive shells"
+                && app.contains("if (root.split_view_open) : split-divider := Rectangle {\n                        x: root.active-pane-width;\n                        width: root.split-divider-width;\n                        height: parent.height;\n                        background: root.split-resize-active ?"),
+            "split divider should be a single pane-level line between the active and inactive shells with drag feedback"
         );
         assert!(
             app.contains("if (root.split_view_open) : right-pane-shell := Rectangle {\n                        x: root.inactive-pane-x;\n                        width: root.inactive-pane-width;\n                        height: parent.height;\n                        background: root.shell-base-color;\n                        clip: true;"),
@@ -2072,6 +2072,72 @@ mod tests {
                 "StatusBar {\n                    y: max(0px, parent.height - root.status-bar-height);\n                    width: parent.width;"
             ),
             "split view must not use a shared full-width status bar"
+        );
+    }
+
+    #[test]
+    fn split_pane_divider_is_draggable_and_persistent() {
+        let app = include_str!("../../ui/app.slint");
+
+        assert!(app.contains("private property <length> split-resize-hit-width: 15px;"));
+        assert!(app.contains("private property <float> split-resize-start-ratio: 0.5;"));
+        assert!(app.contains("private property <length> split-resize-press-x: 0px;"));
+        assert!(app.contains("private property <bool> split-resize-active: false;"));
+        assert!(
+            app.contains("changed split_view_open => {\n        if (!root.split_view_open) {\n            root.split-resize-active = false;\n        }\n    }"),
+            "closing split view should clear any active divider drag state"
+        );
+        assert!(
+            app.contains("changed split_pane_ratio => {\n        root.sync-main-viewport();\n        root.main_view_changed();\n        root.inactive_pane_view_changed();\n    }"),
+            "dragging the divider should resync both pane virtual views as the ratio changes"
+        );
+
+        let divider = app
+            .split_once("if (root.split_view_open) : split-divider := Rectangle {")
+            .expect("split divider should exist")
+            .1
+            .split_once("if (root.split_view_open) : right-pane-shell := Rectangle")
+            .expect("split divider should be before the right pane shell")
+            .0;
+        assert!(
+            divider.contains("x: root.active-pane-width;")
+                && divider.contains("width: root.split-divider-width;")
+                && divider.contains("background: root.split-resize-active ?"),
+            "visible divider should stay between panes and expose drag feedback"
+        );
+
+        let divider_touch = app
+            .split_once("if (root.split_view_open) : split-divider-touch := TouchArea {")
+            .expect("split divider touch area should exist")
+            .1
+            .split_once("}\n                    }\n                }\n        }")
+            .expect("split divider touch area should be scoped to pane shells")
+            .0;
+        assert!(
+            divider_touch
+                .contains("x: max(0px, root.active-pane-width - root.split-resize-hit-width / 2);")
+                && divider_touch.contains("width: root.split-resize-hit-width;")
+                && divider_touch.contains("height: parent.height;")
+                && divider_touch.contains("mouse-cursor: ew-resize;"),
+            "divider touch area should be wider than the 1px visual line"
+        );
+        assert!(
+            divider_touch.contains("root.split-resize-start-ratio = root.split_pane_ratio;")
+                && divider_touch.contains(
+                    "root.split-resize-press-x = self.absolute-position.x + self.mouse-x;"
+                )
+                && divider_touch.contains("root.split-resize-active = true;"),
+            "divider drag should remember the starting ratio and press position"
+        );
+        assert!(
+            divider_touch.contains("root.split-resize-active = false;")
+                && divider_touch.contains("root.persist_ui_state();"),
+            "divider drag should clear active state and persist the new ratio on release"
+        );
+        assert!(
+            divider_touch.contains("if (self.pressed) {")
+                && divider_touch.contains("root.split_pane_ratio = max(0.1, min(0.9, root.split-resize-start-ratio + ((self.absolute-position.x + self.mouse-x - root.split-resize-press-x) / 1px) / max(1, root.split-content-width / 1px)));"),
+            "divider drag should update the split ratio continuously while clamped"
         );
     }
 
