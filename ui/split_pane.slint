@@ -44,6 +44,8 @@ export component SplitPaneView inherits Rectangle {
     private property <int> column-count: max(1, ceil(root.entry-count / root.rows-per-column));
     private property <length> viewport-content-width: 2 * root.preview-padding + root.column-count * root.cell-width;
     private property <length> virtual-layer-width: root.viewport-content-width;
+    private property <int> virtual-slice-column-count: max(1, ceil(root.entries.length / root.rows-per-column));
+    private property <length> virtual-slice-width: max(1px, root.virtual-slice-column-count * root.cell-width);
     private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width)) / 1px);
     private property <float> viewport-sync-epsilon: 0.5;
     private property <float> pan-target-viewport-x: 0;
@@ -211,49 +213,56 @@ export component SplitPaneView inherits Rectangle {
             width: root.virtual-layer-width;
             height: preview.viewport-height;
 
-            for item[index] in root.entries: FileTile {
-                drag-data-source: root.make_drag_data(item.path, item.is_dir);
-                property <int> global-index: index + root.virtual-start-index;
-                x: root.preview-padding + floor(global-index / root.rows-per-column) * root.cell-width;
-                y: root.preview-padding + mod(global-index, root.rows-per-column) * root.row-height;
-                width: root.cell-width - 12px;
-                entry: item;
-                selected: root.selection-revision >= 0 && root.is_selected(item.path);
-                dark: root.dark;
-                zoom-level: root.zoom-level;
-                show-location: root.show-location;
-                interactive: root.interactive;
-                drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;
-                request_select(path, toggle, range) => {
-                    root.focus_requested();
-                    root.request_select(path, toggle, range);
-                }
-                request_context_menu(path, name, x, y) => {
-                    root.focus_requested();
-                    root.request_context_menu(path, name, item.size, item.modified, item.is_dir, x, y);
-                }
-                activated(path) => {
-                    root.focus_requested();
-                    root.activated(path);
-                }
-                navigate_back => {
-                    root.focus_requested();
-                    root.navigate_back();
-                }
-                navigate_forward => {
-                    root.focus_requested();
-                    root.navigate_forward();
-                }
-                zoom_in => {
-                    root.focus_requested();
-                    root.zoom_in();
-                }
-                zoom_out => {
-                    root.focus_requested();
-                    root.zoom_out();
-                }
-                pan_horizontal(delta) => {
-                    root.pan-horizontal(delta);
+            slice-layer := Rectangle {
+                x: root.preview-padding + root.virtual-start-column * root.cell-width;
+                y: 0px;
+                width: root.virtual-slice-width;
+                height: parent.height;
+
+                for item[index] in root.entries: FileTile {
+                    drag-data-source: root.make_drag_data(item.path, item.is_dir);
+                    property <int> local-index: index + root.virtual-start-index - root.virtual-start-column * root.rows-per-column;
+                    x: floor(local-index / root.rows-per-column) * root.cell-width;
+                    y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;
+                    width: root.cell-width - 12px;
+                    entry: item;
+                    selected: root.selection-revision >= 0 && root.is_selected(item.path);
+                    dark: root.dark;
+                    zoom-level: root.zoom-level;
+                    show-location: root.show-location;
+                    interactive: root.interactive;
+                    drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;
+                    request_select(path, toggle, range) => {
+                        root.focus_requested();
+                        root.request_select(path, toggle, range);
+                    }
+                    request_context_menu(path, name, x, y) => {
+                        root.focus_requested();
+                        root.request_context_menu(path, name, item.size, item.modified, item.is_dir, x, y);
+                    }
+                    activated(path) => {
+                        root.focus_requested();
+                        root.activated(path);
+                    }
+                    navigate_back => {
+                        root.focus_requested();
+                        root.navigate_back();
+                    }
+                    navigate_forward => {
+                        root.focus_requested();
+                        root.navigate_forward();
+                    }
+                    zoom_in => {
+                        root.focus_requested();
+                        root.zoom_in();
+                    }
+                    zoom_out => {
+                        root.focus_requested();
+                        root.zoom_out();
+                    }
+                    pan_horizontal(delta) => {
+                        root.pan-horizontal(delta);
+                    }
                 }
             }
         }

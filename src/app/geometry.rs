@@ -1651,8 +1651,11 @@ mod tests {
         assert!(
             status_bar.contains("label: \"Admin Save\";")
                 && status_bar.contains("width: 104px;")
+                && status_bar.contains("text: \"ADMIN\";")
+                && status_bar.contains("private property <color> admin-badge-bg")
+                && status_bar.contains("private property <color> admin-badge-border")
                 && !status_bar.contains("label: \"Save Back\";"),
-            "status bar should expose the clearer admin write-back save action"
+            "status bar should expose a clear admin write-back marker and save action"
         );
         let main_pane_index = app
             .find("main-pane := Rectangle")
@@ -2275,7 +2278,7 @@ mod tests {
         ));
         assert!(
             split_pane
-                .contains("root.focus_requested();\n                    root.activated(path);")
+                .contains("activated(path) => {\n                        root.focus_requested();\n                        root.activated(path);")
         );
         assert!(!split_pane.contains("Click to focus it."));
         assert!(split_pane.contains("callback activated(string);"));
@@ -2353,20 +2356,30 @@ mod tests {
         assert!(split_pane.contains(
             "private property <length> virtual-layer-width: root.viewport-content-width;"
         ));
+        assert!(split_pane.contains(
+            "private property <int> virtual-slice-column-count: max(1, ceil(root.entries.length / root.rows-per-column));"
+        ));
+        assert!(split_pane.contains(
+            "private property <length> virtual-slice-width: max(1px, root.virtual-slice-column-count * root.cell-width);"
+        ));
         assert!(
             split_pane.contains("x: 0px;")
                 && split_pane.contains("width: root.virtual-layer-width;")
+                && split_pane.contains("slice-layer := Rectangle")
+                && split_pane.contains(
+                    "x: root.preview-padding + root.virtual-start-column * root.cell-width;"
+                )
+                && split_pane.contains("width: root.virtual-slice-width;")
                 && split_pane
-                    .contains("property <int> global-index: index + root.virtual-start-index;")
+                    .contains("property <int> local-index: index + root.virtual-start-index - root.virtual-start-column * root.rows-per-column;")
                 && split_pane.contains(
-                    "x: root.preview-padding + floor(global-index / root.rows-per-column) * root.cell-width;"
+                    "x: floor(local-index / root.rows-per-column) * root.cell-width;"
                 )
                 && split_pane.contains(
-                    "y: root.preview-padding + mod(global-index, root.rows-per-column) * root.row-height;"
+                    "y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;"
                 )
-                && !split_pane.contains("property <int> local-index:")
-                && !split_pane.contains("root.virtual-start-column * root.cell-width"),
-            "virtualized pane slices should keep a stable full-width layer and move only tile positions"
+                && !split_pane.contains("property <int> global-index:"),
+            "virtualized pane slices should keep a stable full-width scroll layer while tile coordinates remain local to the slice"
         );
         assert!(!split_pane.contains("root.viewport-content-width - self.x"));
         assert!(split_pane.contains("clip: true;"));

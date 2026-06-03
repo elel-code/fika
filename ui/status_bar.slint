@@ -34,6 +34,9 @@ export component StatusBar inherits Rectangle {
 
     private property <color> separator-color: root.dark ? #242b33 : #e5eaf0;
     private property <color> body-text-color: root.dark ? #d5dde5 : #526071;
+    private property <color> admin-badge-bg: root.dark ? #4a3010 : #fff1cc;
+    private property <color> admin-badge-border: root.dark ? #f59e0b : #d97706;
+    private property <color> admin-badge-text: root.dark ? #fde68a : #7c2d12;
 
     Rectangle {
         width: parent.width;
@@ -53,6 +56,26 @@ export component StatusBar inherits Rectangle {
             font-size: 13px;
             overflow: elide;
             vertical-alignment: center;
+        }
+
+        if (root.external-edit-active): Rectangle {
+            width: 54px;
+            height: 22px;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: root.admin-badge-border;
+            background: root.admin-badge-bg;
+
+            Text {
+                width: parent.width;
+                height: parent.height;
+                text: "ADMIN";
+                color: root.admin-badge-text;
+                font-size: 11px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
         }
 
         if (root.external-edit-active): Text {
