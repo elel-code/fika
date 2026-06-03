@@ -3,7 +3,6 @@ import { ToolButton } from "widgets.slint";
 export component TopBar inherits Rectangle {
     in property <bool> dark;
     in property <string> current-path;
-    in property <length> main-start-x;
     in property <bool> can-go-back;
     in property <bool> can-go-forward;
     in property <bool> search-active;
@@ -37,15 +36,11 @@ export component TopBar inherits Rectangle {
     private property <length> path-min-width: root.search-active ? 64px : 168px;
 
     HorizontalLayout {
+        padding-left: 14px;
         padding-right: 14px;
         padding-top: 12px;
         padding-bottom: 12px;
         spacing: 0px;
-
-        Rectangle {
-            width: root.main-start-x;
-            background: transparent;
-        }
 
         HorizontalLayout {
             padding-left: 0px;
@@ -220,9 +215,8 @@ export component TopBar inherits Rectangle {
     }
 
     Rectangle {
-        x: root.main-start-x;
         y: parent.height - 1px;
-        width: max(1px, parent.width - self.x);
+        width: parent.width;
         height: 1px;
         background: root.separator-color;
     }

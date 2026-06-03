@@ -1469,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn cosmic_shell_chrome_uses_unified_top_bar_with_below_header_sidebar_panel() {
+    fn cosmic_shell_chrome_uses_main_pane_header_with_below_header_sidebar_panel() {
         let app = include_str!("../../ui/app.slint");
         let top_bar = include_str!("../../ui/top_bar.slint");
         let search_panel = include_str!("../../ui/search_panel.slint");
@@ -1517,25 +1517,37 @@ mod tests {
         );
         assert!(
             app.contains("sidebar-surface := Rectangle"),
-            "sidebar panel should be explicit inside the content area below the unified top bar"
+            "sidebar panel should be explicit in the content row below the header"
         );
         assert!(
             app.contains("width: parent.width;\n                        height: parent.height;"),
             "sidebar panel should fill the full content-row height so it is equal-height with the main pane"
         );
+        let main_pane_index = app
+            .find("main-pane := Rectangle")
+            .expect("AppWindow should instantiate the main pane");
+        let header_row_index = app
+            .find("header-row := HorizontalLayout")
+            .expect("AppWindow should reserve a shared header row");
+        let content_row_index = app
+            .find("content-row := HorizontalLayout")
+            .expect("AppWindow should place sidebar and main content below the header");
         let top_bar_index = app
             .find("TopBar {")
-            .expect("AppWindow should instantiate the unified TopBar");
-        let content_layout_index = app[top_bar_index..]
-            .find("HorizontalLayout {\n                vertical-stretch: 1;")
-            .map(|index| top_bar_index + index)
-            .expect("content layout should start after the unified TopBar");
+            .expect("AppWindow should instantiate the main-pane TopBar");
+        let sidebar_header_slot_index = app
+            .find("sidebar-header-slot := Rectangle")
+            .expect("left header slot should align the main-pane toolbar with the sidebar edge");
         let sidebar_surface_index = app
             .find("sidebar-surface := Rectangle")
             .expect("sidebar content panel should be present");
         assert!(
-            top_bar_index < content_layout_index && content_layout_index < sidebar_surface_index,
-            "sidebar panel should live in the content row below the unified TopBar"
+            header_row_index < sidebar_header_slot_index
+                && sidebar_header_slot_index < top_bar_index
+                && top_bar_index < content_row_index
+                && content_row_index < sidebar_surface_index
+                && sidebar_surface_index < main_pane_index,
+            "toolbar should live in the header row on the main side, while sidebar panel starts in the below-header content row"
         );
         assert!(
             !app.contains("SidebarSection { label: \"Remote\""),
@@ -1562,10 +1574,14 @@ mod tests {
             "TopBar visible height should match AppWindow top-bar-height"
         );
         assert!(
-            top_bar.contains("in property <length> main-start-x;")
-                && top_bar.contains("width: root.main-start-x;")
-                && top_bar.contains("x: root.main-start-x;"),
-            "unified TopBar should span the sidebar area while controls and separator start from the main content edge"
+            !top_bar.contains("main-start-x") && !app.contains("main-start-x:"),
+            "TopBar should no longer reserve sidebar space because it belongs to the main pane"
+        );
+        assert!(
+            app.contains("private property <length> main-grid-height:")
+                && app.contains("height: root.main-grid-height;")
+                && app.contains("viewport-height: root.main-grid-height;"),
+            "main grid component height and virtual viewport height should share one available-height binding"
         );
         assert!(
             app.contains(
@@ -1585,7 +1601,7 @@ mod tests {
         );
         assert!(
             app.contains("padding-left: 8px;") && app.contains("padding-right: 8px;"),
-            "sidebar rows should be inset inside the rounded below-header panel"
+            "sidebar rows should be inset inside the rounded below-header sidebar panel"
         );
         assert!(
             app.contains("in-out property <float> sidebar_width_px: 280;"),
@@ -1598,7 +1614,7 @@ mod tests {
         assert!(
             app.contains("private property <length> sidebar-panel-radius: 16px;")
                 && !app.contains("sidebar-panel-margin"),
-            "sidebar content panel should keep the rounded COSMIC-like treatment without an inset that makes it shorter than the main pane"
+            "sidebar content panel should keep the rounded COSMIC-like treatment without drifting back to a window-level overlay"
         );
 
         for (name, slint) in [
