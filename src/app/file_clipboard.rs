@@ -459,8 +459,12 @@ mod tests {
             vec!["/tmp/left/a".to_string(), "/tmp/left/b".to_string()];
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
         state.panes.focus_inactive();
-        state.panes.active.selection.paths =
-            vec!["/tmp/right/a".to_string(), "/tmp/right/b".to_string()];
+        state
+            .panes
+            .inactive_mut()
+            .expect("inactive pane")
+            .selection
+            .paths = vec!["/tmp/right/a".to_string(), "/tmp/right/b".to_string()];
 
         assert_eq!(
             clipboard_paths_for_focused_context(&state, "/tmp/right/b"),

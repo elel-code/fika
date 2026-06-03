@@ -140,6 +140,7 @@ export component PathBar inherits Rectangle {
     in property <bool> can-go-forward;
     in-out property <string> path-text;
     in-out property <bool> path-focused;
+    callback focus_requested();
     callback go_back();
     callback go_forward();
     callback path_submitted(string);
@@ -172,14 +173,20 @@ export component PathBar inherits Rectangle {
                 label: "<";
                 dark: root.dark;
                 enabled: root.can-go-back;
-                clicked => { root.go_back(); }
+                clicked => {
+                    root.focus_requested();
+                    root.go_back();
+                }
             }
 
             ToolButton {
                 label: ">";
                 dark: root.dark;
                 enabled: root.can-go-forward;
-                clicked => { root.go_forward(); }
+                clicked => {
+                    root.focus_requested();
+                    root.go_forward();
+                }
             }
         }
 
@@ -218,9 +225,12 @@ export component PathBar inherits Rectangle {
                 accepted => { root.path_submitted(self.text); }
                 changed has-focus => {
                     root.path-focused = self.has-focus;
-                    if (!self.has-focus) {
+                    if (self.has-focus) {
+                        root.focus_requested();
+                    } else {
                         self.text = root.current-path;
-                    } else if (self.text == "") {
+                    }
+                    if (self.has-focus && self.text == "") {
                         self.text = root.current-path;
                     }
                 }

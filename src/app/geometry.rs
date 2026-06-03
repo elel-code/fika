@@ -5,7 +5,7 @@ use std::ops::Range;
 const SHELL_HEADER_HEIGHT: f32 = 56.0;
 const PATH_BAR_HEIGHT: f32 = 56.0;
 pub(crate) const STATUS_BAR_HEIGHT: f32 = 36.0;
-const SPLIT_PANE_HEADER_HEIGHT: f32 = PATH_BAR_HEIGHT;
+const SPLIT_DIVIDER_WIDTH: f32 = 1.0;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
 const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
 const SEARCH_PANEL_NARROW_WIDTH: f32 = 760.0;
@@ -105,10 +105,21 @@ impl MainGridLayout {
 pub(crate) fn active_main_pane_width(main_pane_width: f32, split_open: bool) -> f32 {
     let main_pane_width = main_pane_width.max(1.0);
     if split_open {
-        (main_pane_width / 2.0).max(1.0)
+        ((main_pane_width - SPLIT_DIVIDER_WIDTH).max(1.0) / 2.0)
+            .floor()
+            .max(1.0)
     } else {
         main_pane_width
     }
+}
+
+pub(crate) fn inactive_main_pane_width(main_pane_width: f32, split_open: bool) -> f32 {
+    if !split_open {
+        return 0.0;
+    }
+    let main_pane_width = main_pane_width.max(1.0);
+    let active_width = active_main_pane_width(main_pane_width, true);
+    (main_pane_width - active_width - SPLIT_DIVIDER_WIDTH).max(1.0)
 }
 
 pub(crate) fn main_pane_bounds(
@@ -180,8 +191,7 @@ pub(crate) fn split_preview_plan(
     let cell_width = icon_cell_width(zoom_level);
     let row_height = icon_row_height(zoom_level);
     let padding = 14.0;
-    let header_height = SPLIT_PANE_HEADER_HEIGHT;
-    let available_height = (pane_height - header_height - 2.0 * padding).max(row_height);
+    let available_height = (pane_height - PATH_BAR_HEIGHT - 2.0 * padding).max(row_height);
     let rows_per_column = (available_height / row_height).floor().max(1.0) as usize;
 
     virtual_grid_plan(
@@ -1130,8 +1140,9 @@ mod tests {
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
         PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, active_main_pane_width,
-        context_menu_metrics, main_pane_bounds, main_scroll_max_x, place_drop_geometry,
-        search_panel_height, split_preview_plan, virtual_entry_range, virtual_grid_plan,
+        context_menu_metrics, inactive_main_pane_width, main_pane_bounds, main_scroll_max_x,
+        place_drop_geometry, search_panel_height, split_preview_plan, virtual_entry_range,
+        virtual_grid_plan,
     };
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
@@ -1541,7 +1552,7 @@ mod tests {
         assert!(
             !app.contains("sidebar-splitter-width")
                 && !app.contains("sidebar-divider-offset")
-                && !app.contains("background: root.shell-separator-color;"),
+                && app.contains("resize-touch := TouchArea"),
             "sidebar panel border should be the visible divider instead of a separate splitter line"
         );
         assert!(
@@ -1628,8 +1639,16 @@ mod tests {
         assert!(
             app.contains("private property <length> main-content-height: max(1px, root.height - root.shell-header-height);")
                 && app.contains("root.main-content-height - root.path-bar-height - root.status-bar-height - root.search-panel-height")
-                && app.contains("y: root.path-bar-height + root.search-panel-height;"),
-            "main grid height should subtract the main-pane path bar, search filters, and status bar from the below-shell content row"
+                && app.contains("left-pane-shell := Rectangle")
+                && app.contains("active-grid-clip := Rectangle")
+                && app.contains("current-path: root.left_pane_path;")
+                && app.contains("if (root.search-panel-visible) : SearchPanel")
+                && app.contains("if (root.entry_count > 0) : grid := ScrollView"),
+            "main grid height should subtract the main-pane path bar, search filters, and status bar inside the active pane shell"
+        );
+        assert!(
+            app.contains("private property <length> search-panel-height: root.search-panel-visible ? (root.active-pane-width < 760px ? 78px : 44px) : 0px;"),
+            "search filters should size against the active pane instead of squeezing the inactive split pane"
         );
         assert!(
             app.contains(
@@ -1750,31 +1769,237 @@ mod tests {
     }
 
     #[test]
-    fn split_pane_ui_has_active_width_and_inactive_preview_wiring() {
+    fn split_pane_ui_has_equal_left_and_right_panel_chrome() {
         let app = include_str!("../../ui/app.slint");
         let split_pane = include_str!("../../ui/split_pane.slint");
 
         assert!(app.contains("import { SplitPaneView } from \"split_pane.slint\";"));
         assert!(app.contains("in property <[FileEntry]> inactive_pane_entries;"));
-        assert!(app.contains("callback focus_inactive_pane();"));
         assert!(app.contains("callback open_inactive_path(string);"));
         assert!(app.contains("private property <length> active-pane-width"));
         assert!(app.contains("width: root.active-pane-width;"));
         assert!(app.contains("callback inactive_pane_view_changed();"));
         assert!(app.contains("in-out property <float> inactive_pane_viewport_x"));
-        assert!(app.contains("active-pane-clip := Rectangle"));
-        assert!(app.contains("if (root.split_view_open) : split-pane-clip := Rectangle"));
-        assert!(app.contains("SplitPaneView {\n                        width: parent.width;"));
+        assert!(app.contains("pane-shells := Rectangle"));
+        assert!(app.contains("left-pane-shell := Rectangle"));
+        assert!(app.contains("if (root.split_view_open) : right-pane-shell := Rectangle"));
+        assert!(app.contains("right-pane-content := Rectangle"));
+        assert!(
+            app.contains(
+                "SplitPaneView {\n                                    width: parent.width;"
+            )
+        );
         assert!(app.contains("virtual-start-index: root.inactive_pane_virtual_start_index;"));
         assert!(app.contains("viewport-offset <=> root.inactive_pane_viewport_offset;"));
-        assert!(app.contains("root.focus_inactive_pane();"));
         assert!(app.contains("root.open_inactive_path(path);"));
+        assert!(!app.contains("active-pane-clip := Rectangle"));
+        assert!(!app.contains("split-pane-clip := Rectangle"));
+        assert!(!app.contains("split-pane-content := Rectangle"));
+        assert!(!app.contains("callback focus_inactive_pane();"));
+        assert!(!app.contains("root.focus_inactive_pane();"));
+        assert!(!app.contains("in-out property <string> path_input_text;"));
+        assert!(!app.contains("in-out property <bool> path-input-focused"));
+        assert!(!app.contains("callback path_submitted(string);"));
+        assert!(!app.contains("current-path: root.current_path;"));
+        assert!(
+            !app.contains("main-blank-touch := TouchArea"),
+            "active pane blank input layer should be scoped inside the active pane shell"
+        );
+        let pane_row_header = app
+            .split_once("pane-row := Rectangle {")
+            .expect("split panes should live inside an explicit row")
+            .1
+            .split_once("pane-shells := Rectangle {")
+            .expect("pane row should contain the physical pane shells")
+            .0;
+        assert!(
+            pane_row_header.contains("width: parent.width;")
+                && pane_row_header.contains("height: parent.height;")
+                && pane_row_header.contains("clip: true;")
+                && !pane_row_header.contains("root.status-bar-height"),
+            "split pane row should give each physical pane its own full-height chrome"
+        );
+        assert!(
+            app.contains("left-pane-shell := Rectangle {\n                        x: 0px;\n                        width: root.active-pane-width;\n                        height: parent.height;")
+                && app.contains("if (root.split_view_open) : right-pane-shell := Rectangle {\n                        x: root.inactive-pane-x;\n                        width: root.inactive-pane-width;\n                        height: parent.height;"),
+            "split view should use two equal sibling pane shells anchored on either side of the divider"
+        );
+        assert!(
+            app.contains("active-grid-clip := Rectangle")
+                && app.contains("height: root.main-grid-height;")
+                && app.contains("if (root.entry_count > 0) : grid := ScrollView {\n                                    width: parent.width;\n                                    height: parent.height;")
+                && app.contains("viewport-width: max(parent.width, root.main-viewport-width);"),
+            "active grid should be clipped to the active pane instead of painting into the inactive pane"
+        );
+        assert!(
+            app.contains("private property <length> split-divider-width: root.split_view_open ? 1px : 0px;")
+                && app.contains("private property <length> inactive-pane-x: root.active-pane-width + root.split-divider-width;")
+                && app.contains("private property <length> inactive-pane-width: root.split_view_open ? max(1px, root.main-pane-width - root.inactive-pane-x) : 0px;")
+                && app.contains("if (root.split_view_open) : split-divider := Rectangle {\n                        x: root.active-pane-width;\n                        width: root.split-divider-width;\n                        height: parent.height;\n                        background: root.shell-separator-color;"),
+            "split divider should be a single pane-level line between the active and inactive shells"
+        );
+        assert!(
+            app.contains("if (root.split_view_open) : right-pane-shell := Rectangle {\n                        x: root.inactive-pane-x;\n                        width: root.inactive-pane-width;\n                        height: parent.height;\n                        background: root.shell-base-color;\n                        clip: true;"),
+            "inactive split pane should start after the divider and use the remaining width"
+        );
+        let pane_shells = app
+            .split_once("pane-shells := Rectangle {")
+            .expect("split panes should live inside one explicit shell row")
+            .1
+            .split_once("DragOverlayLayer {")
+            .expect("split pane shell row should be before overlay layers")
+            .0;
+        assert_eq!(
+            pane_shells.matches("PathBar {").count(),
+            2,
+            "split view must render one address bar per physical pane"
+        );
+        assert_eq!(
+            pane_shells.matches("StatusBar {").count(),
+            2,
+            "split view must render one status bar per physical pane"
+        );
+        assert!(app.contains("in-out property <string> left_pane_path;"));
+        assert!(app.contains("in-out property <string> left_pane_path_input_text;"));
+        assert!(app.contains("in-out property <bool> left_pane_path_focused: false;"));
+        assert!(app.contains("in-out property <bool> left_pane_can_go_back: false;"));
+        assert!(app.contains("in-out property <bool> left_pane_can_go_forward: false;"));
+        assert!(app.contains("callback left_pane_path_submitted(string);"));
+        assert!(app.contains("callback left_pane_go_back();"));
+        assert!(app.contains("callback left_pane_go_forward();"));
+        let left_path_bar = app
+            .split_once("left-pane-shell := Rectangle {")
+            .expect("active pane shell should exist")
+            .1
+            .split_once("if (root.search-panel-visible) : SearchPanel")
+            .expect("active pane path bar should be before search panel")
+            .0;
+        assert!(
+            left_path_bar.contains("current-path: root.left_pane_path;")
+                && left_path_bar.contains("path-text <=> root.left_pane_path_input_text;")
+                && left_path_bar.contains("path-focused <=> root.left_pane_path_focused;")
+                && left_path_bar.contains("can-go-back: root.left_pane_can_go_back;")
+                && left_path_bar.contains("can-go-forward: root.left_pane_can_go_forward;")
+                && left_path_bar.contains("root.left_pane_go_back();")
+                && left_path_bar.contains("root.left_pane_go_forward();")
+                && left_path_bar.contains("root.left_pane_path_submitted(path);"),
+            "left path bar should be wired to its own physical pane address and history state"
+        );
+        assert!(
+            !left_path_bar.contains("root.go_back();")
+                && !left_path_bar.contains("root.go_forward();")
+                && !left_path_bar.contains("root.inactive_")
+                && !left_path_bar.contains("root.current_path")
+                && !left_path_bar.contains("root.path_input_text"),
+            "left path bar must not use shared active/global address state"
+        );
+        let left_status_bar = app
+            .split_once("left-pane-shell := Rectangle {")
+            .expect("active pane shell should exist")
+            .1
+            .split_once("StatusBar {")
+            .expect("left pane should have its own status bar")
+            .1
+            .split_once("if (root.split_view_open) : split-divider")
+            .expect("left pane status should be before the split divider")
+            .0;
+        assert!(
+            left_status_bar.contains(
+                "status: root.left_pane_status == \"\" ? root.status : root.left_pane_status;"
+            ) && left_status_bar.contains("selected-count: root.left_pane_selected_count;")
+                && left_status_bar.contains("selected-status: root.left_pane_selected_status;")
+                && left_status_bar.contains(
+                    "external-edit-active: root.focused_pane == 0 && root.external_edit_active;"
+                )
+                && left_status_bar
+                    .contains("selected-path: root.focused_pane == 0 ? root.selected_path : \"\";"),
+            "left status bar should be scoped to the left physical pane"
+        );
+        assert!(app.contains("current-path: root.inactive_pane_path;"));
+        assert!(app.contains("path-text <=> root.inactive_pane_path_input_text;"));
+        assert!(app.contains("path-focused <=> root.inactive_pane_path_focused;"));
+        assert!(app.contains("callback inactive_path_submitted(string);"));
+        assert!(app.contains("callback inactive_go_back();"));
+        assert!(app.contains("callback inactive_go_forward();"));
+        assert!(app.contains("root.inactive_path_submitted(path);"));
+        assert!(app.contains("root.inactive_go_back();"));
+        assert!(app.contains("root.inactive_go_forward();"));
+        let inactive_path_bar = app
+            .split_once("if (root.split_view_open) : right-pane-shell := Rectangle {")
+            .expect("right pane shell should exist")
+            .1
+            .split_once("right-pane-content := Rectangle")
+            .expect("right pane path bar should be before content")
+            .0;
+        assert!(
+            inactive_path_bar.contains("current-path: root.inactive_pane_path;")
+                && inactive_path_bar.contains("path-text <=> root.inactive_pane_path_input_text;")
+                && inactive_path_bar.contains("path-focused <=> root.inactive_pane_path_focused;")
+                && inactive_path_bar.contains("root.inactive_go_back();")
+                && inactive_path_bar.contains("root.inactive_go_forward();")
+                && inactive_path_bar.contains("root.inactive_path_submitted(path);"),
+            "inactive path bar should be wired to its own address and history state"
+        );
+        assert!(
+            !inactive_path_bar.contains("root.go_back();")
+                && !inactive_path_bar.contains("root.go_forward();")
+                && !inactive_path_bar.contains("root.left_pane_")
+                && !inactive_path_bar.contains("root.current_path")
+                && !inactive_path_bar.contains("root.path_input_text")
+                && !inactive_path_bar.contains("root.focus_inactive_pane();"),
+            "inactive path bar must not drive active-pane navigation or focus swapping"
+        );
+        let inactive_status_bar = app
+            .split_once("if (root.split_view_open) : right-pane-shell := Rectangle {")
+            .expect("right pane shell should exist")
+            .1
+            .split_once("StatusBar {")
+            .expect("right pane should have its own status bar")
+            .1
+            .split_once("}\n                        }\n                    }")
+            .expect("right pane status should be inside the right pane shell")
+            .0;
+        assert!(
+            inactive_status_bar.contains("status: root.inactive_pane_status;")
+                && inactive_status_bar
+                    .contains("selected-count: root.inactive_pane_selected_count;")
+                && inactive_status_bar
+                    .contains("selected-status: root.inactive_pane_selected_status;")
+                && inactive_status_bar.contains(
+                    "external-edit-active: root.focused_pane == 1 && root.external_edit_active;"
+                )
+                && inactive_status_bar
+                    .contains("selected-path: root.focused_pane == 1 ? root.selected_path : \"\";"),
+            "right status bar should be scoped to the right physical pane"
+        );
+        assert!(
+            app.contains("callback prepare_inactive_pane_transfer(string, float, float) -> bool;")
+        );
+        assert!(app.contains("callback inactive_pane_drop_allowed(string) -> bool;"));
+        assert!(app.contains("root.prepare_inactive_pane_transfer("));
+        assert!(app.contains("root.inactive_pane_drop_allowed("));
+        assert!(app.contains("inactive-pane-drag-active"));
         assert!(split_pane.contains("export component SplitPaneView"));
         assert!(split_pane.contains("callback view_changed();"));
         assert!(split_pane.contains("callback focus_requested();"));
+        assert!(
+            split_pane
+                .contains("root.focus_requested();\n            root.activated(root.entry.path);")
+        );
+        assert!(split_pane.contains(
+            "root.focus_requested();\n            root.scrolled(event.delta-x, event.delta-y"
+        ));
+        assert!(
+            split_pane.contains(
+                "root.focus_requested();\n        root.viewport-x = root.entry-count == 0"
+            )
+        );
+        assert!(
+            split_pane
+                .contains("root.focus_requested();\n                    root.activated(path);")
+        );
+        assert!(!split_pane.contains("Click to focus it."));
         assert!(split_pane.contains("callback activated(string);"));
-        assert!(split_pane.contains("double-clicked => { root.activated(root.entry.path); }"));
-        assert!(split_pane.contains("activated(path) => { root.activated(path); }"));
         assert!(split_pane.contains("callback zoom_in();"));
         assert!(split_pane.contains("callback zoom_out();"));
         assert!(split_pane.contains("function handle-scroll("));
@@ -1784,25 +2009,51 @@ mod tests {
         assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
         assert!(split_pane.contains("virtual-layer := Rectangle"));
         assert!(split_pane.contains("clip: true;"));
-        assert!(split_pane.contains("private property <length> header-height: 56px;"));
         assert!(
-            app.contains("height: max(1px, parent.height - root.status-bar-height);"),
-            "split panes should share the same content height above the full-width status bar"
+            !split_pane.contains("import { PathBar } from \"top_bar.slint\";"),
+            "SplitPaneView should be content-only; pane chrome belongs to app.slint"
+        );
+        assert!(!split_pane.contains("PathBar {"));
+        assert!(!split_pane.contains("current-path"));
+        assert!(!split_pane.contains("path-text"));
+        assert!(!split_pane.contains("path-bar-height"));
+        assert!(split_pane.contains("root.height - 2 * root.preview-padding"));
+        assert!(!split_pane.contains("header-height"));
+        assert!(!split_pane.contains("Split Pane"));
+        assert!(!split_pane.contains("text: root.path"));
+        assert!(!split_pane.contains("x: 1px;"));
+        assert!(!split_pane.contains("parent.width - 1px"));
+        assert!(!split_pane.contains("root.width - 1px"));
+        assert!(
+            app.contains("pane-row := Rectangle")
+                && app.contains("height: parent.height;")
+                && app.contains("left-pane-shell := Rectangle")
+                && app.contains("right-pane-shell := Rectangle")
+                && app.contains("height: parent.height;"),
+            "split panes should keep their chrome inside each clipped physical pane"
         );
         assert!(
             app.matches("clip: true;").count() >= 2,
             "active and inactive split pane shells must be clipped at their pane boundaries"
         );
         assert!(
-            app.contains("StatusBar {\n                    y: max(0px, parent.height - root.status-bar-height);\n                    width: parent.width;"),
-            "status bar should span the whole main pane instead of only the active split pane"
+            !app.contains(
+                "StatusBar {\n                    y: max(0px, parent.height - root.status-bar-height);\n                    width: parent.width;"
+            ),
+            "split view must not use a shared full-width status bar"
         );
     }
 
     #[test]
     fn active_main_pane_width_halves_only_when_split_is_open() {
         assert_eq!(active_main_pane_width(900.0, false), 900.0);
-        assert_eq!(active_main_pane_width(900.0, true), 450.0);
+        assert_eq!(active_main_pane_width(900.0, true), 449.0);
+        assert_eq!(inactive_main_pane_width(900.0, true), 450.0);
+        assert_eq!(
+            active_main_pane_width(900.0, true) + 1.0 + inactive_main_pane_width(900.0, true),
+            900.0
+        );
+        assert_eq!(inactive_main_pane_width(900.0, false), 0.0);
         assert_eq!(active_main_pane_width(0.0, false), 1.0);
         assert_eq!(active_main_pane_width(0.0, true), 1.0);
     }

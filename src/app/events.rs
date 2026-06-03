@@ -18,6 +18,7 @@ pub(crate) struct DirectoryLoadResult {
 
 #[derive(Debug)]
 pub(crate) struct FileOpenResult {
+    pub(crate) pane_id: u64,
     pub(crate) generation: u64,
     pub(crate) path: PathBuf,
     pub(crate) result: Result<FileOpenSuccess, String>,

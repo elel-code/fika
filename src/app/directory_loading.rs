@@ -25,8 +25,8 @@ pub(crate) fn prepare_directory_load(
     state: &mut AppState,
     preserve_view: bool,
 ) -> DirectoryLoadPreparation {
-    prepare_directory_load_for_target(state, PaneTarget::Focused, preserve_view)
-        .expect("focused pane should always exist")
+    prepare_directory_load_for_target(state, PaneTarget::Active, preserve_view)
+        .expect("active pane should always exist")
 }
 
 pub(crate) fn prepare_directory_load_for_target(

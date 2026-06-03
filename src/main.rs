@@ -41,8 +41,8 @@ use app::file_clipboard::{
     apply_clipboard_load_result, refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    MainGridLayout, STATUS_BAR_HEIGHT, SelectionRect, active_main_pane_width, main_pane_bounds,
-    place_drop_geometry, register_menu_geometry_callbacks,
+    MainGridLayout, SelectionRect, active_main_pane_width, place_drop_geometry,
+    register_menu_geometry_callbacks,
 };
 use app::operation_controller::{
     OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
@@ -50,7 +50,7 @@ use app::operation_controller::{
 };
 #[cfg(test)]
 use app::pane::PaneHistory;
-use app::pane::{DirectoryViewState, PaneTarget};
+use app::pane::{DirectoryViewState, PaneSide, PaneTarget};
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
     rename_place, reorder_place_path, restore_default_places, sync_places,
@@ -65,20 +65,22 @@ use app::selection::{
     rebuild_visible_entry_index, retained_visible_paths, selection_range_paths_filtered,
     selection_rect_paths_filtered,
 };
+use app::split_view::{
+    directory_status_text, sync_inactive_pane_ui, sync_inactive_pane_view_from_ui,
+    sync_navigation_ui, toggle_split_view,
+};
 use app::state::{AppState, DeviceAction, FileUndo};
 use app::thumbnail_pipeline::{
     apply_thumbnail_load_to_state, decorate_entries_with_cached_thumbnails,
     prioritize_thumbnail_entries, thumbnail_schedule_batch,
 };
 use app::transfer::{
-    cancel_queued_operations, entry_at_main_point, main_drop_allowed, path_label,
-    place_drop_allowed, prepare_current_dir_transfer, prepare_entry_transfer,
-    prepare_main_transfer, prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
-    start_transfer_operation,
+    cancel_queued_operations, entry_at_main_point, inactive_pane_drop_allowed, main_drop_allowed,
+    path_label, place_drop_allowed, prepare_current_dir_transfer, prepare_entry_transfer,
+    prepare_inactive_pane_transfer, prepare_main_transfer, prepare_place_transfer,
+    resolve_transfer_conflict, start_next_operation, start_transfer_operation,
 };
-use app::virtual_view::{
-    SplitPreviewInput, VirtualViewInput, prepare_split_preview_update, prepare_virtual_view_update,
-};
+use app::virtual_view::{VirtualViewInput, prepare_virtual_view_update};
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::settings::{AppSettings, load_settings, save_settings};
@@ -293,7 +295,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_refresh(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                refresh_directory(&ui, &state, &bridge);
+                refresh_focused_directory(&ui, &state, &bridge);
             }
         });
     }
@@ -304,7 +306,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_go_home(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                navigate_to(&ui, &state, &bridge, home_dir());
+                navigate_focused_to(&ui, &state, &bridge, home_dir());
             }
         });
     }
@@ -326,7 +328,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_go_root(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                navigate_to(&ui, &state, &bridge, PathBuf::from("/"));
+                navigate_focused_to(&ui, &state, &bridge, PathBuf::from("/"));
             }
         });
     }
@@ -335,15 +337,34 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_path_submitted(move |path| {
+        ui.on_left_pane_path_submitted(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let requested = expand_user_path(path.as_str());
                 if requested.is_dir() {
+                    focus_left_pane(&ui, &state);
                     navigate_to(&ui, &state, &bridge, requested);
                 } else {
-                    ui.set_path_input_text(ui.get_current_path());
+                    ui.set_left_pane_path_input_text(ui.get_left_pane_path());
                     set_status(&ui, "Path is not a readable directory");
                 }
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_inactive_path_submitted(move |path| {
+            if let Some(ui) = ui_weak.upgrade() {
+                let requested = expand_user_path(path.as_str());
+                if !requested.is_dir() {
+                    ui.set_inactive_pane_path_input_text(ui.get_inactive_pane_path());
+                    set_status(&ui, "Path is not a readable directory");
+                    return;
+                }
+                focus_right_pane(&ui, &state);
+                navigate_inactive_to(&ui, &state, &bridge, requested);
             }
         });
     }
@@ -357,11 +378,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 let requested = expand_user_path(path.as_str());
                 if fs::file_ops::is_trash_files_dir(&requested) {
                     match fs::file_ops::ensure_trash_dirs() {
-                        Ok(()) => navigate_to(&ui, &state, &bridge, requested),
+                        Ok(()) => navigate_focused_to(&ui, &state, &bridge, requested),
                         Err(err) => set_status(&ui, &format!("Trash is not available: {err}")),
                     }
                 } else if requested.is_dir() {
-                    navigate_to(&ui, &state, &bridge, requested);
+                    navigate_focused_to(&ui, &state, &bridge, requested);
                 } else {
                     set_status(&ui, "Place is not available");
                 }
@@ -387,7 +408,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 let requested = expand_user_path(path.as_str());
                 if requested.is_dir() {
-                    navigate_to(&ui, &state, &bridge, requested);
+                    navigate_focused_to(&ui, &state, &bridge, requested);
                 } else {
                     set_status(&ui, "Device is not available");
                 }
@@ -565,6 +586,17 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
+        ui.on_left_pane_go_back(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                go_active_back(&ui, &state, &bridge);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_go_forward(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 go_forward(&ui, &state, &bridge);
@@ -576,9 +608,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_toggle_split_view(move || {
+        ui.on_left_pane_go_forward(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                toggle_split_view(&ui, &state, &bridge);
+                go_active_forward(&ui, &state, &bridge);
             }
         });
     }
@@ -587,9 +619,51 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_focus_inactive_pane(move || {
+        ui.on_inactive_go_back(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                focus_inactive_pane(&ui, &state, &bridge);
+                inactive_go_back(&ui, &state, &bridge);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_inactive_go_forward(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                inactive_go_forward(&ui, &state, &bridge);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_focus_left_pane(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                focus_left_pane(&ui, &state);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_focus_right_pane(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                focus_right_pane(&ui, &state);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_toggle_split_view(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                toggle_split_view(&ui, &state, &bridge);
             }
         });
     }
@@ -808,6 +882,16 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_prepare_inactive_pane_transfer(move |source, x, y| {
+            ui_weak.upgrade().is_some_and(|ui| {
+                prepare_inactive_pane_transfer(&ui, &state, source.as_str(), x, y)
+            })
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         ui.on_main_drop_target_path(move |x, y, source| {
             let Some(ui) = ui_weak.upgrade() else {
                 return SharedString::new();
@@ -829,6 +913,14 @@ fn main() -> Result<(), slint::PlatformError> {
             let state = state.borrow();
             let source = Path::new(source.as_str());
             main_drop_allowed(&ui, &state, x, y, source)
+        });
+    }
+
+    {
+        let state = Rc::clone(&state);
+        ui.on_inactive_pane_drop_allowed(move |source| {
+            let state = state.borrow();
+            inactive_pane_drop_allowed(&state, Path::new(source.as_str()))
         });
     }
 
@@ -1160,6 +1252,18 @@ fn remember_current_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         .insert_state_cache(current_dir, DirectoryViewState { viewport_x });
 }
 
+fn remember_inactive_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let mut state = state.borrow_mut();
+    let Some(pane) = state.panes.inactive_mut() else {
+        return;
+    };
+    let current_dir = pane.current_dir.clone();
+    let viewport_x = ui.get_inactive_pane_viewport_x();
+    pane.view.viewport_x = viewport_x;
+    pane.view
+        .insert_state_cache(current_dir, DirectoryViewState { viewport_x });
+}
+
 fn restore_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path) {
     let view_state = {
         let mut state = state.borrow_mut();
@@ -1176,10 +1280,27 @@ fn restore_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path
     ui.set_main_viewport_offset(-view_state.viewport_x);
 }
 
+fn restore_inactive_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path) {
+    let view_state = {
+        let mut state = state.borrow_mut();
+        let Some(pane) = state.panes.inactive_mut() else {
+            return;
+        };
+        let view_state = pane.view.cached_state(path).unwrap_or_default();
+        pane.view.viewport_x = view_state.viewport_x;
+        view_state
+    };
+    ui.set_inactive_pane_viewport_x(view_state.viewport_x);
+    ui.set_inactive_pane_viewport_offset(-view_state.viewport_x);
+}
+
 fn set_current_location_ui(ui: &AppWindow, path: &Path) {
     let current_path = path.display().to_string();
     ui.set_current_path(current_path.as_str().into());
-    ui.set_path_input_text(current_path.into());
+    ui.set_left_pane_path(current_path.as_str().into());
+    if !ui.get_left_pane_path_focused() {
+        ui.set_left_pane_path_input_text(current_path.into());
+    }
     ui.set_current_name(display_location_name(path).into());
     ui.set_current_in_trash(fs::file_ops::is_in_trash_files_dir(path));
 }
@@ -1244,7 +1365,7 @@ fn refresh_inactive_pane(
     }) else {
         return;
     };
-    load_prepared_inactive_directory(ui, state, bridge, preparation);
+    load_prepared_inactive_directory(ui, state, bridge, preparation, true);
 }
 
 fn load_prepared_inactive_directory(
@@ -1252,18 +1373,44 @@ fn load_prepared_inactive_directory(
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     preparation: DirectoryLoadPreparation,
+    preserve_view: bool,
 ) {
     let DirectoryLoadPreparation {
         pane_id,
         current_dir,
         generation,
-        cached_entries: _,
+        cached_entries,
         defer_view_restore,
     } = preparation;
     debug_log(&format!(
-        "load_directory inactive pane_id={pane_id} generation={generation} preserve_view=true defer_view_restore={defer_view_restore} path={}",
-        current_dir.display()
+        "load_directory inactive pane_id={pane_id} generation={generation} preserve_view={preserve_view} defer_view_restore={defer_view_restore} path={} cache_hit={}",
+        current_dir.display(),
+        cached_entries.is_some()
     ));
+    if !preserve_view && !defer_view_restore {
+        restore_inactive_view_state(ui, state, &current_dir);
+    }
+    if let Some(cached_entries) = cached_entries {
+        {
+            let mut state = state.borrow_mut();
+            if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
+                pane.entries = cached_entries;
+                pane.view.virtual_view.invalidate();
+            }
+        }
+        set_inactive_pane_status(ui, "Refreshing cached split folder...");
+    } else if !preserve_view {
+        {
+            let mut state = state.borrow_mut();
+            if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
+                pane.entries.clear();
+                pane.view.virtual_view.invalidate();
+            }
+        }
+        set_inactive_pane_status(ui, "Loading split folder...");
+    } else {
+        set_inactive_pane_status(ui, "Refreshing split folder...");
+    }
     sync_inactive_pane_ui(ui, state);
     watch_current_directory(&current_dir, pane_id, generation, bridge);
 
@@ -1278,7 +1425,7 @@ fn load_prepared_inactive_directory(
                 pane_id,
                 generation,
                 path: current_dir,
-                preserve_view: true,
+                preserve_view,
                 defer_view_restore,
                 result,
             }),
@@ -1370,7 +1517,7 @@ fn load_directory_with_preservation(
     save_current_settings(ui, state);
     if preserve_view {
         ui.set_directory_loading(false);
-        set_status(ui, "Refreshing folder...");
+        set_left_pane_status(ui, "Refreshing folder...");
     } else if let Some(cached_entries) = cached_entries {
         {
             let mut state = state.borrow_mut();
@@ -1381,12 +1528,12 @@ fn load_directory_with_preservation(
         apply_filter(ui, state, bridge, false);
         ui.set_items_path(current_dir.display().to_string().into());
         ui.set_directory_loading(false);
-        set_status(ui, "Refreshing cached folder...");
+        set_left_pane_status(ui, "Refreshing cached folder...");
     } else {
         ui.set_directory_loading(true);
         reset_search_controls(ui);
         update_selection_ui(ui, &[]);
-        set_status(ui, "Loading folder...");
+        set_left_pane_status(ui, "Loading folder...");
     }
     watch_current_directory(&current_dir, pane_id, generation, bridge);
 
@@ -1779,7 +1926,7 @@ fn apply_directory_result(
                     result.generation,
                     result.path.display()
                 ));
-                set_directory_status_from_entries(ui, state);
+                set_left_directory_status_from_entries(ui, state);
                 ui.set_items_path(result.path.display().to_string().into());
                 ui.set_directory_loading(false);
                 return;
@@ -1810,7 +1957,7 @@ fn apply_directory_result(
             match recovery {
                 DirectoryLoadErrorRecovery::KeepVisibleModel => {
                     ui.set_directory_loading(false);
-                    set_status(ui, &format!("Cannot refresh directory: {err}"));
+                    set_left_pane_status(ui, &format!("Cannot refresh directory: {err}"));
                 }
                 DirectoryLoadErrorRecovery::RollBackToItemsPath(path) => {
                     {
@@ -1822,7 +1969,7 @@ fn apply_directory_result(
                     save_current_settings(ui, state);
                     sync_virtual_entries(ui, state, bridge, true);
                     ui.set_directory_loading(false);
-                    set_status(
+                    set_left_pane_status(
                         ui,
                         &format!(
                             "Cannot read {}; stayed in {}: {err}",
@@ -1858,7 +2005,7 @@ fn apply_directory_result(
                     } else {
                         update_selection_ui(ui, &[]);
                     }
-                    set_status(ui, &format!("Cannot read directory: {err}"));
+                    set_left_pane_status(ui, &format!("Cannot read directory: {err}"));
                 }
             }
         }
@@ -1880,6 +2027,9 @@ fn apply_inactive_directory_result(
                 entries.len(),
                 result.preserve_view
             ));
+            if result.defer_view_restore {
+                restore_inactive_view_state(ui, state, &result.path);
+            }
             let mut entries = Some(entries);
             {
                 let mut state = state.borrow_mut();
@@ -1910,6 +2060,7 @@ fn apply_inactive_directory_result(
                 }
             }
             sync_inactive_pane_ui(ui, state);
+            set_inactive_directory_status_from_entries(ui, state, result.pane_id);
         }
         Err(err) => {
             debug_log(&format!(
@@ -1919,6 +2070,8 @@ fn apply_inactive_directory_result(
                 result.path.display(),
                 result.preserve_view
             ));
+            sync_inactive_pane_ui(ui, state);
+            set_inactive_pane_status(ui, &format!("Cannot read split directory: {err}"));
         }
     }
 }
@@ -1961,9 +2114,25 @@ fn open_file_async(
     bridge: &AsyncBridge,
     path: PathBuf,
 ) {
-    let generation = {
+    open_file_for_target_async(ui, state, bridge, PaneTarget::Focused, path);
+}
+
+fn open_file_for_target_async(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    target: PaneTarget,
+    path: PathBuf,
+) {
+    let Some((pane_id, generation)) = ({
         let mut state = state.borrow_mut();
-        state.panes.active.open_generation.next()
+        state
+            .panes
+            .pane_mut_for_target(target)
+            .map(|pane| (pane.id, pane.open_generation.next()))
+    }) else {
+        set_status(ui, "No split pane target is available");
+        return;
     };
     let label = path
         .file_name()
@@ -1980,6 +2149,7 @@ fn open_file_async(
             async_tx,
             notify_ui,
             AsyncEvent::FileOpened(FileOpenResult {
+                pane_id,
                 generation,
                 path,
                 result,
@@ -1991,12 +2161,10 @@ fn open_file_async(
 fn apply_file_open_result(ui: &AppWindow, state: &Rc<RefCell<AppState>>, result: FileOpenResult) {
     {
         let state = state.borrow();
-        if !state
-            .panes
-            .active
-            .open_generation
-            .is_current(result.generation)
-        {
+        let Some(pane) = state.panes.pane_for_target(PaneTarget::Id(result.pane_id)) else {
+            return;
+        };
+        if !pane.open_generation.is_current(result.generation) {
             return;
         }
     }
@@ -2860,7 +3028,7 @@ fn sync_virtual_entries_with_count(
     ui.set_entry_count(update.entry_count as i32);
 }
 
-fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+fn set_left_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let (query, filters_active, total, summary) = {
         let state_ref = state.borrow();
         (
@@ -2871,12 +3039,12 @@ fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState
         )
     };
     if query.is_empty() && !filters_active {
-        set_status(
+        set_left_pane_status(
             ui,
             &format!("{} folders, {} files", summary.folders, summary.files),
         );
     } else {
-        set_status(
+        set_left_pane_status(
             ui,
             &format!(
                 "{} of {total} items ({} folders, {} files)",
@@ -2913,12 +3081,12 @@ fn apply_filter(
     }
 
     if query.is_empty() && !filters_active {
-        set_status(
+        set_left_pane_status(
             ui,
             &format!("{} folders, {} files", summary.folders, summary.files),
         );
     } else {
-        set_status(
+        set_left_pane_status(
             ui,
             &format!(
                 "{} of {total} items ({} folders, {} files)",
@@ -3126,214 +3294,45 @@ fn thumbnail_size_px(ui: &AppWindow) -> u32 {
 }
 
 fn update_selection_ui(ui: &AppWindow, selected_paths: &[String]) {
-    ui.set_selected_path(
-        selected_paths
-            .last()
-            .map_or_else(SharedString::new, |path| path.as_str().into()),
-    );
-    ui.set_selected_count(selected_paths.len() as i32);
-    ui.set_selected_status(match selected_paths {
-        [] => SharedString::new(),
-        [path] => format!("1 item selected: {path}").into(),
-        paths => format!("{} items selected", paths.len()).into(),
-    });
+    let selected_path = selected_paths
+        .last()
+        .map_or_else(SharedString::new, |path| path.as_str().into());
+    let selected_count = selected_paths.len() as i32;
+    let selected_status = selection_status_text(selected_paths);
+    ui.set_left_pane_selected_count(selected_count);
+    ui.set_left_pane_selected_status(selected_status.clone());
+    if ui.get_focused_pane() == 0 || !ui.get_split_view_open() {
+        ui.set_selected_path(selected_path);
+        ui.set_selected_count(selected_count);
+        ui.set_selected_status(selected_status);
+    }
     ui.set_selection_revision(ui.get_selection_revision() + 1);
 }
 
-fn sync_inactive_pane_view_from_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+fn selection_status_text(selected_paths: &[String]) -> SharedString {
+    match selected_paths {
+        [] => SharedString::new(),
+        [path] => format!("1 item selected: {path}").into(),
+        paths => format!("{} items selected", paths.len()).into(),
+    }
+}
+
+fn focus_left_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     {
         let mut state = state.borrow_mut();
-        let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Inactive) else {
-            return;
-        };
-        pane.view.viewport_x = ui.get_inactive_pane_viewport_x();
+        state.panes.focus_active();
     }
-    sync_inactive_pane_ui(ui, state);
-}
-
-fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-    let pane_bounds = main_pane_bounds(
-        ui.get_sidebar_width_px(),
-        window_size.width,
-        window_size.height,
-    );
-    let main_width = (pane_bounds.right - pane_bounds.left).max(1.0);
-    let active_width = active_main_pane_width(main_width, ui.get_split_view_open());
-    let inactive_width = (main_width - active_width).max(1.0);
-    let inactive_height = (pane_bounds.bottom - pane_bounds.top - STATUS_BAR_HEIGHT).max(1.0);
-
-    let snapshot = {
-        let mut state = state.borrow_mut();
-        prepare_split_preview_update(
-            &mut state,
-            SplitPreviewInput {
-                pane_width: inactive_width,
-                pane_height: inactive_height,
-                zoom_level: ui.get_icon_zoom_level(),
-                thumbnail_size_px: thumbnail_size_px(ui),
-                force_rebuild_model: ui.get_inactive_pane_entry_count() == 0,
-            },
-        )
-    };
-
-    let Some(update) = snapshot else {
-        ui.set_inactive_pane_path(SharedString::new());
-        ui.set_inactive_pane_name(SharedString::new());
-        ui.set_inactive_pane_entry_count(0);
-        ui.set_inactive_pane_virtual_start_index(0);
-        ui.set_inactive_pane_virtual_start_column(0);
-        ui.set_inactive_pane_viewport_x(0.0);
-        ui.set_inactive_pane_viewport_offset(0.0);
-        ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(
-            Vec::<FileEntry>::new(),
-        ))));
-        return;
-    };
-
-    let path = update.current_dir.display().to_string();
-    let name = display_location_name(&update.current_dir);
-    ui.set_inactive_pane_path(path.into());
-    ui.set_inactive_pane_name(name.into());
-    ui.set_inactive_pane_entry_count(update.entry_count as i32);
-    ui.set_inactive_pane_virtual_start_index(update.range.start as i32);
-    ui.set_inactive_pane_virtual_start_column(update.start_column as i32);
-    ui.set_inactive_pane_viewport_x(update.viewport_x);
-    ui.set_inactive_pane_viewport_offset(-update.viewport_x);
-    if update.rebuild_model {
-        ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
-    }
-}
-
-fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let (can_go_back, can_go_forward, split_open) = {
-        let state = state.borrow();
-        (
-            state.panes.active.history.back_len() > 0,
-            state.panes.active.history.forward_len() > 0,
-            state.panes.is_split(),
-        )
-    };
-    ui.set_can_go_back(can_go_back);
-    ui.set_can_go_forward(can_go_forward);
-    ui.set_split_view_open(split_open);
-    sync_inactive_pane_ui(ui, state);
-}
-
-fn toggle_split_view(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
-    let (opened, current_dir) = {
-        let mut state = state.borrow_mut();
-        if state.panes.is_split() {
-            state.panes.close_inactive();
-            (false, state.panes.active.current_dir.clone())
-        } else {
-            let current_dir = state.panes.active.current_dir.clone();
-            state.panes.open_inactive_from_active();
-            (true, current_dir)
-        }
-    };
-
     sync_navigation_ui(ui, state);
-    sync_virtual_entries(ui, state, bridge, true);
-    if opened {
-        set_status(
-            ui,
-            &format!("Split view opened at {}", current_dir.display()),
-        );
-    } else {
-        set_status(ui, "Split view closed");
-    }
 }
 
-fn focus_inactive_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
-    let focused = activate_inactive_pane(ui, state, bridge);
+fn focus_right_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let focused = {
+        let mut state = state.borrow_mut();
+        state.panes.focus_inactive()
+    };
     if focused {
-        set_directory_status_from_entries(ui, state);
+        sync_navigation_ui(ui, state);
     }
-}
-
-fn open_inactive_path(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    path: &str,
-    bridge: &AsyncBridge,
-) {
-    let should_focus_inactive = {
-        let state = state.borrow();
-        let active_contains = state
-            .panes
-            .active
-            .entries
-            .iter()
-            .any(|entry| entry.path.as_str() == path);
-        let inactive_contains = state
-            .panes
-            .inactive()
-            .is_some_and(|pane| pane.entries.iter().any(|entry| entry.path.as_str() == path));
-        inactive_contains && !active_contains
-    };
-
-    if should_focus_inactive && !activate_inactive_pane(ui, state, bridge) {
-        return;
-    }
-
-    open_path(ui, state, path, bridge);
-}
-
-fn activate_inactive_pane(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-) -> bool {
-    remember_current_view_state(ui, state);
-    let focused = state.borrow_mut().panes.focus_inactive();
-    if !focused {
-        return false;
-    }
-
-    let (
-        pane_id,
-        current_dir,
-        selected_paths,
-        search_query,
-        kind_filter,
-        modified_filter,
-        size_filter,
-        viewport_x,
-    ) = {
-        let mut state = state.borrow_mut();
-        state.panes.active.view.virtual_view.invalidate();
-        (
-            state.panes.active.id,
-            state.panes.active.current_dir.clone(),
-            state.panes.active.selection.paths.clone(),
-            state.panes.active.search.query.clone(),
-            state.panes.active.search.kind_filter,
-            state.panes.active.search.modified_filter,
-            state.panes.active.search.size_filter,
-            state.panes.active.view.viewport_x,
-        )
-    };
-
-    set_current_location_ui(ui, &current_dir);
-    ui.set_items_path(current_dir.display().to_string().into());
-    ui.set_search_query(search_query.into());
-    ui.set_search_kind_filter(kind_filter);
-    ui.set_search_modified_filter(modified_filter);
-    ui.set_search_size_filter(size_filter);
-    ui.set_search_loading(false);
-    ui.set_directory_loading(false);
-    ui.set_main_viewport_x(viewport_x);
-    ui.set_main_viewport_offset(-viewport_x);
-    update_selection_ui(ui, &selected_paths);
-    sync_navigation_ui(ui, state);
-    sync_virtual_entries(ui, state, bridge, true);
-    set_directory_status_from_entries(ui, state);
-    save_current_settings(ui, state);
-
-    let generation = state.borrow().panes.active.load_generation.current();
-    watch_current_directory(&current_dir, pane_id, generation, bridge);
-    true
 }
 
 fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge, path: PathBuf) {
@@ -3366,23 +3365,113 @@ fn navigate_to(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBrid
     load_directory(ui, state, bridge);
 }
 
+fn navigate_focused_to(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    path: PathBuf,
+) {
+    let side = { state.borrow().panes.focused_side() };
+    match side {
+        PaneSide::Active => navigate_to(ui, state, bridge, path),
+        PaneSide::Inactive => navigate_inactive_to(ui, state, bridge, path),
+    }
+}
+
+fn navigate_inactive_to(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    path: PathBuf,
+) {
+    remember_inactive_view_state(ui, state);
+    {
+        let mut state_ref = state.borrow_mut();
+        let Some(pane) = state_ref.panes.inactive_mut() else {
+            drop(state_ref);
+            sync_navigation_ui(ui, state);
+            set_status(ui, "No split pane target is available");
+            return;
+        };
+
+        if pane.current_dir == path {
+            debug_log(&format!(
+                "navigate_inactive_to same path={} -> refresh",
+                path.display()
+            ));
+            drop(state_ref);
+            sync_inactive_pane_ui(ui, state);
+            load_inactive_current_directory(ui, state, bridge, true);
+            return;
+        }
+
+        debug_log(&format!(
+            "navigate_inactive_to from={} to={} back_len_before={} forward_len_before={}",
+            pane.current_dir.display(),
+            path.display(),
+            pane.history.back_len(),
+            pane.history.forward_len()
+        ));
+        let previous = pane.current_dir.clone();
+        let nav = pane.history.navigate_from(previous, path);
+        pane.current_dir = nav.target;
+    }
+    load_inactive_current_directory(ui, state, bridge, false);
+}
+
+fn refresh_focused_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    let side = { state.borrow().panes.focused_side() };
+    match side {
+        PaneSide::Active => refresh_directory(ui, state, bridge),
+        PaneSide::Inactive => load_inactive_current_directory(ui, state, bridge, true),
+    }
+}
+
+fn load_inactive_current_directory(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    preserve_view: bool,
+) {
+    let Some(preparation) = ({
+        let mut state = state.borrow_mut();
+        prepare_directory_load_for_target(&mut state, PaneTarget::Inactive, preserve_view)
+    }) else {
+        sync_navigation_ui(ui, state);
+        set_status(ui, "No split pane target is available");
+        return;
+    };
+    load_prepared_inactive_directory(ui, state, bridge, preparation, preserve_view);
+}
+
 fn go_parent(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
-    let parent = state
-        .borrow()
-        .panes
-        .active
-        .current_dir
-        .parent()
-        .map(Path::to_path_buf);
+    let current_dir = {
+        let state = state.borrow();
+        state
+            .panes
+            .pane_for_target(PaneTarget::Focused)
+            .unwrap_or(&state.panes.active)
+            .current_dir
+            .clone()
+    };
+    let parent = current_dir.parent().map(Path::to_path_buf);
     if let Some(parent) = parent {
         debug_log(&format!("go_parent target={}", parent.display()));
-        navigate_to(ui, state, bridge, parent);
+        navigate_focused_to(ui, state, bridge, parent);
     } else {
         debug_log("go_parent no parent");
     }
 }
 
 fn go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    let side = { state.borrow().panes.focused_side() };
+    match side {
+        PaneSide::Active => go_active_back(ui, state, bridge),
+        PaneSide::Inactive => inactive_go_back(ui, state, bridge),
+    }
+}
+
+fn go_active_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     remember_current_view_state(ui, state);
     {
         let mut state_ref = state.borrow_mut();
@@ -3412,7 +3501,51 @@ fn go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) 
     load_directory(ui, state, bridge);
 }
 
+fn inactive_go_back(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    remember_inactive_view_state(ui, state);
+    {
+        let mut state_ref = state.borrow_mut();
+        let Some(pane) = state_ref.panes.inactive_mut() else {
+            drop(state_ref);
+            sync_navigation_ui(ui, state);
+            set_status(ui, "No split pane target is available");
+            return;
+        };
+
+        debug_log(&format!(
+            "inactive_go_back requested current={} back_len={} forward_len={}",
+            pane.current_dir.display(),
+            pane.history.back_len(),
+            pane.history.forward_len()
+        ));
+        let previous = pane.current_dir.clone();
+        let Some(nav) = pane.history.go_back_from(previous) else {
+            debug_log("inactive_go_back ignored: empty back stack");
+            drop(state_ref);
+            sync_inactive_pane_ui(ui, state);
+            set_status(ui, "No previous split location");
+            return;
+        };
+        pane.current_dir = nav.target.clone();
+
+        debug_log(&format!(
+            "inactive_go_back accepted target={} previous_current={}",
+            nav.target.display(),
+            nav.previous.display()
+        ));
+    }
+    load_inactive_current_directory(ui, state, bridge, false);
+}
+
 fn go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    let side = { state.borrow().panes.focused_side() };
+    match side {
+        PaneSide::Active => go_active_forward(ui, state, bridge),
+        PaneSide::Inactive => inactive_go_forward(ui, state, bridge),
+    }
+}
+
+fn go_active_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     remember_current_view_state(ui, state);
     {
         let mut state_ref = state.borrow_mut();
@@ -3440,6 +3573,42 @@ fn go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridg
     }
     sync_navigation_ui(ui, state);
     load_directory(ui, state, bridge);
+}
+
+fn inactive_go_forward(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    remember_inactive_view_state(ui, state);
+    {
+        let mut state_ref = state.borrow_mut();
+        let Some(pane) = state_ref.panes.inactive_mut() else {
+            drop(state_ref);
+            sync_navigation_ui(ui, state);
+            set_status(ui, "No split pane target is available");
+            return;
+        };
+
+        debug_log(&format!(
+            "inactive_go_forward requested current={} back_len={} forward_len={}",
+            pane.current_dir.display(),
+            pane.history.back_len(),
+            pane.history.forward_len()
+        ));
+        let previous = pane.current_dir.clone();
+        let Some(nav) = pane.history.go_forward_from(previous) else {
+            debug_log("inactive_go_forward ignored: empty forward stack");
+            drop(state_ref);
+            sync_inactive_pane_ui(ui, state);
+            set_status(ui, "No next split location");
+            return;
+        };
+        pane.current_dir = nav.target.clone();
+
+        debug_log(&format!(
+            "inactive_go_forward accepted target={} previous_current={}",
+            nav.target.display(),
+            nav.previous.display()
+        ));
+    }
+    load_inactive_current_directory(ui, state, bridge, false);
 }
 
 fn open_path(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &str, bridge: &AsyncBridge) {
@@ -3472,6 +3641,45 @@ fn open_path(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &str, bridge: 
     }
 
     open_file_async(ui, state, bridge, path);
+}
+
+fn open_inactive_path(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    path: &str,
+    bridge: &AsyncBridge,
+) {
+    let (path, is_known_dir) = {
+        let state = state.borrow();
+        let Some(pane) = state.panes.inactive() else {
+            set_status(ui, "No split pane target is available");
+            return;
+        };
+        let entry = pane
+            .entries
+            .iter()
+            .find(|entry| entry.path.as_str() == path);
+        let path = entry
+            .map(|entry| Cow::Owned(entry.path.to_string()))
+            .unwrap_or_else(|| Cow::Borrowed(path));
+        (
+            PathBuf::from(path.as_ref()),
+            entry.map(|entry| entry.is_dir),
+        )
+    };
+
+    let is_dir = is_known_dir.unwrap_or_else(|| path.is_dir());
+    if is_dir {
+        navigate_inactive_to(ui, state, bridge, path);
+        return;
+    }
+
+    if ui.get_chooser_mode() {
+        let metadata = chooser_output_metadata(&state.borrow());
+        output_chooser_paths_and_exit(vec![path], metadata);
+    }
+
+    open_file_for_target_async(ui, state, bridge, PaneTarget::Inactive, path);
 }
 
 fn chooser_accept(
@@ -3639,8 +3847,43 @@ fn output_chooser_paths_and_exit(paths: Vec<PathBuf>, metadata: ChooserOutputMet
     std::process::exit(0);
 }
 
+fn set_left_pane_status(ui: &AppWindow, message: &str) {
+    let message: SharedString = message.into();
+    ui.set_status(message.clone());
+    ui.set_left_pane_status(message);
+}
+
+fn set_inactive_pane_status(ui: &AppWindow, message: &str) {
+    let message: SharedString = message.into();
+    ui.set_status(message.clone());
+    ui.set_inactive_pane_status(message);
+}
+
+fn set_inactive_directory_status_from_entries(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    pane_id: u64,
+) {
+    let status = {
+        let state = state.borrow();
+        state
+            .panes
+            .pane_for_target(PaneTarget::Id(pane_id))
+            .map(|pane| directory_status_text(pane.entries.iter()))
+    };
+    if let Some(status) = status {
+        set_inactive_pane_status(ui, &status);
+    }
+}
+
 fn set_status(ui: &AppWindow, message: &str) {
-    ui.set_status(message.into());
+    let message: SharedString = message.into();
+    ui.set_status(message.clone());
+    if ui.get_split_view_open() && ui.get_focused_pane() == 1 {
+        ui.set_inactive_pane_status(message);
+    } else {
+        ui.set_left_pane_status(message);
+    }
 }
 
 fn debug_log(message: &str) {

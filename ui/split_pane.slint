@@ -15,9 +15,17 @@ component SplitPreviewTile inherits Rectangle {
     background: touch-area.has-hover ? (root.dark ? #171b1f : #f0f4f8) : transparent;
 
     touch-area := TouchArea {
-        clicked => { root.focus_requested(); }
-        double-clicked => { root.activated(root.entry.path); }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.focus_requested();
+            }
+        }
+        double-clicked => {
+            root.focus_requested();
+            root.activated(root.entry.path);
+        }
         scroll-event(event) => {
+            root.focus_requested();
             root.scrolled(event.delta-x, event.delta-y, event.modifiers.control);
             return accept;
         }
@@ -46,8 +54,6 @@ component SplitPreviewTile inherits Rectangle {
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
-    in property <string> path;
-    in property <string> name;
     in property <int> entry-count;
     in property <[FileEntry]> entries;
     in property <int> virtual-start-index;
@@ -63,22 +69,23 @@ export component SplitPaneView inherits Rectangle {
 
     clip: true;
 
-    private property <length> header-height: 56px;
     private property <length> preview-padding: 14px;
     private property <length> cell-width: root.zoom-level == 0 ? 172px : (root.zoom-level == 1 ? 208px : (root.zoom-level == 2 ? 248px : (root.zoom-level == 3 ? 292px : 340px)));
     private property <length> row-height: root.zoom-level == 0 ? 78px : (root.zoom-level == 1 ? 90px : (root.zoom-level == 2 ? 104px : (root.zoom-level == 3 ? 124px : 146px)));
-    private property <int> rows-per-column: max(1, floor(max(1px, root.height - root.header-height - 2 * root.preview-padding) / root.row-height));
+    private property <int> rows-per-column: max(1, floor(max(1px, root.height - 2 * root.preview-padding) / root.row-height));
     private property <int> column-count: max(1, ceil(root.entry-count / root.rows-per-column));
     private property <length> viewport-content-width: 2 * root.preview-padding + root.column-count * root.cell-width;
-    private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width - 1px)) / 1px);
+    private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width)) / 1px);
 
     function pan-horizontal(delta: length) {
+        root.focus_requested();
         root.viewport-x = root.entry-count == 0 ? 0 : max(0, min(root.scroll-max-x, root.viewport-x + delta / 1px));
         root.viewport-offset = -root.viewport-x * 1px;
         root.view_changed();
     }
 
     function handle-scroll(delta-x: length, delta-y: length, control: bool) {
+        root.focus_requested();
         if (control && delta-y < 0px) {
             root.zoom_out();
         } else if (control && delta-y > 0px) {
@@ -90,65 +97,23 @@ export component SplitPaneView inherits Rectangle {
 
     background: root.dark ? #101418 : #f8fafc;
 
-    Rectangle {
-        width: 1px;
-        height: parent.height;
-        background: root.dark ? #222832 : #dde4ec;
-    }
-
-    Rectangle {
-        x: 1px;
-        width: max(1px, parent.width - 1px);
-        height: root.header-height;
-        background: transparent;
-
-        TouchArea {
-            width: parent.width;
-            height: parent.height;
-            clicked => { root.focus_requested(); }
-        }
-
-        Text {
-            x: 14px;
-            y: 10px;
-            width: max(1px, parent.width - 28px);
-            height: 18px;
-            text: root.name == "" ? "Split Pane" : root.name;
-            color: root.dark ? #eef3f7 : #202832;
-            font-size: 13px;
-            font-weight: 700;
-            overflow: elide;
-            vertical-alignment: center;
-        }
-
-        Text {
-            x: 14px;
-            y: 31px;
-            width: max(1px, parent.width - 28px);
-            height: 16px;
-            text: root.path;
-            color: root.dark ? #8f9aa5 : #667586;
-            font-size: 11px;
-            overflow: elide;
-            vertical-alignment: center;
-        }
-    }
-
     if (root.entry-count == 0): Rectangle {
-        y: root.header-height;
         width: parent.width;
-        height: max(1px, parent.height - root.header-height);
+        height: parent.height;
         background: transparent;
 
         TouchArea {
             width: parent.width;
             height: parent.height;
-            clicked => { root.focus_requested(); }
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    root.focus_requested();
+                }
+            }
         }
 
         VerticalLayout {
             alignment: center;
-            spacing: 8px;
 
             Text {
                 text: "This split pane is empty";
@@ -157,30 +122,22 @@ export component SplitPaneView inherits Rectangle {
                 font-weight: 600;
                 horizontal-alignment: center;
             }
-
-            Text {
-                text: "Click to focus it.";
-                color: root.dark ? #9aa5af : #94a3b8;
-                font-size: 12px;
-                horizontal-alignment: center;
-            }
         }
     }
 
     if (root.entry-count > 0): preview := ScrollView {
-        x: 1px;
-        y: root.header-height;
-        width: max(1px, parent.width - 1px);
-        height: max(1px, parent.height - root.header-height);
+        width: parent.width;
+        height: parent.height;
         horizontal-scrollbar-policy: as-needed;
         vertical-scrollbar-policy: always-off;
         viewport-width: max(parent.width, root.viewport-content-width);
-        viewport-height: max(1px, parent.height - root.header-height);
+        viewport-height: parent.height;
         viewport-x <=> root.viewport-offset;
         viewport-y: 0px;
 
         changed viewport-x => {
             if (root.viewport-x != max(0, -self.viewport-x / 1px)) {
+                root.focus_requested();
                 root.viewport-x = max(0, -self.viewport-x / 1px);
                 root.view_changed();
             }
@@ -189,7 +146,11 @@ export component SplitPaneView inherits Rectangle {
         TouchArea {
             width: preview.viewport-width;
             height: preview.viewport-height;
-            clicked => { root.focus_requested(); }
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    root.focus_requested();
+                }
+            }
             scroll-event(event) => {
                 root.handle-scroll(event.delta-x, event.delta-y, event.modifiers.control);
                 return accept;
@@ -210,8 +171,13 @@ export component SplitPaneView inherits Rectangle {
                 entry: item;
                 dark: root.dark;
                 zoom-level: root.zoom-level;
-                focus_requested => { root.focus_requested(); }
-                activated(path) => { root.activated(path); }
+                focus_requested => {
+                    root.focus_requested();
+                }
+                activated(path) => {
+                    root.focus_requested();
+                    root.activated(path);
+                }
                 scrolled(delta-x, delta-y, control) => {
                     root.handle-scroll(delta-x, delta-y, control);
                 }

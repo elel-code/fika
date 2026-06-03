@@ -2,7 +2,7 @@ use crate::app::state::AppState;
 use crate::config::paths::expand_user_path;
 use crate::desktop::systemd_launch;
 use crate::fs::places::{builtin_places, place_entry, save_places};
-use crate::{AppWindow, PlaceEntry};
+use crate::{AppWindow, PlaceEntry, set_status};
 use slint::{ModelRc, VecModel};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -38,7 +38,7 @@ fn add_place_at_slot_inner(
 ) {
     let path = normalize_place_path(path);
     if !path.is_dir() {
-        ui.set_status("Only folders can be added to Places".into());
+        set_status(ui, "Only folders can be added to Places");
         return;
     }
 
@@ -49,7 +49,7 @@ fn add_place_at_slot_inner(
         .iter()
         .any(|place| place.path.as_str() == path_string)
     {
-        ui.set_status("Folder is already in Places".into());
+        set_status(ui, "Folder is already in Places");
         return;
     }
 
@@ -68,7 +68,7 @@ fn add_place_at_slot_inner(
     state.places.insert(slot, entry);
     save_places(&state.places);
     sync_places(ui, &state.places);
-    ui.set_status("Folder added to Places".into());
+    set_status(ui, "Folder added to Places");
 }
 
 pub(crate) fn normalize_place_path(path: PathBuf) -> PathBuf {
@@ -79,7 +79,7 @@ pub(crate) fn normalize_place_path(path: PathBuf) -> PathBuf {
 pub(crate) fn rename_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index: i32, label: &str) {
     let label = label.trim();
     if label.is_empty() {
-        ui.set_status("Place name cannot be empty".into());
+        set_status(ui, "Place name cannot be empty");
         return;
     }
 
@@ -91,7 +91,7 @@ pub(crate) fn rename_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index:
         return;
     };
     if place.is_builtin {
-        ui.set_status("Built-in places cannot be renamed".into());
+        set_status(ui, "Built-in places cannot be renamed");
         return;
     }
 
@@ -99,7 +99,7 @@ pub(crate) fn rename_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index:
     place.marker = place_marker(label).into();
     save_places(&state.places);
     sync_places(ui, &state.places);
-    ui.set_status("Place renamed".into());
+    set_status(ui, "Place renamed");
 }
 
 pub(crate) fn remove_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index: i32) {
@@ -111,14 +111,14 @@ pub(crate) fn remove_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index:
         return;
     }
     if state.places[index].is_builtin {
-        ui.set_status("Built-in places cannot be removed".into());
+        set_status(ui, "Built-in places cannot be removed");
         return;
     }
 
     state.places.remove(index);
     save_places(&state.places);
     sync_places(ui, &state.places);
-    ui.set_status("Place removed".into());
+    set_status(ui, "Place removed");
 }
 
 pub(crate) fn restore_default_places(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -126,7 +126,7 @@ pub(crate) fn restore_default_places(ui: &AppWindow, state: &Rc<RefCell<AppState
     state.places = builtin_places();
     save_places(&state.places);
     sync_places(ui, &state.places);
-    ui.set_status("Default places restored".into());
+    set_status(ui, "Default places restored");
 }
 
 pub(crate) fn open_place_new_window(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index: i32) {
@@ -141,7 +141,7 @@ pub(crate) fn open_place_new_window(ui: &AppWindow, state: &Rc<RefCell<AppState>
         (place.label.to_string(), place.path.to_string())
     };
     let Ok(exe) = std::env::current_exe() else {
-        ui.set_status("Cannot locate Fika executable".into());
+        set_status(ui, "Cannot locate Fika executable");
         return;
     };
     let program = exe.to_string_lossy().to_string();
@@ -151,9 +151,9 @@ pub(crate) fn open_place_new_window(ui: &AppWindow, state: &Rc<RefCell<AppState>
             if let Some(unit) = &launch.unit {
                 state.borrow_mut().launched_units.push(unit.clone());
             }
-            ui.set_status(format_new_window_status(&label, &launch).into());
+            set_status(ui, &format_new_window_status(&label, &launch));
         }
-        Err(err) => ui.set_status(format!("Cannot open new window: {err}").into()),
+        Err(err) => set_status(ui, &format!("Cannot open new window: {err}")),
     }
 }
 
@@ -197,7 +197,7 @@ pub(crate) fn reorder_place_path(
             .position(|place| place.path.as_str() == path)
     };
     let Some(from) = from else {
-        ui.set_status("Place is no longer available".into());
+        set_status(ui, "Place is no longer available");
         return;
     };
     reorder_place(ui, state, from as i32, to_slot);

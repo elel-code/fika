@@ -120,9 +120,12 @@ fn open_file_with_app_async(
     path: PathBuf,
     desktop_id: String,
 ) {
-    let generation = {
+    let (pane_id, generation) = {
         let mut state = state.borrow_mut();
-        state.panes.active.open_generation.next()
+        (
+            state.panes.active.id,
+            state.panes.active.open_generation.next(),
+        )
     };
     set_status(ui, &format!("Opening with {desktop_id}..."));
 
@@ -134,6 +137,7 @@ fn open_file_with_app_async(
             async_tx,
             notify_ui,
             AsyncEvent::FileOpened(FileOpenResult {
+                pane_id,
                 generation,
                 path,
                 result,
@@ -149,9 +153,12 @@ fn open_file_with_custom_command_async(
     path: PathBuf,
     command: String,
 ) {
-    let generation = {
+    let (pane_id, generation) = {
         let mut state = state.borrow_mut();
-        state.panes.active.open_generation.next()
+        (
+            state.panes.active.id,
+            state.panes.active.open_generation.next(),
+        )
     };
     set_status(ui, "Opening with custom command...");
 
@@ -164,6 +171,7 @@ fn open_file_with_custom_command_async(
             async_tx,
             notify_ui,
             AsyncEvent::FileOpened(FileOpenResult {
+                pane_id,
                 generation,
                 path,
                 result,

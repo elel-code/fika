@@ -64,14 +64,22 @@ impl PaneState {
 pub(crate) struct PanesState {
     pub(crate) active: PaneState,
     inactive: Option<PaneState>,
+    focused: PaneSide,
     next_pane_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PaneTarget {
+    Active,
     Focused,
     Inactive,
     Id(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PaneSide {
+    Active,
+    Inactive,
 }
 
 impl PanesState {
@@ -79,6 +87,7 @@ impl PanesState {
         Self {
             active: PaneState::new_with_id(1, active_dir),
             inactive: None,
+            focused: PaneSide::Active,
             next_pane_id: 2,
         }
     }
@@ -114,9 +123,34 @@ impl PanesState {
         self.inactive.as_mut()
     }
 
+    pub(crate) fn focused_side(&self) -> PaneSide {
+        if self.inactive.is_none() {
+            PaneSide::Active
+        } else {
+            self.focused
+        }
+    }
+
+    pub(crate) fn focus_active(&mut self) {
+        self.focused = PaneSide::Active;
+    }
+
+    pub(crate) fn focus_inactive(&mut self) -> bool {
+        if self.inactive.is_none() {
+            self.focused = PaneSide::Active;
+            return false;
+        }
+        self.focused = PaneSide::Inactive;
+        true
+    }
+
     pub(crate) fn pane_for_target(&self, target: PaneTarget) -> Option<&PaneState> {
         match target {
-            PaneTarget::Focused => Some(&self.active),
+            PaneTarget::Active => Some(&self.active),
+            PaneTarget::Focused => match self.focused_side() {
+                PaneSide::Active => Some(&self.active),
+                PaneSide::Inactive => self.inactive(),
+            },
             PaneTarget::Inactive => self.inactive(),
             PaneTarget::Id(id) => self.pane_by_id(id),
         }
@@ -124,7 +158,11 @@ impl PanesState {
 
     pub(crate) fn pane_mut_for_target(&mut self, target: PaneTarget) -> Option<&mut PaneState> {
         match target {
-            PaneTarget::Focused => Some(&mut self.active),
+            PaneTarget::Active => Some(&mut self.active),
+            PaneTarget::Focused => match self.focused_side() {
+                PaneSide::Active => Some(&mut self.active),
+                PaneSide::Inactive => self.inactive_mut(),
+            },
             PaneTarget::Inactive => self.inactive_mut(),
             PaneTarget::Id(id) => self.pane_mut_by_id(id),
         }
@@ -146,20 +184,29 @@ impl PanesState {
         }
         let id = self.allocate_pane_id();
         self.inactive = Some(self.active.split_snapshot(id));
+        self.focused = PaneSide::Active;
         true
     }
 
     pub(crate) fn close_inactive(&mut self) -> Option<PaneState> {
-        self.inactive.take()
+        let closed = self.inactive.take();
+        self.focused = PaneSide::Active;
+        closed
     }
 
-    pub(crate) fn focus_inactive(&mut self) -> bool {
-        let Some(mut inactive) = self.inactive.take() else {
-            return false;
-        };
-        std::mem::swap(&mut self.active, &mut inactive);
-        self.inactive = Some(inactive);
-        true
+    pub(crate) fn close_focused_split_pane(&mut self) -> Option<(PaneSide, PaneState)> {
+        let focused = self.focused_side();
+        match focused {
+            PaneSide::Active => {
+                let replacement = self.inactive.take()?;
+                let closed = std::mem::replace(&mut self.active, replacement);
+                self.focused = PaneSide::Active;
+                Some((PaneSide::Active, closed))
+            }
+            PaneSide::Inactive => self
+                .close_inactive()
+                .map(|closed| (PaneSide::Inactive, closed)),
+        }
     }
 
     pub(crate) fn prune_mount_path(&mut self, mount_path: &Path, fallback_dir: PathBuf) -> bool {
@@ -553,21 +600,53 @@ mod tests {
         );
 
         assert!(panes.focus_inactive());
-        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/right"));
-        assert_eq!(panes.active.id, inactive_id);
+        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/left"));
+        assert_eq!(panes.active.id, active_id);
         assert_eq!(
             panes.inactive().map(|pane| pane.current_dir.as_path()),
-            Some(Path::new("/tmp/left"))
+            Some(Path::new("/tmp/right"))
         );
-        assert_eq!(panes.inactive().expect("inactive pane").id, active_id);
+        assert_eq!(panes.inactive().expect("inactive pane").id, inactive_id);
 
         let closed = panes.close_inactive().expect("inactive pane should close");
-        assert_eq!(closed.current_dir, PathBuf::from("/tmp/left"));
-        assert_eq!(closed.id, active_id);
+        assert_eq!(closed.current_dir, PathBuf::from("/tmp/right"));
+        assert_eq!(closed.id, inactive_id);
         assert_eq!(panes.pane_count(), 1);
         assert!(!panes.is_split());
         assert!(panes.close_inactive().is_none());
         assert!(!panes.focus_inactive());
+    }
+
+    #[test]
+    fn panes_state_closes_focused_split_pane_without_swapping_on_focus() {
+        let mut panes = PanesState::new(PathBuf::from("/tmp/left"));
+        let left_id = panes.active.id;
+        assert!(panes.open_inactive(PathBuf::from("/tmp/right")));
+        let right_id = panes.inactive().expect("inactive pane").id;
+
+        assert!(panes.focus_inactive());
+        let (closed_side, closed) = panes
+            .close_focused_split_pane()
+            .expect("focused right pane should close");
+        assert_eq!(closed_side, PaneSide::Inactive);
+        assert_eq!(closed.current_dir, PathBuf::from("/tmp/right"));
+        assert_eq!(closed.id, right_id);
+        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/left"));
+        assert_eq!(panes.active.id, left_id);
+        assert!(!panes.is_split());
+
+        assert!(panes.open_inactive(PathBuf::from("/tmp/next-right")));
+        let next_right_id = panes.inactive().expect("inactive pane").id;
+        panes.focus_active();
+        let (closed_side, closed) = panes
+            .close_focused_split_pane()
+            .expect("focused left pane should close");
+        assert_eq!(closed_side, PaneSide::Active);
+        assert_eq!(closed.current_dir, PathBuf::from("/tmp/left"));
+        assert_eq!(closed.id, left_id);
+        assert_eq!(panes.active.current_dir, PathBuf::from("/tmp/next-right"));
+        assert_eq!(panes.active.id, next_right_id);
+        assert!(!panes.is_split());
     }
 
     #[test]
@@ -619,7 +698,7 @@ mod tests {
             panes
                 .pane_for_target(PaneTarget::Inactive)
                 .map(|pane| pane.current_dir.as_path()),
-            Some(Path::new("/tmp/left"))
+            Some(Path::new("/tmp/right"))
         );
         assert_eq!(
             panes
