@@ -26,7 +26,7 @@ import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
 import { StatusBar } from "status_bar.slint";
-import { TopBar } from "top_bar.slint";
+import { PathBar, TopBar } from "top_bar.slint";
 import { ChildSubmenuLayer, ChooserChoicePopupLayer, ChooserOptionPopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
 import { ConfirmationPopup, OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
@@ -93,7 +93,7 @@ export component AppWindow inherits Window {
     in-out property <float> main_viewport_x: 0;
     in-out property <length> main_viewport_offset: 0px;
     private property <length> shell-header-height: 56px;
-    private property <length> top-bar-height: 56px;
+    private property <length> path-bar-height: 56px;
     private property <length> status-bar-height: 36px;
     private property <length> sidebar-resize-hit-width: 8px;
     private property <length> main-content-left: root.sidebar_width_px * 1px;
@@ -106,7 +106,7 @@ export component AppWindow inherits Window {
     private property <length> main-pane-width: max(1px, root.width - root.main-content-left);
     private property <length> active-pane-width: root.split_view_open ? max(1px, root.main-pane-width / 2) : root.main-pane-width;
     private property <length> main-content-height: max(1px, root.height - root.shell-header-height);
-    private property <length> main-grid-height: max(root.icon-row-height + 2 * root.icon-grid-padding, root.main-content-height - root.top-bar-height - root.status-bar-height - root.search-panel-height);
+    private property <length> main-grid-height: max(root.icon-row-height + 2 * root.icon-grid-padding, root.main-content-height - root.path-bar-height - root.status-bar-height - root.search-panel-height);
     private property <length> main-available-grid-height: max(root.icon-row-height, root.main-grid-height - 2 * root.icon-grid-padding);
     private property <int> main-rows-per-column: max(1, floor(root.main-available-grid-height / root.icon-row-height));
     private property <int> main-column-count: max(1, ceil(root.entry_count / root.main-rows-per-column));
@@ -618,6 +618,35 @@ export component AppWindow inherits Window {
             shell-header := Rectangle {
                 height: root.shell-header-height;
                 background: root.shell-base-color;
+
+                TopBar {
+                    width: parent.width;
+                    height: root.shell-header-height;
+                    dark: root.dark_mode;
+                    search-active: root.search-panel-visible;
+                    split-view-open: root.split_view_open;
+                    search-query <=> root.search_query;
+                    search-focused <=> root.search-input-focused;
+                    search_requested => { root.search_bar_open = true; }
+                    search_submitted(query) => {
+                        root.search_bar_open = true;
+                        root.search_submitted(query);
+                    }
+                    search_close_requested => {
+                        root.search_query = "";
+                        root.search_kind_filter = 0;
+                        root.search_modified_filter = 0;
+                        root.search_size_filter = 0;
+                        root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
+                        root.search_submitted("");
+                        root.search_bar_open = false;
+                    }
+                    toggle_split_view => { root.toggle_split_view(); }
+                    dark_toggled => {
+                        root.dark_mode = !root.dark_mode;
+                        root.persist_ui_state();
+                    }
+                }
             }
 
             content-row := HorizontalLayout {
@@ -845,7 +874,7 @@ export component AppWindow inherits Window {
                 }
 
                 main-blank-touch := TouchArea {
-                    y: root.top-bar-height + root.search-panel-height;
+                    y: root.path-bar-height + root.search-panel-height;
                     width: root.active-pane-width;
                     height: root.main-grid-height;
 
@@ -876,42 +905,18 @@ export component AppWindow inherits Window {
                     padding: 0px;
                     spacing: 0px;
 
-                    TopBar {
+                    PathBar {
                         horizontal-stretch: 1;
-                        height: root.top-bar-height;
+                        height: root.path-bar-height;
                         dark: root.dark_mode;
                         current-path: root.current_path;
                         can-go-back: root.can_go_back;
                         can-go-forward: root.can_go_forward;
-                        search-active: root.search-panel-visible;
-                        split-view-open: root.split_view_open;
                         path-text <=> root.path_input_text;
                         path-focused <=> root.path-input-focused;
-                        search-query <=> root.search_query;
-                        search-focused <=> root.search-input-focused;
                         go_back => { root.go_back(); }
                         go_forward => { root.go_forward(); }
-                        go_parent => { root.go_parent(); }
                         path_submitted(path) => { root.path_submitted(path); }
-                        search_requested => { root.search_bar_open = true; }
-                        search_submitted(query) => {
-                            root.search_bar_open = true;
-                            root.search_submitted(query);
-                        }
-                        search_close_requested => {
-                            root.search_query = "";
-                            root.search_kind_filter = 0;
-                            root.search_modified_filter = 0;
-                            root.search_size_filter = 0;
-                            root.search_filters_changed(root.search_kind_filter, root.search_modified_filter, root.search_size_filter);
-                            root.search_submitted("");
-                            root.search_bar_open = false;
-                        }
-                        toggle_split_view => { root.toggle_split_view(); }
-                        dark_toggled => {
-                            root.dark_mode = !root.dark_mode;
-                            root.persist_ui_state();
-                        }
                     }
 
                     if (root.search-panel-visible) : SearchPanel {

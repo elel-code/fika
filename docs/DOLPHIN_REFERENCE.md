@@ -91,7 +91,7 @@ Useful interaction rules:
 Current Fika mapping:
 
 - Fika already preserves old view during uncached navigation, caches directory entries, and remembers per-directory horizontal scroll.
-- Top bar layout now lives in `TopBar`, keeping path editing, search entry, and theme toggling out of `AppWindow`.
+- Top/header layout is split between `TopBar` for global search/split/theme controls and `PathBar` for main-pane Back/Forward plus path editing, keeping chrome layout details out of `AppWindow`.
 - Status bar and chooser footer controls now live in `StatusBar`, keeping bottom-row actions out of `AppWindow`.
 - Submenu positioning has been changed to anchor to the actual parent menu item and avoid window edges.
 - File item, viewport, Open With, Create New, Transfer, Places, Devices, and Places blank-area menu content have been split into `ui/menus.slint`.

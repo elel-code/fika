@@ -3,7 +3,7 @@ use slint::ComponentHandle;
 use std::ops::Range;
 
 const SHELL_HEADER_HEIGHT: f32 = 56.0;
-const TOP_BAR_HEIGHT: f32 = 56.0;
+const PATH_BAR_HEIGHT: f32 = 56.0;
 const STATUS_BAR_HEIGHT: f32 = 36.0;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
 const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
@@ -61,7 +61,7 @@ impl MainGridLayout {
         );
         let available_grid_height = (pane.bottom
             - pane.top
-            - TOP_BAR_HEIGHT
+            - PATH_BAR_HEIGHT
             - STATUS_BAR_HEIGHT
             - search_panel_height
             - 2.0 * padding)
@@ -70,7 +70,7 @@ impl MainGridLayout {
 
         Self {
             main_x: pane.left,
-            main_y: pane.top + TOP_BAR_HEIGHT + search_panel_height,
+            main_y: pane.top + PATH_BAR_HEIGHT + search_panel_height,
             viewport_x: ui.get_main_viewport_x(),
             rows_per_column,
             cell_width,
@@ -1490,9 +1490,9 @@ mod tests {
     }
 
     #[test]
-    fn cosmic_shell_chrome_places_toolbar_at_main_pane_top() {
+    fn cosmic_shell_chrome_separates_top_tools_from_main_path_bar() {
         let app = include_str!("../../ui/app.slint");
-        let top_bar = include_str!("../../ui/top_bar.slint");
+        let bars = include_str!("../../ui/top_bar.slint");
         let search_panel = include_str!("../../ui/search_panel.slint");
         let status_bar = include_str!("../../ui/status_bar.slint");
 
@@ -1530,7 +1530,7 @@ mod tests {
             app.contains("private property <length> shell-header-height: 56px;")
                 && app.contains("shell-header := Rectangle")
                 && app.contains("content-row := HorizontalLayout"),
-            "AppWindow should keep a shell/header row separate from the main-pane navigation bar"
+            "AppWindow should keep a shell/header row separate from the main-pane content"
         );
         assert!(
             !app.contains("sidebar-splitter-width")
@@ -1560,22 +1560,28 @@ mod tests {
         let shell_header_index = app
             .find("shell-header := Rectangle")
             .expect("AppWindow should reserve the top shell/header row");
+        let top_bar_index = app[shell_header_index..]
+            .find("TopBar {")
+            .map(|index| shell_header_index + index)
+            .expect("AppWindow should instantiate the global shell TopBar");
         let content_row_index = app
             .find("content-row := HorizontalLayout")
             .expect("AppWindow should place sidebar and main pane below the shell header");
-        let top_bar_index = app
-            .find("TopBar {")
-            .expect("AppWindow should instantiate the main-pane internal TopBar");
+        let path_bar_index = app
+            .find("PathBar {")
+            .expect("AppWindow should instantiate the main-pane PathBar");
         let sidebar_surface_index = app
             .find("sidebar-surface := Rectangle")
             .expect("sidebar content panel should be present");
         assert!(
             shell_header_index < content_row_index
+                && shell_header_index < top_bar_index
+                && top_bar_index < content_row_index
                 && content_row_index < sidebar_surface_index
                 && content_row_index < main_pane_index
-                && main_pane_index < top_bar_index
+                && main_pane_index < path_bar_index
                 && app.contains("main-pane := Rectangle {\n            horizontal-stretch: 1;"),
-            "address/navigation toolbar should be the first row inside the right main pane below the shell header, not in the shell header"
+            "global search/tools should live in the shell header while address/navigation stay inside the right main pane"
         );
         assert!(
             !app.contains("SidebarSection { label: \"Remote\""),
@@ -1594,16 +1600,18 @@ mod tests {
             "sidebar panel should keep a subtle border"
         );
         assert!(
-            app.contains("private property <length> top-bar-height: 56px;"),
-            "AppWindow top bar height should match Rust main-pane geometry"
+            app.contains("private property <length> path-bar-height: 56px;"),
+            "AppWindow path bar height should match Rust main-pane geometry"
         );
         assert!(
-            top_bar.contains("height: 56px;"),
-            "TopBar visible height should match AppWindow top-bar-height"
+            bars.contains("export component TopBar inherits Rectangle")
+                && bars.contains("export component PathBar inherits Rectangle")
+                && bars.matches("height: 56px;").count() >= 2,
+            "TopBar and PathBar should both expose the shared 56px chrome rhythm"
         );
         assert!(
-            !top_bar.contains("main-start-x") && !app.contains("main-start-x:"),
-            "TopBar should no longer reserve sidebar space because it belongs to the main pane"
+            !bars.contains("callback go_parent") && !bars.contains("label: \"^\""),
+            "visible Home/up navigation should be removed from the chrome"
         );
         assert!(
             app.contains("private property <length> main-grid-height:")
@@ -1613,8 +1621,9 @@ mod tests {
         );
         assert!(
             app.contains("private property <length> main-content-height: max(1px, root.height - root.shell-header-height);")
-                && app.contains("root.main-content-height - root.top-bar-height - root.status-bar-height - root.search-panel-height"),
-            "main grid height should subtract the main-pane toolbar, search strip, and status bar from the below-shell content row"
+                && app.contains("root.main-content-height - root.path-bar-height - root.status-bar-height - root.search-panel-height")
+                && app.contains("y: root.path-bar-height + root.search-panel-height;"),
+            "main grid height should subtract the main-pane path bar, search filters, and status bar from the below-shell content row"
         );
         assert!(
             app.contains(
@@ -1651,7 +1660,7 @@ mod tests {
         );
 
         for (name, slint) in [
-            ("TopBar", top_bar),
+            ("TopBar/PathBar", bars),
             ("SearchPanel", search_panel),
             ("StatusBar", status_bar),
         ] {
@@ -1670,47 +1679,41 @@ mod tests {
         }
 
         assert!(
-            top_bar.contains(
+            bars.contains(
                 "private property <color> field-background: root.dark ? #151b20 : #ffffff;"
             ),
-            "TopBar path/search fields should use the quiet COSMIC-like input surface"
+            "TopBar and PathBar fields should use the quiet COSMIC-like input surface"
         );
         assert!(
-            top_bar.contains(
+            bars.contains(
                 "private property <color> field-text-color: root.dark ? #eef3f7 : #24303b;"
             ),
-            "TopBar input text should remain readable in light theme"
+            "TopBar and PathBar input text should remain readable in light theme"
         );
         assert!(
-            top_bar.matches("height: 32px;").count() >= 2,
-            "TopBar path/search inputs should keep the lighter COSMIC-style 32px height"
+            bars.matches("height: 32px;").count() >= 2,
+            "TopBar search and PathBar address inputs should keep the lighter COSMIC-style 32px height"
         );
         assert!(
-            top_bar.contains(
-                "private property <length> path-min-width: root.search-active ? 64px : 168px;"
-            ),
-            "TopBar path field should relax its minimum width when search is active"
+            bars.contains("min-width: 96px;"),
+            "PathBar should keep the address field flexible inside the main pane"
         );
         assert!(
-            top_bar.contains("min-width: root.path-min-width;"),
-            "TopBar path field should relax its minimum width when search is active in a narrow header"
+            bars.contains("min-width: 180px;")
+                && bars.contains("preferred-width: 320px;")
+                && bars.contains("max-width: 420px;"),
+            "TopBar active search field should live in the global toolbar with bounded flexible width"
         );
         assert!(
-            top_bar.contains("min-width: 136px;")
-                && top_bar.contains("preferred-width: 240px;")
-                && top_bar.contains("max-width: 240px;"),
-            "TopBar active search field should follow COSMIC's 240px search input rhythm without a fixed width binding"
-        );
-        assert!(
-            top_bar.contains("width: max(1px, parent.width - 70px);"),
+            bars.contains("width: max(1px, parent.width - 70px);"),
             "TopBar search input text should clamp narrow available widths instead of overflowing"
         );
         assert!(
-            !top_bar.contains("\n                width: 240px;"),
+            !bars.contains("\n                width: 240px;"),
             "TopBar active search field must not return to a fixed width that can squeeze the main pane"
         );
         assert!(
-            !top_bar.contains("root.width - root.sidebar-width-px"),
+            !bars.contains("root.width - root.sidebar-width-px"),
             "TopBar layout constraints should not depend on root width because that can create Slint layoutinfo binding loops"
         );
         let widgets = include_str!("../../ui/widgets.slint");

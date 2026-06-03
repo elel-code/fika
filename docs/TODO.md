@@ -18,8 +18,9 @@
 - [x] Dolphin-like shell: toolbar, Places sidebar, main icon area, status bar.
 - [x] COSMIC-style shell surface layering outside the main file arrangement.
   - Current: `AppWindow` owns one shared base surface with a separate window-wide shell/header row.
-  - Current: `TopBar`, `SearchPanel`, and `StatusBar` render transparent backgrounds with only necessary separators, so they read as one layer with the main pane.
-  - Current: below the shell/header row, the rounded sidebar panel and right main pane share one equal-height content row; the navigation/address `TopBar` is the first row inside that right main pane, not in the shell/header.
+  - Current: `TopBar`, `PathBar`, `SearchPanel`, and `StatusBar` render transparent backgrounds with only necessary separators, so they read as one layer with the main pane.
+  - Current: `TopBar` lives in the shell/header row and owns global search, split, and theme controls.
+  - Current: below the shell/header row, the rounded sidebar panel and right main pane share one equal-height content row; the navigation/address `PathBar` is the first row inside that right main pane.
   - Current: the main-pane item arrangement intentionally remains Fika's existing Dolphin-like column-first horizontal layout.
 - [x] Dark mode.
 - [x] Resizable sidebar.
@@ -471,20 +472,20 @@ Acceptance for all:
   - Acceptance: new UI polish and desktop-integration work first checks `./cosmic-files` before reaching for Dolphin-specific behavior.
   - Acceptance: the current Dolphin-like column-first main-pane arrangement, horizontal scrolling, and virtualized Slint tile model stay intact.
   - Current: `docs/COSMIC_REFERENCE.md` records the policy and concrete source files to inspect.
-  - Current direction: shell visuals should move closer to COSMIC Files: below the window-wide shell/header, the main-pane toolbar and main pane share one calm surface, the sidebar content reads as a raised rounded panel in the same content row, and address/search/navigation placement follows COSMIC unless it conflicts with Fika's column-first main pane.
-  - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, search placement, and transient surface styling; the sidebar keeps Fika's rounded panel treatment on top of COSMIC proportions.
+  - Current direction: shell visuals should move closer to COSMIC Files: the window-wide shell/header owns global search/tools, below it the main-pane `PathBar` and main pane share one calm surface, and the sidebar content reads as a raised rounded panel in the same content row.
+  - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, top-bar search placement, and transient surface styling; the sidebar keeps Fika's rounded panel treatment on top of COSMIC proportions.
   - Current direction: once the current structural/menu/performance work is stable, all non-main-pane chrome may move further toward COSMIC Files directly: colors, layout rhythm, address-bar position, Back/Forward affordances, search field position/display, and sidebar treatment should follow COSMIC where practical, while preserving Fika's rounded raised sidebar content panel and the existing main-pane arrangement.
   - Current direction: future UI work should freely copy COSMIC Files for all chrome outside the main file arrangement, including color tokens, top-bar/main-pane layer treatment, address-bar alignment, navigation/search placement, menus, dialogs, and sidebar rhythm. The main pane's item arrangement remains the explicit exception.
-  - Current direction: the main-pane toolbar and main pane should continue to read as one flat content layer inside the below-header right pane, while the sidebar remains a rounded raised content panel in the same row; the sidebar may be more Fika-specific, but its spacing and rhythm should still start from COSMIC.
-  - Current: first shell pass aligns the main-pane toolbar, search panel, status bar, and main pane to one shared surface while the sidebar uses a rounded panel color and a softer divider, keeping the main pane's column-first layout untouched.
-  - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 56px top bar and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
-  - Current: header controls now use a lighter 32px shared `ToolButton`, 32px path/search input surfaces, and softer light-theme sidebar colors, moving non-main-pane chrome closer to COSMIC while leaving the main file arrangement unchanged.
-  - Current: TopBar follows COSMIC's previous/next/up navigation grouping. Home remains a Places/sidebar action rather than a top-bar button.
-  - Current: Search follows COSMIC's header behavior more closely: the toolbar search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
-  - Current: TopBar Split now uses the shared `ToolButton` selected state instead of a hand-drawn one-off rectangle, keeping header controls in one COSMIC-like component family.
-  - Current: the TopBar now lives as the first row inside the right main pane in the below-header content row, matching COSMIC's address/navigation placement while keeping it out of the window-wide shell/header.
+  - Current direction: `PathBar` and the main pane should continue to read as one flat content layer inside the below-header right pane, while the sidebar remains a rounded raised content panel in the same row; the sidebar may be more Fika-specific, but its spacing and rhythm should still start from COSMIC.
+  - Current: first shell pass aligns the path bar, search filter panel, status bar, and main pane to one shared surface while the sidebar uses a rounded panel color and a softer divider, keeping the main pane's column-first layout untouched.
+  - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 56px shell header, 56px main-pane path bar, and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
+  - Current: header/path controls now use a lighter 32px shared `ToolButton`, 32px path/search input surfaces, and softer light-theme sidebar colors, moving non-main-pane chrome closer to COSMIC while leaving the main file arrangement unchanged.
+  - Current: `PathBar` follows COSMIC's previous/next navigation grouping. Home remains a Places/sidebar action rather than a top/path bar button, and the visible Up button is removed from chrome.
+  - Current: Search follows COSMIC's header behavior more closely: the shell `TopBar` search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
+  - Current: `TopBar` Split now uses the shared `ToolButton` selected state instead of a hand-drawn one-off rectangle, keeping header controls in one COSMIC-like component family.
+  - Current: `TopBar` lives in the shell/header row for global tools; `PathBar` lives as the first row inside the right main pane in the below-header content row for address/navigation.
   - Current: the default sidebar width is now 280px to better match COSMIC's narrower navigation rhythm, while persisted user widths still override it.
-  - Current: the top-bar search field now follows COSMIC's 240px header search rhythm through min/preferred/max layout constraints, and the path field relaxes its minimum width while search is active so search mode cannot squeeze the main-pane geometry or create Slint layout recursion.
+  - Current: the top-bar search field now uses bounded min/preferred/max layout constraints, and the path field stays in the separate main-pane `PathBar` so search mode cannot squeeze the main-pane geometry or create Slint layout recursion.
   - Current: `AppWindow` now owns a single `main-content-left` edge shared by the sidebar panel and main pane; the sidebar panel starts in the below-header content row, and its right border is the visible divider.
   - Current: the light shell base is subtly distinct from the raised white sidebar, the sidebar border is stronger than the flat top/main separators, and Places/Devices rows are inset inside the rounded sidebar panel.
   - Current: sidebar content geometry now uses a below-header same-row panel with a 16px radius, while the main-pane toolbar and main content remain a shared flat base inside the right pane.
