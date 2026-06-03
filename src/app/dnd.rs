@@ -243,8 +243,8 @@ mod tests {
             .split_once("component PaneSlot inherits FilePane")
             .expect("FilePane should be defined before PaneSlot")
             .0;
-        assert!(file_pane.contains("navigate_back => { root.go_back(root.pane-side); }"));
-        assert!(file_pane.contains("navigate_forward => { root.go_forward(root.pane-side); }"));
+        assert!(file_pane.contains("navigate_back => { root.go_back(root.pane-slot); }"));
+        assert!(file_pane.contains("navigate_forward => { root.go_forward(root.pane-slot); }"));
 
         let pane_slot = app
             .split_once("component PaneSlot inherits FilePane {")
@@ -253,17 +253,17 @@ mod tests {
             .split_once("export component AppWindow inherits Window")
             .expect("PaneSlot should be defined before AppWindow")
             .0;
-        assert!(pane_slot.contains("go_back(side) => { PaneRouting.go-back(side); }"));
-        assert!(pane_slot.contains("go_forward(side) => { PaneRouting.go-forward(side); }"));
+        assert!(pane_slot.contains("go_back(slot) => { PaneRouting.go-back(slot); }"));
+        assert!(pane_slot.contains("go_forward(slot) => { PaneRouting.go-forward(slot); }"));
 
         let main_pane = &app[main_pane_start..];
         assert!(main_pane.contains("for pane in root.pane_slots : PaneSlotSurface"));
         assert_eq!(main_pane.matches("PaneSlotSurface {").count(), 1);
         assert_eq!(main_pane.matches("PaneSlot {").count(), 0);
-        assert!(app.contains("public function route-pane-go-back(side: int)"));
-        assert!(app.contains("root.pane_go_back(side);"));
-        assert!(app.contains("public function route-pane-go-forward(side: int)"));
-        assert!(app.contains("root.pane_go_forward(side);"));
+        assert!(app.contains("public function route-pane-go-back(slot: int)"));
+        assert!(app.contains("root.pane_go_back(slot);"));
+        assert!(app.contains("public function route-pane-go-forward(slot: int)"));
+        assert!(app.contains("root.pane_go_forward(slot);"));
         assert!(!app.contains("root.inactive_go_back();"));
         assert!(!app.contains("root.left_pane_go_back();"));
         assert!(!app.contains("root.inactive_go_forward();"));

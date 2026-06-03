@@ -63,7 +63,7 @@ import { ChildSubmenuLayer, ChooserChoicePopupLayer, ChooserOptionPopupLayer, Ro
 import { ConfirmationPopup, OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
 
 component FilePane inherits Rectangle {
-    in property <int> pane-side: 0;
+    in property <int> pane-slot: 0;
     in property <bool> dark;
     in property <color> shell-base-color;
     in property <length> path-bar-height;
@@ -173,17 +173,17 @@ component FilePane inherits Rectangle {
             can-go-forward: root.can-go-forward;
             path-text: root.path-text;
             path-focused: root.path-focused;
-            focus_requested => { root.focus_requested(root.pane-side); }
-            go_back => { root.go_back(root.pane-side); }
-            go_forward => { root.go_forward(root.pane-side); }
-            path_submitted(path) => { root.path_submitted(root.pane-side, path); }
+            focus_requested => { root.focus_requested(root.pane-slot); }
+            go_back => { root.go_back(root.pane-slot); }
+            go_forward => { root.go_forward(root.pane-slot); }
+            path_submitted(path) => { root.path_submitted(root.pane-slot, path); }
             path_text_changed(text) => {
                 root.path-text = text;
-                root.path_text_changed(root.pane-side, text);
+                root.path_text_changed(root.pane-slot, text);
             }
             path_focus_changed(focused) => {
                 root.path-focused = focused;
-                root.path_focus_changed(root.pane-side, focused);
+                root.path_focus_changed(root.pane-slot, focused);
             }
         }
 
@@ -229,7 +229,7 @@ component FilePane inherits Rectangle {
                     }
                 }
                 can-drop(event) => {
-                    root.focus_requested(root.pane-side);
+                    root.focus_requested(root.pane-slot);
                     if (!root.drop-ready) {
                         root.drag-active = false;
                         root.drag-rejected = true;
@@ -238,8 +238,8 @@ component FilePane inherits Rectangle {
                     }
                     if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
                         root.drag-active = true;
-                        root.drag-target-path = root.drop_target_path(root.pane-side, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
-                        root.drag-rejected = !root.drop_allowed(root.pane-side, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                        root.drag-target-path = root.drop_target_path(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                        root.drag-rejected = !root.drop_allowed(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                         root.trace_drop(root.drop-trace-prefix + (root.drag-rejected ? "can-drop-rejected" : "can-drop-accepted"), DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.drag-rejected, root.drag-target-path);
                         return DragAction.copy;
                     } else {
@@ -251,10 +251,10 @@ component FilePane inherits Rectangle {
                     }
                 }
                 dropped(event) => {
-                    root.focus_requested(root.pane-side);
+                    root.focus_requested(root.pane-slot);
                     root.trace_drop(root.drop-trace-prefix + "dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.drag-rejected, root.drag-target-path);
-                    if (!root.drag-rejected && root.drop-ready && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_transfer(root.pane-side, DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
-                        root.transfer_menu_requested(root.pane-side);
+                    if (!root.drag-rejected && root.drop-ready && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_transfer(root.pane-slot, DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                        root.transfer_menu_requested(root.pane-slot);
                     }
                     root.drag-active = false;
                     root.drag-rejected = false;
@@ -284,33 +284,33 @@ component FilePane inherits Rectangle {
                 drag-rejected: root.drag-rejected;
                 drag-target-path: root.drag-target-path;
                 make_drag_data(path, is-dir) => {
-                    root.make_drag_data(root.pane-side, path, is-dir)
+                    root.make_drag_data(root.pane-slot, path, is-dir)
                 }
-                focus_requested => { root.focus_requested(root.pane-side); }
+                focus_requested => { root.focus_requested(root.pane-slot); }
                 view_changed => {
-                    root.viewport_changed(root.pane-side, root.viewport-x, root.viewport-offset);
-                    root.view_changed(root.pane-side);
+                    root.viewport_changed(root.pane-slot, root.viewport-x, root.viewport-offset);
+                    root.view_changed(root.pane-slot);
                 }
-                zoom_in => { root.zoom_in(root.pane-side); }
-                zoom_out => { root.zoom_out(root.pane-side); }
-                activated(path) => { root.activated(root.pane-side, path); }
+                zoom_in => { root.zoom_in(root.pane-slot); }
+                zoom_out => { root.zoom_out(root.pane-slot); }
+                activated(path) => { root.activated(root.pane-slot, path); }
                 request_select(path, toggle, range) => {
-                    root.request_select(root.pane-side, path, toggle, range);
+                    root.request_select(root.pane-slot, path, toggle, range);
                 }
                 select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
-                    root.select_rect(root.pane-side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+                    root.select_rect(root.pane-slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
                 }
-                clear_selection => { root.clear_selection(root.pane-side); }
+                clear_selection => { root.clear_selection(root.pane-slot); }
                 request_context_menu(path, name, size, modified, is-dir, x, y) => {
-                    root.request_context_menu(root.pane-side, path, name, size, modified, is-dir, x, y);
+                    root.request_context_menu(root.pane-slot, path, name, size, modified, is-dir, x, y);
                 }
                 request_blank_context_menu(x, y) => {
-                    root.request_blank_context_menu(root.pane-side, x, y);
+                    root.request_blank_context_menu(root.pane-slot, x, y);
                 }
-                navigate_back => { root.go_back(root.pane-side); }
-                navigate_forward => { root.go_forward(root.pane-side); }
+                navigate_back => { root.go_back(root.pane-slot); }
+                navigate_forward => { root.go_forward(root.pane-slot); }
                 is_selected(path) => {
-                    root.is_selected(root.pane-side, path)
+                    root.is_selected(root.pane-slot, path)
                 }
             }
         }
@@ -335,73 +335,73 @@ component FilePane inherits Rectangle {
             chooser-filter-label: root.chooser-filter-label;
             chooser-choices: root.chooser-choices;
             chooser-save-name <=> root.chooser-save-name;
-            save_focus_changed(focused) => { root.save_focus_changed(root.pane-side, focused); }
-            commit_external_edit => { root.commit_external_edit(root.pane-side); }
-            discard_external_edit => { root.discard_external_edit(root.pane-side); }
+            save_focus_changed(focused) => { root.save_focus_changed(root.pane-slot, focused); }
+            commit_external_edit => { root.commit_external_edit(root.pane-slot); }
+            discard_external_edit => { root.discard_external_edit(root.pane-slot); }
             undo_last_operation => { root.undo_last_operation(); }
             chooser_accept(value) => { root.chooser_accept(value); }
-            chooser_filter_requested(x, y) => { root.chooser_filter_requested(root.pane-side, x, y); }
+            chooser_filter_requested(x, y) => { root.chooser_filter_requested(root.pane-slot, x, y); }
             chooser_choice_requested(index, x, y) => {
-                root.chooser_choice_requested(root.pane-side, index, x, y);
+                root.chooser_choice_requested(root.pane-slot, index, x, y);
             }
         }
     }
 }
 
 component PaneSlot inherits FilePane {
-    focus_requested(side) => { PaneRouting.focus(side); }
-    path_submitted(side, path) => { PaneRouting.path-submitted(side, path); }
-    go_back(side) => { PaneRouting.go-back(side); }
-    go_forward(side) => { PaneRouting.go-forward(side); }
+    focus_requested(slot) => { PaneRouting.focus(slot); }
+    path_submitted(slot, path) => { PaneRouting.path-submitted(slot, path); }
+    go_back(slot) => { PaneRouting.go-back(slot); }
+    go_forward(slot) => { PaneRouting.go-forward(slot); }
     search_submitted(query) => { PaneRouting.search-submitted(query); }
     cancel_search => { PaneRouting.cancel-search(); }
     search_filters_changed(kind, modified, size) => {
         PaneRouting.search-filters-changed(kind, modified, size);
     }
     search_close_requested => { PaneRouting.search-close-requested(); }
-    view_changed(side) => { PaneRouting.view-changed(side); }
-    activated(side, path) => { PaneRouting.activated(side, path); }
-    request_select(side, path, toggle, range) => {
-        PaneRouting.request-select(side, path, toggle, range);
+    view_changed(slot) => { PaneRouting.view-changed(slot); }
+    activated(slot, path) => { PaneRouting.activated(slot, path); }
+    request_select(slot, path, toggle, range) => {
+        PaneRouting.request-select(slot, path, toggle, range);
     }
-    select_rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
-        PaneRouting.select-rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+    select_rect(slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
+        PaneRouting.select-rect(slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
     }
-    clear_selection(side) => { PaneRouting.clear-selection(side); }
-    request_context_menu(side, path, name, size, modified, is-dir, x, y) => {
-        PaneRouting.request-context-menu(side, path, name, size, modified, is-dir, x, y);
+    clear_selection(slot) => { PaneRouting.clear-selection(slot); }
+    request_context_menu(slot, path, name, size, modified, is-dir, x, y) => {
+        PaneRouting.request-context-menu(slot, path, name, size, modified, is-dir, x, y);
     }
-    request_blank_context_menu(side, x, y) => {
-        PaneRouting.request-blank-context-menu(side, x, y);
+    request_blank_context_menu(slot, x, y) => {
+        PaneRouting.request-blank-context-menu(slot, x, y);
     }
-    zoom_in(side) => { PaneRouting.zoom-in(side); }
-    zoom_out(side) => { PaneRouting.zoom-out(side); }
-    drop_target_path(side, x, y, source) => {
-        PaneRouting.drop-target-path(side, x, y, source)
+    zoom_in(slot) => { PaneRouting.zoom-in(slot); }
+    zoom_out(slot) => { PaneRouting.zoom-out(slot); }
+    drop_target_path(slot, x, y, source) => {
+        PaneRouting.drop-target-path(slot, x, y, source)
     }
-    drop_allowed(side, x, y, source) => {
-        PaneRouting.drop-allowed(side, x, y, source)
+    drop_allowed(slot, x, y, source) => {
+        PaneRouting.drop-allowed(slot, x, y, source)
     }
-    prepare_transfer(side, source, x, y) => {
-        PaneRouting.prepare-transfer(side, source, x, y)
+    prepare_transfer(slot, source, x, y) => {
+        PaneRouting.prepare-transfer(slot, source, x, y)
     }
-    transfer_menu_requested(side) => { PaneRouting.transfer-menu-requested(side); }
+    transfer_menu_requested(slot) => { PaneRouting.transfer-menu-requested(slot); }
     trace_drop(action, kind, path, x, y, rejected, target) => {
         PaneRouting.trace-drop(action, kind, path, x, y, rejected, target);
     }
-    save_focus_changed(side, focused) => { PaneRouting.save-focus-changed(side, focused); }
-    commit_external_edit(side) => { PaneRouting.commit-external-edit(side); }
-    discard_external_edit(side) => { PaneRouting.discard-external-edit(side); }
+    save_focus_changed(slot, focused) => { PaneRouting.save-focus-changed(slot, focused); }
+    commit_external_edit(slot) => { PaneRouting.commit-external-edit(slot); }
+    discard_external_edit(slot) => { PaneRouting.discard-external-edit(slot); }
     undo_last_operation => { PaneRouting.undo-last-operation(); }
     chooser_accept(value) => { PaneRouting.chooser-accept(value); }
-    chooser_filter_requested(side, x, y) => { PaneRouting.chooser-filter-requested(side, x, y); }
-    chooser_choice_requested(side, index, x, y) => {
-        PaneRouting.chooser-choice-requested(side, index, x, y);
+    chooser_filter_requested(slot, x, y) => { PaneRouting.chooser-filter-requested(slot, x, y); }
+    chooser_choice_requested(slot, index, x, y) => {
+        PaneRouting.chooser-choice-requested(slot, index, x, y);
     }
-    is_selected(side, path) => {
-        PaneRouting.is-selected(side, path)
+    is_selected(slot, path) => {
+        PaneRouting.is-selected(slot, path)
     }
-    make_drag_data(side, path, is-dir) => {
+    make_drag_data(slot, path, is-dir) => {
         is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)
     }
 }
@@ -445,7 +445,7 @@ component PaneSlotSurface inherits Rectangle {
     }
 
     PaneSlot {
-        pane-side: root.pane.slot;
+        pane-slot: root.pane.slot;
         width: parent.width;
         height: parent.height;
         dark: root.dark-mode;
@@ -503,10 +503,10 @@ component PaneSlotSurface inherits Rectangle {
         chooser-filter-label: root.pane.chooser_filter_label;
         chooser-choices: root.pane.chooser_choices;
         chooser-save-name <=> root.pane-chooser-save-name;
-        path_text_changed(side, text) => { root.path_text_changed(side, text); }
-        path_focus_changed(side, focused) => { root.path_focus_changed(side, focused); }
-        viewport_changed(side, viewport-x, viewport-offset) => {
-            root.viewport_changed(side, viewport-x, viewport-offset);
+        path_text_changed(slot, text) => { root.path_text_changed(slot, text); }
+        path_focus_changed(slot, focused) => { root.path_focus_changed(slot, focused); }
+        viewport_changed(slot, viewport-x, viewport-offset) => {
+            root.viewport_changed(slot, viewport-x, viewport-offset);
         }
     }
 }
@@ -620,8 +620,8 @@ export component AppWindow inherits Window {
     private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d8e1ea;
     private property <color> shell-separator-color: root.dark_mode ? #242b33 : #e5eaf0;
     private property <length> sidebar-panel-radius: 16px;
-    private property <length> sidebar-bottom-gap: 14px;
-    private property <length> sidebar-content-bottom-padding: 22px;
+    private property <length> sidebar-bottom-gap: 22px;
+    private property <length> sidebar-content-bottom-padding: 28px;
     private property <length> sidebar-content-height: 10px + 30px + root.places.length * 38px + 30px + 30px + root.devices.length * 38px + (root.places.length + root.devices.length + 2) * 4px + root.sidebar-content-bottom-padding;
     private property <float> sidebar-resize-start-width-px: 280;
     private property <length> sidebar-resize-press-x: 0px;
@@ -804,6 +804,7 @@ export component AppWindow inherits Window {
     callback pane_drop_target_path(int, float, float, string) -> string;
     callback pane_drop_allowed(int, float, float, string) -> bool;
     callback pane_view_changed(int);
+    callback pane_layout_changed();
     callback pane_slots_refresh_requested();
     callback place_drop_allowed(string, int) -> bool;
     callback place_drop_target(float) -> int;
@@ -992,49 +993,49 @@ export component AppWindow inherits Window {
         }
     }
 
-    public function route-pane-focus(side: int) {
+    public function route-pane-focus(slot: int) {
         main-focus.focus();
-        root.pane_focus(side);
+        root.pane_focus(slot);
     }
 
-    public function route-pane-path-submitted(side: int, path: string) {
-        root.pane_path_submitted(side, path);
+    public function route-pane-path-submitted(slot: int, path: string) {
+        root.pane_path_submitted(slot, path);
     }
 
-    public function route-pane-go-back(side: int) {
-        root.pane_go_back(side);
+    public function route-pane-go-back(slot: int) {
+        root.pane_go_back(slot);
     }
 
-    public function route-pane-go-forward(side: int) {
-        root.pane_go_forward(side);
+    public function route-pane-go-forward(slot: int) {
+        root.pane_go_forward(slot);
     }
 
-    public function route-pane-view-changed(side: int) {
-        root.pane_view_changed(side);
+    public function route-pane-view-changed(slot: int) {
+        root.pane_view_changed(slot);
     }
 
-    public function route-pane-activated(side: int, path: string) {
-        root.pane_activated(side, path);
+    public function route-pane-activated(slot: int, path: string) {
+        root.pane_activated(slot, path);
     }
 
-    public function route-pane-request-select(side: int, path: string, toggle: bool, range: bool) {
-        root.pane_request_select(side, path, toggle, range);
+    public function route-pane-request-select(slot: int, path: string, toggle: bool, range: bool) {
+        root.pane_request_select(slot, path, toggle, range);
     }
 
-    public function route-pane-select-rect(side: int, x1: float, y1: float, x2: float, y2: float, rows-per-column: int, cell-width: float, row-height: float, padding: float, toggle: bool) {
-        root.pane_select_rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+    public function route-pane-select-rect(slot: int, x1: float, y1: float, x2: float, y2: float, rows-per-column: int, cell-width: float, row-height: float, padding: float, toggle: bool) {
+        root.pane_select_rect(slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
     }
 
-    public function route-pane-clear-selection(side: int) {
-        root.route-pane-focus(side);
+    public function route-pane-clear-selection(slot: int) {
+        root.route-pane-focus(slot);
         root.clear_selection();
     }
 
-    public function route-pane-request-context-menu(side: int, path: string, name: string, size: string, modified: string, is-dir: bool, x: length, y: length) {
-        root.route-pane-focus(side);
+    public function route-pane-request-context-menu(slot: int, path: string, name: string, size: string, modified: string, is-dir: bool, x: length, y: length) {
+        root.route-pane-focus(slot);
         root.refresh_clipboard_availability();
-        if (!root.pane_is_selected(side, path)) {
-            root.pane_request_select(side, path, false, false);
+        if (!root.pane_is_selected(slot, path)) {
+            root.pane_request_select(slot, path, false, false);
         }
         root.context-menu-kind = 1;
         root.context-menu-path = path;
@@ -1050,56 +1051,56 @@ export component AppWindow inherits Window {
         root.show-context-menu(1, x, y);
     }
 
-    public function route-pane-request-blank-context-menu(side: int, x: length, y: length) {
-        root.route-pane-clear-selection(side);
+    public function route-pane-request-blank-context-menu(slot: int, x: length, y: length) {
+        root.route-pane-clear-selection(slot);
         root.refresh_clipboard_availability();
         root.show-context-menu(3, x, y);
     }
 
-    public function route-pane-zoom-in(side: int) {
-        root.route-pane-focus(side);
+    public function route-pane-zoom-in(slot: int) {
+        root.route-pane-focus(slot);
         root.zoom-main-in();
     }
 
-    public function route-pane-zoom-out(side: int) {
-        root.route-pane-focus(side);
+    public function route-pane-zoom-out(slot: int) {
+        root.route-pane-focus(slot);
         root.zoom-main-out();
     }
 
-    public function route-pane-drop-target-path(side: int, x: float, y: float, source: string) -> string {
-        return root.pane_drop_target_path(side, x, y, source);
+    public function route-pane-drop-target-path(slot: int, x: float, y: float, source: string) -> string {
+        return root.pane_drop_target_path(slot, x, y, source);
     }
 
-    public function route-pane-drop-allowed(side: int, x: float, y: float, source: string) -> bool {
-        return root.pane_drop_allowed(side, x, y, source);
+    public function route-pane-drop-allowed(slot: int, x: float, y: float, source: string) -> bool {
+        return root.pane_drop_allowed(slot, x, y, source);
     }
 
-    public function route-pane-prepare-transfer(side: int, source: string, x: float, y: float) -> bool {
-        return root.pane_prepare_transfer(side, source, x, y);
+    public function route-pane-prepare-transfer(slot: int, source: string, x: float, y: float) -> bool {
+        return root.pane_prepare_transfer(slot, source, x, y);
     }
 
-    public function route-pane-transfer-menu-requested(side: int) {
-        root.route-pane-focus(side);
+    public function route-pane-transfer-menu-requested(slot: int) {
+        root.route-pane-focus(slot);
         root.transfer-menu-open = true;
     }
 
-    public function route-pane-save-focus-changed(side: int, focused: bool) {
+    public function route-pane-save-focus-changed(slot: int, focused: bool) {
         root.chooser-save-input-focused = focused;
         if (focused) {
-            root.route-pane-focus(side);
+            root.route-pane-focus(slot);
         }
     }
 
-    public function route-pane-chooser-filter-requested(side: int, x: length, y: length) {
-        root.route-pane-focus(side);
+    public function route-pane-chooser-filter-requested(slot: int, x: length, y: length) {
+        root.route-pane-focus(slot);
         root.chooser-choice-menu-open = false;
         root.chooser-filter-menu-x = x;
         root.chooser-filter-menu-y = y;
         root.chooser-filter-menu-open = true;
     }
 
-    public function route-pane-chooser-choice-requested(side: int, index: int, x: length, y: length) {
-        root.route-pane-focus(side);
+    public function route-pane-chooser-choice-requested(slot: int, index: int, x: length, y: length) {
+        root.route-pane-focus(slot);
         root.chooser-filter-menu-open = false;
         root.chooser-choice-menu-index = index;
         root.chooser-choice-menu-x = x;
@@ -1115,21 +1116,18 @@ export component AppWindow inherits Window {
     background: root.shell-base-color;
 
     changed width => {
-        root.pane_view_changed(0);
-        root.pane_view_changed(1);
+        root.pane_layout_changed();
     }
     changed height => {
-        root.pane_view_changed(0);
-        root.pane_view_changed(1);
+        root.pane_layout_changed();
     }
     changed sidebar_width_px => {
         root.sync-main-viewport();
-        root.pane_view_changed(0);
-        root.pane_view_changed(1);
+        root.pane_layout_changed();
     }
     changed search-panel-height => {
         root.sync-main-viewport();
-        root.pane_view_changed(0);
+        root.pane_layout_changed();
     }
     changed search_bar_open => {
         root.pane_slots_refresh_requested();
@@ -1151,13 +1149,11 @@ export component AppWindow inherits Window {
     }
     changed pane-slot-0-width => {
         root.sync-main-viewport();
-        root.pane_view_changed(0);
-        root.pane_view_changed(1);
+        root.pane_layout_changed();
     }
     changed split_pane_ratio => {
         root.sync-main-viewport();
-        root.pane_view_changed(0);
-        root.pane_view_changed(1);
+        root.pane_layout_changed();
     }
     changed split_view_open => {
         if (!root.split_view_open) {
@@ -1165,8 +1161,7 @@ export component AppWindow inherits Window {
         }
     }
     changed icon_zoom_level => {
-        root.pane_view_changed(0);
-        root.pane_view_changed(1);
+        root.pane_layout_changed();
     }
     changed transfer_conflict_open => {
         if (root.transfer_conflict_open) {
@@ -1574,22 +1569,24 @@ export component AppWindow inherits Window {
                         pane-search-modified-filter <=> root.search_modified_filter;
                         pane-search-size-filter <=> root.search_size_filter;
                         pane-chooser-save-name <=> root.chooser_save_name;
-                        path_text_changed(side, text) => {
-                            root.set-pane-slot-path-text(side, text);
+                        path_text_changed(slot, text) => {
+                            root.set-pane-slot-path-text(slot, text);
                         }
-                        path_focus_changed(side, focused) => {
-                            root.set-pane-slot-path-focused(side, focused);
+                        path_focus_changed(slot, focused) => {
+                            root.set-pane-slot-path-focused(slot, focused);
                         }
-                        viewport_changed(side, viewport-x, viewport-offset) => {
-                            root.set-pane-slot-viewport(side, viewport-x, viewport-offset);
+                        viewport_changed(slot, viewport-x, viewport-offset) => {
+                            root.set-pane-slot-viewport(slot, viewport-x, viewport-offset);
                         }
                     }
 
-                    if (root.split_view_open) : split-divider := Rectangle {
-                        x: root.pane-slot-0-width;
+                    for pane in root.pane_slots : Rectangle {
+                        private property <int> slot: pane.slot;
+                        visible: root.split_view_open && slot > 0;
+                        x: root.pane-slot-x(slot) - root.split-divider-width;
                         width: root.split-divider-width;
                         height: parent.height;
-                        background: root.split-resize-active ? (root.dark_mode ? #58b4d8 : #2f8dbc) : root.shell-separator-color;
+                        background: root.split-resize-active && slot == 1 ? (root.dark_mode ? #58b4d8 : #2f8dbc) : root.shell-separator-color;
                     }
 
                     if (root.split_view_open) : split-divider-touch := TouchArea {

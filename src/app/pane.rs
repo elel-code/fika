@@ -123,6 +123,40 @@ impl PanesState {
         self.inactive.as_mut()
     }
 
+    pub(crate) fn focused_slot(&self) -> i32 {
+        match self.focused_side() {
+            PaneSide::Active => 0,
+            PaneSide::Inactive => 1,
+        }
+    }
+
+    pub(crate) fn focus_slot(&mut self, slot: i32) -> bool {
+        match slot {
+            0 => {
+                self.focus_active();
+                true
+            }
+            1 => self.focus_inactive(),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn pane_for_slot(&self, slot: i32) -> Option<&PaneState> {
+        match slot {
+            0 => Some(&self.active),
+            1 => self.inactive(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn pane_mut_for_slot(&mut self, slot: i32) -> Option<&mut PaneState> {
+        match slot {
+            0 => Some(&mut self.active),
+            1 => self.inactive_mut(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn focused_side(&self) -> PaneSide {
         if self.inactive.is_none() {
             PaneSide::Active
@@ -627,7 +661,7 @@ mod tests {
         assert!(panes.focus_inactive());
         let (closed_side, closed) = panes
             .close_focused_split_pane()
-            .expect("focused right pane should close");
+            .expect("focused slot 1 should close");
         assert_eq!(closed_side, PaneSide::Inactive);
         assert_eq!(closed.current_dir, PathBuf::from("/tmp/right"));
         assert_eq!(closed.id, right_id);
@@ -640,7 +674,7 @@ mod tests {
         panes.focus_active();
         let (closed_side, closed) = panes
             .close_focused_split_pane()
-            .expect("focused left pane should close");
+            .expect("focused slot 0 should close");
         assert_eq!(closed_side, PaneSide::Active);
         assert_eq!(closed.current_dir, PathBuf::from("/tmp/left"));
         assert_eq!(closed.id, left_id);

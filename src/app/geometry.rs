@@ -1620,9 +1620,9 @@ mod tests {
             "sidebar panel should be explicit in the content row below the shell header"
         );
         assert!(
-            app.contains("private property <length> sidebar-bottom-gap: 14px;")
+            app.contains("private property <length> sidebar-bottom-gap: 22px;")
                 && app.contains(
-                    "private property <length> sidebar-content-bottom-padding: 22px;"
+                    "private property <length> sidebar-content-bottom-padding: 28px;"
                 )
                 && app.contains("private property <length> sidebar-content-height: 10px + 30px + root.places.length * 38px + 30px + 30px + root.devices.length * 38px + (root.places.length + root.devices.length + 2) * 4px + root.sidebar-content-bottom-padding;"),
             "sidebar should define explicit outer and inner bottom spacing"
@@ -1655,7 +1655,7 @@ mod tests {
         assert!(
             status_bar.contains("label: \"Admin Save\";")
                 && status_bar.contains("width: 104px;")
-                && status_bar.contains("text: \"ADMIN\";")
+                && status_bar.contains("text: \"ADMIN EDIT\";")
                 && status_bar.contains("private property <color> admin-badge-bg")
                 && status_bar.contains("private property <color> admin-badge-border")
                 && !status_bar.contains("label: \"Save Back\";"),
@@ -1888,7 +1888,7 @@ mod tests {
             .expect("PaneSlotSurface should be defined before AppWindow")
             .0;
         let route_functions = app
-            .split_once("public function route-pane-focus(side: int) {")
+            .split_once("public function route-pane-focus(slot: int) {")
             .expect("AppWindow should expose shared pane route functions")
             .1
             .split_once("title: chooser_mode")
@@ -1979,7 +1979,7 @@ mod tests {
                 && pane_routing.contains("callback drop-allowed(int, float, float, string) -> bool;")
                 && pane_routing.contains("callback prepare-transfer(int, string, float, float) -> bool;")
                 && pane_routing.contains("pure callback is-selected(int, string) -> bool;"),
-            "PaneRouting should expose one side-aware surface for every pane interaction"
+            "PaneRouting should expose one slot-aware surface for every pane interaction"
         );
         assert_eq!(
             file_pane.matches("PathBar {").count(),
@@ -2033,7 +2033,7 @@ mod tests {
             "FilePane should expose the full interactive surface shared by both panes"
         );
         assert!(
-            file_pane.contains("in property <int> pane-side: 0;")
+            file_pane.contains("in property <int> pane-slot: 0;")
                 && file_pane.contains("callback focus_requested(int);")
                 && file_pane.contains("callback path_submitted(int, string);")
                 && file_pane.contains("callback go_back(int);")
@@ -2045,58 +2045,58 @@ mod tests {
                 && file_pane.contains("pure callback is_selected(int, string) -> bool;")
                 && file_pane
                     .contains("pure callback make_drag_data(int, string, bool) -> data-transfer;"),
-            "FilePane callbacks should carry the pane side instead of baking in left/right behavior"
+            "FilePane callbacks should carry the pane slot instead of baking in left/right behavior"
         );
         assert!(
-            file_pane.contains("focus_requested => { root.focus_requested(root.pane-side); }")
-                && file_pane.contains("go_back => { root.go_back(root.pane-side); }")
-                && file_pane.contains("go_forward => { root.go_forward(root.pane-side); }")
+            file_pane.contains("focus_requested => { root.focus_requested(root.pane-slot); }")
+                && file_pane.contains("go_back => { root.go_back(root.pane-slot); }")
+                && file_pane.contains("go_forward => { root.go_forward(root.pane-slot); }")
                 && file_pane
-                    .contains("path_submitted(path) => { root.path_submitted(root.pane-side, path); }")
-                && file_pane.contains("root.request_context_menu(root.pane-side, path, name, size, modified, is-dir, x, y);")
-                && file_pane.contains("navigate_back => { root.go_back(root.pane-side); }")
-                && file_pane.contains("navigate_forward => { root.go_forward(root.pane-side); }")
-                && file_pane.contains("root.is_selected(root.pane-side, path)")
+                    .contains("path_submitted(path) => { root.path_submitted(root.pane-slot, path); }")
+                && file_pane.contains("root.request_context_menu(root.pane-slot, path, name, size, modified, is-dir, x, y);")
+                && file_pane.contains("navigate_back => { root.go_back(root.pane-slot); }")
+                && file_pane.contains("navigate_forward => { root.go_forward(root.pane-slot); }")
+                && file_pane.contains("root.is_selected(root.pane-slot, path)")
                 && file_pane.contains(
-                    "commit_external_edit => { root.commit_external_edit(root.pane-side); }"
+                    "commit_external_edit => { root.commit_external_edit(root.pane-slot); }"
                 )
                 && file_pane.contains(
-                    "discard_external_edit => { root.discard_external_edit(root.pane-side); }"
+                    "discard_external_edit => { root.discard_external_edit(root.pane-slot); }"
                 )
                 && file_pane
-                    .contains("save_focus_changed(focused) => { root.save_focus_changed(root.pane-side, focused); }"),
-            "FilePane should route address bar, content, side buttons, context menus, selection, and status through pane-side"
+                    .contains("save_focus_changed(focused) => { root.save_focus_changed(root.pane-slot, focused); }"),
+            "FilePane should route address bar, content, side buttons, context menus, selection, and status through pane-slot"
         );
         let pane_slot_bindings = [
-            "focus_requested(side) => { PaneRouting.focus(side); }",
-            "path_submitted(side, path) => { PaneRouting.path-submitted(side, path); }",
-            "go_back(side) => { PaneRouting.go-back(side); }",
-            "go_forward(side) => { PaneRouting.go-forward(side); }",
+            "focus_requested(slot) => { PaneRouting.focus(slot); }",
+            "path_submitted(slot, path) => { PaneRouting.path-submitted(slot, path); }",
+            "go_back(slot) => { PaneRouting.go-back(slot); }",
+            "go_forward(slot) => { PaneRouting.go-forward(slot); }",
             "search_submitted(query) => { PaneRouting.search-submitted(query); }",
             "cancel_search => { PaneRouting.cancel-search(); }",
             "search_close_requested => { PaneRouting.search-close-requested(); }",
-            "view_changed(side) => { PaneRouting.view-changed(side); }",
-            "activated(side, path) => { PaneRouting.activated(side, path); }",
-            "request_select(side, path, toggle, range) => {\n        PaneRouting.request-select(side, path, toggle, range);\n    }",
-            "clear_selection(side) => { PaneRouting.clear-selection(side); }",
-            "request_context_menu(side, path, name, size, modified, is-dir, x, y) => {\n        PaneRouting.request-context-menu(side, path, name, size, modified, is-dir, x, y);\n    }",
-            "request_blank_context_menu(side, x, y) => {\n        PaneRouting.request-blank-context-menu(side, x, y);\n    }",
-            "zoom_in(side) => { PaneRouting.zoom-in(side); }",
-            "zoom_out(side) => { PaneRouting.zoom-out(side); }",
-            "drop_target_path(side, x, y, source) => {\n        PaneRouting.drop-target-path(side, x, y, source)\n    }",
-            "drop_allowed(side, x, y, source) => {\n        PaneRouting.drop-allowed(side, x, y, source)\n    }",
-            "prepare_transfer(side, source, x, y) => {\n        PaneRouting.prepare-transfer(side, source, x, y)\n    }",
-            "transfer_menu_requested(side) => { PaneRouting.transfer-menu-requested(side); }",
+            "view_changed(slot) => { PaneRouting.view-changed(slot); }",
+            "activated(slot, path) => { PaneRouting.activated(slot, path); }",
+            "request_select(slot, path, toggle, range) => {\n        PaneRouting.request-select(slot, path, toggle, range);\n    }",
+            "clear_selection(slot) => { PaneRouting.clear-selection(slot); }",
+            "request_context_menu(slot, path, name, size, modified, is-dir, x, y) => {\n        PaneRouting.request-context-menu(slot, path, name, size, modified, is-dir, x, y);\n    }",
+            "request_blank_context_menu(slot, x, y) => {\n        PaneRouting.request-blank-context-menu(slot, x, y);\n    }",
+            "zoom_in(slot) => { PaneRouting.zoom-in(slot); }",
+            "zoom_out(slot) => { PaneRouting.zoom-out(slot); }",
+            "drop_target_path(slot, x, y, source) => {\n        PaneRouting.drop-target-path(slot, x, y, source)\n    }",
+            "drop_allowed(slot, x, y, source) => {\n        PaneRouting.drop-allowed(slot, x, y, source)\n    }",
+            "prepare_transfer(slot, source, x, y) => {\n        PaneRouting.prepare-transfer(slot, source, x, y)\n    }",
+            "transfer_menu_requested(slot) => { PaneRouting.transfer-menu-requested(slot); }",
             "trace_drop(action, kind, path, x, y, rejected, target) => {\n        PaneRouting.trace-drop(action, kind, path, x, y, rejected, target);\n    }",
-            "save_focus_changed(side, focused) => { PaneRouting.save-focus-changed(side, focused); }",
-            "commit_external_edit(side) => { PaneRouting.commit-external-edit(side); }",
-            "discard_external_edit(side) => { PaneRouting.discard-external-edit(side); }",
+            "save_focus_changed(slot, focused) => { PaneRouting.save-focus-changed(slot, focused); }",
+            "commit_external_edit(slot) => { PaneRouting.commit-external-edit(slot); }",
+            "discard_external_edit(slot) => { PaneRouting.discard-external-edit(slot); }",
             "undo_last_operation => { PaneRouting.undo-last-operation(); }",
             "chooser_accept(value) => { PaneRouting.chooser-accept(value); }",
-            "chooser_filter_requested(side, x, y) => { PaneRouting.chooser-filter-requested(side, x, y); }",
-            "chooser_choice_requested(side, index, x, y) => {\n        PaneRouting.chooser-choice-requested(side, index, x, y);\n    }",
-            "is_selected(side, path) => {\n        PaneRouting.is-selected(side, path)\n    }",
-            "make_drag_data(side, path, is-dir) => {\n        is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)\n    }",
+            "chooser_filter_requested(slot, x, y) => { PaneRouting.chooser-filter-requested(slot, x, y); }",
+            "chooser_choice_requested(slot, index, x, y) => {\n        PaneRouting.chooser-choice-requested(slot, index, x, y);\n    }",
+            "is_selected(slot, path) => {\n        PaneRouting.is-selected(slot, path)\n    }",
+            "make_drag_data(slot, path, is-dir) => {\n        is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)\n    }",
         ];
         for binding in pane_slot_bindings {
             assert!(
@@ -2107,7 +2107,7 @@ mod tests {
         assert!(
             pane_slot_surface.contains("PaneSlot {")
                 && pane_slot_surface.contains("in property <PaneSlotData> pane;")
-                && pane_slot_surface.contains("pane-side: root.pane.slot;")
+                && pane_slot_surface.contains("pane-slot: root.pane.slot;")
                 && pane_slot_surface.contains("current-path: root.pane.current_path;")
                 && pane_slot_surface
                     .contains("private property <string> live-path-text: root.pane.path_text;")
@@ -2166,8 +2166,9 @@ mod tests {
             app.contains("private property <length> split-divider-width: root.split_view_open ? 1px : 0px;")
                 && app.contains("private property <length> pane-slot-1-x: root.pane-slot-0-width + root.split-divider-width;")
                 && app.contains("private property <length> pane-slot-1-width: root.split_view_open ? max(1px, root.main-pane-width - root.pane-slot-1-x) : 0px;")
-                && app.contains("if (root.split_view_open) : split-divider := Rectangle {\n                        x: root.pane-slot-0-width;\n                        width: root.split-divider-width;\n                        height: parent.height;\n                        background: root.split-resize-active ?"),
-            "split divider should be a single pane-level line between the active and inactive shells with drag feedback"
+                && app.contains("for pane in root.pane_slots : Rectangle {\n                        private property <int> slot: pane.slot;\n                        visible: root.split_view_open && slot > 0;\n                        x: root.pane-slot-x(slot) - root.split-divider-width;")
+                && app.contains("background: root.split-resize-active && slot == 1 ?"),
+            "split dividers should be generated from pane slot boundaries instead of a hand-coded side pair"
         );
         assert!(
             app.contains("function pane-slot-x(slot: int) -> length {")
@@ -2210,60 +2211,60 @@ mod tests {
         );
         assert!(
             route_functions.contains("main-focus.focus();")
-                && route_functions.contains("root.pane_focus(side);")
+                && route_functions.contains("root.pane_focus(slot);")
                 && route_functions
-                    .contains("public function route-pane-path-submitted(side: int, path: string)")
-                && route_functions.contains("root.pane_path_submitted(side, path);")
-                && route_functions.contains("public function route-pane-go-back(side: int)")
-                && route_functions.contains("root.pane_go_back(side);")
-                && route_functions.contains("public function route-pane-go-forward(side: int)")
-                && route_functions.contains("root.pane_go_forward(side);"),
-            "shared pane route functions should focus and navigate any pane from the same side-aware code"
+                    .contains("public function route-pane-path-submitted(slot: int, path: string)")
+                && route_functions.contains("root.pane_path_submitted(slot, path);")
+                && route_functions.contains("public function route-pane-go-back(slot: int)")
+                && route_functions.contains("root.pane_go_back(slot);")
+                && route_functions.contains("public function route-pane-go-forward(slot: int)")
+                && route_functions.contains("root.pane_go_forward(slot);"),
+            "shared pane route functions should focus and navigate any pane from the same slot-aware code"
         );
         assert!(
-            route_functions.contains("public function route-pane-view-changed(side: int)")
-                && route_functions.contains("root.pane_view_changed(side);")
-                && route_functions.contains("public function route-pane-activated(side: int, path: string)")
-                && route_functions.contains("root.pane_activated(side, path);")
+            route_functions.contains("public function route-pane-view-changed(slot: int)")
+                && route_functions.contains("root.pane_view_changed(slot);")
+                && route_functions.contains("public function route-pane-activated(slot: int, path: string)")
+                && route_functions.contains("root.pane_activated(slot, path);")
                 && route_functions.contains(
-                    "public function route-pane-request-select(side: int, path: string, toggle: bool, range: bool)"
+                    "public function route-pane-request-select(slot: int, path: string, toggle: bool, range: bool)"
                 )
-                && route_functions.contains("root.pane_request_select(side, path, toggle, range);")
-                && route_functions.contains("public function route-pane-select-rect(side: int,")
-                && route_functions.contains("root.pane_select_rect(side, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);"),
-            "shared pane route functions should dispatch activation, selection, and view state by side"
+                && route_functions.contains("root.pane_request_select(slot, path, toggle, range);")
+                && route_functions.contains("public function route-pane-select-rect(slot: int,")
+                && route_functions.contains("root.pane_select_rect(slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);"),
+            "shared pane route functions should dispatch activation, selection, and view state by slot"
         );
         assert!(
-            route_functions.contains("public function route-pane-request-context-menu(side: int,")
+            route_functions.contains("public function route-pane-request-context-menu(slot: int,")
                 && route_functions.contains("root.refresh_clipboard_availability();")
-                && route_functions.contains("if (!root.pane_is_selected(side, path))")
-                && route_functions.contains("root.pane_request_select(side, path, false, false);")
+                && route_functions.contains("if (!root.pane_is_selected(slot, path))")
+                && route_functions.contains("root.pane_request_select(slot, path, false, false);")
                 && route_functions.contains("root.show-context-menu(1, x, y);")
                 && route_functions
-                    .contains("public function route-pane-request-blank-context-menu(side: int,")
+                    .contains("public function route-pane-request-blank-context-menu(slot: int,")
                 && route_functions.contains("root.show-context-menu(3, x, y);")
                 && route_functions
-                    .contains("public function route-pane-drop-target-path(side: int,")
+                    .contains("public function route-pane-drop-target-path(slot: int,")
                 && route_functions
-                    .contains("return root.pane_drop_target_path(side, x, y, source);")
-                && route_functions.contains("public function route-pane-drop-allowed(side: int,")
-                && route_functions.contains("return root.pane_drop_allowed(side, x, y, source);")
+                    .contains("return root.pane_drop_target_path(slot, x, y, source);")
+                && route_functions.contains("public function route-pane-drop-allowed(slot: int,")
+                && route_functions.contains("return root.pane_drop_allowed(slot, x, y, source);")
                 && route_functions
-                    .contains("public function route-pane-prepare-transfer(side: int,")
+                    .contains("public function route-pane-prepare-transfer(slot: int,")
                 && route_functions
-                    .contains("return root.pane_prepare_transfer(side, source, x, y);")
+                    .contains("return root.pane_prepare_transfer(slot, source, x, y);")
                 && route_functions
-                    .contains("public function route-pane-transfer-menu-requested(side: int)"),
-            "shared pane route functions should dispatch context menus and drag/drop by side"
+                    .contains("public function route-pane-transfer-menu-requested(slot: int)"),
+            "shared pane route functions should dispatch context menus and drag/drop by slot"
         );
         assert!(
-            route_functions.contains("public function route-pane-save-focus-changed(side: int, focused: bool)")
+            route_functions.contains("public function route-pane-save-focus-changed(slot: int, focused: bool)")
                 && route_functions
-                    .contains("public function route-pane-chooser-filter-requested(side: int, x: length, y: length)")
+                    .contains("public function route-pane-chooser-filter-requested(slot: int, x: length, y: length)")
                 && route_functions.contains(
-                    "public function route-pane-chooser-choice-requested(side: int, index: int, x: length, y: length)"
+                    "public function route-pane-chooser-choice-requested(slot: int, index: int, x: length, y: length)"
                 ),
-            "shared pane route functions should dispatch status bar and chooser controls by side"
+            "shared pane route functions should dispatch status bar and chooser controls by slot"
         );
         assert!(
             !app.contains("function pane-slot-path-text(slot: int) -> string")
@@ -2292,9 +2293,9 @@ mod tests {
             app.contains("callback pane_drop_target_path(int, float, float, string) -> string;")
         );
         assert!(app.contains("callback pane_drop_allowed(int, float, float, string) -> bool;"));
-        assert!(app.contains("root.pane_prepare_transfer(side, source, x, y)"));
-        assert!(app.contains("root.pane_drop_target_path(side, x, y, source)"));
-        assert!(app.contains("root.pane_drop_allowed(side, x, y, source)"));
+        assert!(app.contains("root.pane_prepare_transfer(slot, source, x, y)"));
+        assert!(app.contains("root.pane_drop_target_path(slot, x, y, source)"));
+        assert!(app.contains("root.pane_drop_allowed(slot, x, y, source)"));
         assert!(!app.contains("inactive-pane-drag-active"));
         assert!(!app.contains("main_drag_active"));
         assert!(!app.contains("function pane-slot-show-location(slot: int) -> bool"));
@@ -2376,14 +2377,17 @@ mod tests {
         ));
         assert!(split_pane.contains("root.pan-horizontal(delta);"));
         assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
-        assert!(split_pane.contains("private property <float> viewport-sync-epsilon: 0.5;"));
+        assert!(split_pane.contains("private property <float> viewport-sync-epsilon: 0.75;"));
         assert!(
             split_pane.contains("root.viewport-x + root.viewport-sync-epsilon <")
                 && split_pane.contains(
-                    "root.viewport-x > max(0, -self.viewport-x / 1px) + root.viewport-sync-epsilon"
+                    "root.pan-target-viewport-x = root.stable-viewport-x(-self.viewport-x / 1px);"
+                )
+                && split_pane.contains(
+                    "root.viewport-x > root.pan-target-viewport-x + root.viewport-sync-epsilon"
                 )
                 && !split_pane.contains("root.viewport-x != max(0, -self.viewport-x / 1px)"),
-            "ScrollView viewport writeback should ignore sub-pixel drift instead of churning virtual slices"
+            "ScrollView viewport writeback should quantize and ignore sub-pixel drift instead of churning virtual slices"
         );
         assert!(split_pane.contains("virtual-layer := Rectangle"));
         assert!(split_pane.contains(
@@ -2466,22 +2470,26 @@ mod tests {
             "closing split view should clear any active divider drag state"
         );
         assert!(
-            app.contains("changed split_pane_ratio => {\n        root.sync-main-viewport();\n        root.pane_view_changed(0);\n        root.pane_view_changed(1);\n    }"),
-            "dragging the divider should resync both pane virtual views as the ratio changes"
+            app.contains(
+                "changed split_pane_ratio => {\n        root.sync-main-viewport();\n        root.pane_layout_changed();\n    }"
+            ),
+            "dragging the divider should resync every visible pane virtual view as the ratio changes"
         );
 
         let divider = app
-            .split_once("if (root.split_view_open) : split-divider := Rectangle {")
+            .split_once("for pane in root.pane_slots : Rectangle {")
             .expect("split divider should exist")
             .1
             .split_once("if (root.split_view_open) : split-divider-touch := TouchArea")
             .expect("split divider should be before the divider touch area")
             .0;
         assert!(
-            divider.contains("x: root.pane-slot-0-width;")
+            divider.contains("private property <int> slot: pane.slot;")
+                && divider.contains("visible: root.split_view_open && slot > 0;")
+                && divider.contains("x: root.pane-slot-x(slot) - root.split-divider-width;")
                 && divider.contains("width: root.split-divider-width;")
-                && divider.contains("background: root.split-resize-active ?"),
-            "visible divider should stay between panes and expose drag feedback"
+                && divider.contains("background: root.split-resize-active && slot == 1 ?"),
+            "visible dividers should come from slot boundaries and expose drag feedback"
         );
 
         let divider_touch = app

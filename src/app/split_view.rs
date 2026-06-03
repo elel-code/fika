@@ -41,6 +41,24 @@ pub(crate) fn set_pane_viewport_ui(ui: &AppWindow, side: PaneSide, viewport_x: f
 }
 
 pub(crate) fn sync_pane_slots_ui(ui: &AppWindow) {
+    let slots = visible_pane_slots(ui)
+        .into_iter()
+        .map(|slot| pane_slot_data(ui, slot))
+        .collect::<Vec<_>>();
+
+    ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));
+}
+
+fn visible_pane_slots(ui: &AppWindow) -> Vec<i32> {
+    let mut slots = vec![0];
+    if ui.get_split_view_open() {
+        slots.push(1);
+    }
+    slots
+}
+
+fn pane_slot_data(ui: &AppWindow, slot: i32) -> PaneSlotData {
+    let primary_slot = slot == 0;
     let search_query = ui.get_search_query();
     let search_filters_active = ui.get_search_kind_filter() != 0
         || ui.get_search_modified_filter() != 0
@@ -60,100 +78,177 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow) {
     let zoom_level = ui.get_icon_zoom_level();
     let selection_revision = ui.get_selection_revision();
 
-    let mut slots = vec![PaneSlotData {
-        slot: 0,
-        current_path: ui.get_left_pane_path(),
-        path_text: ui.get_left_pane_path_input_text(),
-        path_focused: ui.get_left_pane_path_focused(),
-        can_go_back: ui.get_left_pane_can_go_back(),
-        can_go_forward: ui.get_left_pane_can_go_forward(),
-        search_panel_visible,
+    PaneSlotData {
+        slot,
+        current_path: pane_slot_current_path(ui, slot),
+        path_text: pane_slot_path_text(ui, slot),
+        path_focused: pane_slot_path_focused(ui, slot),
+        can_go_back: pane_slot_can_go_back(ui, slot),
+        can_go_forward: pane_slot_can_go_forward(ui, slot),
+        search_panel_visible: primary_slot && search_panel_visible,
         search_panel_height_px: 0.0,
-        search_loading: ui.get_search_loading(),
-        search_filters_active,
+        search_loading: primary_slot && ui.get_search_loading(),
+        search_filters_active: primary_slot && search_filters_active,
         search_kind_label: active_search_kind_label(ui),
         search_modified_label: active_search_modified_label(ui),
         search_size_label: active_search_size_label(ui),
-        content_interactive: !ui.get_directory_loading(),
-        drop_ready: !ui.get_directory_loading(),
-        drop_trace_prefix: SharedString::new(),
-        entry_count: ui.get_entry_count(),
-        entries: ui.get_virtual_entries(),
-        virtual_start_index: ui.get_virtual_start_index(),
-        virtual_start_column: ui.get_virtual_start_column(),
-        viewport_x: ui.get_main_viewport_x(),
+        content_interactive: primary_slot
+            .then(|| !ui.get_directory_loading())
+            .unwrap_or(true),
+        drop_ready: primary_slot
+            .then(|| !ui.get_directory_loading())
+            .unwrap_or(true),
+        drop_trace_prefix: format!("pane-{slot}-").into(),
+        entry_count: pane_slot_entry_count(ui, slot),
+        entries: pane_slot_entries(ui, slot),
+        virtual_start_index: pane_slot_virtual_start_index(ui, slot),
+        virtual_start_column: pane_slot_virtual_start_column(ui, slot),
+        viewport_x: pane_slot_viewport_x(ui, slot),
         zoom_level,
         selection_revision,
-        show_location: ui.get_left_pane_in_trash()
-            || (ui.get_recursive_search() && !search_query.is_empty()),
-        empty_message_visible: !ui.get_directory_loading(),
-        empty_title: active_empty_title(ui, &search_query),
-        empty_subtitle: active_empty_subtitle(ui, &search_query),
-        status: ui.get_left_pane_status(),
-        selected_count: ui.get_left_pane_selected_count(),
-        selected_status: ui.get_left_pane_selected_status(),
-        external_edit_active: ui.get_left_pane_external_edit_active(),
-        external_edit_status: ui.get_left_pane_external_edit_status(),
+        show_location: pane_slot_in_trash(ui, slot)
+            || (primary_slot && ui.get_recursive_search() && !search_query.is_empty()),
+        empty_message_visible: primary_slot
+            .then(|| !ui.get_directory_loading())
+            .unwrap_or(true),
+        empty_title: if primary_slot {
+            active_empty_title(ui, &search_query)
+        } else {
+            "This folder is empty".into()
+        },
+        empty_subtitle: if primary_slot {
+            active_empty_subtitle(ui, &search_query)
+        } else {
+            SharedString::new()
+        },
+        status: pane_slot_status(ui, slot),
+        selected_count: pane_slot_selected_count(ui, slot),
+        selected_status: pane_slot_selected_status(ui, slot),
+        external_edit_active: pane_slot_external_edit_active(ui, slot),
+        external_edit_status: pane_slot_external_edit_status(ui, slot),
         undo_available,
-        undo_label: undo_label.clone(),
+        undo_label,
         chooser_mode,
         chooser_select_directories,
         chooser_save_mode,
-        chooser_accept_label: chooser_accept_label.clone(),
-        focused_selected_path: focused_selected_path.clone(),
+        chooser_accept_label,
+        focused_selected_path,
         chooser_filter_count,
-        chooser_filter_label: chooser_filter_label.clone(),
-        chooser_choices: chooser_choices.clone(),
-    }];
-
-    if ui.get_split_view_open() {
-        slots.push(PaneSlotData {
-            slot: 1,
-            current_path: ui.get_inactive_pane_path(),
-            path_text: ui.get_inactive_pane_path_input_text(),
-            path_focused: ui.get_inactive_pane_path_focused(),
-            can_go_back: ui.get_inactive_pane_can_go_back(),
-            can_go_forward: ui.get_inactive_pane_can_go_forward(),
-            search_panel_visible: false,
-            search_panel_height_px: 0.0,
-            search_loading: false,
-            search_filters_active: false,
-            search_kind_label: active_search_kind_label(ui),
-            search_modified_label: active_search_modified_label(ui),
-            search_size_label: active_search_size_label(ui),
-            content_interactive: true,
-            drop_ready: true,
-            drop_trace_prefix: "inactive-".into(),
-            entry_count: ui.get_inactive_pane_entry_count(),
-            entries: ui.get_inactive_pane_entries(),
-            virtual_start_index: ui.get_inactive_pane_virtual_start_index(),
-            virtual_start_column: ui.get_inactive_pane_virtual_start_column(),
-            viewport_x: ui.get_inactive_pane_viewport_x(),
-            zoom_level,
-            selection_revision,
-            show_location: ui.get_inactive_pane_in_trash(),
-            empty_message_visible: true,
-            empty_title: "This folder is empty".into(),
-            empty_subtitle: SharedString::new(),
-            status: ui.get_inactive_pane_status(),
-            selected_count: ui.get_inactive_pane_selected_count(),
-            selected_status: ui.get_inactive_pane_selected_status(),
-            external_edit_active: ui.get_inactive_pane_external_edit_active(),
-            external_edit_status: ui.get_inactive_pane_external_edit_status(),
-            undo_available,
-            undo_label,
-            chooser_mode,
-            chooser_select_directories,
-            chooser_save_mode,
-            chooser_accept_label,
-            focused_selected_path,
-            chooser_filter_count,
-            chooser_filter_label,
-            chooser_choices,
-        });
+        chooser_filter_label,
+        chooser_choices,
     }
+}
 
-    ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));
+fn pane_slot_current_path(ui: &AppWindow, slot: i32) -> SharedString {
+    match slot {
+        1 => ui.get_inactive_pane_path(),
+        _ => ui.get_left_pane_path(),
+    }
+}
+
+fn pane_slot_path_text(ui: &AppWindow, slot: i32) -> SharedString {
+    match slot {
+        1 => ui.get_inactive_pane_path_input_text(),
+        _ => ui.get_left_pane_path_input_text(),
+    }
+}
+
+fn pane_slot_path_focused(ui: &AppWindow, slot: i32) -> bool {
+    match slot {
+        1 => ui.get_inactive_pane_path_focused(),
+        _ => ui.get_left_pane_path_focused(),
+    }
+}
+
+fn pane_slot_can_go_back(ui: &AppWindow, slot: i32) -> bool {
+    match slot {
+        1 => ui.get_inactive_pane_can_go_back(),
+        _ => ui.get_left_pane_can_go_back(),
+    }
+}
+
+fn pane_slot_can_go_forward(ui: &AppWindow, slot: i32) -> bool {
+    match slot {
+        1 => ui.get_inactive_pane_can_go_forward(),
+        _ => ui.get_left_pane_can_go_forward(),
+    }
+}
+
+fn pane_slot_entry_count(ui: &AppWindow, slot: i32) -> i32 {
+    match slot {
+        1 => ui.get_inactive_pane_entry_count(),
+        _ => ui.get_entry_count(),
+    }
+}
+
+fn pane_slot_entries(ui: &AppWindow, slot: i32) -> ModelRc<FileEntry> {
+    match slot {
+        1 => ui.get_inactive_pane_entries(),
+        _ => ui.get_virtual_entries(),
+    }
+}
+
+fn pane_slot_virtual_start_index(ui: &AppWindow, slot: i32) -> i32 {
+    match slot {
+        1 => ui.get_inactive_pane_virtual_start_index(),
+        _ => ui.get_virtual_start_index(),
+    }
+}
+
+fn pane_slot_virtual_start_column(ui: &AppWindow, slot: i32) -> i32 {
+    match slot {
+        1 => ui.get_inactive_pane_virtual_start_column(),
+        _ => ui.get_virtual_start_column(),
+    }
+}
+
+fn pane_slot_viewport_x(ui: &AppWindow, slot: i32) -> f32 {
+    match slot {
+        1 => ui.get_inactive_pane_viewport_x(),
+        _ => ui.get_main_viewport_x(),
+    }
+}
+
+fn pane_slot_in_trash(ui: &AppWindow, slot: i32) -> bool {
+    match slot {
+        1 => ui.get_inactive_pane_in_trash(),
+        _ => ui.get_left_pane_in_trash(),
+    }
+}
+
+fn pane_slot_status(ui: &AppWindow, slot: i32) -> SharedString {
+    match slot {
+        1 => ui.get_inactive_pane_status(),
+        _ => ui.get_left_pane_status(),
+    }
+}
+
+fn pane_slot_selected_count(ui: &AppWindow, slot: i32) -> i32 {
+    match slot {
+        1 => ui.get_inactive_pane_selected_count(),
+        _ => ui.get_left_pane_selected_count(),
+    }
+}
+
+fn pane_slot_selected_status(ui: &AppWindow, slot: i32) -> SharedString {
+    match slot {
+        1 => ui.get_inactive_pane_selected_status(),
+        _ => ui.get_left_pane_selected_status(),
+    }
+}
+
+fn pane_slot_external_edit_active(ui: &AppWindow, slot: i32) -> bool {
+    match slot {
+        1 => ui.get_inactive_pane_external_edit_active(),
+        _ => ui.get_left_pane_external_edit_active(),
+    }
+}
+
+fn pane_slot_external_edit_status(ui: &AppWindow, slot: i32) -> SharedString {
+    match slot {
+        1 => ui.get_inactive_pane_external_edit_status(),
+        _ => ui.get_left_pane_external_edit_status(),
+    }
 }
 
 fn active_search_kind_label(ui: &AppWindow) -> SharedString {
@@ -379,8 +474,8 @@ pub(crate) fn toggle_split_view(
                 .map(|(side, _)| side)
                 .unwrap_or(PaneSide::Inactive);
             let status = match closed_side {
-                PaneSide::Active => "Split view closed; right pane kept".to_string(),
-                PaneSide::Inactive => "Split view closed; left pane kept".to_string(),
+                PaneSide::Active => "Split view closed; slot 1 kept".to_string(),
+                PaneSide::Inactive => "Split view closed; slot 0 kept".to_string(),
             };
             (false, status)
         } else {

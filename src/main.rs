@@ -1,4 +1,6 @@
-use slint::{CloseRequestResponse, ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
+use slint::{
+    CloseRequestResponse, ComponentHandle, LogicalSize, Model, ModelRc, SharedString, VecModel,
+};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::env;
@@ -279,10 +281,18 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_pane_view_changed(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                match pane_side_from_slot(slot) {
-                    PaneSide::Active => sync_virtual_entries(&ui, &state, &bridge, true),
-                    PaneSide::Inactive => sync_inactive_pane_view_from_ui(&ui, &state),
-                }
+                sync_pane_view_for_slot(&ui, &state, &bridge, slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_pane_layout_changed(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                sync_visible_pane_views(&ui, &state, &bridge);
             }
         });
     }
@@ -350,15 +360,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_pane_path_submitted(move |slot, path| {
             if let Some(ui) = ui_weak.upgrade() {
-                let side = pane_side_from_slot(slot);
-                focus_pane(&ui, &state, side);
+                focus_pane_slot(&ui, &state, slot);
                 let requested = expand_user_path(path.as_str());
                 if !requested.is_dir() {
-                    reset_pane_path_input(&ui, side);
+                    reset_pane_path_input_for_slot(&ui, slot);
                     set_status(&ui, "Path is not a readable directory");
                     return;
                 }
-                navigate_pane_to(&ui, &state, &bridge, side, requested);
+                navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
             }
         });
     }
@@ -369,14 +378,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_open_place(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
+                let slot = focus_current_ui_pane_slot(&ui, &state);
                 let requested = expand_user_path(path.as_str());
                 if fs::file_ops::is_trash_files_dir(&requested) {
                     match fs::file_ops::ensure_trash_dirs() {
-                        Ok(()) => navigate_focused_to(&ui, &state, &bridge, requested),
+                        Ok(()) => navigate_pane_to_slot(&ui, &state, &bridge, slot, requested),
                         Err(err) => set_status(&ui, &format!("Trash is not available: {err}")),
                     }
                 } else if requested.is_dir() {
-                    navigate_focused_to(&ui, &state, &bridge, requested);
+                    navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
                 } else {
                     set_status(&ui, "Place is not available");
                 }
@@ -402,7 +412,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 let requested = expand_user_path(path.as_str());
                 if requested.is_dir() {
-                    navigate_focused_to(&ui, &state, &bridge, requested);
+                    let slot = focus_current_ui_pane_slot(&ui, &state);
+                    navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
                 } else {
                     set_status(&ui, "Device is not available");
                 }
@@ -593,7 +604,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_pane_go_back(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                go_pane_back(&ui, &state, &bridge, pane_side_from_slot(slot));
+                go_pane_back_slot(&ui, &state, &bridge, slot);
             }
         });
     }
@@ -604,7 +615,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_pane_go_forward(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                go_pane_forward(&ui, &state, &bridge, pane_side_from_slot(slot));
+                go_pane_forward_slot(&ui, &state, &bridge, slot);
             }
         });
     }
@@ -614,7 +625,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = Rc::clone(&state);
         ui.on_pane_focus(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                focus_pane(&ui, &state, pane_side_from_slot(slot));
+                focus_pane_slot(&ui, &state, slot);
             }
         });
     }
@@ -636,13 +647,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_pane_activated(move |slot, path| {
             if let Some(ui) = ui_weak.upgrade() {
-                open_path_for_side(
-                    &ui,
-                    &state,
-                    pane_side_from_slot(slot),
-                    path.as_str(),
-                    &bridge,
-                );
+                open_path_for_slot(&ui, &state, slot, path.as_str(), &bridge);
             }
         });
     }
@@ -652,14 +657,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = Rc::clone(&state);
         ui.on_pane_request_select(move |slot, path, toggle, range| {
             if let Some(ui) = ui_weak.upgrade() {
-                select_path_for_side(
-                    &ui,
-                    &state,
-                    pane_side_from_slot(slot),
-                    path.as_str(),
-                    toggle,
-                    range,
-                );
+                select_path_for_slot(&ui, &state, slot, path.as_str(), toggle, range);
             }
         });
     }
@@ -679,10 +677,10 @@ fn main() -> Result<(), slint::PlatformError> {
                   padding,
                   toggle| {
                 if let Some(ui) = ui_weak.upgrade() {
-                    select_rect_for_side(
+                    select_rect_for_slot(
                         &ui,
                         &state,
-                        pane_side_from_slot(slot),
+                        slot,
                         SelectionRect {
                             x1,
                             y1,
@@ -714,8 +712,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = Rc::clone(&state);
         ui.on_pane_is_selected(move |slot, path| {
             let state = state.borrow();
-            let target = pane_target_from_slot(slot);
-            state.panes.pane_for_target(target).is_some_and(|pane| {
+            state.panes.pane_for_slot(slot).is_some_and(|pane| {
                 pane.selection
                     .paths
                     .iter()
@@ -852,14 +849,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = Rc::clone(&state);
         ui.on_pane_prepare_transfer(move |slot, source, x, y| {
             ui_weak.upgrade().is_some_and(|ui| {
-                prepare_pane_transfer(
-                    &ui,
-                    &state,
-                    pane_side_from_slot(slot),
-                    source.as_str(),
-                    x,
-                    y,
-                )
+                prepare_pane_transfer_for_slot(&ui, &state, slot, source.as_str(), x, y)
             })
         });
     }
@@ -872,15 +862,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 return SharedString::new();
             };
             let state = state.borrow();
-            pane_drop_target_path(
-                &ui,
-                &state,
-                pane_side_from_slot(slot),
-                x,
-                y,
-                Path::new(source.as_str()),
-            )
-            .map_or_else(SharedString::new, Into::into)
+            pane_drop_target_path_for_slot(&ui, &state, slot, x, y, Path::new(source.as_str()))
+                .map_or_else(SharedString::new, Into::into)
         });
     }
 
@@ -892,14 +875,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 return false;
             };
             let state = state.borrow();
-            pane_drop_allowed(
-                &ui,
-                &state,
-                pane_side_from_slot(slot),
-                x,
-                y,
-                Path::new(source.as_str()),
-            )
+            pane_drop_allowed_for_slot(&ui, &state, slot, x, y, Path::new(source.as_str()))
         });
     }
 
@@ -1074,13 +1050,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_commit_external_edit(move |pane_side| {
+        ui.on_commit_external_edit(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
                 start_external_edit_resolution(
                     &ui,
                     &state,
                     &bridge,
-                    pane_side,
+                    slot,
                     EXTERNAL_EDIT_SAVE_OPERATION,
                 );
             }
@@ -1091,13 +1067,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_discard_external_edit(move |pane_side| {
+        ui.on_discard_external_edit(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
                 start_external_edit_resolution(
                     &ui,
                     &state,
                     &bridge,
-                    pane_side,
+                    slot,
                     EXTERNAL_EDIT_DISCARD_OPERATION,
                 );
             }
@@ -3210,12 +3186,12 @@ fn start_external_edit_resolution(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
-    pane_side: i32,
+    slot: i32,
     operation: &str,
 ) {
     let pane_id = {
         let state = state.borrow();
-        let Some(pane_id) = pane_id_for_ui_side(&state, pane_side) else {
+        let Some(pane_id) = pane_id_for_slot(&state, slot) else {
             set_status(ui, "No split pane target is available");
             return;
         };
@@ -3338,15 +3314,8 @@ fn sync_external_edit_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     sync_pane_slots_ui(ui);
 }
 
-fn pane_id_for_ui_side(state: &AppState, pane_side: i32) -> Option<u64> {
-    state
-        .panes
-        .pane_for_target(if pane_side == 1 {
-            PaneTarget::Inactive
-        } else {
-            PaneTarget::Active
-        })
-        .map(|pane| pane.id)
+fn pane_id_for_slot(state: &AppState, slot: i32) -> Option<u64> {
+    state.panes.pane_for_slot(slot).map(|pane| pane.id)
 }
 
 fn external_edit_status_for_pane(edits: &[PaneExternalEdit], pane_id: u64) -> String {
@@ -3426,8 +3395,10 @@ fn sync_virtual_entries_with_count(
         update.viewport_clamped,
     );
     if !update.rebuild_model {
-        ui.set_entry_count(update.entry_count as i32);
-        sync_pane_slots_ui(ui);
+        if ui.get_entry_count() != update.entry_count as i32 {
+            ui.set_entry_count(update.entry_count as i32);
+            sync_pane_slots_ui(ui);
+        }
         return;
     }
 
@@ -3773,13 +3744,13 @@ fn select_rect_for_side(
 }
 
 fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let side = { state.borrow().panes.focused_side() };
+    let slot = { state.borrow().panes.focused_slot() };
     let mut state = state.borrow_mut();
-    if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Focused) {
+    if let Some(pane) = state.panes.pane_mut_for_slot(slot) {
         pane.selection.clear();
     }
     drop(state);
-    update_selection_ui_for_side(ui, side, &[]);
+    update_selection_ui_for_slot(ui, slot, &[]);
 }
 
 fn clear_active_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -3909,96 +3880,194 @@ fn selection_status_text(selected_paths: &[String]) -> SharedString {
     }
 }
 
-fn pane_side_from_slot(slot: i32) -> PaneSide {
-    if slot == 1 {
-        PaneSide::Inactive
-    } else {
-        PaneSide::Active
+fn pane_side_from_slot(slot: i32) -> Option<PaneSide> {
+    match slot {
+        0 => Some(PaneSide::Active),
+        1 => Some(PaneSide::Inactive),
+        _ => None,
     }
 }
 
-fn pane_target_from_slot(slot: i32) -> PaneTarget {
-    match pane_side_from_slot(slot) {
-        PaneSide::Active => PaneTarget::Active,
-        PaneSide::Inactive => PaneTarget::Inactive,
+fn sync_visible_pane_views(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    let slots = ui.get_pane_slots();
+    if slots.row_count() == 0 {
+        sync_pane_view_for_slot(ui, state, bridge, 0);
+        return;
+    }
+
+    for row in 0..slots.row_count() {
+        if let Some(pane) = slots.row_data(row) {
+            sync_pane_view_for_slot(ui, state, bridge, pane.slot);
+        }
     }
 }
 
-fn focus_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>, side: PaneSide) {
-    match side {
-        PaneSide::Active => focus_left_pane(ui, state),
-        PaneSide::Inactive => focus_right_pane(ui, state),
-    }
-}
-
-fn reset_pane_path_input(ui: &AppWindow, side: PaneSide) {
-    match side {
-        PaneSide::Active => ui.set_left_pane_path_input_text(ui.get_left_pane_path()),
-        PaneSide::Inactive => ui.set_inactive_pane_path_input_text(ui.get_inactive_pane_path()),
-    }
-}
-
-fn prepare_pane_transfer(
+fn sync_pane_view_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
-    side: PaneSide,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    match pane_side_from_slot(slot) {
+        Some(PaneSide::Active) => sync_virtual_entries(ui, state, bridge, true),
+        Some(PaneSide::Inactive) => sync_inactive_pane_view_from_ui(ui, state),
+        None => {}
+    }
+}
+
+fn focus_pane_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    let focused = {
+        let mut state = state.borrow_mut();
+        state.panes.focus_slot(slot)
+    };
+    if focused {
+        sync_navigation_ui(ui, state);
+    }
+}
+
+fn focus_current_ui_pane_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>) -> i32 {
+    let requested_slot = if ui.get_split_view_open() {
+        ui.get_focused_pane()
+    } else {
+        0
+    };
+    focus_pane_slot(ui, state, requested_slot);
+    state.borrow().panes.focused_slot()
+}
+
+fn reset_pane_path_input_for_slot(ui: &AppWindow, slot: i32) {
+    match pane_side_from_slot(slot) {
+        Some(PaneSide::Active) => ui.set_left_pane_path_input_text(ui.get_left_pane_path()),
+        Some(PaneSide::Inactive) => {
+            ui.set_inactive_pane_path_input_text(ui.get_inactive_pane_path())
+        }
+        None => {}
+    }
+}
+
+fn prepare_pane_transfer_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
     source: &str,
     x: f32,
     y: f32,
 ) -> bool {
-    match side {
-        PaneSide::Active => {
+    match pane_side_from_slot(slot) {
+        Some(PaneSide::Active) => {
             prepare_main_transfer(ui, state, source, path_label(source).as_str(), x, y)
         }
-        PaneSide::Inactive => prepare_inactive_pane_transfer(ui, state, source, x, y),
+        Some(PaneSide::Inactive) => prepare_inactive_pane_transfer(ui, state, source, x, y),
+        None => false,
     }
 }
 
-fn pane_drop_target_path(
+fn pane_drop_target_path_for_slot(
     ui: &AppWindow,
     state: &AppState,
-    side: PaneSide,
+    slot: i32,
     x: f32,
     y: f32,
     source: &Path,
 ) -> Option<String> {
-    match side {
-        PaneSide::Active => entry_at_main_point(ui, state, x, y)
+    match pane_side_from_slot(slot) {
+        Some(PaneSide::Active) => entry_at_main_point(ui, state, x, y)
             .filter(|entry| entry.is_dir && Path::new(entry.path.as_str()) != source)
             .map(|entry| entry.path.to_string()),
-        PaneSide::Inactive => inactive_pane_drop_target_path(ui, state, x, y, source),
+        Some(PaneSide::Inactive) => inactive_pane_drop_target_path(ui, state, x, y, source),
+        None => None,
     }
 }
 
-fn pane_drop_allowed(
+fn pane_drop_allowed_for_slot(
     ui: &AppWindow,
     state: &AppState,
-    side: PaneSide,
+    slot: i32,
     x: f32,
     y: f32,
     source: &Path,
 ) -> bool {
-    match side {
-        PaneSide::Active => main_drop_allowed(ui, state, x, y, source),
-        PaneSide::Inactive => inactive_pane_drop_allowed(ui, state, x, y, source),
+    match pane_side_from_slot(slot) {
+        Some(PaneSide::Active) => main_drop_allowed(ui, state, x, y, source),
+        Some(PaneSide::Inactive) => inactive_pane_drop_allowed(ui, state, x, y, source),
+        None => false,
     }
 }
 
-fn focus_left_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    {
-        let mut state = state.borrow_mut();
-        state.panes.focus_active();
+fn update_selection_ui_for_slot(ui: &AppWindow, slot: i32, selected_paths: &[String]) {
+    if let Some(side) = pane_side_from_slot(slot) {
+        update_selection_ui_for_side(ui, side, selected_paths);
     }
-    sync_navigation_ui(ui, state);
 }
 
-fn focus_right_pane(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let focused = {
-        let mut state = state.borrow_mut();
-        state.panes.focus_inactive()
-    };
-    if focused {
-        sync_navigation_ui(ui, state);
+fn select_path_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    path: &str,
+    toggle: bool,
+    range: bool,
+) {
+    if let Some(side) = pane_side_from_slot(slot) {
+        select_path_for_side(ui, state, side, path, toggle, range);
+    }
+}
+
+fn select_rect_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    rect: SelectionRect,
+    toggle: bool,
+) {
+    if let Some(side) = pane_side_from_slot(slot) {
+        select_rect_for_side(ui, state, side, rect, toggle);
+    }
+}
+
+fn navigate_pane_to_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+    path: PathBuf,
+) {
+    if let Some(side) = pane_side_from_slot(slot) {
+        navigate_pane_to(ui, state, bridge, side, path);
+    }
+}
+
+fn go_pane_back_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    if let Some(side) = pane_side_from_slot(slot) {
+        go_pane_back(ui, state, bridge, side);
+    }
+}
+
+fn go_pane_forward_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    if let Some(side) = pane_side_from_slot(slot) {
+        go_pane_forward(ui, state, bridge, side);
+    }
+}
+
+fn open_path_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    path: &str,
+    bridge: &AsyncBridge,
+) {
+    if let Some(side) = pane_side_from_slot(slot) {
+        open_path_for_side(ui, state, side, path, bridge);
     }
 }
 
@@ -5619,7 +5688,7 @@ mod tests {
     }
 
     #[test]
-    fn admin_writeback_resolution_uses_pane_side_and_pane_id() {
+    fn admin_writeback_resolution_uses_pane_slot_and_pane_id() {
         let source = include_str!("main.rs");
         let start_body = source
             .split_once("fn start_external_edit_resolution(")
@@ -5628,12 +5697,12 @@ mod tests {
             .expect("start_external_edit_resolution body should be present");
         let sync_body = source
             .split_once("fn sync_external_edit_ui(")
-            .and_then(|(_, rest)| rest.split_once("fn pane_id_for_ui_side("))
+            .and_then(|(_, rest)| rest.split_once("fn pane_id_for_slot("))
             .map(|(body, _)| body)
             .expect("sync_external_edit_ui body should be present");
 
         assert!(
-            start_body.contains("pane_id_for_ui_side(&state, pane_side)")
+            start_body.contains("pane_id_for_slot(&state, slot)")
                 && start_body.contains(".find(|edit| edit.pane_id == pane_id)")
                 && start_body.contains("ExternalEditResult {\n                pane_id,"),
             "admin write-back resolution should select the pending session owned by the clicked pane"
@@ -5651,7 +5720,7 @@ mod tests {
                 .contains("external_edit_status_for_pane(&state.external_edits, pane.id)")
                 && sync_body.contains("ui.set_left_pane_external_edit_active")
                 && sync_body.contains("ui.set_inactive_pane_external_edit_active"),
-            "admin write-back UI should publish separate left and right pane pending state"
+            "admin write-back UI should publish pane-local pending state"
         );
     }
 

@@ -91,7 +91,7 @@
 - [x] Per-directory main-view scroll position memory.
   - Current: remembered view states are cached with an LRU cap so long browsing sessions cannot keep every visited path's viewport state forever.
 - [x] Removed local `icu_segmenter` vendor patch after the upstream ICU4X segmentation warning fix landed.
-- [x] Mouse Back/Forward scoped to the right-side main pane only.
+- [x] Mouse Back/Forward scoped to pane content surfaces only.
 - [x] Adaptive Open With hover submenu placement.
 - [x] Use Slint master `DragArea` / `DropArea` built-ins without the experimental compiler flag.
 - [x] Dolphin-style DnD self-drop rejection.
@@ -478,7 +478,7 @@ Acceptance for all:
   - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, top-bar search placement, and transient surface styling; the sidebar keeps Fika's rounded panel treatment on top of COSMIC proportions.
   - Current direction: once the current structural/menu/performance work is stable, all non-main-pane chrome may move further toward COSMIC Files directly: colors, layout rhythm, address-bar position, Back/Forward affordances, search field position/display, and sidebar treatment should follow COSMIC where practical, while preserving Fika's rounded raised sidebar content panel and the existing main-pane arrangement.
   - Current direction: future UI work should freely copy COSMIC Files for all chrome outside the main file arrangement, including color tokens, top-bar/main-pane layer treatment, address-bar alignment, navigation/search placement, menus, dialogs, and sidebar rhythm. The main pane's item arrangement remains the explicit exception.
-  - Current direction: `PathBar` and the main pane should continue to read as one flat content layer inside the below-header right pane, while the sidebar remains a rounded raised content panel in the same row; the sidebar may be more Fika-specific, but its spacing and rhythm should still start from COSMIC.
+  - Current direction: each pane-local `PathBar` and file content should continue to read as one flat content layer inside the below-header pane area, while the sidebar remains a rounded raised content panel in the same row; the sidebar may be more Fika-specific, but its spacing and rhythm should still start from COSMIC.
   - Current: first shell pass aligns the path bar, search filter panel, status bar, and main pane to one shared surface while the sidebar uses a rounded panel color and a softer divider, keeping the main pane's column-first layout untouched.
   - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 56px shell header, 56px main-pane path bar, and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
   - Current: header/path controls now use a lighter 32px shared `ToolButton`, 32px path/search input surfaces, and softer light-theme sidebar colors, moving non-main-pane chrome closer to COSMIC while leaving the main file arrangement unchanged.
@@ -490,7 +490,7 @@ Acceptance for all:
   - Current: the top-bar search field now uses bounded min/preferred/max layout constraints, and the path field stays in the separate main-pane `PathBar` so search mode cannot squeeze the main-pane geometry or create Slint layout recursion.
   - Current: `AppWindow` now owns a single `main-content-left` edge shared by the sidebar panel and main pane; the sidebar panel starts in the below-header content row, and its right border is the visible divider.
   - Current: the light shell base is subtly distinct from the raised white sidebar, the sidebar border is stronger than the flat top/main separators, and Places/Devices rows are inset inside the rounded sidebar panel.
-  - Current: sidebar content geometry now uses a below-header same-row panel with a 16px radius, while the main-pane toolbar and main content remain a shared flat base inside the right pane.
+  - Current: sidebar content geometry now uses a below-header same-row panel with a 16px radius, while pane toolbars and content remain shared flat bases inside the pane area.
   - Current: shared header controls now use quieter COSMIC-like 32px icon-button styling with 8px radius and lighter text weight, and path/search fields use calmer light/dark tokens without changing the main file arrangement.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.

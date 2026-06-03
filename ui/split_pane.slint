@@ -47,7 +47,7 @@ export component SplitPaneView inherits Rectangle {
     private property <int> virtual-slice-column-count: max(1, ceil(root.entries.length / root.rows-per-column));
     private property <length> virtual-slice-width: max(1px, root.virtual-slice-column-count * root.cell-width);
     private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width)) / 1px);
-    private property <float> viewport-sync-epsilon: 0.5;
+    private property <float> viewport-sync-epsilon: 0.75;
     private property <float> pan-target-viewport-x: 0;
     private property <bool> selection-rect-active: false;
     private property <bool> selection-rect-pending: false;
@@ -58,13 +58,17 @@ export component SplitPaneView inherits Rectangle {
     private property <length> selection-rect-current-y: 0px;
 
     function pan-horizontal(delta: length) {
-        root.pan-target-viewport-x = root.entry-count == 0 ? 0 : max(0, min(root.scroll-max-x, root.viewport-x + delta / 1px));
+        root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(root.viewport-x + delta / 1px);
         if (root.pan-target-viewport-x != root.viewport-x) {
             root.viewport-x = root.pan-target-viewport-x;
             root.viewport-offset = -root.viewport-x * 1px;
             root.view_changed();
         }
         root.focus_requested();
+    }
+
+    function stable-viewport-x(raw: float) -> float {
+        return floor(max(0, min(root.scroll-max-x, raw)) + 0.5);
     }
 
     function scroll-pan-delta(delta-x: length, delta-y: length) -> length {
@@ -141,8 +145,9 @@ export component SplitPaneView inherits Rectangle {
         viewport-y: 0px;
 
         changed viewport-x => {
-            if (root.viewport-x + root.viewport-sync-epsilon < max(0, -self.viewport-x / 1px) || root.viewport-x > max(0, -self.viewport-x / 1px) + root.viewport-sync-epsilon) {
-                root.viewport-x = max(0, -self.viewport-x / 1px);
+            root.pan-target-viewport-x = root.stable-viewport-x(-self.viewport-x / 1px);
+            if (root.viewport-x + root.viewport-sync-epsilon < root.pan-target-viewport-x || root.viewport-x > root.pan-target-viewport-x + root.viewport-sync-epsilon) {
+                root.viewport-x = root.pan-target-viewport-x;
                 root.viewport-offset = -root.viewport-x * 1px;
                 root.view_changed();
                 root.focus_requested();
