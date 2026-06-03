@@ -1420,7 +1420,7 @@ fn refresh_affected_directories(
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     affected_dirs: &[PathBuf],
-) {
+) -> Vec<u64> {
     let pane_ids = {
         let mut state = state.borrow_mut();
         for dir in affected_dirs {
@@ -1431,6 +1431,7 @@ fn refresh_affected_directories(
     if !pane_ids.is_empty() {
         refresh_panes(ui, state, bridge, &pane_ids);
     }
+    pane_ids
 }
 
 fn refresh_inactive_pane(
@@ -1894,8 +1895,9 @@ fn apply_async_event(
                 register_undo(ui, state, undo);
             }
             if let Some(status) = applied.status {
-                refresh_affected_directories(ui, state, bridge, &applied.affected_dirs);
-                set_status(ui, &status);
+                let pane_ids =
+                    refresh_affected_directories(ui, state, bridge, &applied.affected_dirs);
+                set_status_for_panes(ui, state, &pane_ids, &status);
             }
         }
         AsyncEvent::FileOperationProgress(progress) => {
@@ -4118,6 +4120,62 @@ fn set_inactive_directory_status_from_entries(
     }
 }
 
+fn set_status_for_panes(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    pane_ids: &[u64],
+    message: &str,
+) {
+    let (active_id, inactive_id) = {
+        let state = state.borrow();
+        (
+            state.panes.active.id,
+            state.panes.inactive().map(|pane| pane.id),
+        )
+    };
+    let targets = pane_status_targets(active_id, inactive_id, pane_ids);
+
+    if targets.fallback {
+        set_status(ui, message);
+        return;
+    }
+    if targets.left {
+        set_left_pane_status(ui, message);
+    }
+    if targets.inactive {
+        set_inactive_pane_status(ui, message);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PaneStatusTargets {
+    left: bool,
+    inactive: bool,
+    fallback: bool,
+}
+
+fn pane_status_targets(
+    active_id: u64,
+    inactive_id: Option<u64>,
+    pane_ids: &[u64],
+) -> PaneStatusTargets {
+    if pane_ids.is_empty() {
+        return PaneStatusTargets {
+            left: false,
+            inactive: false,
+            fallback: true,
+        };
+    }
+
+    let left = pane_ids.contains(&active_id);
+    let inactive = inactive_id.is_some_and(|id| pane_ids.contains(&id));
+    PaneStatusTargets {
+        left,
+        inactive,
+        fallback: !left && !inactive,
+    }
+}
+
 fn set_status(ui: &AppWindow, message: &str) {
     let message: SharedString = message.into();
     ui.set_status(message.clone());
@@ -4840,6 +4898,42 @@ mod tests {
                 PathBuf::from("/tmp/target"),
                 PathBuf::from("/tmp/other"),
             ]
+        );
+    }
+
+    #[test]
+    fn pane_status_targets_route_to_affected_split_panes() {
+        assert_eq!(
+            pane_status_targets(7, Some(11), &[11]),
+            PaneStatusTargets {
+                left: false,
+                inactive: true,
+                fallback: false,
+            }
+        );
+        assert_eq!(
+            pane_status_targets(7, Some(11), &[7, 11]),
+            PaneStatusTargets {
+                left: true,
+                inactive: true,
+                fallback: false,
+            }
+        );
+        assert_eq!(
+            pane_status_targets(7, Some(11), &[]),
+            PaneStatusTargets {
+                left: false,
+                inactive: false,
+                fallback: true,
+            }
+        );
+        assert_eq!(
+            pane_status_targets(7, Some(11), &[99]),
+            PaneStatusTargets {
+                left: false,
+                inactive: false,
+                fallback: true,
+            }
         );
     }
 
