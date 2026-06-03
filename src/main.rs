@@ -2694,8 +2694,15 @@ fn start_file_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Async
         return;
     };
 
-    set_status(
+    let affected_dirs = file_undo_affected_dirs(&undo);
+    let pane_ids = {
+        let state = state.borrow();
+        affected_directory_pane_ids(&state, affected_dirs.iter().map(|dir| dir.as_path()))
+    };
+    set_status_for_panes(
         ui,
+        state,
+        &pane_ids,
         &format!("Undoing {}...", operation_finished_label(&undo.operation)),
     );
     let async_tx = bridge.tx.clone();
@@ -2747,17 +2754,29 @@ fn apply_file_undo_result(
     result: FileUndoResult,
 ) {
     let affected_dirs = file_undo_affected_dirs(&result.undo);
-    refresh_affected_directories(ui, state, bridge, &affected_dirs);
+    let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);
 
     match result.result {
-        Ok(message) => set_status(ui, &format!("Undo complete: {message}")),
+        Ok(message) => {
+            set_status_for_panes(ui, state, &pane_ids, &format!("Undo complete: {message}"));
+        }
         Err(err) => {
             let restored = restore_failed_file_undo(state, result.undo);
             sync_undo_ui(ui, state);
             if restored {
-                set_status(ui, &format!("Undo failed: {err}; Undo can be retried"));
+                set_status_for_panes(
+                    ui,
+                    state,
+                    &pane_ids,
+                    &format!("Undo failed: {err}; Undo can be retried"),
+                );
             } else {
-                set_status(ui, &format!("Undo failed: {err}; newer Undo is available"));
+                set_status_for_panes(
+                    ui,
+                    state,
+                    &pane_ids,
+                    &format!("Undo failed: {err}; newer Undo is available"),
+                );
             }
         }
     }
@@ -4991,6 +5010,46 @@ mod tests {
         assert!(
             !body.contains("set_status(ui, &update.status);"),
             "file operation progress status must not jump to whichever pane is focused while progress events arrive"
+        );
+    }
+
+    #[test]
+    fn file_undo_status_uses_affected_pane_route() {
+        let source = include_str!("main.rs");
+        let start_body = source
+            .split_once("fn start_file_undo(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_file_undo_result("))
+            .map(|(body, _)| body)
+            .expect("start_file_undo body should be present");
+        let result_body = source
+            .split_once("fn apply_file_undo_result(")
+            .and_then(|(_, rest)| rest.split_once("fn file_undo_affected_dirs("))
+            .map(|(body, _)| body)
+            .expect("apply_file_undo_result body should be present");
+
+        assert!(
+            start_body.contains("let affected_dirs = file_undo_affected_dirs(&undo);")
+                && start_body.contains("let pane_ids = {")
+                && start_body.contains("affected_directory_pane_ids(&state, affected_dirs.iter().map(|dir| dir.as_path()))")
+                && start_body.contains("set_status_for_panes("),
+            "file undo start status should write to panes affected by the undo"
+        );
+        assert!(
+            result_body.contains(
+                "let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);"
+            ) && result_body.matches("set_status_for_panes(").count() == 3,
+            "file undo result status should use the same affected-pane route as its refresh"
+        );
+        assert!(
+            !start_body.contains("set_status(\n        ui,\n        &format!(\"Undoing {}...\"")
+                && !result_body.contains("set_status(ui, &format!(\"Undo complete: {message}\"))")
+                && !result_body.contains(
+                    "set_status(ui, &format!(\"Undo failed: {err}; Undo can be retried\"))"
+                )
+                && !result_body.contains(
+                    "set_status(ui, &format!(\"Undo failed: {err}; newer Undo is available\"))"
+                ),
+            "file undo status must not jump to whichever pane is focused while the undo runs"
         );
     }
 
