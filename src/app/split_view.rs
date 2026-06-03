@@ -2,6 +2,7 @@ use crate::app::async_bridge::AsyncBridge;
 use crate::app::geometry::{
     PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, inactive_main_pane_width, main_pane_bounds,
 };
+use crate::app::model_update::{new_file_entries_model, update_file_entries_model};
 use crate::app::pane::PaneTarget;
 use crate::app::state::AppState;
 use crate::app::virtual_view::{PanePreviewInput, prepare_pane_preview_update};
@@ -23,7 +24,7 @@ pub(crate) fn pane_viewport_x_from_ui(ui: &AppWindow, slot: i32) -> Option<f32> 
     }
 }
 
-pub(crate) fn set_pane_viewport_ui(ui: &AppWindow, slot: i32, viewport_x: f32) {
+fn set_pane_viewport_ui_properties(ui: &AppWindow, slot: i32, viewport_x: f32) {
     match slot {
         0 => {
             ui.set_main_viewport_x(viewport_x);
@@ -35,6 +36,10 @@ pub(crate) fn set_pane_viewport_ui(ui: &AppWindow, slot: i32, viewport_x: f32) {
         }
         _ => {}
     }
+}
+
+pub(crate) fn set_pane_viewport_ui(ui: &AppWindow, slot: i32, viewport_x: f32) {
+    set_pane_viewport_ui_properties(ui, slot, viewport_x);
     sync_pane_slots_ui(ui);
 }
 
@@ -53,12 +58,32 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow) {
         });
     if same_slots {
         for (row, slot) in slots.into_iter().enumerate() {
-            current.set_row_data(row, slot);
+            if current.row_data(row).as_ref() != Some(&slot) {
+                current.set_row_data(row, slot);
+            }
         }
         return;
     }
 
     ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));
+}
+
+pub(crate) fn sync_pane_slot_ui(ui: &AppWindow, slot: i32) {
+    let current = ui.get_pane_slots();
+    for row in 0..current.row_count() {
+        let Some(current_slot) = current.row_data(row) else {
+            continue;
+        };
+        if current_slot.slot == slot {
+            let next = pane_slot_data(ui, slot);
+            if current_slot != next {
+                current.set_row_data(row, next);
+            }
+            return;
+        }
+    }
+
+    sync_pane_slots_ui(ui);
 }
 
 fn visible_pane_slots(ui: &AppWindow) -> Vec<i32> {
@@ -325,6 +350,23 @@ pub(crate) fn set_pane_viewport_ui_if_clamped(
 }
 
 pub(crate) fn sync_pane_slot_preview_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    sync_pane_slot_preview_ui_impl(ui, state, slot, true);
+}
+
+pub(crate) fn sync_pane_slot_preview_viewport_ui(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+) {
+    sync_pane_slot_preview_ui_impl(ui, state, slot, false);
+}
+
+fn sync_pane_slot_preview_ui_impl(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    full_sync: bool,
+) {
     if slot == 0 {
         sync_pane_slots_ui(ui);
         return;
@@ -367,6 +409,26 @@ pub(crate) fn sync_pane_slot_preview_ui(ui: &AppWindow, state: &Rc<RefCell<AppSt
         return;
     };
 
+    if !full_sync {
+        if update.viewport_clamped {
+            set_pane_viewport_ui_properties(ui, slot, update.viewport_x);
+        }
+        if update.rebuild_model {
+            set_pane_slot_entries_ui(ui, slot, update.range.start, update.entries);
+            set_pane_slot_virtual_range_ui(
+                ui,
+                slot,
+                update.range.start as i32,
+                update.start_column as i32,
+            );
+            set_pane_slot_entry_count_ui(ui, slot, update.entry_count as i32);
+            sync_pane_slot_ui(ui, slot);
+        } else if update.viewport_clamped {
+            sync_pane_slot_ui(ui, slot);
+        }
+        return;
+    }
+
     let path = update.current_dir.display().to_string();
     set_pane_slot_path(ui, slot, path.as_str(), &update.current_dir);
     if !pane_slot_path_focused(ui, slot) {
@@ -396,7 +458,7 @@ pub(crate) fn sync_pane_slot_preview_ui(ui: &AppWindow, state: &Rc<RefCell<AppSt
     set_pane_slot_selection_ui(ui, slot, &selected_paths);
     set_pane_viewport_ui_if_clamped(ui, slot, update.viewport_x, update.viewport_clamped);
     if update.rebuild_model {
-        set_pane_slot_entries_ui(ui, slot, update.entries);
+        set_pane_slot_entries_ui(ui, slot, update.range.start, update.entries);
         set_pane_slot_virtual_range_ui(
             ui,
             slot,
@@ -424,9 +486,7 @@ fn clear_pane_slot_cache(ui: &AppWindow, slot: i32) {
             ui.set_inactive_pane_virtual_start_index(0);
             ui.set_inactive_pane_virtual_start_column(0);
             set_pane_viewport_ui(ui, slot, 0.0);
-            ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(
-                Vec::<FileEntry>::new(),
-            ))));
+            ui.set_inactive_pane_entries(new_file_entries_model(Vec::<FileEntry>::new()));
         }
         _ => {}
     }
@@ -492,9 +552,22 @@ fn set_pane_slot_selection_ui(ui: &AppWindow, slot: i32, selected_paths: &[Strin
     }
 }
 
-fn set_pane_slot_entries_ui(ui: &AppWindow, slot: i32, entries: Vec<FileEntry>) {
+fn set_pane_slot_entries_ui(
+    ui: &AppWindow,
+    slot: i32,
+    start_index: usize,
+    entries: Vec<FileEntry>,
+) {
     match slot {
-        1 => ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(entries)))),
+        1 => {
+            let current = ui.get_inactive_pane_entries();
+            let old_start = ui.get_inactive_pane_virtual_start_index().max(0) as usize;
+            if let Some(model) =
+                update_file_entries_model(&current, old_start, start_index, entries)
+            {
+                ui.set_inactive_pane_entries(model);
+            }
+        }
         _ => {}
     }
 }

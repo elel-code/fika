@@ -10,6 +10,21 @@ export component FileTile inherits Rectangle {
     in property <bool> show-location;
     in property <bool> interactive: true;
     in property <data-transfer> drag-data-source;
+    in property <length> tile-height;
+    in property <length> tile-padding-x;
+    in property <length> tile-spacing;
+    in property <length> thumbnail-width;
+    in property <length> thumbnail-height;
+    in property <length> metadata-font-size;
+    in property <length> title-font-size;
+    in property <color> selection-border-color;
+    in property <color> drop-border-color;
+    in property <color> drop-background-color;
+    in property <color> selected-background-color;
+    in property <color> hover-background-color;
+    in property <color> metadata-group-color;
+    in property <color> metadata-location-color;
+    in property <color> title-color;
     callback activated(string);
     callback request_select(string, bool, bool);
     callback request_context_menu(string, string, length, length);
@@ -23,11 +38,11 @@ export component FileTile inherits Rectangle {
         return (delta-x < 0px ? -delta-x : delta-x) > (delta-y < 0px ? -delta-y : delta-y) ? -delta-x : -delta-y;
     }
 
-    height: root.zoom-level == 0 ? 72px : (root.zoom-level == 1 ? 84px : (root.zoom-level == 2 ? 98px : (root.zoom-level == 3 ? 116px : 136px)));
+    height: root.tile-height;
     border-radius: 7px;
     border-width: selected || drop-target ? 1px : 0px;
-    border-color: drop-target ? (dark ? #f59e0b : #d97706) : (dark ? #51a9d4 : #2b86b7);
-    background: drop-target ? (dark ? #3a2a12 : #fff7dd) : (selected ? (dark ? #223f4f : #e4f0f8) : (root.interactive && touch-area.has-hover ? (dark ? #171b1f : #f0f4f8) : transparent));
+    border-color: drop-target ? root.drop-border-color : root.selection-border-color;
+    background: drop-target ? root.drop-background-color : (selected ? root.selected-background-color : (root.interactive && touch-area.has-hover ? root.hover-background-color : transparent));
 
     drag-area := DragArea {
         enabled: root.interactive && root.entry.path != "";
@@ -72,13 +87,13 @@ export component FileTile inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: root.zoom-level < 2 ? 12px : 16px;
-            padding-right: root.zoom-level < 2 ? 12px : 16px;
-            spacing: root.zoom-level < 2 ? 10px : 12px;
+            padding-left: root.tile-padding-x;
+            padding-right: root.tile-padding-x;
+            spacing: root.tile-spacing;
 
             if (!root.entry.is_dir && root.entry.thumbnail_state == 2): Image {
-                width: root.zoom-level == 0 ? 52px : (root.zoom-level == 1 ? 64px : (root.zoom-level == 2 ? 80px : (root.zoom-level == 3 ? 96px : 112px)));
-                height: root.zoom-level == 0 ? 46px : (root.zoom-level == 1 ? 58px : (root.zoom-level == 2 ? 70px : (root.zoom-level == 3 ? 84px : 98px)));
+                width: root.thumbnail-width;
+                height: root.thumbnail-height;
                 source: root.entry.thumbnail;
                 image-fit: contain;
             }
@@ -95,24 +110,24 @@ export component FileTile inherits Rectangle {
 
                 if (root.show-location && root.entry.group != ""): Text {
                     text: root.entry.group;
-                    color: root.dark ? #9bc7ec : #2b6f9f;
-                    font-size: root.zoom-level < 2 ? 10px : 11px;
+                    color: root.metadata-group-color;
+                    font-size: root.metadata-font-size;
                     font-weight: 700;
                     overflow: elide;
                 }
 
                 Text {
                     text: root.entry.name;
-                    color: root.dark ? #edf2f7 : #1f2933;
-                    font-size: root.zoom-level == 0 ? 12px : (root.zoom-level == 1 ? 13px : (root.zoom-level == 2 ? 15px : (root.zoom-level == 3 ? 16px : 18px)));
+                    color: root.title-color;
+                    font-size: root.title-font-size;
                     overflow: elide;
                     vertical-alignment: center;
                 }
 
                 if (root.show-location && root.entry.location != ""): Text {
                     text: root.entry.location;
-                    color: root.dark ? #9aa5af : #697684;
-                    font-size: root.zoom-level < 2 ? 10px : 11px;
+                    color: root.metadata-location-color;
+                    font-size: root.metadata-font-size;
                     overflow: elide;
                 }
             }

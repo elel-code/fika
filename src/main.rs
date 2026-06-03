@@ -1,8 +1,10 @@
 use slint::{
-    CloseRequestResponse, ComponentHandle, LogicalSize, Model, ModelRc, SharedString, VecModel,
+    CloseRequestResponse, ComponentHandle, LogicalSize, Model, ModelRc, SharedString, Timer,
+    TimerMode, VecModel,
 };
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -46,6 +48,7 @@ use app::geometry::{
     MainGridLayout, SelectionRect, active_main_pane_width, clamped_split_pane_ratio,
     place_drop_geometry, register_menu_geometry_callbacks,
 };
+use app::model_update::{new_file_entries_model, update_file_entries_model};
 use app::operation_controller::{
     OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
     operation_finished_label,
@@ -70,7 +73,7 @@ use app::selection::{
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui,
     set_pane_viewport_ui_if_clamped, sync_navigation_ui, sync_pane_slot_preview_ui,
-    sync_pane_slots_ui, toggle_split_view,
+    sync_pane_slot_preview_viewport_ui, sync_pane_slot_ui, sync_pane_slots_ui, toggle_split_view,
 };
 use app::state::{AppState, DeviceAction, FileUndo, PaneExternalEdit};
 use app::thumbnail_pipeline::{
@@ -99,6 +102,86 @@ slint::include_modules!();
 
 const EXTERNAL_EDIT_SAVE_OPERATION: &str = "Admin Save";
 const EXTERNAL_EDIT_DISCARD_OPERATION: &str = "Discard";
+const PANE_VIEW_SYNC_COALESCE: Duration = Duration::from_millis(8);
+const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
+
+struct PaneViewSyncScheduler {
+    timer: Timer,
+    pending_slots: Rc<RefCell<Vec<i32>>>,
+}
+
+impl PaneViewSyncScheduler {
+    fn new(ui: slint::Weak<AppWindow>, state: Rc<RefCell<AppState>>, bridge: AsyncBridge) -> Self {
+        let timer = Timer::default();
+        let pending_slots = Rc::new(RefCell::new(Vec::<i32>::new()));
+        let timer_slots = Rc::clone(&pending_slots);
+
+        timer.start(TimerMode::SingleShot, PANE_VIEW_SYNC_COALESCE, move || {
+            let Some(ui) = ui.upgrade() else {
+                return;
+            };
+            let slots = {
+                let mut pending = timer_slots.borrow_mut();
+                pending.sort_unstable();
+                pending.dedup();
+                pending.drain(..).collect::<Vec<_>>()
+            };
+            for slot in slots {
+                sync_pane_viewport_for_slot(&ui, &state, &bridge, slot);
+            }
+        });
+        timer.stop();
+
+        Self {
+            timer,
+            pending_slots,
+        }
+    }
+
+    fn request(&self, slot: i32) {
+        let mut pending = self.pending_slots.borrow_mut();
+        if !pending.contains(&slot) {
+            pending.push(slot);
+        }
+        drop(pending);
+        self.timer.restart();
+    }
+
+    fn flush_all(&self) {
+        self.timer.stop();
+        self.pending_slots.borrow_mut().clear();
+    }
+}
+
+struct ThumbnailFlushScheduler {
+    timer: Timer,
+    pending: Rc<RefCell<VecDeque<(u64, thumbnails::ThumbnailLoad)>>>,
+}
+
+impl ThumbnailFlushScheduler {
+    fn new(ui: slint::Weak<AppWindow>, state: Rc<RefCell<AppState>>, bridge: AsyncBridge) -> Self {
+        let timer = Timer::default();
+        let pending = Rc::new(RefCell::new(
+            VecDeque::<(u64, thumbnails::ThumbnailLoad)>::new(),
+        ));
+        let timer_pending = Rc::clone(&pending);
+
+        timer.start(TimerMode::SingleShot, THUMBNAIL_FLUSH_COALESCE, move || {
+            let Some(ui) = ui.upgrade() else {
+                return;
+            };
+            flush_thumbnail_results(&ui, &state, &bridge, &timer_pending);
+        });
+        timer.stop();
+
+        Self { timer, pending }
+    }
+
+    fn push(&self, generation: u64, load: thumbnails::ThumbnailLoad) {
+        self.pending.borrow_mut().push_back((generation, load));
+        self.timer.restart();
+    }
+}
 
 fn main() -> Result<(), slint::PlatformError> {
     let raw_args = env::args().skip(1).collect::<Vec<_>>();
@@ -256,6 +339,16 @@ fn main() -> Result<(), slint::PlatformError> {
     refresh_devices_async(&state, &bridge);
     refresh_clipboard_availability_async(&state, &bridge);
     start_device_monitor(&bridge);
+    let pane_view_sync = Rc::new(PaneViewSyncScheduler::new(
+        ui.as_weak(),
+        Rc::clone(&state),
+        bridge.clone(),
+    ));
+    let thumbnail_flush = Rc::new(ThumbnailFlushScheduler::new(
+        ui.as_weak(),
+        Rc::clone(&state),
+        bridge.clone(),
+    ));
 
     let async_rx = Rc::new(RefCell::new(async_rx));
     {
@@ -263,25 +356,22 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = Rc::clone(&state);
         let async_rx = Rc::clone(&async_rx);
         let bridge = bridge.clone();
+        let thumbnail_flush = Rc::clone(&thumbnail_flush);
         ui.on_async_results_ready(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
 
             while let Ok(event) = async_rx.borrow_mut().try_recv() {
-                apply_async_event(&ui, &state, &bridge, event);
+                apply_async_event(&ui, &state, &bridge, &thumbnail_flush, event);
             }
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
+        let pane_view_sync = Rc::clone(&pane_view_sync);
         ui.on_pane_view_changed(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                sync_pane_view_for_slot(&ui, &state, &bridge, slot);
-            }
+            pane_view_sync.request(slot);
         });
     }
 
@@ -289,9 +379,11 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
+        let pane_view_sync = Rc::clone(&pane_view_sync);
         ui.on_pane_layout_changed(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                sync_visible_pane_views(&ui, &state, &bridge);
+                pane_view_sync.flush_all();
+                sync_visible_pane_viewports(&ui, &state, &bridge);
             }
         });
     }
@@ -2045,6 +2137,7 @@ fn apply_async_event(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
+    thumbnail_flush: &ThumbnailFlushScheduler,
     event: AsyncEvent,
 ) {
     match event {
@@ -2107,9 +2200,7 @@ fn apply_async_event(
         AsyncEvent::ExternalEditFinished(result) => {
             apply_external_edit_result(ui, state, bridge, result);
         }
-        AsyncEvent::ThumbnailLoaded { generation, load } => {
-            apply_thumbnail_result(ui, state, bridge, generation, load);
-        }
+        AsyncEvent::ThumbnailLoaded { generation, load } => thumbnail_flush.push(generation, load),
     }
 }
 
@@ -2271,9 +2362,7 @@ fn apply_directory_result(
                     ui.set_entry_count(0);
                     ui.set_virtual_start_index(0);
                     ui.set_virtual_start_column(0);
-                    ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(
-                        Vec::<FileEntry>::new(),
-                    ))));
+                    ui.set_virtual_entries(new_file_entries_model(Vec::<FileEntry>::new()));
                     ui.set_directory_loading(false);
                     sync_pane_slots_ui(ui);
                     if result.preserve_view {
@@ -2647,9 +2736,7 @@ fn start_recursive_search(
     ui.set_entry_count(0);
     ui.set_virtual_start_index(0);
     ui.set_virtual_start_column(0);
-    ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(
-        Vec::<FileEntry>::new(),
-    ))));
+    ui.set_virtual_entries(new_file_entries_model(Vec::<FileEntry>::new()));
     update_selection_ui(ui, &[]);
 
     let async_tx = bridge.tx.clone();
@@ -3394,7 +3481,7 @@ fn sync_virtual_entries_with_count(
     if !update.rebuild_model {
         if ui.get_entry_count() != update.entry_count as i32 {
             ui.set_entry_count(update.entry_count as i32);
-            sync_pane_slots_ui(ui);
+            sync_pane_slot_ui(ui, 0);
         }
         return;
     }
@@ -3404,11 +3491,19 @@ fn sync_virtual_entries_with_count(
             prioritize_thumbnail_entries(&update.entries, update.range.start, update.visible_range);
         schedule_visible_thumbnails(ui, state, bridge, &thumbnail_entries, size_px, false);
     }
-    ui.set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
+    set_main_virtual_entries_ui(ui, update.range.start, update.entries);
     ui.set_virtual_start_index(update.range.start as i32);
     ui.set_virtual_start_column(update.start_column as i32);
     ui.set_entry_count(update.entry_count as i32);
-    sync_pane_slots_ui(ui);
+    sync_pane_slot_ui(ui, 0);
+}
+
+fn set_main_virtual_entries_ui(ui: &AppWindow, start_index: usize, entries: Vec<FileEntry>) {
+    let current = ui.get_virtual_entries();
+    let old_start = ui.get_virtual_start_index().max(0) as usize;
+    if let Some(model) = update_file_entries_model(&current, old_start, start_index, entries) {
+        ui.set_virtual_entries(model);
+    }
 }
 
 fn set_left_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -3730,17 +3825,22 @@ fn schedule_visible_thumbnails(
     }
 }
 
-fn apply_thumbnail_result(
+fn flush_thumbnail_results(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
-    generation: u64,
-    load: thumbnails::ThumbnailLoad,
+    pending: &Rc<RefCell<VecDeque<(u64, thumbnails::ThumbnailLoad)>>>,
 ) {
-    let path_text = load.path.display().to_string();
     let should_refresh_virtual = {
         let mut state = state.borrow_mut();
-        apply_thumbnail_load_to_state(&mut state, generation, &path_text, load)
+        let mut should_refresh_virtual = false;
+        let mut pending = pending.borrow_mut();
+        while let Some((generation, load)) = pending.pop_front() {
+            let path_text = load.path.display().to_string();
+            should_refresh_virtual |=
+                apply_thumbnail_load_to_state(&mut state, generation, &path_text, load);
+        }
+        should_refresh_virtual
     };
     if should_refresh_virtual {
         sync_virtual_entries(ui, state, bridge, false);
@@ -3769,17 +3869,45 @@ fn selection_status_text(selected_paths: &[String]) -> SharedString {
     }
 }
 
-fn sync_visible_pane_views(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+fn sync_visible_pane_viewports(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+) {
     let slots = ui.get_pane_slots();
     if slots.row_count() == 0 {
-        sync_pane_view_for_slot(ui, state, bridge, 0);
+        sync_pane_viewport_for_slot(ui, state, bridge, 0);
         return;
     }
 
     for row in 0..slots.row_count() {
         if let Some(pane) = slots.row_data(row) {
-            sync_pane_view_for_slot(ui, state, bridge, pane.slot);
+            sync_pane_viewport_for_slot(ui, state, bridge, pane.slot);
         }
+    }
+}
+
+fn sync_pane_viewport_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    if pane_viewport_x_from_ui(ui, slot).is_none() {
+        return;
+    }
+    if slot == 0 {
+        sync_virtual_entries(ui, state, bridge, true);
+    } else {
+        {
+            let mut state = state.borrow_mut();
+            if let Some(viewport_x) = pane_viewport_x_from_ui(ui, slot)
+                && let Some(pane) = state.panes.pane_mut_for_slot(slot)
+            {
+                pane.view.viewport_x = viewport_x;
+            }
+        }
+        sync_pane_slot_preview_viewport_ui(ui, state, slot);
     }
 }
 
@@ -5186,7 +5314,7 @@ mod tests {
         let source = include_str!("app/split_view.rs");
         let body = source
             .split_once("pub(crate) fn sync_pane_slots_ui(")
-            .and_then(|(_, rest)| rest.split_once("fn visible_pane_slots("))
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_slot_ui("))
             .map(|(body, _)| body)
             .expect("sync_pane_slots_ui body should be present");
 
@@ -5194,10 +5322,123 @@ mod tests {
             body.contains("let current = ui.get_pane_slots();")
                 && body.contains("let same_slots = current.row_count() == slots.len()")
                 && body.contains(".is_some_and(|current| current.slot == slot.slot)")
+                && body.contains("if current.row_data(row).as_ref() != Some(&slot)")
                 && body.contains("current.set_row_data(row, slot);")
                 && body
                     .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));"),
             "pane data refresh should update stable rows instead of replacing the pane model while gestures are active"
+        );
+    }
+
+    #[test]
+    fn pane_slot_sync_can_update_one_row_without_refreshing_all_slots() {
+        let source = include_str!("app/split_view.rs");
+        let body = source
+            .split_once("pub(crate) fn sync_pane_slot_ui(")
+            .and_then(|(_, rest)| rest.split_once("fn visible_pane_slots("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_slot_ui body should be present");
+
+        assert!(
+            body.contains("if current_slot.slot == slot")
+                && body.contains("let next = pane_slot_data(ui, slot);")
+                && body.contains("if current_slot != next")
+                && body.contains("current.set_row_data(row, next);")
+                && body.contains("sync_pane_slots_ui(ui);"),
+            "viewport-only pane refreshes should update the affected pane row and fall back to full sync only when the row is missing"
+        );
+    }
+
+    #[test]
+    fn pane_view_changes_are_coalesced_before_virtual_slice_sync() {
+        let source = include_str!("main.rs");
+        let main_body = source
+            .split_once("fn main()")
+            .and_then(|(_, rest)| rest.split_once("load_directory(&ui, &state, &bridge);"))
+            .map(|(body, _)| body)
+            .expect("main setup body should be present");
+        let scheduler_body = source
+            .split_once("struct PaneViewSyncScheduler")
+            .and_then(|(_, rest)| rest.split_once("struct ThumbnailFlushScheduler"))
+            .map(|(body, _)| body)
+            .expect("pane view scheduler body should be present");
+
+        assert!(
+            source.contains("const PANE_VIEW_SYNC_COALESCE: Duration = Duration::from_millis(8);")
+                && main_body.contains("let pane_view_sync = Rc::new(PaneViewSyncScheduler::new(")
+                && main_body.contains("ui.on_pane_view_changed(move |slot|")
+                && main_body.contains("pane_view_sync.request(slot);")
+                && !main_body.contains("sync_pane_view_for_slot(&ui, &state, &bridge, slot);"),
+            "pane view-changed callbacks should enqueue viewport sync instead of doing full virtual refresh immediately"
+        );
+        assert!(
+            scheduler_body.contains("timer.start(TimerMode::SingleShot, PANE_VIEW_SYNC_COALESCE")
+                && scheduler_body.contains("pending.sort_unstable();")
+                && scheduler_body.contains("pending.dedup();")
+                && scheduler_body
+                    .contains("sync_pane_viewport_for_slot(&ui, &state, &bridge, slot);"),
+            "pane view scheduler should collapse repeated slot events into one viewport sync"
+        );
+    }
+
+    #[test]
+    fn layout_changes_use_viewport_only_pane_sync() {
+        let source = include_str!("main.rs");
+        let main_body = source
+            .split_once("ui.on_pane_layout_changed(move ||")
+            .and_then(|(_, rest)| rest.split_once("ui.on_pane_slots_refresh_requested"))
+            .map(|(body, _)| body)
+            .expect("pane layout callback body should be present");
+        let viewport_body = source
+            .split_once("fn sync_pane_viewport_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_view_for_slot("))
+            .map(|(body, _)| body)
+            .expect("viewport-only pane sync body should be present");
+
+        assert!(
+            main_body.contains("pane_view_sync.flush_all();")
+                && main_body.contains("sync_visible_pane_viewports(&ui, &state, &bridge);")
+                && !main_body.contains("sync_pane_view_for_slot"),
+            "layout changes should flush pending scroll work and use viewport-only pane sync"
+        );
+        assert!(
+            viewport_body.contains("sync_virtual_entries(ui, state, bridge, true);")
+                && viewport_body.contains("sync_pane_slot_preview_viewport_ui(ui, state, slot);")
+                && !viewport_body.contains("sync_pane_slot_preview_ui(ui, state, slot);"),
+            "non-primary pane layout/scroll sync should update only viewport and virtual slice state"
+        );
+    }
+
+    #[test]
+    fn thumbnail_results_are_batched_before_virtual_refresh() {
+        let source = include_str!("main.rs");
+        let async_body = source
+            .split_once("fn apply_async_event(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_directory_result("))
+            .map(|(body, _)| body)
+            .expect("apply_async_event body should be present");
+        let flush_body = source
+            .split_once("fn flush_thumbnail_results(")
+            .and_then(|(_, rest)| rest.split_once("fn thumbnail_size_px("))
+            .map(|(body, _)| body)
+            .expect("thumbnail flush body should be present");
+
+        assert!(
+            source.contains("const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);")
+                && source.contains("struct ThumbnailFlushScheduler")
+                && async_body
+                    .contains("AsyncEvent::ThumbnailLoaded { generation, load } => thumbnail_flush.push(generation, load)")
+                && !async_body.contains("sync_virtual_entries(ui, state, bridge, false);"),
+            "thumbnail async results should be queued instead of refreshing the virtual model per image"
+        );
+        assert!(
+            flush_body.contains("while let Some((generation, load)) = pending.pop_front()")
+                && flush_body.contains("should_refresh_virtual |=")
+                && flush_body
+                    .matches("sync_virtual_entries(ui, state, bridge, false);")
+                    .count()
+                    == 1,
+            "thumbnail flush should apply all pending loads and refresh the virtual slice once"
         );
     }
 

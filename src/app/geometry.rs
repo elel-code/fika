@@ -2339,6 +2339,19 @@ mod tests {
             "tile scrolling should use the same dominant-axis wheel rule as blank pane scrolling"
         );
         assert!(
+            split_pane.contains("private property <length> tile-height:")
+                && split_pane.contains("private property <length> thumbnail-width:")
+                && split_pane.contains("private property <length> title-font-size:")
+                && split_pane.contains("tile-height: root.tile-height;")
+                && split_pane.contains("metadata-group-color: root.metadata-group-color;")
+                && file_tile.contains("in property <length> tile-height;")
+                && file_tile.contains("height: root.tile-height;")
+                && file_tile.contains("font-size: root.title-font-size;")
+                && !file_tile.contains("height: root.zoom-level ==")
+                && !file_tile.contains("font-size: root.zoom-level =="),
+            "FileTile should consume pane-level display tokens instead of recalculating zoom/color bindings in every tile"
+        );
+        assert!(
             split_pane.contains(
                 "function pan-horizontal(delta: length) {\n        root.pan-target-viewport-x = root.entry-count == 0"
             ),
