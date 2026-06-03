@@ -1,71 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { FileEntry } from "models.slint";
-import { FolderGlyph } from "widgets.slint";
-
-component SplitPreviewTile inherits Rectangle {
-    in property <FileEntry> entry;
-    in property <bool> selected;
-    in property <bool> dark;
-    in property <int> zoom-level;
-    callback focus_requested();
-    callback activated(string);
-    callback request_select(string, bool, bool);
-    callback request_context_menu(string, string, length, length);
-    callback navigate_back();
-    callback navigate_forward();
-    callback scrolled(length, length, bool);
-
-    height: root.zoom-level == 0 ? 72px : (root.zoom-level == 1 ? 84px : (root.zoom-level == 2 ? 98px : (root.zoom-level == 3 ? 116px : 136px)));
-    border-radius: 7px;
-    border-width: root.selected ? 1px : 0px;
-    border-color: root.dark ? #51a9d4 : #2b86b7;
-    background: root.selected ? (root.dark ? #223f4f : #e4f0f8) : (touch-area.has-hover ? (root.dark ? #171b1f : #f0f4f8) : transparent);
-
-    touch-area := TouchArea {
-        pointer-event(event) => {
-            if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
-                root.navigate_back();
-            } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
-                root.navigate_forward();
-            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
-                root.focus_requested();
-                root.request_select(root.entry.path, event.modifiers.control, event.modifiers.shift);
-            } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                root.focus_requested();
-                root.request_context_menu(root.entry.path, root.entry.name, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-            }
-        }
-        double-clicked => {
-            root.focus_requested();
-            root.activated(root.entry.path);
-        }
-        scroll-event(event) => {
-            root.focus_requested();
-            root.scrolled(event.delta-x, event.delta-y, event.modifiers.control);
-            return accept;
-        }
-    }
-
-    HorizontalLayout {
-        padding-left: root.zoom-level < 2 ? 12px : 16px;
-        padding-right: root.zoom-level < 2 ? 12px : 16px;
-        spacing: root.zoom-level < 2 ? 10px : 12px;
-
-        FolderGlyph {
-            dir: root.entry.is_dir;
-            dark: root.dark;
-            zoom-level: root.zoom-level;
-        }
-
-        Text {
-            text: root.entry.name;
-            color: root.dark ? #edf2f7 : #1f2933;
-            font-size: root.zoom-level == 0 ? 12px : (root.zoom-level == 1 ? 13px : (root.zoom-level == 2 ? 15px : (root.zoom-level == 3 ? 16px : 18px)));
-            overflow: elide;
-            vertical-alignment: center;
-        }
-    }
-}
+import { FileTile } from "file_tile.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
@@ -77,10 +12,20 @@ export component SplitPaneView inherits Rectangle {
     in-out property <length> viewport-offset;
     in property <int> zoom-level;
     in property <int> selection-revision;
+    in property <bool> interactive: true;
+    in property <bool> empty-message-visible: true;
+    in property <string> empty-title: "This folder is empty";
+    in property <string> empty-subtitle: "";
+    in property <bool> show-location: false;
+    in property <bool> drag-active: false;
+    in property <bool> drag-rejected: false;
+    in property <string> drag-target-path;
     callback view_changed();
     callback focus_requested();
     callback activated(string);
     callback request_select(string, bool, bool);
+    callback select_rect(float, float, float, float, int, float, float, float, bool);
+    callback clear_selection();
     callback request_context_menu(string, string, string, string, bool, length, length);
     callback request_blank_context_menu(length, length);
     callback navigate_back();
@@ -88,6 +33,7 @@ export component SplitPaneView inherits Rectangle {
     callback zoom_in();
     callback zoom_out();
     pure callback is_selected(string) -> bool;
+    pure callback make_drag_data(string, bool) -> data-transfer;
 
     clip: true;
 
@@ -98,6 +44,13 @@ export component SplitPaneView inherits Rectangle {
     private property <int> column-count: max(1, ceil(root.entry-count / root.rows-per-column));
     private property <length> viewport-content-width: 2 * root.preview-padding + root.column-count * root.cell-width;
     private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width)) / 1px);
+    private property <bool> selection-rect-active: false;
+    private property <bool> selection-rect-pending: false;
+    private property <bool> selection-rect-toggle: false;
+    private property <length> selection-rect-start-x: 0px;
+    private property <length> selection-rect-start-y: 0px;
+    private property <length> selection-rect-current-x: 0px;
+    private property <length> selection-rect-current-y: 0px;
 
     function pan-horizontal(delta: length) {
         root.focus_requested();
@@ -134,23 +87,31 @@ export component SplitPaneView inherits Rectangle {
                 } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
                     root.focus_requested();
                     root.navigate_forward();
-                } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                     root.focus_requested();
-                } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                    root.clear_selection();
+                } else if (root.interactive && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                     root.focus_requested();
                     root.request_blank_context_menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                 }
             }
         }
 
-        VerticalLayout {
+        if (root.empty-message-visible): VerticalLayout {
             alignment: center;
 
             Text {
-                text: "This split pane is empty";
+                text: root.empty-title;
                 color: root.dark ? #e8edf2 : #334155;
-                font-size: 14px;
+                font-size: 15px;
                 font-weight: 600;
+                horizontal-alignment: center;
+            }
+
+            if (root.empty-subtitle != ""): Text {
+                text: root.empty-subtitle;
+                color: root.dark ? #9aa5af : #94a3b8;
+                font-size: 13px;
                 horizontal-alignment: center;
             }
         }
@@ -184,15 +145,51 @@ export component SplitPaneView inherits Rectangle {
                 } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
                     root.focus_requested();
                     root.navigate_forward();
-                } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                     root.focus_requested();
-                } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                    root.selection-rect-pending = true;
+                    root.selection-rect-active = false;
+                    root.selection-rect-toggle = event.modifiers.control;
+                    root.selection-rect-start-x = self.mouse-x;
+                    root.selection-rect-start-y = self.mouse-y;
+                    root.selection-rect-current-x = self.mouse-x;
+                    root.selection-rect-current-y = self.mouse-y;
+                } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                    if (root.selection-rect-active) {
+                        root.select_rect(
+                            min(root.selection-rect-start-x, root.selection-rect-current-x) / 1px,
+                            min(root.selection-rect-start-y, root.selection-rect-current-y) / 1px,
+                            max(root.selection-rect-start-x, root.selection-rect-current-x) / 1px,
+                            max(root.selection-rect-start-y, root.selection-rect-current-y) / 1px,
+                            root.rows-per-column,
+                            root.cell-width / 1px,
+                            root.row-height / 1px,
+                            root.preview-padding / 1px,
+                            root.selection-rect-toggle
+                        );
+                    } else if (root.selection-rect-pending) {
+                        root.clear_selection();
+                    }
+                    root.selection-rect-active = false;
+                    root.selection-rect-pending = false;
+                } else if (root.interactive && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                     root.focus_requested();
                     root.request_blank_context_menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                 }
             }
+            moved => {
+                if (root.interactive && self.pressed && root.selection-rect-pending) {
+                    root.selection-rect-current-x = self.mouse-x;
+                    root.selection-rect-current-y = self.mouse-y;
+                    if (!root.selection-rect-active && (self.mouse-x > root.selection-rect-start-x + 5px || self.mouse-x + 5px < root.selection-rect-start-x || self.mouse-y > root.selection-rect-start-y + 5px || self.mouse-y + 5px < root.selection-rect-start-y)) {
+                        root.selection-rect-active = true;
+                    }
+                }
+            }
             scroll-event(event) => {
-                root.handle-scroll(event.delta-x, event.delta-y, event.modifiers.control);
+                if (root.interactive) {
+                    root.handle-scroll(event.delta-x, event.delta-y, event.modifiers.control);
+                }
                 return accept;
             }
         }
@@ -203,7 +200,8 @@ export component SplitPaneView inherits Rectangle {
             width: max(1px, root.viewport-content-width - self.x);
             height: preview.viewport-height;
 
-            for item[index] in root.entries: SplitPreviewTile {
+            for item[index] in root.entries: FileTile {
+                drag-data-source: root.make_drag_data(item.path, item.is_dir);
                 property <int> local-index: index + root.virtual-start-index - root.virtual-start-column * root.rows-per-column;
                 x: floor(local-index / root.rows-per-column) * root.cell-width;
                 y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;
@@ -212,9 +210,9 @@ export component SplitPaneView inherits Rectangle {
                 selected: root.selection-revision >= 0 && root.is_selected(item.path);
                 dark: root.dark;
                 zoom-level: root.zoom-level;
-                focus_requested => {
-                    root.focus_requested();
-                }
+                show-location: root.show-location;
+                interactive: root.interactive;
+                drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;
                 request_select(path, toggle, range) => {
                     root.focus_requested();
                     root.request_select(path, toggle, range);
@@ -235,10 +233,28 @@ export component SplitPaneView inherits Rectangle {
                     root.focus_requested();
                     root.navigate_forward();
                 }
-                scrolled(delta-x, delta-y, control) => {
-                    root.handle-scroll(delta-x, delta-y, control);
+                zoom_in => {
+                    root.focus_requested();
+                    root.zoom_in();
+                }
+                zoom_out => {
+                    root.focus_requested();
+                    root.zoom_out();
+                }
+                pan_horizontal(delta) => {
+                    root.pan-horizontal(delta);
                 }
             }
+        }
+
+        if (root.selection-rect-active): Rectangle {
+            x: min(root.selection-rect-start-x, root.selection-rect-current-x);
+            y: min(root.selection-rect-start-y, root.selection-rect-current-y);
+            width: max(1px, max(root.selection-rect-start-x, root.selection-rect-current-x) - min(root.selection-rect-start-x, root.selection-rect-current-x));
+            height: max(1px, max(root.selection-rect-start-y, root.selection-rect-current-y) - min(root.selection-rect-start-y, root.selection-rect-current-y));
+            background: root.dark ? #51a9d433 : #2b86b733;
+            border-width: 1px;
+            border-color: root.dark ? #51a9d4 : #2b86b7;
         }
     }
 }

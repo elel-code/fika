@@ -481,7 +481,6 @@ pub(crate) fn selection_range_paths_filtered(
     vec![target.to_string()]
 }
 
-#[cfg(test)]
 pub(crate) fn selection_rect_paths(entries: &[FileEntry], rect: SelectionRect) -> Vec<String> {
     let rows_per_column = rect.rows_per_column.max(1) as usize;
     entries

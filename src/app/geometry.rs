@@ -3,7 +3,7 @@ use slint::ComponentHandle;
 use std::ops::Range;
 
 const SHELL_HEADER_HEIGHT: f32 = 56.0;
-const PATH_BAR_HEIGHT: f32 = 56.0;
+pub(crate) const PATH_BAR_HEIGHT: f32 = 56.0;
 pub(crate) const STATUS_BAR_HEIGHT: f32 = 36.0;
 const SPLIT_DIVIDER_WIDTH: f32 = 1.0;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
@@ -222,7 +222,7 @@ pub(crate) fn split_preview_plan(
     let cell_width = icon_cell_width(zoom_level);
     let row_height = icon_row_height(zoom_level);
     let padding = 14.0;
-    let available_height = (pane_height - PATH_BAR_HEIGHT - 2.0 * padding).max(row_height);
+    let available_height = (pane_height - 2.0 * padding).max(row_height);
     let rows_per_column = (available_height / row_height).floor().max(1.0) as usize;
 
     virtual_grid_plan(
@@ -1615,9 +1615,9 @@ mod tests {
         let content_row_index = app
             .find("content-row := HorizontalLayout")
             .expect("AppWindow should place sidebar and main pane below the shell header");
-        let path_bar_index = app
-            .find("PathBar {")
-            .expect("AppWindow should instantiate the main-pane PathBar");
+        let pane_shells_index = app
+            .find("pane-shells := Rectangle")
+            .expect("AppWindow should instantiate the reusable file panes");
         let sidebar_surface_index = app
             .find("sidebar-surface := Rectangle")
             .expect("sidebar content panel should be present");
@@ -1627,7 +1627,7 @@ mod tests {
                 && top_bar_index < content_row_index
                 && content_row_index < sidebar_surface_index
                 && content_row_index < main_pane_index
-                && main_pane_index < path_bar_index
+                && main_pane_index < pane_shells_index
                 && app.contains("main-pane := Rectangle {\n            horizontal-stretch: 1;"),
             "global search/tools should live in the shell header while address/navigation stay inside the right main pane"
         );
@@ -1662,20 +1662,15 @@ mod tests {
             "visible Home/up navigation should be removed from the chrome"
         );
         assert!(
-            app.contains("private property <length> main-grid-height:")
-                && app.contains("height: root.main-grid-height;")
-                && app.contains("viewport-height: root.main-grid-height;"),
-            "main grid component height and virtual viewport height should share one available-height binding"
-        );
-        assert!(
             app.contains("private property <length> main-content-height: max(1px, root.height - root.shell-header-height);")
-                && app.contains("root.main-content-height - root.path-bar-height - root.status-bar-height - root.search-panel-height")
+                && app.contains("component FilePane inherits Rectangle")
+                && app.contains("pane-content := Rectangle")
+                && app.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));")
                 && app.contains("left-pane-shell := Rectangle")
-                && app.contains("active-grid-clip := Rectangle")
                 && app.contains("current-path: root.left_pane_path;")
                 && app.contains("if (root.search-panel-visible) : SearchPanel")
-                && app.contains("if (root.entry_count > 0) : grid := ScrollView"),
-            "main grid height should subtract the main-pane path bar, search filters, and status bar inside the active pane shell"
+                && app.contains("SplitPaneView {"),
+            "pane content height should subtract the pane-local path bar, search filters, and status bar inside the reusable file pane"
         );
         assert!(
             app.contains("private property <length> search-panel-height: root.search-panel-visible ? (root.active-pane-width < 760px ? 78px : 44px) : 0px;"),
@@ -1804,6 +1799,7 @@ mod tests {
         let app = include_str!("../../ui/app.slint");
         let split_pane = include_str!("../../ui/split_pane.slint");
 
+        assert!(app.contains("component FilePane inherits Rectangle"));
         assert!(app.contains("import { SplitPaneView } from \"split_pane.slint\";"));
         assert!(app.contains("in property <[FileEntry]> inactive_pane_entries;"));
         assert!(app.contains("callback open_inactive_path(string);"));
@@ -1814,15 +1810,11 @@ mod tests {
         assert!(app.contains("pane-shells := Rectangle"));
         assert!(app.contains("left-pane-shell := Rectangle"));
         assert!(app.contains("if (root.split_view_open) : right-pane-shell := Rectangle"));
-        assert!(app.contains("right-pane-content := Rectangle"));
-        assert!(
-            app.contains(
-                "SplitPaneView {\n                                    width: parent.width;"
-            )
-        );
         assert!(app.contains("virtual-start-index: root.inactive_pane_virtual_start_index;"));
         assert!(app.contains("viewport-offset <=> root.inactive_pane_viewport_offset;"));
         assert!(app.contains("root.open_inactive_path(path);"));
+        assert!(!app.contains("right-pane-content := Rectangle"));
+        assert!(!app.contains("active-grid-clip := Rectangle"));
         assert!(!app.contains("active-pane-clip := Rectangle"));
         assert!(!app.contains("split-pane-clip := Rectangle"));
         assert!(!app.contains("split-pane-content := Rectangle"));
@@ -1830,11 +1822,60 @@ mod tests {
         assert!(!app.contains("root.focus_inactive_pane();"));
         assert!(!app.contains("in-out property <string> path_input_text;"));
         assert!(!app.contains("in-out property <bool> path-input-focused"));
-        assert!(!app.contains("callback path_submitted(string);"));
         assert!(!app.contains("current-path: root.current_path;"));
         assert!(
             !app.contains("main-blank-touch := TouchArea"),
             "active pane blank input layer should be scoped inside the active pane shell"
+        );
+        let file_pane = app
+            .split_once("component FilePane inherits Rectangle {")
+            .expect("reusable FilePane component should exist")
+            .1
+            .split_once("export component AppWindow inherits Window")
+            .expect("FilePane component should be before AppWindow")
+            .0;
+        assert_eq!(
+            file_pane.matches("PathBar {").count(),
+            1,
+            "FilePane should own one address bar"
+        );
+        assert_eq!(
+            file_pane.matches("SplitPaneView {").count(),
+            1,
+            "FilePane should own one file content view"
+        );
+        assert_eq!(
+            file_pane.matches("DropArea {").count(),
+            1,
+            "FilePane should own one drop target layer"
+        );
+        assert_eq!(
+            file_pane.matches("StatusBar {").count(),
+            1,
+            "FilePane should own one status bar"
+        );
+        assert!(
+            file_pane.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));")
+                && file_pane.contains("path-text <=> root.path-text;")
+                && file_pane.contains("path-focused <=> root.path-focused;")
+                && file_pane.contains("viewport-x <=> root.viewport-x;")
+                && file_pane.contains("viewport-offset <=> root.viewport-offset;")
+                && file_pane.contains("drag-active: root.drag-active;")
+                && file_pane.contains("status: root.status;")
+                && file_pane.contains("selected-count: root.selected-count;")
+                && file_pane.contains("selected-status: root.selected-status;"),
+            "FilePane should expose address, content, drag, selection, and status through pane-local bindings"
+        );
+        assert!(
+            file_pane.contains("callback request_context_menu")
+                && file_pane.contains("callback request_blank_context_menu")
+                && file_pane.contains("callback select_rect")
+                && file_pane.contains("callback clear_selection")
+                && file_pane.contains("callback drop_target_path")
+                && file_pane.contains("callback drop_allowed")
+                && file_pane.contains("callback prepare_transfer")
+                && file_pane.contains("callback make_drag_data"),
+            "FilePane should expose the full interactive surface shared by both panes"
         );
         let pane_row_header = app
             .split_once("pane-row := Rectangle {")
@@ -1856,13 +1897,6 @@ mod tests {
             "split view should use two equal sibling pane shells anchored on either side of the divider"
         );
         assert!(
-            app.contains("active-grid-clip := Rectangle")
-                && app.contains("height: root.main-grid-height;")
-                && app.contains("if (root.entry_count > 0) : grid := ScrollView {\n                                    width: parent.width;\n                                    height: parent.height;")
-                && app.contains("viewport-width: max(parent.width, root.main-viewport-width);"),
-            "active grid should be clipped to the active pane instead of painting into the inactive pane"
-        );
-        assert!(
             app.contains("private property <length> split-divider-width: root.split_view_open ? 1px : 0px;")
                 && app.contains("private property <length> inactive-pane-x: root.active-pane-width + root.split-divider-width;")
                 && app.contains("private property <length> inactive-pane-width: root.split_view_open ? max(1px, root.main-pane-width - root.inactive-pane-x) : 0px;")
@@ -1881,14 +1915,16 @@ mod tests {
             .expect("split pane shell row should be before overlay layers")
             .0;
         assert_eq!(
-            pane_shells.matches("PathBar {").count(),
+            pane_shells.matches("FilePane {").count(),
             2,
-            "split view must render one address bar per physical pane"
+            "split view must render both physical panes with the same reusable FilePane component"
         );
-        assert_eq!(
-            pane_shells.matches("StatusBar {").count(),
-            2,
-            "split view must render one status bar per physical pane"
+        assert!(
+            !pane_shells.contains("PathBar {")
+                && !pane_shells.contains("StatusBar {")
+                && !pane_shells.contains("SplitPaneView {")
+                && !pane_shells.contains("right-pane-content := Rectangle"),
+            "pane shells should not hand-roll pane chrome or content outside FilePane"
         );
         assert!(app.contains("in-out property <string> left_pane_path;"));
         assert!(app.contains("in-out property <string> left_pane_path_input_text;"));
@@ -1898,53 +1934,45 @@ mod tests {
         assert!(app.contains("callback left_pane_path_submitted(string);"));
         assert!(app.contains("callback left_pane_go_back();"));
         assert!(app.contains("callback left_pane_go_forward();"));
-        let left_path_bar = app
+        let left_pane = app
             .split_once("left-pane-shell := Rectangle {")
             .expect("active pane shell should exist")
-            .1
-            .split_once("if (root.search-panel-visible) : SearchPanel")
-            .expect("active pane path bar should be before search panel")
-            .0;
-        assert!(
-            left_path_bar.contains("current-path: root.left_pane_path;")
-                && left_path_bar.contains("path-text <=> root.left_pane_path_input_text;")
-                && left_path_bar.contains("path-focused <=> root.left_pane_path_focused;")
-                && left_path_bar.contains("can-go-back: root.left_pane_can_go_back;")
-                && left_path_bar.contains("can-go-forward: root.left_pane_can_go_forward;")
-                && left_path_bar.contains("root.left_pane_go_back();")
-                && left_path_bar.contains("root.left_pane_go_forward();")
-                && left_path_bar.contains("root.left_pane_path_submitted(path);"),
-            "left path bar should be wired to its own physical pane address and history state"
-        );
-        assert!(
-            !left_path_bar.contains("root.go_back();")
-                && !left_path_bar.contains("root.go_forward();")
-                && !left_path_bar.contains("root.inactive_")
-                && !left_path_bar.contains("root.current_path")
-                && !left_path_bar.contains("root.path_input_text"),
-            "left path bar must not use shared active/global address state"
-        );
-        let left_status_bar = app
-            .split_once("left-pane-shell := Rectangle {")
-            .expect("active pane shell should exist")
-            .1
-            .split_once("StatusBar {")
-            .expect("left pane should have its own status bar")
             .1
             .split_once("if (root.split_view_open) : split-divider")
-            .expect("left pane status should be before the split divider")
+            .expect("left pane should be before the split divider")
             .0;
         assert!(
-            left_status_bar.contains(
-                "status: root.left_pane_status == \"\" ? root.status : root.left_pane_status;"
-            ) && left_status_bar.contains("selected-count: root.left_pane_selected_count;")
-                && left_status_bar.contains("selected-status: root.left_pane_selected_status;")
-                && left_status_bar.contains(
+            left_pane.contains("FilePane {")
+                && left_pane.contains("current-path: root.left_pane_path;")
+                && left_pane.contains("path-text <=> root.left_pane_path_input_text;")
+                && left_pane.contains("path-focused <=> root.left_pane_path_focused;")
+                && left_pane.contains("can-go-back: root.left_pane_can_go_back;")
+                && left_pane.contains("can-go-forward: root.left_pane_can_go_forward;")
+                && left_pane.contains("root.left_pane_go_back();")
+                && left_pane.contains("root.left_pane_go_forward();")
+                && left_pane.contains("root.left_pane_path_submitted(path);")
+                && left_pane.contains("status: root.left_pane_status;")
+                && left_pane.contains("selected-count: root.left_pane_selected_count;")
+                && left_pane.contains("selected-status: root.left_pane_selected_status;")
+                && left_pane.contains(
                     "external-edit-active: root.focused_pane == 0 && root.external_edit_active;"
                 )
-                && left_status_bar
-                    .contains("selected-path: root.focused_pane == 0 ? root.selected_path : \"\";"),
-            "left status bar should be scoped to the left physical pane"
+                && left_pane
+                    .contains("selected-path: root.focused_pane == 0 ? root.selected_path : \"\";")
+                && left_pane.contains("root.open_path(path);")
+                && left_pane.contains("root.select_path(path, toggle, range);")
+                && left_pane.contains("root.select_rect(")
+                && left_pane.contains("root.main_drop_target_path(x, y, source)")
+                && left_pane.contains("root.main_drop_allowed(x, y, source)")
+                && left_pane.contains("root.prepare_path_main_transfer(source, x, y)")
+                && left_pane.contains("root.is_selected(path)"),
+            "left FilePane instance should be wired to left-pane address, status, selection, navigation, and transfer state"
+        );
+        assert!(
+            !left_pane.contains("root.inactive_")
+                && !left_pane.contains("root.open_inactive_path")
+                && !left_pane.contains("root.is_inactive_selected"),
+            "left FilePane instance must not use right-pane state"
         );
         assert!(app.contains("current-path: root.inactive_pane_path;"));
         assert!(app.contains("path-text <=> root.inactive_pane_path_input_text;"));
@@ -1955,71 +1983,71 @@ mod tests {
         assert!(app.contains("root.inactive_path_submitted(path);"));
         assert!(app.contains("root.inactive_go_back();"));
         assert!(app.contains("root.inactive_go_forward();"));
-        let inactive_path_bar = app
+        let inactive_pane = app
             .split_once("if (root.split_view_open) : right-pane-shell := Rectangle {")
             .expect("right pane shell should exist")
             .1
-            .split_once("right-pane-content := Rectangle")
-            .expect("right pane path bar should be before content")
+            .split_once("if (root.split_view_open) : split-divider-touch")
+            .expect("right pane should be before the divider touch area")
             .0;
         assert!(
-            inactive_path_bar.contains("current-path: root.inactive_pane_path;")
-                && inactive_path_bar.contains("path-text <=> root.inactive_pane_path_input_text;")
-                && inactive_path_bar.contains("path-focused <=> root.inactive_pane_path_focused;")
-                && inactive_path_bar.contains("root.inactive_go_back();")
-                && inactive_path_bar.contains("root.inactive_go_forward();")
-                && inactive_path_bar.contains("root.inactive_path_submitted(path);"),
-            "inactive path bar should be wired to its own address and history state"
-        );
-        assert!(
-            !inactive_path_bar.contains("root.go_back();")
-                && !inactive_path_bar.contains("root.go_forward();")
-                && !inactive_path_bar.contains("root.left_pane_")
-                && !inactive_path_bar.contains("root.current_path")
-                && !inactive_path_bar.contains("root.path_input_text")
-                && !inactive_path_bar.contains("root.focus_inactive_pane();"),
-            "inactive path bar must not drive active-pane navigation or focus swapping"
-        );
-        let inactive_status_bar = app
-            .split_once("if (root.split_view_open) : right-pane-shell := Rectangle {")
-            .expect("right pane shell should exist")
-            .1
-            .split_once("StatusBar {")
-            .expect("right pane should have its own status bar")
-            .1
-            .split_once("}\n                        }\n                    }")
-            .expect("right pane status should be inside the right pane shell")
-            .0;
-        assert!(
-            inactive_status_bar.contains("status: root.inactive_pane_status;")
-                && inactive_status_bar
-                    .contains("selected-count: root.inactive_pane_selected_count;")
-                && inactive_status_bar
-                    .contains("selected-status: root.inactive_pane_selected_status;")
-                && inactive_status_bar.contains(
+            inactive_pane.contains("FilePane {")
+                && inactive_pane.contains("current-path: root.inactive_pane_path;")
+                && inactive_pane.contains("path-text <=> root.inactive_pane_path_input_text;")
+                && inactive_pane.contains("path-focused <=> root.inactive_pane_path_focused;")
+                && inactive_pane.contains("root.inactive_go_back();")
+                && inactive_pane.contains("root.inactive_go_forward();")
+                && inactive_pane.contains("root.inactive_path_submitted(path);")
+                && inactive_pane.contains("status: root.inactive_pane_status;")
+                && inactive_pane.contains("selected-count: root.inactive_pane_selected_count;")
+                && inactive_pane.contains("selected-status: root.inactive_pane_selected_status;")
+                && inactive_pane.contains(
                     "external-edit-active: root.focused_pane == 1 && root.external_edit_active;"
                 )
-                && inactive_status_bar
-                    .contains("selected-path: root.focused_pane == 1 ? root.selected_path : \"\";"),
-            "right status bar should be scoped to the right physical pane"
+                && inactive_pane
+                    .contains("selected-path: root.focused_pane == 1 ? root.selected_path : \"\";")
+                && inactive_pane.contains("root.open_inactive_path(path);")
+                && inactive_pane.contains("root.select_inactive_path(path, toggle, range);")
+                && inactive_pane.contains("root.select_inactive_rect(")
+                && inactive_pane.contains("root.inactive_pane_drop_target_path(x, y, source)")
+                && inactive_pane.contains("root.inactive_pane_drop_allowed(x, y, source)")
+                && inactive_pane.contains("root.prepare_inactive_pane_transfer(source, x, y)")
+                && inactive_pane.contains("root.is_inactive_selected(path)"),
+            "right FilePane instance should be wired to right-pane address, status, selection, navigation, and transfer state"
+        );
+        assert!(
+            !inactive_pane.contains("root.go_back();")
+                && !inactive_pane.contains("root.go_forward();")
+                && !inactive_pane.contains("root.left_pane_")
+                && !inactive_pane.contains("root.current_path")
+                && !inactive_pane.contains("root.path_input_text")
+                && !inactive_pane.contains("root.focus_inactive_pane();"),
+            "right FilePane instance must not use shared active/global address state"
         );
         assert!(
             app.contains("callback prepare_inactive_pane_transfer(string, float, float) -> bool;")
         );
-        assert!(app.contains("callback inactive_pane_drop_allowed(string) -> bool;"));
+        assert!(
+            app.contains(
+                "callback inactive_pane_drop_target_path(float, float, string) -> string;"
+            )
+        );
+        assert!(app.contains("callback inactive_pane_drop_allowed(float, float, string) -> bool;"));
         assert!(app.contains("root.prepare_inactive_pane_transfer("));
+        assert!(app.contains("root.inactive_pane_drop_target_path("));
         assert!(app.contains("root.inactive_pane_drop_allowed("));
         assert!(app.contains("inactive-pane-drag-active"));
+        assert!(app.contains("in-out property <bool> left_pane_in_trash: false;"));
+        assert!(app.contains("in-out property <bool> inactive_pane_in_trash: false;"));
+        assert!(app.contains(
+            "show-location: root.left_pane_in_trash || (root.recursive_search && root.search_query != \"\");"
+        ));
+        assert!(app.contains("show-location: root.inactive_pane_in_trash;"));
         assert!(split_pane.contains("export component SplitPaneView"));
+        assert!(split_pane.contains("import { FileTile } from \"file_tile.slint\";"));
+        assert!(!split_pane.contains("SplitPreviewTile"));
         assert!(split_pane.contains("callback view_changed();"));
         assert!(split_pane.contains("callback focus_requested();"));
-        assert!(
-            split_pane
-                .contains("root.focus_requested();\n            root.activated(root.entry.path);")
-        );
-        assert!(split_pane.contains(
-            "root.focus_requested();\n            root.scrolled(event.delta-x, event.delta-y"
-        ));
         assert!(
             split_pane.contains(
                 "root.focus_requested();\n        root.viewport-x = root.entry-count == 0"
@@ -2035,8 +2063,18 @@ mod tests {
         assert!(split_pane.contains("callback zoom_out();"));
         assert!(split_pane.contains("function handle-scroll("));
         assert!(split_pane.contains("scroll-event(event)"));
-        assert!(split_pane.contains("root.scrolled(event.delta-x, event.delta-y"));
-        assert!(split_pane.contains("root.handle-scroll(delta-x, delta-y, control);"));
+        assert!(split_pane.contains("for item[index] in root.entries: FileTile"));
+        assert!(
+            split_pane.contains("drag-data-source: root.make_drag_data(item.path, item.is_dir);")
+        );
+        assert!(split_pane.contains("show-location: root.show-location;"));
+        assert!(split_pane.contains(
+            "drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;"
+        ));
+        assert!(split_pane.contains(
+            "root.request_context_menu(path, name, item.size, item.modified, item.is_dir, x, y);"
+        ));
+        assert!(split_pane.contains("root.pan-horizontal(delta);"));
         assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
         assert!(split_pane.contains("virtual-layer := Rectangle"));
         assert!(split_pane.contains("clip: true;"));
@@ -2626,8 +2664,8 @@ mod tests {
         let plan = split_preview_plan(1_000, 420.0, 704.0, 1_200.0, 1);
 
         assert_eq!(plan.viewport_x, 1200.0);
-        assert_eq!(plan.visible_range, 30..54);
-        assert_eq!(plan.range, 18..66);
+        assert_eq!(plan.visible_range, 35..63);
+        assert_eq!(plan.range, 21..77);
         assert_eq!(plan.start_column, 3);
 
         let clamped = split_preview_plan(12, 420.0, 704.0, 4_000.0, 1);

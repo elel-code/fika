@@ -63,7 +63,7 @@ use app::search_ui::{
 use app::selection::{
     append_unique_paths, filtered_entry_count, filtered_entry_paths, filtered_entry_summary,
     rebuild_visible_entry_index, retained_visible_paths, selection_range_paths_filtered,
-    selection_rect_paths_filtered,
+    selection_rect_paths, selection_rect_paths_filtered,
 };
 use app::split_view::{
     directory_status_text, sync_inactive_pane_ui, sync_inactive_pane_view_from_ui,
@@ -75,10 +75,11 @@ use app::thumbnail_pipeline::{
     prioritize_thumbnail_entries, thumbnail_schedule_batch,
 };
 use app::transfer::{
-    cancel_queued_operations, entry_at_main_point, inactive_pane_drop_allowed, main_drop_allowed,
-    path_label, place_drop_allowed, prepare_current_dir_transfer, prepare_entry_transfer,
-    prepare_inactive_pane_transfer, prepare_main_transfer, prepare_place_transfer,
-    resolve_transfer_conflict, start_next_operation, start_transfer_operation,
+    cancel_queued_operations, entry_at_main_point, inactive_pane_drop_allowed,
+    inactive_pane_drop_target_path, main_drop_allowed, path_label, place_drop_allowed,
+    prepare_current_dir_transfer, prepare_entry_transfer, prepare_inactive_pane_transfer,
+    prepare_main_transfer, prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
+    start_transfer_operation,
 };
 use app::virtual_view::{VirtualViewInput, prepare_virtual_view_update};
 use config::args::{Args, Mode};
@@ -731,6 +732,32 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_select_inactive_rect(
+            move |x1, y1, x2, y2, rows_per_column, cell_width, row_height, padding, toggle| {
+                if let Some(ui) = ui_weak.upgrade() {
+                    select_inactive_rect(
+                        &ui,
+                        &state,
+                        SelectionRect {
+                            x1,
+                            y1,
+                            x2,
+                            y2,
+                            rows_per_column,
+                            cell_width,
+                            row_height,
+                            padding,
+                        },
+                        toggle,
+                    );
+                }
+            },
+        );
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         ui.on_clear_selection(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 clear_selection(&ui, &state);
@@ -942,10 +969,27 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     {
+        let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_inactive_pane_drop_allowed(move |source| {
+        ui.on_inactive_pane_drop_target_path(move |x, y, source| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return SharedString::new();
+            };
             let state = state.borrow();
-            inactive_pane_drop_allowed(&state, Path::new(source.as_str()))
+            inactive_pane_drop_target_path(&ui, &state, x, y, Path::new(source.as_str()))
+                .map_or_else(SharedString::new, Into::into)
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_inactive_pane_drop_allowed(move |x, y, source| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return false;
+            };
+            let state = state.borrow();
+            inactive_pane_drop_allowed(&ui, &state, x, y, Path::new(source.as_str()))
         });
     }
 
@@ -1322,13 +1366,15 @@ fn restore_inactive_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, pa
 
 fn set_current_location_ui(ui: &AppWindow, path: &Path) {
     let current_path = path.display().to_string();
+    let in_trash = fs::file_ops::is_in_trash_files_dir(path);
     ui.set_current_path(current_path.as_str().into());
     ui.set_left_pane_path(current_path.as_str().into());
     if !ui.get_left_pane_path_focused() {
         ui.set_left_pane_path_input_text(current_path.into());
     }
     ui.set_current_name(display_location_name(path).into());
-    ui.set_current_in_trash(fs::file_ops::is_in_trash_files_dir(path));
+    ui.set_current_in_trash(in_trash);
+    ui.set_left_pane_in_trash(in_trash);
 }
 
 fn reset_search_controls(ui: &AppWindow) {
@@ -3337,6 +3383,29 @@ fn select_rect(ui: &AppWindow, state: &Rc<RefCell<AppState>>, rect: SelectionRec
     update_selection_ui_for_side(ui, PaneSide::Active, &selected_paths);
 }
 
+fn select_inactive_rect(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    rect: SelectionRect,
+    toggle: bool,
+) {
+    let selected_paths = {
+        let mut state = state.borrow_mut();
+        let Some(pane) = state.panes.inactive_mut() else {
+            return;
+        };
+        let selected = selection_rect_paths(&pane.entries, rect);
+        if toggle {
+            append_unique_paths(&mut pane.selection.paths, selected);
+        } else {
+            pane.selection.paths = selected;
+        }
+        pane.selection.anchor = pane.selection.paths.last().cloned();
+        pane.selection.paths.clone()
+    };
+    update_selection_ui_for_side(ui, PaneSide::Inactive, &selected_paths);
+}
+
 fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let side = { state.borrow().panes.focused_side() };
     let mut state = state.borrow_mut();
@@ -4010,13 +4079,17 @@ fn output_chooser_paths_and_exit(paths: Vec<PathBuf>, metadata: ChooserOutputMet
 
 fn set_left_pane_status(ui: &AppWindow, message: &str) {
     let message: SharedString = message.into();
-    ui.set_status(message.clone());
+    if !ui.get_split_view_open() || ui.get_focused_pane() == 0 {
+        ui.set_status(message.clone());
+    }
     ui.set_left_pane_status(message);
 }
 
 fn set_inactive_pane_status(ui: &AppWindow, message: &str) {
     let message: SharedString = message.into();
-    ui.set_status(message.clone());
+    if ui.get_split_view_open() && ui.get_focused_pane() == 1 {
+        ui.set_status(message.clone());
+    }
     ui.set_inactive_pane_status(message);
 }
 

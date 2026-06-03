@@ -1,5 +1,7 @@
 use crate::app::async_bridge::AsyncBridge;
-use crate::app::geometry::{STATUS_BAR_HEIGHT, inactive_main_pane_width, main_pane_bounds};
+use crate::app::geometry::{
+    PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, inactive_main_pane_width, main_pane_bounds,
+};
 use crate::app::pane::{PaneSide, PaneTarget};
 use crate::app::state::AppState;
 use crate::app::virtual_view::{SplitPreviewInput, prepare_split_preview_update};
@@ -36,7 +38,8 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
         ui.get_split_pane_ratio(),
     )
     .max(1.0);
-    let inactive_height = (pane_bounds.bottom - pane_bounds.top - STATUS_BAR_HEIGHT).max(1.0);
+    let inactive_height =
+        (pane_bounds.bottom - pane_bounds.top - PATH_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(1.0);
 
     let snapshot = {
         let mut state = state.borrow_mut();
@@ -56,6 +59,7 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
         ui.set_inactive_pane_path(SharedString::new());
         ui.set_inactive_pane_path_input_text(SharedString::new());
         ui.set_inactive_pane_status(SharedString::new());
+        ui.set_inactive_pane_in_trash(false);
         ui.set_inactive_pane_selected_count(0);
         ui.set_inactive_pane_selected_status(SharedString::new());
         ui.set_inactive_pane_can_go_back(false);
@@ -73,6 +77,7 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
 
     let path = update.current_dir.display().to_string();
     ui.set_inactive_pane_path(path.as_str().into());
+    ui.set_inactive_pane_in_trash(fs::file_ops::is_in_trash_files_dir(&update.current_dir));
     if !ui.get_inactive_pane_path_focused() {
         ui.set_inactive_pane_path_input_text(path.into());
     }
@@ -134,6 +139,7 @@ pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
     }
     ui.set_left_pane_can_go_back(snapshot.left_can_go_back);
     ui.set_left_pane_can_go_forward(snapshot.left_can_go_forward);
+    ui.set_left_pane_in_trash(fs::file_ops::is_in_trash_files_dir(&snapshot.left_dir));
     if ui.get_left_pane_status().is_empty() {
         let left_status = {
             let state = state.borrow();

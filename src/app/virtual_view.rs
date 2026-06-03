@@ -319,11 +319,11 @@ mod tests {
         assert_eq!(update.current_dir, PathBuf::from("/tmp/inactive"));
         assert_eq!(update.entry_count, 100);
         assert_eq!(update.viewport_x, 1_200.0);
-        assert_eq!(update.range, 18..66);
+        assert_eq!(update.range, 21..77);
         assert_eq!(update.start_column, 3);
         assert!(update.rebuild_model);
-        assert_eq!(update.entries.len(), 48);
-        assert_eq!(update.entries[0].name.as_str(), "item-18.txt");
+        assert_eq!(update.entries.len(), 56);
+        assert_eq!(update.entries[0].name.as_str(), "item-21.txt");
         assert_eq!(
             state.panes.inactive().unwrap().view.viewport_x,
             update.viewport_x
@@ -342,10 +342,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(clamped.viewport_x, 3_144.0);
-        assert_eq!(clamped.range, 78..100);
+        assert_eq!(clamped.viewport_x, 2_728.0);
+        assert_eq!(clamped.range, 77..100);
         assert!(clamped.rebuild_model);
-        assert_eq!(state.panes.inactive().unwrap().view.viewport_x, 3_144.0);
+        assert_eq!(state.panes.inactive().unwrap().view.viewport_x, 2_728.0);
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
         )
         .unwrap();
         assert!(first.rebuild_model);
-        assert_eq!(first.range, 0..36);
+        assert_eq!(first.range, 0..42);
         assert_eq!(first.entries.len(), first.range.len());
 
         state.panes.inactive_mut().unwrap().view.viewport_x = 40.0;

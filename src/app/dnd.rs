@@ -236,9 +236,28 @@ mod tests {
             "mouse side buttons must not navigate from topbar, sidebar, or splitter sources"
         );
 
+        let file_pane = app
+            .split_once("component FilePane inherits Rectangle {")
+            .expect("app.slint should define the reusable FilePane component")
+            .1
+            .split_once("export component AppWindow inherits Window")
+            .expect("FilePane should be defined before AppWindow")
+            .0;
+        assert!(file_pane.contains("navigate_back => { root.go_back(); }"));
+        assert!(file_pane.contains("navigate_forward => { root.go_forward(); }"));
+
         let main_pane = &app[main_pane_start..];
-        assert!(main_pane.contains("PointerEventButton.back"));
-        assert!(main_pane.contains("PointerEventButton.forward"));
+        assert!(main_pane.contains("FilePane {"));
+        assert!(main_pane.contains("go_back => { root.left_pane_go_back(); }"));
+        assert!(main_pane.contains("go_forward => { root.left_pane_go_forward(); }"));
+        assert!(main_pane.contains("go_back => { root.inactive_go_back(); }"));
+        assert!(main_pane.contains("go_forward => { root.inactive_go_forward(); }"));
+
+        let split_pane = include_str!("../../ui/split_pane.slint");
+        assert!(split_pane.contains("PointerEventButton.back"));
+        assert!(split_pane.contains("PointerEventButton.forward"));
+        assert!(split_pane.contains("root.navigate_back();"));
+        assert!(split_pane.contains("root.navigate_forward();"));
 
         let file_tile = include_str!("../../ui/file_tile.slint");
         assert!(file_tile.contains("PointerEventButton.back"));

@@ -21,7 +21,6 @@ import {
     SidebarSection,
 } from "widgets.slint";
 import { ChooserChoice, ChooserChoiceOption, DesktopApp, DeviceEntry, FileEntry, PlaceEntry } from "models.slint";
-import { FileTile } from "file_tile.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -29,6 +28,285 @@ import { StatusBar } from "status_bar.slint";
 import { PathBar, TopBar } from "top_bar.slint";
 import { ChildSubmenuLayer, ChooserChoicePopupLayer, ChooserOptionPopupLayer, RootContextMenuLayer, TransferMenuLayer } from "menus.slint";
 import { ConfirmationPopup, OtherApplicationsPopup, PrivilegedPromptPopup, PropertiesPopup, TextInputPopup, TransferConflictPopup } from "dialogs.slint";
+
+component FilePane inherits Rectangle {
+    in property <bool> dark;
+    in property <color> shell-base-color;
+    in property <length> path-bar-height;
+    in property <length> status-bar-height;
+    in property <string> current-path;
+    in property <bool> can-go-back;
+    in property <bool> can-go-forward;
+    in-out property <string> path-text;
+    in-out property <bool> path-focused;
+    in property <bool> search-panel-visible: false;
+    in property <length> search-panel-height: 0px;
+    in property <bool> search-loading: false;
+    in property <bool> search-filters-active: false;
+    in property <string> search-kind-label;
+    in property <string> search-modified-label;
+    in property <string> search-size-label;
+    in-out property <string> search-query;
+    in-out property <bool> recursive-search;
+    in-out property <int> search-kind-filter;
+    in-out property <int> search-modified-filter;
+    in-out property <int> search-size-filter;
+    in property <bool> content-interactive: true;
+    in property <bool> drop-ready: true;
+    in property <string> drop-trace-prefix;
+    in property <int> entry-count;
+    in property <[FileEntry]> entries;
+    in property <int> virtual-start-index;
+    in property <int> virtual-start-column;
+    in-out property <float> viewport-x;
+    in-out property <length> viewport-offset;
+    in property <int> zoom-level;
+    in property <int> selection-revision;
+    in property <bool> show-location: false;
+    in-out property <bool> drag-active;
+    in-out property <bool> drag-rejected;
+    in-out property <string> drag-target-path;
+    in property <bool> empty-message-visible: true;
+    in property <string> empty-title: "This folder is empty";
+    in property <string> empty-subtitle: "";
+    in property <string> status;
+    in property <int> selected-count;
+    in property <string> selected-status;
+    in property <bool> external-edit-active;
+    in property <string> external-edit-status;
+    in property <bool> undo-available;
+    in property <string> undo-label;
+    in property <bool> chooser-mode;
+    in property <bool> chooser-select-directories;
+    in property <bool> chooser-save-mode;
+    in property <string> chooser-accept-label;
+    in property <string> selected-path;
+    in property <int> chooser-filter-count;
+    in property <string> chooser-filter-label;
+    in property <[ChooserChoice]> chooser-choices;
+    in-out property <string> chooser-save-name;
+
+    callback focus_requested();
+    callback path_submitted(string);
+    callback go_back();
+    callback go_forward();
+    callback search_submitted(string);
+    callback cancel_search();
+    callback search_filters_changed(int, int, int);
+    callback search_close_requested();
+    callback view_changed();
+    callback activated(string);
+    callback request_select(string, bool, bool);
+    callback select_rect(float, float, float, float, int, float, float, float, bool);
+    callback clear_selection();
+    callback request_context_menu(string, string, string, string, bool, length, length);
+    callback request_blank_context_menu(length, length);
+    callback zoom_in();
+    callback zoom_out();
+    callback drop_target_path(float, float, string) -> string;
+    callback drop_allowed(float, float, string) -> bool;
+    callback prepare_transfer(string, float, float) -> bool;
+    callback transfer_menu_requested();
+    callback trace_drop(string, string, string, float, float, bool, string);
+    callback save_focus_changed(bool);
+    callback commit_external_edit();
+    callback discard_external_edit();
+    callback undo_last_operation();
+    callback chooser_accept(string);
+    callback chooser_filter_requested(length, length);
+    callback chooser_choice_requested(int, length, length);
+    pure callback is_selected(string) -> bool;
+    pure callback make_drag_data(string, bool) -> data-transfer;
+
+    background: root.shell-base-color;
+    clip: true;
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding: 0px;
+        spacing: 0px;
+
+        PathBar {
+            horizontal-stretch: 1;
+            height: root.path-bar-height;
+            dark: root.dark;
+            current-path: root.current-path;
+            can-go-back: root.can-go-back;
+            can-go-forward: root.can-go-forward;
+            path-text <=> root.path-text;
+            path-focused <=> root.path-focused;
+            focus_requested => { root.focus_requested(); }
+            go_back => { root.go_back(); }
+            go_forward => { root.go_forward(); }
+            path_submitted(path) => { root.path_submitted(path); }
+        }
+
+        if (root.search-panel-visible) : SearchPanel {
+            horizontal-stretch: 1;
+            height: root.search-panel-height;
+            dark: root.dark;
+            loading: root.search-loading;
+            filters-active: root.search-filters-active;
+            kind-label: root.search-kind-label;
+            modified-label: root.search-modified-label;
+            size-label: root.search-size-label;
+            query <=> root.search-query;
+            recursive <=> root.recursive-search;
+            kind-filter <=> root.search-kind-filter;
+            modified-filter <=> root.search-modified-filter;
+            size-filter <=> root.search-size-filter;
+            submitted(query) => { root.search_submitted(query); }
+            cancel_requested => { root.cancel_search(); }
+            filters_changed(kind, modified, size) => {
+                root.search_filters_changed(kind, modified, size);
+            }
+            close_requested => { root.search_close_requested(); }
+        }
+
+        pane-content := Rectangle {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            width: parent.width;
+            height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));
+            background: root.shell-base-color;
+            clip: true;
+
+            DropArea {
+                width: parent.width;
+                height: parent.height;
+                enabled: true;
+                changed contains-drag => {
+                    if (!self.contains-drag) {
+                        root.drag-active = false;
+                        root.drag-rejected = false;
+                        root.drag-target-path = "";
+                    }
+                }
+                can-drop(event) => {
+                    root.focus_requested();
+                    if (!root.drop-ready) {
+                        root.drag-active = false;
+                        root.drag-rejected = true;
+                        root.drag-target-path = "";
+                        return DragAction.none;
+                    }
+                    if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
+                        root.drag-active = true;
+                        root.drag-target-path = root.drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                        root.drag-rejected = !root.drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                        root.trace_drop(root.drop-trace-prefix + (root.drag-rejected ? "can-drop-rejected" : "can-drop-accepted"), DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.drag-rejected, root.drag-target-path);
+                        return DragAction.copy;
+                    } else {
+                        root.drag-active = false;
+                        root.drag-rejected = false;
+                        root.drag-target-path = "";
+                        root.trace_drop(root.drop-trace-prefix + "can-drop-rejected:unsupported-dnd-payload", "unsupported", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
+                        return DragAction.none;
+                    }
+                }
+                dropped(event) => {
+                    root.focus_requested();
+                    root.trace_drop(root.drop-trace-prefix + "dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.drag-rejected, root.drag-target-path);
+                    if (!root.drag-rejected && root.drop-ready && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
+                        root.transfer_menu_requested();
+                    }
+                    root.drag-active = false;
+                    root.drag-rejected = false;
+                    root.drag-target-path = "";
+                    return DragAction.copy;
+                }
+            }
+
+            SplitPaneView {
+                width: parent.width;
+                height: parent.height;
+                dark: root.dark;
+                entry-count: root.entry-count;
+                entries: root.entries;
+                virtual-start-index: root.virtual-start-index;
+                virtual-start-column: root.virtual-start-column;
+                viewport-x <=> root.viewport-x;
+                viewport-offset <=> root.viewport-offset;
+                zoom-level: root.zoom-level;
+                selection-revision: root.selection-revision;
+                interactive: root.content-interactive;
+                empty-message-visible: root.empty-message-visible;
+                empty-title: root.empty-title;
+                empty-subtitle: root.empty-subtitle;
+                show-location: root.show-location;
+                drag-active: root.drag-active;
+                drag-rejected: root.drag-rejected;
+                drag-target-path: root.drag-target-path;
+                make_drag_data(path, is-dir) => {
+                    root.make_drag_data(path, is-dir)
+                }
+                focus_requested => { root.focus_requested(); }
+                view_changed => { root.view_changed(); }
+                zoom_in => { root.zoom_in(); }
+                zoom_out => { root.zoom_out(); }
+                activated(path) => { root.activated(path); }
+                request_select(path, toggle, range) => {
+                    root.request_select(path, toggle, range);
+                }
+                select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
+                    root.select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+                }
+                clear_selection => { root.clear_selection(); }
+                request_context_menu(path, name, size, modified, is-dir, x, y) => {
+                    root.request_context_menu(path, name, size, modified, is-dir, x, y);
+                }
+                request_blank_context_menu(x, y) => {
+                    root.request_blank_context_menu(x, y);
+                }
+                navigate_back => { root.go_back(); }
+                navigate_forward => { root.go_forward(); }
+                is_selected(path) => {
+                    root.is_selected(path)
+                }
+            }
+
+            if (root.drag-active): Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: root.drag-rejected ? (root.dark ? #3a1515aa : #fee2e2aa) : (root.dark ? #243b4daa : #dff0faaa);
+                border-width: 1px;
+                border-color: root.drag-rejected ? (root.dark ? #ef4444 : #dc2626) : (root.dark ? #58b4d8 : #2f8dbc);
+            }
+        }
+
+        StatusBar {
+            horizontal-stretch: 1;
+            height: root.status-bar-height;
+            dark: root.dark;
+            status: root.status;
+            selected-count: root.selected-count;
+            selected-status: root.selected-status;
+            external-edit-active: root.external-edit-active;
+            external-edit-status: root.external-edit-status;
+            undo-available: root.undo-available;
+            undo-label: root.undo-label;
+            chooser-mode: root.chooser-mode;
+            chooser-select-directories: root.chooser-select-directories;
+            chooser-save-mode: root.chooser-save-mode;
+            chooser-accept-label: root.chooser-accept-label;
+            selected-path: root.selected-path;
+            chooser-filter-count: root.chooser-filter-count;
+            chooser-filter-label: root.chooser-filter-label;
+            chooser-choices: root.chooser-choices;
+            chooser-save-name <=> root.chooser-save-name;
+            save_focus_changed(focused) => { root.save_focus_changed(focused); }
+            commit_external_edit => { root.commit_external_edit(); }
+            discard_external_edit => { root.discard_external_edit(); }
+            undo_last_operation => { root.undo_last_operation(); }
+            chooser_accept(value) => { root.chooser_accept(value); }
+            chooser_filter_requested(x, y) => { root.chooser_filter_requested(x, y); }
+            chooser_choice_requested(index, x, y) => {
+                root.chooser_choice_requested(index, x, y);
+            }
+        }
+    }
+}
 
 export component AppWindow inherits Window {
     in-out property <string> current_path;
@@ -38,6 +316,7 @@ export component AppWindow inherits Window {
     in-out property <bool> left_pane_path_focused: false;
     in-out property <bool> left_pane_can_go_back: false;
     in-out property <bool> left_pane_can_go_forward: false;
+    in-out property <bool> left_pane_in_trash: false;
     in property <string> current_name;
     in property <string> status;
     in-out property <string> left_pane_status;
@@ -70,6 +349,7 @@ export component AppWindow inherits Window {
     in-out property <float> inactive_pane_viewport_x: 0;
     in-out property <length> inactive_pane_viewport_offset: 0px;
     in-out property <string> inactive_pane_status;
+    in-out property <bool> inactive_pane_in_trash: false;
     in-out property <int> inactive_pane_selected_count: 0;
     in-out property <string> inactive_pane_selected_status;
     in property <[PlaceEntry]> places;
@@ -126,16 +406,6 @@ export component AppWindow inherits Window {
     private property <length> inactive-pane-x: root.active-pane-width + root.split-divider-width;
     private property <length> inactive-pane-width: root.split_view_open ? max(1px, root.main-pane-width - root.inactive-pane-x) : 0px;
     private property <length> main-content-height: max(1px, root.height - root.shell-header-height);
-    private property <length> main-grid-height: max(root.icon-row-height + 2 * root.icon-grid-padding, root.main-content-height - root.path-bar-height - root.status-bar-height - root.search-panel-height);
-    private property <length> main-available-grid-height: max(root.icon-row-height, root.main-grid-height - 2 * root.icon-grid-padding);
-    private property <int> main-rows-per-column: max(1, floor(root.main-available-grid-height / root.icon-row-height));
-    private property <int> main-column-count: max(1, ceil(root.entry_count / root.main-rows-per-column));
-    private property <length> main-viewport-width: 2 * root.icon-grid-padding + root.main-column-count * root.icon-cell-width;
-    private property <float> main-scroll-max-x: max(0, (root.main-viewport-width - root.active-pane-width) / 1px);
-
-    private property <length> icon-cell-width: root.icon_zoom_level == 0 ? 172px : (root.icon_zoom_level == 1 ? 208px : (root.icon_zoom_level == 2 ? 248px : (root.icon_zoom_level == 3 ? 292px : 340px)));
-    private property <length> icon-row-height: root.icon_zoom_level == 0 ? 78px : (root.icon_zoom_level == 1 ? 90px : (root.icon_zoom_level == 2 ? 104px : (root.icon_zoom_level == 3 ? 124px : 146px)));
-    private property <length> icon-grid-padding: 14px;
     private property <color> shell-base-color: root.dark_mode ? #101418 : #f6f8fa;
     private property <color> sidebar-surface-color: root.dark_mode ? #181e24 : #ffffff;
     private property <color> sidebar-border-color: root.dark_mode ? #313a43 : #d8e1ea;
@@ -257,13 +527,7 @@ export component AppWindow inherits Window {
     private property <bool> main_drag_rejected: false;
     private property <bool> inactive-pane-drag-active: false;
     private property <bool> inactive-pane-drag-rejected: false;
-    private property <bool> selection_rect_active: false;
-    private property <bool> selection_rect_pending: false;
-    private property <bool> selection_rect_toggle: false;
-    private property <length> selection_rect_start_x: 0px;
-    private property <length> selection_rect_start_y: 0px;
-    private property <length> selection_rect_current_x: 0px;
-    private property <length> selection_rect_current_y: 0px;
+    private property <string> inactive-pane-drag-target-path;
     private property <bool> search-input-focused: false;
     private property <bool> chooser-save-input-focused: false;
     private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
@@ -321,6 +585,7 @@ export component AppWindow inherits Window {
     callback select_path(string, bool, bool);
     callback select_inactive_path(string, bool, bool);
     callback select_rect(float, float, float, float, int, float, float, float, bool);
+    callback select_inactive_rect(float, float, float, float, int, float, float, float, bool);
     callback select_all_visible();
     callback clear_selection();
     callback add_place(string);
@@ -338,7 +603,8 @@ export component AppWindow inherits Window {
     callback prepare_inactive_pane_transfer(string, float, float) -> bool;
     callback main_drop_target_path(float, float, string) -> string;
     callback main_drop_allowed(float, float, string) -> bool;
-    callback inactive_pane_drop_allowed(string) -> bool;
+    callback inactive_pane_drop_target_path(float, float, string) -> string;
+    callback inactive_pane_drop_allowed(float, float, string) -> bool;
     callback main_view_changed();
     callback inactive_pane_view_changed();
     callback place_drop_allowed(string, int) -> bool;
@@ -462,7 +728,7 @@ export component AppWindow inherits Window {
     }
 
     function sync-main-viewport() {
-        root.main_viewport_x = root.entry_count == 0 ? 0 : max(0, min(root.main-scroll-max-x, root.main_viewport_x));
+        root.main_viewport_x = root.entry_count == 0 ? 0 : max(0, root.main_viewport_x);
         root.main_viewport_offset = -root.main_viewport_x * 1px;
     }
 
@@ -476,21 +742,6 @@ export component AppWindow inherits Window {
         root.icon_zoom_level = max(0, root.icon_zoom_level - 1);
         root.sync-main-viewport();
         root.persist_ui_state();
-    }
-
-    function pan-main-horizontal(delta: length) {
-        root.main_viewport_x = root.entry_count == 0 ? 0 : max(0, min(root.main-scroll-max-x, root.main_viewport_x + delta / 1px));
-        root.main_viewport_offset = -root.main_viewport_x * 1px;
-    }
-
-    function handle-main-scroll(delta-x: length, delta-y: length, control: bool) {
-        if (control && delta-y < 0px) {
-            root.zoom-main-out();
-        } else if (control && delta-y > 0px) {
-            root.zoom-main-in();
-        } else {
-            root.pan-main-horizontal(-(delta-y + delta-x));
-        }
     }
 
     title: chooser_mode ? (chooser_title == "" ? "Fika File Chooser" : chooser_title) : "Fika File Manager";
@@ -934,373 +1185,154 @@ export component AppWindow inherits Window {
                         background: root.shell-base-color;
                         clip: true;
 
-                        VerticalLayout {
+                        FilePane {
                             width: parent.width;
                             height: parent.height;
-                            padding: 0px;
-                            spacing: 0px;
-
-                            PathBar {
-                                horizontal-stretch: 1;
-                                height: root.path-bar-height;
-                                dark: root.dark_mode;
-                                current-path: root.left_pane_path;
-                                can-go-back: root.left_pane_can_go_back;
-                                can-go-forward: root.left_pane_can_go_forward;
-                                path-text <=> root.left_pane_path_input_text;
-                                path-focused <=> root.left_pane_path_focused;
-                                focus_requested => {
+                            dark: root.dark_mode;
+                            shell-base-color: root.shell-base-color;
+                            path-bar-height: root.path-bar-height;
+                            status-bar-height: root.status-bar-height;
+                            current-path: root.left_pane_path;
+                            can-go-back: root.left_pane_can_go_back;
+                            can-go-forward: root.left_pane_can_go_forward;
+                            path-text <=> root.left_pane_path_input_text;
+                            path-focused <=> root.left_pane_path_focused;
+                            search-panel-visible: root.search-panel-visible;
+                            search-panel-height: root.search-panel-height;
+                            search-loading: root.search_loading;
+                            search-filters-active: root.search-filters-active;
+                            search-kind-label: root.search-kind-filter-label;
+                            search-modified-label: root.search-modified-filter-label;
+                            search-size-label: root.search-size-filter-label;
+                            search-query <=> root.search_query;
+                            recursive-search <=> root.recursive_search;
+                            search-kind-filter <=> root.search_kind_filter;
+                            search-modified-filter <=> root.search_modified_filter;
+                            search-size-filter <=> root.search_size_filter;
+                            content-interactive: !root.directory_loading;
+                            drop-ready: !root.directory_loading;
+                            drop-trace-prefix: "";
+                            entry-count: root.entry_count;
+                            entries: root.virtual_entries;
+                            virtual-start-index: root.virtual_start_index;
+                            virtual-start-column: root.virtual_start_column;
+                            viewport-x <=> root.main_viewport_x;
+                            viewport-offset <=> root.main_viewport_offset;
+                            zoom-level: root.icon_zoom_level;
+                            selection-revision: root.selection_revision;
+                            show-location: root.left_pane_in_trash || (root.recursive_search && root.search_query != "");
+                            drag-active <=> root.main_drag_active;
+                            drag-rejected <=> root.main_drag_rejected;
+                            drag-target-path <=> root.place_drag_target_path;
+                            empty-message-visible: !root.directory_loading;
+                            empty-title: root.search_loading ? "Searching..." : (root.search_query == "" ? "This folder is empty" : "No matching items");
+                            empty-subtitle: root.search_loading ? "Scanning subfolders." : (root.search_query == "" ? "This directory has no visible files." : "Try another search term.");
+                            status: root.left_pane_status;
+                            selected-count: root.left_pane_selected_count;
+                            selected-status: root.left_pane_selected_status;
+                            external-edit-active: root.focused_pane == 0 && root.external_edit_active;
+                            external-edit-status: root.external_edit_status;
+                            undo-available: root.focused_pane == 0 && root.undo_available;
+                            undo-label: root.undo_label;
+                            chooser-mode: root.focused_pane == 0 && root.chooser_mode;
+                            chooser-select-directories: root.chooser_select_directories;
+                            chooser-save-mode: root.chooser_save_mode;
+                            chooser-accept-label: root.chooser_accept_label;
+                            selected-path: root.focused_pane == 0 ? root.selected_path : "";
+                            chooser-filter-count: root.chooser_filter_count;
+                            chooser-filter-label: root.chooser_filter_label;
+                            chooser-choices: root.chooser_choices;
+                            chooser-save-name <=> root.chooser_save_name;
+                            focus_requested => {
+                                main-focus.focus();
+                                root.focus_left_pane();
+                            }
+                            path_submitted(path) => { root.left_pane_path_submitted(path); }
+                            go_back => { root.left_pane_go_back(); }
+                            go_forward => { root.left_pane_go_forward(); }
+                            search_submitted(query) => { root.search_submitted(query); }
+                            cancel_search => { root.cancel_search(); }
+                            search_filters_changed(kind, modified, size) => {
+                                root.search_filters_changed(kind, modified, size);
+                            }
+                            search_close_requested => { root.search_bar_open = false; }
+                            view_changed => { root.main_view_changed(); }
+                            activated(path) => { root.open_path(path); }
+                            request_select(path, toggle, range) => {
+                                root.select_path(path, toggle, range);
+                            }
+                            select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
+                                root.select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+                            }
+                            clear_selection => { root.clear_selection(); }
+                            request_context_menu(path, name, size, modified, is-dir, x, y) => {
+                                root.refresh_clipboard_availability();
+                                if (!root.is_selected(path)) {
+                                    root.select_path(path, false, false);
+                                }
+                                root.context-menu-kind = 1;
+                                root.context-menu-path = path;
+                                root.context-menu-name = name;
+                                root.context-menu-properties-size = size;
+                                root.context-menu-properties-modified = modified;
+                                root.context-menu-is-dir = is-dir;
+                                if (!is-dir && root.selected_count <= 1) {
+                                    root.open_with_path = path;
+                                    root.default_open_app_name = "";
+                                    root.prepare_open_with(path);
+                                }
+                                root.show-context-menu(1, x, y);
+                            }
+                            request_blank_context_menu(x, y) => {
+                                root.clear_selection();
+                                root.refresh_clipboard_availability();
+                                root.show-context-menu(3, x, y);
+                            }
+                            zoom_in => { root.zoom-main-in(); }
+                            zoom_out => { root.zoom-main-out(); }
+                            drop_target_path(x, y, source) => {
+                                root.main_drop_target_path(x, y, source)
+                            }
+                            drop_allowed(x, y, source) => {
+                                root.main_drop_allowed(x, y, source)
+                            }
+                            prepare_transfer(source, x, y) => {
+                                root.prepare_path_main_transfer(source, x, y)
+                            }
+                            transfer_menu_requested => { root.transfer-menu-open = true; }
+                            trace_drop(action, kind, path, x, y, rejected, target) => {
+                                root.trace_main_drop(action, kind, path, x, y, rejected, target);
+                            }
+                            save_focus_changed(focused) => {
+                                root.chooser-save-input-focused = focused;
+                                if (focused) {
                                     root.focus_left_pane();
                                 }
-                                go_back => { root.left_pane_go_back(); }
-                                go_forward => { root.left_pane_go_forward(); }
-                                path_submitted(path) => { root.left_pane_path_submitted(path); }
                             }
-
-                            if (root.search-panel-visible) : SearchPanel {
-                                horizontal-stretch: 1;
-                                height: root.search-panel-height;
-                                dark: root.dark_mode;
-                                loading: root.search_loading;
-                                filters-active: root.search-filters-active;
-                                kind-label: root.search-kind-filter-label;
-                                modified-label: root.search-modified-filter-label;
-                                size-label: root.search-size-filter-label;
-                                query <=> root.search_query;
-                                recursive <=> root.recursive_search;
-                                kind-filter <=> root.search_kind_filter;
-                                modified-filter <=> root.search_modified_filter;
-                                size-filter <=> root.search_size_filter;
-                                submitted(query) => {
-                                    root.search_submitted(query);
-                                }
-                                cancel_requested => {
-                                    root.cancel_search();
-                                }
-                                filters_changed(kind, modified, size) => {
-                                    root.search_filters_changed(kind, modified, size);
-                                }
-                                close_requested => {
-                                    root.search_bar_open = false;
-                                }
+                            commit_external_edit => { root.commit_external_edit(); }
+                            discard_external_edit => { root.discard_external_edit(); }
+                            undo_last_operation => { root.undo_last_operation(); }
+                            chooser_accept(value) => { root.chooser_accept(value); }
+                            chooser_filter_requested(x, y) => {
+                                root.focus_left_pane();
+                                root.chooser-choice-menu-open = false;
+                                root.chooser-filter-menu-x = x;
+                                root.chooser-filter-menu-y = y;
+                                root.chooser-filter-menu-open = true;
                             }
-
-                            active-grid-clip := Rectangle {
-                                horizontal-stretch: 1;
-                                vertical-stretch: 1;
-                                width: parent.width;
-                                height: root.main-grid-height;
-                                background: root.shell-base-color;
-                                clip: true;
-
-                                if (root.entry_count == 0 && !root.directory_loading) : Rectangle {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    background: root.shell-base-color;
-
-                                    TouchArea {
-                                        width: parent.width;
-                                        height: parent.height;
-
-                                        pointer-event(event) => {
-                                            if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
-                                                root.focus_left_pane();
-                                                root.go_back();
-                                            } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
-                                                root.focus_left_pane();
-                                                root.go_forward();
-                                            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
-                                                main-focus.focus();
-                                                root.focus_left_pane();
-                                                root.clear_selection();
-                                            } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                                main-focus.focus();
-                                                root.focus_left_pane();
-                                                root.clear_selection();
-                                                root.refresh_clipboard_availability();
-                                                root.show-context-menu(3, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-                                            }
-                                        }
-                                        scroll-event(event) => {
-                                            root.handle-main-scroll(event.delta-x, event.delta-y, event.modifiers.control);
-                                            return accept;
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        spacing: 8px;
-
-                                        Text {
-                                            text: root.search_loading ? "Searching..." : (root.search_query == "" ? "This folder is empty" : "No matching items");
-                                            color: root.dark_mode ? #e8edf2 : #334155;
-                                            font-size: 15px;
-                                            font-weight: 600;
-                                            horizontal-alignment: center;
-                                        }
-
-                                        Text {
-                                            text: root.search_loading ? "Scanning subfolders." : (root.search_query == "" ? "This directory has no visible files." : "Try another search term.");
-                                            color: root.dark_mode ? #9aa5af : #94a3b8;
-                                            font-size: 13px;
-                                            horizontal-alignment: center;
-                                        }
-                                    }
-                                }
-
-                                if (root.entry_count > 0) : grid := ScrollView {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    horizontal-scrollbar-policy: as-needed;
-                                    vertical-scrollbar-policy: always-off;
-
-                                    property <int> rows-per-column: root.main-rows-per-column;
-                                    property <int> column-count: root.main-column-count;
-                                    viewport-width: max(parent.width, root.main-viewport-width);
-                                    viewport-height: root.main-grid-height;
-                                    viewport-x <=> root.main_viewport_offset;
-                                    viewport-y: 0px;
-
-                                    changed viewport-x => {
-                                        root.main_viewport_x = max(0, min(root.main-scroll-max-x, -self.viewport-x / 1px));
-                                    }
-
-                                    DropArea {
-                                        width: grid.viewport-width;
-                                        height: grid.viewport-height;
-                                        enabled: true;
-                                        changed contains-drag => {
-                                            if (!self.contains-drag) {
-                                                root.main_drag_active = false;
-                                                root.main_drag_rejected = false;
-                                                root.place_drag_target_path = "";
-                                                root.place_drag_target_label = "";
-                                            }
-                                        }
-                                        can-drop(event) => {
-                                            root.focus_left_pane();
-                                            if (root.directory_loading) {
-                                                root.main_drag_active = false;
-                                                root.main_drag_rejected = true;
-                                                root.place_drag_target_path = "";
-                                                return DragAction.none;
-                                            }
-                                            if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
-                                                root.main_drag_active = true;
-                                                root.main_drag_rejected = !root.main_drop_allowed((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
-                                                root.place_drag_target_path = root.main_drop_target_path((self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
-                                                root.trace_main_drop(root.main_drag_rejected ? "can-drop-rejected" : "can-drop-accepted", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
-                                                return DragAction.copy;
-                                            } else {
-                                                root.main_drag_active = false;
-                                                root.main_drag_rejected = false;
-                                                root.place_drag_target_path = "";
-                                                root.trace_main_drop("can-drop-rejected:unsupported-dnd-payload", "unsupported", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
-                                                return DragAction.none;
-                                            }
-                                        }
-                                        dropped(event) => {
-                                            root.focus_left_pane();
-                                            root.trace_main_drop("dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.main_drag_rejected, root.place_drag_target_path);
-                                            root.main_drag_active = false;
-                                            root.main_drag_rejected = false;
-                                            if (!root.directory_loading && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_path_main_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
-                                                root.transfer-menu-open = true;
-                                            }
-                                            return DragAction.copy;
-                                        }
-                                    }
-
-                                    TouchArea {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        pointer-event(event) => {
-                                            if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
-                                                root.focus_left_pane();
-                                                root.go_back();
-                                            } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
-                                                root.focus_left_pane();
-                                                root.go_forward();
-                                            } else if (root.directory_loading) {
-                                                // Keep the previous visible model inert while an uncached directory is loading.
-                                            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
-                                                main-focus.focus();
-                                                root.focus_left_pane();
-                                                root.selection_rect_pending = true;
-                                                root.selection_rect_active = false;
-                                                root.selection_rect_toggle = event.modifiers.control;
-                                                root.selection_rect_start_x = self.mouse-x;
-                                                root.selection_rect_start_y = self.mouse-y;
-                                                root.selection_rect_current_x = self.mouse-x;
-                                                root.selection_rect_current_y = self.mouse-y;
-                                            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
-                                                if (root.selection_rect_active) {
-                                                    root.select_rect(
-                                                        min(root.selection_rect_start_x, root.selection_rect_current_x) / 1px,
-                                                        min(root.selection_rect_start_y, root.selection_rect_current_y) / 1px,
-                                                        max(root.selection_rect_start_x, root.selection_rect_current_x) / 1px,
-                                                        max(root.selection_rect_start_y, root.selection_rect_current_y) / 1px,
-                                                        grid.rows-per-column,
-                                                        root.icon-cell-width / 1px,
-                                                        root.icon-row-height / 1px,
-                                                        root.icon-grid-padding / 1px,
-                                                        root.selection_rect_toggle
-                                                    );
-                                                } else if (root.selection_rect_pending) {
-                                                    root.clear_selection();
-                                                }
-                                                root.selection_rect_active = false;
-                                                root.selection_rect_pending = false;
-                                            } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                                main-focus.focus();
-                                                root.focus_left_pane();
-                                                root.clear_selection();
-                                                root.refresh_clipboard_availability();
-                                                root.show-context-menu(3, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-                                            }
-                                        }
-                                        moved => {
-                                            if (self.pressed && root.selection_rect_pending) {
-                                                root.selection_rect_current_x = self.mouse-x;
-                                                root.selection_rect_current_y = self.mouse-y;
-                                                if (!root.selection_rect_active && (self.mouse-x > root.selection_rect_start_x + 5px || self.mouse-x + 5px < root.selection_rect_start_x || self.mouse-y > root.selection_rect_start_y + 5px || self.mouse-y + 5px < root.selection_rect_start_y)) {
-                                                    root.selection_rect_active = true;
-                                                }
-                                            }
-                                        }
-                                        scroll-event(event) => {
-                                            if (!root.directory_loading) {
-                                                root.handle-main-scroll(event.delta-x, event.delta-y, event.modifiers.control);
-                                            }
-                                            return accept;
-                                        }
-                                    }
-
-                                    virtual-layer := Rectangle {
-                                        x: root.icon-grid-padding + root.virtual_start_column * root.icon-cell-width;
-                                        y: 0px;
-                                        width: max(1px, root.main-viewport-width - self.x);
-                                        height: grid.viewport-height;
-
-                                        for item[index] in root.virtual_entries: FileTile {
-                                            drag-data-source: item.is_dir ? DndApi.make-drag-folder(item.path) : DndApi.make-drag-file(item.path);
-                                            property <int> local-index: index + root.virtual_start_index - root.virtual_start_column * grid.rows-per-column;
-                                            x: floor(local-index / grid.rows-per-column) * root.icon-cell-width;
-                                            y: root.icon-grid-padding + mod(local-index, grid.rows-per-column) * root.icon-row-height;
-                                            width: root.icon-cell-width - 12px;
-                                            entry: item;
-                                            selected: root.selection_revision >= 0 && root.is_selected(item.path);
-                                            dark: root.dark_mode;
-                                            zoom-level: root.icon_zoom_level;
-                                            show-location: root.current_in_trash || (root.recursive_search && root.search_query != "");
-                                            interactive: !root.directory_loading;
-                                            drop-target: root.main_drag_active && !root.main_drag_rejected && root.place_drag_target_path == item.path;
-                                            request_select(path, toggle, range) => {
-                                                main-focus.focus();
-                                                root.focus_left_pane();
-                                                root.select_path(path, toggle, range);
-                                            }
-                                            request_context_menu(path, name, x, y) => {
-                                                main-focus.focus();
-                                                root.focus_left_pane();
-                                                root.refresh_clipboard_availability();
-                                                if (!root.is_selected(path)) {
-                                                    root.select_path(path, false, false);
-                                                }
-                                                root.context-menu-kind = 1;
-                                                root.context-menu-path = path;
-                                                root.context-menu-name = name;
-                                                root.context-menu-properties-size = item.size;
-                                                root.context-menu-properties-modified = item.modified;
-                                                root.context-menu-is-dir = item.is_dir;
-                                                if (!item.is_dir && root.selected_count <= 1) {
-                                                    root.open_with_path = path;
-                                                    root.default_open_app_name = "";
-                                                    root.prepare_open_with(path);
-                                                }
-                                                root.show-context-menu(1, x, y);
-                                            }
-                                            activated(path) => {
-                                                root.focus_left_pane();
-                                                root.open_path(path);
-                                            }
-                                            zoom_in => {
-                                                root.zoom-main-in();
-                                            }
-                                            zoom_out => {
-                                                root.zoom-main-out();
-                                            }
-                                            pan_horizontal(delta) => {
-                                                root.pan-main-horizontal(delta);
-                                            }
-                                            navigate_back => {
-                                                root.focus_left_pane();
-                                                root.go_back();
-                                            }
-                                            navigate_forward => {
-                                                root.focus_left_pane();
-                                                root.go_forward();
-                                            }
-                                        }
-                                    }
-
-                                    if (root.selection_rect_active): Rectangle {
-                                        x: min(root.selection_rect_start_x, root.selection_rect_current_x);
-                                        y: min(root.selection_rect_start_y, root.selection_rect_current_y);
-                                        width: max(1px, max(root.selection_rect_start_x, root.selection_rect_current_x) - min(root.selection_rect_start_x, root.selection_rect_current_x));
-                                        height: max(1px, max(root.selection_rect_start_y, root.selection_rect_current_y) - min(root.selection_rect_start_y, root.selection_rect_current_y));
-                                        background: root.dark_mode ? #51a9d433 : #2b86b733;
-                                        border-width: 1px;
-                                        border-color: root.dark_mode ? #51a9d4 : #2b86b7;
-                                    }
-                                }
+                            chooser_choice_requested(index, x, y) => {
+                                root.focus_left_pane();
+                                root.chooser-filter-menu-open = false;
+                                root.chooser-choice-menu-index = index;
+                                root.chooser-choice-menu-x = x;
+                                root.chooser-choice-menu-y = y;
+                                root.chooser-choice-menu-open = true;
                             }
-
-                            StatusBar {
-                                horizontal-stretch: 1;
-                                height: root.status-bar-height;
-                                dark: root.dark_mode;
-                                status: root.left_pane_status == "" ? root.status : root.left_pane_status;
-                                selected-count: root.left_pane_selected_count;
-                                selected-status: root.left_pane_selected_status;
-                                external-edit-active: root.focused_pane == 0 && root.external_edit_active;
-                                external-edit-status: root.external_edit_status;
-                                undo-available: root.focused_pane == 0 && root.undo_available;
-                                undo-label: root.undo_label;
-                                chooser-mode: root.focused_pane == 0 && root.chooser_mode;
-                                chooser-select-directories: root.chooser_select_directories;
-                                chooser-save-mode: root.chooser_save_mode;
-                                chooser-accept-label: root.chooser_accept_label;
-                                selected-path: root.focused_pane == 0 ? root.selected_path : "";
-                                chooser-filter-count: root.chooser_filter_count;
-                                chooser-filter-label: root.chooser_filter_label;
-                                chooser-choices: root.chooser_choices;
-                                chooser-save-name <=> root.chooser_save_name;
-                                save_focus_changed(focused) => {
-                                    root.chooser-save-input-focused = focused;
-                                    if (focused) {
-                                        root.focus_left_pane();
-                                    }
-                                }
-                                commit_external_edit => { root.commit_external_edit(); }
-                                discard_external_edit => { root.discard_external_edit(); }
-                                undo_last_operation => { root.undo_last_operation(); }
-                                chooser_accept(value) => { root.chooser_accept(value); }
-                                chooser_filter_requested(x, y) => {
-                                    root.focus_left_pane();
-                                    root.chooser-choice-menu-open = false;
-                                    root.chooser-filter-menu-x = x;
-                                    root.chooser-filter-menu-y = y;
-                                    root.chooser-filter-menu-open = true;
-                                }
-                                chooser_choice_requested(index, x, y) => {
-                                    root.focus_left_pane();
-                                    root.chooser-filter-menu-open = false;
-                                    root.chooser-choice-menu-index = index;
-                                    root.chooser-choice-menu-x = x;
-                                    root.chooser-choice-menu-y = y;
-                                    root.chooser-choice-menu-open = true;
-                                }
+                            is_selected(path) => {
+                                root.is_selected(path)
+                            }
+                            make_drag_data(path, is-dir) => {
+                                is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)
                             }
                         }
                     }
@@ -1319,204 +1351,136 @@ export component AppWindow inherits Window {
                         background: root.shell-base-color;
                         clip: true;
 
-                        VerticalLayout {
+                        FilePane {
                             width: parent.width;
                             height: parent.height;
-                            padding: 0px;
-                            spacing: 0px;
-
-                            PathBar {
-                                horizontal-stretch: 1;
-                                height: root.path-bar-height;
-                                dark: root.dark_mode;
-                                current-path: root.inactive_pane_path;
-                                can-go-back: root.inactive_pane_can_go_back;
-                                can-go-forward: root.inactive_pane_can_go_forward;
-                                path-text <=> root.inactive_pane_path_input_text;
-                                path-focused <=> root.inactive_pane_path_focused;
-                                focus_requested => {
+                            dark: root.dark_mode;
+                            shell-base-color: root.shell-base-color;
+                            path-bar-height: root.path-bar-height;
+                            status-bar-height: root.status-bar-height;
+                            current-path: root.inactive_pane_path;
+                            can-go-back: root.inactive_pane_can_go_back;
+                            can-go-forward: root.inactive_pane_can_go_forward;
+                            path-text <=> root.inactive_pane_path_input_text;
+                            path-focused <=> root.inactive_pane_path_focused;
+                            search-panel-visible: false;
+                            content-interactive: true;
+                            drop-ready: true;
+                            drop-trace-prefix: "inactive-";
+                            entry-count: root.inactive_pane_entry_count;
+                            entries: root.inactive_pane_entries;
+                            virtual-start-index: root.inactive_pane_virtual_start_index;
+                            virtual-start-column: root.inactive_pane_virtual_start_column;
+                            viewport-x <=> root.inactive_pane_viewport_x;
+                            viewport-offset <=> root.inactive_pane_viewport_offset;
+                            zoom-level: root.icon_zoom_level;
+                            selection-revision: root.selection_revision;
+                            show-location: root.inactive_pane_in_trash;
+                            drag-active <=> root.inactive-pane-drag-active;
+                            drag-rejected <=> root.inactive-pane-drag-rejected;
+                            drag-target-path <=> root.inactive-pane-drag-target-path;
+                            status: root.inactive_pane_status;
+                            selected-count: root.inactive_pane_selected_count;
+                            selected-status: root.inactive_pane_selected_status;
+                            external-edit-active: root.focused_pane == 1 && root.external_edit_active;
+                            external-edit-status: root.external_edit_status;
+                            undo-available: root.focused_pane == 1 && root.undo_available;
+                            undo-label: root.undo_label;
+                            chooser-mode: root.focused_pane == 1 && root.chooser_mode;
+                            chooser-select-directories: root.chooser_select_directories;
+                            chooser-save-mode: root.chooser_save_mode;
+                            chooser-accept-label: root.chooser_accept_label;
+                            selected-path: root.focused_pane == 1 ? root.selected_path : "";
+                            chooser-filter-count: root.chooser_filter_count;
+                            chooser-filter-label: root.chooser_filter_label;
+                            chooser-choices: root.chooser_choices;
+                            chooser-save-name <=> root.chooser_save_name;
+                            focus_requested => {
+                                main-focus.focus();
+                                root.focus_right_pane();
+                            }
+                            path_submitted(path) => { root.inactive_path_submitted(path); }
+                            go_back => { root.inactive_go_back(); }
+                            go_forward => { root.inactive_go_forward(); }
+                            view_changed => { root.inactive_pane_view_changed(); }
+                            activated(path) => { root.open_inactive_path(path); }
+                            request_select(path, toggle, range) => {
+                                root.select_inactive_path(path, toggle, range);
+                            }
+                            select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
+                                root.select_inactive_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+                            }
+                            clear_selection => { root.clear_selection(); }
+                            request_context_menu(path, name, size, modified, is-dir, x, y) => {
+                                root.focus_right_pane();
+                                root.refresh_clipboard_availability();
+                                if (!root.is_inactive_selected(path)) {
+                                    root.select_inactive_path(path, false, false);
+                                }
+                                root.context-menu-kind = 1;
+                                root.context-menu-path = path;
+                                root.context-menu-name = name;
+                                root.context-menu-properties-size = size;
+                                root.context-menu-properties-modified = modified;
+                                root.context-menu-is-dir = is-dir;
+                                if (!is-dir && root.selected_count <= 1) {
+                                    root.open_with_path = path;
+                                    root.default_open_app_name = "";
+                                    root.prepare_open_with(path);
+                                }
+                                root.show-context-menu(1, x, y);
+                            }
+                            request_blank_context_menu(x, y) => {
+                                root.focus_right_pane();
+                                root.clear_selection();
+                                root.refresh_clipboard_availability();
+                                root.show-context-menu(3, x, y);
+                            }
+                            zoom_in => { root.zoom-main-in(); }
+                            zoom_out => { root.zoom-main-out(); }
+                            drop_target_path(x, y, source) => {
+                                root.inactive_pane_drop_target_path(x, y, source)
+                            }
+                            drop_allowed(x, y, source) => {
+                                root.inactive_pane_drop_allowed(x, y, source)
+                            }
+                            prepare_transfer(source, x, y) => {
+                                root.prepare_inactive_pane_transfer(source, x, y)
+                            }
+                            transfer_menu_requested => { root.transfer-menu-open = true; }
+                            trace_drop(action, kind, path, x, y, rejected, target) => {
+                                root.trace_main_drop(action, kind, path, x, y, rejected, target);
+                            }
+                            save_focus_changed(focused) => {
+                                root.chooser-save-input-focused = focused;
+                                if (focused) {
                                     root.focus_right_pane();
-                                }
-                                go_back => {
-                                    root.inactive_go_back();
-                                }
-                                go_forward => {
-                                    root.inactive_go_forward();
-                                }
-                                path_submitted(path) => {
-                                    root.inactive_path_submitted(path);
                                 }
                             }
-
-                            right-pane-content := Rectangle {
-                                horizontal-stretch: 1;
-                                vertical-stretch: 1;
-                                width: parent.width;
-                                height: max(1px, parent.height - root.path-bar-height - root.status-bar-height);
-                                clip: true;
-
-                                SplitPaneView {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    dark: root.dark_mode;
-                                    entry-count: root.inactive_pane_entry_count;
-                                    entries: root.inactive_pane_entries;
-                                    virtual-start-index: root.inactive_pane_virtual_start_index;
-                                    virtual-start-column: root.inactive_pane_virtual_start_column;
-                                    viewport-x <=> root.inactive_pane_viewport_x;
-                                    viewport-offset <=> root.inactive_pane_viewport_offset;
-                                    zoom-level: root.icon_zoom_level;
-                                    selection-revision: root.selection_revision;
-                                    focus_requested => {
-                                        root.focus_right_pane();
-                                    }
-                                    view_changed => {
-                                        root.inactive_pane_view_changed();
-                                    }
-                                    zoom_in => {
-                                        root.focus_right_pane();
-                                        root.zoom-main-in();
-                                    }
-                                    zoom_out => {
-                                        root.focus_right_pane();
-                                        root.zoom-main-out();
-                                    }
-                                    activated(path) => {
-                                        root.focus_right_pane();
-                                        root.open_inactive_path(path);
-                                    }
-                                    request_select(path, toggle, range) => {
-                                        root.focus_right_pane();
-                                        root.select_inactive_path(path, toggle, range);
-                                    }
-                                    request_context_menu(path, name, size, modified, is-dir, x, y) => {
-                                        root.focus_right_pane();
-                                        root.refresh_clipboard_availability();
-                                        if (!root.is_inactive_selected(path)) {
-                                            root.select_inactive_path(path, false, false);
-                                        }
-                                        root.context-menu-kind = 1;
-                                        root.context-menu-path = path;
-                                        root.context-menu-name = name;
-                                        root.context-menu-properties-size = size;
-                                        root.context-menu-properties-modified = modified;
-                                        root.context-menu-is-dir = is-dir;
-                                        if (!is-dir && root.selected_count <= 1) {
-                                            root.open_with_path = path;
-                                            root.default_open_app_name = "";
-                                            root.prepare_open_with(path);
-                                        }
-                                        root.show-context-menu(1, x, y);
-                                    }
-                                    request_blank_context_menu(x, y) => {
-                                        root.focus_right_pane();
-                                        root.clear_selection();
-                                        root.refresh_clipboard_availability();
-                                        root.show-context-menu(3, x, y);
-                                    }
-                                    navigate_back => {
-                                        root.focus_right_pane();
-                                        root.go_back();
-                                    }
-                                    navigate_forward => {
-                                        root.focus_right_pane();
-                                        root.go_forward();
-                                    }
-                                    is_selected(path) => {
-                                        root.is_inactive_selected(path)
-                                    }
-                                }
-
-                                DropArea {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    enabled: true;
-                                    changed contains-drag => {
-                                        if (!self.contains-drag) {
-                                            root.inactive-pane-drag-active = false;
-                                            root.inactive-pane-drag-rejected = false;
-                                        }
-                                    }
-                                    can-drop(event) => {
-                                        root.focus_right_pane();
-                                        if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
-                                            root.inactive-pane-drag-active = true;
-                                            root.inactive-pane-drag-rejected = !root.inactive_pane_drop_allowed(DndApi.event-path(event));
-                                            root.trace_main_drop(root.inactive-pane-drag-rejected ? "inactive-can-drop-rejected" : "inactive-can-drop-accepted", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.inactive-pane-drag-rejected, root.inactive_pane_path);
-                                            return DragAction.copy;
-                                        } else {
-                                            root.inactive-pane-drag-active = false;
-                                            root.inactive-pane-drag-rejected = false;
-                                            root.trace_main_drop("inactive-can-drop-rejected:unsupported-dnd-payload", "unsupported", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, root.inactive_pane_path);
-                                            return DragAction.none;
-                                        }
-                                    }
-                                    dropped(event) => {
-                                        root.focus_right_pane();
-                                        root.trace_main_drop("inactive-dropped", DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : (DndApi.event-kind(event) == DragKind.file ? "file" : "unsupported")), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.inactive-pane-drag-rejected, root.inactive_pane_path);
-                                        if (!root.inactive-pane-drag-rejected && (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) && root.prepare_inactive_pane_transfer(DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
-                                            root.transfer-menu-open = true;
-                                        }
-                                        root.inactive-pane-drag-active = false;
-                                        root.inactive-pane-drag-rejected = false;
-                                        return DragAction.copy;
-                                    }
-                                }
-
-                                if (root.inactive-pane-drag-active): Rectangle {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    background: root.inactive-pane-drag-rejected ? (root.dark_mode ? #3a1515aa : #fee2e2aa) : (root.dark_mode ? #243b4daa : #dff0faaa);
-                                    border-width: 1px;
-                                    border-color: root.inactive-pane-drag-rejected ? (root.dark_mode ? #ef4444 : #dc2626) : (root.dark_mode ? #58b4d8 : #2f8dbc);
-                                }
+                            commit_external_edit => { root.commit_external_edit(); }
+                            discard_external_edit => { root.discard_external_edit(); }
+                            undo_last_operation => { root.undo_last_operation(); }
+                            chooser_accept(value) => { root.chooser_accept(value); }
+                            chooser_filter_requested(x, y) => {
+                                root.focus_right_pane();
+                                root.chooser-choice-menu-open = false;
+                                root.chooser-filter-menu-x = x;
+                                root.chooser-filter-menu-y = y;
+                                root.chooser-filter-menu-open = true;
                             }
-
-                            StatusBar {
-                                horizontal-stretch: 1;
-                                height: root.status-bar-height;
-                                dark: root.dark_mode;
-                                status: root.inactive_pane_status;
-                                selected-count: root.inactive_pane_selected_count;
-                                selected-status: root.inactive_pane_selected_status;
-                                external-edit-active: root.focused_pane == 1 && root.external_edit_active;
-                                external-edit-status: root.external_edit_status;
-                                undo-available: root.focused_pane == 1 && root.undo_available;
-                                undo-label: root.undo_label;
-                                chooser-mode: root.focused_pane == 1 && root.chooser_mode;
-                                chooser-select-directories: root.chooser_select_directories;
-                                chooser-save-mode: root.chooser_save_mode;
-                                chooser-accept-label: root.chooser_accept_label;
-                                selected-path: root.focused_pane == 1 ? root.selected_path : "";
-                                chooser-filter-count: root.chooser_filter_count;
-                                chooser-filter-label: root.chooser_filter_label;
-                                chooser-choices: root.chooser_choices;
-                                chooser-save-name <=> root.chooser_save_name;
-                                save_focus_changed(focused) => {
-                                    root.chooser-save-input-focused = focused;
-                                    if (focused) {
-                                        root.focus_right_pane();
-                                    }
-                                }
-                                commit_external_edit => { root.commit_external_edit(); }
-                                discard_external_edit => { root.discard_external_edit(); }
-                                undo_last_operation => { root.undo_last_operation(); }
-                                chooser_accept(value) => { root.chooser_accept(value); }
-                                chooser_filter_requested(x, y) => {
-                                    root.focus_right_pane();
-                                    root.chooser-choice-menu-open = false;
-                                    root.chooser-filter-menu-x = x;
-                                    root.chooser-filter-menu-y = y;
-                                    root.chooser-filter-menu-open = true;
-                                }
-                                chooser_choice_requested(index, x, y) => {
-                                    root.focus_right_pane();
-                                    root.chooser-filter-menu-open = false;
-                                    root.chooser-choice-menu-index = index;
-                                    root.chooser-choice-menu-x = x;
-                                    root.chooser-choice-menu-y = y;
-                                    root.chooser-choice-menu-open = true;
-                                }
+                            chooser_choice_requested(index, x, y) => {
+                                root.focus_right_pane();
+                                root.chooser-filter-menu-open = false;
+                                root.chooser-choice-menu-index = index;
+                                root.chooser-choice-menu-x = x;
+                                root.chooser-choice-menu-y = y;
+                                root.chooser-choice-menu-open = true;
+                            }
+                            is_selected(path) => {
+                                root.is_inactive_selected(path)
+                            }
+                            make_drag_data(path, is-dir) => {
+                                is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)
                             }
                         }
                     }

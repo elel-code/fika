@@ -1,6 +1,9 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::file_clipboard::sync_clipboard_ui;
-use crate::app::geometry::MainGridLayout;
+use crate::app::geometry::{
+    MainGridLayout, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width, icon_cell_width,
+    icon_row_height, inactive_main_pane_width, main_pane_bounds,
+};
 use crate::app::operation_controller::{
     OperationQueuePosition, operation_cancel_status, operation_queued_status,
     operation_started_status, transfer_conflict_apply_remaining_status,
@@ -14,6 +17,7 @@ use crate::fs::{file_ops, privilege};
 use crate::{
     AppWindow, AsyncEvent, FileEntry, FileOperationProgress, FileOperationResult, set_status,
 };
+use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -93,6 +97,20 @@ pub(crate) fn prepare_inactive_pane_transfer(
     y: f32,
 ) -> bool {
     let state = state.borrow();
+    if let Some(target) = entry_at_inactive_pane_point(ui, &state, x, y)
+        .filter(|target| target.is_dir && target.path.as_str() != source)
+    {
+        return prepare_transfer_menu(
+            ui,
+            source,
+            path_label(source).as_str(),
+            target.path.as_str(),
+            target.name.as_str(),
+            x,
+            y,
+        );
+    }
+
     prepare_current_dir_transfer_for_target_with_state(
         ui,
         &state,
@@ -140,9 +158,32 @@ pub(crate) fn main_drop_allowed(
     main_drop_rejection(ui, state, x, y, source).is_none()
 }
 
-pub(crate) fn inactive_pane_drop_allowed(state: &AppState, source: &Path) -> bool {
+pub(crate) fn inactive_pane_drop_allowed(
+    ui: &AppWindow,
+    state: &AppState,
+    x: f32,
+    y: f32,
+    source: &Path,
+) -> bool {
+    inactive_pane_drop_rejection(ui, state, x, y, source).is_none()
+}
+
+#[cfg(test)]
+fn inactive_pane_current_dir_drop_allowed(state: &AppState, source: &Path) -> bool {
     pane_current_dir(state, PaneTarget::Inactive)
         .is_some_and(|target_dir| transfer_target_rejection(source, target_dir).is_none())
+}
+
+pub(crate) fn inactive_pane_drop_target_path(
+    ui: &AppWindow,
+    state: &AppState,
+    x: f32,
+    y: f32,
+    source: &Path,
+) -> Option<String> {
+    entry_at_inactive_pane_point(ui, state, x, y)
+        .filter(|target| target.is_dir && Path::new(target.path.as_str()) != source)
+        .map(|target| target.path.to_string())
 }
 
 pub(crate) fn main_drop_rejection(
@@ -188,6 +229,131 @@ fn main_drop_target_dir(
         .filter(|target| target.is_dir && Path::new(target.path.as_str()) != source)
         .map(|target| PathBuf::from(target.path.as_str()))
         .unwrap_or_else(|| focused_current_dir(state).to_path_buf())
+}
+
+fn inactive_pane_drop_rejection(
+    ui: &AppWindow,
+    state: &AppState,
+    x: f32,
+    y: f32,
+    source: &Path,
+) -> Option<&'static str> {
+    let target_dir = inactive_pane_drop_target_dir(ui, state, x, y, source)?;
+    transfer_target_rejection(source, &target_dir)
+}
+
+fn inactive_pane_drop_target_dir(
+    ui: &AppWindow,
+    state: &AppState,
+    x: f32,
+    y: f32,
+    source: &Path,
+) -> Option<PathBuf> {
+    entry_at_inactive_pane_point(ui, state, x, y)
+        .filter(|target| target.is_dir && Path::new(target.path.as_str()) != source)
+        .map(|target| PathBuf::from(target.path.as_str()))
+        .or_else(|| pane_current_dir(state, PaneTarget::Inactive).map(Path::to_path_buf))
+}
+
+pub(crate) fn entry_at_inactive_pane_point(
+    ui: &AppWindow,
+    state: &AppState,
+    x: f32,
+    y: f32,
+) -> Option<FileEntry> {
+    let layout = InactivePaneGridLayout::from_ui(ui)?;
+    let index = layout.index_at_point(x, y)?;
+    state
+        .panes
+        .inactive()
+        .and_then(|pane| pane.entries.get(index).cloned())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InactivePaneGridLayout {
+    main_x: f32,
+    main_y: f32,
+    width: f32,
+    height: f32,
+    viewport_x: f32,
+    rows_per_column: usize,
+    cell_width: f32,
+    row_height: f32,
+    padding: f32,
+}
+
+impl InactivePaneGridLayout {
+    fn from_ui(ui: &AppWindow) -> Option<Self> {
+        if !ui.get_split_view_open() {
+            return None;
+        }
+        let cell_width = icon_cell_width(ui.get_icon_zoom_level());
+        let row_height = icon_row_height(ui.get_icon_zoom_level());
+        let padding = 14.0;
+        let window_size = ui.window().size().to_logical(ui.window().scale_factor());
+        let pane = main_pane_bounds(
+            ui.get_sidebar_width_px(),
+            window_size.width,
+            window_size.height,
+        );
+        let main_width = (pane.right - pane.left).max(1.0);
+        let inactive_width = inactive_main_pane_width(
+            main_width,
+            ui.get_split_view_open(),
+            ui.get_split_pane_ratio(),
+        )
+        .max(1.0);
+        let active_width = active_main_pane_width(
+            main_width,
+            ui.get_split_view_open(),
+            ui.get_split_pane_ratio(),
+        );
+        let content_height =
+            (pane.bottom - pane.top - PATH_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(1.0);
+        let available_grid_height = (content_height - 2.0 * padding).max(row_height);
+        let rows_per_column = (available_grid_height / row_height).floor().max(1.0) as usize;
+
+        Some(Self {
+            main_x: pane.left + active_width + (main_width - active_width - inactive_width),
+            main_y: pane.top + PATH_BAR_HEIGHT,
+            width: inactive_width,
+            height: content_height,
+            viewport_x: ui.get_inactive_pane_viewport_x(),
+            rows_per_column,
+            cell_width,
+            row_height,
+            padding,
+        })
+    }
+
+    fn index_at_point(self, x: f32, y: f32) -> Option<usize> {
+        if x < self.main_x
+            || x > self.main_x + self.width
+            || y < self.main_y
+            || y > self.main_y + self.height
+        {
+            return None;
+        }
+
+        let local_x = x - self.main_x - self.padding + self.viewport_x;
+        let local_y = y - self.main_y - self.padding;
+        if local_x < 0.0 || local_y < 0.0 {
+            return None;
+        }
+
+        let column = (local_x / self.cell_width).floor() as usize;
+        let row = (local_y / self.row_height).floor() as usize;
+        if row >= self.rows_per_column {
+            return None;
+        }
+
+        let inside_tile_x = local_x - column as f32 * self.cell_width;
+        if inside_tile_x > (self.cell_width - 12.0).max(1.0) {
+            return None;
+        }
+
+        Some(column * self.rows_per_column + row)
+    }
 }
 
 fn prepare_current_dir_transfer_with_state(
@@ -833,7 +999,7 @@ mod tests {
         apply_conflict_decision_to_queue, apply_rename_to_remaining_conflicts,
         clear_accepted_cut_source, clear_cut_sources_for_remaining_conflicts,
         default_rename_suggestion, default_rename_suggestion_with_reserved, focused_current_dir,
-        inactive_pane_drop_allowed, target_is_source_or_descendant,
+        inactive_pane_current_dir_drop_allowed, target_is_source_or_descendant,
         transfer_request_conflict_destination, transfer_start_rejection,
     };
     use crate::app::state::{AppState, FileOperationRequest};
@@ -958,7 +1124,7 @@ mod tests {
     fn inactive_pane_drop_allowed_requires_split_target() {
         let state = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
 
-        assert!(!inactive_pane_drop_allowed(
+        assert!(!inactive_pane_current_dir_drop_allowed(
             &state,
             Path::new("/tmp/fika-source")
         ));
@@ -969,7 +1135,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/fika-right")));
 
-        assert!(inactive_pane_drop_allowed(
+        assert!(inactive_pane_current_dir_drop_allowed(
             &state,
             Path::new("/tmp/fika-left/note.txt")
         ));
@@ -981,12 +1147,18 @@ mod tests {
         let mut same_target = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
         assert!(same_target.panes.open_inactive(source.clone()));
 
-        assert!(!inactive_pane_drop_allowed(&same_target, &source));
+        assert!(!inactive_pane_current_dir_drop_allowed(
+            &same_target,
+            &source
+        ));
 
         let mut descendant_target = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
         assert!(descendant_target.panes.open_inactive(source.join("child")));
 
-        assert!(!inactive_pane_drop_allowed(&descendant_target, &source));
+        assert!(!inactive_pane_current_dir_drop_allowed(
+            &descendant_target,
+            &source
+        ));
     }
 
     #[cfg(unix)]
