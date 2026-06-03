@@ -10,7 +10,7 @@ use crate::fs;
 use crate::{
     AppWindow, FileEntry, PaneSlotData, set_status, sync_virtual_entries, thumbnail_size_px,
 };
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -43,6 +43,20 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow) {
         .into_iter()
         .map(|slot| pane_slot_data(ui, slot))
         .collect::<Vec<_>>();
+
+    let current = ui.get_pane_slots();
+    let same_slots = current.row_count() == slots.len()
+        && slots.iter().enumerate().all(|(row, slot)| {
+            current
+                .row_data(row)
+                .is_some_and(|current| current.slot == slot.slot)
+        });
+    if same_slots {
+        for (row, slot) in slots.into_iter().enumerate() {
+            current.set_row_data(row, slot);
+        }
+        return;
+    }
 
     ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));
 }

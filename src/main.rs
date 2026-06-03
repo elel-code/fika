@@ -3797,11 +3797,12 @@ fn sync_pane_view_for_slot(
 }
 
 fn focus_pane_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    let previous_slot = { state.borrow().panes.focused_slot() };
     let focused = {
         let mut state = state.borrow_mut();
         state.panes.focus_slot(slot)
     };
-    if focused {
+    if focused && previous_slot != slot {
         sync_navigation_ui(ui, state);
     }
 }
@@ -5110,6 +5111,43 @@ mod tests {
         );
         assert!(pane_status_target_slots(&state, &[]).is_empty());
         assert!(pane_status_target_slots(&state, &[99]).is_empty());
+    }
+
+    #[test]
+    fn pane_focus_refresh_does_not_rebuild_the_current_pane_surface() {
+        let source = include_str!("main.rs");
+        let body = source
+            .split_once("fn focus_pane_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn focus_current_ui_pane_slot("))
+            .map(|(body, _)| body)
+            .expect("focus_pane_slot body should be present");
+
+        assert!(
+            body.contains("let previous_slot = { state.borrow().panes.focused_slot() };")
+                && body.contains("if focused && previous_slot != slot {")
+                && body.contains("sync_navigation_ui(ui, state);"),
+            "clicking inside the already focused pane must not rebuild pane surfaces during double-click or drag gestures"
+        );
+    }
+
+    #[test]
+    fn pane_slot_sync_updates_existing_rows_when_slot_shape_is_unchanged() {
+        let source = include_str!("app/split_view.rs");
+        let body = source
+            .split_once("pub(crate) fn sync_pane_slots_ui(")
+            .and_then(|(_, rest)| rest.split_once("fn visible_pane_slots("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_slots_ui body should be present");
+
+        assert!(
+            body.contains("let current = ui.get_pane_slots();")
+                && body.contains("let same_slots = current.row_count() == slots.len()")
+                && body.contains(".is_some_and(|current| current.slot == slot.slot)")
+                && body.contains("current.set_row_data(row, slot);")
+                && body
+                    .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));"),
+            "pane data refresh should update stable rows instead of replacing the pane model while gestures are active"
+        );
     }
 
     #[test]
