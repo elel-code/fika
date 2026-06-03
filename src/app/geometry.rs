@@ -1655,7 +1655,8 @@ mod tests {
         assert!(
             status_bar.contains("label: \"Admin Save\";")
                 && status_bar.contains("width: 104px;")
-                && status_bar.contains("text: \"ADMIN EDIT\";")
+                && status_bar.contains("text: \"ADMIN\";")
+                && !status_bar.contains("text: \"ADMIN EDIT\";")
                 && status_bar.contains("private property <color> admin-badge-bg")
                 && status_bar.contains("private property <color> admin-badge-border")
                 && !status_bar.contains("label: \"Save Back\";"),
