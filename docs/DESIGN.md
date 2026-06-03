@@ -439,7 +439,7 @@ system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privi
 3. helper 经 polkit 授权后读取 protected 文件，生成用户可读写的 scratch 文件，例如 `/run/user/$UID/fika-edit/<token>/<name>`，返回 scratch path 和 token。
 4. Fika 用普通路径启动 Zed / VS Code / 其他编辑器。外部编辑器完全不提权，也不需要理解虚拟协议。
 5. Helper 持有 scratch token 并监听 scratch 文件变更；用户在编辑器里保存时，helper 自动校验并写回 protected 文件。因此 Fika GUI 可以在外部编辑器启动后关闭，写回不依赖 GUI 存活。
-6. Fika 在状态栏提供 “Save Back / Discard” 操作作为显式兜底和清理入口；`Save Back` 调用 `CommitExternalEdit(token, scratch_path)`，`DiscardExternalEdit(token)` 清理 scratch。
+6. Fika 在状态栏提供 “Admin Save / Discard” 操作作为显式兜底和清理入口；`Admin Save` 调用 `CommitExternalEdit(token, scratch_path)`，`DiscardExternalEdit(token)` 清理 scratch。
 7. `DiscardExternalEdit(token)` 清理 scratch。
 
 这个模型避免了 Dolphin+kio-fuse 的 FUSE 挂载层，但保留“编辑器 Ctrl+S 后写回”的核心体验。Fika 当前通过 D-Bus `org.freedesktop.systemd1.Manager.StartTransientUnit` 把默认 Open / Open With / custom command 启动出的 child PID 纳入 user transient `.scope`；systemd user D-Bus 不可用时会保留普通 spawn 行为并把非致命诊断返回 UI 状态栏。受保护外部编辑会把 token 和 `.scope` unit 通过 `AssociateExternalEditUnit` 交给 helper。helper 使用传入的 session bus 地址订阅 systemd user unit 的 `ActiveState` 属性变化，unit 结束后做一次最终写回并清理 scratch；如果订阅不可用则退回保守轮询。没有 unit 的 token 会在固定 TTL 后做最终写回并过期。这样 scratch 清理和 helper 退出已经不依赖 GUI 进程；普通非保护 Open/Open With/custom command/Open Terminal Here 的状态栏会显示 transient unit 名称，或显示应用已启动但 systemd scope 不可用的诊断。

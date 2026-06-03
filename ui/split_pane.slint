@@ -43,6 +43,8 @@ export component SplitPaneView inherits Rectangle {
     private property <int> rows-per-column: max(1, floor(max(1px, root.height - 2 * root.preview-padding) / root.row-height));
     private property <int> column-count: max(1, ceil(root.entry-count / root.rows-per-column));
     private property <length> viewport-content-width: 2 * root.preview-padding + root.column-count * root.cell-width;
+    private property <int> virtual-column-count: max(1, ceil(root.entries.length / root.rows-per-column));
+    private property <length> virtual-layer-width: max(1px, root.virtual-column-count * root.cell-width);
     private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width)) / 1px);
     private property <bool> selection-rect-active: false;
     private property <bool> selection-rect-pending: false;
@@ -197,7 +199,7 @@ export component SplitPaneView inherits Rectangle {
         virtual-layer := Rectangle {
             x: root.preview-padding + root.virtual-start-column * root.cell-width;
             y: 0px;
-            width: max(1px, root.viewport-content-width - self.x);
+            width: root.virtual-layer-width;
             height: preview.viewport-height;
 
             for item[index] in root.entries: FileTile {

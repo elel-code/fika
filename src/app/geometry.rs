@@ -1644,6 +1644,16 @@ mod tests {
                 ),
             "sidebar panel should leave a visible bottom gap and avoid stretching the list to fill the window"
         );
+        assert!(
+            !app.contains("changed main_viewport_x => { root.main_view_changed(); }"),
+            "main viewport scrolling should not separately trigger a duplicate virtual refresh"
+        );
+        assert!(
+            status_bar.contains("label: \"Admin Save\";")
+                && status_bar.contains("width: 104px;")
+                && !status_bar.contains("label: \"Save Back\";"),
+            "status bar should expose the clearer admin write-back save action"
+        );
         let main_pane_index = app
             .find("main-pane := Rectangle")
             .expect("AppWindow should instantiate the main pane");
@@ -2232,6 +2242,14 @@ mod tests {
         assert!(split_pane.contains("root.pan-horizontal(delta);"));
         assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
         assert!(split_pane.contains("virtual-layer := Rectangle"));
+        assert!(split_pane.contains(
+            "private property <int> virtual-column-count: max(1, ceil(root.entries.length / root.rows-per-column));"
+        ));
+        assert!(split_pane.contains(
+            "private property <length> virtual-layer-width: max(1px, root.virtual-column-count * root.cell-width);"
+        ));
+        assert!(split_pane.contains("width: root.virtual-layer-width;"));
+        assert!(!split_pane.contains("root.viewport-content-width - self.x"));
         assert!(split_pane.contains("clip: true;"));
         assert!(
             !split_pane.contains("import { PathBar } from \"top_bar.slint\";"),

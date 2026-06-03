@@ -95,6 +95,9 @@ use fs::{file_actions, privilege, search, thumbnails};
 
 slint::include_modules!();
 
+const EXTERNAL_EDIT_SAVE_OPERATION: &str = "Admin Save";
+const EXTERNAL_EDIT_DISCARD_OPERATION: &str = "Discard";
+
 fn main() -> Result<(), slint::PlatformError> {
     let raw_args = env::args().skip(1).collect::<Vec<_>>();
     let args = Args::parse(raw_args.into_iter());
@@ -1166,7 +1169,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_commit_external_edit(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                start_external_edit_resolution(&ui, &state, &bridge, "Save Back");
+                start_external_edit_resolution(&ui, &state, &bridge, EXTERNAL_EDIT_SAVE_OPERATION);
             }
         });
     }
@@ -1177,7 +1180,12 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_discard_external_edit(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                start_external_edit_resolution(&ui, &state, &bridge, "Discard");
+                start_external_edit_resolution(
+                    &ui,
+                    &state,
+                    &bridge,
+                    EXTERNAL_EDIT_DISCARD_OPERATION,
+                );
             }
         });
     }
@@ -2948,16 +2956,16 @@ fn start_external_edit_resolution(
     let Some(session) = session else {
         ui.set_external_edit_active(false);
         ui.set_external_edit_status(SharedString::new());
-        set_status(ui, "No protected edit is pending");
+        set_status(ui, "No admin write-back is pending");
         return;
     };
 
     set_status(
         ui,
         match operation {
-            "Save Back" => "Saving protected edit back...",
-            "Discard" => "Discarding protected edit...",
-            _ => "Resolving protected edit...",
+            EXTERNAL_EDIT_SAVE_OPERATION => "Saving admin write-back...",
+            EXTERNAL_EDIT_DISCARD_OPERATION => "Discarding admin write-back...",
+            _ => "Resolving admin write-back...",
         },
     );
 
@@ -2965,7 +2973,7 @@ fn start_external_edit_resolution(
     let notify_ui = bridge.ui_weak.clone();
     let operation = operation.to_string();
     bridge.handle.spawn(async move {
-        let result = if operation == "Save Back" {
+        let result = if operation == EXTERNAL_EDIT_SAVE_OPERATION {
             privilege::commit_external_edit_via_dbus(&session).await
         } else {
             privilege::discard_external_edit_via_dbus(&session).await
@@ -2998,16 +3006,16 @@ fn apply_external_edit_result(
 
     match result.result {
         Ok(path) => {
-            if result.operation == "Save Back" {
+            if result.operation == EXTERNAL_EDIT_SAVE_OPERATION {
                 if let Some(parent) = path.parent() {
                     refresh_affected_directories(ui, state, bridge, &[parent.to_path_buf()]);
                 }
+                set_status(ui, &format!("Admin write-back saved: {}", path.display()));
+            } else {
                 set_status(
                     ui,
-                    &format!("Protected edit saved back: {}", path.display()),
+                    &format!("Admin write-back discarded: {}", path.display()),
                 );
-            } else {
-                set_status(ui, &format!("Protected edit discarded: {}", path.display()));
             }
         }
         Err(err) => set_status(ui, &format!("{} failed: {err}", result.operation)),
@@ -3027,9 +3035,9 @@ fn sync_external_edit_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             .and_then(|session| session.original_path.file_name())
             .and_then(|name| name.to_str())
             .unwrap_or("protected file");
-        ui.set_external_edit_status(format!("Protected edit: {label}").into());
+        ui.set_external_edit_status(format!("Admin write-back: {label}").into());
     } else {
-        ui.set_external_edit_status(format!("{count} protected edits").into());
+        ui.set_external_edit_status(format!("{count} admin write-backs pending").into());
     }
 }
 

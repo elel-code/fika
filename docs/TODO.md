@@ -457,8 +457,8 @@ Acceptance for all:
 - [x] External editor writeback flow.
   - Acceptance: protected files open as ordinary scratch paths under `/run/user/$UID/fika-edit`.
   - Acceptance: writeback uses `CommitExternalEdit`, not a root editor or user-visible admin URI.
-  - Current: default Open / Open With / custom Open With fall back to scratch on permission errors; status bar exposes Save Back and Discard for pending protected edits.
-  - Current: helper watches scratch files and writes back on save, so GUI can close after launching the editor; Save Back remains a manual flush/cleanup action.
+  - Current: default Open / Open With / custom Open With fall back to scratch on permission errors; status bar exposes Admin Save and Discard for pending admin write-backs.
+  - Current: helper watches scratch files and writes back on save, so GUI can close after launching the editor; Admin Save remains a manual flush/cleanup action.
 
 - [x] Helper-owned external editor lifecycle.
   - Acceptance: helper can track editor systemd unit lifetime or token expiry and clean scratch files without relying on the GUI.

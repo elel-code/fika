@@ -937,7 +937,6 @@ export component AppWindow inherits Window {
             root.split-resize-active = false;
         }
     }
-    changed main_viewport_x => { root.main_view_changed(); }
     changed icon_zoom_level => {
         root.main_view_changed();
         root.inactive_pane_view_changed();
