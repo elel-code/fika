@@ -1572,7 +1572,8 @@ fn refresh_panes(
     pane_ids: &[u64],
 ) {
     for pane_id in pane_ids {
-        match state.borrow().panes.slot_for_id(*pane_id) {
+        let slot = { state.borrow().panes.slot_for_id(*pane_id) };
+        match slot {
             Some(0) => refresh_directory(ui, state, bridge),
             Some(_) => refresh_pane_by_id(ui, state, bridge, *pane_id),
             None => {}
@@ -5111,6 +5112,23 @@ mod tests {
         );
         assert!(pane_status_target_slots(&state, &[]).is_empty());
         assert!(pane_status_target_slots(&state, &[99]).is_empty());
+    }
+
+    #[test]
+    fn refresh_panes_releases_slot_lookup_borrow_before_refreshing() {
+        let source = include_str!("main.rs");
+        let body = source
+            .split_once("fn refresh_panes(")
+            .and_then(|(_, rest)| rest.split_once("fn refresh_affected_directories("))
+            .map(|(body, _)| body)
+            .expect("refresh_panes body should be present");
+
+        assert!(
+            body.contains("let slot = { state.borrow().panes.slot_for_id(*pane_id) };")
+                && body.contains("match slot {")
+                && !body.contains("match state.borrow().panes.slot_for_id(*pane_id)"),
+            "refresh_panes must not hold an immutable RefCell borrow while calling refresh paths that borrow_mut"
+        );
     }
 
     #[test]
