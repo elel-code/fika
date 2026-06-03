@@ -19,6 +19,10 @@ export component FileTile inherits Rectangle {
     callback navigate_back();
     callback navigate_forward();
 
+    function scroll-pan-delta(delta-x: length, delta-y: length) -> length {
+        return (delta-x < 0px ? -delta-x : delta-x) > (delta-y < 0px ? -delta-y : delta-y) ? -delta-x : -delta-y;
+    }
+
     height: root.zoom-level == 0 ? 72px : (root.zoom-level == 1 ? 84px : (root.zoom-level == 2 ? 98px : (root.zoom-level == 3 ? 116px : 136px)));
     border-radius: 7px;
     border-width: selected || drop-target ? 1px : 0px;
@@ -61,7 +65,7 @@ export component FileTile inherits Rectangle {
                     root.zoom_in();
                     return accept;
                 } else {
-                    root.pan_horizontal(-(event.delta-y + event.delta-x));
+                    root.pan_horizontal(root.scroll-pan-delta(event.delta-x, event.delta-y));
                     return accept;
                 }
             }

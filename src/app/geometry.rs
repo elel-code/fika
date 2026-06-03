@@ -2242,6 +2242,24 @@ mod tests {
         assert!(split_pane.contains("callback zoom_out();"));
         assert!(split_pane.contains("function handle-scroll("));
         assert!(
+            split_pane
+                .contains("function scroll-pan-delta(delta-x: length, delta-y: length) -> length")
+                && split_pane
+                    .contains("root.pan-horizontal(root.scroll-pan-delta(delta-x, delta-y));")
+                && !split_pane.contains("delta-y + delta-x"),
+            "pane scrolling should use the dominant wheel axis instead of adding touchpad cross-axis jitter"
+        );
+        let file_tile = include_str!("../../ui/file_tile.slint");
+        assert!(
+            file_tile
+                .contains("function scroll-pan-delta(delta-x: length, delta-y: length) -> length")
+                && file_tile.contains(
+                    "root.pan_horizontal(root.scroll-pan-delta(event.delta-x, event.delta-y));"
+                )
+                && !file_tile.contains("delta-y + delta-x"),
+            "tile scrolling should use the same dominant-axis wheel rule as blank pane scrolling"
+        );
+        assert!(
             split_pane.contains(
                 "function pan-horizontal(delta: length) {\n        root.focus_requested();\n        root.viewport-x = root.entry-count == 0"
             ),

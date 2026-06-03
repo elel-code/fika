@@ -4,7 +4,7 @@ use crate::app::geometry::{
 };
 use crate::app::pane::{PaneSide, PaneTarget};
 use crate::app::state::AppState;
-use crate::app::virtual_view::{SplitPreviewInput, prepare_split_preview_update};
+use crate::app::virtual_view::{PanePreviewInput, prepare_pane_preview_update};
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{AppWindow, FileEntry, set_status, sync_virtual_entries, thumbnail_size_px};
@@ -22,6 +22,30 @@ pub(crate) fn sync_inactive_pane_view_from_ui(ui: &AppWindow, state: &Rc<RefCell
         pane.view.viewport_x = ui.get_inactive_pane_viewport_x();
     }
     sync_inactive_pane_ui(ui, state);
+}
+
+pub(crate) fn set_pane_viewport_ui(ui: &AppWindow, side: PaneSide, viewport_x: f32) {
+    match side {
+        PaneSide::Active => {
+            ui.set_main_viewport_x(viewport_x);
+            ui.set_main_viewport_offset(-viewport_x);
+        }
+        PaneSide::Inactive => {
+            ui.set_inactive_pane_viewport_x(viewport_x);
+            ui.set_inactive_pane_viewport_offset(-viewport_x);
+        }
+    }
+}
+
+pub(crate) fn set_pane_viewport_ui_if_clamped(
+    ui: &AppWindow,
+    side: PaneSide,
+    viewport_x: f32,
+    viewport_clamped: bool,
+) {
+    if viewport_clamped {
+        set_pane_viewport_ui(ui, side, viewport_x);
+    }
 }
 
 pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -43,9 +67,10 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
 
     let snapshot = {
         let mut state = state.borrow_mut();
-        prepare_split_preview_update(
+        prepare_pane_preview_update(
             &mut state,
-            SplitPreviewInput {
+            PaneTarget::Inactive,
+            PanePreviewInput {
                 pane_width: inactive_width,
                 pane_height: inactive_height,
                 zoom_level: ui.get_icon_zoom_level(),
@@ -67,8 +92,7 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
         ui.set_inactive_pane_entry_count(0);
         ui.set_inactive_pane_virtual_start_index(0);
         ui.set_inactive_pane_virtual_start_column(0);
-        ui.set_inactive_pane_viewport_x(0.0);
-        ui.set_inactive_pane_viewport_offset(0.0);
+        set_pane_viewport_ui(ui, PaneSide::Inactive, 0.0);
         ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(
             Vec::<FileEntry>::new(),
         ))));
@@ -102,8 +126,12 @@ pub(crate) fn sync_inactive_pane_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>
             ui.set_inactive_pane_selected_status(selection_status_text(&selected_paths));
         }
     }
-    ui.set_inactive_pane_viewport_x(update.viewport_x);
-    ui.set_inactive_pane_viewport_offset(-update.viewport_x);
+    set_pane_viewport_ui_if_clamped(
+        ui,
+        PaneSide::Inactive,
+        update.viewport_x,
+        update.viewport_clamped,
+    );
     if update.rebuild_model {
         ui.set_inactive_pane_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))));
         ui.set_inactive_pane_virtual_start_index(update.range.start as i32);
@@ -200,15 +228,12 @@ pub(crate) fn toggle_split_view(
     };
 
     if opened {
-        ui.set_main_viewport_x(0.0);
-        ui.set_main_viewport_offset(0.0);
-        ui.set_inactive_pane_viewport_x(0.0);
-        ui.set_inactive_pane_viewport_offset(0.0);
+        set_pane_viewport_ui(ui, PaneSide::Active, 0.0);
+        set_pane_viewport_ui(ui, PaneSide::Inactive, 0.0);
     }
     if !opened {
         let viewport_x = state.borrow().panes.active.view.viewport_x;
-        ui.set_main_viewport_x(viewport_x);
-        ui.set_main_viewport_offset(-viewport_x);
+        set_pane_viewport_ui(ui, PaneSide::Active, viewport_x);
     }
     sync_navigation_ui(ui, state);
     sync_virtual_entries(ui, state, bridge, true);

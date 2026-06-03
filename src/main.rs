@@ -66,8 +66,8 @@ use app::selection::{
     selection_rect_paths, selection_rect_paths_filtered,
 };
 use app::split_view::{
-    directory_status_text, sync_inactive_pane_ui, sync_inactive_pane_view_from_ui,
-    sync_navigation_ui, toggle_split_view,
+    directory_status_text, set_pane_viewport_ui, set_pane_viewport_ui_if_clamped,
+    sync_inactive_pane_ui, sync_inactive_pane_view_from_ui, sync_navigation_ui, toggle_split_view,
 };
 use app::state::{AppState, DeviceAction, FileUndo, PaneExternalEdit};
 use app::thumbnail_pipeline::{
@@ -1361,8 +1361,7 @@ fn restore_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path
         state.panes.active.view.viewport_x = view_state.viewport_x;
         view_state
     };
-    ui.set_main_viewport_x(view_state.viewport_x);
-    ui.set_main_viewport_offset(-view_state.viewport_x);
+    set_pane_viewport_ui(ui, PaneSide::Active, view_state.viewport_x);
 }
 
 fn restore_inactive_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path) {
@@ -1375,8 +1374,7 @@ fn restore_inactive_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, pa
         pane.view.viewport_x = view_state.viewport_x;
         view_state
     };
-    ui.set_inactive_pane_viewport_x(view_state.viewport_x);
-    ui.set_inactive_pane_viewport_offset(-view_state.viewport_x);
+    set_pane_viewport_ui(ui, PaneSide::Inactive, view_state.viewport_x);
 }
 
 fn set_current_location_ui(ui: &AppWindow, path: &Path) {
@@ -3205,10 +3203,12 @@ fn sync_virtual_entries_with_count(
             },
         )
     };
-    if update.viewport_clamped {
-        ui.set_main_viewport_x(update.viewport_x);
-        ui.set_main_viewport_offset(-update.viewport_x);
-    }
+    set_pane_viewport_ui_if_clamped(
+        ui,
+        PaneSide::Active,
+        update.viewport_x,
+        update.viewport_clamped,
+    );
     if !update.rebuild_model {
         ui.set_entry_count(update.entry_count as i32);
         return;

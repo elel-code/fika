@@ -62,6 +62,10 @@ export component SplitPaneView inherits Rectangle {
         root.view_changed();
     }
 
+    function scroll-pan-delta(delta-x: length, delta-y: length) -> length {
+        return (delta-x < 0px ? -delta-x : delta-x) > (delta-y < 0px ? -delta-y : delta-y) ? -delta-x : -delta-y;
+    }
+
     function handle-scroll(delta-x: length, delta-y: length, control: bool) {
         if (control && delta-y < 0px) {
             root.focus_requested();
@@ -70,7 +74,7 @@ export component SplitPaneView inherits Rectangle {
             root.focus_requested();
             root.zoom_in();
         } else {
-            root.pan-horizontal(-(delta-y + delta-x));
+            root.pan-horizontal(root.scroll-pan-delta(delta-x, delta-y));
         }
     }
 

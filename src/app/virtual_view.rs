@@ -32,10 +32,11 @@ pub(crate) struct VirtualViewInput {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SplitPreviewUpdate {
+pub(crate) struct PanePreviewUpdate {
     pub(crate) current_dir: PathBuf,
     pub(crate) entry_count: usize,
     pub(crate) viewport_x: f32,
+    pub(crate) viewport_clamped: bool,
     pub(crate) range: Range<usize>,
     pub(crate) start_column: usize,
     pub(crate) entries: Vec<FileEntry>,
@@ -43,7 +44,7 @@ pub(crate) struct SplitPreviewUpdate {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SplitPreviewInput {
+pub(crate) struct PanePreviewInput {
     pub(crate) pane_width: f32,
     pub(crate) pane_height: f32,
     pub(crate) zoom_level: i32,
@@ -110,20 +111,23 @@ pub(crate) fn prepare_virtual_view_update(
     }
 }
 
-pub(crate) fn prepare_split_preview_update(
+pub(crate) fn prepare_pane_preview_update(
     state: &mut AppState,
-    input: SplitPreviewInput,
-) -> Option<SplitPreviewUpdate> {
-    let (current_dir, entry_count, plan, rebuild_model, mut entries) = {
-        let pane = state.panes.pane_mut_for_target(PaneTarget::Inactive)?;
+    target: PaneTarget,
+    input: PanePreviewInput,
+) -> Option<PanePreviewUpdate> {
+    let (current_dir, entry_count, plan, viewport_clamped, rebuild_model, mut entries) = {
+        let pane = state.panes.pane_mut_for_target(target)?;
         let entry_count = pane.entries.len();
+        let requested_viewport_x = pane.view.viewport_x;
         let plan = split_preview_plan(
             entry_count,
             input.pane_width,
             input.pane_height,
-            pane.view.viewport_x,
+            requested_viewport_x,
             input.zoom_level,
         );
+        let viewport_clamped = (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON;
         let rebuild_model = input.force_rebuild_model
             || should_rebuild_virtual_cache(
                 &pane.view.virtual_view,
@@ -148,6 +152,7 @@ pub(crate) fn prepare_split_preview_update(
             pane.current_dir.clone(),
             entry_count,
             plan,
+            viewport_clamped,
             rebuild_model,
             entries,
         )
@@ -157,10 +162,11 @@ pub(crate) fn prepare_split_preview_update(
         decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
     }
 
-    Some(SplitPreviewUpdate {
+    Some(PanePreviewUpdate {
         current_dir,
         entry_count,
         viewport_x: plan.viewport_x,
+        viewport_clamped,
         range: plan.range,
         start_column: plan.start_column,
         entries,
@@ -344,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn split_preview_update_slices_inactive_pane_and_clamps_viewport() {
+    fn pane_preview_update_slices_target_pane_and_clamps_viewport() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
         {
@@ -353,9 +359,10 @@ mod tests {
             inactive.view.viewport_x = 1_200.0;
         }
 
-        let update = prepare_split_preview_update(
+        let update = prepare_pane_preview_update(
             &mut state,
-            SplitPreviewInput {
+            PaneTarget::Inactive,
+            PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
                 zoom_level: 1,
@@ -368,6 +375,7 @@ mod tests {
         assert_eq!(update.current_dir, PathBuf::from("/tmp/inactive"));
         assert_eq!(update.entry_count, 100);
         assert_eq!(update.viewport_x, 1_200.0);
+        assert!(!update.viewport_clamped);
         assert_eq!(update.range, 21..70);
         assert_eq!(update.start_column, 3);
         assert!(update.rebuild_model);
@@ -379,9 +387,10 @@ mod tests {
         );
 
         state.panes.inactive_mut().unwrap().view.viewport_x = 4_000.0;
-        let clamped = prepare_split_preview_update(
+        let clamped = prepare_pane_preview_update(
             &mut state,
-            SplitPreviewInput {
+            PaneTarget::Inactive,
+            PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
                 zoom_level: 1,
@@ -392,20 +401,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(clamped.viewport_x, 2_728.0);
+        assert!(clamped.viewport_clamped);
         assert_eq!(clamped.range, 77..100);
         assert!(clamped.rebuild_model);
         assert_eq!(state.panes.inactive().unwrap().view.viewport_x, 2_728.0);
     }
 
     #[test]
-    fn split_preview_update_reuses_model_inside_same_range() {
+    fn pane_preview_update_reuses_model_inside_same_range() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
         state.panes.inactive_mut().unwrap().entries = (0..100).map(test_entry).collect();
 
-        let first = prepare_split_preview_update(
+        let first = prepare_pane_preview_update(
             &mut state,
-            SplitPreviewInput {
+            PaneTarget::Inactive,
+            PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
                 zoom_level: 1,
@@ -419,9 +430,10 @@ mod tests {
         assert_eq!(first.entries.len(), first.range.len());
 
         state.panes.inactive_mut().unwrap().view.viewport_x = 10.0;
-        let second = prepare_split_preview_update(
+        let second = prepare_pane_preview_update(
             &mut state,
-            SplitPreviewInput {
+            PaneTarget::Inactive,
+            PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
                 zoom_level: 1,
@@ -435,9 +447,10 @@ mod tests {
         assert!(second.entries.is_empty());
         assert_eq!(second.range, first.range);
 
-        let forced = prepare_split_preview_update(
+        let forced = prepare_pane_preview_update(
             &mut state,
-            SplitPreviewInput {
+            PaneTarget::Inactive,
+            PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
                 zoom_level: 1,
@@ -453,14 +466,15 @@ mod tests {
     }
 
     #[test]
-    fn split_preview_update_reuses_model_while_cached_range_covers_visible_range() {
+    fn pane_preview_update_reuses_model_while_cached_range_covers_visible_range() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
         assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
         state.panes.inactive_mut().unwrap().entries = (0..160).map(test_entry).collect();
 
-        let first = prepare_split_preview_update(
+        let first = prepare_pane_preview_update(
             &mut state,
-            SplitPreviewInput {
+            PaneTarget::Inactive,
+            PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
                 zoom_level: 1,
@@ -473,9 +487,10 @@ mod tests {
         assert_eq!(first.range, 0..28);
 
         state.panes.inactive_mut().unwrap().view.viewport_x = 230.0;
-        let second = prepare_split_preview_update(
+        let second = prepare_pane_preview_update(
             &mut state,
-            SplitPreviewInput {
+            PaneTarget::Inactive,
+            PanePreviewInput {
                 pane_width: 420.0,
                 pane_height: 704.0,
                 zoom_level: 1,
@@ -495,13 +510,14 @@ mod tests {
     }
 
     #[test]
-    fn split_preview_update_returns_none_without_inactive_pane() {
+    fn pane_preview_update_returns_none_without_target_pane() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
 
         assert!(
-            prepare_split_preview_update(
+            prepare_pane_preview_update(
                 &mut state,
-                SplitPreviewInput {
+                PaneTarget::Inactive,
+                PanePreviewInput {
                     pane_width: 420.0,
                     pane_height: 704.0,
                     zoom_level: 1,
