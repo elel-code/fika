@@ -302,7 +302,7 @@ Slint: Rectangle viewport + input/DnD overlays
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
 7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只按 `media_x/media_y/text_x/text_width/group_y/title_y/location_y` 等字段绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。
 8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 Rust item-view media renderer：虚拟切片进入 Slint 前会把成功缩略图或 fallback 文件/目录图标统一投影为 `ItemViewEntry.media`，主视图 loop 只保留一个 media `Image` primitive。
-9. `ItemViewEntry.media_token` 作为 Rust-side media 更新令牌进入可见 row；`model_update` 在虚拟切片滑动的重叠 row 上只比较 path/text/geometry/selection/thumbnail 状态和 media token，不再用整条 `ItemViewEntry` 的 `Image` 参与相等判断，减少大目录滚动时的 row patch 成本。
+9. `ItemViewEntry.media_token` 作为 Rust-side media 更新令牌进入可见 row；`model_update` 同时维护 pane-local `ItemViewRowToken` sidecar。虚拟切片滑动的重叠 row 先比较 sidecar token，token 相同就不读取 `VecModel::row_data()`，因此不会为了判断复用而克隆包含 `Image` 的整条 `ItemViewEntry`。split pane 快照也会复制到独立 `VecModel`，避免两个 pane 共享同一个可见 row 模型。
 10. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
 
 ---
@@ -530,7 +530,7 @@ selected: root.selection-revision >= 0 && root.is_selected(item.path);
 selected: item.selected;
 ```
 
-选择变化时，Rust 侧通过 `update_item_view_entries_model_selection` 对当前 pane 的虚拟 `VecModel<ItemViewEntry>` 做逐行 `set_row_data` 脏更新；后台虚拟视图结果应用时也会用当前 pane 的 selection 调用 `annotate_selection_state`，防止旧异步结果覆盖当前高亮。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
+选择变化时，Rust 侧先更新当前 pane 的 `ItemViewRowToken` sidecar 并得到脏 row 列表，释放 `AppState` borrow 后再对当前 pane 的虚拟 `VecModel<ItemViewEntry>` 做逐行 `set_row_data` 更新；后台虚拟视图结果应用时也会用当前 pane 的 selection 调用 `annotate_selection_state`，防止旧异步结果覆盖当前高亮。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
 
 **收益**：每次选择变化（点击、框选、Ctrl+A）省 80-120 次 FFI 调用。
 
@@ -797,7 +797,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 **Phase 1-6 实现要点**：
 - **Phase 1**: `changed viewport-x` 提前退出 + `sync_pane_slots_ui` row_data 脏检查 + 新增 `sync_pane_slot_ui` 单 slot 增量 + `sync_pane_slot_viewport_ui` 单字段 viewport row patch
 - **Phase 2**: `PaneViewSyncScheduler` (8ms `slint::Timer` SingleShot) + `sync_pane_viewport_for_slot` viewport-only 路径 + layout/flush 分离
-- **Phase 3**: 新模块 `src/app/model_update.rs` — `VecModel::downcast_ref` 增量更新，支持前/后滑动 + `set_row_data` 逐行脏检查
+- **Phase 3**: 新模块 `src/app/model_update.rs` — `VecModel::downcast_ref` 增量更新，支持前/后滑动 + `set_row_data` 逐行脏检查；当前重叠 row 复用通过 pane-local `ItemViewRowToken` sidecar 判断，避免为了比较而读取并克隆 Slint row data
 - **Phase 4**: `ThumbnailFlushScheduler` (16ms) — 缩略图结果入队批量写入，`AsyncEvent::ThumbnailLoaded` 不再逐张触发 `sync_virtual_entries`
 - **Phase 5**: `PaneEntrySnapshot`（不含 `Image` 的轻量快照, `Arc` 零拷贝共享）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）— 虚拟视图的条目过滤/切片/clone/location 标注全部在 `tokio::spawn_blocking` 中完成，UI 线程只做 generation staleness 检查 + Slint 模型写入 + 缩略图缓存装饰。`virtual_generation` 独立于 `load_generation`，目录切换时自动推进。`apply_virtual_view_result` 先在 `borrow_mut` 内写 state 再 drop 后写 Slint，避免 RefCell 跨线程风险。所有可见 pane 走同一条 slot-aware 虚拟视图管线。
 - **Phase 6**: zoom 派生尺寸/字体 token、tile size、media/text rect 和 group/title/location line 坐标迁到 Rust item-view render plan；slice-local tile x/y 改由 `for item[index]` 下标复用计算，避免滑动窗口时重叠条目因局部坐标变化触发 row-data 写入；可见 tile primitive 内联到 `SplitPaneView`，且不再为每个 item 使用 Slint layout 容器

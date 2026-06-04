@@ -57,7 +57,8 @@ use app::item_view::{
     entry_at_pane_point,
 };
 use app::model_update::{
-    update_item_view_entries_model_selection, update_pane_item_view_entries_model,
+    apply_item_view_entry_selection_updates, update_item_view_entry_selection_tokens,
+    update_pane_item_view_entries_model,
 };
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
@@ -4315,15 +4316,20 @@ fn update_virtual_selection_for_slot(
     slot: i32,
     selected_paths: &[String],
 ) {
-    let model = {
-        state
-            .borrow()
-            .panes
-            .pane_for_slot(slot)
-            .map(|pane| pane.view.virtual_entries.clone())
+    let Some((model, updates)) = ({
+        let mut state_ref = state.borrow_mut();
+        state_ref.panes.pane_mut_for_slot(slot).map(|pane| {
+            let updates = update_item_view_entry_selection_tokens(
+                &mut pane.view.virtual_entry_tokens,
+                selected_paths,
+            );
+            (pane.view.virtual_entries.clone(), updates)
+        })
+    }) else {
+        return;
     };
-    if let Some(model) = model {
-        update_item_view_entries_model_selection(&model, selected_paths);
+    if !updates.is_empty() {
+        apply_item_view_entry_selection_updates(&model, &updates);
     }
 }
 

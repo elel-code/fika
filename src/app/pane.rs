@@ -1,13 +1,14 @@
-use crate::app::item_view::{ItemViewInputState, ItemViewRenderMetrics};
+use crate::app::item_view::{ItemViewInputState, ItemViewRenderMetrics, ItemViewRowToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use crate::{FileEntry, ItemViewEntry};
-use slint::ModelRc;
+use slint::{Model, ModelRc, VecModel};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -66,6 +67,8 @@ impl PaneState {
         pane.search = self.search.clone();
         pane.view.viewport_x = self.view.viewport_x;
         pane.view.virtual_view = self.view.virtual_view.clone();
+        pane.view.virtual_entries = clone_item_view_entries_model(&self.view.virtual_entries);
+        pane.view.virtual_entry_tokens = self.view.virtual_entry_tokens.clone();
         pane.view.virtual_start_index = self.view.virtual_start_index;
         pane.view.virtual_start_column = self.view.virtual_start_column;
         pane
@@ -94,6 +97,7 @@ impl PaneState {
         self.search.visible_entries_have_locations = false;
         self.search.visible_location_groups = None;
         self.view.virtual_entries = ModelRc::default();
+        self.view.virtual_entry_tokens.clear();
         self.view.virtual_start_index = 0;
         self.view.virtual_start_column = 0;
         self.view.invalidate_virtual_view();
@@ -113,6 +117,13 @@ impl PaneState {
                 .into(),
         );
     }
+}
+
+fn clone_item_view_entries_model(model: &ModelRc<ItemViewEntry>) -> ModelRc<ItemViewEntry> {
+    let entries = (0..model.row_count())
+        .filter_map(|row| model.row_data(row))
+        .collect::<Vec<_>>();
+    ModelRc::new(Rc::new(VecModel::from(entries)))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -453,6 +464,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_view: VirtualViewCache,
     pub(crate) virtual_generation: GenerationCounter,
     pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
+    pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
     pub(crate) virtual_start_index: usize,
     pub(crate) virtual_start_column: usize,
     virtual_prepare_in_flight: Option<u64>,
@@ -694,6 +706,8 @@ impl PaneHistory {
 mod tests {
     use super::*;
     use crate::app::geometry::MainGridLayout;
+    use crate::app::model_update::update_pane_item_view_entries_model;
+    use slint::Model;
 
     fn virtual_prepare_request(
         generation: u64,
@@ -1101,6 +1115,13 @@ mod tests {
         };
         panes.focused_mut().view.virtual_start_index = 4;
         panes.focused_mut().view.virtual_start_column = 1;
+        let virtual_entries = panes
+            .focused()
+            .entries
+            .iter()
+            .map(PaneEntrySnapshot::to_item_view_entry)
+            .collect();
+        update_pane_item_view_entries_model(&mut panes.focused_mut().view, 4, 1, virtual_entries);
 
         assert!(panes.open_peer_from_focused());
         assert!(panes.open_peer_from_focused());
@@ -1129,10 +1150,47 @@ mod tests {
         assert_eq!(inactive.view.virtual_view.thumbnail_size_px, 80);
         assert_eq!(inactive.view.virtual_start_index, 4);
         assert_eq!(inactive.view.virtual_start_column, 1);
+        assert_eq!(inactive.view.virtual_entries.row_count(), 2);
+        assert_eq!(inactive.view.virtual_entry_tokens.len(), 2);
+        assert_eq!(
+            inactive
+                .view
+                .virtual_entries
+                .row_data(0)
+                .expect("inactive row")
+                .name
+                .as_str(),
+            "one.txt"
+        );
         assert!(inactive.selection.paths.is_empty());
         assert!(inactive.selection.anchor.is_none());
         assert_eq!(inactive.history.back_len(), 0);
         assert_eq!(inactive.history.forward_len(), 0);
+
+        let mut focused_row = panes
+            .focused()
+            .view
+            .virtual_entries
+            .row_data(0)
+            .expect("focused row");
+        focused_row.name = "changed.txt".into();
+        panes
+            .focused()
+            .view
+            .virtual_entries
+            .set_row_data(0, focused_row);
+        assert_eq!(
+            panes
+                .pane_for_slot(1)
+                .expect("inactive pane")
+                .view
+                .virtual_entries
+                .row_data(0)
+                .expect("inactive row")
+                .name
+                .as_str(),
+            "one.txt"
+        );
     }
 
     #[test]

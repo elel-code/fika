@@ -5,7 +5,7 @@ use crate::app::geometry::{
 use crate::app::selection::filtered_entry_at_for_slot;
 use crate::app::state::AppState;
 use crate::{AppWindow, FileEntry, ItemViewEntry};
-use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
+use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::ops::Range;
 
 const ITEM_VIEW_PADDING: f32 = 14.0;
@@ -28,6 +28,75 @@ pub(crate) struct ItemViewRenderPlanInput {
     pub(crate) cell_width: f32,
     pub(crate) render_metrics: ItemViewRenderMetrics,
     pub(crate) show_location: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewRowToken {
+    name: SharedString,
+    path: SharedString,
+    group: SharedString,
+    location: SharedString,
+    is_dir: bool,
+    selected: bool,
+    thumbnail_state: i32,
+    media_token: i32,
+    tile_width: f32,
+    tile_height: f32,
+    media_x: f32,
+    media_y: f32,
+    text_x: f32,
+    text_width: f32,
+    group_y: f32,
+    title_y: f32,
+    location_y: f32,
+    metadata_line_height: f32,
+    title_line_height: f32,
+    media_width: f32,
+    media_height: f32,
+    metadata_font_size: f32,
+    title_font_size: f32,
+}
+
+impl ItemViewRowToken {
+    pub(crate) fn from_entry(entry: &ItemViewEntry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            path: entry.path.clone(),
+            group: entry.group.clone(),
+            location: entry.location.clone(),
+            is_dir: entry.is_dir,
+            selected: entry.selected,
+            thumbnail_state: entry.thumbnail_state,
+            media_token: entry.media_token,
+            tile_width: entry.tile_width,
+            tile_height: entry.tile_height,
+            media_x: entry.media_x,
+            media_y: entry.media_y,
+            text_x: entry.text_x,
+            text_width: entry.text_width,
+            group_y: entry.group_y,
+            title_y: entry.title_y,
+            location_y: entry.location_y,
+            metadata_line_height: entry.metadata_line_height,
+            title_line_height: entry.title_line_height,
+            media_width: entry.media_width,
+            media_height: entry.media_height,
+            metadata_font_size: entry.metadata_font_size,
+            title_font_size: entry.title_font_size,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &str {
+        self.path.as_str()
+    }
+
+    pub(crate) fn selected(&self) -> bool {
+        self.selected
+    }
+
+    pub(crate) fn set_selected(&mut self, selected: bool) {
+        self.selected = selected;
+    }
 }
 
 impl ItemViewRenderMetrics {
