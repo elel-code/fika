@@ -548,6 +548,7 @@ Acceptance for all:
   - Current: cancelling queued/active operations now returns the active operation's pane ids in `OperationCancelSummary`; cancellation status is applied through the same affected-pane status route as operation start/progress/completion instead of jumping to the pane focused when Cancel is clicked.
   - Current: start-next-operation queue popping, invalid-request skipping, conflict registration, affected-pane routing, and start status now flow through `OperationStartDecision` from `operation_controller.rs`; `transfer.rs` applies the returned UI effects only after releasing the state borrow and then dispatches the async task.
   - Current: transfer conflict apply-to-remaining queue mutation, default Rename policy, and accepted Cut clipboard source cleanup are now owned by `operation_controller.rs`; `transfer.rs` only delegates those state changes, then syncs clipboard/status UI after the mutable `AppState` borrow has ended.
+  - Current: Undo affected-directory derivation, failed-Undo restoration, and old overwrite-backup cleanup decisions now live in `operation_controller.rs`; `main.rs` applies only refresh/status UI work and performs backup cleanup after releasing the mutable `AppState` borrow.
 
 - [x] Add split view / dual-pane browsing.
   - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.

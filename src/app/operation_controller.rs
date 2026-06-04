@@ -1,5 +1,5 @@
 use crate::app::events::FileOperationProgress;
-use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
+use crate::app::state::{AppState, FileOperationRequest, FileUndo, TransferConflict};
 use crate::fs::{file_ops, privilege};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -72,6 +72,12 @@ pub(crate) struct OperationProgressUpdate {
     pub(crate) pane_ids: Vec<u64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FileUndoRestoreSummary {
+    pub(crate) restored: bool,
+    pub(crate) cleanup_backup: Option<PathBuf>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TransferConflictQueueUpdate {
     pub(crate) applied_remaining: usize,
@@ -102,6 +108,26 @@ impl FileOperationController {
 }
 
 impl AppState {
+    pub(crate) fn replace_file_undo(&mut self, undo: Option<FileUndo>) -> Option<PathBuf> {
+        let old_undo = std::mem::replace(&mut self.last_undo, undo);
+        file_undo_backup_path(old_undo)
+    }
+
+    pub(crate) fn restore_failed_file_undo(&mut self, undo: FileUndo) -> FileUndoRestoreSummary {
+        if self.last_undo.is_none() {
+            self.last_undo = Some(undo);
+            FileUndoRestoreSummary {
+                restored: true,
+                cleanup_backup: None,
+            }
+        } else {
+            FileUndoRestoreSummary {
+                restored: false,
+                cleanup_backup: file_undo_backup_path(Some(undo)),
+            }
+        }
+    }
+
     pub(crate) fn queue_file_operation(
         &mut self,
         mut request: FileOperationRequest,
@@ -383,6 +409,39 @@ impl AppState {
         }
         changed
     }
+}
+
+pub(crate) fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    push_unique_parent(&mut dirs, &undo.original_source);
+    push_unique_parent(&mut dirs, &undo.destination);
+    for item in &undo.items {
+        push_unique_parent(&mut dirs, &item.original_source);
+        push_unique_parent(&mut dirs, &item.destination);
+    }
+    dirs
+}
+
+fn push_unique_parent(paths: &mut Vec<PathBuf>, path: &Path) {
+    if let Some(parent) = path.parent() {
+        push_unique_path(paths, parent.to_path_buf());
+    }
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+pub(crate) fn cleanup_file_undo_backup(backup: Option<PathBuf>) {
+    if let Some(backup) = backup {
+        let _ = file_ops::cleanup_overwrite_backup(&backup);
+    }
+}
+
+fn file_undo_backup_path(undo: Option<FileUndo>) -> Option<PathBuf> {
+    undo.and_then(|undo| undo.overwritten_backup)
 }
 
 pub(crate) fn affected_directory_pane_ids<'a>(
@@ -742,7 +801,7 @@ fn operation_item_label(path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::app::pane::PreparedDirectoryEntries;
-    use crate::app::state::AppState;
+    use crate::app::state::{AppState, FileUndo, FileUndoItem};
     use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
@@ -754,6 +813,16 @@ mod tests {
             source: PathBuf::from("/tmp/source"),
             target_dir: PathBuf::from("/tmp/target"),
             conflict_policy: "ask".to_string(),
+        }
+    }
+
+    fn undo(operation: &str, original_source: &str, destination: &str) -> FileUndo {
+        FileUndo {
+            operation: operation.to_string(),
+            original_source: PathBuf::from(original_source),
+            destination: PathBuf::from(destination),
+            overwritten_backup: None,
+            items: Vec::new(),
         }
     }
 
@@ -778,6 +847,88 @@ mod tests {
         assert_eq!(second.id, 2);
         assert_eq!(second.queued_len, 2);
         assert!(second.active);
+    }
+
+    #[test]
+    fn failed_file_undo_is_restored_when_no_newer_undo_exists() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let undo = undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
+
+        assert_eq!(
+            state.restore_failed_file_undo(undo.clone()),
+            FileUndoRestoreSummary {
+                restored: true,
+                cleanup_backup: None,
+            }
+        );
+
+        let restored = state.last_undo.as_ref().unwrap();
+        assert_eq!(restored.operation, undo.operation);
+        assert_eq!(restored.original_source, undo.original_source);
+        assert_eq!(restored.destination, undo.destination);
+    }
+
+    #[test]
+    fn failed_file_undo_does_not_replace_newer_undo() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let newer = undo("move", "/tmp/new-source.txt", "/tmp/new-target.txt");
+        state.last_undo = Some(newer.clone());
+        let mut failed = undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
+        failed.overwritten_backup = Some(PathBuf::from("/tmp/fika-backup"));
+
+        assert_eq!(
+            state.restore_failed_file_undo(failed),
+            FileUndoRestoreSummary {
+                restored: false,
+                cleanup_backup: Some(PathBuf::from("/tmp/fika-backup")),
+            }
+        );
+
+        let retained = state.last_undo.as_ref().unwrap();
+        assert_eq!(retained.operation, newer.operation);
+        assert_eq!(retained.original_source, newer.original_source);
+        assert_eq!(retained.destination, newer.destination);
+    }
+
+    #[test]
+    fn replace_file_undo_returns_previous_backup_for_cleanup() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let mut previous = undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
+        previous.overwritten_backup = Some(PathBuf::from("/tmp/old-backup"));
+        state.last_undo = Some(previous);
+
+        assert_eq!(
+            state.replace_file_undo(Some(undo("move", "/tmp/a", "/tmp/b"))),
+            Some(PathBuf::from("/tmp/old-backup"))
+        );
+        assert_eq!(
+            state.last_undo.as_ref().map(|undo| undo.operation.as_str()),
+            Some("move")
+        );
+    }
+
+    #[test]
+    fn file_undo_affected_dirs_are_deduplicated_in_operation_order() {
+        let mut undo = undo("copy", "/tmp/source/one.txt", "/tmp/target/one.txt");
+        undo.items = vec![
+            FileUndoItem {
+                original_source: PathBuf::from("/tmp/source/two.txt"),
+                destination: PathBuf::from("/tmp/target/two.txt"),
+            },
+            FileUndoItem {
+                original_source: PathBuf::from("/tmp/other/three.txt"),
+                destination: PathBuf::from("/tmp/target/three.txt"),
+            },
+        ];
+
+        assert_eq!(
+            file_undo_affected_dirs(&undo),
+            vec![
+                PathBuf::from("/tmp/source"),
+                PathBuf::from("/tmp/target"),
+                PathBuf::from("/tmp/other"),
+            ]
+        );
     }
 
     #[test]

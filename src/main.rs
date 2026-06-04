@@ -54,8 +54,8 @@ use app::geometry::{
 };
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
-    OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
-    operation_finished_label,
+    OperationResultDisposition, affected_directory_pane_ids, cleanup_file_undo_backup,
+    file_undo_affected_dirs, operation_final_status, operation_finished_label,
 };
 use app::pane::{DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries};
 #[cfg(test)]
@@ -2919,22 +2919,12 @@ fn register_file_undo(
 }
 
 fn register_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, undo: FileUndo) {
-    replace_file_undo(state, Some(undo));
-    sync_undo_ui(ui, state);
-}
-
-fn replace_file_undo(state: &Rc<RefCell<AppState>>, undo: Option<FileUndo>) {
-    let old_undo = {
+    let cleanup_backup = {
         let mut state = state.borrow_mut();
-        std::mem::replace(&mut state.last_undo, undo)
+        state.replace_file_undo(Some(undo))
     };
-    cleanup_file_undo_backup(old_undo);
-}
-
-fn cleanup_file_undo_backup(undo: Option<FileUndo>) {
-    if let Some(backup) = undo.and_then(|undo| undo.overwritten_backup) {
-        let _ = fs::file_ops::cleanup_overwrite_backup(&backup);
-    }
+    cleanup_file_undo_backup(cleanup_backup);
+    sync_undo_ui(ui, state);
 }
 
 fn sync_undo_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -3023,9 +3013,13 @@ fn apply_file_undo_result(
             set_status_for_panes(ui, state, &pane_ids, &format!("Undo complete: {message}"));
         }
         Err(err) => {
-            let restored = restore_failed_file_undo(state, result.undo);
+            let restore = {
+                let mut state = state.borrow_mut();
+                state.restore_failed_file_undo(result.undo)
+            };
+            cleanup_file_undo_backup(restore.cleanup_backup);
             sync_undo_ui(ui, state);
-            if restored {
+            if restore.restored {
                 set_status_for_panes(
                     ui,
                     state,
@@ -3041,41 +3035,6 @@ fn apply_file_undo_result(
                 );
             }
         }
-    }
-}
-
-fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    push_unique_parent(&mut dirs, &undo.original_source);
-    push_unique_parent(&mut dirs, &undo.destination);
-    for item in &undo.items {
-        push_unique_parent(&mut dirs, &item.original_source);
-        push_unique_parent(&mut dirs, &item.destination);
-    }
-    dirs
-}
-
-fn push_unique_parent(paths: &mut Vec<PathBuf>, path: &Path) {
-    if let Some(parent) = path.parent() {
-        push_unique_path(paths, parent.to_path_buf());
-    }
-}
-
-fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|existing| existing == &path) {
-        paths.push(path);
-    }
-}
-
-fn restore_failed_file_undo(state: &Rc<RefCell<AppState>>, undo: FileUndo) -> bool {
-    let mut state_ref = state.borrow_mut();
-    if state_ref.last_undo.is_none() {
-        state_ref.last_undo = Some(undo);
-        true
-    } else {
-        drop(state_ref);
-        cleanup_file_undo_backup(Some(undo));
-        false
     }
 }
 
@@ -5387,66 +5346,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_file_undo_is_restored_when_no_newer_undo_exists() {
-        let state = Rc::new(RefCell::new(AppState::new(
-            PathBuf::from("/tmp"),
-            Vec::new(),
-        )));
-        let undo = test_undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
-
-        assert!(restore_failed_file_undo(&state, undo.clone()));
-
-        let state = state.borrow();
-        let restored = state.last_undo.as_ref().unwrap();
-        assert_eq!(restored.operation, undo.operation);
-        assert_eq!(restored.original_source, undo.original_source);
-        assert_eq!(restored.destination, undo.destination);
-    }
-
-    #[test]
-    fn failed_file_undo_does_not_replace_newer_undo() {
-        let state = Rc::new(RefCell::new(AppState::new(
-            PathBuf::from("/tmp"),
-            Vec::new(),
-        )));
-        let newer = test_undo("move", "/tmp/new-source.txt", "/tmp/new-target.txt");
-        state.borrow_mut().last_undo = Some(newer.clone());
-        let failed = test_undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
-
-        assert!(!restore_failed_file_undo(&state, failed));
-
-        let state = state.borrow();
-        let retained = state.last_undo.as_ref().unwrap();
-        assert_eq!(retained.operation, newer.operation);
-        assert_eq!(retained.original_source, newer.original_source);
-        assert_eq!(retained.destination, newer.destination);
-    }
-
-    #[test]
-    fn file_undo_affected_dirs_are_deduplicated_in_operation_order() {
-        let mut undo = test_undo("copy", "/tmp/source/one.txt", "/tmp/target/one.txt");
-        undo.items = vec![
-            crate::app::state::FileUndoItem {
-                original_source: PathBuf::from("/tmp/source/two.txt"),
-                destination: PathBuf::from("/tmp/target/two.txt"),
-            },
-            crate::app::state::FileUndoItem {
-                original_source: PathBuf::from("/tmp/other/three.txt"),
-                destination: PathBuf::from("/tmp/target/three.txt"),
-            },
-        ];
-
-        assert_eq!(
-            file_undo_affected_dirs(&undo),
-            vec![
-                PathBuf::from("/tmp/source"),
-                PathBuf::from("/tmp/target"),
-                PathBuf::from("/tmp/other"),
-            ]
-        );
-    }
-
-    #[test]
     fn pane_status_target_slots_route_to_affected_panes() {
         let mut state = AppState::new(PathBuf::from("/tmp/slot-0"), Vec::new());
         let slot_0_id = state.panes.focused().id;
@@ -5839,6 +5738,10 @@ mod tests {
     #[test]
     fn file_undo_status_uses_affected_pane_route() {
         let source = include_str!("main.rs");
+        let production_source = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(body, _)| body)
+            .unwrap_or(source);
         let start_body = source
             .split_once("fn start_file_undo(")
             .and_then(|(_, rest)| rest.split_once("fn apply_file_undo_result("))
@@ -5846,7 +5749,7 @@ mod tests {
             .expect("start_file_undo body should be present");
         let result_body = source
             .split_once("fn apply_file_undo_result(")
-            .and_then(|(_, rest)| rest.split_once("fn file_undo_affected_dirs("))
+            .and_then(|(_, rest)| rest.split_once("fn apply_device_mount_result("))
             .map(|(body, _)| body)
             .expect("apply_file_undo_result body should be present");
 
@@ -5860,8 +5763,17 @@ mod tests {
         assert!(
             result_body.contains(
                 "let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);"
-            ) && result_body.matches("set_status_for_panes(").count() == 3,
+            ) && result_body.contains("state.restore_failed_file_undo(result.undo)")
+                && result_body.contains("cleanup_file_undo_backup(restore.cleanup_backup);")
+                && result_body.contains("if restore.restored {")
+                && result_body.matches("set_status_for_panes(").count() == 3,
             "file undo result status should use the same affected-pane route as its refresh"
+        );
+        assert!(
+            !production_source.contains("fn file_undo_affected_dirs(")
+                && !production_source.contains("fn restore_failed_file_undo(")
+                && !production_source.contains("fn cleanup_file_undo_backup("),
+            "file undo state decisions should live in operation_controller.rs, not main.rs"
         );
         assert!(
             !start_body.contains("set_status(\n        ui,\n        &format!(\"Undoing {}...\"")
@@ -6167,16 +6079,6 @@ mod tests {
             directory_watch_paths(&trash_files),
             vec![trash_files, trash_info]
         );
-    }
-
-    fn test_undo(operation: &str, original_source: &str, destination: &str) -> FileUndo {
-        FileUndo {
-            operation: operation.to_string(),
-            original_source: PathBuf::from(original_source),
-            destination: PathBuf::from(destination),
-            overwritten_backup: None,
-            items: Vec::new(),
-        }
     }
 
     fn test_entry(name: &str, path: &str) -> FileEntry {
