@@ -257,7 +257,7 @@ mod tests {
         assert!(pane_slot.contains("go_forward(slot) => { PaneRouting.go-forward(slot); }"));
 
         let main_pane = &app[main_pane_start..];
-        assert!(main_pane.contains("for pane in root.pane_slots : PaneSlotSurface"));
+        assert!(main_pane.contains("for pane[index] in root.pane_slots : PaneSlotSurface"));
         assert_eq!(main_pane.matches("PaneSlotSurface {").count(), 1);
         assert_eq!(main_pane.matches("PaneSlot {").count(), 0);
         assert!(app.contains("public function route-pane-go-back(slot: int)"));

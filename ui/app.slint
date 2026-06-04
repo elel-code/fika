@@ -55,7 +55,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewEntry, PaneSlotData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewEntry, PaneSlotData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -433,6 +433,8 @@ component PaneSlot inherits FilePane {
 
 component PaneSlotSurface inherits Rectangle {
     in property <PaneSlotData> pane;
+    in property <PaneViewData> view;
+    in property <[ItemViewEntry]> entries;
     in property <bool> focused: false;
     in property <bool> dark-mode;
     in property <color> pane-shell-base-color;
@@ -453,7 +455,7 @@ component PaneSlotSurface inherits Rectangle {
     private property <bool> live-path-focused: root.pane.path_focused;
     private property <int> live-slot: root.pane.slot;
     private property <string> live-current-path: root.pane.current_path;
-    private property <float> live-viewport-x: root.pane.viewport_x;
+    private property <float> live-viewport-x: root.view.viewport_x;
     private property <bool> live-drag-active: false;
     private property <bool> live-drag-rejected: false;
     private property <string> live-drag-target-path;
@@ -466,11 +468,17 @@ component PaneSlotSurface inherits Rectangle {
             root.live-path-text = root.pane.path_text;
         }
         root.live-path-focused = root.pane.path_focused;
-        if (root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path || root.live-viewport-x != root.pane.viewport_x) {
-            root.live-viewport-x = root.pane.viewport_x;
+        if (root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path) {
+            root.live-viewport-x = root.view.viewport_x;
         }
         root.live-slot = root.pane.slot;
         root.live-current-path = root.pane.current_path;
+    }
+
+    changed view => {
+        if (root.live-slot != root.view.slot || root.live-viewport-x != root.view.viewport_x) {
+            root.live-viewport-x = root.view.viewport_x;
+        }
     }
 
     PaneSlot {
@@ -498,28 +506,28 @@ component PaneSlotSurface inherits Rectangle {
         search-kind-filter <=> root.pane-search-kind-filter;
         search-modified-filter <=> root.pane-search-modified-filter;
         search-size-filter <=> root.pane-search-size-filter;
-        content-interactive: root.pane.content_interactive;
-        drop-ready: root.pane.drop_ready;
+        content-interactive: root.view.content_interactive;
+        drop-ready: root.view.drop_ready;
         drop-trace-prefix: root.pane.drop_trace_prefix;
-        entry-count: root.pane.entry_count;
-        entries: root.pane.entries;
-        virtual-start-column: root.pane.virtual_start_column;
+        entry-count: root.view.entry_count;
+        entries: root.entries;
+        virtual-start-column: root.view.virtual_start_column;
         viewport-x <=> root.live-viewport-x;
-        item-view-rows-per-column: root.pane.item_view_rows_per_column;
-        item-view-cell-width: root.pane.item_view_cell_width;
-        item-view-row-height: root.pane.item_view_row_height;
-        item-view-padding: root.pane.item_view_padding;
-        item-view-content-width: root.pane.item_view_content_width;
-        item-view-virtual-slice-width: root.pane.item_view_virtual_slice_width;
-        item-view-scroll-max-x: root.pane.item_view_scroll_max_x;
-        selection-revision: root.pane.selection_revision;
-        show-location: root.pane.show_location;
+        item-view-rows-per-column: root.view.item_view_rows_per_column;
+        item-view-cell-width: root.view.item_view_cell_width;
+        item-view-row-height: root.view.item_view_row_height;
+        item-view-padding: root.view.item_view_padding;
+        item-view-content-width: root.view.item_view_content_width;
+        item-view-virtual-slice-width: root.view.item_view_virtual_slice_width;
+        item-view-scroll-max-x: root.view.item_view_scroll_max_x;
+        selection-revision: root.view.selection_revision;
+        show-location: root.view.show_location;
         drag-active <=> root.live-drag-active;
         drag-rejected <=> root.live-drag-rejected;
         drag-target-path <=> root.live-drag-target-path;
-        empty-message-visible: root.pane.empty_message_visible;
-        empty-title: root.pane.empty_title;
-        empty-subtitle: root.pane.empty_subtitle;
+        empty-message-visible: root.view.empty_message_visible;
+        empty-title: root.view.empty_title;
+        empty-subtitle: root.view.empty_subtitle;
         status: root.pane.status;
         selected-count: root.pane.selected_count;
         selected-status: root.pane.selected_status;
@@ -561,6 +569,9 @@ export component AppWindow inherits Window {
     in property <[ChooserChoiceOption]> chooser_filter_options;
     in property <[ChooserChoice]> chooser_choices;
     in property <[PaneSlotData]> pane_slots;
+    in property <[PaneViewData]> pane_views;
+    in property <[ItemViewEntry]> pane_slot_0_entries;
+    in property <[ItemViewEntry]> pane_slot_1_entries;
     in-out property <int> entry_count: 0;
     in property <[PlaceEntry]> places;
     in property <[DeviceEntry]> devices;
@@ -1557,12 +1568,14 @@ export component AppWindow inherits Window {
                     height: parent.height;
                     clip: true;
 
-                    for pane in root.pane_slots : PaneSlotSurface {
+                    for pane[index] in root.pane_slots : PaneSlotSurface {
                         private property <int> slot: pane.slot;
                         x: root.pane-slot-x(slot);
                         width: root.pane-slot-width(slot);
                         height: parent.height;
                         pane: pane;
+                        view: root.pane_views[index];
+                        entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;
                         focused: root.focused_pane == slot;
                         dark-mode: root.dark_mode;
                         pane-shell-base-color: root.shell-base-color;

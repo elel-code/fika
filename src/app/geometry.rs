@@ -185,11 +185,11 @@ pub(crate) fn virtual_grid_plan(
 
 pub(crate) fn icon_cell_width(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 112.0,
-        1 => 132.0,
-        2 => 156.0,
-        3 => 184.0,
-        _ => 216.0,
+        0 => 80.0,
+        1 => 96.0,
+        2 => 112.0,
+        3 => 132.0,
+        _ => 156.0,
     }
 }
 
@@ -1722,7 +1722,7 @@ mod tests {
                 && app.contains("pane-content := Rectangle")
                 && app.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));")
                 && app.contains("in property <[PaneSlotData]> pane_slots;")
-                && app.contains("for pane in root.pane_slots : PaneSlotSurface")
+                && app.contains("for pane[index] in root.pane_slots : PaneSlotSurface")
                 && app.contains("current-path: root.pane.current_path;")
                 && app.contains("if (root.search-panel-visible) : SearchPanel")
                 && app.contains("SplitPaneView {"),
@@ -1939,7 +1939,7 @@ mod tests {
         assert!(app.contains(
             "private property <int> visible-pane-count: max(1, root.pane_slots.length);"
         ));
-        assert!(app.contains("for pane in root.pane_slots : PaneSlotSurface"));
+        assert!(app.contains("for pane[index] in root.pane_slots : PaneSlotSurface"));
         assert!(app.contains("private property <int> slot: pane.slot;"));
         assert!(app.contains("x: root.pane-slot-x(slot);"));
         assert!(app.contains("width: root.pane-slot-width(slot);"));
@@ -2176,6 +2176,8 @@ mod tests {
         assert!(
             pane_slot_surface.contains("PaneSlot {")
                 && pane_slot_surface.contains("in property <PaneSlotData> pane;")
+                && pane_slot_surface.contains("in property <PaneViewData> view;")
+                && pane_slot_surface.contains("in property <[ItemViewEntry]> entries;")
                 && pane_slot_surface.contains("pane-slot: root.pane.slot;")
                 && pane_slot_surface.contains("current-path: root.pane.current_path;")
                 && pane_slot_surface
@@ -2187,11 +2189,16 @@ mod tests {
                 && pane_slot_surface.contains("can-go-back: root.pane.can_go_back;")
                 && pane_slot_surface.contains("can-go-forward: root.pane.can_go_forward;")
                 && pane_slot_surface
-                    .contains("private property <float> live-viewport-x: root.pane.viewport_x;")
+                    .contains("private property <float> live-viewport-x: root.view.viewport_x;")
                 && pane_slot_surface.contains(
-                    "root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path || root.live-viewport-x != root.pane.viewport_x"
+                    "root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path"
+                )
+                && pane_slot_surface.contains("changed view => {")
+                && pane_slot_surface.contains(
+                    "root.live-slot != root.view.slot || root.live-viewport-x != root.view.viewport_x"
                 )
                 && pane_slot_surface.contains("viewport-x <=> root.live-viewport-x;")
+                && pane_slot_surface.contains("entries: root.entries;")
                 && pane_slot_surface.contains("callback viewport_changed(int, float);")
                 && pane_slot_surface.contains(
                     "viewport_changed(slot, viewport-x) => {\n            root.viewport_changed(slot, viewport-x);\n        }"
@@ -2229,8 +2236,10 @@ mod tests {
             "split pane row should give each physical pane its own full-height chrome"
         );
         assert!(
-            app.contains("for pane in root.pane_slots : PaneSlotSurface {\n                        private property <int> slot: pane.slot;\n                        x: root.pane-slot-x(slot);\n                        width: root.pane-slot-width(slot);\n                        height: parent.height;")
+            app.contains("for pane[index] in root.pane_slots : PaneSlotSurface {\n                        private property <int> slot: pane.slot;\n                        x: root.pane-slot-x(slot);\n                        width: root.pane-slot-width(slot);\n                        height: parent.height;")
                 && app.contains("pane: pane;")
+                && app.contains("view: root.pane_views[index];")
+                && app.contains("entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;")
                 && app.contains("focused: root.focused_pane == slot;"),
             "split view should render every physical pane through one slot-driven PaneSlotSurface template"
         );
@@ -2261,7 +2270,7 @@ mod tests {
             1,
             "split view must render physical panes through one reusable PaneSlotSurface repeater"
         );
-        assert!(pane_shells.contains("for pane in root.pane_slots : PaneSlotSurface"));
+        assert!(pane_shells.contains("for pane[index] in root.pane_slots : PaneSlotSurface"));
         assert_eq!(
             pane_shells.matches("PaneSlot {").count(),
             0,
@@ -2508,18 +2517,14 @@ mod tests {
                 && split_pane.contains("height: item.tile_height * 1px;")
                 && split_pane.contains("width: item.media_width * 1px;")
                 && split_pane.contains("font-size: max(12px, item.title_font_size * 1px);")
-                && split_pane.contains(
-                    "x: root.show-location && (item.group != \"\" || item.location != \"\") ? item.text_x * 1px : 6px;"
-                )
-                && split_pane.contains(
-                    "y: root.show-location && (item.group != \"\" || item.location != \"\") ? item.title_y * 1px : max(0px, parent.height - max(16px, item.title_line_height * 1px) - 2px);"
-                )
-                && split_pane.contains(
-                    "width: root.show-location && (item.group != \"\" || item.location != \"\") ? item.text_width * 1px : max(1px, parent.width - 12px);"
-                )
+                && split_pane.contains("x: item.text_x * 1px;")
+                && split_pane.contains("y: item.title_y * 1px;")
+                && split_pane.contains("width: item.text_width * 1px;")
                 && split_pane.contains(
                     "horizontal-alignment: root.show-location && (item.group != \"\" || item.location != \"\") ? left : center;"
                 )
+                && !split_pane.contains("parent.height - max(16px, item.title_line_height")
+                && !split_pane.contains("parent.width - 12px")
                 && split_pane.contains("height: item.metadata_line_height * 1px;")
                 && !split_pane.contains("item.thumbnail_width")
                 && !split_pane.contains("doc-font-size:")
@@ -2676,7 +2681,7 @@ mod tests {
         assert!(
             app.contains("pane-row := Rectangle")
                 && app.contains("height: parent.height;")
-                && app.contains("for pane in root.pane_slots : PaneSlotSurface")
+                && app.contains("for pane[index] in root.pane_slots : PaneSlotSurface")
                 && app.contains("private property <int> slot: pane.slot;")
                 && app.contains("x: root.pane-slot-x(slot);")
                 && app.contains("width: root.pane-slot-width(slot);")

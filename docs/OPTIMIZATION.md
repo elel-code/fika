@@ -15,7 +15,7 @@ Slint SplitPaneView 自管 viewport-x
   ├─ 自管 scrollbar drag/click → set-viewport-x(raw)
   └─ pane-local width / rows-per-column 变化 → relayout-visible-slice()
        └─ root.view_changed() → PaneRouting.view-changed(slot)
-            └─ Rust: PaneViewSyncScheduler 合并同 slot 请求
+            └─ Rust: PaneViewSyncScheduler 同步重建当前 visible slice
                  └─ sync_virtual_entries_for_slot()  [src/main.rs]
                       ├─ MainGridLayout::from_ui_for_pane_width()
                       │    └─ 只对 focused slot 扣搜索栏高度
@@ -29,7 +29,7 @@ Slint SplitPaneView 自管 viewport-x
                       ├─ prioritize_thumbnail_entries()         [thumbnail_pipeline.rs]
                       ├─ schedule_visible_thumbnails()          (异步)
                       ├─ set_virtual_entries(VecModel)          → Slint
-                      └─ sync_pane_slot_ui()                   [split_view.rs]
+                      └─ sync_pane_view_ui()                   [split_view.rs]
 ```
 
 ### 当前主视图结构 (ui/split_pane.slint)
@@ -104,23 +104,24 @@ changed viewport-x => {
 - `src/main.rs` — `sync_virtual_entries_for_slot`
 - `ui/split_pane.slint` — `set-viewport-x(raw)` / `relayout-visible-slice()`
 
-**实际实现**（✅ 已完成）：Rust 侧已有一个短合并窗口（8ms，约半帧）：
+**实际实现**（✅ 已调整）：早期实现使用 8ms 合并窗口降低滚动计算量，但末尾 fullscreen/resize 和快速滚动时会把 visible slice 恢复推迟到 timer 之后。当前路径参考 Dolphin `KItemListView::setScrollOffset()`：viewport 变化后立刻进入 `sync_pane_viewport_for_slot()`，同步夹紧并重建当前 visible slice；只用 `PaneViewSyncScheduler` 的 re-entrancy guard 防止 Slint 回调重入。
 
 ```
 滚动事件到达
-  ├─ 立即写回 viewport_x 到 Slint（保证渲染不卡）
-  └─ 启动/重置 8ms coalesce timer
-       └─ timer 到期 → 执行一次 sync_virtual_entries
+  ├─ Slint 本地 live viewport-x 立即更新
+  └─ Rust 同步 sync_virtual_entries_for_slot_with_count(..., immediate=true)
+       ├─ 缓存覆盖当前 visible range：只更新 AppState viewport，必要时发布 clamp
+       └─ 缓存不覆盖：同步准备并写入当前 PaneViewData
 ```
 
 关键设计点：
-- viewport_x 的 Slint 写回不在合并窗口内——每次事件都立即写回，保证自管 viewport 实时跟手
-- 只有虚拟切片同步（`sync_virtual_entries`）在合并窗口内
-- 需要从 `PaneRouting.view-changed` 回调路径中提取合并逻辑
+- viewport-x 的 Slint 本地状态仍由 pane surface 持有，普通滚动不再每步把 viewport 反发布到 pane row。
+- layout/fullscreen/rows-per-column 变化走 immediate layout rebuild，不等待 timer，也不需要手动拖动滚动条恢复。
+- `PaneViewData` 承载 viewport、layout metrics、空状态等主视图热数据；可见 `ItemViewEntry` 切片作为 pane-local 顶层 slot model 单独下发，避免把 item model 嵌套进 pane row data；`PaneSlotData` 只保留地址栏、搜索、状态栏、chooser 等 pane chrome 冷数据。
 
-`PaneViewSyncScheduler` 用 `slint::Timer` SingleShot 收集 pending slot，timer 到期后按 slot 去重调用 `sync_pane_viewport_for_slot()`。layout/fullscreen/rows-per-column 变化会先 flush pending 滚动同步，再走 immediate layout rebuild，避免末尾 resize 后等待手动滚动条恢复。
+`PaneViewSyncScheduler` 不再使用 `slint::Timer` 聚合滚动事件；它只持有 weak UI/state/bridge 并用 `syncing: Cell<bool>` 跳过递归重入。
 
-**收益**：高速滚动时 Rust 计算量下降 60-80%（从每帧变为每 2-3 帧一次）。
+**收益**：牺牲旧 timer 合并带来的少量计算节流，换取滚动、末尾 resize/fullscreen、pane-local layout 变化时的同步可见内容恢复，避免出现必须手动拖动滚动条才能恢复的空白段。
 
 **难度**：中。需要引入 coalesce timer，且要与现有的 `RefCell<AppState>` 借用模式协调。
 
@@ -154,7 +155,7 @@ fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 **难度**：低。纯 Rust 修改，不改变任何 Slint 接口。
 
-**后续补充实现**（✅ 已完成）：`set_pane_viewport_ui()` 现在只把 pane-local `view.viewport_x` 写入 `AppState`，然后通过 `sync_pane_slot_viewport_ui()` patch 当前 `PaneSlotData.viewport_x` 字段；只有 pane row 缺失时才回退到 `sync_pane_slot_ui()` 重建整行。这避免边界 clamp、目录 view-state 恢复、Split 打开/关闭 viewport 发布时为了一个浮点字段重新构建完整 `PaneSlotData`。
+**后续补充实现**（✅ 已完成）：`set_pane_viewport_ui()` 现在只把 pane-local `view.viewport_x` 写入 `AppState`，然后通过 `sync_pane_view_viewport_ui()` patch 当前 `PaneViewData.viewport_x` 字段；只有 view row 缺失时才回退到 `sync_pane_view_ui()`。主视图热字段已经从 `PaneSlotData` 拆到同序 `PaneViewData`，边界 clamp、目录 view-state 恢复、虚拟切片重建和 selection revision 更新不再重建 pane chrome row。
 
 ---
 
@@ -298,9 +299,9 @@ Slint: Rectangle viewport + input/DnD overlays
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD、selection、activation 与 context menu 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
 4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；可见 tile primitive 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
-5. 虚拟切片仍输出 `virtual_entries`，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；普通图标视图使用图标居中、标题在下方居中的布局，且 `SplitPaneView` 对普通标题保留 tile-width 底部锚定和最小字号兜底；带 group/location 的递归搜索结果才使用横向 media + text 元数据布局。local `x/y` 改由 `for item[index]` 下标和 pane row metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
+5. 虚拟切片仍输出 `virtual_entries`，但主视图热字段已通过 `PaneViewData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）以及 viewport、selection revision 和空状态；可见 entries 单独作为 pane-local 顶层 slot model 下发，避免 nested model in row；`PaneSlotData` 只保留 pane chrome/status/search/chooser 冷数据。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；普通图标视图使用图标居中、标题在下方居中的布局，标题 rect 落在与 row/item height 同源的 tile rect 内；带 group/location 的递归搜索结果才使用横向 media + text 元数据布局。local `x/y` 改由 `for item[index]` 下标和 pane view metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
-7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。普通 item 的标题区域由 Rust 提供 line/font token，并在 Slint 绘制层用 tile 底部锚定、tile 宽度和最小字号保证可见；递归搜索带位置元数据的 item 才按 Rust 投影的 `text_x/text_width/group_y/title_y/location_y` 左对齐显示多行信息。
+7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。普通 item 的标题区域由 Rust 提供 `text_x/text_width/title_y/title_line_height/font` token，tile height 与 row height 同源，Slint 绘制层只消费这些 rect；递归搜索带位置元数据的 item 才按 Rust 投影的 `text_x/text_width/group_y/title_y/location_y` 左对齐显示多行信息。
 8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 Rust item-view media renderer：虚拟切片进入 Slint 前会把成功缩略图或 fallback 文件/目录图标统一投影为 `ItemViewEntry.media`，主视图 loop 只保留一个 media `Image` primitive。
 9. `ItemViewEntry.media_token` 作为 Rust-side media 更新令牌进入可见 row；`model_update` 同时维护 pane-local `ItemViewRowToken` sidecar。虚拟切片滑动的重叠 row 先比较 sidecar token，token 相同就不读取 `VecModel::row_data()`，因此不会为了判断复用而克隆包含 `Image` 的整条 `ItemViewEntry`。split pane 快照也会复制到独立 `VecModel`，避免两个 pane 共享同一个可见 row 模型。
 10. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
@@ -755,7 +756,7 @@ private property <bool> file-operation-shortcuts-blocked:
 
 ### 自管 scrollbar 几何
 
-`viewport-content-width`、`virtual-slice-width` 和 `scroll-max-x` 现在由 Rust `pane_slot_item_view_metrics()` 通过同一套 `MainGridLayout` / `main_scroll_max_x()` 计算，并随 `PaneSlotData` 下发给 `SplitPaneView`。Slint 只消费这些 metrics 做 scrollbar、viewport clamp 和切片偏移，不再自己根据 `entry-count` / `rows-per-column` / `zoom-level` 重算主视图 layouter。
+`viewport-content-width`、`virtual-slice-width` 和 `scroll-max-x` 现在由 Rust `pane_slot_item_view_metrics()` 通过同一套 `MainGridLayout` / `main_scroll_max_x()` 计算，并随 `PaneViewData` 下发给 `SplitPaneView`。Slint 只消费这些 metrics 做 scrollbar、viewport clamp 和切片偏移，不再自己根据 `entry-count` / `rows-per-column` / `zoom-level` 重算主视图 layouter。
 
 已处理的布局恢复问题：`SplitPaneView` 现在在 pane-local `width` 或 `rows-per-column` 变化时主动夹紧 `viewport-x` 并请求虚拟切片刷新。这样全屏/布局变化发生在大目录末尾时，不再依赖后续手动拖动滚动条来触发旧切片重建。
 
@@ -788,15 +789,15 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | 阶段 | 改进 | 预计工作量 | 状态 |
 |------|------|-----------|------|
 | **Phase 1** | P0 边界提前退出 + P1 `sync_pane_slots_ui` 去重 | 1-2h | ✅ 已完成 |
-| **Phase 2** | P1 滚轮事件合并 (Coalesce 8ms) | 2-3h | ✅ 已完成 |
+| **Phase 2** | P1 旧 8ms 合并窗口，后续替换为同步 visible slice | 2-3h | ✅ 已替换 |
 | **Phase 3** | P2 Slint model 增量更新 (`model_update.rs`) | 3-4h | ✅ 已完成 |
 | **Phase 4** | P2 缩略图批量写入 (Flush 16ms) | 2-3h | ✅ 已完成 |
 | **Phase 5** | P3 UI 线程计算后移 | 1-2d | ✅ 已完成 |
 | **Phase 6** | P3 tile primitive 简化 | 1-2h | ✅ 已完成 |
 
 **Phase 1-6 实现要点**：
-- **Phase 1**: `changed viewport-x` 提前退出 + `sync_pane_slots_ui` row_data 脏检查 + 新增 `sync_pane_slot_ui` 单 slot 增量 + `sync_pane_slot_viewport_ui` 单字段 viewport row patch
-- **Phase 2**: `PaneViewSyncScheduler` (8ms `slint::Timer` SingleShot) + `sync_pane_viewport_for_slot` viewport-only 路径 + layout/flush 分离
+- **Phase 1**: `changed viewport-x` 提前退出 + `sync_pane_slots_ui` row_data 脏检查 + 新增 `sync_pane_slot_ui` 单 slot 增量；主视图热字段现已拆到 `PaneViewData`
+- **Phase 2**: 旧 `PaneViewSyncScheduler` 8ms timer 已删除；当前 scheduler 同步调用 `sync_pane_viewport_for_slot` 并只保留重入保护，layout/viewport 变化立即重建当前 visible slice
 - **Phase 3**: 新模块 `src/app/model_update.rs` — `VecModel::downcast_ref` 增量更新，支持前/后滑动 + `set_row_data` 逐行脏检查；当前重叠 row 复用通过 pane-local `ItemViewRowToken` sidecar 判断，避免为了比较而读取并克隆 Slint row data
 - **Phase 4**: `ThumbnailFlushScheduler` (16ms) — 缩略图结果入队批量写入，`AsyncEvent::ThumbnailLoaded` 不再逐张触发 `sync_virtual_entries`
 - **Phase 5**: `PaneEntrySnapshot`（不含 `Image` 的轻量快照, `Arc` 零拷贝共享）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）— 虚拟视图的条目过滤/切片/clone/location 标注全部在 `tokio::spawn_blocking` 中完成，UI 线程只做 generation staleness 检查 + Slint 模型写入 + 缩略图缓存装饰。`virtual_generation` 独立于 `load_generation`，目录切换时自动推进。`apply_virtual_view_result` 先在 `borrow_mut` 内写 state 再 drop 后写 Slint，避免 RefCell 跨线程风险。所有可见 pane 走同一条 slot-aware 虚拟视图管线。

@@ -336,9 +336,9 @@ export component SplitPaneView inherits Rectangle {
                     }
 
                     Text {
-                        x: root.show-location && (item.group != "" || item.location != "") ? item.text_x * 1px : 6px;
-                        y: root.show-location && (item.group != "" || item.location != "") ? item.title_y * 1px : max(0px, parent.height - max(16px, item.title_line_height * 1px) - 2px);
-                        width: root.show-location && (item.group != "" || item.location != "") ? item.text_width * 1px : max(1px, parent.width - 12px);
+                        x: item.text_x * 1px;
+                        y: item.title_y * 1px;
+                        width: item.text_width * 1px;
                         height: max(16px, item.title_line_height * 1px);
                         text: item.name;
                         color: root.title-color;

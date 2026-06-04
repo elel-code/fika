@@ -6,7 +6,9 @@ use crate::app::pane::{PaneEntrySnapshot, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
-use crate::{AppWindow, ItemViewEntry, PaneSlotData, set_status, sync_virtual_entries_for_slot};
+use crate::{
+    AppWindow, ItemViewEntry, PaneSlotData, PaneViewData, set_status, sync_virtual_entries_for_slot,
+};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -39,42 +41,71 @@ pub(crate) fn set_pane_viewport_ui(
         })
     };
     if updated {
-        sync_pane_slot_viewport_ui(ui, state, slot, viewport_x);
+        sync_pane_view_viewport_ui(ui, state, slot, viewport_x);
     }
 }
 
-fn sync_pane_slot_viewport_ui(
+fn sync_pane_view_viewport_ui(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     slot: i32,
     viewport_x: f32,
 ) {
-    let current = ui.get_pane_slots();
+    let current = ui.get_pane_views();
     for row in 0..current.row_count() {
-        let Some(mut current_slot) = current.row_data(row) else {
+        let Some(mut current_view) = current.row_data(row) else {
             continue;
         };
-        if current_slot.slot == slot {
-            if (current_slot.viewport_x - viewport_x).abs() > f32::EPSILON {
-                current_slot.viewport_x = viewport_x;
-                current.set_row_data(row, current_slot);
+        if current_view.slot == slot {
+            if (current_view.viewport_x - viewport_x).abs() > f32::EPSILON {
+                current_view.viewport_x = viewport_x;
+                current.set_row_data(row, current_view);
             }
             return;
         }
     }
 
-    sync_pane_slot_ui(ui, state, slot);
+    sync_pane_view_ui(ui, state, slot);
 }
 
 pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let visible_slots = visible_pane_slots(ui);
     let slots = {
         let state_ref = state.borrow();
-        visible_pane_slots(ui)
-            .into_iter()
+        visible_slots
+            .iter()
+            .copied()
             .map(|slot| pane_slot_data(ui, slot, &state_ref))
             .collect::<Vec<_>>()
     };
+    let views = {
+        let state_ref = state.borrow();
+        visible_slots
+            .iter()
+            .copied()
+            .map(|slot| pane_view_data(ui, slot, &state_ref))
+            .collect::<Vec<_>>()
+    };
+    let entries = {
+        let state_ref = state.borrow();
+        visible_slots
+            .iter()
+            .copied()
+            .map(|slot| (slot, pane_slot_entries(slot, &state_ref)))
+            .collect::<Vec<_>>()
+    };
 
+    if ui.get_pane_slots().row_count() > slots.len() {
+        sync_pane_slots_model(ui, slots);
+        sync_pane_views_model(ui, views);
+    } else {
+        sync_pane_views_model(ui, views);
+        sync_pane_slots_model(ui, slots);
+    }
+    sync_pane_entries_ui(ui, entries);
+}
+
+fn sync_pane_slots_model(ui: &AppWindow, slots: Vec<PaneSlotData>) {
     let current = ui.get_pane_slots();
     let same_slots = current.row_count() == slots.len()
         && slots.iter().enumerate().all(|(row, slot)| {
@@ -92,6 +123,31 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
     }
 
     ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));
+}
+
+pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    let current = ui.get_pane_views();
+    for row in 0..current.row_count() {
+        let Some(current_view) = current.row_data(row) else {
+            continue;
+        };
+        if current_view.slot == slot {
+            let (next, entries) = {
+                let state_ref = state.borrow();
+                (
+                    pane_view_data(ui, slot, &state_ref),
+                    pane_slot_entries(slot, &state_ref),
+                )
+            };
+            if current_view != next {
+                current.set_row_data(row, next);
+            }
+            set_pane_entries_ui(ui, slot, entries);
+            return;
+        }
+    }
+
+    sync_pane_slots_ui(ui, state);
 }
 
 pub(crate) fn sync_pane_slot_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
@@ -123,6 +179,48 @@ fn visible_pane_slots(ui: &AppWindow) -> Vec<i32> {
     slots
 }
 
+fn sync_pane_views_model(ui: &AppWindow, views: Vec<PaneViewData>) {
+    let current = ui.get_pane_views();
+    let same_slots = current.row_count() == views.len()
+        && views.iter().enumerate().all(|(row, view)| {
+            current
+                .row_data(row)
+                .is_some_and(|current| current.slot == view.slot)
+        });
+    if same_slots {
+        for (row, view) in views.into_iter().enumerate() {
+            if current.row_data(row).as_ref() != Some(&view) {
+                current.set_row_data(row, view);
+            }
+        }
+        return;
+    }
+
+    ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));
+}
+
+fn sync_pane_entries_ui(ui: &AppWindow, entries: Vec<(i32, ModelRc<ItemViewEntry>)>) {
+    for (slot, model) in entries {
+        set_pane_entries_ui(ui, slot, model);
+    }
+}
+
+fn set_pane_entries_ui(ui: &AppWindow, slot: i32, entries: ModelRc<ItemViewEntry>) {
+    match slot {
+        0 => {
+            if ui.get_pane_slot_0_entries() != entries {
+                ui.set_pane_slot_0_entries(entries);
+            }
+        }
+        1 => {
+            if ui.get_pane_slot_1_entries() != entries {
+                ui.set_pane_slot_1_entries(entries);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
     let is_focused = slot == state.panes.focused_slot();
     let search_query = ui.get_search_query();
@@ -141,8 +239,6 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
     let chooser_filter_count = ui.get_chooser_filter_count();
     let chooser_filter_label = ui.get_chooser_filter_label();
     let focused_selected_path = ui.get_selected_path();
-    let selection_revision = ui.get_selection_revision();
-    let item_view_metrics = pane_slot_item_view_metrics(ui, slot, state);
 
     PaneSlotData {
         slot,
@@ -167,45 +263,7 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         search_kind_label: active_search_kind_label(ui),
         search_modified_label: active_search_modified_label(ui),
         search_size_label: active_search_size_label(ui),
-        content_interactive: if is_focused {
-            !ui.get_directory_loading()
-        } else {
-            true
-        },
-        drop_ready: if is_focused {
-            !ui.get_directory_loading()
-        } else {
-            true
-        },
         drop_trace_prefix: format!("pane-{slot}-").into(),
-        entry_count: item_view_metrics.entry_count,
-        entries: pane_slot_entries(slot, state),
-        virtual_start_column: pane_slot_virtual_start_column(state, slot),
-        viewport_x: pane_slot_viewport_x(slot, state),
-        item_view_rows_per_column: item_view_metrics.rows_per_column,
-        item_view_cell_width: item_view_metrics.cell_width,
-        item_view_row_height: item_view_metrics.row_height,
-        item_view_padding: item_view_metrics.padding,
-        item_view_content_width: item_view_metrics.content_width,
-        item_view_virtual_slice_width: item_view_metrics.virtual_slice_width,
-        item_view_scroll_max_x: item_view_metrics.scroll_max_x,
-        selection_revision,
-        show_location: pane_slot_show_location(state, slot, is_focused),
-        empty_message_visible: if is_focused {
-            !ui.get_directory_loading()
-        } else {
-            true
-        },
-        empty_title: if is_focused {
-            active_empty_title(ui, &search_query)
-        } else {
-            "This folder is empty".into()
-        },
-        empty_subtitle: if is_focused {
-            active_empty_subtitle(ui, &search_query)
-        } else {
-            SharedString::new()
-        },
         status: pane_slot_status(state, slot),
         selected_count: pane_slot_selected_count(state, slot),
         selected_status: pane_slot_selected_status(state, slot),
@@ -221,6 +279,53 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         chooser_filter_count,
         chooser_filter_label,
         chooser_choices,
+    }
+}
+
+fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
+    let is_focused = slot == state.panes.focused_slot();
+    let search_query = ui.get_search_query();
+    let item_view_metrics = pane_slot_item_view_metrics(ui, slot, state);
+
+    PaneViewData {
+        slot,
+        entry_count: item_view_metrics.entry_count,
+        virtual_start_column: pane_slot_virtual_start_column(state, slot),
+        viewport_x: pane_slot_viewport_x(slot, state),
+        item_view_rows_per_column: item_view_metrics.rows_per_column,
+        item_view_cell_width: item_view_metrics.cell_width,
+        item_view_row_height: item_view_metrics.row_height,
+        item_view_padding: item_view_metrics.padding,
+        item_view_content_width: item_view_metrics.content_width,
+        item_view_virtual_slice_width: item_view_metrics.virtual_slice_width,
+        item_view_scroll_max_x: item_view_metrics.scroll_max_x,
+        selection_revision: ui.get_selection_revision(),
+        show_location: pane_slot_show_location(state, slot, is_focused),
+        content_interactive: if is_focused {
+            !ui.get_directory_loading()
+        } else {
+            true
+        },
+        drop_ready: if is_focused {
+            !ui.get_directory_loading()
+        } else {
+            true
+        },
+        empty_message_visible: if is_focused {
+            !ui.get_directory_loading()
+        } else {
+            true
+        },
+        empty_title: if is_focused {
+            active_empty_title(ui, &search_query)
+        } else {
+            "This folder is empty".into()
+        },
+        empty_subtitle: if is_focused {
+            active_empty_subtitle(ui, &search_query)
+        } else {
+            SharedString::new()
+        },
     }
 }
 
@@ -530,8 +635,10 @@ pub(crate) fn sync_focus_navigation_ui(
 
     sync_focused_ui(ui, focused_slot, &focused_dir, &focused_selection, state);
     sync_pane_slot_ui(ui, state, previous_slot);
+    sync_pane_view_ui(ui, state, previous_slot);
     if previous_slot != focused_slot {
         sync_pane_slot_ui(ui, state, focused_slot);
+        sync_pane_view_ui(ui, state, focused_slot);
     }
 }
 

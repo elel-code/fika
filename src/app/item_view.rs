@@ -452,11 +452,11 @@ impl ItemTextRenderPlan {
 
 fn icon_tile_height(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 72.0,
-        1 => 84.0,
-        2 => 98.0,
-        3 => 116.0,
-        _ => 136.0,
+        0 => 78.0,
+        1 => 90.0,
+        2 => 104.0,
+        3 => 124.0,
+        _ => 146.0,
     }
 }
 
@@ -850,19 +850,19 @@ mod tests {
             render_tokens,
             vec![
                 (
-                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
             ]
         );
@@ -891,14 +891,14 @@ mod tests {
 
         let entry = &entries[0];
         assert_eq!(entry.media_x, 16.0);
-        assert_eq!(entry.media_y, 14.0);
+        assert_eq!(entry.media_y, 17.0);
         assert_eq!(entry.text_x, 108.0);
         assert_eq!(entry.text_width, 112.0);
         assert_eq!(entry.metadata_line_height, 14.0);
         assert_eq!(entry.title_line_height, 19.0);
-        assert_eq!(entry.group_y, 23.5);
-        assert_eq!(entry.title_y, 39.5);
-        assert_eq!(entry.location_y, 60.5);
+        assert_eq!(entry.group_y, 26.5);
+        assert_eq!(entry.title_y, 42.5);
+        assert_eq!(entry.location_y, 63.5);
     }
 
     #[test]
@@ -918,7 +918,7 @@ mod tests {
         assert_eq!(entry.media_x, 4.0);
         assert_eq!(entry.text_x, 6.0);
         assert_eq!(entry.text_width, 76.0);
-        assert_eq!(entry.title_y, 77.0);
+        assert_eq!(entry.title_y, 80.0);
     }
 
     #[test]

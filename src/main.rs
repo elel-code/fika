@@ -3,7 +3,7 @@ use slint::{
     TimerMode, VecModel,
 };
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::env;
 use std::io;
@@ -85,7 +85,8 @@ use app::selection::{
 };
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui, sync_focus_navigation_ui,
-    sync_navigation_ui, sync_pane_slot_ui, sync_pane_slots_ui, toggle_split_view,
+    sync_navigation_ui, sync_pane_slot_ui, sync_pane_slots_ui, sync_pane_view_ui,
+    toggle_split_view,
 };
 #[cfg(test)]
 use app::state::PaneExternalEdit;
@@ -129,55 +130,38 @@ pub(crate) struct FileEntry {
     pub(crate) is_dir: bool,
 }
 
-const PANE_VIEW_SYNC_COALESCE: Duration = Duration::from_millis(8);
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
 
 struct PaneViewSyncScheduler {
-    timer: Timer,
-    pending_slots: Rc<RefCell<Vec<i32>>>,
+    ui: slint::Weak<AppWindow>,
+    state: Rc<RefCell<AppState>>,
+    bridge: AsyncBridge,
+    syncing: Cell<bool>,
 }
 
 impl PaneViewSyncScheduler {
     fn new(ui: slint::Weak<AppWindow>, state: Rc<RefCell<AppState>>, bridge: AsyncBridge) -> Self {
-        let timer = Timer::default();
-        let pending_slots = Rc::new(RefCell::new(Vec::<i32>::new()));
-        let timer_slots = Rc::clone(&pending_slots);
-
-        timer.start(TimerMode::SingleShot, PANE_VIEW_SYNC_COALESCE, move || {
-            let Some(ui) = ui.upgrade() else {
-                return;
-            };
-            let slots = {
-                let mut pending = timer_slots.borrow_mut();
-                pending.sort_unstable();
-                pending.dedup();
-                pending.drain(..).collect::<Vec<_>>()
-            };
-            for slot in slots {
-                sync_pane_viewport_for_slot(&ui, &state, &bridge, slot);
-            }
-        });
-        timer.stop();
-
         Self {
-            timer,
-            pending_slots,
+            ui,
+            state,
+            bridge,
+            syncing: Cell::new(false),
         }
     }
 
     fn request(&self, slot: i32) {
-        let mut pending = self.pending_slots.borrow_mut();
-        if !pending.contains(&slot) {
-            pending.push(slot);
+        if self.syncing.get() {
+            return;
         }
-        drop(pending);
-        self.timer.restart();
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        self.syncing.set(true);
+        sync_pane_viewport_for_slot(&ui, &self.state, &self.bridge, slot);
+        self.syncing.set(false);
     }
 
-    fn flush_all(&self) {
-        self.timer.stop();
-        self.pending_slots.borrow_mut().clear();
-    }
+    fn flush_all(&self) {}
 }
 
 struct ThumbnailFlushScheduler {
@@ -189,7 +173,10 @@ type ThumbnailPendingLoad = (u64, u64, thumbnails::ThumbnailLoad);
 type ThumbnailPendingQueue = Rc<RefCell<VecDeque<ThumbnailPendingLoad>>>;
 
 enum VirtualViewSyncRequest {
-    Cached { viewport_x: f32 },
+    Cached {
+        viewport_x: f32,
+        publish_viewport: bool,
+    },
     Deferred,
     Prepare(VirtualViewPrepareRequest),
 }
@@ -3323,7 +3310,7 @@ fn sync_virtual_entries_for_slot_with_count(
         if immediate {
             pane.view.cancel_virtual_prepare_queue();
         }
-        if let Some(viewport_x) = cached_virtual_viewport_sync(
+        if let Some((viewport_x, publish_viewport)) = cached_virtual_viewport_sync(
             pane,
             &layout,
             requested_viewport_x,
@@ -3335,7 +3322,10 @@ fn sync_virtual_entries_for_slot_with_count(
         ) {
             pane.view.virtual_generation.next();
             pane.view.clear_pending_virtual_prepare();
-            Some(VirtualViewSyncRequest::Cached { viewport_x })
+            Some(VirtualViewSyncRequest::Cached {
+                viewport_x,
+                publish_viewport,
+            })
         } else {
             let generation = pane.view.virtual_generation.next();
             let query = pane.search.query.to_ascii_lowercase();
@@ -3382,8 +3372,13 @@ fn sync_virtual_entries_for_slot_with_count(
     };
 
     let request = match request {
-        VirtualViewSyncRequest::Cached { viewport_x } => {
-            set_pane_viewport_ui(ui, slot, viewport_x, state);
+        VirtualViewSyncRequest::Cached {
+            viewport_x,
+            publish_viewport,
+        } => {
+            if publish_viewport {
+                set_pane_viewport_ui(ui, slot, viewport_x, state);
+            }
             return;
         }
         VirtualViewSyncRequest::Deferred => return,
@@ -3480,7 +3475,7 @@ fn cached_virtual_viewport_sync(
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
     chooser_patterns: &[String],
-) -> Option<f32> {
+) -> Option<(f32, bool)> {
     if !schedule_thumbnails || visible_count_override.is_some() {
         return None;
     }
@@ -3518,7 +3513,10 @@ fn cached_virtual_viewport_sync(
     }
 
     pane.view.viewport_x = plan.viewport_x;
-    Some(plan.viewport_x)
+    Some((
+        plan.viewport_x,
+        (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON,
+    ))
 }
 
 fn virtual_cache_covers_visible_range(
@@ -3577,12 +3575,14 @@ fn apply_virtual_view_result(
         return;
     }
 
-    set_pane_viewport_ui(ui, slot, update.viewport_x, state);
     let target_is_focused = state.borrow().panes.focused_slot() == slot;
     if !update.rebuild_model {
+        if update.viewport_clamped {
+            set_pane_viewport_ui(ui, slot, update.viewport_x, state);
+        }
         if target_is_focused && ui.get_entry_count() != update.entry_count as i32 {
             ui.set_entry_count(update.entry_count as i32);
-            sync_pane_slot_ui(ui, state, slot);
+            sync_pane_view_ui(ui, state, slot);
         }
         return;
     }
@@ -3648,7 +3648,7 @@ fn apply_virtual_view_result(
     if target_is_focused {
         ui.set_entry_count(update.entry_count as i32);
     }
-    sync_pane_slot_ui(ui, state, slot);
+    sync_pane_view_ui(ui, state, slot);
 }
 
 fn apply_virtual_view_prepare_failure(
@@ -4207,7 +4207,7 @@ fn sync_pane_viewport_for_slot(
     bridge: &AsyncBridge,
     slot: i32,
 ) {
-    sync_virtual_entries_for_slot(ui, state, bridge, slot, true);
+    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true);
 }
 
 fn sync_pane_layout_for_slot(
@@ -4308,7 +4308,7 @@ fn update_selection_ui_for_slot(
         ui.set_selected_status(selected_status);
     }
     ui.set_selection_revision(ui.get_selection_revision() + 1);
-    sync_pane_slots_ui(ui, state);
+    sync_pane_view_ui(ui, state, slot);
 }
 
 fn update_virtual_selection_for_slot(
@@ -5630,35 +5630,101 @@ mod tests {
         assert!(
             focus_sync_body.contains("sync_focused_ui(")
                 && focus_sync_body.contains("sync_pane_slot_ui(ui, state, previous_slot);")
+                && focus_sync_body.contains("sync_pane_view_ui(ui, state, previous_slot);")
                 && focus_sync_body.contains("sync_pane_slot_ui(ui, state, focused_slot);")
+                && focus_sync_body.contains("sync_pane_view_ui(ui, state, focused_slot);")
                 && !focus_sync_body.contains("sync_pane_slots_ui(ui, state);"),
-            "pure pane focus changes should update the old and new pane rows instead of running a full pane-slots sync"
+            "pure pane focus changes should update only the old/new pane chrome and hot view rows instead of running a full pane-slots sync"
         );
     }
 
     #[test]
-    fn pane_slot_sync_updates_existing_rows_when_slot_shape_is_unchanged() {
+    fn pane_slot_and_view_sync_update_existing_rows_when_slot_shape_is_unchanged() {
         let source = include_str!("app/split_view.rs");
         let body = source
             .split_once("pub(crate) fn sync_pane_slots_ui(")
             .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_slot_ui("))
             .map(|(body, _)| body)
             .expect("sync_pane_slots_ui body should be present");
-        let (snapshot_body, update_body) = body
-            .split_once("let current = ui.get_pane_slots();")
-            .expect("sync_pane_slots_ui should snapshot before touching the model");
+        let slots_model_body = body
+            .split_once("fn sync_pane_slots_model(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_view_ui("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_slots_model body should be present");
+        let views_model_body = body
+            .split_once("fn sync_pane_views_model(")
+            .and_then(|(_, rest)| rest.split_once("fn pane_slot_data("))
+            .map(|(body, _)| body)
+            .unwrap_or_else(|| {
+                source
+                    .split_once("fn sync_pane_views_model(")
+                    .and_then(|(_, rest)| rest.split_once("fn pane_slot_data("))
+                    .map(|(body, _)| body)
+                    .expect("sync_pane_views_model body should be present")
+            });
 
         assert!(
-            snapshot_body.contains("let slots = {\n        let state_ref = state.borrow();")
-                && snapshot_body.contains(".map(|slot| pane_slot_data(ui, slot, &state_ref))")
-                && update_body.contains("let same_slots = current.row_count() == slots.len()")
-                && update_body.contains(".is_some_and(|current| current.slot == slot.slot)")
-                && update_body.contains("if current.row_data(row).as_ref() != Some(&slot)")
-                && update_body.contains("current.set_row_data(row, slot);")
-                && update_body
+            body.contains("let visible_slots = visible_pane_slots(ui);")
+                && body.contains(".map(|slot| pane_slot_data(ui, slot, &state_ref))")
+                && body.contains(".map(|slot| pane_view_data(ui, slot, &state_ref))")
+                && body.contains(".map(|slot| (slot, pane_slot_entries(slot, &state_ref)))")
+                && body.contains("sync_pane_views_model(ui, views);")
+                && body.contains("sync_pane_slots_model(ui, slots);")
+                && body.contains("sync_pane_entries_ui(ui, entries);")
+                && slots_model_body.contains("let current = ui.get_pane_slots();")
+                && slots_model_body.contains("let same_slots = current.row_count() == slots.len()")
+                && slots_model_body.contains(".is_some_and(|current| current.slot == slot.slot)")
+                && slots_model_body.contains("if current.row_data(row).as_ref() != Some(&slot)")
+                && slots_model_body.contains("current.set_row_data(row, slot);")
+                && slots_model_body
                     .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));")
-                && !update_body.contains("state.borrow()"),
-            "pane data refresh should snapshot state before updating the Slint model"
+                && !slots_model_body.contains("state.borrow()")
+                && views_model_body.contains("let current = ui.get_pane_views();")
+                && views_model_body.contains("let same_slots = current.row_count() == views.len()")
+                && views_model_body.contains(".is_some_and(|current| current.slot == view.slot)")
+                && views_model_body.contains("if current.row_data(row).as_ref() != Some(&view)")
+                && views_model_body.contains("current.set_row_data(row, view);")
+                && views_model_body
+                    .contains("ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));")
+                && !views_model_body.contains("state.borrow()"),
+            "pane chrome and hot view data refresh should snapshot state before updating Slint models"
+        );
+    }
+
+    #[test]
+    fn pane_entry_models_are_not_nested_inside_pane_view_rows() {
+        let models = include_str!("../ui/models.slint");
+        let app = include_str!("../ui/app.slint");
+        let split_view = include_str!("app/split_view.rs");
+        let pane_view_data = models
+            .split_once("export struct PaneViewData")
+            .and_then(|(_, rest)| rest.split_once("export struct PaneSlotData"))
+            .map(|(body, _)| body)
+            .expect("PaneViewData should be declared before PaneSlotData");
+        let surface_body = app
+            .split_once("component PaneSlotSurface inherits Rectangle")
+            .and_then(|(_, rest)| rest.split_once("export component AppWindow"))
+            .map(|(body, _)| body)
+            .expect("PaneSlotSurface body should be present");
+        let entries_sync_body = split_view
+            .split_once("fn sync_pane_entries_ui(")
+            .and_then(|(_, rest)| rest.split_once("fn pane_slot_data("))
+            .map(|(body, _)| body)
+            .expect("pane entries sync body should be present");
+
+        assert!(
+            !pane_view_data.contains("entries: [ItemViewEntry]")
+                && app.contains("in property <[ItemViewEntry]> pane_slot_0_entries;")
+                && app.contains("in property <[ItemViewEntry]> pane_slot_1_entries;")
+                && surface_body.contains("in property <[ItemViewEntry]> entries;")
+                && surface_body.contains("entries: root.entries;")
+                && app.contains(
+                    "entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;"
+                )
+                && entries_sync_body.contains("set_pane_entries_ui(ui, slot, model);")
+                && entries_sync_body.contains("ui.set_pane_slot_0_entries(entries);")
+                && entries_sync_body.contains("ui.set_pane_slot_1_entries(entries);"),
+            "visible item models should stay as pane-local top-level models instead of being nested in PaneViewData rows"
         );
     }
 
@@ -5684,38 +5750,39 @@ mod tests {
     }
 
     #[test]
-    fn pane_viewport_sync_updates_only_the_viewport_row_field() {
+    fn pane_viewport_sync_updates_only_the_hot_view_row_field() {
         let source = include_str!("app/split_view.rs");
         let setter_body = source
             .split_once("pub(crate) fn set_pane_viewport_ui(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_slot_viewport_ui("))
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_view_viewport_ui("))
             .map(|(body, _)| body)
             .expect("set_pane_viewport_ui body should be present");
         let viewport_body = source
-            .split_once("fn sync_pane_slot_viewport_ui(")
+            .split_once("fn sync_pane_view_viewport_ui(")
             .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_slots_ui("))
             .map(|(body, _)| body)
-            .expect("sync_pane_slot_viewport_ui body should be present");
+            .expect("sync_pane_view_viewport_ui body should be present");
 
         assert!(
             setter_body.contains("pane.view.viewport_x = viewport_x;")
-                && setter_body.contains("sync_pane_slot_viewport_ui(ui, state, slot, viewport_x);")
+                && setter_body.contains("sync_pane_view_viewport_ui(ui, state, slot, viewport_x);")
                 && !setter_body.contains("sync_pane_slot_ui(ui, state, slot);"),
             "viewport writes should not rebuild full PaneSlotData just to publish viewport_x"
         );
         assert!(
-            viewport_body.contains("let Some(mut current_slot) = current.row_data(row)")
-                && viewport_body.contains("if current_slot.slot == slot")
-                && viewport_body.contains("current_slot.viewport_x = viewport_x;")
-                && viewport_body.contains("current.set_row_data(row, current_slot);")
-                && viewport_body.contains("sync_pane_slot_ui(ui, state, slot);")
+            viewport_body.contains("let current = ui.get_pane_views();")
+                && viewport_body.contains("let Some(mut current_view) = current.row_data(row)")
+                && viewport_body.contains("if current_view.slot == slot")
+                && viewport_body.contains("current_view.viewport_x = viewport_x;")
+                && viewport_body.contains("current.set_row_data(row, current_view);")
+                && viewport_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && !viewport_body.contains("pane_slot_data(ui"),
-            "viewport-only row sync should patch only PaneSlotData.viewport_x and use full row sync only as a missing-row fallback"
+            "viewport-only row sync should patch only PaneViewData.viewport_x and use hot view sync as a missing-row fallback"
         );
     }
 
     #[test]
-    fn virtual_view_sync_publishes_cached_and_async_viewport_rows() {
+    fn virtual_view_sync_updates_hot_view_rows_without_rebuilding_pane_chrome() {
         let source = include_str!("main.rs");
         let sync_body = source
             .split_once("fn sync_virtual_entries_for_slot_with_count(")
@@ -5733,41 +5800,48 @@ mod tests {
             .expect("main production body should be present");
 
         assert!(
-            sync_body.contains("VirtualViewSyncRequest::Cached { viewport_x }")
-                && sync_body.contains("set_pane_viewport_ui(ui, slot, viewport_x, state);")
-                && result_body
-                    .contains("set_pane_viewport_ui(ui, slot, update.viewport_x, state);")
+            sync_body.contains("VirtualViewSyncRequest::Cached {\n            viewport_x,\n            publish_viewport,")
+                && sync_body.contains("if publish_viewport {\n                set_pane_viewport_ui(ui, slot, viewport_x, state);")
+                && result_body.contains("if update.viewport_clamped {\n            set_pane_viewport_ui(ui, slot, update.viewport_x, state);")
+                && result_body.contains("sync_pane_view_ui(ui, state, slot);")
+                && !result_body.contains("sync_pane_slot_ui(ui, state, slot);")
                 && !production_body.contains("set_pane_viewport_ui_if_clamped")
-                && !sync_body.contains("viewport_clamped"),
-            "cached viewport sync and async virtual-view results must publish pane row viewport_x, not only clamp corrections"
+                && !production_body.contains("sync_pane_slot_viewport_ui"),
+            "cached viewport sync should only publish clamp corrections, while virtual model rebuilds update PaneViewData instead of pane chrome rows"
         );
     }
 
     #[test]
     fn pane_slot_sync_releases_state_borrow_before_model_updates() {
         let source = include_str!("app/split_view.rs");
-        let slots_body = source
-            .split_once("pub(crate) fn sync_pane_slots_ui(")
-            .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_slot_ui("))
+        let slots_model_body = source
+            .split_once("fn sync_pane_slots_model(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_view_ui("))
             .map(|(body, _)| body)
-            .expect("sync_pane_slots_ui body should be present");
+            .expect("sync_pane_slots_model body should be present");
+        let views_model_body = source
+            .split_once("fn sync_pane_views_model(")
+            .and_then(|(_, rest)| rest.split_once("fn pane_slot_data("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_views_model body should be present");
         let slot_body = source
             .split_once("pub(crate) fn sync_pane_slot_ui(")
             .and_then(|(_, rest)| rest.split_once("fn visible_pane_slots("))
             .map(|(body, _)| body)
             .expect("sync_pane_slot_ui body should be present");
-        let (_, slots_update_body) = slots_body
-            .split_once("let current = ui.get_pane_slots();")
-            .expect("sync_pane_slots_ui should snapshot before touching the model");
         let (_, slot_update_body) = slot_body
             .split_once("};\n            if current_slot != next")
             .expect("sync_pane_slot_ui should close the state borrow before touching the model");
 
         assert!(
-            !slots_update_body.contains("state.borrow()")
-                && slots_update_body.contains("current.set_row_data(row, slot);")
-                && slots_update_body
-                    .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));"),
+            !slots_model_body.contains("state.borrow()")
+                && slots_model_body.contains("current.set_row_data(row, slot);")
+                && slots_model_body
+                    .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));")
+                && !views_model_body.contains("state.borrow()")
+                && views_model_body.contains("current.set_row_data(row, view);")
+                && views_model_body
+                    .contains("ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));"),
             "full pane sync must release AppState borrow before Slint model setters"
         );
         assert!(
@@ -5820,7 +5894,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_view_changes_are_coalesced_before_virtual_slice_sync() {
+    fn pane_view_changes_rebuild_the_visible_slice_synchronously() {
         let source = include_str!("main.rs");
         let main_body = source
             .split_once("fn main()")
@@ -5834,20 +5908,20 @@ mod tests {
             .expect("pane view scheduler body should be present");
 
         assert!(
-            source.contains("const PANE_VIEW_SYNC_COALESCE: Duration = Duration::from_millis(8);")
-                && main_body.contains("let pane_view_sync = Rc::new(PaneViewSyncScheduler::new(")
+            main_body.contains("let pane_view_sync = Rc::new(PaneViewSyncScheduler::new(")
                 && main_body.contains("ui.on_pane_view_changed(move |slot|")
                 && main_body.contains("pane_view_sync.request(slot);")
                 && !main_body.contains("sync_pane_view_for_slot(&ui, &state, &bridge, slot);"),
-            "pane view-changed callbacks should enqueue viewport sync instead of doing full virtual refresh immediately"
+            "pane view-changed callbacks should route through the pane view scheduler"
         );
         assert!(
-            scheduler_body.contains("timer.start(TimerMode::SingleShot, PANE_VIEW_SYNC_COALESCE")
-                && scheduler_body.contains("pending.sort_unstable();")
-                && scheduler_body.contains("pending.dedup();")
+            scheduler_body.contains("syncing: Cell<bool>")
+                && scheduler_body.contains("if self.syncing.get()")
                 && scheduler_body
-                    .contains("sync_pane_viewport_for_slot(&ui, &state, &bridge, slot);"),
-            "pane view scheduler should collapse repeated slot events into one viewport sync"
+                    .contains("sync_pane_viewport_for_slot(&ui, &self.state, &self.bridge, slot);")
+                && !scheduler_body.contains("TimerMode::SingleShot")
+                && !scheduler_body.contains("pending_slots"),
+            "pane view scheduler should synchronously rebuild the current visible slice instead of delaying scroll layout behind a timer"
         );
     }
 
@@ -5877,7 +5951,9 @@ mod tests {
             "layout changes should flush pending scroll work and rebuild visible pane slices immediately"
         );
         assert!(
-            viewport_body.contains("sync_virtual_entries_for_slot(ui, state, bridge, slot, true);")
+            viewport_body.contains(
+                "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true);"
+            )
                 && !viewport_body.contains("sync_pane_slot_preview")
                 && !viewport_body.contains("sync_virtual_entries(ui, state, bridge, true);")
                 && !viewport_body.contains("filtered_entry_count_for_slot")
