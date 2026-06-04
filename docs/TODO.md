@@ -434,6 +434,7 @@ Acceptance for all:
 - [~] Continue focused Rust and Slint decomposition while feature work proceeds.
   - Acceptance: new behavior should opportunistically move related Rust state/controller logic and reusable Slint rows/layers/components into focused files instead of growing `main.rs` or `ui/app.slint`.
   - Current direction: split both `.rs` and `.slint` incrementally alongside real feature/performance work, keeping each extraction tied to tested behavior rather than preserving historical compatibility paths.
+  - Current: service-menu context action snapshotting, Slint model synchronization, shell-free launch dispatch, and source-pane status updates now live in `src/app/context_service_menu.rs`; `main.rs` only routes pane/menu callbacks and async events.
 
 - [x] Apply Dolphin DnD target validation.
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.
@@ -444,6 +445,7 @@ Acceptance for all:
   - Current: `src/desktop/service_menu.rs` discovers KDE/Dolphin `kio/servicemenus` desktop entries from XDG data dirs, filters `KonqPopupMenu/Plugin` actions by MIME and multi-selection-safe Exec fields, expands desktop Exec field codes into shell-free argv, and sorts top-level actions first.
   - Current: item and blank-area right-click routing refresh a generation-guarded `AppState` snapshot of matching service-menu actions off the UI thread, clear stale popup rows immediately, then update the Slint action model when discovery returns.
   - Current: matching service-menu actions now render in file/viewport context menus, dynamic row count participates in popup geometry, and clicking launches the stored shell-free argv through the existing systemd user-scope launch path while reporting status back to the source pane.
+  - Current: context action UI/controller behavior is isolated in `src/app/context_service_menu.rs`, giving `X-KDE-Submenu` grouping, icon metadata, and user enable/disable policy a focused place to evolve without expanding `main.rs`.
   - Remaining: add better grouping/submenus for `X-KDE-Submenu` / top-level placement, plus optional icons and user enable/disable policy if needed.
 
 - [x] Apply Dolphin-like context menu grouping and submenu grace.

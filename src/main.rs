@@ -27,6 +27,7 @@ use app::chooser::{
     parse_chooser_filter_spec, safe_child_path, selected_directory_or_current,
     set_chooser_choice_index,
 };
+use app::context_service_menu;
 use app::device_monitor::start_device_monitor;
 use app::directory_loading::{
     DirectoryLoadPreparation, directory_entries_match, prepare_directory_load,
@@ -40,7 +41,7 @@ use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
     ExternalEditResult, FileOpenResult, FileOpenSuccess, FileOperationProgress,
     FileOperationResult, FileUndoResult, RecursiveSearchProgress, RecursiveSearchResult,
-    ServiceMenuActionLaunchResult, VirtualViewResult,
+    VirtualViewResult,
 };
 use app::file_clipboard::{
     apply_clipboard_load_result, apply_clipboard_paste_load_result,
@@ -93,7 +94,7 @@ use app::virtual_view::{VirtualViewSnapshotInput, prepare_virtual_view_snapshot_
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::settings::{AppSettings, load_settings, save_settings};
-use desktop::{mime_open, open_with, service_menu, terminal};
+use desktop::{mime_open, open_with, terminal};
 use fs::devices::{
     device_diagnostics_report, eject_device, mount_device, mounted_devices, unmount_device,
 };
@@ -717,7 +718,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let bridge = bridge.clone();
         ui.on_context_service_action(move |index| {
             if let Some(ui) = ui_weak.upgrade() {
-                launch_context_service_action_async(&ui, &state, &bridge, index);
+                context_service_menu::launch_action_async(&ui, &state, &bridge, index);
             }
         });
     }
@@ -1466,8 +1467,8 @@ fn register_pane_routing_callbacks(
         routing.on_request_context_menu(move |slot, path, name, size, modified, is_dir, x, y| {
             if let Some(ui) = ui_weak.upgrade() {
                 let service_menu_paths =
-                    context_service_menu_item_paths(&state, slot, path.as_str());
-                refresh_context_service_menu_actions_async(
+                    context_service_menu::item_paths(&state, slot, path.as_str());
+                context_service_menu::refresh_actions_async(
                     &ui,
                     &state,
                     &bridge,
@@ -1487,8 +1488,8 @@ fn register_pane_routing_callbacks(
         let bridge = bridge.clone();
         routing.on_request_blank_context_menu(move |slot, x, y| {
             if let Some(ui) = ui_weak.upgrade() {
-                let service_menu_paths = context_service_menu_blank_paths(&state, slot);
-                refresh_context_service_menu_actions_async(
+                let service_menu_paths = context_service_menu::blank_paths(&state, slot);
+                context_service_menu::refresh_actions_async(
                     &ui,
                     &state,
                     &bridge,
@@ -2211,10 +2212,10 @@ fn apply_async_event(
             open_with::apply_default_app_set_result(ui, state, result)
         }
         AsyncEvent::ServiceMenuActionsLoaded(result) => {
-            apply_context_service_menu_actions_result(ui, state, result);
+            context_service_menu::apply_actions_result(ui, state, result);
         }
         AsyncEvent::ServiceMenuActionFinished(result) => {
-            apply_service_menu_action_result(ui, state, result);
+            context_service_menu::apply_launch_result(ui, state, result);
         }
         AsyncEvent::FileActionFinished(result) => {
             let applied = file_actions::apply_file_action_result(ui, state, result);
@@ -3181,188 +3182,6 @@ fn apply_file_operation_progress(
 
     if let Some(update) = update {
         set_status_for_panes(ui, state, &update.pane_ids, &update.status);
-    }
-}
-
-fn context_service_menu_item_paths(
-    state: &Rc<RefCell<AppState>>,
-    slot: i32,
-    context_path: &str,
-) -> Vec<PathBuf> {
-    let state = state.borrow();
-    let Some(pane) = state.panes.pane_for_slot(slot) else {
-        return vec![PathBuf::from(context_path)];
-    };
-    if pane.selection.paths.len() > 1
-        && pane
-            .selection
-            .paths
-            .iter()
-            .any(|selected| selected == context_path)
-    {
-        pane.selection.paths.iter().map(PathBuf::from).collect()
-    } else {
-        vec![PathBuf::from(context_path)]
-    }
-}
-
-fn context_service_menu_blank_paths(state: &Rc<RefCell<AppState>>, slot: i32) -> Vec<PathBuf> {
-    state
-        .borrow()
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| vec![pane.current_dir.clone()])
-        .unwrap_or_default()
-}
-
-fn refresh_context_service_menu_actions_async(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    slot: i32,
-    paths: Vec<PathBuf>,
-) {
-    let generation = {
-        let mut state = state.borrow_mut();
-        let generation = state.service_menu_generation.next();
-        state.context_service_menu_paths = paths.clone();
-        state.context_service_menu_actions.clear();
-        state.context_service_menu_pane_id = state.panes.pane_for_slot(slot).map(|pane| pane.id);
-        generation
-    };
-    sync_context_service_actions_ui(ui, &[]);
-
-    if paths.is_empty() {
-        return;
-    }
-
-    let async_tx = bridge.tx.clone();
-    let notify_ui = bridge.ui_weak.clone();
-    bridge.handle.spawn(async move {
-        let query_paths = paths.clone();
-        let result =
-            tokio::task::spawn_blocking(move || service_menu::list_actions_for_paths(&query_paths))
-                .await
-                .unwrap_or_else(|err| Err(format!("service menu task failed: {err}")));
-        send_async_event(
-            async_tx,
-            notify_ui,
-            AsyncEvent::ServiceMenuActionsLoaded(service_menu::ServiceMenuActionsResult {
-                generation,
-                paths,
-                result,
-            }),
-        );
-    });
-}
-
-fn apply_context_service_menu_actions_result(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    result: service_menu::ServiceMenuActionsResult,
-) {
-    let actions = {
-        let mut state = state.borrow_mut();
-        if !state.service_menu_generation.is_current(result.generation)
-            || state.context_service_menu_paths != result.paths
-        {
-            return;
-        }
-        state.context_service_menu_actions = result.result.unwrap_or_default();
-        state.context_service_menu_actions.clone()
-    };
-    sync_context_service_actions_ui(ui, &actions);
-}
-
-fn sync_context_service_actions_ui(ui: &AppWindow, actions: &[service_menu::ServiceMenuAction]) {
-    let actions = actions
-        .iter()
-        .map(|action| ContextServiceAction {
-            id: action.id.clone().into(),
-            name: action.name.clone().into(),
-        })
-        .collect::<Vec<_>>();
-    ui.set_context_service_actions(ModelRc::new(Rc::new(VecModel::from(actions))));
-}
-
-fn launch_context_service_action_async(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    index: i32,
-) {
-    let Some((pane_id, action)) = ({
-        let state = state.borrow();
-        let Some(pane_id) = state.context_service_menu_pane_id else {
-            return;
-        };
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| state.context_service_menu_actions.get(index).cloned())
-            .map(|action| (pane_id, action))
-    }) else {
-        set_status(ui, state, "Context menu action is no longer available");
-        return;
-    };
-
-    set_status_for_panes(
-        ui,
-        state,
-        &[pane_id],
-        &format!("Running {}...", action.name),
-    );
-
-    let async_tx = bridge.tx.clone();
-    let notify_ui = bridge.ui_weak.clone();
-    bridge.handle.spawn(async move {
-        let action_name = action.name.clone();
-        let result = tokio::task::spawn_blocking(move || service_menu::launch_action(&action))
-            .await
-            .unwrap_or_else(|err| Err(format!("service menu launch task failed: {err}")));
-        send_async_event(
-            async_tx,
-            notify_ui,
-            AsyncEvent::ServiceMenuActionFinished(ServiceMenuActionLaunchResult {
-                pane_id,
-                action_name,
-                result,
-            }),
-        );
-    });
-}
-
-fn apply_service_menu_action_result(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    result: ServiceMenuActionLaunchResult,
-) {
-    match result.result {
-        Ok(launch) => match (launch.unit, launch.diagnostic) {
-            (Some(unit), _) => set_status_for_panes(
-                ui,
-                state,
-                &[result.pane_id],
-                &format!("Ran {} ({unit})", result.action_name),
-            ),
-            (None, Some(diagnostic)) => set_status_for_panes(
-                ui,
-                state,
-                &[result.pane_id],
-                &format!("Ran {}; {diagnostic}", result.action_name),
-            ),
-            (None, None) => set_status_for_panes(
-                ui,
-                state,
-                &[result.pane_id],
-                &format!("Ran {}", result.action_name),
-            ),
-        },
-        Err(err) => set_status_for_panes(
-            ui,
-            state,
-            &[result.pane_id],
-            &format!("Cannot run {}: {err}", result.action_name),
-        ),
     }
 }
 
@@ -6082,58 +5901,18 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("routing.on_zoom_in"))
             .map(|(body, _)| body)
             .expect("blank context menu routing body should be present");
-        let refresh_body = source
-            .split_once("fn refresh_context_service_menu_actions_async(")
-            .and_then(|(_, rest)| rest.split_once("fn apply_context_service_menu_actions_result("))
-            .map(|(body, _)| body)
-            .expect("service menu refresh body should be present");
-        let apply_body = source
-            .split_once("fn apply_context_service_menu_actions_result(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_context_service_actions_ui("))
-            .map(|(body, _)| body)
-            .expect("service menu apply body should be present");
-        let launch_body = source
-            .split_once("fn launch_context_service_action_async(")
-            .and_then(|(_, rest)| rest.split_once("fn apply_service_menu_action_result("))
-            .map(|(body, _)| body)
-            .expect("service menu launch body should be present");
-        let result_body = source
-            .split_once("fn apply_service_menu_action_result(")
-            .and_then(|(_, rest)| rest.split_once("fn apply_privileged_operation_result("))
-            .map(|(body, _)| body)
-            .expect("service menu result body should be present");
 
-        for body in [item_route, blank_route] {
-            assert!(
-                body.contains("refresh_context_service_menu_actions_async(")
-                    && body.contains("&ui,\n                    &state,\n                    &bridge,\n                    slot,"),
-                "service menu discovery should be routed through the pane slot that opened the context menu"
-            );
-        }
         assert!(
-            refresh_body.contains(
-                "state.context_service_menu_pane_id = state.panes.pane_for_slot(slot).map(|pane| pane.id);"
-            ) && refresh_body.contains("sync_context_service_actions_ui(ui, &[]);"),
-            "opening a context menu should remember the source pane and clear stale service action rows before async discovery"
+            item_route.contains("context_service_menu::item_paths(&state, slot, path.as_str())")
+                && item_route.contains("context_service_menu::refresh_actions_async(")
+                && item_route.contains("&ui,\n                    &state,\n                    &bridge,\n                    slot,"),
+            "item service menu discovery should be routed through the pane slot that opened the context menu"
         );
         assert!(
-            apply_body.contains("let actions = {\n        let mut state = state.borrow_mut();")
-                && apply_body.contains("state.context_service_menu_actions.clone()")
-                && apply_body.contains("sync_context_service_actions_ui(ui, &actions);"),
-            "service menu discovery results should update AppState first, release the borrow, then write the Slint model"
-        );
-        assert!(
-            launch_body.contains("state.context_service_menu_pane_id")
-                && launch_body.contains("state.context_service_menu_actions.get(index).cloned()")
-                && launch_body.contains("set_status_for_panes(")
-                && launch_body.contains("AsyncEvent::ServiceMenuActionFinished")
-                && !launch_body.contains("PaneTarget::Focused"),
-            "service menu actions should launch from the stored context snapshot and report start status to the source pane"
-        );
-        assert!(
-            result_body.matches("set_status_for_panes(").count() == 4
-                && !result_body.contains("set_status(ui, state"),
-            "service menu launch results should report to the source pane instead of the focused pane"
+            blank_route.contains("context_service_menu::blank_paths(&state, slot)")
+                && blank_route.contains("context_service_menu::refresh_actions_async(")
+                && blank_route.contains("&ui,\n                    &state,\n                    &bridge,\n                    slot,"),
+            "blank-area service menu discovery should be routed through the pane slot that opened the context menu"
         );
     }
 

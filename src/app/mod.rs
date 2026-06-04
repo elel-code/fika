@@ -1,5 +1,6 @@
 pub(crate) mod async_bridge;
 pub(crate) mod chooser;
+pub(crate) mod context_service_menu;
 pub(crate) mod device_monitor;
 pub(crate) mod directory_loading;
 pub(crate) mod dnd;
