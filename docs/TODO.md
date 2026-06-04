@@ -553,6 +553,7 @@ Acceptance for all:
   - Current: split pane scrolling now uses the dominant wheel axis instead of adding vertical and horizontal deltas together, pane viewport refreshes go through one shared clamp-aware writeback helper, and wheel input that clamps to the current viewport no longer triggers a virtual-grid refresh.
   - Current: `PanesState` now exposes `PaneTarget::{Active, Focused, Slot, Id}` lookup helpers, giving shortcuts, menus, DnD, and async operation code a tested route away from hard-coded `active` access toward focused-pane or explicit-pane routing.
   - Current: stable `pane_slots` model rows are updated in place when slot shape is unchanged, so focusing an already visible pane or refreshing a pane does not rebuild its Slint surface and break gestures.
+  - Current: pure pane focus changes update global focused-pane fields and then refresh only the old and new pane slot rows, avoiding a full pane-slot model pass while still downgrading/activating focus-derived pane UI.
   - Current: affected-pane refresh releases slot lookup borrows before entering refresh paths, avoiding nested `RefCell` borrow panics during async operation completion.
   - Current: successful device unmount cleanup prunes mount paths from all pane histories, so split panes do not strand removed device paths.
 

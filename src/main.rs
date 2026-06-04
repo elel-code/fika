@@ -4015,7 +4015,7 @@ fn focus_pane_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
         state.panes.focus_slot(slot)
     };
     if focused && previous_slot != slot {
-        sync_focus_navigation_ui(ui, state);
+        sync_focus_navigation_ui(ui, state, previous_slot);
     }
 }
 
@@ -5380,9 +5380,24 @@ mod tests {
         assert!(
             body.contains("let previous_slot = { state.borrow().panes.focused_slot() };")
                 && body.contains("if focused && previous_slot != slot {")
-                && body.contains("sync_focus_navigation_ui(ui, state);")
+                && body.contains("sync_focus_navigation_ui(ui, state, previous_slot);")
                 && !body.contains("sync_navigation_ui(ui, state);"),
             "clicking inside the already focused pane must not rebuild pane surfaces, and focus changes should skip left-pane rewrites"
+        );
+
+        let split_view = include_str!("app/split_view.rs");
+        let focus_sync_body = split_view
+            .split_once("pub(crate) fn sync_focus_navigation_ui(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn toggle_split_view("))
+            .map(|(body, _)| body)
+            .expect("sync_focus_navigation_ui body should be present");
+
+        assert!(
+            focus_sync_body.contains("sync_focused_ui(")
+                && focus_sync_body.contains("sync_pane_slot_ui(ui, state, previous_slot);")
+                && focus_sync_body.contains("sync_pane_slot_ui(ui, state, focused_slot);")
+                && !focus_sync_body.contains("sync_pane_slots_ui(ui, state);"),
+            "pure pane focus changes should update the old and new pane rows instead of running a full pane-slots sync"
         );
     }
 

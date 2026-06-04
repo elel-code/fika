@@ -393,22 +393,22 @@ pub(crate) fn sync_navigation_ui(ui, state) {
 }
 ```
 
-**改进**：将 `sync_navigation_ui` 拆分为两个路径，或内部做脏检查。
+**实际实现**（✅ 已完成）：焦点切换走 `sync_focus_navigation_ui(ui, state, previous_slot)`，不调用完整 `sync_navigation_ui`，也不在 `sync_focused_ui` 内部触发 `sync_pane_slots_ui`。该路径只写 focused pane 的全局导航/选择属性，然后用 `sync_pane_slot_ui` 增量刷新旧 slot 和新 focused slot 两行，使旧 pane 的 focused 派生字段降级、新 pane 升级，同时避免重扫整个 pane slot model。
 
-方案 A（拆分路径）：
 ```rust
-fn sync_focus_change_only(ui, state) {
+fn sync_focus_navigation_ui(ui, state, previous_slot) {
     let (focused_slot, focused_dir, focused_selection) = { ... };
     sync_focused_ui(ui, focused_slot, &focused_dir, &focused_selection);
-    sync_pane_slots_ui(ui, state);
+    sync_pane_slot_ui(ui, state, previous_slot);
+    if previous_slot != focused_slot {
+        sync_pane_slot_ui(ui, state, focused_slot);
+    }
 }
 ```
 
-方案 B（内部脏检查）：在 `sync_navigation_ui` 中缓存上次写入的左栏值，比较后按需写入。`NavigationUiSnapshot` 已包含所有需要的字段。
+**收益**：焦点切换时减少 ~8 次无效 Slint setter 调用及潜在的下游绑定重算，并跳过完整 pane slots 同步；只更新焦点切换实际影响的旧/新两行。
 
-**收益**：焦点切换时减少 ~8 次无效 Slint setter 调用及潜在的下游绑定重算。
-
-**难度**：中。需要重构 `sync_navigation_ui`，拆分调用路径或增加内部缓存。逻辑清晰但涉及多处调用点（`focus_pane_slot`、`sync_pane_slot_directory` 等均调用 `sync_navigation_ui`）。
+**验证**：源码守卫测试确认 `focus_pane_slot` 只调用 `sync_focus_navigation_ui(ui, state, previous_slot)`，且 `sync_focus_navigation_ui` 不调用 `sync_pane_slots_ui`，只调用旧/new slot 的 `sync_pane_slot_ui`。
 
 **优先级**：P2。F0+F1 已解决高频场景（每帧滚动触发），F2 只影响低频的焦点切换（slot 0↔1）。
 
@@ -707,7 +707,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 
 **审查发现的后继微优化**：
 - **cleanup-1**: 旧 state-based 虚拟视图更新 helper 和测试路径已删除，虚拟视图测试改为覆盖当前 snapshot 管线
-- **f2-note**: `sync_focus_navigation_ui` 调用的 `sync_focused_ui` 内部仍执行 `sync_pane_slots_ui`。Phase 1 的 row_data 脏检查使其开销极小（O(2) 次比较），进一步跳过属于可选微优化
+- **f2-note**: `sync_focus_navigation_ui` 已跳过完整 `sync_pane_slots_ui`，纯焦点切换只增量刷新旧 slot 和新 focused slot 两行
 
 ### 焦点优化
 
@@ -721,7 +721,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 **焦点已实现要点**：
 - **F0**: `route-pane-focus` 加 `if root.focused_pane == slot` 守卫，且额外处理输入框焦点回收
 - **F1**: `pan-horizontal` 和 `changed viewport-x` 中的 `focus_requested()` 已移除；`handle-scroll` 中 Ctrl+滚轮的调用保留
-- **F2**: 新增 `sync_focus_navigation_ui` — 与 `sync_navigation_ui` 相比跳过左栏 8 setter 和 `set_split_view_open`，只读取 focused pane 数据并写入 `sync_focused_ui`。内部 `sync_pane_slots_ui` 由 Phase 1 脏检查保护（O(2) 比较即返回），进一步跳过为可选微优化
+- **F2**: 新增 `sync_focus_navigation_ui` — 与 `sync_navigation_ui` 相比跳过左栏 8 setter 和 `set_split_view_open`，只读取 focused pane 数据并写入 `sync_focused_ui`；旧 pane 和新 focused pane 的 row data 通过 `sync_pane_slot_ui` 增量刷新，不再执行完整 `sync_pane_slots_ui`
 
 ### 虚拟网格内部优化
 

@@ -409,7 +409,11 @@ pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
     sync_pane_slots_ui(ui, state);
 }
 
-pub(crate) fn sync_focus_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+pub(crate) fn sync_focus_navigation_ui(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    previous_slot: i32,
+) {
     let (focused_slot, focused_dir, focused_selection) = {
         let state = state.borrow();
         let focused_slot = state.panes.focused_slot();
@@ -425,6 +429,10 @@ pub(crate) fn sync_focus_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppSta
     };
 
     sync_focused_ui(ui, focused_slot, &focused_dir, &focused_selection, state);
+    sync_pane_slot_ui(ui, state, previous_slot);
+    if previous_slot != focused_slot {
+        sync_pane_slot_ui(ui, state, focused_slot);
+    }
 }
 
 pub(crate) fn toggle_split_view(
@@ -532,7 +540,6 @@ fn sync_focused_ui(
     ui.set_selected_count(selected_paths.len() as i32);
     ui.set_selected_status(selection_status_text(selected_paths));
     ui.set_selection_revision(ui.get_selection_revision() + 1);
-    sync_pane_slots_ui(ui, state);
 }
 
 pub(crate) fn directory_status_text<'a>(
