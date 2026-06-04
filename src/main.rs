@@ -52,8 +52,9 @@ use app::geometry::{
     place_drop_geometry, register_menu_geometry_callbacks, virtual_grid_plan,
 };
 use app::item_view::{
-    ItemViewInputMetrics, ItemViewReleaseAction, ItemViewRenderMetrics, ItemViewRenderPlanInput,
-    SelectionRect, decorate_render_plan, entry_at_pane_point,
+    ItemViewInputMetrics, ItemViewMediaCache, ItemViewReleaseAction, ItemViewRenderMetrics,
+    ItemViewRenderPlanInput, SelectionRect, decorate_fallback_media, decorate_render_plan,
+    entry_at_pane_point,
 };
 use app::model_update::{
     update_item_view_entries_model_selection, update_pane_item_view_entries_model,
@@ -1388,9 +1389,11 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_persist_ui_state(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 save_current_settings(&ui, &state);
+                refresh_visible_item_view_after_ui_persist(&ui, &state, &bridge);
             }
         });
     }
@@ -3629,6 +3632,8 @@ fn apply_virtual_view_result(
             result.thumbnail_size_px,
         );
     }
+    let media_cache = ItemViewMediaCache::new(result.render_metrics, ui.get_dark_mode());
+    decorate_fallback_media(&mut entries, &media_cache);
 
     if result.schedule_thumbnails {
         let thumbnail_entries =
@@ -4174,6 +4179,36 @@ fn sync_visible_pane_layouts(ui: &AppWindow, state: &Rc<RefCell<AppState>>, brid
             sync_pane_layout_for_slot(ui, state, bridge, pane.slot);
         }
     }
+}
+
+fn refresh_visible_item_view_after_ui_persist(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+) {
+    let slots = visible_ui_pane_slots(ui);
+    {
+        let mut state_ref = state.borrow_mut();
+        for slot in &slots {
+            if let Some(pane) = state_ref.panes.pane_mut_for_slot(*slot) {
+                pane.view.invalidate_virtual_view();
+            }
+        }
+    }
+    for slot in slots {
+        sync_pane_layout_for_slot(ui, state, bridge, slot);
+    }
+}
+
+fn visible_ui_pane_slots(ui: &AppWindow) -> Vec<i32> {
+    let slots = ui.get_pane_slots();
+    if slots.row_count() == 0 {
+        return vec![0];
+    }
+
+    (0..slots.row_count())
+        .filter_map(|row| slots.row_data(row).map(|pane| pane.slot))
+        .collect()
 }
 
 fn sync_pane_viewport_for_slot(

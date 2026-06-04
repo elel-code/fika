@@ -6,7 +6,7 @@ export struct ItemViewEntry {
     is_dir: bool,
     selected: bool,
     thumbnail_state: int,
-    thumbnail: image,
+    media: image,
     tile_width: float,
     tile_height: float,
     media_x: float,
@@ -18,11 +18,10 @@ export struct ItemViewEntry {
     location_y: float,
     metadata_line_height: float,
     title_line_height: float,
-    thumbnail_width: float,
-    thumbnail_height: float,
+    media_width: float,
+    media_height: float,
     metadata_font_size: float,
     title_font_size: float,
-    glyph_doc_font_size: float,
 }
 
 export struct PlaceEntry {

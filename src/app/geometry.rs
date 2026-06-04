@@ -2406,7 +2406,7 @@ mod tests {
         assert!(!app.contains("main_drag_active"));
         assert!(!app.contains("function pane-slot-show-location(slot: int) -> bool"));
         assert!(split_pane.contains("export component SplitPaneView"));
-        assert!(split_pane.contains("import { FolderGlyph } from \"widgets.slint\";"));
+        assert!(!split_pane.contains("FolderGlyph"));
         assert!(!split_pane.contains("file_tile.slint"));
         assert!(!split_pane.contains("FileTile"));
         assert!(!split_pane.contains("import { ScrollView }"));
@@ -2463,10 +2463,6 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
             .map(|(body, _)| body)
             .expect("models.slint should define ItemViewEntry before PlaceEntry");
-        let folder_glyph = widgets
-            .split_once("export component FolderGlyph")
-            .expect("widgets.slint should define FolderGlyph")
-            .1;
         let visible_tile_loop = split_pane
             .split_once("for item[index] in root.entries: Rectangle")
             .and_then(|(_, rest)| rest.split_once("if (root.selection-rect-active): Rectangle"))
@@ -2475,26 +2471,31 @@ mod tests {
         assert!(
             split_pane.contains("for item[index] in root.entries: Rectangle")
                 && split_pane.contains("height: item.tile_height * 1px;")
-                && split_pane.contains("if (!item.is_dir && item.thumbnail_state == 2): Image")
-                && split_pane
-                    .contains("if (item.is_dir || item.thumbnail_state != 2): FolderGlyph")
+                && split_pane.contains("source: item.media;")
                 && split_pane.contains("x: item.media_x * 1px;")
                 && split_pane.contains("x: item.text_x * 1px;")
                 && split_pane.contains("height: item.title_line_height * 1px;")
                 && split_pane.contains("text: item.name;")
+                && !split_pane.contains("item.thumbnail")
+                && !visible_tile_loop.contains("thumbnail_state")
+                && !widgets.contains("export component FolderGlyph")
                 && !split_pane.contains("entry: item;")
                 && !split_pane.contains("selected: item.selected;")
                 && !split_pane.contains("drag-data-source:")
                 && !models.contains("export struct FileEntry")
                 && item_view_entry.contains("selected: bool")
                 && item_view_entry.contains("thumbnail_state: int")
+                && item_view_entry.contains("media: image")
                 && item_view_entry.contains("tile_width: float")
                 && item_view_entry.contains("media_x: float")
+                && item_view_entry.contains("media_width: float")
                 && item_view_entry.contains("text_x: float")
                 && item_view_entry.contains("title_line_height: float")
+                && !item_view_entry.contains("thumbnail: image")
+                && !item_view_entry.contains("glyph_doc_font_size")
                 && !item_view_entry.contains("tile_x")
                 && !item_view_entry.contains("tile_y"),
-            "SplitPaneView should inline visible tile primitives without a FileTile component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
+            "SplitPaneView should inline visible tile primitives without a FileTile or FolderGlyph component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
         );
         assert!(
             !split_pane.contains("private property <length> tile-height:")
@@ -2504,22 +2505,20 @@ mod tests {
                 && !split_pane.contains("zoom-level: root.zoom-level;")
                 && split_pane.contains("color: root.metadata-group-color;")
                 && split_pane.contains("height: item.tile_height * 1px;")
-                && split_pane.contains("width: item.thumbnail_width * 1px;")
+                && split_pane.contains("width: item.media_width * 1px;")
                 && split_pane.contains("font-size: item.title_font_size * 1px;")
-                && split_pane.contains("doc-font-size: item.glyph_doc_font_size * 1px;")
                 && split_pane.contains("width: item.text_width * 1px;")
                 && split_pane.contains("y: item.title_y * 1px;")
                 && split_pane.contains("height: item.metadata_line_height * 1px;")
+                && !split_pane.contains("item.thumbnail_width")
+                && !split_pane.contains("doc-font-size:")
                 && !split_pane.contains("item.tile_padding_x")
                 && !split_pane.contains("item.tile_spacing")
                 && !visible_tile_loop.contains("HorizontalLayout")
                 && !visible_tile_loop.contains("VerticalLayout")
                 && !split_pane.contains("height: root.zoom-level ==")
-                && !split_pane.contains("font-size: root.zoom-level ==")
-                && folder_glyph.contains("in property <length> doc-font-size;")
-                && !folder_glyph.contains("in property <int> zoom-level;")
-                && !folder_glyph.contains("font-size: root.zoom-level"),
-            "visible tile primitives should consume render tokens projected by Rust item-view instead of recalculating zoom bindings in Slint"
+                && !split_pane.contains("font-size: root.zoom-level =="),
+            "visible tile primitives should consume media and render tokens projected by Rust item-view instead of recalculating zoom bindings or fallback glyphs in Slint"
         );
         assert!(
             split_pane.contains(

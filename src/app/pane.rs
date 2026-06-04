@@ -184,7 +184,7 @@ impl PaneEntrySnapshot {
             is_dir: self.is_dir,
             selected: false,
             thumbnail_state: 0,
-            thumbnail: Default::default(),
+            media: Default::default(),
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,
@@ -196,11 +196,10 @@ impl PaneEntrySnapshot {
             location_y: 0.0,
             metadata_line_height: 0.0,
             title_line_height: 0.0,
-            thumbnail_width: 0.0,
-            thumbnail_height: 0.0,
+            media_width: 0.0,
+            media_height: 0.0,
             metadata_font_size: 0.0,
             title_font_size: 0.0,
-            glyph_doc_font_size: 0.0,
         }
     }
 }

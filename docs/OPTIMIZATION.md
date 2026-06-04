@@ -300,8 +300,9 @@ Slint: Rectangle viewport + input/DnD overlays
 4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；可见 tile primitive 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
 5. 虚拟切片仍输出 `virtual_entries`，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；local `x/y` 改由 `for item[index]` 下标和 pane row metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
-7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只按 `media_x/media_y/text_x/text_width/group_y/title_y/location_y` 等字段绘制 `Image` / `FolderGlyph` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。
-8. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
+7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只按 `media_x/media_y/text_x/text_width/group_y/title_y/location_y` 等字段绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。
+8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 Rust item-view media renderer：虚拟切片进入 Slint 前会把成功缩略图或 fallback 文件/目录图标统一投影为 `ItemViewEntry.media`，主视图 loop 只保留一个 media `Image` primitive。
+9. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
 
 ---
 

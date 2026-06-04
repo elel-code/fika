@@ -1,5 +1,4 @@
 import { ItemViewEntry } from "models.slint";
-import { FolderGlyph } from "widgets.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
@@ -314,23 +313,13 @@ export component SplitPaneView inherits Rectangle {
                     border-color: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-border-color : root.selection-border-color;
                     background: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-background-color : (item.selected ? root.selected-background-color : transparent);
 
-                    if (!item.is_dir && item.thumbnail_state == 2): Image {
+                    Image {
                         x: item.media_x * 1px;
                         y: item.media_y * 1px;
-                        width: item.thumbnail_width * 1px;
-                        height: item.thumbnail_height * 1px;
-                        source: item.thumbnail;
+                        width: item.media_width * 1px;
+                        height: item.media_height * 1px;
+                        source: item.media;
                         image-fit: contain;
-                    }
-
-                    if (item.is_dir || item.thumbnail_state != 2): FolderGlyph {
-                        x: item.media_x * 1px;
-                        y: item.media_y * 1px;
-                        width: item.thumbnail_width * 1px;
-                        height: item.thumbnail_height * 1px;
-                        dir: item.is_dir;
-                        dark: root.dark;
-                        doc-font-size: item.glyph_doc_font_size * 1px;
                     }
 
                     if (root.show-location && item.group != ""): Text {

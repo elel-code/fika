@@ -5,7 +5,7 @@ use crate::app::geometry::{
 use crate::app::selection::filtered_entry_at_for_slot;
 use crate::app::state::AppState;
 use crate::{AppWindow, FileEntry, ItemViewEntry};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
 use std::ops::Range;
 
 const ITEM_VIEW_PADDING: f32 = 14.0;
@@ -17,11 +17,10 @@ pub(crate) struct ItemViewRenderMetrics {
     pub(crate) tile_height: f32,
     pub(crate) media_padding_x: f32,
     pub(crate) media_text_gap: f32,
-    pub(crate) thumbnail_width: f32,
-    pub(crate) thumbnail_height: f32,
+    pub(crate) media_width: f32,
+    pub(crate) media_height: f32,
     pub(crate) metadata_font_size: f32,
     pub(crate) title_font_size: f32,
-    pub(crate) glyph_doc_font_size: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,11 +36,35 @@ impl ItemViewRenderMetrics {
             tile_height: icon_tile_height(zoom_level),
             media_padding_x: if zoom_level < 2 { 12.0 } else { 16.0 },
             media_text_gap: if zoom_level < 2 { 10.0 } else { 12.0 },
-            thumbnail_width: icon_thumbnail_width(zoom_level),
-            thumbnail_height: icon_thumbnail_height(zoom_level),
+            media_width: icon_media_width(zoom_level),
+            media_height: icon_media_height(zoom_level),
             metadata_font_size: if zoom_level < 2 { 10.0 } else { 11.0 },
             title_font_size: icon_title_font_size(zoom_level),
-            glyph_doc_font_size: icon_glyph_doc_font_size(zoom_level),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ItemViewMediaCache {
+    folder: Image,
+    file: Image,
+}
+
+impl ItemViewMediaCache {
+    pub(crate) fn new(metrics: ItemViewRenderMetrics, dark: bool) -> Self {
+        let width = metrics.media_width.round().max(1.0) as u32;
+        let height = metrics.media_height.round().max(1.0) as u32;
+        Self {
+            folder: fallback_media_image(true, dark, width, height),
+            file: fallback_media_image(false, dark, width, height),
+        }
+    }
+
+    fn image_for(&self, is_dir: bool) -> Image {
+        if is_dir {
+            self.folder.clone()
+        } else {
+            self.file.clone()
         }
     }
 }
@@ -244,10 +267,9 @@ pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemVie
         entry.tile_width = tile_width;
         entry.tile_height = render_metrics.tile_height;
         entry.media_x = render_metrics.media_padding_x;
-        entry.media_y =
-            ((render_metrics.tile_height - render_metrics.thumbnail_height) / 2.0).max(0.0);
+        entry.media_y = ((render_metrics.tile_height - render_metrics.media_height) / 2.0).max(0.0);
         entry.text_x = render_metrics.media_padding_x
-            + render_metrics.thumbnail_width
+            + render_metrics.media_width
             + render_metrics.media_text_gap;
         entry.text_width = (tile_width - entry.text_x - render_metrics.media_padding_x).max(1.0);
         let text_plan = ItemTextRenderPlan::new(entry, render_metrics, input.show_location);
@@ -256,11 +278,18 @@ pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemVie
         entry.location_y = text_plan.location_y;
         entry.metadata_line_height = text_plan.metadata_line_height;
         entry.title_line_height = text_plan.title_line_height;
-        entry.thumbnail_width = render_metrics.thumbnail_width;
-        entry.thumbnail_height = render_metrics.thumbnail_height;
+        entry.media_width = render_metrics.media_width;
+        entry.media_height = render_metrics.media_height;
         entry.metadata_font_size = render_metrics.metadata_font_size;
         entry.title_font_size = render_metrics.title_font_size;
-        entry.glyph_doc_font_size = render_metrics.glyph_doc_font_size;
+    }
+}
+
+pub(crate) fn decorate_fallback_media(entries: &mut [ItemViewEntry], cache: &ItemViewMediaCache) {
+    for entry in entries.iter_mut() {
+        if entry.is_dir || entry.thumbnail_state != 2 {
+            entry.media = cache.image_for(entry.is_dir);
+        }
     }
 }
 
@@ -326,7 +355,7 @@ fn icon_tile_height(zoom_level: i32) -> f32 {
     }
 }
 
-fn icon_thumbnail_width(zoom_level: i32) -> f32 {
+fn icon_media_width(zoom_level: i32) -> f32 {
     match zoom_level {
         0 => 52.0,
         1 => 64.0,
@@ -336,7 +365,7 @@ fn icon_thumbnail_width(zoom_level: i32) -> f32 {
     }
 }
 
-fn icon_thumbnail_height(zoom_level: i32) -> f32 {
+fn icon_media_height(zoom_level: i32) -> f32 {
     match zoom_level {
         0 => 46.0,
         1 => 58.0,
@@ -356,22 +385,119 @@ fn icon_title_font_size(zoom_level: i32) -> f32 {
     }
 }
 
-fn icon_glyph_doc_font_size(zoom_level: i32) -> f32 {
-    if zoom_level < 2 {
-        10.0
-    } else if zoom_level == 2 {
-        12.0
-    } else {
-        13.0
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct RectBounds {
     x1: f32,
     y1: f32,
     x2: f32,
     y2: f32,
+}
+
+#[derive(Clone, Copy)]
+struct GlyphColor {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+impl GlyphColor {
+    const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+
+    fn pixel(self) -> Rgba8Pixel {
+        Rgba8Pixel::new(self.r, self.g, self.b, self.a)
+    }
+}
+
+fn fallback_media_image(is_dir: bool, dark: bool, width: u32, height: u32) -> Image {
+    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
+    buffer
+        .make_mut_slice()
+        .fill(GlyphColor::rgba(0, 0, 0, 0).pixel());
+    if is_dir {
+        draw_folder_glyph(&mut buffer, dark);
+    } else {
+        draw_file_glyph(&mut buffer, dark);
+    }
+    Image::from_rgba8(buffer)
+}
+
+fn draw_folder_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    let tab = if dark {
+        GlyphColor::rgba(59, 102, 139, 255)
+    } else {
+        GlyphColor::rgba(114, 174, 230, 255)
+    };
+    let body = if dark {
+        GlyphColor::rgba(63, 111, 152, 255)
+    } else {
+        GlyphColor::rgba(96, 159, 224, 255)
+    };
+    let highlight = if dark {
+        GlyphColor::rgba(169, 184, 196, 255)
+    } else {
+        GlyphColor::rgba(237, 244, 250, 255)
+    };
+    draw_rect(buffer, 0.0, 0.14, 0.48, 0.26, tab);
+    draw_rect(buffer, 0.0, 0.29, 1.0, 0.69, body);
+    draw_rect(buffer, 0.08, 0.37, 0.82, 0.10, highlight);
+}
+
+fn draw_file_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    let body = if dark {
+        GlyphColor::rgba(139, 145, 151, 255)
+    } else {
+        GlyphColor::rgba(174, 180, 186, 255)
+    };
+    let shade = if dark {
+        GlyphColor::rgba(113, 119, 126, 255)
+    } else {
+        GlyphColor::rgba(151, 158, 165, 255)
+    };
+    let line = if dark {
+        GlyphColor::rgba(48, 48, 48, 255)
+    } else {
+        GlyphColor::rgba(85, 85, 85, 255)
+    };
+    draw_rect(buffer, 0.18, 0.10, 0.64, 0.82, body);
+    draw_rect(buffer, 0.58, 0.10, 0.24, 0.24, shade);
+    draw_rect(buffer, 0.30, 0.52, 0.40, 0.06, line);
+    draw_rect(buffer, 0.30, 0.66, 0.32, 0.06, line);
+}
+
+fn draw_rect(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: GlyphColor,
+) {
+    let buffer_width = buffer.width() as usize;
+    let buffer_height = buffer.height() as usize;
+    if buffer_width == 0 || buffer_height == 0 {
+        return;
+    }
+    let start_x = (x * buffer_width as f32).round().max(0.0) as usize;
+    let start_y = (y * buffer_height as f32).round().max(0.0) as usize;
+    let end_x = ((x + width) * buffer_width as f32)
+        .round()
+        .max(start_x as f32) as usize;
+    let end_y = ((y + height) * buffer_height as f32)
+        .round()
+        .max(start_y as f32) as usize;
+    let end_x = end_x.min(buffer_width);
+    let end_y = end_y.min(buffer_height);
+    let pixel = color.pixel();
+    let pixels = buffer.make_mut_slice();
+    for row in start_y..end_y {
+        let row_start = row * buffer_width;
+        for col in start_x..end_x {
+            pixels[row_start + col] = pixel;
+        }
+    }
 }
 
 impl RectBounds {
@@ -534,7 +660,7 @@ mod tests {
             is_dir: false,
             selected: false,
             thumbnail_state: 0,
-            thumbnail: Image::default(),
+            media: Image::default(),
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,
@@ -546,11 +672,10 @@ mod tests {
             location_y: 0.0,
             metadata_line_height: 0.0,
             title_line_height: 0.0,
-            thumbnail_width: 0.0,
-            thumbnail_height: 0.0,
+            media_width: 0.0,
+            media_height: 0.0,
             metadata_font_size: 0.0,
             title_font_size: 0.0,
-            glyph_doc_font_size: 0.0,
         }
     }
 
@@ -600,11 +725,10 @@ mod tests {
                     entry.text_width,
                     entry.title_y,
                     entry.title_line_height,
-                    entry.thumbnail_width,
-                    entry.thumbnail_height,
+                    entry.media_width,
+                    entry.media_height,
                     entry.metadata_font_size,
                     entry.title_font_size,
-                    entry.glyph_doc_font_size,
                 )
             })
             .collect::<Vec<_>>();
@@ -612,19 +736,19 @@ mod tests {
             render_tokens,
             vec![
                 (
-                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0, 12.0
+                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0, 12.0
+                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0, 12.0
+                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0, 12.0
+                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0, 12.0
+                    98.0, 16.0, 14.0, 108.0, 1.0, 39.5, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
             ]
         );
@@ -657,6 +781,45 @@ mod tests {
         assert_eq!(entry.group_y, 23.5);
         assert_eq!(entry.title_y, 39.5);
         assert_eq!(entry.location_y, 60.5);
+    }
+
+    #[test]
+    fn fallback_media_renderer_supplies_icons_without_replacing_loaded_thumbnails() {
+        let metrics = ItemViewRenderMetrics::from_zoom_level(1);
+        let cache = ItemViewMediaCache::new(metrics, false);
+        let mut thumbnail_buffer = SharedPixelBuffer::<Rgba8Pixel>::new(2, 2);
+        thumbnail_buffer
+            .make_mut_slice()
+            .fill(Rgba8Pixel::new(255, 0, 0, 255));
+        let thumbnail = Image::from_rgba8(thumbnail_buffer);
+        let mut entries = vec![
+            ItemViewEntry {
+                is_dir: true,
+                ..test_entry(0)
+            },
+            ItemViewEntry {
+                thumbnail_state: 2,
+                media: thumbnail,
+                ..test_entry(1)
+            },
+        ];
+
+        decorate_fallback_media(&mut entries, &cache);
+
+        let folder_media = entries[0].media.to_rgba8().expect("folder fallback media");
+        assert!(
+            folder_media
+                .as_slice()
+                .iter()
+                .any(|pixel| pixel.a != 0 && (pixel.r != 0 || pixel.g != 0 || pixel.b != 0))
+        );
+        let thumbnail_media = entries[1].media.to_rgba8().expect("thumbnail media");
+        assert!(
+            thumbnail_media
+                .as_slice()
+                .iter()
+                .all(|pixel| *pixel == Rgba8Pixel::new(255, 0, 0, 255))
+        );
     }
 
     #[test]
