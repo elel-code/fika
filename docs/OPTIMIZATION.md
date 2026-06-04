@@ -514,7 +514,7 @@ indices[..].iter()
 **涉及代码**：
 - `src/app/selection.rs:207-244` — `filtered_entries_range`
 
-**改进**：
+**实际实现**（✅ 已完成）：
 
 ```rust
 indices[range.start..end]
@@ -523,11 +523,13 @@ indices[range.start..end]
     .collect()
 ```
 
-**安全性**：索引在目录切换/search 重置时重建，永不过期。
+该直接索引路径不只用于 `filtered_entries_range`，也用于可见路径收集、单项读取、可见 range 迭代、虚拟视图后台 snapshot，以及缩略图可见范围判断。`PaneState::set_entries` / `clear_entries` 会清空旧的 `visible_entry_indices` 和 `visible_location_groups`，目录加载路径使用 `set_entries_with_location_state(entries, has_locations)` 复用已有 location 统计，避免为了失效缓存额外扫描大目录。
+
+**安全性**：`visible_entry_indices` 只由 `rebuild_visible_entry_index` 从当前 pane entries 枚举生成；条目集替换或清空时会立即失效索引缓存，保留 query/filter 条件等待下一次过滤重建。因此直接索引不会使用过期 index。
 
 **收益**：有搜索/过滤时每条目省 `Option` 解包。
 
-**难度**：极低。
+**验证**：`filtered_entries_range_clones_only_requested_filtered_window` / `visible_entry_index_drives_virtual_range_without_rescanning_filters` 覆盖可见索引驱动的虚拟范围；`pane_set_entries_invalidates_visible_index_cache_without_clearing_filters` 覆盖条目替换时的索引缓存失效。
 
 ---
 

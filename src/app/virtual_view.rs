@@ -140,8 +140,7 @@ fn snapshot_entries_range(
             .get(range.start..range.end.min(indices.len()))
             .unwrap_or(&[])
             .iter()
-            .filter_map(|index| input.entries.get(*index))
-            .cloned()
+            .map(|&index| input.entries[index].clone())
             .collect();
     }
 
@@ -202,8 +201,7 @@ fn snapshot_visible_entry_location_at(
     if let Some(indices) = input.visible_entry_indices.as_ref() {
         return indices
             .get(visible_index)
-            .and_then(|entry_index| input.entries.get(*entry_index))
-            .map(|entry| entry.location.clone());
+            .map(|&entry_index| input.entries[entry_index].location.clone());
     }
 
     if snapshot_filters_are_identity(input) {

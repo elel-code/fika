@@ -1784,8 +1784,10 @@ fn load_prepared_pane_directory(
         {
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
-                pane.search.visible_entries_have_locations = cached_entries.has_locations;
-                pane.set_entries(Arc::clone(&cached_entries.entries));
+                pane.set_entries_with_location_state(
+                    Arc::clone(&cached_entries.entries),
+                    cached_entries.has_locations,
+                );
                 pane.view.virtual_view.invalidate();
             }
         }
@@ -2290,8 +2292,10 @@ fn apply_pane_directory_result(
                 if directory_entries_match(&pane.entries, &entries) {
                     unchanged = true;
                 } else {
-                    pane.search.visible_entries_have_locations = entries.has_locations;
-                    pane.set_entries(Arc::clone(&entries.entries));
+                    pane.set_entries_with_location_state(
+                        Arc::clone(&entries.entries),
+                        entries.has_locations,
+                    );
                     pane.view.virtual_view.invalidate();
                     if !result.preserve_view {
                         pane.search.reset_all();
@@ -2554,8 +2558,10 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         let current_dir = state.panes.focused().current_dir.clone();
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
             let pane = state.panes.focused_mut();
-            pane.search.visible_entries_have_locations = entries.has_locations;
-            pane.set_entries(Arc::clone(&entries.entries));
+            pane.set_entries_with_location_state(
+                Arc::clone(&entries.entries),
+                entries.has_locations,
+            );
             pane.view.virtual_view.invalidate();
         }
         (query, progress)
@@ -2725,8 +2731,10 @@ fn apply_recursive_search_result(
             {
                 let mut state = state.borrow_mut();
                 let pane = state.panes.focused_mut();
-                pane.search.visible_entries_have_locations = entries.has_locations;
-                pane.set_entries(Arc::clone(&entries.entries));
+                pane.set_entries_with_location_state(
+                    Arc::clone(&entries.entries),
+                    entries.has_locations,
+                );
                 pane.view.virtual_view.invalidate();
             }
             apply_filter(ui, state, bridge, true);

@@ -70,12 +70,27 @@ impl PaneState {
     }
 
     pub(crate) fn set_entries(&mut self, entries: Arc<[PaneEntrySnapshot]>) {
+        let has_locations = entries.iter().any(|entry| !entry.location.is_empty());
+        self.set_entries_with_location_state(entries, has_locations);
+    }
+
+    pub(crate) fn set_entries_with_location_state(
+        &mut self,
+        entries: Arc<[PaneEntrySnapshot]>,
+        has_locations: bool,
+    ) {
         self.entries = entries;
+        self.search.visible_entry_indices = None;
+        self.search.visible_entries_have_locations = has_locations;
+        self.search.visible_location_groups = None;
         self.view.virtual_generation.next();
     }
 
     pub(crate) fn clear_entries(&mut self) {
         self.entries = Arc::from([]);
+        self.search.visible_entry_indices = None;
+        self.search.visible_entries_have_locations = false;
+        self.search.visible_location_groups = None;
         self.view.virtual_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
         self.view.virtual_start_column = 0;
@@ -676,6 +691,37 @@ mod tests {
         assert_eq!(search.size_filter, 0);
         assert!(search.visible_entry_indices.is_none());
         assert!(!search.visible_entries_have_locations);
+    }
+
+    #[test]
+    fn pane_set_entries_invalidates_visible_index_cache_without_clearing_filters() {
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+        pane.search.query = "report".to_string();
+        pane.search.kind_filter = 2;
+        pane.search.visible_entry_indices = Some(vec![0, 2, 4]);
+        pane.search.visible_entries_have_locations = true;
+        pane.search.visible_location_groups = Some(vec!["docs".to_string()]);
+
+        pane.set_file_entries(vec![test_entry("report.txt", "/tmp/report.txt")]);
+
+        assert_eq!(pane.search.query, "report");
+        assert_eq!(pane.search.kind_filter, 2);
+        assert!(pane.search.visible_entry_indices.is_none());
+        assert!(!pane.search.visible_entries_have_locations);
+        assert!(pane.search.visible_location_groups.is_none());
+    }
+
+    #[test]
+    fn pane_set_entries_recomputes_unfiltered_location_flag() {
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+        let mut entry = test_entry("result.txt", "/tmp/docs/result.txt");
+        entry.location = "docs".into();
+
+        pane.set_file_entries(vec![entry]);
+
+        assert!(pane.search.visible_entries_have_locations);
+        assert!(pane.search.visible_entry_indices.is_none());
+        assert!(pane.search.visible_location_groups.is_none());
     }
 
     #[test]

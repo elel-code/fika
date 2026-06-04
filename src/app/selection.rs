@@ -54,8 +54,7 @@ pub(crate) fn filtered_entry_paths_for_pane(state: &AppState, pane: &PaneState) 
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .iter()
-            .filter_map(|index| pane.entries.get(*index))
-            .map(|entry| entry.path.clone())
+            .map(|&index| pane.entries[index].path.clone())
             .collect();
     }
 
@@ -147,8 +146,7 @@ pub(crate) fn filtered_entry_at_for_pane(
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .get(index)
-            .and_then(|entry_index| pane.entries.get(*entry_index))
-            .map(PaneEntrySnapshot::to_file_entry);
+            .map(|&entry_index| pane.entries[entry_index].to_file_entry());
     }
 
     let chooser_patterns = active_chooser_patterns(state);
@@ -330,8 +328,7 @@ pub(crate) fn filtered_entries_range_for_slot(
             .get(range.start..end)
             .unwrap_or(&[])
             .iter()
-            .filter_map(|&index| pane.entries.get(index))
-            .map(PaneEntrySnapshot::to_file_entry)
+            .map(|&index| pane.entries[index].to_file_entry())
             .collect()
     } else if filters_are_identity(&pane.search, &chooser_patterns) {
         pane.entries
@@ -420,8 +417,7 @@ fn visible_entry_location_at_for_pane(
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .get(visible_index)
-            .and_then(|entry_index| pane.entries.get(*entry_index))
-            .map(|entry| entry.location.clone());
+            .map(|&entry_index| pane.entries[entry_index].location.clone());
     }
 
     let chooser_patterns = active_chooser_patterns(state);
@@ -779,13 +775,12 @@ fn visible_entries_range_iter_for_slot(
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         let start = range.start.min(indices.len());
         let end = range.end.min(indices.len());
-        return Box::new(indices[start..end].iter().enumerate().filter_map(
-            move |(offset, index)| {
-                pane.entries
-                    .get(*index)
-                    .map(|entry| (start + offset, entry))
-            },
-        ));
+        return Box::new(
+            indices[start..end]
+                .iter()
+                .enumerate()
+                .map(move |(offset, &index)| (start + offset, &pane.entries[index])),
+        );
     }
 
     let chooser_patterns = active_chooser_patterns(state);
@@ -827,7 +822,7 @@ fn visible_entry_iter_for_slot(
     };
 
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
-        return Box::new(indices.iter().filter_map(|index| pane.entries.get(*index)));
+        return Box::new(indices.iter().map(|&index| &pane.entries[index]));
     }
 
     let chooser_patterns = active_chooser_patterns(state);

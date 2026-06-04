@@ -86,8 +86,7 @@ pub(crate) fn path_is_in_virtual_range_for_pane(
 
         return indices[start..end]
             .iter()
-            .filter_map(|entry_index| pane.entries.get(*entry_index))
-            .any(|entry| entry.path.as_str() == path_text);
+            .any(|&entry_index| pane.entries[entry_index].path.as_str() == path_text);
     }
 
     let start = range_start.min(pane.entries.len());
