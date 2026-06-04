@@ -928,13 +928,10 @@ export component AppWindow inherits Window {
     }
 
     public function route-pane-focus(slot: int) {
+        app-focus.focus();
         if (root.focused_pane == slot) {
-            if root.search-input-focused || root.chooser-save-input-focused {
-                main-focus.focus();
-            }
             return;
         }
-        main-focus.focus();
         root.pane_focus(slot);
     }
 
@@ -1472,11 +1469,6 @@ export component AppWindow inherits Window {
             preferred-width: 0px;
             max-width: 100000px;
             background: root.shell-base-color;
-
-            main-focus := FocusScope {
-                width: 0px;
-                height: 0px;
-            }
 
             pane-row := Rectangle {
                 width: parent.width;

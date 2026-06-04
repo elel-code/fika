@@ -235,9 +235,7 @@ export component PathBar inherits Rectangle {
                 }
                 changed has-focus => {
                     root.path_focus_changed(self.has-focus);
-                    if (self.has-focus) {
-                        root.focus_requested();
-                    } else {
+                    if (!self.has-focus) {
                         root.editor-text = root.current-path;
                         root.path_text_changed(root.current-path);
                     }

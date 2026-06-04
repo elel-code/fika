@@ -424,6 +424,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 pane.path_focused = focused;
             }
             if let Some(ui) = ui_weak.upgrade() {
+                if focused {
+                    focus_pane_slot(&ui, &state, slot);
+                }
                 sync_pane_slot_ui(&ui, &state, slot);
             }
         });
@@ -1571,7 +1574,6 @@ fn register_pane_routing_callbacks(ui: &AppWindow) {
             }
         });
     }
-
 }
 
 fn log_chooser_parent_window(parent_window: Option<&str>) {
@@ -4498,7 +4500,7 @@ fn dnd_debug_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{place_drop_geometry, virtual_entry_range};
+    use crate::app::geometry::{place_drop_geometry, virtual_grid_plan};
     use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
         filtered_entries_range, filtered_entry_at, filtered_entry_paths, filtered_entry_summary,
@@ -4814,19 +4816,18 @@ mod tests {
     }
 
     #[test]
-    fn virtual_entry_range_keeps_visible_columns_with_overscan() {
-        assert_eq!(
-            virtual_entry_range(100, 4, 0.0, 250.0, 100.0, 10.0, 1),
-            0..16
-        );
-        assert_eq!(
-            virtual_entry_range(100, 4, 350.0, 250.0, 100.0, 10.0, 1),
-            8..28
-        );
-        assert_eq!(
-            virtual_entry_range(10, 4, 800.0, 250.0, 100.0, 10.0, 1),
-            10..10
-        );
+    fn virtual_grid_plan_keeps_visible_columns_with_overscan() {
+        let at_start = virtual_grid_plan(100, 4, 0.0, 250.0, 100.0, 10.0, 1);
+        assert_eq!(at_start.range, 0..16);
+        assert_eq!(at_start.visible_range, 0..12);
+
+        let middle = virtual_grid_plan(100, 4, 350.0, 250.0, 100.0, 10.0, 1);
+        assert_eq!(middle.range, 8..28);
+        assert_eq!(middle.visible_range, 12..24);
+
+        let clamped = virtual_grid_plan(10, 4, 800.0, 250.0, 100.0, 10.0, 1);
+        assert_eq!(clamped.range, 0..10);
+        assert_eq!(clamped.visible_range, 0..10);
     }
 
     #[test]

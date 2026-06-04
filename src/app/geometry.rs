@@ -151,7 +151,7 @@ pub(crate) fn virtual_grid_plan(
         padding,
     );
     let viewport_x = requested_viewport_x.clamp(0.0, scroll_max_x);
-    let range = virtual_entry_range(
+    let (range, visible_range) = virtual_entry_ranges(
         entry_count,
         rows_per_column,
         viewport_x,
@@ -159,15 +159,6 @@ pub(crate) fn virtual_grid_plan(
         cell_width,
         padding,
         overscan_columns,
-    );
-    let visible_range = virtual_entry_range(
-        entry_count,
-        rows_per_column,
-        viewport_x,
-        viewport_width,
-        cell_width,
-        padding,
-        0,
     );
     let start_column = range.start / rows_per_column.max(1);
 
@@ -223,7 +214,7 @@ pub(crate) fn search_panel_height(
     }
 }
 
-pub(crate) fn virtual_entry_range(
+fn virtual_entry_ranges(
     entry_count: usize,
     rows_per_column: usize,
     viewport_x: f32,
@@ -231,9 +222,9 @@ pub(crate) fn virtual_entry_range(
     cell_width: f32,
     padding: f32,
     overscan_columns: usize,
-) -> Range<usize> {
+) -> (Range<usize>, Range<usize>) {
     if entry_count == 0 {
-        return 0..0;
+        return (0..0, 0..0);
     }
 
     let rows_per_column = rows_per_column.max(1);
@@ -249,6 +240,23 @@ pub(crate) fn virtual_entry_range(
     let start_column = first_visible_column.saturating_sub(overscan_columns);
     let end_column = visible_end_column + overscan_columns;
 
+    (
+        entry_range_for_columns(start_column, end_column, rows_per_column, entry_count),
+        entry_range_for_columns(
+            first_visible_column,
+            visible_end_column,
+            rows_per_column,
+            entry_count,
+        ),
+    )
+}
+
+fn entry_range_for_columns(
+    start_column: usize,
+    end_column: usize,
+    rows_per_column: usize,
+    entry_count: usize,
+) -> Range<usize> {
     let start = (start_column * rows_per_column).min(entry_count);
     let end = (end_column * rows_per_column).min(entry_count);
     start..end.max(start)
@@ -1125,7 +1133,7 @@ mod tests {
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
         PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, active_main_pane_width,
         context_menu_metrics, inactive_main_pane_width, main_pane_bounds, main_scroll_max_x,
-        place_drop_geometry, search_panel_height, virtual_entry_range, virtual_grid_plan,
+        place_drop_geometry, search_panel_height, virtual_grid_plan,
     };
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
@@ -1765,6 +1773,18 @@ mod tests {
             bars.contains("min-width: 96px;"),
             "PathBar should keep the address field flexible inside the main pane"
         );
+        let path_text_focus_body = path_bar_component
+            .split_once("changed has-focus => {")
+            .expect("PathBar TextInput should track focus changes")
+            .1
+            .split_once("if (self.has-focus && root.editor-text == \"\")")
+            .expect("PathBar focus block should prepare empty path text after focus handling")
+            .0;
+        assert!(
+            path_text_focus_body.contains("root.path_focus_changed(self.has-focus);")
+                && !path_text_focus_body.contains("root.focus_requested();"),
+            "PathBar TextInput focus should mark pane-local path focus without stealing keyboard focus from the address editor"
+        );
         assert!(
             bars.contains("min-width: 180px;")
                 && bars.contains("preferred-width: 320px;")
@@ -2169,7 +2189,8 @@ mod tests {
             "pane shells should not hand-roll pane chrome or content outside FilePane"
         );
         assert!(
-            route_functions.contains("main-focus.focus();")
+            route_functions.contains("app-focus.focus();")
+                && !app.contains("main-focus := FocusScope")
                 && route_functions.contains("root.pane_focus(slot);")
                 && route_functions
                     .contains("public function route-pane-path-submitted(slot: int, path: string)")
@@ -2178,7 +2199,7 @@ mod tests {
                 && route_functions.contains("root.pane_go_back(slot);")
                 && route_functions.contains("public function route-pane-go-forward(slot: int)")
                 && route_functions.contains("root.pane_go_forward(slot);"),
-            "shared pane route functions should focus and navigate any pane from the same slot-aware code"
+            "shared pane route functions should return keyboard focus to the global shortcut scope and navigate any pane from the same slot-aware code"
         );
         assert!(
             route_functions.contains("public function route-pane-view-changed(slot: int)")
@@ -2198,13 +2219,17 @@ mod tests {
                 && context_menu_route.contains("root.sync_clipboard_state();")
                 && !context_menu_route.contains("root.refresh_clipboard_availability();")
                 && context_menu_route.contains("if (!root.pane_is_selected(slot, path))")
-                && context_menu_route.contains("root.pane_request_select(slot, path, false, false);")
+                && context_menu_route
+                    .contains("root.pane_request_select(slot, path, false, false);")
                 && context_menu_route.contains("root.show-context-menu(1, x, y);")
                 && route_functions
                     .contains("public function route-pane-request-blank-context-menu(slot: int,")
                 && blank_context_menu_route.contains("root.sync_clipboard_state();")
                 && !blank_context_menu_route.contains("root.refresh_clipboard_availability();")
-                && route_functions.matches("root.sync_clipboard_state();").count() == 2
+                && route_functions
+                    .matches("root.sync_clipboard_state();")
+                    .count()
+                    == 2
                 && blank_context_menu_route.contains("root.show-context-menu(3, x, y);")
                 && route_functions
                     .contains("public function route-pane-drop-target-path(slot: int,")
@@ -2589,19 +2614,18 @@ mod tests {
     }
 
     #[test]
-    fn virtual_entry_range_keeps_visible_columns_with_overscan() {
-        assert_eq!(
-            virtual_entry_range(100, 4, 0.0, 250.0, 100.0, 10.0, 1),
-            0..16
-        );
-        assert_eq!(
-            virtual_entry_range(100, 4, 350.0, 250.0, 100.0, 10.0, 1),
-            8..28
-        );
-        assert_eq!(
-            virtual_entry_range(10, 4, 800.0, 250.0, 100.0, 10.0, 1),
-            10..10
-        );
+    fn virtual_grid_plan_keeps_visible_columns_with_overscan() {
+        let at_start = virtual_grid_plan(100, 4, 0.0, 250.0, 100.0, 10.0, 1);
+        assert_eq!(at_start.range, 0..16);
+        assert_eq!(at_start.visible_range, 0..12);
+
+        let middle = virtual_grid_plan(100, 4, 350.0, 250.0, 100.0, 10.0, 1);
+        assert_eq!(middle.range, 8..28);
+        assert_eq!(middle.visible_range, 12..24);
+
+        let clamped = virtual_grid_plan(10, 4, 800.0, 250.0, 100.0, 10.0, 1);
+        assert_eq!(clamped.range, 0..10);
+        assert_eq!(clamped.visible_range, 0..10);
     }
 
     #[test]

@@ -243,8 +243,8 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewUpd
 Slint: 用户交互（滚动/点击/右键菜单/...）
   → focus_requested(slot) 回调
     → PaneRouting.focus(slot)
-      → route-pane-focus(slot)           [ui/app.slint:1002]
-        → main-focus.focus()             ← Slint FocusScope 重算
+      → route-pane-focus(slot)           [ui/app.slint:930]
+        → app-focus.focus()              ← 回到全局快捷键 FocusScope
         → pane_focus(slot)               ← Rust FFI
           → focus_pane_slot()            [src/main.rs:3894]
             → state.panes.focus_slot(slot)
@@ -285,12 +285,12 @@ fn focus_pane_slot(ui, state, slot) {
 
 ### F0 — Slint 侧 `route-pane-focus` 提前退出
 
-**问题**：`route-pane-focus(slot)` 无条件执行 `main-focus.focus()` + `pane_focus(slot)`，即使 slot 已经是当前焦点。快速滚动时每帧触发两次（`pan-horizontal` + `changed viewport-x`），每次都做无效的 `FocusScope` 重算和 FFI 往返。
+**问题**：`route-pane-focus(slot)` 曾无条件执行 focus + `pane_focus(slot)`，即使 slot 已经是当前焦点。快速滚动时每帧触发两次（`pan-horizontal` + `changed viewport-x`），每次都做无效的 `FocusScope` 重算和 FFI 往返。
 
 ```slint
 // 当前 (ui/app.slint:1002)
 public function route-pane-focus(slot: int) {
-    main-focus.focus();
+    app-focus.focus();
     root.pane_focus(slot);
 }
 ```
@@ -298,18 +298,19 @@ public function route-pane-focus(slot: int) {
 **涉及代码**：
 - `ui/app.slint:1002-1005` — `route-pane-focus`
 
-**改进**：比较 `root.focused_pane`，slot 未变化时直接返回。
+**实际实现**（✅ 已完成）：`route-pane-focus` 先把焦点回收到 `app-focus`（全局 `KeyBinding` 所在的 FocusScope），然后只在 slot 变化时调用 `pane_focus(slot)`。这既恢复文件区点击后的 Ctrl+A/C/V/Delete 等窗口级快捷键，又避免同 slot 点击时重复 FFI。
 
 ```slint
 public function route-pane-focus(slot: int) {
-    if (root.focused_pane != slot) {
-        main-focus.focus();
-        root.pane_focus(slot);
+    app-focus.focus();
+    if (root.focused_pane == slot) {
+        return;
     }
+    root.pane_focus(slot);
 }
 ```
 
-`focused_pane` 已经是 `AppWindow` 的 property，不需要新增任何状态。
+`PathBar` 的 `TextInput` 获焦不再调用 `focus_requested()`，只通过 `pane_path_focus_changed(slot, true)` 切换 pane 状态，避免地址栏刚获焦又被 `app-focus.focus()` 抢走。
 
 **注意事项**：
 - 首次启动时 `focused_pane` 初始值为 0，与 slot 0 匹配，第一帧不会跳过分发
@@ -415,7 +416,7 @@ fn sync_focus_change_only(ui, state) {
 
 **原问题**：路径输入框焦点变化曾通过 `set-pane-slot-path-focused` 写固定左右 pane 属性并触发 `pane_slots_refresh_requested()`，导致完整重建 `Vec<PaneSlotData>`。但唯一变化的数据只是当前 slot 的 `PaneSlotData.path_focused`。
 
-**实际实现**（✅ 已完成）：旧的 `set-pane-slot-path-focused` / `left_pane_path_focused` / `inactive_pane_path_focused` 路径已删除。`PaneSlotSurface` 直接把 `path_focus_changed(slot, focused)` 路由到 `AppWindow.pane_path_focus_changed(int, bool)`；Rust 回调写入对应 pane 的 `path_focused` 后调用 `sync_pane_slot_ui(&ui, &state, slot)`，只更新单个 `PaneSlotData` row。
+**实际实现**（✅ 已完成）：旧的 `set-pane-slot-path-focused` / `left_pane_path_focused` / `inactive_pane_path_focused` 路径已删除。`PaneSlotSurface` 直接把 `path_focus_changed(slot, focused)` 路由到 `AppWindow.pane_path_focus_changed(int, bool)`；Rust 回调写入对应 pane 的 `path_focused`，在 `focused == true` 时切换对应 pane 的 focused slot，然后调用 `sync_pane_slot_ui(&ui, &state, slot)`，只更新单个 `PaneSlotData` row。
 
 **涉及代码**：
 - `ui/app.slint` — `path_focus_changed(slot, focused) => root.pane_path_focus_changed(slot, focused);`
@@ -476,21 +477,23 @@ let visible_range = virtual_entry_range(..., 0);           // 第二次
 
 **涉及代码**：
 - `src/app/geometry.rs:169-215` — `virtual_grid_plan`
-- `src/app/geometry.rs:282-311` — `virtual_entry_range`
+- `src/app/geometry.rs` — `virtual_grid_plan` / `virtual_entry_ranges`
 
-**改进**：融合为一次调用同时返回两个 range。
+**实际实现**（✅ 已完成）：`virtual_grid_plan` 现在调用内部 `virtual_entry_ranges`，一次计算 `first_visible_column` / `visible_end_column`，同时返回 overscan range 和 visible range。旧的单 range 包装函数已删除，避免非测试构建保留死代码。
 
 ```rust
-fn virtual_grid_range(..., overscan_columns) -> (Range<usize>, Range<usize>) {
-    let overscan_range = /* 带 overscan */;
-    let visible_range = /* 不带 overscan, 直接从 overscan_range 推导 */;
+fn virtual_entry_ranges(..., overscan_columns) -> (Range<usize>, Range<usize>) {
+    let first_visible_column = ...;
+    let visible_end_column = ...;
+    let overscan_range = entry_range_for_columns(...);
+    let visible_range = entry_range_for_columns(first_visible_column, visible_end_column, ...);
     (overscan_range, visible_range)
 }
 ```
 
 **收益**：每次 `virtual_grid_plan` 省一次除法/floor/ceil 链。
 
-**难度**：低。单函数重构。
+**难度**：已完成。现有 `virtual_grid_plan` 测试覆盖边界、overscan 和 viewport clamp 行为。
 
 ---
 
@@ -722,7 +725,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | 阶段 | 改进 | 预计工作量 | 状态 |
 |------|------|-----------|------|
 | **Phase V0** | `is_selected` FFI 预计算到 FileEntry | 1h | ✅ 已完成 |
-| **Phase V1** | `virtual_entry_range` 双重计算融合 | 15min | 待实施 |
+| **Phase V1** | `virtual_entry_range` 双重计算融合 | 15min | ✅ 已完成 |
 | **Phase V2** | `filtered_entries_range` filter_map→map | 5min | ✅ 已完成 |
 | **Phase V3** | 旧 preview 路径删除 | 5min | ✅ 已完成/不适用 |
 | **Phase V4** | `annotate_visible_location_groups` 缓存 | 30min | 待实施 |
@@ -736,9 +739,9 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | **Phase S2** | 右键菜单跳过剪贴板读取 | 10min | ✅ 已完成 |
 | **Phase S3** | `file-operation-shortcuts-blocked` 归约 | 5min | ✅ 已完成 |
 
-**综合建议**：V1 可顺手做；V4 低频可搁置。S1 继续搁置，除非 Places 列表规模显著变大。
+**综合建议**：V4 低频可搁置。S1 继续搁置，除非 Places 列表规模显著变大。
 
-**综合建议**：滚动 Phase 1-6、焦点 F0-F2/G0、V0/V2/V3、S0/S2/S3 已完成。剩余 V1 + V4，S1 搁置。
+**综合建议**：滚动 Phase 1-6、焦点 F0-F2/G0、V0-V3、S0/S2/S3 已完成。剩余 V4，S1 搁置。
 
 ### 验证方法
 
