@@ -31,12 +31,38 @@ pub(crate) fn set_pane_viewport_ui(
     viewport_x: f32,
     state: &Rc<RefCell<AppState>>,
 ) {
-    {
+    let updated = {
         let mut state = state.borrow_mut();
-        if let Some(pane) = state.panes.pane_mut_for_slot(slot) {
+        state.panes.pane_mut_for_slot(slot).is_some_and(|pane| {
             pane.view.viewport_x = viewport_x;
+            true
+        })
+    };
+    if updated {
+        sync_pane_slot_viewport_ui(ui, state, slot, viewport_x);
+    }
+}
+
+fn sync_pane_slot_viewport_ui(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    viewport_x: f32,
+) {
+    let current = ui.get_pane_slots();
+    for row in 0..current.row_count() {
+        let Some(mut current_slot) = current.row_data(row) else {
+            continue;
+        };
+        if current_slot.slot == slot {
+            if (current_slot.viewport_x - viewport_x).abs() > f32::EPSILON {
+                current_slot.viewport_x = viewport_x;
+                current.set_row_data(row, current_slot);
+            }
+            return;
         }
     }
+
     sync_pane_slot_ui(ui, state, slot);
 }
 

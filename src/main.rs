@@ -5638,7 +5638,38 @@ mod tests {
                 && body.contains("if current_slot != next")
                 && body.contains("current.set_row_data(row, next);")
                 && body.contains("sync_pane_slots_ui(ui, state);"),
-            "viewport-only pane refreshes should update the affected pane row and fall back to full sync only when the row is missing"
+            "single-pane refreshes should update the affected pane row and fall back to full sync only when the row is missing"
+        );
+    }
+
+    #[test]
+    fn pane_viewport_sync_updates_only_the_viewport_row_field() {
+        let source = include_str!("app/split_view.rs");
+        let setter_body = source
+            .split_once("pub(crate) fn set_pane_viewport_ui(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_slot_viewport_ui("))
+            .map(|(body, _)| body)
+            .expect("set_pane_viewport_ui body should be present");
+        let viewport_body = source
+            .split_once("fn sync_pane_slot_viewport_ui(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_slots_ui("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_slot_viewport_ui body should be present");
+
+        assert!(
+            setter_body.contains("pane.view.viewport_x = viewport_x;")
+                && setter_body.contains("sync_pane_slot_viewport_ui(ui, state, slot, viewport_x);")
+                && !setter_body.contains("sync_pane_slot_ui(ui, state, slot);"),
+            "viewport writes should not rebuild full PaneSlotData just to publish viewport_x"
+        );
+        assert!(
+            viewport_body.contains("let Some(mut current_slot) = current.row_data(row)")
+                && viewport_body.contains("if current_slot.slot == slot")
+                && viewport_body.contains("current_slot.viewport_x = viewport_x;")
+                && viewport_body.contains("current.set_row_data(row, current_slot);")
+                && viewport_body.contains("sync_pane_slot_ui(ui, state, slot);")
+                && !viewport_body.contains("pane_slot_data(ui"),
+            "viewport-only row sync should patch only PaneSlotData.viewport_x and use full row sync only as a missing-row fallback"
         );
     }
 

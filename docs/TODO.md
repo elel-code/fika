@@ -34,6 +34,7 @@
   - Current: `SplitPaneView` owns a self-managed clipped viewport and scrollbar; rendered tiles live in a local slice layer anchored at the first virtualized column and shifted by `viewport_x`, so large directories avoid both scrollbar-width churn and huge per-tile global coordinates.
   - Current: virtual range metadata is cached; scrolling inside the same range does not reset the Slint model.
   - Current: virtual range reuse now keeps the current Slint model while its cached overscan slice still covers the newly visible columns, and self-managed viewport clamping/rounding avoids sub-pixel drift during small scroll steps.
+  - Current: viewport-only state publication patches only the affected `PaneSlotData.viewport_x` row field, so clamp and restored-scroll updates no longer rebuild the full pane row model for a single float change.
   - Current: pane-local width and rows-per-column changes clamp the viewport and request a virtual slice refresh directly, so fullscreen/layout changes at the end of a large directory no longer wait for manual scrollbar movement.
   - Current: recursive-search location group annotation is keyed by pane-local visible-result state, so ordinary large-directory scrolling does not rescan every entry just to decide whether the virtual slice needs group labels.
   - Current: background virtual snapshot preparation receives the pane-local `visible_location_groups` cache and annotates slices by visible index, so recursive-search scrolling avoids per-slice location-boundary recomputation off the UI thread too.

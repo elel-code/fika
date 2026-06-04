@@ -103,7 +103,7 @@ changed viewport-x => {
 - `src/main.rs` — `sync_virtual_entries_for_slot`
 - `ui/split_pane.slint` — `set-viewport-x(raw)` / `relayout-visible-slice()`
 
-**改进**：在 Rust 侧加一个短合并窗口（~8ms，约半帧）：
+**实际实现**（✅ 已完成）：Rust 侧已有一个短合并窗口（8ms，约半帧）：
 
 ```
 滚动事件到达
@@ -116,6 +116,8 @@ changed viewport-x => {
 - viewport_x 的 Slint 写回不在合并窗口内——每次事件都立即写回，保证自管 viewport 实时跟手
 - 只有虚拟切片同步（`sync_virtual_entries`）在合并窗口内
 - 需要从 `PaneRouting.view-changed` 回调路径中提取合并逻辑
+
+`PaneViewSyncScheduler` 用 `slint::Timer` SingleShot 收集 pending slot，timer 到期后按 slot 去重调用 `sync_pane_viewport_for_slot()`。layout/fullscreen/rows-per-column 变化会先 flush pending 滚动同步，再走 immediate layout rebuild，避免末尾 resize 后等待手动滚动条恢复。
 
 **收益**：高速滚动时 Rust 计算量下降 60-80%（从每帧变为每 2-3 帧一次）。
 
@@ -150,6 +152,8 @@ fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 **收益**：每次滚动同步减少 20+ 次 Slint FFI 属性读取。
 
 **难度**：低。纯 Rust 修改，不改变任何 Slint 接口。
+
+**后续补充实现**（✅ 已完成）：`set_pane_viewport_ui()` 现在只把 pane-local `view.viewport_x` 写入 `AppState`，然后通过 `sync_pane_slot_viewport_ui()` patch 当前 `PaneSlotData.viewport_x` 字段；只有 pane row 缺失时才回退到 `sync_pane_slot_ui()` 重建整行。这避免边界 clamp、目录 view-state 恢复、Split 打开/关闭 viewport 发布时为了一个浮点字段重新构建完整 `PaneSlotData`。
 
 ---
 
@@ -788,7 +792,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | **Phase 6** | P3 tile primitive 简化 | 1-2h | ✅ 已完成 |
 
 **Phase 1-6 实现要点**：
-- **Phase 1**: `changed viewport-x` 提前退出 + `sync_pane_slots_ui` row_data 脏检查 + 新增 `sync_pane_slot_ui` 单 slot 增量
+- **Phase 1**: `changed viewport-x` 提前退出 + `sync_pane_slots_ui` row_data 脏检查 + 新增 `sync_pane_slot_ui` 单 slot 增量 + `sync_pane_slot_viewport_ui` 单字段 viewport row patch
 - **Phase 2**: `PaneViewSyncScheduler` (8ms `slint::Timer` SingleShot) + `sync_pane_viewport_for_slot` viewport-only 路径 + layout/flush 分离
 - **Phase 3**: 新模块 `src/app/model_update.rs` — `VecModel::downcast_ref` 增量更新，支持前/后滑动 + `set_row_data` 逐行脏检查
 - **Phase 4**: `ThumbnailFlushScheduler` (16ms) — 缩略图结果入队批量写入，`AsyncEvent::ThumbnailLoaded` 不再逐张触发 `sync_virtual_entries`
