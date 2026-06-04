@@ -112,7 +112,7 @@ pub(crate) fn selected_directory_or_current(state: &AppState) -> PathBuf {
     let focused = state
         .panes
         .pane_for_target(PaneTarget::Focused)
-        .unwrap_or(&state.panes.focused());
+        .unwrap_or(state.panes.focused());
     focused
         .selection
         .paths

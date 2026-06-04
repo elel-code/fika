@@ -660,6 +660,21 @@ private property <bool> file-operation-shortcuts-blocked:
 
 ---
 
+### S4 — Devices mounter item 合并入口
+
+**问题**：Devices 发现路径已经同时包含 mountinfo/root-scan 和 UDisks2，但合并逻辑直接围绕 Slint `DeviceEntry` 运行。这样会把“后端来源/能力”和“侧栏投影字段”绑在一起，后续如果加入 GVfs/network 类后端，容易复制一套合并与诊断统计逻辑。
+
+**涉及代码**：
+- `src/fs/devices.rs` — mountinfo/root-scan、UDisks2 discovery、duplicate merge、diagnostics stats
+
+**实际实现**（✅ 已完成）：mountinfo/root-scan 和 UDisks2 discovery 现在先生成 backend-tagged `MounterDevice`，在内部 mounter item 层完成去重、能力合并、kind 升级和 merge stats 统计，最后再投影成现有 Slint `DeviceEntry`。本地可移动设备操作仍走 UDisks2 system bus；UI model 字段不变。
+
+**收益**：把后端发现/合并路径和 sidebar Slint model 投影分开，后续 GVfs/network 后端可以接入同一个 merge/statistics/projection 路径，而不是重新实现一套 Devices sidebar 合并逻辑。
+
+**验证**：`mounter_device_merge_keeps_backend_semantics_before_sidebar_projection` 覆盖内部 mounter item 合并；现有 `devices` 测试继续覆盖 UDisks2 parsing、mountinfo fallback、diagnostics 和 sidebar status projection。
+
+---
+
 ## 潜在问题排查
 
 以下是与性能相关的已知限制或需要排查的点：
@@ -751,8 +766,9 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | **Phase S1** | Places 模型增量更新 | 10min | ✅ 已完成 |
 | **Phase S2** | 右键菜单跳过剪贴板读取 | 10min | ✅ 已完成 |
 | **Phase S3** | `file-operation-shortcuts-blocked` 归约 | 5min | ✅ 已完成 |
+| **Phase S4** | Devices mounter item 合并入口 | 30min | ✅ 已完成 |
 
-**综合建议**：滚动 Phase 1-6、焦点 F0-F2/G0、V0-V4、S0-S3 已完成。后续性能工作应优先来自实测卡顿或新的 Dolphin/COSMIC 对照发现，而不是继续堆叠低收益微优化。
+**综合建议**：滚动 Phase 1-6、焦点 F0-F2/G0、V0-V4、S0-S4 已完成。后续性能工作应优先来自实测卡顿或新的 Dolphin/COSMIC 对照发现，而不是继续堆叠低收益微优化。
 
 ### 验证方法
 

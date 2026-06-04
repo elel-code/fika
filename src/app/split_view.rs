@@ -117,7 +117,11 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         can_go_forward: pane_slot_can_go_forward(state, slot),
         search_panel_visible: is_focused && search_panel_visible,
         search_panel_height_px: 0.0,
-        search_query: is_focused.then(|| search_query.clone()).unwrap_or_default(),
+        search_query: if is_focused {
+            search_query.clone()
+        } else {
+            SharedString::new()
+        },
         recursive_search: is_focused && ui.get_recursive_search(),
         search_kind_filter: ui.get_search_kind_filter(),
         search_modified_filter: ui.get_search_modified_filter(),
@@ -127,12 +131,16 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         search_kind_label: active_search_kind_label(ui),
         search_modified_label: active_search_modified_label(ui),
         search_size_label: active_search_size_label(ui),
-        content_interactive: is_focused
-            .then(|| !ui.get_directory_loading())
-            .unwrap_or(true),
-        drop_ready: is_focused
-            .then(|| !ui.get_directory_loading())
-            .unwrap_or(true),
+        content_interactive: if is_focused {
+            !ui.get_directory_loading()
+        } else {
+            true
+        },
+        drop_ready: if is_focused {
+            !ui.get_directory_loading()
+        } else {
+            true
+        },
         drop_trace_prefix: format!("pane-{slot}-").into(),
         entry_count: pane_slot_entry_count(state, slot),
         entries: pane_slot_entries(slot, state),
@@ -143,9 +151,11 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         selection_revision,
         show_location: pane_slot_in_trash(slot)
             || (is_focused && ui.get_recursive_search() && !search_query.is_empty()),
-        empty_message_visible: is_focused
-            .then(|| !ui.get_directory_loading())
-            .unwrap_or(true),
+        empty_message_visible: if is_focused {
+            !ui.get_directory_loading()
+        } else {
+            true
+        },
         empty_title: if is_focused {
             active_empty_title(ui, &search_query)
         } else {
@@ -281,7 +291,7 @@ fn pane_slot_selected_status(state: &AppState, slot: i32) -> SharedString {
             if count == 0 {
                 SharedString::new()
             } else if count == 1 {
-                format!("1 item selected").into()
+                "1 item selected".into()
             } else {
                 format!("{count} items selected").into()
             }
@@ -389,7 +399,7 @@ pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
         let focused = state
             .panes
             .pane_for_target(PaneTarget::Focused)
-            .unwrap_or(&state.panes.focused());
+            .unwrap_or(state.panes.focused());
         NavigationUiSnapshot {
             split_open: state.panes.is_split(),
             focused_slot,
@@ -420,7 +430,7 @@ pub(crate) fn sync_focus_navigation_ui(
         let focused = state
             .panes
             .pane_for_target(PaneTarget::Focused)
-            .unwrap_or(&state.panes.focused());
+            .unwrap_or(state.panes.focused());
         (
             focused_slot,
             focused.current_dir.clone(),

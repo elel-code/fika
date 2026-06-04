@@ -15,23 +15,26 @@ pub(crate) fn mounted_devices() -> Vec<DeviceEntry> {
 
 fn discover_devices() -> DeviceDiscovery {
     let roots = mount_roots();
-    let (mounted, mount_source) = mounted_devices_from_mountinfo(&roots, "/proc/self/mountinfo")
-        .map(|devices| {
-            device_debug_log(&format!(
-                "mountinfo discovered {} mounted device row(s)",
-                devices.len().saturating_sub(1)
-            ));
-            (devices, DeviceMountSource::Mountinfo)
-        })
-        .unwrap_or_else(|| {
-            device_debug_log("mountinfo unavailable; falling back to mount-root directory scan");
-            (
-                mounted_devices_from_roots(roots),
-                DeviceMountSource::RootScan,
-            )
-        });
+    let (mounted, mount_source) =
+        mounted_mounter_devices_from_mountinfo(&roots, "/proc/self/mountinfo")
+            .map(|devices| {
+                device_debug_log(&format!(
+                    "mountinfo discovered {} mounted device row(s)",
+                    devices.len().saturating_sub(1)
+                ));
+                (devices, DeviceMountSource::Mountinfo)
+            })
+            .unwrap_or_else(|| {
+                device_debug_log(
+                    "mountinfo unavailable; falling back to mount-root directory scan",
+                );
+                (
+                    mounted_mounter_devices_from_roots(roots),
+                    DeviceMountSource::RootScan,
+                )
+            });
     let mounted_rows = mounted.len().saturating_sub(1);
-    let (discovered, udisks_error) = match udisks2_removable_devices() {
+    let (discovered, udisks_error) = match udisks2_removable_mounter_devices() {
         Ok(devices) => {
             device_debug_log(&format!(
                 "UDisks2 discovered {} external media row(s)",
@@ -45,9 +48,9 @@ fn discover_devices() -> DeviceDiscovery {
         }
     };
     let udisks_rows = discovered.len();
-    let merged = merge_device_entries_with_stats(mounted, discovered);
+    let merged = merge_mounter_devices_with_stats(mounted, discovered);
     let discovery = DeviceDiscovery {
-        devices: merged.devices,
+        devices: device_entries_from_mounter_devices(merged.devices),
         mount_source,
         mounted_rows,
         udisks_rows,
@@ -127,14 +130,28 @@ fn diagnostic_value(value: &str) -> String {
     escaped
 }
 
+#[cfg(test)]
 fn mounted_devices_from_roots(roots: Vec<PathBuf>) -> Vec<DeviceEntry> {
-    mounted_devices_from_paths(mounted_children_from_roots(&roots))
+    device_entries_from_mounter_devices(mounted_mounter_devices_from_roots(roots))
 }
 
+#[cfg(test)]
 fn mounted_devices_from_mountinfo(
     roots: &[PathBuf],
     mountinfo_path: &str,
 ) -> Option<Vec<DeviceEntry>> {
+    mounted_mounter_devices_from_mountinfo(roots, mountinfo_path)
+        .map(device_entries_from_mounter_devices)
+}
+
+fn mounted_mounter_devices_from_roots(roots: Vec<PathBuf>) -> Vec<MounterDevice> {
+    mounted_mounter_devices_from_paths(mounted_children_from_roots(&roots))
+}
+
+fn mounted_mounter_devices_from_mountinfo(
+    roots: &[PathBuf],
+    mountinfo_path: &str,
+) -> Option<Vec<MounterDevice>> {
     let contents = fs::read_to_string(mountinfo_path).ok()?;
     let mount_points = parse_mountinfo_records(&contents)
         .into_iter()
@@ -142,11 +159,11 @@ fn mounted_devices_from_mountinfo(
         .map(|record| record.mount_point)
         .collect::<Vec<_>>();
 
-    Some(mounted_devices_from_paths(mount_points))
+    Some(mounted_mounter_devices_from_paths(mount_points))
 }
 
-fn mounted_devices_from_paths(paths: Vec<PathBuf>) -> Vec<DeviceEntry> {
-    let mut devices = Vec::from([filesystem_entry()]);
+fn mounted_mounter_devices_from_paths(paths: Vec<PathBuf>) -> Vec<MounterDevice> {
+    let mut devices = Vec::from([filesystem_mounter_device()]);
     let mut seen = HashSet::from([String::from("/")]);
 
     let mut paths = paths;
@@ -157,7 +174,7 @@ fn mounted_devices_from_paths(paths: Vec<PathBuf>) -> Vec<DeviceEntry> {
         if !seen.insert(path_text.clone()) {
             continue;
         }
-        devices.push(device_entry(
+        devices.push(mounter_device(
             mount_label(&path),
             path_text.clone(),
             path_text,
@@ -165,56 +182,67 @@ fn mounted_devices_from_paths(paths: Vec<PathBuf>) -> Vec<DeviceEntry> {
             mount_marker(&path),
             true,
             DeviceCapabilities::default(),
+            MounterBackend::MountTable,
         ));
     }
 
     devices
 }
 
-fn merge_device_entries_with_stats(
-    mounted_devices: Vec<DeviceEntry>,
-    discovered_devices: Vec<DeviceEntry>,
-) -> DeviceMergeResult {
-    let mut devices = Vec::new();
-    let mut seen = HashMap::new();
-    let mut origins = Vec::new();
+fn merge_mounter_devices_with_stats(
+    mounted_devices: Vec<MounterDevice>,
+    discovered_devices: Vec<MounterDevice>,
+) -> MounterDeviceMergeResult {
+    let mut devices: Vec<MounterDevice> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut origins: Vec<DeviceEntryOrigin> = Vec::new();
 
     for device in mounted_devices {
-        let path = device.path.to_string();
+        let path = device.path.clone();
         if let Some(index) = seen.get(&path).copied() {
-            merge_device_metadata(&mut devices[index], &device);
+            merge_mounter_device_metadata(&mut devices[index], &device);
+            origins[index].add_backend(device.backend);
         } else {
             seen.insert(path, devices.len());
+            origins.push(DeviceEntryOrigin::from_backend(device.backend));
             devices.push(device);
-            origins.push(DeviceEntryOrigin {
-                mounted_table: true,
-                udisks: false,
-            });
         }
     }
 
     for device in discovered_devices {
-        let path = device.path.to_string();
+        let path = device.path.clone();
         if let Some(index) = seen.get(&path).copied() {
-            merge_device_metadata(&mut devices[index], &device);
-            origins[index].udisks = true;
+            merge_mounter_device_metadata(&mut devices[index], &device);
+            origins[index].add_backend(device.backend);
         } else {
             seen.insert(path, devices.len());
+            origins.push(DeviceEntryOrigin::from_backend(device.backend));
             devices.push(device);
-            origins.push(DeviceEntryOrigin {
-                mounted_table: false,
-                udisks: true,
-            });
         }
     }
 
-    DeviceMergeResult {
+    MounterDeviceMergeResult {
         stats: DeviceMergeStats::from_origins(&devices, &origins),
         devices,
     }
 }
 
-fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
+#[cfg(test)]
+fn merge_device_entries_with_stats(
+    mounted_devices: Vec<DeviceEntry>,
+    discovered_devices: Vec<DeviceEntry>,
+) -> DeviceMergeResult {
+    let mounted_devices = mounter_devices_from_entries(mounted_devices, MounterBackend::MountTable);
+    let discovered_devices =
+        mounter_devices_from_entries(discovered_devices, MounterBackend::UDisks2);
+    let merged = merge_mounter_devices_with_stats(mounted_devices, discovered_devices);
+    DeviceMergeResult {
+        devices: device_entries_from_mounter_devices(merged.devices),
+        stats: merged.stats,
+    }
+}
+
+fn merge_mounter_device_metadata(existing: &mut MounterDevice, discovered: &MounterDevice) {
     if existing.device_path == existing.path && discovered.device_path != discovered.path {
         existing.device_path = discovered.device_path.clone();
     }
@@ -225,10 +253,16 @@ fn merge_device_metadata(existing: &mut DeviceEntry, discovered: &DeviceEntry) {
     if existing.kind.as_str() != DeviceKind::Filesystem.as_str()
         && discovered.kind.as_str() == DeviceKind::RemovableMedia.as_str()
     {
-        existing.kind = discovered.kind.clone();
+        existing.kind = discovered.kind;
     }
 }
 
+struct MounterDeviceMergeResult {
+    devices: Vec<MounterDevice>,
+    stats: DeviceMergeStats,
+}
+
+#[cfg(test)]
 struct DeviceMergeResult {
     devices: Vec<DeviceEntry>,
     stats: DeviceMergeStats,
@@ -249,6 +283,22 @@ struct DeviceEntryOrigin {
     udisks: bool,
 }
 
+impl DeviceEntryOrigin {
+    fn from_backend(backend: MounterBackend) -> Self {
+        let mut origin = Self::default();
+        origin.add_backend(backend);
+        origin
+    }
+
+    fn add_backend(&mut self, backend: MounterBackend) {
+        match backend {
+            MounterBackend::Filesystem => {}
+            MounterBackend::MountTable => self.mounted_table = true,
+            MounterBackend::UDisks2 => self.udisks = true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct DeviceMergeStats {
     mounted_only: usize,
@@ -257,10 +307,10 @@ struct DeviceMergeStats {
 }
 
 impl DeviceMergeStats {
-    fn from_origins(devices: &[DeviceEntry], origins: &[DeviceEntryOrigin]) -> Self {
+    fn from_origins(devices: &[MounterDevice], origins: &[DeviceEntryOrigin]) -> Self {
         let mut stats = Self::default();
         for (device, origin) in devices.iter().zip(origins) {
-            if device.path.as_str() == "/" {
+            if device.path == "/" {
                 continue;
             }
             match (origin.mounted_table, origin.udisks) {
@@ -352,8 +402,52 @@ impl DeviceKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MounterBackend {
+    Filesystem,
+    MountTable,
+    UDisks2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MounterDevice {
+    label: String,
+    path: String,
+    device_path: String,
+    kind: DeviceKind,
+    marker: String,
+    mounted: bool,
+    can_mount: bool,
+    can_unmount: bool,
+    can_eject: bool,
+    backend: MounterBackend,
+}
+
+impl MounterDevice {
+    fn into_device_entry(self) -> DeviceEntry {
+        DeviceEntry {
+            label: self.label.into(),
+            path: self.path.into(),
+            device_path: self.device_path.into(),
+            kind: self.kind.as_str().into(),
+            marker: self.marker.into(),
+            mounted: self.mounted,
+            can_mount: self.can_mount,
+            can_unmount: self.can_unmount,
+            can_eject: self.can_eject,
+            pending_action: String::new().into(),
+            error: String::new().into(),
+        }
+    }
+}
+
+#[cfg(test)]
 fn filesystem_entry() -> DeviceEntry {
-    device_entry(
+    filesystem_mounter_device().into_device_entry()
+}
+
+fn filesystem_mounter_device() -> MounterDevice {
+    mounter_device(
         "Filesystem".into(),
         "/".into(),
         "/".into(),
@@ -361,9 +455,11 @@ fn filesystem_entry() -> DeviceEntry {
         "/".into(),
         true,
         DeviceCapabilities::default(),
+        MounterBackend::Filesystem,
     )
 }
 
+#[cfg(test)]
 fn device_entry(
     label: String,
     path: String,
@@ -373,18 +469,79 @@ fn device_entry(
     mounted: bool,
     capabilities: DeviceCapabilities,
 ) -> DeviceEntry {
-    DeviceEntry {
-        label: label.into(),
-        path: path.into(),
-        device_path: device_path.into(),
-        kind: kind.as_str().into(),
-        marker: marker.into(),
+    mounter_device(
+        label,
+        path,
+        device_path,
+        kind,
+        marker,
+        mounted,
+        capabilities,
+        MounterBackend::MountTable,
+    )
+    .into_device_entry()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mounter_device(
+    label: String,
+    path: String,
+    device_path: String,
+    kind: DeviceKind,
+    marker: String,
+    mounted: bool,
+    capabilities: DeviceCapabilities,
+    backend: MounterBackend,
+) -> MounterDevice {
+    MounterDevice {
+        label,
+        path,
+        device_path,
+        kind,
+        marker,
         mounted,
         can_mount: capabilities.can_mount,
         can_unmount: capabilities.can_unmount,
         can_eject: capabilities.can_eject,
-        pending_action: String::new().into(),
-        error: String::new().into(),
+        backend,
+    }
+}
+
+fn device_entries_from_mounter_devices(devices: Vec<MounterDevice>) -> Vec<DeviceEntry> {
+    devices
+        .into_iter()
+        .map(MounterDevice::into_device_entry)
+        .collect()
+}
+
+#[cfg(test)]
+fn mounter_devices_from_entries(
+    devices: Vec<DeviceEntry>,
+    backend: MounterBackend,
+) -> Vec<MounterDevice> {
+    devices
+        .into_iter()
+        .map(|device| MounterDevice {
+            label: device.label.to_string(),
+            path: device.path.to_string(),
+            device_path: device.device_path.to_string(),
+            kind: device_kind_from_str(device.kind.as_str()),
+            marker: device.marker.to_string(),
+            mounted: device.mounted,
+            can_mount: device.can_mount,
+            can_unmount: device.can_unmount,
+            can_eject: device.can_eject,
+            backend,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn device_kind_from_str(kind: &str) -> DeviceKind {
+    match kind {
+        "filesystem" => DeviceKind::Filesystem,
+        "removable-media" => DeviceKind::RemovableMedia,
+        _ => DeviceKind::LocalMount,
     }
 }
 
@@ -433,9 +590,9 @@ type Properties = HashMap<String, OwnedValue>;
 type InterfaceMap = HashMap<String, Properties>;
 type ManagedObjects = HashMap<OwnedObjectPath, InterfaceMap>;
 
-fn udisks2_removable_devices() -> Result<Vec<DeviceEntry>, String> {
+fn udisks2_removable_mounter_devices() -> Result<Vec<MounterDevice>, String> {
     let connection = system_bus_connection(Duration::from_millis(750))?;
-    udisks2_removable_devices_with_connection(&connection)
+    udisks2_removable_mounter_devices_with_connection(&connection)
 }
 
 pub(crate) fn mount_device(device_path: &str) -> Result<PathBuf, String> {
@@ -461,9 +618,9 @@ fn system_bus_connection(timeout: Duration) -> Result<Connection, String> {
         .map_err(|err| format!("cannot connect to system bus: {err}"))
 }
 
-fn udisks2_removable_devices_with_connection(
+fn udisks2_removable_mounter_devices_with_connection(
     connection: &Connection,
-) -> Result<Vec<DeviceEntry>, String> {
+) -> Result<Vec<MounterDevice>, String> {
     let proxy = Proxy::new(
         connection,
         "org.freedesktop.UDisks2",
@@ -475,7 +632,7 @@ fn udisks2_removable_devices_with_connection(
     let objects: ManagedObjects = proxy
         .call("GetManagedObjects", &())
         .map_err(|err| format!("GetManagedObjects failed: {err}"))?;
-    Ok(udisks2_removable_devices_from_objects(&objects))
+    Ok(udisks2_removable_mounter_devices_from_objects(&objects))
 }
 
 fn mount_device_with_connection(
@@ -682,19 +839,26 @@ fn udisks2_device_target_from_objects(
     Err("device is no longer available".to_string())
 }
 
+#[cfg(test)]
 fn udisks2_removable_devices_from_objects(objects: &ManagedObjects) -> Vec<DeviceEntry> {
+    device_entries_from_mounter_devices(udisks2_removable_mounter_devices_from_objects(objects))
+}
+
+fn udisks2_removable_mounter_devices_from_objects(objects: &ManagedObjects) -> Vec<MounterDevice> {
     let mut devices = objects
         .values()
-        .filter_map(|interfaces| udisks2_removable_device_from_interfaces(objects, interfaces))
+        .filter_map(|interfaces| {
+            udisks2_removable_mounter_device_from_interfaces(objects, interfaces)
+        })
         .collect::<Vec<_>>();
-    devices.sort_by_key(|device| device.label.to_string().to_lowercase());
+    devices.sort_by_key(|device| device.label.to_lowercase());
     devices
 }
 
-fn udisks2_removable_device_from_interfaces(
+fn udisks2_removable_mounter_device_from_interfaces(
     objects: &ManagedObjects,
     interfaces: &InterfaceMap,
-) -> Option<DeviceEntry> {
+) -> Option<MounterDevice> {
     let block = interfaces.get("org.freedesktop.UDisks2.Block")?;
     let device = byte_string_property(block, "Device").unwrap_or_else(|| "<unknown>".to_string());
     if block_is_hidden(block) {
@@ -723,7 +887,7 @@ fn udisks2_removable_device_from_interfaces(
         can_unmount: mounted,
         can_eject: bool_property(drive, "Ejectable"),
     };
-    let entry = device_entry(
+    let entry = mounter_device(
         label.clone(),
         path.clone(),
         device,
@@ -731,6 +895,7 @@ fn udisks2_removable_device_from_interfaces(
         marker,
         mounted,
         capabilities,
+        MounterBackend::UDisks2,
     );
     device_debug_log(&format!(
         "UDisks2 accept label={} marker={} path={} device_path={} mounted={} mountable={} unmountable={} ejectable={}",
@@ -1747,6 +1912,70 @@ mod tests {
             device_merge_summary(&merged.stats),
             "merge mounted_only=0 udisks_only=1 merged=1"
         );
+    }
+
+    #[test]
+    fn mounter_device_merge_keeps_backend_semantics_before_sidebar_projection() {
+        let mounted = vec![
+            filesystem_mounter_device(),
+            mounter_device(
+                "Mountinfo USB".into(),
+                "/run/media/yk/USB".into(),
+                "/run/media/yk/USB".into(),
+                DeviceKind::LocalMount,
+                "M".into(),
+                true,
+                DeviceCapabilities::default(),
+                MounterBackend::MountTable,
+            ),
+        ];
+        let discovered = vec![
+            mounter_device(
+                "UDisks USB".into(),
+                "/run/media/yk/USB".into(),
+                "/dev/sdb1".into(),
+                DeviceKind::RemovableMedia,
+                "USB".into(),
+                true,
+                DeviceCapabilities {
+                    can_unmount: true,
+                    can_eject: true,
+                    ..DeviceCapabilities::default()
+                },
+                MounterBackend::UDisks2,
+            ),
+            mounter_device(
+                "Fallback Mount".into(),
+                "/mnt/backup".into(),
+                "/mnt/backup".into(),
+                DeviceKind::LocalMount,
+                "F".into(),
+                true,
+                DeviceCapabilities::default(),
+                MounterBackend::MountTable,
+            ),
+        ];
+
+        let merged = merge_mounter_devices_with_stats(mounted, discovered);
+
+        assert_eq!(
+            merged.stats,
+            DeviceMergeStats {
+                mounted_only: 1,
+                udisks_only: 0,
+                merged: 1,
+            }
+        );
+        assert_eq!(merged.devices[1].label, "Mountinfo USB");
+        assert_eq!(merged.devices[1].device_path, "/dev/sdb1");
+        assert_eq!(merged.devices[1].kind, DeviceKind::RemovableMedia);
+        assert_eq!(merged.devices[1].marker, "M");
+        assert!(merged.devices[1].can_unmount);
+        assert!(merged.devices[1].can_eject);
+
+        let sidebar_devices = device_entries_from_mounter_devices(merged.devices);
+        assert_eq!(sidebar_devices[1].kind, "removable-media");
+        assert_eq!(sidebar_devices[2].path, "/mnt/backup");
     }
 
     #[test]

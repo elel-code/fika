@@ -117,7 +117,7 @@ pub(crate) fn prepare_pane_transfer(
 
     prepare_current_dir_transfer_for_target_with_state(
         ui,
-        &state,
+        state,
         PaneTarget::Slot(slot),
         source,
         path_label(source).as_str(),
@@ -333,7 +333,7 @@ fn prepare_current_dir_transfer_for_target_with_state(
     y: f32,
 ) -> bool {
     let binding = state.borrow();
-    let Some(current_dir) = pane_current_dir(&*binding, target) else {
+    let Some(current_dir) = pane_current_dir(&binding, target) else {
         set_status(ui, state, "No split pane target is available");
         ui.set_transfer_source_path("".into());
         ui.set_transfer_target_path("".into());
@@ -365,6 +365,7 @@ fn pane_current_dir(state: &AppState, target: PaneTarget) -> Option<&Path> {
         .map(|pane| pane.current_dir.as_path())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_transfer_menu(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -588,12 +589,12 @@ pub(crate) fn resolve_transfer_conflict(
             if clipboard_changed {
                 sync_clipboard_ui(ui, state);
             }
-            if apply_to_remaining && applied_remaining > 0 {
-                if let Some(status) =
+            if apply_to_remaining
+                && applied_remaining > 0
+                && let Some(status) =
                     transfer_conflict_apply_remaining_status("rename", applied_remaining)
-                {
-                    set_status(ui, state, &status);
-                }
+            {
+                set_status(ui, state, &status);
             }
         }
         _ => set_status(ui, state, "Unknown conflict decision"),

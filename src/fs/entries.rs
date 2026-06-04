@@ -56,7 +56,7 @@ pub fn read_entries_sync(path: &Path) -> io::Result<Vec<RawFileEntry>> {
     Ok(entries)
 }
 
-fn sort_entries(entries: &mut Vec<RawFileEntry>, trash: bool) {
+fn sort_entries(entries: &mut [RawFileEntry], trash: bool) {
     if trash {
         entries.sort_by_cached_key(trash_sort_key);
     } else {

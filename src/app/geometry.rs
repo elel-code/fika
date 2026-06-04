@@ -1501,7 +1501,6 @@ mod tests {
         let path_bar_marker = "export component PathBar inherits Rectangle";
         let (top_bar_component, path_bar_component) = bars
             .split_once(path_bar_marker)
-            .map(|(top_bar, path_bar)| (top_bar, path_bar))
             .expect("top_bar.slint should export TopBar followed by PathBar");
 
         assert!(

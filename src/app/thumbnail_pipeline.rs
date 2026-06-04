@@ -727,7 +727,7 @@ mod tests {
 
         let mut dir_entry = test_entry("folder.png", dir_path.to_str().unwrap());
         dir_entry.is_dir = true;
-        let entries = vec![
+        let entries = [
             test_entry("cached.png", cached_path.to_str().unwrap()),
             test_entry("failed.png", failed_path.to_str().unwrap()),
             test_entry("pending.png", pending_path.to_str().unwrap()),

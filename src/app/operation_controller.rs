@@ -289,17 +289,11 @@ pub(crate) fn affected_directory_pane_ids<'a>(
     let affected_dirs = affected_dirs.into_iter().collect::<Vec<_>>();
     let mut pane_ids = Vec::new();
     let focused_id = state.panes.focused().id;
-    if affected_dirs
-        .iter()
-        .any(|dir| *dir == state.panes.focused().current_dir.as_path())
-    {
+    if affected_dirs.contains(&state.panes.focused().current_dir.as_path()) {
         pane_ids.push(focused_id);
     }
     for (_slot, pane) in state.panes.iter().filter(|(_, p)| p.id != focused_id) {
-        if affected_dirs
-            .iter()
-            .any(|dir| *dir == pane.current_dir.as_path())
-        {
+        if affected_dirs.contains(&pane.current_dir.as_path()) {
             pane_ids.push(pane.id);
         }
     }

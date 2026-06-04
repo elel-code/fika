@@ -158,8 +158,11 @@ impl PaneViewSyncScheduler {
 
 struct ThumbnailFlushScheduler {
     timer: Timer,
-    pending: Rc<RefCell<VecDeque<(u64, u64, thumbnails::ThumbnailLoad)>>>,
+    pending: ThumbnailPendingQueue,
 }
+
+type ThumbnailPendingLoad = (u64, u64, thumbnails::ThumbnailLoad);
+type ThumbnailPendingQueue = Rc<RefCell<VecDeque<ThumbnailPendingLoad>>>;
 
 enum VirtualViewSyncRequest {
     Cached {
@@ -171,7 +174,7 @@ enum VirtualViewSyncRequest {
         generation: u64,
         rows_per_column: usize,
         cell_width: f32,
-        input: VirtualViewSnapshotInput,
+        input: Box<VirtualViewSnapshotInput>,
     },
 }
 
@@ -3428,7 +3431,7 @@ fn sync_virtual_entries_for_slot_with_count(
                 generation,
                 rows_per_column: layout.rows_per_column,
                 cell_width: layout.cell_width,
-                input: VirtualViewSnapshotInput {
+                input: Box::new(VirtualViewSnapshotInput {
                     layout,
                     requested_viewport_x,
                     viewport_width,
@@ -3445,7 +3448,7 @@ fn sync_virtual_entries_for_slot_with_count(
                     modified_filter: pane.search.modified_filter,
                     size_filter: pane.search.size_filter,
                     chooser_patterns,
-                },
+                }),
             })
         }
     }) else {
@@ -3466,7 +3469,7 @@ fn sync_virtual_entries_for_slot_with_count(
             rows_per_column,
             cell_width,
             input,
-        } => (pane_id, generation, rows_per_column, cell_width, input),
+        } => (pane_id, generation, rows_per_column, cell_width, *input),
     };
 
     if immediate {
@@ -3512,6 +3515,7 @@ fn sync_virtual_entries_for_slot_with_count(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cached_virtual_viewport_sync(
     pane: &mut PaneState,
     layout: &MainGridLayout,
@@ -3936,7 +3940,7 @@ fn flush_thumbnail_results(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
-    pending: &Rc<RefCell<VecDeque<(u64, u64, thumbnails::ThumbnailLoad)>>>,
+    pending: &ThumbnailPendingQueue,
 ) {
     let refresh_pane_ids = {
         let mut state = state.borrow_mut();
@@ -4242,7 +4246,7 @@ fn go_parent(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge
         state
             .panes
             .pane_for_target(PaneTarget::Focused)
-            .unwrap_or(&state.panes.focused())
+            .unwrap_or(state.panes.focused())
             .current_dir
             .clone()
     };
