@@ -1,5 +1,5 @@
 use crate::app::events::FileOperationProgress;
-use crate::app::state::{AppState, FileOperationRequest};
+use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
 use crate::fs::{file_ops, privilege};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,6 +9,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(crate) enum OperationQueuePosition {
     Front,
     Back,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum OperationStartDecision {
+    Idle,
+    NeedsConflict(TransferConflict),
+    Skipped { status: String },
+    Started(OperationStartSummary),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct OperationStartSummary {
+    pub(crate) request: FileOperationRequest,
+    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) pane_ids: Vec<u64>,
+    pub(crate) status: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +118,51 @@ impl AppState {
 
     pub(crate) fn can_start_file_operation(&self) -> bool {
         self.active_operation.is_none() && self.pending_transfer_conflict.is_none()
+    }
+
+    pub(crate) fn next_file_operation_start(&mut self) -> OperationStartDecision {
+        if !self.can_start_file_operation() {
+            return OperationStartDecision::Idle;
+        }
+
+        let Some(mut request) = self.operation_queue.pop_front() else {
+            return OperationStartDecision::Idle;
+        };
+
+        match transfer_request_conflict_destination(&request) {
+            Ok(Some(destination)) if request.conflict_policy == "ask" => {
+                let conflict = TransferConflict {
+                    operation: request.operation,
+                    source: request.source,
+                    target_dir: request.target_dir,
+                    destination,
+                };
+                self.pending_transfer_conflict = Some(conflict.clone());
+                OperationStartDecision::NeedsConflict(conflict)
+            }
+            Ok(_) => {
+                if request.conflict_policy == "ask" {
+                    request.conflict_policy = "keep-both".to_string();
+                }
+                let pane_ids = affected_directory_pane_ids(
+                    self,
+                    [Some(request.target_dir.as_path()), request.source.parent()]
+                        .into_iter()
+                        .flatten(),
+                );
+                let cancel = self.begin_file_operation_for_panes(request.id, pane_ids.clone());
+                let status = operation_started_status(request.operation.as_str(), &request.source);
+                OperationStartDecision::Started(OperationStartSummary {
+                    request,
+                    cancel,
+                    pane_ids,
+                    status,
+                })
+            }
+            Err(err) => OperationStartDecision::Skipped {
+                status: operation_skipped_status(&err),
+            },
+        }
     }
 
     #[cfg(test)]
@@ -271,6 +332,10 @@ pub(crate) fn operation_started_status(operation: &str, source: &Path) -> String
         operation_label(operation),
         operation_item_label(source)
     )
+}
+
+pub(crate) fn operation_skipped_status(error: &str) -> String {
+    format!("Skipped transfer: {error}")
 }
 
 pub(crate) fn operation_progress_status(
@@ -550,6 +615,10 @@ mod tests {
             "Copying photo.jpg..."
         );
         assert_eq!(
+            operation_skipped_status("source no longer exists"),
+            "Skipped transfer: source no longer exists"
+        );
+        assert_eq!(
             operation_progress_status("copy", Path::new("/tmp/photo.jpg"), 512, 2048),
             "Copying photo.jpg: 25% (512 B/2.0 KB)"
         );
@@ -647,6 +716,96 @@ mod tests {
             transfer_request_conflict_destination(&missing),
             Err("source no longer exists".to_string())
         );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn next_file_operation_start_skips_invalid_requests_without_ui_side_effects() {
+        let temp = test_dir("operation-start-skip");
+        let target_dir = temp.join("target");
+        let source = temp.join("source").join("ok.txt");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&source, "new").unwrap();
+
+        let mut state = AppState::new(target_dir.clone(), Vec::new());
+        state.queue_file_operation(
+            FileOperationRequest {
+                source: temp.join("missing.txt"),
+                target_dir: target_dir.clone(),
+                ..request("copy")
+            },
+            OperationQueuePosition::Back,
+        );
+        state.queue_file_operation(
+            FileOperationRequest {
+                source: source.clone(),
+                target_dir: target_dir.clone(),
+                ..request("copy")
+            },
+            OperationQueuePosition::Back,
+        );
+
+        match state.next_file_operation_start() {
+            OperationStartDecision::Skipped { status } => {
+                assert_eq!(status, "Skipped transfer: source no longer exists");
+            }
+            other => panic!("expected skipped transfer, got {other:?}"),
+        }
+
+        match state.next_file_operation_start() {
+            OperationStartDecision::Started(start) => {
+                assert_eq!(start.request.source, source);
+                assert_eq!(start.request.conflict_policy, "keep-both");
+                assert_eq!(start.pane_ids, vec![state.panes.focused().id]);
+                assert_eq!(start.status, "Copying ok.txt...");
+                assert!(state.active_operation_cancel.is_some());
+                assert!(!start.cancel.load(Ordering::Relaxed));
+            }
+            other => panic!("expected started transfer, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn next_file_operation_start_records_pending_conflict_for_ui_application() {
+        let temp = test_dir("operation-start-conflict");
+        let source = temp.join("source").join("note.txt");
+        let target_dir = temp.join("target");
+        let destination = target_dir.join("note.txt");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&source, "new").unwrap();
+        fs::write(&destination, "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.queue_file_operation(
+            FileOperationRequest {
+                source: source.clone(),
+                target_dir: target_dir.clone(),
+                ..request("copy")
+            },
+            OperationQueuePosition::Back,
+        );
+
+        match state.next_file_operation_start() {
+            OperationStartDecision::NeedsConflict(conflict) => {
+                assert_eq!(
+                    conflict,
+                    TransferConflict {
+                        operation: "copy".to_string(),
+                        source,
+                        target_dir,
+                        destination,
+                    }
+                );
+                assert_eq!(state.pending_transfer_conflict, Some(conflict));
+            }
+            other => panic!("expected transfer conflict, got {other:?}"),
+        }
+        assert!(!state.can_start_file_operation());
 
         let _ = fs::remove_dir_all(temp);
     }

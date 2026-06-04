@@ -5,8 +5,8 @@ use crate::app::geometry::{
     inactive_main_pane_width, main_pane_bounds,
 };
 use crate::app::operation_controller::{
-    OperationQueuePosition, affected_directory_pane_ids, operation_cancel_status,
-    operation_queued_status, operation_started_status, transfer_conflict_apply_remaining_status,
+    OperationQueuePosition, OperationStartDecision, operation_cancel_status,
+    operation_queued_status, transfer_conflict_apply_remaining_status,
     transfer_conflict_skip_status, transfer_request_conflict_destination,
     transfer_target_rejection,
 };
@@ -761,49 +761,26 @@ pub(crate) fn start_next_operation(
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
 ) {
-    let request = {
-        let mut state_ref = state.borrow_mut();
-        if !state_ref.can_start_file_operation() {
-            return;
-        }
-        let request = loop {
-            let Some(mut request) = state_ref.operation_queue.pop_front() else {
+    let start = loop {
+        let decision = state.borrow_mut().next_file_operation_start();
+        match decision {
+            OperationStartDecision::Idle => return,
+            OperationStartDecision::NeedsConflict(conflict) => {
+                open_transfer_conflict(ui, state, &conflict);
                 return;
-            };
-            match transfer_request_conflict_destination(&request) {
-                Ok(Some(destination)) if request.conflict_policy == "ask" => {
-                    open_transfer_conflict(ui, state, request, destination);
-                    return;
-                }
-                Ok(_) => {
-                    if request.conflict_policy == "ask" {
-                        request.conflict_policy = "keep-both".to_string();
-                    }
-                    break request;
-                }
-                Err(err) => {
-                    set_status(ui, state, &format!("Skipped transfer: {err}"));
-                    continue;
-                }
             }
-        };
-        let pane_ids = affected_directory_pane_ids(
-            &state_ref,
-            [Some(request.target_dir.as_path()), request.source.parent()]
-                .into_iter()
-                .flatten(),
-        );
-        let cancel = state_ref.begin_file_operation_for_panes(request.id, pane_ids.clone());
-        (request, cancel, pane_ids)
+            OperationStartDecision::Skipped { status } => {
+                set_status(ui, state, &status);
+                continue;
+            }
+            OperationStartDecision::Started(start) => break start,
+        }
     };
-    let (request, cancel, pane_ids) = request;
+    let request = start.request;
+    let cancel = start.cancel;
+    let pane_ids = start.pane_ids;
 
-    set_status_for_panes(
-        ui,
-        state,
-        &pane_ids,
-        &operation_started_status(request.operation.as_str(), &request.source),
-    );
+    set_status_for_panes(ui, state, &pane_ids, &start.status);
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -868,21 +845,14 @@ pub(crate) fn start_next_operation(
 fn open_transfer_conflict(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
-    request: FileOperationRequest,
-    destination: PathBuf,
+    conflict: &TransferConflict,
 ) {
-    let source_label = path_label(request.source.to_string_lossy().as_ref());
-    let target_label = path_label(destination.to_string_lossy().as_ref());
+    let source_label = path_label(conflict.source.to_string_lossy().as_ref());
+    let target_label = path_label(conflict.destination.to_string_lossy().as_ref());
     ui.set_transfer_conflict_source(source_label.as_str().into());
     ui.set_transfer_conflict_target(target_label.as_str().into());
-    ui.set_transfer_conflict_rename_name(default_rename_suggestion(&destination).into());
+    ui.set_transfer_conflict_rename_name(default_rename_suggestion(&conflict.destination).into());
     ui.set_transfer_conflict_open(true);
-    state.borrow_mut().pending_transfer_conflict = Some(TransferConflict {
-        operation: request.operation,
-        source: request.source,
-        target_dir: request.target_dir,
-        destination,
-    });
     set_status(ui, state, "Transfer needs a conflict decision");
 }
 
@@ -1434,16 +1404,29 @@ mod tests {
             .expect("start_next_operation body should be present");
 
         assert!(
-            body.contains("let pane_ids = affected_directory_pane_ids(")
-                && body.contains(
-                    "let cancel = state_ref.begin_file_operation_for_panes(request.id, pane_ids.clone());"
-                )
-                && body.contains("set_status_for_panes(\n        ui,\n        state,\n        &pane_ids,"),
-            "file operation start status should use the same affected-pane route as progress and completion"
+            body.contains("state.borrow_mut().next_file_operation_start()")
+                && body.contains("OperationStartDecision::Started(start) => break start")
+                && body.contains("let pane_ids = start.pane_ids;")
+                && body.contains("set_status_for_panes(ui, state, &pane_ids, &start.status);"),
+            "file operation start status should use the controller's affected-pane route"
         );
         assert!(
-            !body.contains("set_status(\n        ui,\n        &operation_started_status"),
-            "file operation start status must not jump to whichever pane is focused when the queued operation starts"
+            !body.contains("state_ref.operation_queue.pop_front()")
+                && !body.contains("begin_file_operation_for_panes")
+                && !body.contains("operation_started_status")
+                && !body.contains("open_transfer_conflict(ui, state, request, destination)")
+                && !body.contains("Skipped transfer: {err}"),
+            "file operation start decisions should stay in operation_controller.rs, with UI effects applied after the state borrow ends"
+        );
+
+        let conflict_body = source
+            .split_once("fn open_transfer_conflict(")
+            .and_then(|(_, rest)| rest.split_once("fn default_rename_suggestion("))
+            .map(|(body, _)| body)
+            .expect("open_transfer_conflict body should be present");
+        assert!(
+            !conflict_body.contains("pending_transfer_conflict = Some"),
+            "conflict registration belongs to operation_controller.rs; the popup helper should only apply UI state"
         );
     }
 

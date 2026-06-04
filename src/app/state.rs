@@ -169,7 +169,7 @@ pub(crate) struct FileOperationRequest {
     pub(crate) conflict_policy: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TransferConflict {
     pub(crate) operation: String,
     pub(crate) source: PathBuf,
