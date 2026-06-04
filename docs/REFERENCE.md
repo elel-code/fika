@@ -176,7 +176,7 @@ ui/
 ├── app.slint           # 入口：AppWindow, FilePane, 全局 DndApi/PaneRouting
 ├── models.slint        # 数据模型：FileEntry, PlaceEntry, DeviceEntry, DesktopApp
 ├── widgets.slint       # 通用控件：按钮、菜单项、PopupSurface、Places 行、FolderGlyph
-├── file_tile.slint     # 主栏文件项显示、选择、右键菜单、双击打开
+├── split_pane.slint    # 主栏 viewport、pane-level input/DnD、可见 tile primitive
 ├── menus.slint         # 菜单层：RootContextMenu, TransferMenu, ChildSubmenu, ChooserPopup
 ├── menu_geometry.slint # 菜单几何纯函数回调
 ├── menu_lifecycle.slint# 菜单生命周期控制器（延迟关闭 timer）

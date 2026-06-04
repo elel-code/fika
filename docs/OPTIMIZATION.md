@@ -39,7 +39,7 @@ Rectangle viewport shell (clip: true)
   ├─ full-viewport DragArea + TouchArea (wheel / item click / double click / context / blank click / rectangle selection)
   ├─ Rust-projected item-view layout metrics (rows/cell/content/scroll extent)
   ├─ slice-layer (x = padding + virtual_start_column * cell_width - viewport_x)
-  │    └─ for item in entries: FileTile  (纯渲染；tile geometry + display tokens 来自 Rust item-view render plan)
+  │    └─ for item in entries: Rectangle primitive  (tile geometry + display tokens 来自 Rust item-view render plan)
   ├─ selection rectangle overlay
   └─ self-managed horizontal scrollbar
 ```
@@ -153,12 +153,12 @@ fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 ### P2 — Slint Model 增量更新
 
-**问题**：`set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))))` 每次都创建全新 `VecModel`。当向右滚动 1 列时，新旧虚拟范围重叠 ~80%，但 Slint 仍然重新创建所有 `FileTile` 实例。
+**问题**：`set_virtual_entries(ModelRc::new(Rc::new(VecModel::from(update.entries))))` 每次都创建全新 `VecModel`。当向右滚动 1 列时，新旧虚拟范围重叠 ~80%，但 Slint 仍然需要重新绑定可见 tile primitive。
 
 **涉及代码**：
 - `src/main.rs:3407` — `set_virtual_entries`
 - `src/app/split_view.rs:399` — `set_pane_slot_entries_ui`
-- `ui/split_pane.slint:228` — `for item[index] in root.entries: FileTile`
+- `ui/split_pane.slint` — `for item in root.entries: Rectangle`
 
 **改进**：保留当前 `VecModel` 引用，比较新旧范围的重叠部分，增量更新：
 
@@ -176,9 +176,9 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSna
 }
 ```
 
-**收益**：连续滚动时 FileTile 实例重建开销下降 50-70%。
+**收益**：连续滚动时可见 tile primitive 更新开销下降 50-70%。
 
-**难度**：中高。需要维护新旧范围的映射关系，处理前/后偏移的边界情况。Slint 1.16.1 的 `VecModel` 支持 `set_row_data` 和 `push`/`remove`，但需要确认 `set_row_data` 会正确触发 `FileTile` 的属性更新而非重建。
+**难度**：中高。需要维护新旧范围的映射关系，处理前/后偏移的边界情况。Slint 1.16.1 的 `VecModel` 支持 `set_row_data` 和 `push`/`remove`，但需要确认 `set_row_data` 会正确触发 visible primitive 的属性更新而非整段重建。
 
 **注意**：Slint 的 `for` 循环在 model 变化时的行为需要实测验证——如果 `set_row_data` 触发的是组件复用而非重建，则收益巨大；如果仍然重建，则需要换用其他策略（如增加 overscan 列并降低重建频率）。
 
@@ -186,7 +186,7 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSna
 
 ### P2 — 缩略图批量写入
 
-**问题**：缩略图异步生成完成后，通过回调逐个写入 Slint model。每个缩略图写入触发一次 `Image` 属性变更和潜在的 `FileTile` 重绘。如果 20 张缩略图在 100ms 内到达，可能触发 20 次属性评估。
+**问题**：缩略图异步生成完成后，通过回调逐个写入 Slint model。每个缩略图写入触发一次 `Image` 属性变更和潜在的 tile 重绘。如果 20 张缩略图在 100ms 内到达，可能触发 20 次属性评估。
 
 **涉及代码**：
 - `src/main.rs` — `schedule_visible_thumbnails` 及相关回调
@@ -226,26 +226,25 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSna
 
 ---
 
-### P3 — FileTile 组件简化
+### P3 — 可见 tile primitive 简化
 
-**问题**：每个 `FileTile` 是完整 Slint 组件，包含图标、文件名、大小文本、选中状态、拖拽状态等子组件。当有 80-120 个可见 tile 时，每个都有自己的属性绑定评估树。
+**问题**：主视图每个可见 tile 仍包含图标、文件名、位置文本、选中状态、drop target 等子节点。当有 80-120 个可见 tile 时，每个都有自己的属性绑定评估树。
 
 **涉及代码**：
-- `ui/file_tile.slint` — `FileTile` 组件定义
-- `ui/split_pane.slint:228-272` — tile 实例化循环
+- `ui/split_pane.slint` — tile primitive 循环
 
 **改进**：
-1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `FileEntry` 字段，避免每个 `FileTile` 独立计算
-2. pane-level 颜色 token 仍由 `SplitPaneView` 下发；后续若切换到自绘 renderer，再把颜色/字体/icon cache 一并纳入 renderer state
-3. 确认 Slint 是否对 `for` 循环内的组件做属性缓存——如果已经在底层做了，则收益有限
+1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `FileEntry` 字段，避免每个 tile 独立计算
+2. 删除独立 tile 组件边界，把可见 tile primitive 内联到 `SplitPaneView` 的 slice layer，避免继续维护旧 path-based item 组件
+3. pane-level 颜色 token 仍由 `SplitPaneView` 下发；后续若切换到自绘 renderer，再把颜色/字体/icon cache 一并纳入 renderer state
 
 **收益**：减少大量 tile 时的属性绑定评估开销。
 
-**难度**：中。涉及 Slint 组件重构，需要确认 Slint 1.16.1 的组件实例化模型。
+**难度**：中。涉及 Slint 主视图 primitive 重构，后续还需要确认 Slint 1.16.1 的 `for` 循环实例复用模型。
 
 ### P0-next — Dolphin-style 自管主视图
 
-**问题**：Phase 1-6 和 V0-V4 已经把大量无效同步、后台计算、缩略图 flush、选择 FFI、FileTile 重复绑定降到较低水平，但 `/etc` 这种基本没有图片的大目录仍然会在滚动、末尾 fullscreen/resize 后出现明显卡顿或空白恢复延迟。第一阶段已经把 viewport source of truth 从 `ScrollView`/`Flickable` 改为 `SplitPaneView` 自管，但剩余瓶颈仍在 Slint 主视图组件树：`for item in entries: FileTile` 管可见 tile，每个 tile 仍是一个完整 Slint 组件。
+**问题**：Phase 1-6 和 V0-V4 已经把大量无效同步、后台计算、缩略图 flush、选择 FFI、重复绑定降到较低水平，但 `/etc` 这种基本没有图片的大目录仍然会在滚动、末尾 fullscreen/resize 后出现明显卡顿或空白恢复延迟。第一阶段已经把 viewport source of truth 从 `ScrollView`/`Flickable` 改为 `SplitPaneView` 自管，但剩余瓶颈仍在 Slint 主视图可见 primitive 树。
 
 **Dolphin 对照**：
 - `dolphin/src/kitemviews/kfileitemmodel.*` — 文件模型
@@ -254,7 +253,7 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSna
 - `dolphin/src/kitemviews/kitemlistcontroller.*` — selection、activation、drag 控制
 - `dolphin/src/kitemviews/kstandarditemlistwidget.*` — item 绘制与复用
 
-Dolphin 的关键不是某个滚动控件，而是 model、layouter、view/controller、item rendering/reuse 分层。Fika 要接近 Dolphin 的滚动上限，已经先移除通用 `ScrollView` 作为 viewport 底座；下一步要把主视图核心从 `FileTile` Repeater 转成 Rust 自管 item view / renderer。
+Dolphin 的关键不是某个滚动控件，而是 model、layouter、view/controller、item rendering/reuse 分层。Fika 要接近 Dolphin 的滚动上限，已经先移除通用 `ScrollView` 作为 viewport 底座，并删除独立 tile 组件边界；下一步要把主视图核心继续转成 Rust 自管 item view / renderer。
 
 **Slint 底座**：
 - `Rectangle { clip: true; }`：只做 viewport 壳、背景和裁剪，不承担滚动模型
@@ -280,7 +279,7 @@ Slint: Rectangle viewport + input/DnD overlays
 **验收标准**：
 - 主文件网格核心不再依赖 `ScrollView` / `Flickable` 的 viewport 状态作为 source of truth
 - 滚动位置、可见范围、item rect、hit-test、selection、drop target 都由 Rust 自管并可测试
-- 不再以全量 `FileTile` 组件树作为核心渲染路径；第一版可以保留少量可见 primitive，最终目标是自绘 frame 或可复用 item layer
+- 不再以完整 per-item Slint 组件树作为核心渲染路径；第一版可以保留少量可见 primitive，最终目标是自绘 frame 或可复用 item layer
 - DnD 仍使用 Slint 原生 `DragArea` / `DropArea` 和 `data-transfer`，但目标解析完全走 Rust hit-test
 - `/etc`、`/usr/lib`、split view 双 pane、末尾 fullscreen/resize、快速滚轮、拖放、框选、右键菜单都要单独验证
 
@@ -290,9 +289,10 @@ Slint: Rectangle viewport + input/DnD overlays
 1. 主文件区已直接替换为 `Rectangle { clip: true; } + DragArea + TouchArea + self-managed scrollbar`，删除 `ScrollView` / `Flickable` viewport 写回。
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD、selection、activation 与 context menu 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
-4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；`FileTile` 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
-5. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max），可见 tile 的 `x/y/width` 和展示尺寸/字体 token 也由 Rust item-view render plan 投影。Slint 不再在主视图内计算 column/row、content width、scroll extent 或 zoom 派生公式。
-6. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
+4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；可见 tile primitive 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
+5. 虚拟切片仍输出 `virtual_entries`，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max），可见 tile primitive 的 `x/y/width` 和展示尺寸/字体 token 也由 Rust item-view render plan 投影。Slint 不再在主视图内计算 column/row、content width、scroll extent 或 zoom 派生公式。
+6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
+7. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
 
 ---
 
@@ -756,9 +756,9 @@ TouchArea {
     height: parent.height;
 ```
 
-当前 `TouchArea` / `DragArea` 只覆盖可见 viewport，不随目录内容宽度增长。大目录的主要 UI 成本仍是可见 `FileTile` 组件树和后续 renderer/reuse 策略。
+当前 `TouchArea` / `DragArea` 只覆盖可见 viewport，不随目录内容宽度增长。大目录的主要 UI 成本仍是可见 tile primitive 树和后续 renderer/reuse 策略。
 
-空白区和 item 输入现在都通过 pane-local item-view controller 决策。`SplitPaneView` 报告 press/move/release/cancel 或 item 坐标，Rust 按同一套 item-view geometry 决定选择、激活、右键菜单、drag payload、清空选择或提交 rectangle selection；这一步减少了 Slint 内部选择逻辑分支，但还没有移除 `FileTile` Repeater 的渲染成本。
+空白区和 item 输入现在都通过 pane-local item-view controller 决策。`SplitPaneView` 报告 press/move/release/cancel 或 item 坐标，Rust 按同一套 item-view geometry 决定选择、激活、右键菜单、drag payload、清空选择或提交 rectangle selection；这一步减少了 Slint 内部选择逻辑分支，但还没有移除 visible primitive 循环的渲染成本。
 
 ### pan-horizontal 中的 viewport-x 比较
 
@@ -781,7 +781,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | **Phase 3** | P2 Slint model 增量更新 (`model_update.rs`) | 3-4h | ✅ 已完成 |
 | **Phase 4** | P2 缩略图批量写入 (Flush 16ms) | 2-3h | ✅ 已完成 |
 | **Phase 5** | P3 UI 线程计算后移 | 1-2d | ✅ 已完成 |
-| **Phase 6** | P3 FileTile 简化 | 1-2h | ✅ 已完成 |
+| **Phase 6** | P3 tile primitive 简化 | 1-2h | ✅ 已完成 |
 
 **Phase 1-6 实现要点**：
 - **Phase 1**: `changed viewport-x` 提前退出 + `sync_pane_slots_ui` row_data 脏检查 + 新增 `sync_pane_slot_ui` 单 slot 增量
@@ -789,7 +789,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 - **Phase 3**: 新模块 `src/app/model_update.rs` — `VecModel::downcast_ref` 增量更新，支持前/后滑动 + `set_row_data` 逐行脏检查
 - **Phase 4**: `ThumbnailFlushScheduler` (16ms) — 缩略图结果入队批量写入，`AsyncEvent::ThumbnailLoaded` 不再逐张触发 `sync_virtual_entries`
 - **Phase 5**: `PaneEntrySnapshot`（不含 `Image` 的轻量快照, `Arc` 零拷贝共享）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）— 虚拟视图的条目过滤/切片/clone/location 标注全部在 `tokio::spawn_blocking` 中完成，UI 线程只做 generation staleness 检查 + Slint 模型写入 + 缩略图缓存装饰。`virtual_generation` 独立于 `load_generation`，目录切换时自动推进。`apply_virtual_view_result` 先在 `borrow_mut` 内写 state 再 drop 后写 Slint，避免 RefCell 跨线程风险。所有可见 pane 走同一条 slot-aware 虚拟视图管线。
-- **Phase 6**: `FileTile` 的 zoom 派生尺寸/字体 token 与 slice-local tile 几何迁到 Rust item-view render plan；pane-level 颜色 token 继续由 `SplitPaneView` 下发
+- **Phase 6**: zoom 派生尺寸/字体 token 与 slice-local tile 几何迁到 Rust item-view render plan；可见 tile primitive 内联到 `SplitPaneView`，pane-level 颜色 token 继续由 `SplitPaneView` 下发
 
 **审查发现的后继微优化**：
 - **cleanup-1**: 旧 state-based 虚拟视图更新 helper 和测试路径已删除，虚拟视图测试改为覆盖当前 snapshot 管线

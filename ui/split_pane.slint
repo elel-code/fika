@@ -1,5 +1,5 @@
 import { FileEntry } from "models.slint";
-import { FileTile } from "file_tile.slint";
+import { FolderGlyph } from "widgets.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
@@ -302,22 +302,64 @@ export component SplitPaneView inherits Rectangle {
                 width: root.virtual-slice-width;
                 height: parent.height;
 
-                for item in root.entries: FileTile {
+                for item in root.entries: Rectangle {
                     x: item.tile_x * 1px;
                     y: item.tile_y * 1px;
                     width: item.tile_width * 1px;
-                    entry: item;
-                    selected: item.selected;
-                    dark: root.dark;
-                    show-location: root.show-location;
-                    drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;
-                    selection-border-color: root.selection-border-color;
-                    drop-border-color: root.drop-border-color;
-                    drop-background-color: root.drop-background-color;
-                    selected-background-color: root.selected-background-color;
-                    metadata-group-color: root.metadata-group-color;
-                    metadata-location-color: root.metadata-location-color;
-                    title-color: root.title-color;
+                    height: item.tile_height * 1px;
+                    border-radius: 7px;
+                    border-width: item.selected || (root.drag-active && !root.drag-rejected && root.drag-target-path == item.path) ? 1px : 0px;
+                    border-color: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-border-color : root.selection-border-color;
+                    background: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-background-color : (item.selected ? root.selected-background-color : transparent);
+
+                    HorizontalLayout {
+                        padding-left: item.tile_padding_x * 1px;
+                        padding-right: item.tile_padding_x * 1px;
+                        spacing: item.tile_spacing * 1px;
+
+                        if (!item.is_dir && item.thumbnail_state == 2): Image {
+                            width: item.thumbnail_width * 1px;
+                            height: item.thumbnail_height * 1px;
+                            source: item.thumbnail;
+                            image-fit: contain;
+                        }
+
+                        if (item.is_dir || item.thumbnail_state != 2): FolderGlyph {
+                            width: item.thumbnail_width * 1px;
+                            height: item.thumbnail_height * 1px;
+                            dir: item.is_dir;
+                            dark: root.dark;
+                            doc-font-size: item.glyph_doc_font_size * 1px;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+
+                            if (root.show-location && item.group != ""): Text {
+                                text: item.group;
+                                color: root.metadata-group-color;
+                                font-size: item.metadata_font_size * 1px;
+                                font-weight: 700;
+                                overflow: elide;
+                            }
+
+                            Text {
+                                text: item.name;
+                                color: root.title-color;
+                                font-size: item.title_font_size * 1px;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+
+                            if (root.show-location && item.location != ""): Text {
+                                text: item.location;
+                                color: root.metadata-location-color;
+                                font-size: item.metadata_font_size * 1px;
+                                overflow: elide;
+                            }
+                        }
+                    }
                 }
             }
 

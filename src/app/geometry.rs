@@ -2406,7 +2406,9 @@ mod tests {
         assert!(!app.contains("main_drag_active"));
         assert!(!app.contains("function pane-slot-show-location(slot: int) -> bool"));
         assert!(split_pane.contains("export component SplitPaneView"));
-        assert!(split_pane.contains("import { FileTile } from \"file_tile.slint\";"));
+        assert!(split_pane.contains("import { FolderGlyph } from \"widgets.slint\";"));
+        assert!(!split_pane.contains("file_tile.slint"));
+        assert!(!split_pane.contains("FileTile"));
         assert!(!split_pane.contains("import { ScrollView }"));
         assert!(!split_pane.contains("SplitPreviewTile"));
         assert!(split_pane.contains("callback view_changed();"));
@@ -2440,7 +2442,7 @@ mod tests {
         assert!(split_pane.contains("callback zoom_in();"));
         assert!(split_pane.contains("callback zoom_out();"));
         assert!(
-            split_pane.contains("selected: item.selected;")
+            split_pane.contains("item.selected ? root.selected-background-color : transparent")
                 && !split_pane.contains("pure callback is_selected")
                 && !split_pane.contains("root.is_selected(item.path)"),
             "SplitPaneView should derive tile highlight from precomputed FileEntry selection state"
@@ -2454,19 +2456,22 @@ mod tests {
                 && !split_pane.contains("delta-y + delta-x"),
             "pane scrolling should use the dominant wheel axis instead of adding touchpad cross-axis jitter"
         );
-        let file_tile = include_str!("../../ui/file_tile.slint");
         let widgets = include_str!("../../ui/widgets.slint");
+        let folder_glyph = widgets
+            .split_once("export component FolderGlyph")
+            .expect("widgets.slint should define FolderGlyph")
+            .1;
         assert!(
-            !file_tile.contains("TouchArea")
-                && !file_tile.contains("DragArea")
-                && !file_tile.contains("callback activated")
-                && !file_tile.contains("callback request_select")
-                && !file_tile.contains("callback request_context_menu")
-                && !file_tile.contains("scroll-event")
-                && !file_tile.contains("pointer-event")
-                && !file_tile.contains("double-clicked")
-                && !file_tile.contains("drag-data-source"),
-            "FileTile should stay a pure renderer; pane-level input owns selection, activation, context menus, wheel events, and DnD"
+            split_pane.contains("for item in root.entries: Rectangle")
+                && split_pane.contains("height: item.tile_height * 1px;")
+                && split_pane.contains("if (!item.is_dir && item.thumbnail_state == 2): Image")
+                && split_pane
+                    .contains("if (item.is_dir || item.thumbnail_state != 2): FolderGlyph")
+                && split_pane.contains("text: item.name;")
+                && !split_pane.contains("entry: item;")
+                && !split_pane.contains("selected: item.selected;")
+                && !split_pane.contains("drag-data-source:"),
+            "SplitPaneView should inline visible tile primitives instead of going through a FileTile component boundary"
         );
         assert!(
             !split_pane.contains("private property <length> tile-height:")
@@ -2474,19 +2479,17 @@ mod tests {
                 && !split_pane.contains("private property <length> title-font-size:")
                 && !split_pane.contains("tile-height: root.tile-height;")
                 && !split_pane.contains("zoom-level: root.zoom-level;")
-                && split_pane.contains("metadata-group-color: root.metadata-group-color;")
-                && !file_tile.contains("in property <length> tile-height;")
-                && !file_tile.contains("in property <int> zoom-level;")
-                && file_tile.contains("height: root.entry.tile_height * 1px;")
-                && file_tile.contains("width: root.entry.thumbnail_width * 1px;")
-                && file_tile.contains("font-size: root.entry.title_font_size * 1px;")
-                && file_tile.contains("doc-font-size: root.entry.glyph_doc_font_size * 1px;")
-                && !file_tile.contains("height: root.zoom-level ==")
-                && !file_tile.contains("font-size: root.zoom-level ==")
-                && widgets.contains("in property <length> doc-font-size;")
-                && !widgets.contains("in property <int> zoom-level;")
-                && !widgets.contains("font-size: root.zoom-level"),
-            "FileTile should consume render tokens projected by Rust item-view instead of recalculating zoom bindings in every tile"
+                && split_pane.contains("color: root.metadata-group-color;")
+                && split_pane.contains("height: item.tile_height * 1px;")
+                && split_pane.contains("width: item.thumbnail_width * 1px;")
+                && split_pane.contains("font-size: item.title_font_size * 1px;")
+                && split_pane.contains("doc-font-size: item.glyph_doc_font_size * 1px;")
+                && !split_pane.contains("height: root.zoom-level ==")
+                && !split_pane.contains("font-size: root.zoom-level ==")
+                && folder_glyph.contains("in property <length> doc-font-size;")
+                && !folder_glyph.contains("in property <int> zoom-level;")
+                && !folder_glyph.contains("font-size: root.zoom-level"),
+            "visible tile primitives should consume render tokens projected by Rust item-view instead of recalculating zoom bindings in Slint"
         );
         assert!(
             split_pane.contains(
@@ -2515,7 +2518,7 @@ mod tests {
             "Ctrl+wheel zoom should still request pane focus before changing zoom"
         );
         assert!(split_pane.contains("scroll-event(event)"));
-        assert!(split_pane.contains("for item in root.entries: FileTile"));
+        assert!(split_pane.contains("for item in root.entries: Rectangle"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")
                 && split_pane.contains("data: root.make_drag_data_at(")
@@ -2536,9 +2539,10 @@ mod tests {
                 && !split_pane.contains("request_context_menu(path"),
             "SplitPaneView should use one pane-level input controller with Rust coordinate hit-test instead of per-tile handlers"
         );
-        assert!(split_pane.contains("show-location: root.show-location;"));
+        assert!(split_pane.contains("if (root.show-location && item.group != \"\"): Text"));
+        assert!(split_pane.contains("if (root.show-location && item.location != \"\"): Text"));
         assert!(split_pane.contains(
-            "drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;"
+            "root.drag-active && !root.drag-rejected && root.drag-target-path == item.path"
         ));
         assert!(!split_pane.contains("root.request_context_menu("));
         assert!(

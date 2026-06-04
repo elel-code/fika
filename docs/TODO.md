@@ -102,7 +102,7 @@
 - [x] Adaptive Open With hover submenu placement.
 - [x] Use Slint master `DragArea` / `DropArea` built-ins without the experimental compiler flag.
 - [x] Dolphin-style DnD self-drop rejection.
-- [x] Focused Slint split: `models.slint`, `widgets.slint`, and `file_tile.slint`.
+- [x] Focused Slint split: `models.slint`, `widgets.slint`, menus, overlays, and pane chrome components.
 - [x] Focused Rust split for selection and Places UI logic.
 - [x] Dolphin-style context menu hover polish.
   - Acceptance: submenu rows use explicit child indicators, child menus keep a timed grace area between parent and child, and drop operation menus include Cancel.
@@ -409,8 +409,9 @@ Acceptance for all:
 ## Phase 11: Code Organization And Dolphin Parity Cleanup
 
 - [x] Split common Slint data models, widgets, overlays, and menus.
-  - Acceptance: reusable models, buttons, menu rows, Places rows, and file tiles are outside the main window file.
-  - Current: `ui/models.slint`, `ui/widgets.slint`, `ui/menus.slint`, `ui/file_tile.slint`, `ui/dnd_overlay.slint`, `ui/search_panel.slint`, `ui/top_bar.slint`, and `ui/status_bar.slint` are imported by `ui/app.slint`; common menu rows and popup surface styling live in `ui/widgets.slint`, while file item, Open With, Create New, Transfer, Places, and viewport menu content is isolated in `ui/menus.slint`.
+  - Acceptance: reusable models, buttons, menu rows, Places rows, overlays, and pane chrome are outside the main window file.
+  - Current: `ui/models.slint`, `ui/widgets.slint`, `ui/menus.slint`, `ui/dnd_overlay.slint`, `ui/search_panel.slint`, `ui/top_bar.slint`, and `ui/status_bar.slint` are imported by `ui/app.slint`; common menu rows and popup surface styling live in `ui/widgets.slint`, while file, Open With, Create New, Transfer, Places, and viewport menu content is isolated in `ui/menus.slint`.
+  - Current: the standalone file tile component has been removed for the Dolphin-style viewport path; visible main-view tile primitives are now inlined in `SplitPaneView` so the next renderer/reuse pass has one focused replacement point.
   - Current: `TopBar` owns the toolbar/path-entry layout, so `ui/app.slint` keeps path/search/theme action wiring without carrying the top bar drawing.
   - Current: `StatusBar` owns the bottom status/chooser/footer layout, so `ui/app.slint` keeps status and chooser action wiring without carrying the bottom row drawing.
   - Current: `DragOverlayLayer` owns Places insertion lines, drag ghost previews, and rejected-drop banners, so `ui/app.slint` keeps DnD state and action wiring without carrying repeated overlay drawing.
@@ -439,15 +440,16 @@ Acceptance for all:
 
 - [~] Spike Dolphin-style self-managed main viewport.
   - Acceptance: main file view scroll offset is no longer sourced from `ScrollView` / `Flickable`; Rust owns the first item-view layout/hit-test layer through `src/app/item_view.rs`.
-  - Acceptance: the Slint layer is reduced to a clipped viewport shell plus input/DnD primitives (`Rectangle`, `TouchArea`, `DragArea`, `DropArea`) and does not use the full `FileTile` `Repeater` tree as the core performance path.
+  - Acceptance: the Slint layer is reduced to a clipped viewport shell plus input/DnD primitives (`Rectangle`, `TouchArea`, `DragArea`, `DropArea`) and does not use a standalone per-item tile component as the core performance path.
   - Acceptance: DnD remains on Slint's native `data-transfer` path, with Rust hit-test deciding item/blank/drop target semantics for both internal file drags and external file-list clipboard/paste-adjacent workflows.
-  - Acceptance: `/etc`, `/usr/lib`, split view dual-pane scrolling, end-of-directory fullscreen/resize, rectangle selection, context menus, and drag/drop are tested against the current self-managed viewport + `FileTile` visible-slice path.
+  - Acceptance: `/etc`, `/usr/lib`, split view dual-pane scrolling, end-of-directory fullscreen/resize, rectangle selection, context menus, and drag/drop are tested against the current self-managed viewport + visible tile primitive path.
   - Reference: Dolphin's `kfileitemmodel`, `kitemlistviewlayouter`, `kitemlistview`, `kitemlistcontroller`, and `kstandarditemlistwidget` split. The goal is Dolphin-like model/layouter/controller/rendering ownership, not a lower-level replacement for `Flickable` alone.
   - Current: the main file area now uses `Rectangle + TouchArea + DragArea + self-managed scrollbar` directly, and transfer/DnD target hit-test plus rectangle-selection item geometry have moved into `src/app/item_view.rs`.
   - Current: each pane owns a pane-local `ItemViewInputState`; Slint now reports blank-area press/move/release/cancel events while Rust decides whether the gesture clears selection or commits a rectangle selection.
-  - Current: item press, double-click activation, item context menus, and the internal main-view drag source are pane-level coordinate events; `FileTile` no longer owns `TouchArea`, `DragArea`, wheel handling, activation callbacks, context-menu callbacks, or path-based DnD data sources.
+  - Current: item press, double-click activation, item context menus, and the internal main-view drag source are pane-level coordinate events; visible tile primitives no longer own `TouchArea`, `DragArea`, wheel handling, activation callbacks, context-menu callbacks, or path-based DnD data sources.
   - Current: visible tile `x/y/width` plus tile sizing/font display tokens are projected by the Rust item-view render plan before the virtual slice reaches Slint, and pane row data carries Rust-projected rows/cell/content/scroll metrics, so `SplitPaneView` no longer computes column/row geometry, scrollbar extent, or zoom-derived tile metrics inside the Slint main-view layer.
-  - Next: remove the remaining `FileTile` Repeater as the core rendering path by adding the renderer/reuse side of the Dolphin-style item view layer, then decide whether to use reusable primitives or `SharedPixelBuffer`/`Image` self-rendered tile frames.
+  - Current: the old standalone tile component has been deleted; `SplitPaneView` now owns the visible tile primitive loop directly.
+  - Next: replace the remaining visible primitive loop with the renderer/reuse side of the Dolphin-style item view layer, then decide whether to use reusable primitives or `SharedPixelBuffer`/`Image` self-rendered tile frames.
 
 - [x] Apply Dolphin DnD target validation.
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.

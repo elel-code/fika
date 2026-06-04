@@ -274,11 +274,9 @@ mod tests {
         assert!(split_pane.contains("PointerEventButton.forward"));
         assert!(split_pane.contains("root.navigate_back();"));
         assert!(split_pane.contains("root.navigate_forward();"));
-
-        let file_tile = include_str!("../../ui/file_tile.slint");
-        assert!(!file_tile.contains("PointerEventButton.back"));
-        assert!(!file_tile.contains("PointerEventButton.forward"));
-        assert!(!file_tile.contains("pointer-event"));
+        assert!(split_pane.contains("input-touch := TouchArea"));
+        assert!(!split_pane.contains("file_tile.slint"));
+        assert!(!split_pane.contains("FileTile"));
 
         for (name, source) in [
             ("top_bar.slint", include_str!("../../ui/top_bar.slint")),

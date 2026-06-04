@@ -35,7 +35,7 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 - `ui/models.slint` 定义 `FileEntry` / `PlaceEntry` / `DesktopApp`。
 - `ui/widgets.slint` 包含通用按钮、菜单项、popup surface、Places 行和 `FolderGlyph`。
 - `ui/top_bar.slint` 导出两个 chrome 组件：`TopBar` 负责窗口顶栏里的 COSMIC-style 搜索入口、Split 状态入口和主题切换；`PathBar` 负责主栏内容顶部的 Back/Forward 导航组和路径输入。`AppWindow` 只保留动作 callback、输入状态和持久化转发。
-- `ui/file_tile.slint` 负责主栏文件项显示、选择、右键菜单、双击打开。
+- `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile primitive 渲染；选择、命中、右键、激活和 DnD payload 语义由 Rust item-view controller 决定。
 - `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
 
 Shell surface layering now follows the COSMIC direction outside the main file arrangement: `AppWindow` owns one shared base surface with a separate window-wide shell/header row. That shell/header row hosts global search, split, and theme controls through `TopBar`, and it intentionally does not draw a horizontal divider above the main content. Below it, the left sidebar panel and right main pane share one equal-height content row. The main pane starts with `PathBar` for Back/Forward and address editing, followed by the search filter strip, file grid, and status bar; these rows render transparent backgrounds and keep only necessary internal separators. Sidebar rows are inset inside the rounded panel, and the sidebar border is intentionally a little stronger than the flat shell separators.
@@ -61,7 +61,7 @@ The non-main-pane chrome is intentionally allowed to track COSMIC Files more clo
 - Rust 侧的 `VirtualGridPlan` 统一计算 clamped viewport、scroll max、可见范围、overscan 范围和 Slint 锚点列，防止滚动条、缩略图调度和模型切片各用一套边界规则。
 - 过滤、搜索、缩放或窗口尺寸变化导致内容变窄时，Rust 会按同一套列宽规则夹紧横向滚动位置，避免旧 viewport 落在新内容之外造成空白主栏。
 - tile 的真实全局索引由 `virtual_start_index + local index` 计算，因此列优先坐标、选择范围、拖拽命中和右键语义仍然基于完整模型。
-- 横向滚动、缩放和窗口尺寸变化会重新切片 `virtual_entries`，避免大目录一次性实例化所有 `FileTile`。
+- 横向滚动、缩放和窗口尺寸变化会重新切片 `virtual_entries`，避免大目录一次性实例化所有可见 tile primitive。
 - 框选仍按完整可见顺序返回路径，但候选项会先裁剪到选择矩形横向覆盖的列范围；搜索/过滤状态下通过可见索引缓存解析真实条目。
 - 缩略图调度按“当前可见列优先，overscan 后置”排序，减少大目录图片预览队列对当前屏幕反馈的拖慢。
 - 离屏缩略图完成时只更新 Rust 缓存，不重置 Slint 模型；缩略图所属路径落在当前虚拟切片内时才刷新 `virtual_entries`。
@@ -191,7 +191,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - Ctrl+A：选择当前过滤后可见的所有项。
 - Ctrl+C / Ctrl+X / Ctrl+V：复制、剪切、粘贴文件路径，粘贴目标为当前目录；Ctrl+Z 触发最近一次文件操作 Undo；Delete 将当前选择移动到回收站。上述文件操作快捷键使用 Slint `KeyBinding` 声明，并在路径输入框、搜索框、保存名输入框、右键菜单、传输菜单或对话框活跃时不执行，避免抢走文本编辑快捷键。
 - 主栏空白拖拽：显示选择矩形，松手后选择与矩形相交的可见 tile；Ctrl+拖拽会追加到当前选择。
-- 主栏采用列优先布局，不提供垂直滚动；普通滚轮和水平滚轮都绑定横向滚动，Ctrl+滚轮缩放图标。左栏是独立纵向滚动区域。主栏空白层、grid 层和 `FileTile` 的滚轮入口都统一转发到 `AppWindow` 的 `handle-main-scroll()`，避免缩放方向、边界夹紧和横向滚动规则在多个组件中漂移。Split inactive preview 也拥有自己的横向滚轮入口，并把 Ctrl+滚轮转发到同一套图标缩放动作。
+- 主栏采用列优先布局，不提供垂直滚动；普通滚轮和水平滚轮都绑定横向滚动，Ctrl+滚轮缩放图标。左栏是独立纵向滚动区域。主栏 viewport input layer 统一处理滚轮、缩放方向、边界夹紧和横向滚动规则。
 - Esc：优先关闭上下文菜单；没有菜单时清空选择。
 - 点击主栏空白处：取消选中并转移焦点。
 - 双击：打开目录或文件。
@@ -203,7 +203,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - 主栏空白菜单借鉴 COSMIC 的 action enablement 模式：提供 Select All，并且没有可粘贴文件时保留 disabled Paste，而不是隐藏整行，避免后续 Open Folder With / Open Terminal Here 的位置随剪贴板状态跳动。菜单项支持右侧快捷键提示，并只标注已经由 `KeyBinding` 实际接管的动作。
 - 单目录右键菜单也保持 Paste Into Folder 行稳定；剪贴板不可粘贴时该行动作禁用，而不是隐藏。
 - Places 空白菜单同样采用稳定 action layout：当前目录已在 Places 中时，Add Current Folder 保留为 disabled 行，Restore Defaults 的位置不随当前目录变化。
-- 鼠标侧键 Back/Forward 直接通过 Slint `PointerEventButton.back` / `PointerEventButton.forward` 处理，入口只挂在主栏空白层、grid 层和 `FileTile` 上；侧栏、顶栏和分隔条不会触发目录历史导航。不再维护窗口后端自定义输入旁路。
+- 鼠标侧键 Back/Forward 直接通过 Slint `PointerEventButton.back` / `PointerEventButton.forward` 处理，入口只挂在主栏 viewport input layer 上；侧栏、顶栏和分隔条不会触发目录历史导航。不再维护窗口后端自定义输入旁路。
 
 当前导航模型：
 
