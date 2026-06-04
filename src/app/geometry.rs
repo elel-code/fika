@@ -2522,11 +2522,31 @@ mod tests {
         assert!(!split_pane.contains("virtual-layer := Rectangle"));
         assert!(!split_pane.contains("private property <length> virtual-layer-width"));
         assert!(split_pane.contains(
-            "private property <int> virtual-slice-column-count: max(1, ceil(root.entries.length / root.rows-per-column));"
+            "private property <int> rows-per-column: max(1, root.item-view-rows-per-column);"
         ));
         assert!(split_pane.contains(
-            "private property <length> virtual-slice-width: max(1px, root.virtual-slice-column-count * root.cell-width);"
+            "private property <length> virtual-slice-width: max(1px, root.item-view-virtual-slice-width * 1px);"
         ));
+        assert!(
+            split_pane.contains("in property <int> item-view-rows-per-column: 1;")
+                && split_pane.contains(
+                    "private property <length> cell-width: max(1, root.item-view-cell-width) * 1px;"
+                )
+                && split_pane.contains(
+                    "private property <length> row-height: max(1, root.item-view-row-height) * 1px;"
+                )
+                && split_pane.contains(
+                    "private property <length> viewport-content-width: max(1px, root.item-view-content-width * 1px);"
+                )
+                && split_pane.contains(
+                    "private property <float> scroll-max-x: max(0, root.item-view-scroll-max-x);"
+                )
+                && !split_pane.contains("root.zoom-level ==")
+                && !split_pane.contains("ceil(root.entry-count / root.rows-per-column)")
+                && !split_pane.contains("ceil(root.entries.length / root.rows-per-column)")
+                && !split_pane.contains("root.height - 2 * root.preview-padding"),
+            "SplitPaneView should consume Rust-projected item-view layout metrics instead of recalculating the layouter in Slint"
+        );
         assert!(
             split_pane.contains("slice-layer := Rectangle")
                 && split_pane.contains(
@@ -2552,7 +2572,6 @@ mod tests {
         assert!(!split_pane.contains("current-path"));
         assert!(!split_pane.contains("path-text"));
         assert!(!split_pane.contains("path-bar-height"));
-        assert!(split_pane.contains("root.height - 2 * root.preview-padding"));
         assert!(!split_pane.contains("header-height"));
         assert!(!split_pane.contains("Split Pane"));
         assert!(!split_pane.contains("text: root.path"));

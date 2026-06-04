@@ -1,10 +1,13 @@
 use crate::app::async_bridge::AsyncBridge;
+use crate::app::geometry::{
+    MainGridLayout, active_main_pane_width, inactive_main_pane_width, main_scroll_max_x,
+};
 use crate::app::pane::{PaneEntrySnapshot, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{AppWindow, FileEntry, PaneSlotData, set_status, sync_virtual_entries_for_slot};
-use slint::{Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -112,8 +115,8 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
     let chooser_filter_count = ui.get_chooser_filter_count();
     let chooser_filter_label = ui.get_chooser_filter_label();
     let focused_selected_path = ui.get_selected_path();
-    let zoom_level = ui.get_icon_zoom_level();
     let selection_revision = ui.get_selection_revision();
+    let item_view_metrics = pane_slot_item_view_metrics(ui, slot, state);
 
     PaneSlotData {
         slot,
@@ -149,12 +152,18 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
             true
         },
         drop_trace_prefix: format!("pane-{slot}-").into(),
-        entry_count: pane_slot_entry_count(state, slot),
+        entry_count: item_view_metrics.entry_count,
         entries: pane_slot_entries(slot, state),
         virtual_start_index: pane_slot_virtual_start_index(state, slot),
         virtual_start_column: pane_slot_virtual_start_column(state, slot),
         viewport_x: pane_slot_viewport_x(slot, state),
-        zoom_level,
+        item_view_rows_per_column: item_view_metrics.rows_per_column,
+        item_view_cell_width: item_view_metrics.cell_width,
+        item_view_row_height: item_view_metrics.row_height,
+        item_view_padding: item_view_metrics.padding,
+        item_view_content_width: item_view_metrics.content_width,
+        item_view_virtual_slice_width: item_view_metrics.virtual_slice_width,
+        item_view_scroll_max_x: item_view_metrics.scroll_max_x,
         selection_revision,
         show_location: pane_slot_in_trash(slot)
             || (is_focused && ui.get_recursive_search() && !search_query.is_empty()),
@@ -189,6 +198,75 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         chooser_filter_label,
         chooser_choices,
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ItemViewSlotMetrics {
+    entry_count: i32,
+    rows_per_column: i32,
+    cell_width: f32,
+    row_height: f32,
+    padding: f32,
+    content_width: f32,
+    virtual_slice_width: f32,
+    scroll_max_x: f32,
+}
+
+fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> ItemViewSlotMetrics {
+    let viewport_width = pane_slot_width(ui, slot);
+    let search_panel_visible = state.panes.focused_slot() == slot;
+    let layout = MainGridLayout::from_ui_for_pane_width(ui, viewport_width, search_panel_visible);
+    let rows_per_column = layout.rows_per_column.max(1);
+    let (entry_count, virtual_slice_count) = state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| {
+            (
+                pane.view.virtual_view.entry_count,
+                pane.view.virtual_entries.row_count(),
+            )
+        })
+        .unwrap_or((0, 0));
+    let column_count = entry_count.div_ceil(rows_per_column).max(1);
+    let virtual_slice_column_count = virtual_slice_count.div_ceil(rows_per_column).max(1);
+    let content_width = (2.0 * layout.padding + column_count as f32 * layout.cell_width).max(1.0);
+    let virtual_slice_width = (virtual_slice_column_count as f32 * layout.cell_width).max(1.0);
+    let scroll_max_x = main_scroll_max_x(
+        entry_count,
+        rows_per_column,
+        viewport_width,
+        layout.cell_width,
+        layout.padding,
+    );
+
+    ItemViewSlotMetrics {
+        entry_count: entry_count as i32,
+        rows_per_column: rows_per_column as i32,
+        cell_width: layout.cell_width,
+        row_height: layout.row_height,
+        padding: layout.padding,
+        content_width,
+        virtual_slice_width,
+        scroll_max_x,
+    }
+}
+
+fn pane_slot_width(ui: &AppWindow, slot: i32) -> f32 {
+    let window_size = ui.window().size().to_logical(ui.window().scale_factor());
+    let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
+    if slot == 0 {
+        return active_main_pane_width(
+            main_width,
+            ui.get_split_view_open(),
+            ui.get_split_pane_ratio(),
+        );
+    }
+
+    inactive_main_pane_width(
+        main_width,
+        ui.get_split_view_open(),
+        ui.get_split_pane_ratio(),
+    )
 }
 
 fn pane_slot_current_path(state: &AppState, slot: i32) -> SharedString {
@@ -226,14 +304,6 @@ fn pane_slot_can_go_forward(state: &AppState, slot: i32) -> bool {
         .panes
         .pane_for_slot(slot)
         .is_some_and(|pane| pane.history.forward_len() > 0)
-}
-
-fn pane_slot_entry_count(state: &AppState, slot: i32) -> i32 {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.entries.len() as i32)
-        .unwrap_or(0)
 }
 
 fn pane_slot_entries(slot: i32, state: &AppState) -> ModelRc<FileEntry> {

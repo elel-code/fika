@@ -8,7 +8,13 @@ export component SplitPaneView inherits Rectangle {
     in property <int> virtual-start-index;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
-    in property <int> zoom-level;
+    in property <int> item-view-rows-per-column: 1;
+    in property <float> item-view-cell-width: 1;
+    in property <float> item-view-row-height: 1;
+    in property <float> item-view-padding: 14;
+    in property <float> item-view-content-width: 1;
+    in property <float> item-view-virtual-slice-width: 1;
+    in property <float> item-view-scroll-max-x: 0;
     in property <int> selection-revision;
     in property <bool> interactive: true;
     in property <bool> empty-message-visible: true;
@@ -36,9 +42,9 @@ export component SplitPaneView inherits Rectangle {
 
     clip: true;
 
-    private property <length> preview-padding: 14px;
-    private property <length> cell-width: root.zoom-level == 0 ? 172px : (root.zoom-level == 1 ? 208px : (root.zoom-level == 2 ? 248px : (root.zoom-level == 3 ? 292px : 340px)));
-    private property <length> row-height: root.zoom-level == 0 ? 78px : (root.zoom-level == 1 ? 90px : (root.zoom-level == 2 ? 104px : (root.zoom-level == 3 ? 124px : 146px)));
+    private property <length> preview-padding: max(0, root.item-view-padding) * 1px;
+    private property <length> cell-width: max(1, root.item-view-cell-width) * 1px;
+    private property <length> row-height: max(1, root.item-view-row-height) * 1px;
     private property <color> selection-border-color: root.dark ? #51a9d4 : #2b86b7;
     private property <color> drop-border-color: root.dark ? #f59e0b : #d97706;
     private property <color> drop-background-color: root.dark ? #3a2a12 : #fff7dd;
@@ -47,12 +53,10 @@ export component SplitPaneView inherits Rectangle {
     private property <color> metadata-group-color: root.dark ? #9bc7ec : #2b6f9f;
     private property <color> metadata-location-color: root.dark ? #9aa5af : #697684;
     private property <color> title-color: root.dark ? #edf2f7 : #1f2933;
-    private property <int> rows-per-column: max(1, floor(max(1px, root.height - 2 * root.preview-padding) / root.row-height));
-    private property <int> column-count: max(1, ceil(root.entry-count / root.rows-per-column));
-    private property <length> viewport-content-width: 2 * root.preview-padding + root.column-count * root.cell-width;
-    private property <int> virtual-slice-column-count: max(1, ceil(root.entries.length / root.rows-per-column));
-    private property <length> virtual-slice-width: max(1px, root.virtual-slice-column-count * root.cell-width);
-    private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width)) / 1px);
+    private property <int> rows-per-column: max(1, root.item-view-rows-per-column);
+    private property <length> viewport-content-width: max(1px, root.item-view-content-width * 1px);
+    private property <length> virtual-slice-width: max(1px, root.item-view-virtual-slice-width * 1px);
+    private property <float> scroll-max-x: max(0, root.item-view-scroll-max-x);
     private property <float> pan-target-viewport-x: 0;
     private property <bool> scrollbar-visible: root.entry-count > 0 && root.scroll-max-x > 0;
     private property <length> scrollbar-height: 10px;

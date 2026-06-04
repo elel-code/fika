@@ -39,6 +39,7 @@
   - Current: background virtual snapshot preparation receives the pane-local `visible_location_groups` cache and annotates slices by visible index, so recursive-search scrolling avoids per-slice location-boundary recomputation off the UI thread too.
   - Current: ordinary wheel scrolling requests pane focus only once per event path before panning, while Ctrl+wheel still focuses before zooming.
   - Current: Rust uses a tested `VirtualGridPlan` to calculate clamped viewport position, scroll extent, visible range, overscan range, and Slint anchor column from one source of truth.
+  - Current: pane row data now carries Rust-projected item-view layout metrics (`rows_per_column`, cell size, padding, content width, virtual slice width, and scroll max), so `SplitPaneView` consumes the Rust layouter output instead of recalculating the main-view grid and scrollbar extent from `zoom-level` in Slint.
   - Current: offscreen thumbnail completions update the cache without resetting the Slint model; visible completions still refresh the current virtual slice.
   - Current: thumbnail scheduling for each virtual-slice sync is capped and owned by `src/app/thumbnail_pipeline.rs`, so large directories cannot enqueue an unbounded number of decode jobs from a single viewport update.
   - Current: rectangle selection narrows candidates to the intersecting column range before resolving paths, so large directories do not scan every visible result for a local drag box.
@@ -444,7 +445,7 @@ Acceptance for all:
   - Reference: Dolphin's `kfileitemmodel`, `kitemlistviewlayouter`, `kitemlistview`, `kitemlistcontroller`, and `kstandarditemlistwidget` split. The goal is Dolphin-like model/layouter/controller/rendering ownership, not a lower-level replacement for `Flickable` alone.
   - Current: the main file area now uses `Rectangle + TouchArea + self-managed scrollbar` directly, and transfer/DnD target hit-test plus rectangle-selection item geometry have moved into `src/app/item_view.rs`.
   - Current: each pane owns a pane-local `ItemViewInputState`; Slint now reports blank-area press/move/release/cancel events while Rust decides whether the gesture clears selection or commits a rectangle selection.
-  - Current: visible tile `x/y/width` plus tile sizing/font display tokens are projected by the Rust item-view render plan before the virtual slice reaches Slint, so `SplitPaneView` no longer computes column/row geometry or zoom-derived tile metrics inside each `FileTile` instance.
+  - Current: visible tile `x/y/width` plus tile sizing/font display tokens are projected by the Rust item-view render plan before the virtual slice reaches Slint, and pane row data carries Rust-projected rows/cell/content/scroll metrics, so `SplitPaneView` no longer computes column/row geometry, scrollbar extent, or zoom-derived tile metrics inside the Slint main-view layer.
   - Next: remove the remaining `FileTile` Repeater as the core rendering path by adding the renderer/reuse side of the Dolphin-style item view layer, then decide whether to use reusable primitives or `SharedPixelBuffer`/`Image` self-rendered tile frames.
 
 - [x] Apply Dolphin DnD target validation.

@@ -37,6 +37,7 @@ Slint SplitPaneView 自管 viewport-x
 ```
 Rectangle viewport shell (clip: true)
   ├─ full-viewport TouchArea (wheel / blank click / rectangle selection)
+  ├─ Rust-projected item-view layout metrics (rows/cell/content/scroll extent)
   ├─ slice-layer (x = padding + virtual_start_column * cell_width - viewport_x)
   │    └─ for item in entries: FileTile  (tile geometry + display tokens 来自 Rust item-view render plan)
   ├─ selection rectangle overlay
@@ -52,10 +53,10 @@ Rectangle viewport shell (clip: true)
 | 缩略图优先可见列 | `thumbnail_pipeline.rs:40` | 减少首屏缩略图延迟 |
 | 自管 viewport clamp/round | `split_pane.slint` | 避免 ScrollView/Flickable viewport 回写和子像素漂移触发同步 |
 | 普通滚轮不重复请求焦点 | `split_pane.slint:78` | 减少 FFI 调用 |
-| 自管滚动条按 `entry_count` / `rows_per_column` 计算全内容宽度 | `split_pane.slint` | 避免滚动条宽度随虚拟切片抖动 |
+| 自管滚动条消费 Rust item-view layout metrics | `split_view.rs` / `split_pane.slint` | `rows_per_column`、content width、scroll max 与虚拟切片使用同一 Rust layouter |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
 | Rust item-view hit-test | `item_view.rs` | DnD/context/drop target 命中不再散落在 transfer 几何代码中 |
-| Rust item-view render plan | `item_view.rs` / `split_pane.slint` | 可见 tile 的 x/y/width 和尺寸/字体 token 不再由 Slint 每项公式计算 |
+| Rust item-view render plan | `item_view.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 x/y/width 和尺寸/字体 token 不再由 Slint 每项公式计算 |
 
 ---
 
@@ -289,7 +290,7 @@ Slint: Rectangle viewport + input/DnD overlays
 1. 主文件区已直接替换为 `Rectangle { clip: true; } + TouchArea + self-managed scrollbar`，删除 `ScrollView` / `Flickable` viewport 写回。
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD 与 selection 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
-4. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，但可见 tile 的 `x/y/width` 和展示尺寸/字体 token 已由 Rust item-view render plan 投影，Slint 不再在每个 tile 上计算 column/row 或 zoom 派生公式。
+4. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max），可见 tile 的 `x/y/width` 和展示尺寸/字体 token 也由 Rust item-view render plan 投影。Slint 不再在主视图内计算 column/row、content width、scroll extent 或 zoom 派生公式。
 5. DnD 仍保留 Slint 原生 `data-transfer` 路径，目标解析继续向 Rust hit-test 收敛。
 
 ---
@@ -742,7 +743,7 @@ private property <bool> file-operation-shortcuts-blocked:
 
 ### 自管 scrollbar 几何
 
-`viewport-content-width` 依赖 `column-count`，而 `column-count` 依赖 `entry-count` 和 `rows-per-column`。当前这些值只用于自管 scrollbar、viewport clamp 和切片偏移，不再触发 `ScrollView` 内部重布局。
+`viewport-content-width`、`virtual-slice-width` 和 `scroll-max-x` 现在由 Rust `pane_slot_item_view_metrics()` 通过同一套 `MainGridLayout` / `main_scroll_max_x()` 计算，并随 `PaneSlotData` 下发给 `SplitPaneView`。Slint 只消费这些 metrics 做 scrollbar、viewport clamp 和切片偏移，不再自己根据 `entry-count` / `rows-per-column` / `zoom-level` 重算主视图 layouter。
 
 已处理的布局恢复问题：`SplitPaneView` 现在在 pane-local `width` 或 `rows-per-column` 变化时主动夹紧 `viewport-x` 并请求虚拟切片刷新。这样全屏/布局变化发生在大目录末尾时，不再依赖后续手动拖动滚动条来触发旧切片重建。
 
