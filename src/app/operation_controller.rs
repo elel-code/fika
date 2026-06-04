@@ -1,5 +1,11 @@
-use crate::app::events::{EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult, FileOperationProgress};
-use crate::app::state::{AppState, FileOperationRequest, FileUndo, TransferConflict};
+use crate::app::events::{
+    EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult, FileOpenResult, FileOpenSuccess,
+    FileOperationProgress,
+};
+use crate::app::pane::PaneTarget;
+use crate::app::state::{
+    AppState, FileOperationRequest, FileUndo, PaneExternalEdit, TransferConflict,
+};
 use crate::fs::{file_actions, file_ops, privilege};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -55,6 +61,13 @@ pub(crate) struct OperationCompletionSummary {
 pub(crate) struct OperationProgressUpdate {
     pub(crate) status: String,
     pub(crate) pane_ids: Vec<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileOpenCompletionSummary {
+    pub(crate) pane_id: u64,
+    pub(crate) status: String,
+    pub(crate) external_edit_changed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -189,6 +202,66 @@ impl AppState {
 
     fn file_undo_ui_state(&self) -> FileUndoUiState {
         file_undo_ui_state(self.last_undo.as_ref())
+    }
+
+    pub(crate) fn complete_file_open(
+        &mut self,
+        result: FileOpenResult,
+    ) -> Option<FileOpenCompletionSummary> {
+        let FileOpenResult {
+            pane_id,
+            generation,
+            path,
+            result,
+        } = result;
+        let is_current = self
+            .panes
+            .pane_for_target(PaneTarget::Id(pane_id))
+            .is_some_and(|pane| pane.open_generation.is_current(generation));
+        if !is_current {
+            return None;
+        }
+
+        let (status, external_edit_changed) = match result {
+            Ok(success) => self.complete_file_open_success(pane_id, success),
+            Err(error) => (file_open_failed_status(&path, &error), false),
+        };
+        Some(FileOpenCompletionSummary {
+            pane_id,
+            status,
+            external_edit_changed,
+        })
+    }
+
+    fn complete_file_open_success(
+        &mut self,
+        pane_id: u64,
+        success: FileOpenSuccess,
+    ) -> (String, bool) {
+        let FileOpenSuccess {
+            mime_type,
+            unit,
+            launch_diagnostic,
+            external_edit,
+        } = success;
+        let launch_suffix = launch_status_suffix(unit.as_deref(), launch_diagnostic.as_deref());
+        if let Some(unit) = unit {
+            self.launched_units.push(unit);
+        }
+        let external_edit_changed = external_edit.is_some();
+        if let Some(session) = external_edit {
+            self.external_edits
+                .push(PaneExternalEdit { pane_id, session });
+        }
+
+        let status = if external_edit_changed {
+            format!(
+                "Opened protected scratch copy with default app for {mime_type}; auto writeback active{launch_suffix}"
+            )
+        } else {
+            format!("Opened with default app for {mime_type}{launch_suffix}")
+        };
+        (status, external_edit_changed)
     }
 
     pub(crate) fn register_file_undo(&mut self, undo: FileUndo) -> FileUndoRegistrationSummary {
@@ -756,6 +829,25 @@ fn external_edit_completion_result(
             ExternalEditStatusTarget::SourcePane,
         ),
     }
+}
+
+fn launch_status_suffix(unit: Option<&str>, diagnostic: Option<&str>) -> String {
+    if let Some(unit) = unit {
+        format!(" ({unit})")
+    } else if let Some(diagnostic) = diagnostic {
+        format!("; {diagnostic}")
+    } else {
+        String::new()
+    }
+}
+
+fn file_open_failed_status(path: &Path, error: &str) -> String {
+    let label = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_str().unwrap_or("file"));
+    format!("Cannot open {label}: {error}")
 }
 
 fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
@@ -1437,6 +1529,100 @@ mod tests {
         assert!(summary.undo_registration.is_none());
         assert_eq!(summary.affected_dirs, vec![PathBuf::from("/tmp/protected")]);
         assert!(summary.privileged_request.is_none());
+    }
+
+    #[test]
+    fn complete_file_open_summarizes_status_registration_and_stale_results() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let pane_id = state.panes.focused().id;
+        let generation = state.panes.focused_mut().open_generation.next();
+
+        assert_eq!(
+            state.complete_file_open(FileOpenResult {
+                pane_id,
+                generation,
+                path: PathBuf::from("/tmp/note.txt"),
+                result: Ok(FileOpenSuccess {
+                    mime_type: "text/plain".to_string(),
+                    unit: Some("app.scope".to_string()),
+                    launch_diagnostic: Some("ignored diagnostic".to_string()),
+                    external_edit: None,
+                }),
+            }),
+            Some(FileOpenCompletionSummary {
+                pane_id,
+                status: "Opened with default app for text/plain (app.scope)".to_string(),
+                external_edit_changed: false,
+            })
+        );
+        assert_eq!(state.launched_units, vec!["app.scope".to_string()]);
+        assert!(state.external_edits.is_empty());
+
+        let protected_generation = state.panes.focused_mut().open_generation.next();
+        assert_eq!(
+            state.complete_file_open(FileOpenResult {
+                pane_id,
+                generation: protected_generation,
+                path: PathBuf::from("/etc/secure.conf"),
+                result: Ok(FileOpenSuccess {
+                    mime_type: "text/plain".to_string(),
+                    unit: Some("editor.scope".to_string()),
+                    launch_diagnostic: None,
+                    external_edit: Some(external_edit_session("/etc/secure.conf", "secure")),
+                }),
+            }),
+            Some(FileOpenCompletionSummary {
+                pane_id,
+                status:
+                    "Opened protected scratch copy with default app for text/plain; auto writeback active (editor.scope)"
+                        .to_string(),
+                external_edit_changed: true,
+            })
+        );
+        assert_eq!(
+            state.launched_units,
+            vec!["app.scope".to_string(), "editor.scope".to_string()]
+        );
+        assert_eq!(state.external_edits.len(), 1);
+        assert_eq!(state.external_edits[0].pane_id, pane_id);
+        assert_eq!(state.external_edits[0].session.token, "secure");
+
+        let failed_generation = state.panes.focused_mut().open_generation.next();
+        assert_eq!(
+            state.complete_file_open(FileOpenResult {
+                pane_id,
+                generation: failed_generation,
+                path: PathBuf::from("/tmp/missing.txt"),
+                result: Err("No app".to_string()),
+            }),
+            Some(FileOpenCompletionSummary {
+                pane_id,
+                status: "Cannot open missing.txt: No app".to_string(),
+                external_edit_changed: false,
+            })
+        );
+
+        let stale_generation = state.panes.focused_mut().open_generation.next();
+        state.panes.focused_mut().open_generation.next();
+        assert_eq!(
+            state.complete_file_open(FileOpenResult {
+                pane_id,
+                generation: stale_generation,
+                path: PathBuf::from("/tmp/stale.txt"),
+                result: Ok(FileOpenSuccess {
+                    mime_type: "text/plain".to_string(),
+                    unit: Some("stale.scope".to_string()),
+                    launch_diagnostic: None,
+                    external_edit: Some(external_edit_session("/tmp/stale.txt", "stale")),
+                }),
+            }),
+            None
+        );
+        assert_eq!(
+            state.launched_units,
+            vec!["app.scope".to_string(), "editor.scope".to_string()]
+        );
+        assert_eq!(state.external_edits.len(), 1);
     }
 
     #[test]

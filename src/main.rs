@@ -79,7 +79,9 @@ use app::split_view::{
     set_pane_viewport_ui_if_clamped, sync_focus_navigation_ui, sync_navigation_ui,
     sync_pane_slot_ui, sync_pane_slots_ui, toggle_split_view,
 };
-use app::state::{AppState, DeviceAction, PaneExternalEdit};
+#[cfg(test)]
+use app::state::PaneExternalEdit;
+use app::state::{AppState, DeviceAction};
 use app::thumbnail_pipeline::{
     apply_thumbnail_load_to_state_for_pane, decorate_entries_with_cached_thumbnails_for_pane,
     prioritize_thumbnail_entries, thumbnail_schedule_batch_for_pane,
@@ -2486,70 +2488,17 @@ fn open_file_for_target_async(
 }
 
 fn apply_file_open_result(ui: &AppWindow, state: &Rc<RefCell<AppState>>, result: FileOpenResult) {
-    {
-        let state = state.borrow();
-        let Some(pane) = state.panes.pane_for_target(PaneTarget::Id(result.pane_id)) else {
-            return;
-        };
-        if !pane.open_generation.is_current(result.generation) {
-            return;
-        }
-    }
+    let Some(summary) = ({
+        let mut state = state.borrow_mut();
+        state.complete_file_open(result)
+    }) else {
+        return;
+    };
 
-    match result.result {
-        Ok(success) => {
-            let launch_suffix = launch_status_suffix(&success);
-            if let Some(unit) = &success.unit {
-                state.borrow_mut().launched_units.push(unit.clone());
-            }
-            if let Some(session) = success.external_edit {
-                register_external_edit(ui, state, result.pane_id, session);
-                set_status_for_panes(
-                    ui,
-                    state,
-                    &[result.pane_id],
-                    &format!(
-                        "Opened protected scratch copy with default app for {}; auto writeback active{}",
-                        success.mime_type, launch_suffix
-                    ),
-                );
-            } else {
-                set_status_for_panes(
-                    ui,
-                    state,
-                    &[result.pane_id],
-                    &format!(
-                        "Opened with default app for {}{}",
-                        success.mime_type, launch_suffix
-                    ),
-                );
-            }
-        }
-        Err(err) => {
-            let label = result
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| result.path.to_str().unwrap_or("file"));
-            set_status_for_panes(
-                ui,
-                state,
-                &[result.pane_id],
-                &format!("Cannot open {label}: {err}"),
-            );
-        }
+    if summary.external_edit_changed {
+        sync_external_edit_ui(ui, state);
     }
-}
-
-fn launch_status_suffix(success: &FileOpenSuccess) -> String {
-    if let Some(unit) = &success.unit {
-        format!(" ({unit})")
-    } else if let Some(diagnostic) = &success.launch_diagnostic {
-        format!("; {diagnostic}")
-    } else {
-        String::new()
-    }
+    set_status_for_panes(ui, state, &[summary.pane_id], &summary.status);
 }
 
 async fn open_default_with_privilege_fallback(path: PathBuf) -> Result<FileOpenSuccess, String> {
@@ -3123,21 +3072,6 @@ fn apply_privileged_operation_result(
     };
     let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);
     set_status_for_panes(ui, state, &pane_ids, &summary.status);
-}
-
-fn register_external_edit(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    pane_id: u64,
-    session: privilege::ExternalEditSession,
-) {
-    {
-        let mut state = state.borrow_mut();
-        state
-            .external_edits
-            .push(PaneExternalEdit { pane_id, session });
-    }
-    sync_external_edit_ui(ui, state);
 }
 
 fn start_external_edit_resolution(
@@ -5796,7 +5730,7 @@ mod tests {
             .expect("open_file_for_target_async body should be present");
         let result_body = source
             .split_once("fn apply_file_open_result(")
-            .and_then(|(_, rest)| rest.split_once("fn launch_status_suffix("))
+            .and_then(|(_, rest)| rest.split_once("async fn open_default_with_privilege_fallback("))
             .map(|(body, _)| body)
             .expect("apply_file_open_result body should be present");
 
@@ -5807,16 +5741,25 @@ mod tests {
             "file-open start status should write to the pane that requested the open"
         );
         assert!(
-            result_body.matches("set_status_for_panes(").count() == 3
-                && result_body.matches("&[result.pane_id]").count() == 3
+            result_body.contains("state.complete_file_open(result)")
+                && result_body.contains(
+                    "if summary.external_edit_changed {\n        sync_external_edit_ui(ui, state);\n    }"
+                )
                 && result_body
-                    .contains("register_external_edit(ui, state, result.pane_id, session);"),
-            "file-open success, protected external-edit registration, and failure status should use the requesting pane id"
+                    .contains("set_status_for_panes(ui, state, &[summary.pane_id], &summary.status);")
+                && result_body.matches("set_status_for_panes(").count() == 1,
+            "file-open result status should consume the controller summary after releasing AppState borrow"
         );
         assert!(
-            !result_body.contains("set_status(\n                    ui,\n                    &format!(\n                        \"Opened with default app")
-                && !result_body.contains("set_status(ui, state, &format!(\"Cannot open {label}: {err}\"));"),
-            "file-open result status must not jump to whichever pane is focused when the async result returns"
+            !result_body.contains("register_external_edit")
+                && !result_body.contains("PaneTarget::Id(result.pane_id)")
+                && !result_body.contains("result.result")
+                && !result_body.contains("launch_status_suffix")
+                && !result_body.contains(".launched_units")
+                && !result_body.contains("success.external_edit")
+                && !result_body.contains("format!(\"Opened with default app")
+                && !result_body.contains("format!(\"Cannot open {label}: {err}\""),
+            "file-open result status must not rebuild stale checks, launch bookkeeping, external-edit registration, or status copy in main.rs"
         );
     }
 
@@ -5853,7 +5796,7 @@ mod tests {
         let source = include_str!("main.rs");
         let body = source
             .split_once("fn apply_privileged_operation_result(")
-            .and_then(|(_, rest)| rest.split_once("fn register_external_edit("))
+            .and_then(|(_, rest)| rest.split_once("fn start_external_edit_resolution("))
             .map(|(body, _)| body)
             .expect("apply_privileged_operation_result body should be present");
 

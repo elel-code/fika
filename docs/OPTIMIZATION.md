@@ -735,7 +735,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 **审查发现的后继微优化**：
 - **cleanup-1**: 旧 state-based 虚拟视图更新 helper 和测试路径已删除，虚拟视图测试改为覆盖当前 snapshot 管线
 - **f2-note**: `sync_focus_navigation_ui` 已跳过完整 `sync_pane_slots_ui`，纯焦点切换只增量刷新旧 slot 和新 focused slot 两行
-- **borrow-note**: pane status、pane slot model、transfer 完成、FileAction 完成、privileged operation 完成、external edit 完成、Undo 注册/启动/完成状态等先在 `AppState` 借用内生成快照/summary，再释放借用后写 Slint row/model、权限弹窗、Undo 按钮状态或清理旧 overwrite backup，避免 async operation status 更新期间被 Slint 回调重入触发 `RefCell` 借用 panic
+- **borrow-note**: pane status、pane slot model、transfer 完成、FileAction 完成、file open 完成、privileged operation 完成、external edit 完成、Undo 注册/启动/完成状态等先在 `AppState` 借用内生成快照/summary，再释放借用后写 Slint row/model、权限弹窗、external edit 控件、Undo 按钮状态或清理旧 overwrite backup，避免 async operation status 更新期间被 Slint 回调重入触发 `RefCell` 借用 panic
 
 ### 焦点优化
 
