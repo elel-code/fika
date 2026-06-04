@@ -511,10 +511,10 @@ Acceptance for all:
   - Current: repeated context-menu rows for submenu parents, Paste, and Cut/Copy are now small internal components in `ui/menus.slint`; `ui/app.slint` only wires menu actions and no longer owns low-level row layout.
   - Current: ordinary action rows now also route through an internal `ActionMenuRow`, so raw `MenuItem` usage is limited to row wrapper internals while file, viewport, Places, Devices, transfer, chooser, Open With, and Create New menus share the same action-row enabled/shortcut/hover/click wiring.
 
-- [~] Revisit clipboard behavior against COSMIC's cached Wayland model.
+- [x] Revisit clipboard behavior against COSMIC's cached Wayland model.
   - Reference: `cosmic-files/src/clipboard.rs` and clipboard handling in `cosmic-files/src/app.rs`.
   - Acceptance: paste availability does not depend on reading clipboard from transient menu contexts, and future paste-image/text/video-to-file workflows have a documented path.
-  - Current: file-list paste availability now uses Fika's cached clipboard state; startup and menu entry only schedule background refreshes.
+  - Current: file-list paste availability now uses Fika's cached clipboard state; startup and menu entry only schedule background refreshes. Clipboard availability refreshes are single-flight, so repeated startup/menu triggers reuse the pending Wayland data-control read instead of spawning duplicate clipboard queries.
   - Current: when the clipboard has no file-list payload, Fika probes the advertised MIME types through its built-in Wayland data-control reader and caches whether image, video, or text content is pasteable without reading the full payload from transient menu handling. Paste then follows COSMIC's order: files first, then image, video, and text, writing non-file contents as unique `Pasted Image.*`, `Pasted Video.*`, or `Pasted Text.txt` files with Undo support.
 
 - [~] Evolve file operation progress toward COSMIC's controller split.

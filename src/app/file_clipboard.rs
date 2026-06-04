@@ -377,7 +377,12 @@ pub(crate) fn refresh_clipboard_availability_async(
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
 ) {
-    let generation = state.borrow_mut().clipboard_generation.next();
+    let Some(generation) = ({
+        let mut state = state.borrow_mut();
+        begin_clipboard_availability_refresh(&mut state)
+    }) else {
+        return;
+    };
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {
@@ -390,6 +395,18 @@ pub(crate) fn refresh_clipboard_availability_async(
             AsyncEvent::ClipboardLoaded(ClipboardLoadResult { generation, result }),
         );
     });
+}
+
+fn begin_clipboard_availability_refresh(state: &mut AppState) -> Option<u64> {
+    if let Some(pending) = state.clipboard_refresh_pending {
+        if state.clipboard_generation.is_current(pending) {
+            return None;
+        }
+        state.clipboard_refresh_pending = None;
+    }
+    let generation = state.clipboard_generation.next();
+    state.clipboard_refresh_pending = Some(generation);
+    Some(generation)
 }
 
 pub(crate) fn apply_clipboard_load_result(
@@ -425,6 +442,9 @@ fn apply_clipboard_load(
     result: ClipboardLoadResult,
     exists: impl Fn(&Path) -> bool,
 ) -> bool {
+    if state.clipboard_refresh_pending == Some(result.generation) {
+        state.clipboard_refresh_pending = None;
+    }
     if !state.clipboard_generation.is_current(result.generation) {
         return false;
     }
@@ -492,9 +512,9 @@ fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClipboardPastePlan, apply_clipboard_load, clipboard_paths_for_context,
-        clipboard_paths_for_focused_context, existing_clipboard_paths, merge_desktop_clipboard,
-        prepare_clipboard_paste, unique_paths,
+        ClipboardPastePlan, apply_clipboard_load, begin_clipboard_availability_refresh,
+        clipboard_paths_for_context, clipboard_paths_for_focused_context, existing_clipboard_paths,
+        merge_desktop_clipboard, prepare_clipboard_paste, unique_paths,
     };
     use crate::app::events::{ClipboardLoadResult, ClipboardPasteLoadResult};
     use crate::app::state::AppState;
@@ -734,6 +754,55 @@ mod tests {
         assert!(applied);
         assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/external")]);
         assert!(!state.clipboard_cut);
+    }
+
+    #[test]
+    fn clipboard_availability_refresh_is_single_flight_until_result_returns() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+
+        let first = begin_clipboard_availability_refresh(&mut state).unwrap();
+        assert_eq!(state.clipboard_refresh_pending, Some(first));
+        assert_eq!(begin_clipboard_availability_refresh(&mut state), None);
+        assert!(state.clipboard_generation.is_current(first));
+
+        let applied = apply_clipboard_load(
+            &mut state,
+            ClipboardLoadResult {
+                generation: first,
+                result: Err("Wayland selection unavailable".to_string()),
+            },
+            |_| true,
+        );
+
+        assert!(!applied);
+        assert_eq!(state.clipboard_refresh_pending, None);
+
+        let second = begin_clipboard_availability_refresh(&mut state).unwrap();
+        assert_eq!(second, first + 1);
+        assert_eq!(state.clipboard_refresh_pending, Some(second));
+    }
+
+    #[test]
+    fn stale_availability_result_clears_pending_without_replacing_internal_clipboard() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let pending = begin_clipboard_availability_refresh(&mut state).unwrap();
+        state.clipboard_generation.next();
+        state.clipboard_paths = vec![PathBuf::from("/tmp/internal")];
+        state.clipboard_cut = true;
+
+        let applied = apply_clipboard_load(
+            &mut state,
+            ClipboardLoadResult {
+                generation: pending,
+                result: Ok(file_snapshot(vec![PathBuf::from("/tmp/external")], false)),
+            },
+            |_| true,
+        );
+
+        assert!(!applied);
+        assert_eq!(state.clipboard_refresh_pending, None);
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/internal")]);
+        assert!(state.clipboard_cut);
     }
 
     #[test]
