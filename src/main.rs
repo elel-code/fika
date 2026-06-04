@@ -54,8 +54,9 @@ use app::geometry::{
 };
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
-    OperationResultDisposition, affected_directory_pane_ids, cleanup_file_undo_backup,
-    file_undo_affected_dirs, operation_final_status, operation_finished_label,
+    FileUndoStartDecision, OperationResultDisposition, affected_directory_pane_ids,
+    cleanup_file_undo_backup, file_undo_affected_dirs, operation_final_status,
+    operation_finished_label,
 };
 use app::pane::{DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries};
 #[cfg(test)]
@@ -2939,26 +2940,23 @@ fn sync_undo_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 fn start_file_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
-    let undo = state.borrow_mut().last_undo.take();
+    let decision = {
+        let mut state = state.borrow_mut();
+        state.take_file_undo_start()
+    };
     sync_undo_ui(ui, state);
-    let Some(undo) = undo else {
-        set_status(ui, state, "Nothing to undo");
-        return;
+    let summary = match decision {
+        FileUndoStartDecision::Started(summary) => summary,
+        FileUndoStartDecision::Empty { status } => {
+            set_status(ui, state, &status);
+            return;
+        }
     };
 
-    let affected_dirs = file_undo_affected_dirs(&undo);
-    let pane_ids = {
-        let state = state.borrow();
-        affected_directory_pane_ids(&state, affected_dirs.iter().map(|dir| dir.as_path()))
-    };
-    set_status_for_panes(
-        ui,
-        state,
-        &pane_ids,
-        &format!("Undoing {}...", operation_finished_label(&undo.operation)),
-    );
+    set_status_for_panes(ui, state, &summary.pane_ids, &summary.status);
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
+    let undo = summary.undo;
     bridge.handle.spawn(async move {
         let task_undo = undo.clone();
         let result = tokio::task::spawn_blocking(move || match task_undo.operation.as_str() {
@@ -5754,11 +5752,14 @@ mod tests {
             .expect("apply_file_undo_result body should be present");
 
         assert!(
-            start_body.contains("let affected_dirs = file_undo_affected_dirs(&undo);")
-                && start_body.contains("let pane_ids = {")
-                && start_body.contains("affected_directory_pane_ids(&state, affected_dirs.iter().map(|dir| dir.as_path()))")
-                && start_body.contains("set_status_for_panes("),
-            "file undo start status should write to panes affected by the undo"
+            start_body.contains("state.take_file_undo_start()")
+                && start_body.contains("sync_undo_ui(ui, state);")
+                && start_body.contains("FileUndoStartDecision::Started(summary) => summary")
+                && start_body.contains("FileUndoStartDecision::Empty { status }")
+                && start_body.contains(
+                    "set_status_for_panes(ui, state, &summary.pane_ids, &summary.status);"
+                ),
+            "file undo start status should use the controller summary after releasing AppState borrow"
         );
         assert!(
             result_body.contains(
@@ -5774,6 +5775,13 @@ mod tests {
                 && !production_source.contains("fn restore_failed_file_undo(")
                 && !production_source.contains("fn cleanup_file_undo_backup("),
             "file undo state decisions should live in operation_controller.rs, not main.rs"
+        );
+        assert!(
+            !start_body.contains("last_undo.take()")
+                && !start_body.contains("file_undo_affected_dirs(&undo)")
+                && !start_body.contains("affected_directory_pane_ids(")
+                && !start_body.contains("operation_finished_label(&undo.operation)"),
+            "file undo start should not re-derive controller-owned state in main.rs"
         );
         assert!(
             !start_body.contains("set_status(\n        ui,\n        &format!(\"Undoing {}...\"")

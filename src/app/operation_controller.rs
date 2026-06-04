@@ -72,6 +72,19 @@ pub(crate) struct OperationProgressUpdate {
     pub(crate) pane_ids: Vec<u64>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum FileUndoStartDecision {
+    Empty { status: String },
+    Started(FileUndoStartSummary),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FileUndoStartSummary {
+    pub(crate) undo: FileUndo,
+    pub(crate) pane_ids: Vec<u64>,
+    pub(crate) status: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FileUndoRestoreSummary {
     pub(crate) restored: bool,
@@ -111,6 +124,24 @@ impl AppState {
     pub(crate) fn replace_file_undo(&mut self, undo: Option<FileUndo>) -> Option<PathBuf> {
         let old_undo = std::mem::replace(&mut self.last_undo, undo);
         file_undo_backup_path(old_undo)
+    }
+
+    pub(crate) fn take_file_undo_start(&mut self) -> FileUndoStartDecision {
+        let Some(undo) = self.last_undo.take() else {
+            return FileUndoStartDecision::Empty {
+                status: "Nothing to undo".to_string(),
+            };
+        };
+
+        let affected_dirs = file_undo_affected_dirs(&undo);
+        let pane_ids =
+            affected_directory_pane_ids(self, affected_dirs.iter().map(|dir| dir.as_path()));
+        let status = file_undo_started_status(&undo.operation);
+        FileUndoStartDecision::Started(FileUndoStartSummary {
+            undo,
+            pane_ids,
+            status,
+        })
     }
 
     pub(crate) fn restore_failed_file_undo(&mut self, undo: FileUndo) -> FileUndoRestoreSummary {
@@ -488,6 +519,10 @@ pub(crate) fn operation_started_status(operation: &str, source: &Path) -> String
         operation_label(operation),
         operation_item_label(source)
     )
+}
+
+pub(crate) fn file_undo_started_status(operation: &str) -> String {
+    format!("Undoing {}...", operation_finished_label(operation))
 }
 
 pub(crate) fn operation_skipped_status(error: &str) -> String {
@@ -905,6 +940,41 @@ mod tests {
             state.last_undo.as_ref().map(|undo| undo.operation.as_str()),
             Some("move")
         );
+    }
+
+    #[test]
+    fn take_file_undo_start_reports_empty_status_without_mutating_state() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+
+        match state.take_file_undo_start() {
+            FileUndoStartDecision::Empty { status } => {
+                assert_eq!(status, "Nothing to undo");
+            }
+            FileUndoStartDecision::Started(_) => panic!("empty undo state should not start"),
+        }
+
+        assert!(state.last_undo.is_none());
+    }
+
+    #[test]
+    fn take_file_undo_start_consumes_undo_and_routes_affected_panes() {
+        let mut state = AppState::new(PathBuf::from("/tmp/source"), Vec::new());
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/target")));
+        let active_id = state.panes.focused().id;
+        let inactive_id = state.panes.pane_for_slot(1).expect("inactive pane").id;
+        state.last_undo = Some(undo("copy", "/tmp/source/item.txt", "/tmp/target/item.txt"));
+
+        let summary = match state.take_file_undo_start() {
+            FileUndoStartDecision::Started(summary) => summary,
+            FileUndoStartDecision::Empty { status } => {
+                panic!("expected undo start, got status {status}")
+            }
+        };
+
+        assert!(state.last_undo.is_none());
+        assert_eq!(summary.undo.operation, "copy");
+        assert_eq!(summary.pane_ids, vec![active_id, inactive_id]);
+        assert_eq!(summary.status, "Undoing Copy...");
     }
 
     #[test]
