@@ -543,12 +543,13 @@ indices[range.start..end]
 
 **涉及代码**：
 - `src/app/selection.rs:247-295` — `annotate_visible_location_groups`
+- `src/app/virtual_view.rs` — `VirtualViewSnapshotInput.visible_location_groups`
 
-**改进**：缓存 `(start_visible_index, previous_location, annotations)` 三元组。连续滚动时复用部分结果。
+**实际实现**（✅ 已完成）：不维护易过期的局部 `(start_visible_index, previous_location, annotations)` 滚动缓存，而是在过滤/search 重建可见索引时一次性生成 pane-local `visible_location_groups`。`VirtualViewSnapshotInput` 将该缓存随条目快照传入后台 `prepare_virtual_view_snapshot_update`，虚拟切片标注直接按 `start_visible_index + offset` 读取预计算 group；只有缺少缓存时才回退到按 slice 边界推断。
 
-**收益**：递归搜索场景下的滚动省 O(virtual_slice_size) 扫描。但递归搜索是低频场景。
+**收益**：递归搜索场景下滚动不再为每个虚拟切片重新查找前一条 location 边界，也不在后台 snapshot 路径重复推断 group 标签。
 
-**难度**：中。需维护缓存状态和 invalidation。
+**验证**：`snapshot_update_uses_precomputed_visible_location_groups` 覆盖非零虚拟 range 起点，证明后台 snapshot 路径使用预计算 group 缓存而不是从 entry.location 重新推断。
 
 **优先级**：P3（低频）。
 
@@ -728,7 +729,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | **Phase V1** | `virtual_entry_range` 双重计算融合 | 15min | ✅ 已完成 |
 | **Phase V2** | `filtered_entries_range` filter_map→map | 5min | ✅ 已完成 |
 | **Phase V3** | 旧 preview 路径删除 | 5min | ✅ 已完成/不适用 |
-| **Phase V4** | `annotate_visible_location_groups` 缓存 | 30min | 待实施 |
+| **Phase V4** | `annotate_visible_location_groups` 缓存 | 30min | ✅ 已完成 |
 
 ### 跨系统通用优化
 
@@ -739,9 +740,9 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | **Phase S2** | 右键菜单跳过剪贴板读取 | 10min | ✅ 已完成 |
 | **Phase S3** | `file-operation-shortcuts-blocked` 归约 | 5min | ✅ 已完成 |
 
-**综合建议**：V4 低频可搁置。S1 继续搁置，除非 Places 列表规模显著变大。
+**综合建议**：S1 继续搁置，除非 Places 列表规模显著变大。
 
-**综合建议**：滚动 Phase 1-6、焦点 F0-F2/G0、V0-V3、S0/S2/S3 已完成。剩余 V4，S1 搁置。
+**综合建议**：滚动 Phase 1-6、焦点 F0-F2/G0、V0-V4、S0/S2/S3 已完成。剩余 S1 搁置。
 
 ### 验证方法
 

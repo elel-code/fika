@@ -59,6 +59,7 @@ pub(crate) struct VirtualViewSnapshotInput {
     pub(crate) entries: Arc<[PaneEntrySnapshot]>,
     pub(crate) visible_entry_indices: Option<Vec<usize>>,
     pub(crate) visible_entries_have_locations: bool,
+    pub(crate) visible_location_groups: Option<Vec<String>>,
     pub(crate) query: String,
     pub(crate) kind_filter: i32,
     pub(crate) modified_filter: i32,
@@ -283,6 +284,16 @@ fn annotate_snapshot_location_groups(
         return;
     }
 
+    if let Some(groups) = input.visible_location_groups.as_ref() {
+        for (offset, entry) in entries.iter_mut().enumerate() {
+            entry.group = groups
+                .get(start_visible_index + offset)
+                .cloned()
+                .unwrap_or_default();
+        }
+        return;
+    }
+
     let mut previous_location = start_visible_index
         .checked_sub(1)
         .and_then(|index| snapshot_visible_entry_location_at(input, index));
@@ -454,6 +465,7 @@ mod tests {
     use crate::app::state::AppState;
     use slint::Image;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn layout() -> MainGridLayout {
         MainGridLayout {
@@ -480,6 +492,12 @@ mod tests {
             thumbnail_state: 0,
             thumbnail: Image::default(),
         }
+    }
+
+    fn snapshot_test_entry(index: usize, location: &str) -> PaneEntrySnapshot {
+        let mut entry = PaneEntrySnapshot::from_entry(&test_entry(index));
+        entry.location = location.to_string();
+        entry
     }
 
     #[test]
@@ -587,5 +605,50 @@ mod tests {
         assert_eq!(update.viewport_x, 70.0);
         assert_eq!(update.range, 0..10);
         assert_eq!(state.panes.focused().view.viewport_x, 70.0);
+    }
+
+    #[test]
+    fn snapshot_update_uses_precomputed_visible_location_groups() {
+        let entries = (0..24)
+            .map(|index| {
+                snapshot_test_entry(
+                    index,
+                    if index < 8 {
+                        "/search/location-a"
+                    } else {
+                        "/search/location-b"
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let groups = (0..entries.len())
+            .map(|index| format!("cached-group-{index}"))
+            .collect::<Vec<_>>();
+
+        let update = prepare_virtual_view_snapshot_update(VirtualViewSnapshotInput {
+            layout: layout(),
+            requested_viewport_x: 315.0,
+            viewport_width: 250.0,
+            thumbnail_size_px: 64,
+            schedule_thumbnails: true,
+            visible_count_override: None,
+            cache: VirtualViewCache::default(),
+            entries: Arc::from(entries),
+            visible_entry_indices: None,
+            visible_entries_have_locations: true,
+            visible_location_groups: Some(groups),
+            query: String::new(),
+            kind_filter: 0,
+            modified_filter: 0,
+            size_filter: 0,
+            chooser_patterns: Vec::new(),
+        });
+
+        assert!(update.rebuild_model);
+        assert_eq!(update.range.start, 4);
+        assert_eq!(update.entries[0].group, "cached-group-4");
+        assert_eq!(update.entries[1].group, "cached-group-5");
+        assert_eq!(update.entries[4].group, "cached-group-8");
+        assert_ne!(update.entries[0].group, "/search/location-a");
     }
 }

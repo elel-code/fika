@@ -3422,6 +3422,7 @@ fn sync_virtual_entries_for_slot_with_count(
                     entries: pane.entry_snapshot(),
                     visible_entry_indices: pane.search.visible_entry_indices.clone(),
                     visible_entries_have_locations: pane.search.visible_entries_have_locations,
+                    visible_location_groups: pane.search.visible_location_groups.clone(),
                     query,
                     kind_filter: pane.search.kind_filter,
                     modified_filter: pane.search.modified_filter,

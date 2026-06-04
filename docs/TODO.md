@@ -34,6 +34,7 @@
   - Current: virtual range metadata is cached; scrolling inside the same range does not reset the Slint model.
   - Current: virtual range reuse now keeps the current Slint model while its cached overscan slice still covers the newly visible columns, and ScrollView viewport writeback ignores sub-pixel drift, reducing large-directory horizontal jitter during small scroll steps.
   - Current: recursive-search location group annotation is keyed by pane-local visible-result state, so ordinary large-directory scrolling does not rescan every entry just to decide whether the virtual slice needs group labels.
+  - Current: background virtual snapshot preparation receives the pane-local `visible_location_groups` cache and annotates slices by visible index, so recursive-search scrolling avoids per-slice location-boundary recomputation off the UI thread too.
   - Current: ordinary wheel scrolling requests pane focus only once per event path before panning, while Ctrl+wheel still focuses before zooming.
   - Current: Rust uses a tested `VirtualGridPlan` to calculate clamped viewport position, scroll extent, visible range, overscan range, and Slint anchor column from one source of truth.
   - Current: offscreen thumbnail completions update the cache without resetting the Slint model; visible completions still refresh the current virtual slice.
