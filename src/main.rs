@@ -4545,16 +4545,29 @@ fn output_chooser_paths_and_exit(paths: Vec<PathBuf>, metadata: ChooserOutputMet
 }
 
 fn set_focused_pane_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, message: &str) {
-    let slot = state.borrow().panes.focused_slot();
+    let slot = { state.borrow().panes.focused_slot() };
     set_pane_status(ui, state, slot, message);
 }
 
 fn set_pane_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32, message: &str) {
-    let message: SharedString = message.into();
-    if ui.get_focused_pane() == slot {
-        ui.set_status(message);
+    let Some(target_is_focused) = ({
+        let mut state = state.borrow_mut();
+        set_pane_status_state(&mut state, slot, message)
+    }) else {
+        return;
+    };
+
+    if target_is_focused {
+        ui.set_status(SharedString::from(message));
     }
-    sync_pane_slots_ui(ui, state);
+    sync_pane_slot_ui(ui, state, slot);
+}
+
+fn set_pane_status_state(state: &mut AppState, slot: i32, message: &str) -> Option<bool> {
+    let focused = state.panes.focused_slot() == slot;
+    let pane = state.panes.pane_mut_for_slot(slot)?;
+    pane.status = message.to_string();
+    Some(focused)
 }
 
 fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>, pane_id: u64) {
@@ -4608,9 +4621,21 @@ fn pane_status_target_slots(state: &AppState, pane_ids: &[u64]) -> Vec<i32> {
 }
 
 fn set_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, message: &str) {
-    let message: SharedString = message.into();
-    ui.set_status(message);
-    sync_pane_slots_ui(ui, state);
+    let slot = {
+        let mut state = state.borrow_mut();
+        set_focused_status_state(&mut state, message)
+    };
+
+    ui.set_status(SharedString::from(message));
+    sync_pane_slot_ui(ui, state, slot);
+}
+
+fn set_focused_status_state(state: &mut AppState, message: &str) -> i32 {
+    let slot = state.panes.focused_slot();
+    if let Some(pane) = state.panes.pane_mut_for_slot(slot) {
+        pane.status = message.to_string();
+    }
+    slot
 }
 
 fn debug_log(message: &str) {
@@ -5373,6 +5398,52 @@ mod tests {
     }
 
     #[test]
+    fn pane_status_state_updates_only_target_pane() {
+        let mut state = AppState::new(PathBuf::from("/tmp/slot-0"), Vec::new());
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/slot-1")));
+
+        assert_eq!(
+            set_pane_status_state(&mut state, 1, "Right pane busy"),
+            Some(false)
+        );
+
+        assert_eq!(state.panes.pane_for_slot(0).expect("slot 0").status, "");
+        assert_eq!(
+            state.panes.pane_for_slot(1).expect("slot 1").status,
+            "Right pane busy"
+        );
+
+        assert_eq!(
+            set_pane_status_state(&mut state, 0, "Left pane ready"),
+            Some(true)
+        );
+        assert_eq!(
+            state.panes.pane_for_slot(0).expect("slot 0").status,
+            "Left pane ready"
+        );
+        assert_eq!(
+            state.panes.pane_for_slot(1).expect("slot 1").status,
+            "Right pane busy"
+        );
+        assert_eq!(set_pane_status_state(&mut state, 99, "Missing"), None);
+    }
+
+    #[test]
+    fn focused_status_state_updates_only_focused_pane() {
+        let mut state = AppState::new(PathBuf::from("/tmp/slot-0"), Vec::new());
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/slot-1")));
+        assert!(state.panes.focus_slot(1));
+
+        assert_eq!(set_focused_status_state(&mut state, "Focused pane"), 1);
+
+        assert_eq!(state.panes.pane_for_slot(0).expect("slot 0").status, "");
+        assert_eq!(
+            state.panes.pane_for_slot(1).expect("slot 1").status,
+            "Focused pane"
+        );
+    }
+
+    #[test]
     fn refresh_panes_releases_slot_lookup_borrow_before_refreshing() {
         let source = include_str!("main.rs");
         let body = source
@@ -5430,16 +5501,21 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_slot_ui("))
             .map(|(body, _)| body)
             .expect("sync_pane_slots_ui body should be present");
+        let (snapshot_body, update_body) = body
+            .split_once("let current = ui.get_pane_slots();")
+            .expect("sync_pane_slots_ui should snapshot before touching the model");
 
         assert!(
-            body.contains("let current = ui.get_pane_slots();")
-                && body.contains("let same_slots = current.row_count() == slots.len()")
-                && body.contains(".is_some_and(|current| current.slot == slot.slot)")
-                && body.contains("if current.row_data(row).as_ref() != Some(&slot)")
-                && body.contains("current.set_row_data(row, slot);")
-                && body
-                    .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));"),
-            "pane data refresh should update stable rows instead of replacing the pane model while gestures are active"
+            snapshot_body.contains("let slots = {\n        let state_ref = state.borrow();")
+                && snapshot_body.contains(".map(|slot| pane_slot_data(ui, slot, &state_ref))")
+                && update_body.contains("let same_slots = current.row_count() == slots.len()")
+                && update_body.contains(".is_some_and(|current| current.slot == slot.slot)")
+                && update_body.contains("if current.row_data(row).as_ref() != Some(&slot)")
+                && update_body.contains("current.set_row_data(row, slot);")
+                && update_body
+                    .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));")
+                && !update_body.contains("state.borrow()"),
+            "pane data refresh should snapshot state before updating the Slint model"
         );
     }
 
@@ -5454,11 +5530,89 @@ mod tests {
 
         assert!(
             body.contains("if current_slot.slot == slot")
-                && body.contains("let next = pane_slot_data(ui, slot, &state_ref);")
+                && body.contains(
+                    "let next = {\n                let state_ref = state.borrow();\n                pane_slot_data(ui, slot, &state_ref)\n            };"
+                )
                 && body.contains("if current_slot != next")
                 && body.contains("current.set_row_data(row, next);")
                 && body.contains("sync_pane_slots_ui(ui, state);"),
             "viewport-only pane refreshes should update the affected pane row and fall back to full sync only when the row is missing"
+        );
+    }
+
+    #[test]
+    fn pane_slot_sync_releases_state_borrow_before_model_updates() {
+        let source = include_str!("app/split_view.rs");
+        let slots_body = source
+            .split_once("pub(crate) fn sync_pane_slots_ui(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_slot_ui("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_slots_ui body should be present");
+        let slot_body = source
+            .split_once("pub(crate) fn sync_pane_slot_ui(")
+            .and_then(|(_, rest)| rest.split_once("fn visible_pane_slots("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_slot_ui body should be present");
+        let (_, slots_update_body) = slots_body
+            .split_once("let current = ui.get_pane_slots();")
+            .expect("sync_pane_slots_ui should snapshot before touching the model");
+        let (_, slot_update_body) = slot_body
+            .split_once("};\n            if current_slot != next")
+            .expect("sync_pane_slot_ui should close the state borrow before touching the model");
+
+        assert!(
+            !slots_update_body.contains("state.borrow()")
+                && slots_update_body.contains("current.set_row_data(row, slot);")
+                && slots_update_body
+                    .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));"),
+            "full pane sync must release AppState borrow before Slint model setters"
+        );
+        assert!(
+            !slot_update_body.contains("state.borrow()")
+                && slot_update_body.contains("current.set_row_data(row, next);"),
+            "single-row pane sync must release AppState borrow before Slint model setters"
+        );
+    }
+
+    #[test]
+    fn pane_status_updates_write_state_before_syncing_ui() {
+        let source = include_str!("main.rs");
+        let pane_status_body = source
+            .split_once("fn set_pane_status(")
+            .and_then(|(_, rest)| rest.split_once("fn set_pane_status_state("))
+            .map(|(body, _)| body)
+            .expect("set_pane_status body should be present");
+        let focused_status_body = source
+            .split_once("fn set_status(")
+            .and_then(|(_, rest)| rest.split_once("fn set_focused_status_state("))
+            .map(|(body, _)| body)
+            .expect("set_status body should be present");
+
+        assert!(
+            pane_status_body.contains("set_pane_status_state(&mut state, slot, message)")
+                && pane_status_body.contains("sync_pane_slot_ui(ui, state, slot);")
+                && !pane_status_body.contains("sync_pane_slots_ui(ui, state);")
+                && focused_status_body.contains("set_focused_status_state(&mut state, message)")
+                && focused_status_body.contains("sync_pane_slot_ui(ui, state, slot);")
+                && !focused_status_body.contains("sync_pane_slots_ui(ui, state);"),
+            "status updates should mutate pane-local state first and refresh only the affected pane row"
+        );
+    }
+
+    #[test]
+    fn pane_slot_sync_legacy_shape_is_not_used() {
+        let source = include_str!("app/split_view.rs");
+        let body = source
+            .split_once("pub(crate) fn sync_pane_slot_ui(")
+            .and_then(|(_, rest)| rest.split_once("fn visible_pane_slots("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_slot_ui body should be present");
+
+        assert!(
+            !body.contains(
+                "let state_ref = state.borrow();\n    let current = ui.get_pane_slots();"
+            ) && !body.contains("let next = pane_slot_data(ui, slot, &state_ref);"),
+            "single-row pane sync must not keep AppState borrowed across Slint model reads/writes"
         );
     }
 

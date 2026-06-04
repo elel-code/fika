@@ -28,18 +28,23 @@ pub(crate) fn set_pane_viewport_ui(
     viewport_x: f32,
     state: &Rc<RefCell<AppState>>,
 ) {
-    if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
-        pane.view.viewport_x = viewport_x;
+    {
+        let mut state = state.borrow_mut();
+        if let Some(pane) = state.panes.pane_mut_for_slot(slot) {
+            pane.view.viewport_x = viewport_x;
+        }
     }
     sync_pane_slot_ui(ui, state, slot);
 }
 
 pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let state_ref = state.borrow();
-    let slots = visible_pane_slots(ui)
-        .into_iter()
-        .map(|slot| pane_slot_data(ui, slot, &state_ref))
-        .collect::<Vec<_>>();
+    let slots = {
+        let state_ref = state.borrow();
+        visible_pane_slots(ui)
+            .into_iter()
+            .map(|slot| pane_slot_data(ui, slot, &state_ref))
+            .collect::<Vec<_>>()
+    };
 
     let current = ui.get_pane_slots();
     let same_slots = current.row_count() == slots.len()
@@ -61,14 +66,16 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
 }
 
 pub(crate) fn sync_pane_slot_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
-    let state_ref = state.borrow();
     let current = ui.get_pane_slots();
     for row in 0..current.row_count() {
         let Some(current_slot) = current.row_data(row) else {
             continue;
         };
         if current_slot.slot == slot {
-            let next = pane_slot_data(ui, slot, &state_ref);
+            let next = {
+                let state_ref = state.borrow();
+                pane_slot_data(ui, slot, &state_ref)
+            };
             if current_slot != next {
                 current.set_row_data(row, next);
             }
