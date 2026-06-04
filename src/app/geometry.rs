@@ -2101,6 +2101,9 @@ mod tests {
                 && pane_slot_surface.contains(
                     "private property <length> live-viewport-offset: -root.pane.viewport_x * 1px;"
                 )
+                && pane_slot_surface.contains(
+                    "root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path || root.live-viewport-x != root.pane.viewport_x"
+                )
                 && pane_slot_surface.contains("viewport-x <=> root.live-viewport-x;")
                 && pane_slot_surface.contains("viewport-offset <=> root.live-viewport-offset;")
                 && pane_slot_surface.contains("private property <bool> live-drag-active: false;")

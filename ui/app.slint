@@ -434,7 +434,7 @@ component PaneSlotSurface inherits Rectangle {
             root.live-path-text = root.pane.path_text;
         }
         root.live-path-focused = root.pane.path_focused;
-        if (root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path) {
+        if (root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path || root.live-viewport-x != root.pane.viewport_x) {
             root.live-viewport-x = root.pane.viewport_x;
             root.live-viewport-offset = -root.pane.viewport_x * 1px;
         }
