@@ -52,7 +52,8 @@ use app::geometry::{
     place_drop_geometry, register_menu_geometry_callbacks, virtual_grid_plan,
 };
 use app::item_view::{
-    ItemViewInputMetrics, ItemViewReleaseAction, SelectionRect, decorate_render_plan,
+    ItemViewInputMetrics, ItemViewReleaseAction, ItemViewRenderMetrics, SelectionRect,
+    decorate_render_plan,
 };
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
@@ -3261,6 +3262,7 @@ fn sync_virtual_entries_for_slot_with_count(
     immediate: bool,
 ) {
     let size_px = thumbnail_size_px(ui);
+    let render_metrics = ItemViewRenderMetrics::from_zoom_level(ui.get_icon_zoom_level());
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
     let viewport_width = pane_slot_width(ui, main_width, slot);
@@ -3309,6 +3311,7 @@ fn sync_virtual_entries_for_slot_with_count(
                 rows_per_column: layout.rows_per_column,
                 cell_width: layout.cell_width,
                 row_height: layout.row_height,
+                render_metrics,
                 input: Box::new(VirtualViewSnapshotInput {
                     layout,
                     requested_viewport_x,
@@ -3363,6 +3366,7 @@ fn sync_virtual_entries_for_slot_with_count(
             rows_per_column,
             cell_width,
             row_height,
+            render_metrics,
             input,
         } = request;
         let update = prepare_virtual_view_snapshot_update(*input);
@@ -3378,6 +3382,7 @@ fn sync_virtual_entries_for_slot_with_count(
                 rows_per_column,
                 cell_width,
                 row_height,
+                render_metrics,
                 update,
             },
         );
@@ -3396,6 +3401,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
         rows_per_column,
         cell_width,
         row_height,
+        render_metrics,
         input,
     } = request;
     let async_tx = bridge.tx.clone();
@@ -3415,6 +3421,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
                     rows_per_column,
                     cell_width,
                     row_height,
+                    render_metrics,
                     update,
                 }),
             ),
@@ -3560,6 +3567,7 @@ fn apply_virtual_view_result(
         result.rows_per_column,
         result.cell_width,
         result.row_height,
+        result.render_metrics,
     );
     {
         let state_ref = state.borrow();
@@ -6228,6 +6236,14 @@ mod tests {
             tile_x: 0.0,
             tile_y: 0.0,
             tile_width: 0.0,
+            tile_height: 0.0,
+            tile_padding_x: 0.0,
+            tile_spacing: 0.0,
+            thumbnail_width: 0.0,
+            thumbnail_height: 0.0,
+            metadata_font_size: 0.0,
+            title_font_size: 0.0,
+            glyph_doc_font_size: 0.0,
         }
     }
 }

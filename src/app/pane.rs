@@ -1,5 +1,5 @@
 use crate::FileEntry;
-use crate::app::item_view::ItemViewInputState;
+use crate::app::item_view::{ItemViewInputState, ItemViewRenderMetrics};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{search, thumbnails};
@@ -178,6 +178,14 @@ impl PaneEntrySnapshot {
             tile_x: 0.0,
             tile_y: 0.0,
             tile_width: 0.0,
+            tile_height: 0.0,
+            tile_padding_x: 0.0,
+            tile_spacing: 0.0,
+            thumbnail_width: 0.0,
+            thumbnail_height: 0.0,
+            metadata_font_size: 0.0,
+            title_font_size: 0.0,
+            glyph_doc_font_size: 0.0,
         }
     }
 }
@@ -448,6 +456,7 @@ pub(crate) struct VirtualViewPrepareRequest {
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
     pub(crate) row_height: f32,
+    pub(crate) render_metrics: ItemViewRenderMetrics,
     pub(crate) input: Box<VirtualViewSnapshotInput>,
 }
 
@@ -684,6 +693,7 @@ mod tests {
             rows_per_column: 4,
             cell_width: 100.0,
             row_height: 90.0,
+            render_metrics: ItemViewRenderMetrics::from_zoom_level(1),
             input: Box::new(VirtualViewSnapshotInput {
                 layout: MainGridLayout {
                     viewport_x: requested_viewport_x,
@@ -1281,6 +1291,14 @@ mod tests {
             tile_x: 0.0,
             tile_y: 0.0,
             tile_width: 0.0,
+            tile_height: 0.0,
+            tile_padding_x: 0.0,
+            tile_spacing: 0.0,
+            thumbnail_width: 0.0,
+            thumbnail_height: 0.0,
+            metadata_font_size: 0.0,
+            title_font_size: 0.0,
+            glyph_doc_font_size: 0.0,
         }
     }
 }

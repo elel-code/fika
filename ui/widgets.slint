@@ -454,10 +454,8 @@ export component MenuHoverRegion inherits Rectangle {
 export component FolderGlyph inherits Rectangle {
     in property <bool> dir;
     in property <bool> dark;
-    in property <int> zoom-level;
+    in property <length> doc-font-size;
 
-    width: root.zoom-level == 0 ? 52px : (root.zoom-level == 1 ? 64px : (root.zoom-level == 2 ? 80px : (root.zoom-level == 3 ? 96px : 112px)));
-    height: root.zoom-level == 0 ? 46px : (root.zoom-level == 1 ? 58px : (root.zoom-level == 2 ? 70px : (root.zoom-level == 3 ? 84px : 98px)));
     background: transparent;
 
     Rectangle {
@@ -495,7 +493,7 @@ export component FolderGlyph inherits Rectangle {
         y: root.height * 0.543;
         width: root.width * 0.625;
         color: root.dark ? #303030 : #555555;
-        font-size: root.zoom-level < 2 ? 10px : (root.zoom-level == 2 ? 12px : 13px);
+        font-size: root.doc-font-size;
         font-weight: 700;
         horizontal-alignment: center;
     }

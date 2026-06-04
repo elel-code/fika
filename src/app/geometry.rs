@@ -2426,6 +2426,7 @@ mod tests {
             "pane scrolling should use the dominant wheel axis instead of adding touchpad cross-axis jitter"
         );
         let file_tile = include_str!("../../ui/file_tile.slint");
+        let widgets = include_str!("../../ui/widgets.slint");
         assert!(
             file_tile
                 .contains("function scroll-pan-delta(delta-x: length, delta-y: length) -> length")
@@ -2436,17 +2437,24 @@ mod tests {
             "tile scrolling should use the same dominant-axis wheel rule as blank pane scrolling"
         );
         assert!(
-            split_pane.contains("private property <length> tile-height:")
-                && split_pane.contains("private property <length> thumbnail-width:")
-                && split_pane.contains("private property <length> title-font-size:")
-                && split_pane.contains("tile-height: root.tile-height;")
+            !split_pane.contains("private property <length> tile-height:")
+                && !split_pane.contains("private property <length> thumbnail-width:")
+                && !split_pane.contains("private property <length> title-font-size:")
+                && !split_pane.contains("tile-height: root.tile-height;")
+                && !split_pane.contains("zoom-level: root.zoom-level;")
                 && split_pane.contains("metadata-group-color: root.metadata-group-color;")
-                && file_tile.contains("in property <length> tile-height;")
-                && file_tile.contains("height: root.tile-height;")
-                && file_tile.contains("font-size: root.title-font-size;")
+                && !file_tile.contains("in property <length> tile-height;")
+                && !file_tile.contains("in property <int> zoom-level;")
+                && file_tile.contains("height: root.entry.tile_height * 1px;")
+                && file_tile.contains("width: root.entry.thumbnail_width * 1px;")
+                && file_tile.contains("font-size: root.entry.title_font_size * 1px;")
+                && file_tile.contains("doc-font-size: root.entry.glyph_doc_font_size * 1px;")
                 && !file_tile.contains("height: root.zoom-level ==")
-                && !file_tile.contains("font-size: root.zoom-level =="),
-            "FileTile should consume pane-level display tokens instead of recalculating zoom/color bindings in every tile"
+                && !file_tile.contains("font-size: root.zoom-level ==")
+                && widgets.contains("in property <length> doc-font-size;")
+                && !widgets.contains("in property <int> zoom-level;")
+                && !widgets.contains("font-size: root.zoom-level"),
+            "FileTile should consume render tokens projected by Rust item-view instead of recalculating zoom bindings in every tile"
         );
         assert!(
             split_pane.contains(

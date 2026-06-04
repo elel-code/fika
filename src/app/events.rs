@@ -1,4 +1,5 @@
 use crate::DeviceEntry;
+use crate::app::item_view::ItemViewRenderMetrics;
 use crate::app::pane::PreparedDirectoryEntries;
 use crate::app::virtual_view::VirtualViewSnapshotUpdate;
 use crate::desktop::{clipboard, open_with, service_menu, systemd_launch};
@@ -126,6 +127,7 @@ pub(crate) struct VirtualViewResult {
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
     pub(crate) row_height: f32,
+    pub(crate) render_metrics: ItemViewRenderMetrics,
     pub(crate) update: VirtualViewSnapshotUpdate,
 }
 

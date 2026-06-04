@@ -5,18 +5,10 @@ export component FileTile inherits Rectangle {
     in property <FileEntry> entry;
     in property <bool> selected;
     in property <bool> dark;
-    in property <int> zoom-level;
     in property <bool> drop-target;
     in property <bool> show-location;
     in property <bool> interactive: true;
     in property <data-transfer> drag-data-source;
-    in property <length> tile-height;
-    in property <length> tile-padding-x;
-    in property <length> tile-spacing;
-    in property <length> thumbnail-width;
-    in property <length> thumbnail-height;
-    in property <length> metadata-font-size;
-    in property <length> title-font-size;
     in property <color> selection-border-color;
     in property <color> drop-border-color;
     in property <color> drop-background-color;
@@ -38,7 +30,7 @@ export component FileTile inherits Rectangle {
         return (delta-x < 0px ? -delta-x : delta-x) > (delta-y < 0px ? -delta-y : delta-y) ? -delta-x : -delta-y;
     }
 
-    height: root.tile-height;
+    height: root.entry.tile_height * 1px;
     border-radius: 7px;
     border-width: selected || drop-target ? 1px : 0px;
     border-color: drop-target ? root.drop-border-color : root.selection-border-color;
@@ -87,21 +79,23 @@ export component FileTile inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: root.tile-padding-x;
-            padding-right: root.tile-padding-x;
-            spacing: root.tile-spacing;
+            padding-left: root.entry.tile_padding_x * 1px;
+            padding-right: root.entry.tile_padding_x * 1px;
+            spacing: root.entry.tile_spacing * 1px;
 
             if (!root.entry.is_dir && root.entry.thumbnail_state == 2): Image {
-                width: root.thumbnail-width;
-                height: root.thumbnail-height;
+                width: root.entry.thumbnail_width * 1px;
+                height: root.entry.thumbnail_height * 1px;
                 source: root.entry.thumbnail;
                 image-fit: contain;
             }
 
             if (root.entry.is_dir || root.entry.thumbnail_state != 2): FolderGlyph {
+                width: root.entry.thumbnail_width * 1px;
+                height: root.entry.thumbnail_height * 1px;
                 dir: root.entry.is_dir;
                 dark: root.dark;
-                zoom-level: root.zoom-level;
+                doc-font-size: root.entry.glyph_doc_font_size * 1px;
             }
 
             VerticalLayout {
@@ -111,7 +105,7 @@ export component FileTile inherits Rectangle {
                 if (root.show-location && root.entry.group != ""): Text {
                     text: root.entry.group;
                     color: root.metadata-group-color;
-                    font-size: root.metadata-font-size;
+                    font-size: root.entry.metadata_font_size * 1px;
                     font-weight: 700;
                     overflow: elide;
                 }
@@ -119,7 +113,7 @@ export component FileTile inherits Rectangle {
                 Text {
                     text: root.entry.name;
                     color: root.title-color;
-                    font-size: root.title-font-size;
+                    font-size: root.entry.title_font_size * 1px;
                     overflow: elide;
                     vertical-alignment: center;
                 }
@@ -127,7 +121,7 @@ export component FileTile inherits Rectangle {
                 if (root.show-location && root.entry.location != ""): Text {
                     text: root.entry.location;
                     color: root.metadata-location-color;
-                    font-size: root.metadata-font-size;
+                    font-size: root.entry.metadata_font_size * 1px;
                     overflow: elide;
                 }
             }

@@ -13,6 +13,33 @@ const TILE_TRAILING_GAP: f32 = 12.0;
 const SELECTION_DRAG_THRESHOLD: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewRenderMetrics {
+    pub(crate) tile_height: f32,
+    pub(crate) tile_padding_x: f32,
+    pub(crate) tile_spacing: f32,
+    pub(crate) thumbnail_width: f32,
+    pub(crate) thumbnail_height: f32,
+    pub(crate) metadata_font_size: f32,
+    pub(crate) title_font_size: f32,
+    pub(crate) glyph_doc_font_size: f32,
+}
+
+impl ItemViewRenderMetrics {
+    pub(crate) fn from_zoom_level(zoom_level: i32) -> Self {
+        Self {
+            tile_height: icon_tile_height(zoom_level),
+            tile_padding_x: if zoom_level < 2 { 12.0 } else { 16.0 },
+            tile_spacing: if zoom_level < 2 { 10.0 } else { 12.0 },
+            thumbnail_width: icon_thumbnail_width(zoom_level),
+            thumbnail_height: icon_thumbnail_height(zoom_level),
+            metadata_font_size: if zoom_level < 2 { 10.0 } else { 11.0 },
+            title_font_size: icon_title_font_size(zoom_level),
+            glyph_doc_font_size: icon_glyph_doc_font_size(zoom_level),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewLayout {
     pub(crate) x: f32,
     pub(crate) y: f32,
@@ -208,6 +235,7 @@ pub(crate) fn decorate_render_plan(
     rows_per_column: usize,
     cell_width: f32,
     row_height: f32,
+    render_metrics: ItemViewRenderMetrics,
 ) {
     let rows_per_column = rows_per_column.max(1);
     let cell_width = cell_width.max(1.0);
@@ -225,6 +253,64 @@ pub(crate) fn decorate_render_plan(
         entry.tile_x = column as f32 * cell_width;
         entry.tile_y = ITEM_VIEW_PADDING + row as f32 * row_height;
         entry.tile_width = tile_width;
+        entry.tile_height = render_metrics.tile_height;
+        entry.tile_padding_x = render_metrics.tile_padding_x;
+        entry.tile_spacing = render_metrics.tile_spacing;
+        entry.thumbnail_width = render_metrics.thumbnail_width;
+        entry.thumbnail_height = render_metrics.thumbnail_height;
+        entry.metadata_font_size = render_metrics.metadata_font_size;
+        entry.title_font_size = render_metrics.title_font_size;
+        entry.glyph_doc_font_size = render_metrics.glyph_doc_font_size;
+    }
+}
+
+fn icon_tile_height(zoom_level: i32) -> f32 {
+    match zoom_level {
+        0 => 72.0,
+        1 => 84.0,
+        2 => 98.0,
+        3 => 116.0,
+        _ => 136.0,
+    }
+}
+
+fn icon_thumbnail_width(zoom_level: i32) -> f32 {
+    match zoom_level {
+        0 => 52.0,
+        1 => 64.0,
+        2 => 80.0,
+        3 => 96.0,
+        _ => 112.0,
+    }
+}
+
+fn icon_thumbnail_height(zoom_level: i32) -> f32 {
+    match zoom_level {
+        0 => 46.0,
+        1 => 58.0,
+        2 => 70.0,
+        3 => 84.0,
+        _ => 98.0,
+    }
+}
+
+fn icon_title_font_size(zoom_level: i32) -> f32 {
+    match zoom_level {
+        0 => 12.0,
+        1 => 13.0,
+        2 => 15.0,
+        3 => 16.0,
+        _ => 18.0,
+    }
+}
+
+fn icon_glyph_doc_font_size(zoom_level: i32) -> f32 {
+    if zoom_level < 2 {
+        10.0
+    } else if zoom_level == 2 {
+        12.0
+    } else {
+        13.0
     }
 }
 
@@ -405,6 +491,14 @@ mod tests {
             tile_x: 0.0,
             tile_y: 0.0,
             tile_width: 0.0,
+            tile_height: 0.0,
+            tile_padding_x: 0.0,
+            tile_spacing: 0.0,
+            thumbnail_width: 0.0,
+            thumbnail_height: 0.0,
+            metadata_font_size: 0.0,
+            title_font_size: 0.0,
+            glyph_doc_font_size: 0.0,
         }
     }
 
@@ -429,7 +523,15 @@ mod tests {
     fn render_plan_decorates_slice_local_tile_geometry() {
         let mut entries = (4..9).map(test_entry).collect::<Vec<_>>();
 
-        decorate_render_plan(&mut entries, 4, 1, 3, 100.0, 50.0);
+        decorate_render_plan(
+            &mut entries,
+            4,
+            1,
+            3,
+            100.0,
+            50.0,
+            ItemViewRenderMetrics::from_zoom_level(2),
+        );
 
         let geometry = entries
             .iter()
@@ -443,6 +545,31 @@ mod tests {
                 (100.0, 14.0, 88.0),
                 (100.0, 64.0, 88.0),
                 (100.0, 114.0, 88.0),
+            ]
+        );
+        let render_tokens = entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.tile_height,
+                    entry.tile_padding_x,
+                    entry.tile_spacing,
+                    entry.thumbnail_width,
+                    entry.thumbnail_height,
+                    entry.metadata_font_size,
+                    entry.title_font_size,
+                    entry.glyph_doc_font_size,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            render_tokens,
+            vec![
+                (98.0, 16.0, 12.0, 80.0, 70.0, 11.0, 15.0, 12.0),
+                (98.0, 16.0, 12.0, 80.0, 70.0, 11.0, 15.0, 12.0),
+                (98.0, 16.0, 12.0, 80.0, 70.0, 11.0, 15.0, 12.0),
+                (98.0, 16.0, 12.0, 80.0, 70.0, 11.0, 15.0, 12.0),
+                (98.0, 16.0, 12.0, 80.0, 70.0, 11.0, 15.0, 12.0),
             ]
         );
     }

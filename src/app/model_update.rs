@@ -138,6 +138,14 @@ mod tests {
             tile_x: 0.0,
             tile_y: 0.0,
             tile_width: 0.0,
+            tile_height: 0.0,
+            tile_padding_x: 0.0,
+            tile_spacing: 0.0,
+            thumbnail_width: 0.0,
+            thumbnail_height: 0.0,
+            metadata_font_size: 0.0,
+            title_font_size: 0.0,
+            glyph_doc_font_size: 0.0,
         }
     }
 
