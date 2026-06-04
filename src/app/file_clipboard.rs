@@ -3,8 +3,7 @@ use crate::app::events::{AsyncEvent, ClipboardLoadResult, ClipboardPasteLoadResu
 use crate::app::pane::PaneTarget;
 use crate::app::state::{AppState, FileUndo};
 use crate::app::transfer::{
-    TransferStart, clear_accepted_cut_source, start_transfer_operation,
-    target_is_source_or_descendant,
+    TransferStart, start_transfer_operation, target_is_source_or_descendant,
 };
 use crate::desktop::clipboard;
 use crate::fs::file_ops;
@@ -144,8 +143,9 @@ fn start_file_clipboard_paste(
         ) {
             TransferStart::Queued => {
                 accepted += 1;
-                cut_clipboard_changed |=
-                    clear_accepted_cut_source(&mut state.borrow_mut(), operation, path);
+                cut_clipboard_changed |= state
+                    .borrow_mut()
+                    .clear_accepted_cut_source(operation, path);
             }
             TransferStart::NeedsDecision => {
                 accepted += 1;

@@ -431,9 +431,17 @@ Acceptance for all:
   - Acceptance: navigation vs same-directory refresh state transitions are testable outside UI callback wiring.
   - Current: `src/app/directory_loading.rs` owns load generation updates, cache lookup, search cancellation, view-context reset rules, and thumbnail-pipeline preservation rules; `main.rs` applies the result to UI state and starts the async read task.
 
+- [~] Continue focused Rust and Slint decomposition while feature work proceeds.
+  - Acceptance: new behavior should opportunistically move related Rust state/controller logic and reusable Slint rows/layers/components into focused files instead of growing `main.rs` or `ui/app.slint`.
+  - Current direction: split both `.rs` and `.slint` incrementally alongside real feature/performance work, keeping each extraction tied to tested behavior rather than preserving historical compatibility paths.
+
 - [x] Apply Dolphin DnD target validation.
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.
   - Current: transfer preparation and execution both reject self/descendant targets.
+
+- [ ] Add Dolphin-style user custom context menu actions.
+  - Acceptance: users can expose opt-in custom file/folder context actions backed by desktop/service-menu style metadata, with visibility constrained by target type and selection.
+  - Current direction: reuse Fika's existing desktop-file parsing and Exec expansion infrastructure where possible, then layer Dolphin-like menu grouping/enablement on top.
 
 - [x] Apply Dolphin-like context menu grouping and submenu grace.
   - Acceptance: context menus use grouped separators, submenu indicators are separate from labels, child menus anchor to their parent row and have a hover bridge to avoid accidental disappearance while moving between parent and child.
@@ -530,9 +538,10 @@ Acceptance for all:
   - Current: the affected-directory to pane-id mapping is now shared by ordinary file operations, Undo refresh, privileged operation results, and protected external-edit save-back, reducing active-pane-only refresh paths in split view.
   - Current: operation progress events now go through an `OperationProgressUpdate` in `operation_controller.rs`; stale progress ids are ignored by the controller instead of being special-cased in `main.rs`.
   - Current: the controller also tracks the last active-operation progress bucket, so repeated progress callbacks inside the same percentage/unknown-size state do not churn status-bar updates.
-  - Current: transfer-conflict status text for Skip and Apply to remaining is now computed by `operation_controller.rs`, keeping `transfer.rs` focused on queue mutation and popup routing while preserving tested user-facing copy.
+  - Current: transfer-conflict status text for Skip and Apply to remaining is now computed by `operation_controller.rs`, preserving tested user-facing copy while leaving `transfer.rs` to apply popup/status UI effects.
   - Current: cancelling queued/active operations now returns the active operation's pane ids in `OperationCancelSummary`; cancellation status is applied through the same affected-pane status route as operation start/progress/completion instead of jumping to the pane focused when Cancel is clicked.
   - Current: start-next-operation queue popping, invalid-request skipping, conflict registration, affected-pane routing, and start status now flow through `OperationStartDecision` from `operation_controller.rs`; `transfer.rs` applies the returned UI effects only after releasing the state borrow and then dispatches the async task.
+  - Current: transfer conflict apply-to-remaining queue mutation, default Rename policy, and accepted Cut clipboard source cleanup are now owned by `operation_controller.rs`; `transfer.rs` only delegates those state changes, then syncs clipboard/status UI after the mutable `AppState` borrow has ended.
 
 - [x] Add split view / dual-pane browsing.
   - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.

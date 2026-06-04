@@ -1,6 +1,7 @@
 use crate::app::events::FileOperationProgress;
 use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
 use crate::fs::{file_ops, privilege};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,6 +70,12 @@ pub(crate) struct OperationCompletionSummary {
 pub(crate) struct OperationProgressUpdate {
     pub(crate) status: String,
     pub(crate) pane_ids: Vec<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TransferConflictQueueUpdate {
+    pub(crate) applied_remaining: usize,
+    pub(crate) clipboard_changed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -280,6 +287,102 @@ impl AppState {
             pane_ids: self.active_operation_pane_ids.clone(),
         })
     }
+
+    pub(crate) fn clear_accepted_cut_source(&mut self, operation: &str, source: &Path) -> bool {
+        if operation != "move" || !self.clipboard_cut {
+            return false;
+        }
+
+        let previous_len = self.clipboard_paths.len();
+        self.clipboard_paths.retain(|path| path != source);
+        if self.clipboard_paths.len() == previous_len {
+            return false;
+        }
+
+        if self.clipboard_paths.is_empty() {
+            self.clipboard_cut = false;
+        }
+        true
+    }
+
+    pub(crate) fn apply_transfer_conflict_decision_to_remaining(
+        &mut self,
+        decision: &str,
+    ) -> TransferConflictQueueUpdate {
+        match decision {
+            "skip" => TransferConflictQueueUpdate {
+                applied_remaining: apply_conflict_decision_to_queue(
+                    &mut self.operation_queue,
+                    decision,
+                ),
+                clipboard_changed: false,
+            },
+            "keep-both" | "overwrite" => {
+                let clipboard_changed = self.clear_cut_sources_for_remaining_conflicts(decision);
+                TransferConflictQueueUpdate {
+                    applied_remaining: apply_conflict_decision_to_queue(
+                        &mut self.operation_queue,
+                        decision,
+                    ),
+                    clipboard_changed,
+                }
+            }
+            _ => TransferConflictQueueUpdate::default(),
+        }
+    }
+
+    pub(crate) fn apply_transfer_rename_to_remaining_conflicts(
+        &mut self,
+        reserved_destinations: &mut Vec<PathBuf>,
+    ) -> TransferConflictQueueUpdate {
+        let mut applied_remaining = 0;
+        let mut renamed_cut_sources = Vec::new();
+        for request in self.operation_queue.iter_mut() {
+            if request.conflict_policy != "ask" {
+                continue;
+            }
+            let Some(destination) = transfer_request_conflict_destination(request)
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            let Some(unique_name) =
+                default_transfer_rename_policy(&destination, reserved_destinations)
+            else {
+                continue;
+            };
+            request.conflict_policy = unique_name;
+            applied_remaining += 1;
+            if request.operation == "move" {
+                renamed_cut_sources.push(request.source.clone());
+            }
+        }
+
+        let mut clipboard_changed = false;
+        if self.clipboard_cut {
+            for source in renamed_cut_sources {
+                clipboard_changed |= self.clear_accepted_cut_source("move", &source);
+            }
+        }
+        TransferConflictQueueUpdate {
+            applied_remaining,
+            clipboard_changed,
+        }
+    }
+
+    fn clear_cut_sources_for_remaining_conflicts(&mut self, decision: &str) -> bool {
+        if !matches!(decision, "keep-both" | "overwrite") || !self.clipboard_cut {
+            return false;
+        }
+
+        let accepted_sources = accepted_remaining_conflict_sources(&self.operation_queue, decision);
+        let mut changed = false;
+        for source in accepted_sources {
+            changed |= self.clear_accepted_cut_source("move", &source);
+        }
+        changed
+    }
 }
 
 pub(crate) fn affected_directory_pane_ids<'a>(
@@ -466,6 +569,130 @@ pub(crate) fn transfer_request_conflict_destination(
     Ok(file_ops::path_exists(&destination).then_some(destination))
 }
 
+fn apply_conflict_decision_to_queue(
+    queue: &mut VecDeque<FileOperationRequest>,
+    decision: &str,
+) -> usize {
+    let mut applied = 0;
+    match decision {
+        "skip" => {
+            queue.retain(|request| {
+                if request.conflict_policy == "ask"
+                    && transfer_request_conflict_destination(request)
+                        .ok()
+                        .flatten()
+                        .is_some()
+                {
+                    applied += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        "keep-both" | "overwrite" => {
+            for request in queue.iter_mut() {
+                if request.conflict_policy != "ask" {
+                    continue;
+                }
+                let Some(destination) = transfer_request_conflict_destination(request)
+                    .ok()
+                    .flatten()
+                else {
+                    continue;
+                };
+                if decision == "overwrite" && destination == request.source {
+                    continue;
+                }
+                request.conflict_policy = decision.to_string();
+                applied += 1;
+            }
+        }
+        _ => {}
+    }
+    applied
+}
+
+fn accepted_remaining_conflict_sources(
+    queue: &VecDeque<FileOperationRequest>,
+    decision: &str,
+) -> Vec<PathBuf> {
+    queue
+        .iter()
+        .filter(|request| request.operation == "move" && request.conflict_policy == "ask")
+        .filter_map(|request| {
+            let destination = transfer_request_conflict_destination(request)
+                .ok()
+                .flatten()?;
+            if decision == "overwrite" && destination == request.source {
+                return None;
+            }
+            Some(request.source.clone())
+        })
+        .collect()
+}
+
+fn default_transfer_rename_policy(
+    destination: &Path,
+    reserved_destinations: &mut Vec<PathBuf>,
+) -> Option<String> {
+    let name = default_transfer_rename_suggestion_with_reserved(destination, reserved_destinations);
+    let target_dir = destination.parent()?;
+    let reserved = target_dir.join(&name);
+    reserved_destinations.push(reserved);
+    Some(format!("rename:{name}"))
+}
+
+pub(crate) fn default_transfer_rename_suggestion(destination: &Path) -> String {
+    default_transfer_rename_suggestion_with_reserved(destination, &[])
+}
+
+fn default_transfer_rename_suggestion_with_reserved(
+    destination: &Path,
+    reserved_destinations: &[PathBuf],
+) -> String {
+    let Some(file_name) = destination.file_name() else {
+        return transfer_path_label(destination);
+    };
+    let Some(parent) = destination.parent() else {
+        return file_name.to_string_lossy().to_string();
+    };
+    let file_name_path = Path::new(file_name);
+    let stem = file_name_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("item");
+    let extension = file_name_path
+        .extension()
+        .and_then(|extension| extension.to_str());
+
+    for index in 1.. {
+        let suffix = if index == 1 {
+            "copy".to_string()
+        } else {
+            format!("copy {index}")
+        };
+        let candidate_name = match extension {
+            Some(extension) if !extension.is_empty() => format!("{stem} {suffix}.{extension}"),
+            _ => format!("{stem} {suffix}"),
+        };
+        let candidate = parent.join(&candidate_name);
+        if !file_ops::path_exists(&candidate) && !reserved_destinations.contains(&candidate) {
+            return candidate_name;
+        }
+    }
+
+    unreachable!("unbounded rename suggestion search should always return")
+}
+
+fn transfer_path_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
 pub(crate) fn operation_label(operation: &str) -> &'static str {
     match operation {
         "move" => "Moving",
@@ -516,6 +743,7 @@ mod tests {
     use super::*;
     use crate::app::pane::PreparedDirectoryEntries;
     use crate::app::state::AppState;
+    use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
 
@@ -710,6 +938,329 @@ mod tests {
             transfer_request_conflict_destination(&missing),
             Err("source no longer exists".to_string())
         );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transfer_conflict_destination_detects_broken_symlink_destination() {
+        let temp = test_dir("queued-broken-symlink-conflict");
+        let source = temp.join("source").join("note.txt");
+        let target_dir = temp.join("target");
+        let occupied = target_dir.join("note.txt");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&source, "new").unwrap();
+        std::os::unix::fs::symlink("missing-target.txt", &occupied).unwrap();
+
+        let request = transfer_request("copy", &source, &target_dir, "ask");
+
+        assert!(!occupied.exists());
+        assert_eq!(
+            transfer_request_conflict_destination(&request).unwrap(),
+            Some(occupied)
+        );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn conflict_dialog_default_rename_uses_keep_both_style_name() {
+        let temp = test_dir("rename-suggestion");
+        fs::create_dir_all(&temp).unwrap();
+        let destination = temp.join("note.txt");
+        fs::write(&destination, "old").unwrap();
+
+        assert_eq!(
+            default_transfer_rename_suggestion(&destination),
+            "note copy.txt"
+        );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn apply_skip_to_remaining_conflicts_removes_only_conflicted_ask_requests() {
+        let temp = test_dir("apply-skip");
+        let conflicted_source = temp.join("sources").join("conflicted.txt");
+        let free_source = temp.join("sources").join("free.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(conflicted_source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&conflicted_source, "new").unwrap();
+        fs::write(&free_source, "new").unwrap();
+        fs::write(target_dir.join("conflicted.txt"), "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.operation_queue = VecDeque::from([
+            transfer_request("copy", &conflicted_source, &target_dir, "ask"),
+            transfer_request("copy", &free_source, &target_dir, "ask"),
+        ]);
+
+        assert_eq!(
+            state.apply_transfer_conflict_decision_to_remaining("skip"),
+            TransferConflictQueueUpdate {
+                applied_remaining: 1,
+                clipboard_changed: false,
+            }
+        );
+        assert_eq!(state.operation_queue.len(), 1);
+        assert_eq!(state.operation_queue[0].source, free_source);
+        assert_eq!(state.operation_queue[0].conflict_policy, "ask");
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn apply_keep_both_to_remaining_conflicts_updates_only_conflicted_ask_requests() {
+        let temp = test_dir("apply-keep-both");
+        let conflicted_source = temp.join("sources").join("conflicted.txt");
+        let free_source = temp.join("sources").join("free.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(conflicted_source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&conflicted_source, "new").unwrap();
+        fs::write(&free_source, "new").unwrap();
+        fs::write(target_dir.join("conflicted.txt"), "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.operation_queue = VecDeque::from([
+            transfer_request("copy", &conflicted_source, &target_dir, "ask"),
+            transfer_request("copy", &free_source, &target_dir, "ask"),
+        ]);
+
+        assert_eq!(
+            state.apply_transfer_conflict_decision_to_remaining("keep-both"),
+            TransferConflictQueueUpdate {
+                applied_remaining: 1,
+                clipboard_changed: false,
+            }
+        );
+        assert_eq!(state.operation_queue[0].conflict_policy, "keep-both");
+        assert_eq!(state.operation_queue[1].conflict_policy, "ask");
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn apply_rename_to_remaining_conflicts_uses_unique_names() {
+        let temp = test_dir("apply-rename");
+        let current_conflict_target = temp.join("target").join("conflicted.txt");
+        let first_source = temp.join("sources").join("one").join("conflicted.txt");
+        let second_source = temp.join("sources").join("two").join("conflicted.txt");
+        let free_source = temp.join("sources").join("free.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(first_source.parent().unwrap()).unwrap();
+        fs::create_dir_all(second_source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&first_source, "new").unwrap();
+        fs::write(&second_source, "new").unwrap();
+        fs::write(&free_source, "new").unwrap();
+        fs::write(&current_conflict_target, "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.operation_queue = VecDeque::from([
+            transfer_request("copy", &first_source, &target_dir, "ask"),
+            transfer_request("copy", &second_source, &target_dir, "ask"),
+            transfer_request("copy", &free_source, &target_dir, "ask"),
+        ]);
+        let mut reserved = vec![target_dir.join("custom.txt")];
+
+        assert_eq!(
+            state.apply_transfer_rename_to_remaining_conflicts(&mut reserved),
+            TransferConflictQueueUpdate {
+                applied_remaining: 2,
+                clipboard_changed: false,
+            }
+        );
+        assert_eq!(
+            state.operation_queue[0].conflict_policy,
+            "rename:conflicted copy.txt"
+        );
+        assert_eq!(
+            state.operation_queue[1].conflict_policy,
+            "rename:conflicted copy 2.txt"
+        );
+        assert_eq!(state.operation_queue[2].conflict_policy, "ask");
+        assert_eq!(
+            reserved,
+            vec![
+                target_dir.join("custom.txt"),
+                target_dir.join("conflicted copy.txt"),
+                target_dir.join("conflicted copy 2.txt"),
+            ]
+        );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn apply_rename_to_remaining_clears_accepted_move_cut_sources() {
+        let temp = test_dir("apply-rename-cut");
+        let conflicted_move = temp.join("sources").join("move.txt");
+        let conflicted_copy = temp.join("sources").join("copy.txt");
+        let free_move = temp.join("sources").join("free.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(conflicted_move.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&conflicted_move, "move").unwrap();
+        fs::write(&conflicted_copy, "copy").unwrap();
+        fs::write(&free_move, "move").unwrap();
+        fs::write(target_dir.join("move.txt"), "old").unwrap();
+        fs::write(target_dir.join("copy.txt"), "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![
+            conflicted_move.clone(),
+            free_move.clone(),
+            conflicted_copy.clone(),
+        ];
+        state.operation_queue = VecDeque::from([
+            transfer_request("move", &conflicted_move, &target_dir, "ask"),
+            transfer_request("move", &free_move, &target_dir, "ask"),
+            transfer_request("copy", &conflicted_copy, &target_dir, "ask"),
+        ]);
+
+        assert_eq!(
+            state.apply_transfer_rename_to_remaining_conflicts(&mut Vec::new()),
+            TransferConflictQueueUpdate {
+                applied_remaining: 2,
+                clipboard_changed: true,
+            }
+        );
+        assert_eq!(state.clipboard_paths, vec![free_move, conflicted_copy]);
+        assert!(state.clipboard_cut);
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn rename_suggestion_respects_reserved_batch_destinations() {
+        let temp = test_dir("rename-reserved");
+        fs::create_dir_all(&temp).unwrap();
+        let destination = temp.join("note.txt");
+        fs::write(&destination, "old").unwrap();
+
+        assert_eq!(
+            default_transfer_rename_suggestion_with_reserved(
+                &destination,
+                &[temp.join("note copy.txt"), temp.join("note copy 2.txt")]
+            ),
+            "note copy 3.txt"
+        );
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn accepted_cut_source_removes_matching_path_only() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")];
+
+        assert!(state.clear_accepted_cut_source("move", Path::new("/tmp/a")));
+
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/b")]);
+        assert!(state.clipboard_cut);
+    }
+
+    #[test]
+    fn accepted_cut_source_clears_cut_when_last_path_is_removed() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![PathBuf::from("/tmp/a")];
+
+        assert!(state.clear_accepted_cut_source("move", Path::new("/tmp/a")));
+
+        assert!(state.clipboard_paths.is_empty());
+        assert!(!state.clipboard_cut);
+    }
+
+    #[test]
+    fn accepted_cut_source_ignores_copy_and_non_cut_clipboards() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![PathBuf::from("/tmp/a")];
+
+        assert!(!state.clear_accepted_cut_source("copy", Path::new("/tmp/a")));
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/a")]);
+        assert!(state.clipboard_cut);
+
+        state.clipboard_cut = false;
+        assert!(!state.clear_accepted_cut_source("move", Path::new("/tmp/a")));
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/a")]);
+    }
+
+    #[test]
+    fn apply_to_remaining_acceptance_clears_only_conflicted_move_cut_sources() {
+        let temp = test_dir("clear-remaining-cut");
+        let conflicted_move = temp.join("sources").join("conflicted-move.txt");
+        let free_move = temp.join("sources").join("free-move.txt");
+        let conflicted_copy = temp.join("sources").join("conflicted-copy.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(conflicted_move.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&conflicted_move, "move").unwrap();
+        fs::write(&free_move, "move").unwrap();
+        fs::write(&conflicted_copy, "copy").unwrap();
+        fs::write(target_dir.join("conflicted-move.txt"), "old").unwrap();
+        fs::write(target_dir.join("conflicted-copy.txt"), "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![
+            conflicted_move.clone(),
+            free_move.clone(),
+            conflicted_copy.clone(),
+        ];
+        state.operation_queue = VecDeque::from([
+            transfer_request("move", &conflicted_move, &target_dir, "ask"),
+            transfer_request("move", &free_move, &target_dir, "ask"),
+            transfer_request("copy", &conflicted_copy, &target_dir, "ask"),
+        ]);
+
+        assert_eq!(
+            state.apply_transfer_conflict_decision_to_remaining("keep-both"),
+            TransferConflictQueueUpdate {
+                applied_remaining: 2,
+                clipboard_changed: true,
+            }
+        );
+
+        assert_eq!(state.clipboard_paths, vec![free_move, conflicted_copy]);
+        assert!(state.clipboard_cut);
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn skip_remaining_conflicts_does_not_clear_cut_sources() {
+        let temp = test_dir("skip-remaining-cut");
+        let source = temp.join("sources").join("conflicted.txt");
+        let target_dir = temp.join("target");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&source, "new").unwrap();
+        fs::write(target_dir.join("conflicted.txt"), "old").unwrap();
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_cut = true;
+        state.clipboard_paths = vec![source.clone()];
+        state.operation_queue =
+            VecDeque::from([transfer_request("move", &source, &target_dir, "ask")]);
+
+        assert_eq!(
+            state.apply_transfer_conflict_decision_to_remaining("skip"),
+            TransferConflictQueueUpdate {
+                applied_remaining: 1,
+                clipboard_changed: false,
+            }
+        );
+
+        assert_eq!(state.clipboard_paths, vec![source]);
+        assert!(state.clipboard_cut);
 
         let _ = fs::remove_dir_all(temp);
     }
@@ -1100,6 +1651,21 @@ mod tests {
         );
         assert_eq!(operation_final_status(None, true, 0), None);
         assert_eq!(operation_final_status(None, false, 3), None);
+    }
+
+    fn transfer_request(
+        operation: &str,
+        source: &Path,
+        target_dir: &Path,
+        conflict_policy: &str,
+    ) -> FileOperationRequest {
+        FileOperationRequest {
+            id: 1,
+            operation: operation.to_string(),
+            source: source.to_path_buf(),
+            target_dir: target_dir.to_path_buf(),
+            conflict_policy: conflict_policy.to_string(),
+        }
     }
 
     fn test_dir(name: &str) -> PathBuf {
