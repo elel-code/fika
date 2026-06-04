@@ -3238,7 +3238,9 @@ fn sync_virtual_entries_for_slot_with_count(
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
     let viewport_width = pane_slot_width(ui, main_width, slot);
-    let mut layout = MainGridLayout::from_ui_for_pane_width(ui, viewport_width);
+    let search_panel_visible = state.borrow().panes.focused_slot() == slot;
+    let mut layout =
+        MainGridLayout::from_ui_for_pane_width(ui, viewport_width, search_panel_visible);
     let Some(request) = ({
         let mut state_ref = state.borrow_mut();
         let chooser_patterns = state_ref

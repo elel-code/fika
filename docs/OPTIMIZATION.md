@@ -10,32 +10,37 @@
 ### 滚动数据流
 
 ```
-Slint ScrollView.viewport-x 变化
-  └─ changed viewport-x 回调 (ui/split_pane.slint:147)
+Slint SplitPaneView 自管 viewport-x
+  ├─ TouchArea.scroll-event → set-viewport-x(raw)
+  ├─ 自管 scrollbar drag/click → set-viewport-x(raw)
+  └─ pane-local width / rows-per-column 变化 → relayout-visible-slice()
        └─ root.view_changed() → PaneRouting.view-changed(slot)
-            └─ Rust: register_pane_routing_callbacks → view_changed_handler
-                 └─ sync_virtual_entries()  [src/main.rs:3354, UI 线程]
-                      ├─ MainGridLayout::from_ui()             [geometry.rs:44]
+            └─ Rust: PaneViewSyncScheduler 合并同 slot 请求
+                 └─ sync_virtual_entries_for_slot()  [src/main.rs]
+                      ├─ MainGridLayout::from_ui_for_pane_width()
+                      │    └─ 只对 focused slot 扣搜索栏高度
                       ├─ VirtualViewSnapshotInput               [virtual_view.rs]
                       ├─ prepare_virtual_view_snapshot_update()  [virtual_view.rs, 后台线程]
-                      │    ├─ virtual_grid_plan()              [geometry.rs:169]
+                      │    ├─ virtual_grid_plan()              [geometry.rs]
                       │    ├─ should_rebuild_virtual_cache()
                       │    ├─ snapshot_entries_range()
                       │    └─ annotate_snapshot_location_groups()
                       ├─ decorate_entries_with_cached_thumbnails_for_pane()
-                      ├─ prioritize_thumbnail_entries()         [thumbnail_pipeline.rs:40]
+                      ├─ prioritize_thumbnail_entries()         [thumbnail_pipeline.rs]
                       ├─ schedule_visible_thumbnails()          (异步)
                       ├─ set_virtual_entries(VecModel)          → Slint
-                      └─ sync_pane_slots_ui()                  [split_view.rs:41]
+                      └─ sync_pane_slot_ui()                   [split_view.rs]
 ```
 
-### 虚拟化三层结构 (ui/split_pane.slint)
+### 当前主视图结构 (ui/split_pane.slint)
 
 ```
-ScrollView (viewport-x 双向绑定)
-  └─ virtual-layer (全宽, 用于滚动条几何)
-       └─ slice-layer (锚定到 virtual_start_column, 局部坐标)
-            └─ for item in entries: FileTile  (每 tile 完整 Slint 组件)
+Rectangle viewport shell (clip: true)
+  ├─ full-viewport TouchArea (wheel / blank click / rectangle selection)
+  ├─ slice-layer (x = padding + virtual_start_column * cell_width - viewport_x)
+  │    └─ for item in entries: FileTile  (当前仍是每 tile 完整 Slint 组件)
+  ├─ selection rectangle overlay
+  └─ self-managed horizontal scrollbar
 ```
 
 ### 现有优化
@@ -45,24 +50,25 @@ ScrollView (viewport-x 双向绑定)
 | 虚拟化：Slint 只接收可见范围条目 | `virtual_view.rs` | 大目录不实例化全部 tile |
 | 缓存命中免重建：`should_rebuild_virtual_model` | `virtual_view.rs:180` | 同范围内滚动零模型更新 |
 | 缩略图优先可见列 | `thumbnail_pipeline.rs:40` | 减少首屏缩略图延迟 |
-| 子像素漂移忽略 (epsilon=0.75) | `split_pane.slint:49-50` | 避免微小 viewport 变化触发同步 |
+| 自管 viewport clamp/round | `split_pane.slint` | 避免 ScrollView/Flickable viewport 回写和子像素漂移触发同步 |
 | 普通滚轮不重复请求焦点 | `split_pane.slint:78` | 减少 FFI 调用 |
-| 滚动条 viewport-content-width 稳定全宽 | `split_pane.slint:45` | 避免滚动条宽度随虚拟切片抖动 |
+| 自管滚动条按 `entry_count` / `rows_per_column` 计算全内容宽度 | `split_pane.slint` | 避免滚动条宽度随虚拟切片抖动 |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
+| Rust item-view hit-test | `item_view.rs` | DnD/context/drop target 命中不再散落在 transfer 几何代码中 |
 
 ---
 
 ## 改进方向
 
-### P0 — 边界滚动提前退出
+### P0 — 边界滚动提前退出（旧 ScrollView 路径）
 
-**问题**：当 viewport 已到达 0 或 `scroll-max-x` 边界时，每次 `changed viewport-x` 回调仍执行完整的 `stable-viewport-x` 计算和 Rust 侧 `sync_virtual_entries`。
+**历史问题**：旧 `ScrollView` 路径下，当 viewport 已到达 0 或 `scroll-max-x` 边界时，每次 `changed viewport-x` 回调仍执行完整的 `stable-viewport-x` 计算和 Rust 侧 `sync_virtual_entries`。
 
 **涉及代码**：
 - `ui/split_pane.slint:147-155` — `changed viewport-x` 回调
 - `src/app/split_view.rs:567` — `sync_virtual_entries`（通过 `PaneRouting.view-changed` 间接调用）
 
-**改进**：在 Slint 侧的 `changed viewport-x` 回调中，夹紧后立即比较新旧 viewport-x：如果相同则直接返回，不调用 `view_changed()`。
+**旧路径改进**：在 Slint 侧的 `changed viewport-x` 回调中，夹紧后立即比较新旧 viewport-x：如果相同则直接返回，不调用 `view_changed()`。
 
 ```slint
 changed viewport-x => {
@@ -77,7 +83,7 @@ changed viewport-x => {
 }
 ```
 
-需要确认当前 epsilon=0.75 的逻辑是否仍能正常工作——夹紧后 viewport-x 精确匹配 clamped，所以判断应该直接比较。
+当前 `SplitPaneView` 已删除 `ScrollView`、`changed viewport-x`、`viewport-offset` 和 epsilon 写回路径，改为 `set-viewport-x(raw)` 统一夹紧和取整。
 
 **收益**：消除所有边界滚动时的无效 FFI 往返和 Rust 计算。
 
@@ -87,11 +93,11 @@ changed viewport-x => {
 
 ### P1 — 滚轮事件合并 (Coalesce)
 
-**问题**：快速滚轮滚动时，Slint 每帧触发 `changed viewport-x`，每个事件走过完整 `sync_virtual_entries` 调用链。即使在缓存命中时不需要重建模型，仍然要执行 `MainGridLayout::from_ui()` + `virtual_grid_plan()` + `sync_pane_slots_ui()`。
+**问题**：快速滚轮滚动时，Slint 每次 viewport 更新都会触发 `view_changed`，事件会进入 `sync_virtual_entries_for_slot` 调用链。即使在缓存命中时不需要重建模型，仍然要执行 `MainGridLayout::from_ui_for_pane_width()` + `virtual_grid_plan()` + pane slot 同步。
 
 **涉及代码**：
-- `src/main.rs:3354` — `sync_virtual_entries`
-- `ui/split_pane.slint:147` — `changed viewport-x` 触发点
+- `src/main.rs` — `sync_virtual_entries_for_slot`
+- `ui/split_pane.slint` — `set-viewport-x(raw)` / `relayout-visible-slice()`
 
 **改进**：在 Rust 侧加一个短合并窗口（~8ms，约半帧）：
 
@@ -103,7 +109,7 @@ changed viewport-x => {
 ```
 
 关键设计点：
-- viewport_x 的 Slint 回写不在合并窗口内——每次事件都立即写回，保证 Slint 的 ScrollView 实时跟手
+- viewport_x 的 Slint 写回不在合并窗口内——每次事件都立即写回，保证自管 viewport 实时跟手
 - 只有虚拟切片同步（`sync_virtual_entries`）在合并窗口内
 - 需要从 `PaneRouting.view-changed` 回调路径中提取合并逻辑
 
@@ -236,7 +242,7 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSna
 
 ### P0-next — Dolphin-style 自管主视图
 
-**问题**：Phase 1-6 和 V0-V4 已经把大量无效同步、后台计算、缩略图 flush、选择 FFI、FileTile 重复绑定降到较低水平，但 `/etc` 这种基本没有图片的大目录仍然会在滚动、末尾 fullscreen/resize 后出现明显卡顿或空白恢复延迟。这说明剩余瓶颈更可能在 Slint 主视图组件树本身：`ScrollView`/`Flickable` 管 viewport，`for item in entries: FileTile` 管可见 tile，每个 tile 仍是一个完整 Slint 组件。
+**问题**：Phase 1-6 和 V0-V4 已经把大量无效同步、后台计算、缩略图 flush、选择 FFI、FileTile 重复绑定降到较低水平，但 `/etc` 这种基本没有图片的大目录仍然会在滚动、末尾 fullscreen/resize 后出现明显卡顿或空白恢复延迟。第一阶段已经把 viewport source of truth 从 `ScrollView`/`Flickable` 改为 `SplitPaneView` 自管，但剩余瓶颈仍在 Slint 主视图组件树：`for item in entries: FileTile` 管可见 tile，每个 tile 仍是一个完整 Slint 组件。
 
 **Dolphin 对照**：
 - `dolphin/src/kitemviews/kfileitemmodel.*` — 文件模型
@@ -245,7 +251,7 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSna
 - `dolphin/src/kitemviews/kitemlistcontroller.*` — selection、activation、drag 控制
 - `dolphin/src/kitemviews/kstandarditemlistwidget.*` — item 绘制与复用
 
-Dolphin 的关键不是某个滚动控件，而是 model、layouter、view/controller、item rendering/reuse 分层。Fika 要接近 Dolphin 的滚动上限，也应该把主视图核心从通用 `ScrollView`/`Repeater` 转成 Rust 自管 item view。
+Dolphin 的关键不是某个滚动控件，而是 model、layouter、view/controller、item rendering/reuse 分层。Fika 要接近 Dolphin 的滚动上限，已经先移除通用 `ScrollView` 作为 viewport 底座；下一步要把主视图核心从 `FileTile` Repeater 转成 Rust 自管 item view / renderer。
 
 **Slint 底座**：
 - `Rectangle { clip: true; }`：只做 viewport 壳、背景和裁剪，不承担滚动模型
@@ -277,11 +283,11 @@ Slint: Rectangle viewport + input/DnD overlays
 
 **收益预期**：理论上可以接近 Dolphin 的架构上限，因为性能边界从 Slint 的每 tile 组件树和通用滚动容器，转移到 Rust 侧的布局、命中测试、缓存和绘制策略。是否真正媲美 Dolphin 需要用 spike 和实测确认，尤其是文字/icon 绘制缓存、DnD 启动层、滚动条手感和 HiDPI 下的 frame 更新成本。
 
-**第一步 spike**：
-1. 新增一个隐藏/可切换的 self-managed viewport 组件，不替换现有路径前先做并排验证。
-2. Rust 侧实现 `scroll_offset -> visible_range/item_rects`，Slint 侧用 `Rectangle + TouchArea + DropArea + DragArea` 承载。
-3. 先支持滚轮、点击选中、右键命中、blank-area、基本 DnD drop target。
-4. 对比现有 `ScrollView + FileTile` 在 `/etc`、`/usr/lib` 的滚动帧稳定性，再决定是否推进 `SharedPixelBuffer` 自绘。
+**当前进度**：
+1. 主文件区已直接替换为 `Rectangle { clip: true; } + TouchArea + self-managed scrollbar`，删除 `ScrollView` / `Flickable` viewport 写回。
+2. `src/app/item_view.rs` 已开始承载 pane-local layout 和 hit-test，transfer/DnD 目标解析不再私有持有主视图几何。
+3. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，下一步需要把 renderer/reuse 从 Slint tile 组件树中拆出来。
+4. DnD 仍保留 Slint 原生 `data-transfer` 路径，目标解析继续向 Rust hit-test 收敛。
 
 ---
 
@@ -309,8 +315,8 @@ Slint: 用户交互（滚动/点击/右键菜单/...）
 
 | 触发来源 | Slint 位置 | 频率 |
 |---------|-----------|------|
-| 滚轮滚动 | `split_pane.slint:67` `pan-horizontal` | 每帧 |
-| ScrollView viewport 变化 | `split_pane.slint:153` `changed viewport-x` | 每帧 |
+| 滚轮滚动 | `split_pane.slint` `set-viewport-x(raw)` | 每帧 |
+| 自管滚动条拖动/点击 | `split_pane.slint` `set-viewport-x(raw)` | 每帧 |
 | Ctrl+滚轮缩放 | `split_pane.slint:80` `handle-scroll` | 按需 |
 | 点击 tile / 空白区 | `split_pane.slint` TouchArea | 按需 |
 | PathBar Back/Forward 按钮 | `top_bar.slint:184,194` | 按需 |
@@ -337,7 +343,7 @@ fn focus_pane_slot(ui, state, slot) {
 
 ### F0 — Slint 侧 `route-pane-focus` 提前退出
 
-**问题**：`route-pane-focus(slot)` 曾无条件执行 focus + `pane_focus(slot)`，即使 slot 已经是当前焦点。快速滚动时每帧触发两次（`pan-horizontal` + `changed viewport-x`），每次都做无效的 `FocusScope` 重算和 FFI 往返。
+**问题**：`route-pane-focus(slot)` 曾无条件执行 focus + `pane_focus(slot)`，即使 slot 已经是当前焦点。旧滚动路径中快速滚动可在 `pan-horizontal` 和 `changed viewport-x` 两处重复触发，每次都做无效的 `FocusScope` 重算和 FFI 往返。
 
 ```slint
 // 当前 (ui/app.slint:1002)
@@ -375,9 +381,9 @@ public function route-pane-focus(slot: int) {
 
 ---
 
-### F1 — 滚动事件中移除冗余的 `focus_requested`
+### F1 — 滚动事件中移除冗余的 `focus_requested`（旧 ScrollView 路径）
 
-**问题**：`pan-horizontal` 和 `changed viewport-x` 中每次都调用 `focus_requested()`。滚动的 pane 必然是用户正在交互的 pane，焦点从首次点击/滚轮时就已经设好。配合 F0 的提前退出后这些调用的成本已大幅降低，但仍是两次属性比较 + 分支。
+**历史问题**：旧 `pan-horizontal` 和 `changed viewport-x` 中每次都调用 `focus_requested()`。滚动的 pane 必然是用户正在交互的 pane，焦点从首次点击/滚轮时就已经设好。配合 F0 的提前退出后这些调用的成本已大幅降低，但仍是两次属性比较 + 分支。
 
 ```slint
 // 当前 (ui/split_pane.slint:60-68)
@@ -405,7 +411,7 @@ changed viewport-x => {
 }
 ```
 
-注意 `handle-scroll` 中 Ctrl+滚轮的 `focus_requested()` 是合理的——Ctrl+滚轮切换缩放模式，确实需要声明焦点。**只需移除 `pan-horizontal` 和 `changed viewport-x` 中的调用**。
+当前自管 viewport 路径中普通滚动只走 `set-viewport-x(raw)`，不再从滚动路径请求焦点。`handle-scroll` 中 Ctrl+滚轮的 `focus_requested()` 仍是合理的——Ctrl+滚轮切换缩放模式，确实需要声明焦点。
 
 **涉及代码**：
 - `ui/split_pane.slint:67` — `pan-horizontal` 末尾的 `focus_requested()`
@@ -415,7 +421,7 @@ changed viewport-x => {
 
 **收益**：每帧省两次属性比较 + 分支判断（配合 F0 后为两次整数比较）。
 
-**难度**：低。两行删除。如果担心边缘情况可先只移除 `pan-horizontal` 中那处，保留 `changed viewport-x` 中作为保险（配合 F0 也几乎无开销）。
+**难度**：低。旧路径为两行删除；当前路径已经删除 `changed viewport-x` 回调和 `viewport-offset` 写回。
 
 ---
 
@@ -731,25 +737,21 @@ private property <bool> file-operation-shortcuts-blocked:
 
 以下是与性能相关的已知限制或需要排查的点：
 
-### ScrollView viewport-width 动态计算
+### 自管 scrollbar 几何
 
-```slint
-viewport-width: max(parent.width, root.viewport-content-width);
-```
-
-`viewport-content-width` 依赖 `column-count`，而 `column-count` 依赖 `entry-count`。在目录切换时 `entry-count` 变化会导致 viewport 宽度变化，触发 ScrollView 内部重布局。当前 `entry-count` 只在模型重建时更新，路径是正常的。
+`viewport-content-width` 依赖 `column-count`，而 `column-count` 依赖 `entry-count` 和 `rows-per-column`。当前这些值只用于自管 scrollbar、viewport clamp 和切片偏移，不再触发 `ScrollView` 内部重布局。
 
 已处理的布局恢复问题：`SplitPaneView` 现在在 pane-local `width` 或 `rows-per-column` 变化时主动夹紧 `viewport-x` 并请求虚拟切片刷新。这样全屏/布局变化发生在大目录末尾时，不再依赖后续手动拖动滚动条来触发旧切片重建。
 
-### TouchArea 覆盖全宽
+### TouchArea 覆盖范围
 
 ```slint
 TouchArea {
-    width: preview.viewport-width;
-    height: preview.viewport-height;
+    width: parent.width;
+    height: parent.height;
 ```
 
-当 viewport 很宽（如 10000 条目目录）时，`TouchArea` 面积很大。但 Slint 的 ScrollView 会自动裁剪触摸区域，实际开销应可控。
+当前 `TouchArea` 只覆盖可见 viewport，不随目录内容宽度增长。大目录的主要 UI 成本仍是可见 `FileTile` 组件树和后续 renderer/reuse 策略。
 
 ### pan-horizontal 中的 viewport-x 比较
 

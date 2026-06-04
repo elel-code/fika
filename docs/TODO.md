@@ -31,9 +31,9 @@
   - Current: viewport changes clone only the requested virtual range through that visible-index cache, avoiding repeated full filtered-model allocation during horizontal scrolling.
   - Current: virtual slice preparation lives in `src/app/virtual_view.rs`, so range planning, viewport clamping, rebuild decisions, filtered slicing, and thumbnail-cache decoration are testable away from Slint property updates.
   - Current: virtual view tests now cover the same owned snapshot pipeline used at runtime; the old state-backed test-only virtual update helper has been removed.
-  - Current: ScrollView keeps a stable full-width virtual content layer for scrollbar geometry, while rendered tiles live in a local slice layer anchored at the first virtualized column, so large directories avoid both scrollbar-width churn and huge per-tile global coordinates.
+  - Current: `SplitPaneView` owns a self-managed clipped viewport and scrollbar; rendered tiles live in a local slice layer anchored at the first virtualized column and shifted by `viewport_x`, so large directories avoid both scrollbar-width churn and huge per-tile global coordinates.
   - Current: virtual range metadata is cached; scrolling inside the same range does not reset the Slint model.
-  - Current: virtual range reuse now keeps the current Slint model while its cached overscan slice still covers the newly visible columns, and ScrollView viewport writeback ignores sub-pixel drift, reducing large-directory horizontal jitter during small scroll steps.
+  - Current: virtual range reuse now keeps the current Slint model while its cached overscan slice still covers the newly visible columns, and self-managed viewport clamping/rounding avoids sub-pixel drift during small scroll steps.
   - Current: pane-local width and rows-per-column changes clamp the viewport and request a virtual slice refresh directly, so fullscreen/layout changes at the end of a large directory no longer wait for manual scrollbar movement.
   - Current: recursive-search location group annotation is keyed by pane-local visible-result state, so ordinary large-directory scrolling does not rescan every entry just to decide whether the virtual slice needs group labels.
   - Current: background virtual snapshot preparation receives the pane-local `visible_location_groups` cache and annotates slices by visible index, so recursive-search scrolling avoids per-slice location-boundary recomputation off the UI thread too.
@@ -436,13 +436,14 @@ Acceptance for all:
   - Current direction: split both `.rs` and `.slint` incrementally alongside real feature/performance work, keeping each extraction tied to tested behavior rather than preserving historical compatibility paths.
   - Current: service-menu context action snapshotting, Slint model synchronization, shell-free launch dispatch, and source-pane status updates now live in `src/app/context_service_menu.rs`; `main.rs` only routes pane/menu callbacks and async events.
 
-- [ ] Spike Dolphin-style self-managed main viewport.
-  - Acceptance: main file view has a prototype path whose scroll offset, visible range, item rects, selection hit-test, right-click hit-test, and drop target resolution are owned by Rust instead of `ScrollView` / `Flickable`.
+- [~] Spike Dolphin-style self-managed main viewport.
+  - Acceptance: main file view scroll offset is no longer sourced from `ScrollView` / `Flickable`; Rust owns the first item-view layout/hit-test layer through `src/app/item_view.rs`.
   - Acceptance: the Slint layer is reduced to a clipped viewport shell plus input/DnD primitives (`Rectangle`, `TouchArea`, `DragArea`, `DropArea`) and does not use the full `FileTile` `Repeater` tree as the core performance path.
   - Acceptance: DnD remains on Slint's native `data-transfer` path, with Rust hit-test deciding item/blank/drop target semantics for both internal file drags and external file-list clipboard/paste-adjacent workflows.
-  - Acceptance: `/etc`, `/usr/lib`, split view dual-pane scrolling, end-of-directory fullscreen/resize, rectangle selection, context menus, and drag/drop are tested against the current virtualized `ScrollView + FileTile` path.
+  - Acceptance: `/etc`, `/usr/lib`, split view dual-pane scrolling, end-of-directory fullscreen/resize, rectangle selection, context menus, and drag/drop are tested against the current self-managed viewport + `FileTile` visible-slice path.
   - Reference: Dolphin's `kfileitemmodel`, `kitemlistviewlayouter`, `kitemlistview`, `kitemlistcontroller`, and `kstandarditemlistwidget` split. The goal is Dolphin-like model/layouter/controller/rendering ownership, not a lower-level replacement for `Flickable` alone.
-  - Next: first implement a narrow hidden/prototype viewport that proves `Rectangle + TouchArea + DropArea + DragArea` can preserve selection, right-click, scrolling, and DnD semantics before considering a `SharedPixelBuffer`/`Image` self-rendered tile frame.
+  - Current: the main file area now uses `Rectangle + TouchArea + self-managed scrollbar` directly, and transfer/DnD target hit-test has moved into `src/app/item_view.rs`.
+  - Next: remove the remaining `FileTile` Repeater as the core rendering path by adding a Dolphin-style item view controller/renderer layer, then decide whether to use reusable primitives or `SharedPixelBuffer`/`Image` self-rendered tile frames.
 
 - [x] Apply Dolphin DnD target validation.
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.

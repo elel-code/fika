@@ -1,9 +1,6 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::file_clipboard::sync_clipboard_ui;
-use crate::app::geometry::{
-    PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width, icon_cell_width, icon_row_height,
-    inactive_main_pane_width, main_pane_bounds,
-};
+use crate::app::item_view::entry_at_pane_point;
 use crate::app::operation_controller::{
     OperationQueuePosition, OperationStartDecision, default_transfer_rename_suggestion,
     operation_cancel_status, operation_queued_status, transfer_conflict_apply_remaining_status,
@@ -11,14 +8,13 @@ use crate::app::operation_controller::{
     transfer_target_rejection,
 };
 use crate::app::pane::PaneTarget;
-use crate::app::selection::{filtered_entry_at, filtered_entry_at_for_slot};
+use crate::app::selection::filtered_entry_at;
 use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
 use crate::fs::{file_ops, privilege};
 use crate::{
-    AppWindow, AsyncEvent, FileEntry, FileOperationProgress, FileOperationResult, set_status,
+    AppWindow, AsyncEvent, FileOperationProgress, FileOperationResult, set_status,
     set_status_for_panes,
 };
-use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -165,18 +161,6 @@ pub(crate) fn place_drop_allowed(state: &AppState, source: &Path, target_index: 
     transfer_target_rejection(source, Path::new(target.path.as_str())).is_none()
 }
 
-pub(crate) fn entry_at_pane_point(
-    ui: &AppWindow,
-    state: &AppState,
-    slot: i32,
-    x: f32,
-    y: f32,
-) -> Option<FileEntry> {
-    let layout = PaneGridLayout::from_ui(ui, state, slot)?;
-    let index = layout.index_at_point(x, y)?;
-    filtered_entry_at_for_slot(state, slot, index)
-}
-
 fn pane_drop_rejection(
     ui: &AppWindow,
     state: &AppState,
@@ -201,101 +185,6 @@ fn pane_drop_target_dir(
         .filter(|target| target.is_dir && Path::new(target.path.as_str()) != source)
         .map(|target| PathBuf::from(target.path.as_str()))
         .or_else(|| pane_current_dir(state, PaneTarget::Slot(slot)).map(Path::to_path_buf))
-}
-
-#[derive(Clone, Copy, Debug)]
-struct PaneGridLayout {
-    main_x: f32,
-    main_y: f32,
-    width: f32,
-    height: f32,
-    viewport_x: f32,
-    rows_per_column: usize,
-    cell_width: f32,
-    row_height: f32,
-    padding: f32,
-}
-
-impl PaneGridLayout {
-    fn from_ui(ui: &AppWindow, state: &AppState, slot: i32) -> Option<Self> {
-        let pane_state = state.panes.pane_for_slot(slot)?;
-        if slot != 0 && !ui.get_split_view_open() {
-            return None;
-        }
-        let cell_width = icon_cell_width(ui.get_icon_zoom_level());
-        let row_height = icon_row_height(ui.get_icon_zoom_level());
-        let padding = 14.0;
-        let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-        let pane = main_pane_bounds(
-            ui.get_sidebar_width_px(),
-            window_size.width,
-            window_size.height,
-        );
-        let main_width = (pane.right - pane.left).max(1.0);
-        let active_width = active_main_pane_width(
-            main_width,
-            ui.get_split_view_open(),
-            ui.get_split_pane_ratio(),
-        );
-        let (main_x, width) = if slot == 0 {
-            (pane.left, active_width.max(1.0))
-        } else if slot == 1 {
-            let width = inactive_main_pane_width(
-                main_width,
-                ui.get_split_view_open(),
-                ui.get_split_pane_ratio(),
-            )
-            .max(1.0);
-            (pane.left + main_width - width, width)
-        } else {
-            return None;
-        };
-        let content_height =
-            (pane.bottom - pane.top - PATH_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(1.0);
-        let available_grid_height = (content_height - 2.0 * padding).max(row_height);
-        let rows_per_column = (available_grid_height / row_height).floor().max(1.0) as usize;
-
-        Some(Self {
-            main_x,
-            main_y: pane.top + PATH_BAR_HEIGHT,
-            width,
-            height: content_height,
-            viewport_x: pane_state.view.viewport_x,
-            rows_per_column,
-            cell_width,
-            row_height,
-            padding,
-        })
-    }
-
-    fn index_at_point(self, x: f32, y: f32) -> Option<usize> {
-        if x < self.main_x
-            || x > self.main_x + self.width
-            || y < self.main_y
-            || y > self.main_y + self.height
-        {
-            return None;
-        }
-
-        let local_x = x - self.main_x - self.padding + self.viewport_x;
-        let local_y = y - self.main_y - self.padding;
-        if local_x < 0.0 || local_y < 0.0 {
-            return None;
-        }
-
-        let column = (local_x / self.cell_width).floor() as usize;
-        let row = (local_y / self.row_height).floor() as usize;
-        if row >= self.rows_per_column {
-            return None;
-        }
-
-        let inside_tile_x = local_x - column as f32 * self.cell_width;
-        if inside_tile_x > (self.cell_width - 12.0).max(1.0) {
-            return None;
-        }
-
-        Some(column * self.rows_per_column + row)
-    }
 }
 
 fn prepare_current_dir_transfer_with_state(

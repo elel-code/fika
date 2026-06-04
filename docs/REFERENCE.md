@@ -775,16 +775,16 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 
 - `toggle_split_view()`：打开 Split 时从当前 pane 快照创建第二个 `PaneSlotSurface` 实例（slot-1），两个 slot 是对等的 `PaneSlotSurface` 组件——关闭 Split 时 `close_focused_split_pane()` 关闭焦点所在 slot，将被关闭 pane 的焦点路由给剩余 pane
 - `sync_inactive_pane_ui()`：为 slot-1 计算虚拟切片和 viewport，与 slot-0 走完全相同的 `prepare_pane_preview_update()` 管线——没有功能降级
-- `sync_inactive_pane_view_from_ui()`：从 UI 端 slot-1 的 ScrollView 回读 viewport 位置
-- `set_pane_viewport_ui(side, viewport_x)` / `set_pane_viewport_ui_if_clamped()`：通过 `PaneSide` 路由将 viewport 写入正确的 slot
+- `pane_viewport_x_from_ui()`：从 pane-local state 读取指定 slot 的自管 viewport 位置
+- `set_pane_viewport_ui(slot, viewport_x)` / `set_pane_viewport_ui_if_clamped()`：将自管 viewport 写入正确的 pane slot 并增量刷新对应 row
 - `directory_status_text()`：为指定路径查找对应 pane 的加载状态文本
 
 **English**:
 
 - `toggle_split_view()`: opens Split by creating a second `PaneSlotSurface` instance (slot-1) from the current pane's snapshot; both slots are identical `PaneSlotSurface` components — closing Split via `close_focused_split_pane()` removes the focused slot and routes focus to the remaining pane
 - `sync_inactive_pane_ui()`: computes virtual slice and viewport for slot-1 through the exact same `prepare_pane_preview_update()` pipeline as slot-0 — no functional degradation
-- `sync_inactive_pane_view_from_ui()`: reads back slot-1's ScrollView viewport position from the UI
-- `set_pane_viewport_ui(side, viewport_x)` / `set_pane_viewport_ui_if_clamped()`: routes viewport writes to the correct slot via `PaneSide`
+- `pane_viewport_x_from_ui()`: reads the requested slot's self-managed viewport position from pane-local state
+- `set_pane_viewport_ui(slot, viewport_x)` / `set_pane_viewport_ui_if_clamped()`: writes the self-managed viewport to the correct pane slot and refreshes only that row
 - `directory_status_text()`: looks up the loading status text for a given path's corresponding pane
 
 ### 9.5 选择逻辑 / Selection Logic (`src/app/selection.rs`)

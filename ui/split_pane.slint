@@ -1,4 +1,3 @@
-import { ScrollView } from "std-widgets.slint";
 import { FileEntry } from "models.slint";
 import { FileTile } from "file_tile.slint";
 
@@ -9,7 +8,6 @@ export component SplitPaneView inherits Rectangle {
     in property <int> virtual-start-index;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
-    in-out property <length> viewport-offset;
     in property <int> zoom-level;
     in property <int> selection-revision;
     in property <bool> interactive: true;
@@ -57,12 +55,20 @@ export component SplitPaneView inherits Rectangle {
     private property <int> rows-per-column: max(1, floor(max(1px, root.height - 2 * root.preview-padding) / root.row-height));
     private property <int> column-count: max(1, ceil(root.entry-count / root.rows-per-column));
     private property <length> viewport-content-width: 2 * root.preview-padding + root.column-count * root.cell-width;
-    private property <length> virtual-layer-width: root.viewport-content-width;
     private property <int> virtual-slice-column-count: max(1, ceil(root.entries.length / root.rows-per-column));
     private property <length> virtual-slice-width: max(1px, root.virtual-slice-column-count * root.cell-width);
     private property <float> scroll-max-x: max(0, (root.viewport-content-width - max(1px, root.width)) / 1px);
-    private property <float> viewport-sync-epsilon: 0.75;
     private property <float> pan-target-viewport-x: 0;
+    private property <bool> scrollbar-visible: root.entry-count > 0 && root.scroll-max-x > 0;
+    private property <length> scrollbar-height: 10px;
+    private property <length> scrollbar-track-margin: 8px;
+    private property <length> scrollbar-track-width: max(1px, root.width - 2 * root.scrollbar-track-margin);
+    private property <length> scrollbar-thumb-width: root.scrollbar-visible ? max(34px, min(root.scrollbar-track-width, root.scrollbar-track-width * root.width / max(root.width, root.viewport-content-width))) : 0px;
+    private property <length> scrollbar-thumb-travel: max(1px, root.scrollbar-track-width - root.scrollbar-thumb-width);
+    private property <length> scrollbar-thumb-track-x: root.scroll-max-x <= 0 ? 0px : root.scrollbar-thumb-travel * root.viewport-x / root.scroll-max-x;
+    private property <float> scrollbar-drag-start-viewport-x: 0;
+    private property <length> scrollbar-drag-press-x: 0px;
+    private property <bool> scrollbar-drag-active: false;
     private property <bool> selection-rect-active: false;
     private property <bool> selection-rect-pending: false;
     private property <bool> selection-rect-toggle: false;
@@ -71,17 +77,24 @@ export component SplitPaneView inherits Rectangle {
     private property <length> selection-rect-current-x: 0px;
     private property <length> selection-rect-current-y: 0px;
 
-    function pan-horizontal(delta: length) {
-        root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(root.viewport-x + delta / 1px);
+    function set-viewport-x(raw: float) {
+        root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(raw);
         if (root.pan-target-viewport-x != root.viewport-x) {
             root.viewport-x = root.pan-target-viewport-x;
-            root.viewport-offset = -root.viewport-x * 1px;
             root.view_changed();
         }
     }
 
+    function pan-horizontal(delta: length) {
+        root.set-viewport-x(root.viewport-x + delta / 1px);
+    }
+
     function stable-viewport-x(raw: float) -> float {
         return floor(max(0, min(root.scroll-max-x, raw)) + 0.5);
+    }
+
+    function viewport-x-from-scrollbar-thumb(raw-thumb-x: length) -> float {
+        return root.scroll-max-x <= 0 ? 0 : root.stable-viewport-x(max(0, min(root.scrollbar-thumb-travel / 1px, raw-thumb-x / 1px)) / max(1, root.scrollbar-thumb-travel / 1px) * root.scroll-max-x);
     }
 
     function scroll-pan-delta(delta-x: length, delta-y: length) -> length {
@@ -104,7 +117,6 @@ export component SplitPaneView inherits Rectangle {
         root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(root.viewport-x);
         if (root.viewport-x != root.pan-target-viewport-x) {
             root.viewport-x = root.pan-target-viewport-x;
-            root.viewport-offset = -root.viewport-x * 1px;
         }
         root.view_changed();
     }
@@ -164,31 +176,14 @@ export component SplitPaneView inherits Rectangle {
         }
     }
 
-    if (root.entry-count > 0): preview := ScrollView {
+    if (root.entry-count > 0): preview := Rectangle {
         width: parent.width;
         height: parent.height;
-        horizontal-scrollbar-policy: as-needed;
-        vertical-scrollbar-policy: always-off;
-        viewport-width: max(parent.width, root.viewport-content-width);
-        viewport-height: parent.height;
-        viewport-x <=> root.viewport-offset;
-        viewport-y: 0px;
-
-        changed viewport-x => {
-            root.pan-target-viewport-x = root.stable-viewport-x(-self.viewport-x / 1px);
-            if (root.viewport-x == root.pan-target-viewport-x) {
-                return;
-            }
-            if (root.viewport-x + root.viewport-sync-epsilon < root.pan-target-viewport-x || root.viewport-x > root.pan-target-viewport-x + root.viewport-sync-epsilon) {
-                root.viewport-x = root.pan-target-viewport-x;
-                root.viewport-offset = -root.viewport-x * 1px;
-                root.view_changed();
-            }
-        }
+        clip: true;
 
         TouchArea {
-            width: preview.viewport-width;
-            height: preview.viewport-height;
+            width: parent.width;
+            height: parent.height;
             pointer-event(event) => {
                 if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
                     root.focus_requested();
@@ -201,9 +196,9 @@ export component SplitPaneView inherits Rectangle {
                     root.selection-rect-pending = true;
                     root.selection-rect-active = false;
                     root.selection-rect-toggle = event.modifiers.control;
-                    root.selection-rect-start-x = self.mouse-x;
+                    root.selection-rect-start-x = self.mouse-x + root.viewport-x * 1px;
                     root.selection-rect-start-y = self.mouse-y;
-                    root.selection-rect-current-x = self.mouse-x;
+                    root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
                     root.selection-rect-current-y = self.mouse-y;
                 } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
                     if (root.selection-rect-active) {
@@ -230,9 +225,9 @@ export component SplitPaneView inherits Rectangle {
             }
             moved => {
                 if (root.interactive && self.pressed && root.selection-rect-pending) {
-                    root.selection-rect-current-x = self.mouse-x;
+                    root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
                     root.selection-rect-current-y = self.mouse-y;
-                    if (!root.selection-rect-active && (self.mouse-x > root.selection-rect-start-x + 5px || self.mouse-x + 5px < root.selection-rect-start-x || self.mouse-y > root.selection-rect-start-y + 5px || self.mouse-y + 5px < root.selection-rect-start-y)) {
+                    if (!root.selection-rect-active && (root.selection-rect-current-x > root.selection-rect-start-x + 5px || root.selection-rect-current-x + 5px < root.selection-rect-start-x || self.mouse-y > root.selection-rect-start-y + 5px || self.mouse-y + 5px < root.selection-rect-start-y)) {
                         root.selection-rect-active = true;
                     }
                 }
@@ -245,89 +240,125 @@ export component SplitPaneView inherits Rectangle {
             }
         }
 
-        virtual-layer := Rectangle {
-            x: 0px;
+        slice-layer := Rectangle {
+            x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;
             y: 0px;
-            width: root.virtual-layer-width;
-            height: preview.viewport-height;
+            width: root.virtual-slice-width;
+            height: parent.height;
 
-            slice-layer := Rectangle {
-                x: root.preview-padding + root.virtual-start-column * root.cell-width;
-                y: 0px;
-                width: root.virtual-slice-width;
-                height: parent.height;
-
-                for item[index] in root.entries: FileTile {
-                    drag-data-source: root.make_drag_data(item.path, item.is_dir);
-                    property <int> local-index: index + root.virtual-start-index - root.virtual-start-column * root.rows-per-column;
-                    x: floor(local-index / root.rows-per-column) * root.cell-width;
-                    y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;
-                    width: root.cell-width - 12px;
-                    entry: item;
-                    selected: item.selected;
-                    dark: root.dark;
-                    zoom-level: root.zoom-level;
-                    show-location: root.show-location;
-                    interactive: root.interactive;
-                    drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;
-                    tile-height: root.tile-height;
-                    tile-padding-x: root.tile-padding-x;
-                    tile-spacing: root.tile-spacing;
-                    thumbnail-width: root.thumbnail-width;
-                    thumbnail-height: root.thumbnail-height;
-                    metadata-font-size: root.metadata-font-size;
-                    title-font-size: root.title-font-size;
-                    selection-border-color: root.selection-border-color;
-                    drop-border-color: root.drop-border-color;
-                    drop-background-color: root.drop-background-color;
-                    selected-background-color: root.selected-background-color;
-                    hover-background-color: root.hover-background-color;
-                    metadata-group-color: root.metadata-group-color;
-                    metadata-location-color: root.metadata-location-color;
-                    title-color: root.title-color;
-                    request_select(path, toggle, range) => {
-                        root.focus_requested();
-                        root.request_select(path, toggle, range);
-                    }
-                    request_context_menu(path, name, x, y) => {
-                        root.focus_requested();
-                        root.request_context_menu(path, name, item.size, item.modified, item.is_dir, x, y);
-                    }
-                    activated(path) => {
-                        root.focus_requested();
-                        root.activated(path);
-                    }
-                    navigate_back => {
-                        root.focus_requested();
-                        root.navigate_back();
-                    }
-                    navigate_forward => {
-                        root.focus_requested();
-                        root.navigate_forward();
-                    }
-                    zoom_in => {
-                        root.focus_requested();
-                        root.zoom_in();
-                    }
-                    zoom_out => {
-                        root.focus_requested();
-                        root.zoom_out();
-                    }
-                    pan_horizontal(delta) => {
-                        root.pan-horizontal(delta);
-                    }
+            for item[index] in root.entries: FileTile {
+                drag-data-source: root.make_drag_data(item.path, item.is_dir);
+                property <int> local-index: index + root.virtual-start-index - root.virtual-start-column * root.rows-per-column;
+                x: floor(local-index / root.rows-per-column) * root.cell-width;
+                y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;
+                width: root.cell-width - 12px;
+                entry: item;
+                selected: item.selected;
+                dark: root.dark;
+                zoom-level: root.zoom-level;
+                show-location: root.show-location;
+                interactive: root.interactive;
+                drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;
+                tile-height: root.tile-height;
+                tile-padding-x: root.tile-padding-x;
+                tile-spacing: root.tile-spacing;
+                thumbnail-width: root.thumbnail-width;
+                thumbnail-height: root.thumbnail-height;
+                metadata-font-size: root.metadata-font-size;
+                title-font-size: root.title-font-size;
+                selection-border-color: root.selection-border-color;
+                drop-border-color: root.drop-border-color;
+                drop-background-color: root.drop-background-color;
+                selected-background-color: root.selected-background-color;
+                hover-background-color: root.hover-background-color;
+                metadata-group-color: root.metadata-group-color;
+                metadata-location-color: root.metadata-location-color;
+                title-color: root.title-color;
+                request_select(path, toggle, range) => {
+                    root.focus_requested();
+                    root.request_select(path, toggle, range);
+                }
+                request_context_menu(path, name, x, y) => {
+                    root.focus_requested();
+                    root.request_context_menu(path, name, item.size, item.modified, item.is_dir, x, y);
+                }
+                activated(path) => {
+                    root.focus_requested();
+                    root.activated(path);
+                }
+                navigate_back => {
+                    root.focus_requested();
+                    root.navigate_back();
+                }
+                navigate_forward => {
+                    root.focus_requested();
+                    root.navigate_forward();
+                }
+                zoom_in => {
+                    root.focus_requested();
+                    root.zoom_in();
+                }
+                zoom_out => {
+                    root.focus_requested();
+                    root.zoom_out();
+                }
+                pan_horizontal(delta) => {
+                    root.pan-horizontal(delta);
                 }
             }
         }
 
         if (root.selection-rect-active): Rectangle {
-            x: min(root.selection-rect-start-x, root.selection-rect-current-x);
+            x: min(root.selection-rect-start-x, root.selection-rect-current-x) - root.viewport-x * 1px;
             y: min(root.selection-rect-start-y, root.selection-rect-current-y);
             width: max(1px, max(root.selection-rect-start-x, root.selection-rect-current-x) - min(root.selection-rect-start-x, root.selection-rect-current-x));
             height: max(1px, max(root.selection-rect-start-y, root.selection-rect-current-y) - min(root.selection-rect-start-y, root.selection-rect-current-y));
             background: root.dark ? #51a9d433 : #2b86b733;
             border-width: 1px;
             border-color: root.dark ? #51a9d4 : #2b86b7;
+        }
+
+        if (root.scrollbar-visible): scrollbar-track := Rectangle {
+            x: root.scrollbar-track-margin;
+            y: parent.height - root.scrollbar-height - 3px;
+            width: root.scrollbar-track-width;
+            height: root.scrollbar-height;
+            border-radius: 5px;
+            background: root.dark ? #222a31 : #e2e8f0;
+
+            scrollbar-thumb := Rectangle {
+                x: root.scrollbar-thumb-track-x;
+                y: 2px;
+                width: root.scrollbar-thumb-width;
+                height: parent.height - 4px;
+                border-radius: 4px;
+                background: root.dark ? #6b7c8c : #94a3b8;
+            }
+
+            scrollbar-touch := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                mouse-cursor: pointer;
+
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                        if (self.mouse-x < root.scrollbar-thumb-track-x || self.mouse-x > root.scrollbar-thumb-track-x + root.scrollbar-thumb-width) {
+                            root.set-viewport-x(root.viewport-x-from-scrollbar-thumb(self.mouse-x - root.scrollbar-thumb-width / 2));
+                        }
+                        root.scrollbar-drag-start-viewport-x = root.viewport-x;
+                        root.scrollbar-drag-press-x = self.mouse-x;
+                        root.scrollbar-drag-active = true;
+                    } else if (event.button == PointerEventButton.left && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
+                        root.scrollbar-drag-active = false;
+                    }
+                }
+
+                moved => {
+                    if (self.pressed && root.scrollbar-drag-active) {
+                        root.set-viewport-x(root.scrollbar-drag-start-viewport-x + ((self.mouse-x - root.scrollbar-drag-press-x) / 1px) / max(1, root.scrollbar-thumb-travel / 1px) * root.scroll-max-x);
+                    }
+                }
+            }
         }
     }
 }

@@ -38,7 +38,11 @@ pub(crate) struct MainPaneBounds {
 }
 
 impl MainGridLayout {
-    pub(crate) fn from_ui_for_pane_width(ui: &AppWindow, pane_width: f32) -> Self {
+    pub(crate) fn from_ui_for_pane_width(
+        ui: &AppWindow,
+        pane_width: f32,
+        search_panel_visible: bool,
+    ) -> Self {
         let cell_width = icon_cell_width(ui.get_icon_zoom_level());
         let row_height = icon_row_height(ui.get_icon_zoom_level());
         let padding = 14.0;
@@ -48,14 +52,18 @@ impl MainGridLayout {
             window_size.width,
             window_size.height,
         );
-        let search_panel_height = search_panel_height(
-            ui.get_search_bar_open(),
-            ui.get_search_query().as_str(),
-            ui.get_search_kind_filter(),
-            ui.get_search_modified_filter(),
-            ui.get_search_size_filter(),
-            pane_width,
-        );
+        let search_panel_height = if search_panel_visible {
+            search_panel_height(
+                ui.get_search_bar_open(),
+                ui.get_search_query().as_str(),
+                ui.get_search_kind_filter(),
+                ui.get_search_modified_filter(),
+                ui.get_search_size_filter(),
+                pane_width,
+            )
+        } else {
+            0.0
+        };
         let available_grid_height = (pane.bottom
             - pane.top
             - PATH_BAR_HEIGHT
@@ -2035,7 +2043,10 @@ mod tests {
                 && file_pane.contains("root.path-text = text;")
                 && file_pane.contains("root.path-focused = focused;")
                 && file_pane.contains("viewport-x <=> root.viewport-x;")
-                && file_pane.contains("viewport-offset <=> root.viewport-offset;")
+                && file_pane.contains("callback viewport_changed(int, float);")
+                && file_pane.contains(
+                    "root.viewport_changed(root.pane-slot, root.viewport-x);"
+                )
                 && file_pane.contains("drag-active: root.drag-active;")
                 && file_pane.contains("status: root.status;")
                 && file_pane.contains("selected-count: root.selected-count;")
@@ -2145,13 +2156,13 @@ mod tests {
                 && pane_slot_surface
                     .contains("private property <float> live-viewport-x: root.pane.viewport_x;")
                 && pane_slot_surface.contains(
-                    "private property <length> live-viewport-offset: -root.pane.viewport_x * 1px;"
-                )
-                && pane_slot_surface.contains(
                     "root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path || root.live-viewport-x != root.pane.viewport_x"
                 )
                 && pane_slot_surface.contains("viewport-x <=> root.live-viewport-x;")
-                && pane_slot_surface.contains("viewport-offset <=> root.live-viewport-offset;")
+                && pane_slot_surface.contains("callback viewport_changed(int, float);")
+                && pane_slot_surface.contains(
+                    "viewport_changed(slot, viewport-x) => {\n            root.viewport_changed(slot, viewport-x);\n        }"
+                )
                 && pane_slot_surface.contains("private property <bool> live-drag-active: false;")
                 && pane_slot_surface.contains("drag-active <=> root.live-drag-active;")
                 && pane_slot_surface.contains("status: root.pane.status;")
@@ -2340,24 +2351,34 @@ mod tests {
         assert!(!app.contains("function pane-slot-show-location(slot: int) -> bool"));
         assert!(split_pane.contains("export component SplitPaneView"));
         assert!(split_pane.contains("import { FileTile } from \"file_tile.slint\";"));
+        assert!(!split_pane.contains("import { ScrollView }"));
         assert!(!split_pane.contains("SplitPreviewTile"));
         assert!(split_pane.contains("callback view_changed();"));
         assert!(split_pane.contains("callback focus_requested();"));
         assert!(split_pane.contains(
-            "function pan-horizontal(delta: length) {\n        root.pan-target-viewport-x = root.entry-count == 0"
+            "function set-viewport-x(raw: float) {\n        root.pan-target-viewport-x = root.entry-count == 0"
         ));
         assert!(split_pane.contains(
-            "root.viewport-offset = -root.viewport-x * 1px;\n            root.view_changed();\n        }"
+            "function pan-horizontal(delta: length) {\n        root.set-viewport-x(root.viewport-x + delta / 1px);"
         ));
+        assert!(!split_pane.contains("root.viewport-offset = -root.viewport-x * 1px;"));
         assert!(
             !split_pane.contains(
                 "root.viewport-offset = -root.viewport-x * 1px;\n            root.view_changed();\n        }\n        root.focus_requested();"
             ),
             "ordinary pane scrolling should not request focus after every viewport change"
         );
+        let tile_activation = split_pane
+            .split_once("activated(path) => {")
+            .expect("tile activation handler should be present")
+            .1
+            .split_once("navigate_back =>")
+            .expect("tile activation handler should precede side-button handlers")
+            .0;
         assert!(
-            split_pane
-                .contains("activated(path) => {\n                        root.focus_requested();\n                        root.activated(path);")
+            tile_activation.contains("root.focus_requested();")
+                && tile_activation.contains("root.activated(path);"),
+            "tile activation should focus the pane before opening the path"
         );
         assert!(!split_pane.contains("Click to focus it."));
         assert!(split_pane.contains("callback activated(string);"));
@@ -2403,7 +2424,7 @@ mod tests {
         );
         assert!(
             split_pane.contains(
-                "function pan-horizontal(delta: length) {\n        root.pan-target-viewport-x = root.entry-count == 0"
+                "function pan-horizontal(delta: length) {\n        root.set-viewport-x(root.viewport-x + delta / 1px);"
             ),
             "ordinary pane scrolling should update the viewport before requesting focus"
         );
@@ -2440,18 +2461,18 @@ mod tests {
             "root.request_context_menu(path, name, item.size, item.modified, item.is_dir, x, y);"
         ));
         assert!(split_pane.contains("root.pan-horizontal(delta);"));
-        assert!(split_pane.contains("viewport-x <=> root.viewport-offset;"));
-        assert!(split_pane.contains("private property <float> viewport-sync-epsilon: 0.75;"));
         assert!(
-            split_pane.contains("root.viewport-x + root.viewport-sync-epsilon <")
+            split_pane.contains("slice-layer := Rectangle")
                 && split_pane.contains(
-                    "root.pan-target-viewport-x = root.stable-viewport-x(-self.viewport-x / 1px);"
+                    "x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;"
                 )
-                && split_pane.contains(
-                    "root.viewport-x > root.pan-target-viewport-x + root.viewport-sync-epsilon"
-                )
-                && !split_pane.contains("root.viewport-x != max(0, -self.viewport-x / 1px)"),
-            "ScrollView viewport writeback should quantize and ignore sub-pixel drift instead of churning virtual slices"
+                && split_pane.contains("private property <bool> scrollbar-visible:")
+                && split_pane.contains("scrollbar-track := Rectangle")
+                && split_pane.contains("root.set-viewport-x(root.viewport-x-from-scrollbar-thumb")
+                && !split_pane.contains("viewport-x <=> root.viewport-offset;")
+                && !split_pane.contains("viewport-sync-epsilon")
+                && !split_pane.contains("changed viewport-x =>"),
+            "SplitPaneView should use a self-managed viewport instead of ScrollView/Flickable viewport writeback"
         );
         assert!(
             split_pane.contains("function relayout-visible-slice()")
@@ -2464,10 +2485,8 @@ mod tests {
                 ),
             "pane-local geometry changes should clamp the viewport and request a virtual slice refresh without waiting for scrollbar input"
         );
-        assert!(split_pane.contains("virtual-layer := Rectangle"));
-        assert!(split_pane.contains(
-            "private property <length> virtual-layer-width: root.viewport-content-width;"
-        ));
+        assert!(!split_pane.contains("virtual-layer := Rectangle"));
+        assert!(!split_pane.contains("private property <length> virtual-layer-width"));
         assert!(split_pane.contains(
             "private property <int> virtual-slice-column-count: max(1, ceil(root.entries.length / root.rows-per-column));"
         ));
@@ -2475,11 +2494,9 @@ mod tests {
             "private property <length> virtual-slice-width: max(1px, root.virtual-slice-column-count * root.cell-width);"
         ));
         assert!(
-            split_pane.contains("x: 0px;")
-                && split_pane.contains("width: root.virtual-layer-width;")
-                && split_pane.contains("slice-layer := Rectangle")
+            split_pane.contains("slice-layer := Rectangle")
                 && split_pane.contains(
-                    "x: root.preview-padding + root.virtual-start-column * root.cell-width;"
+                    "x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;"
                 )
                 && split_pane.contains("width: root.virtual-slice-width;")
                 && split_pane
@@ -2491,7 +2508,7 @@ mod tests {
                     "y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;"
                 )
                 && !split_pane.contains("property <int> global-index:"),
-            "virtualized pane slices should keep a stable full-width scroll layer while tile coordinates remain local to the slice"
+            "virtualized pane slices should be positioned by the self-managed viewport while tile coordinates remain local to the slice"
         );
         assert!(!split_pane.contains("root.viewport-content-width - self.x"));
         assert!(split_pane.contains("clip: true;"));

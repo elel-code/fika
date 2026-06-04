@@ -92,7 +92,6 @@ component FilePane inherits Rectangle {
     in property <int> virtual-start-index;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
-    in-out property <length> viewport-offset;
     in property <int> zoom-level;
     in property <int> selection-revision;
     in property <bool> show-location: false;
@@ -129,7 +128,7 @@ component FilePane inherits Rectangle {
     callback cancel_search();
     callback search_filters_changed(int, int, int);
     callback search_close_requested();
-    callback viewport_changed(int, float, length);
+    callback viewport_changed(int, float);
     callback view_changed(int);
     callback activated(int, string);
     callback request_select(int, string, bool, bool);
@@ -270,7 +269,6 @@ component FilePane inherits Rectangle {
                 virtual-start-index: root.virtual-start-index;
                 virtual-start-column: root.virtual-start-column;
                 viewport-x <=> root.viewport-x;
-                viewport-offset <=> root.viewport-offset;
                 zoom-level: root.zoom-level;
                 selection-revision: root.selection-revision;
                 interactive: root.content-interactive;
@@ -286,7 +284,7 @@ component FilePane inherits Rectangle {
                 }
                 focus_requested => { root.focus_requested(root.pane-slot); }
                 view_changed => {
-                    root.viewport_changed(root.pane-slot, root.viewport-x, root.viewport-offset);
+                    root.viewport_changed(root.pane-slot, root.viewport-x);
                     root.view_changed(root.pane-slot);
                 }
                 zoom_in => { root.zoom_in(root.pane-slot); }
@@ -414,14 +412,13 @@ component PaneSlotSurface inherits Rectangle {
 
     callback path_text_changed(int, string);
     callback path_focus_changed(int, bool);
-    callback viewport_changed(int, float, length);
+    callback viewport_changed(int, float);
 
     private property <string> live-path-text: root.pane.path_text;
     private property <bool> live-path-focused: root.pane.path_focused;
     private property <int> live-slot: root.pane.slot;
     private property <string> live-current-path: root.pane.current_path;
     private property <float> live-viewport-x: root.pane.viewport_x;
-    private property <length> live-viewport-offset: -root.pane.viewport_x * 1px;
     private property <bool> live-drag-active: false;
     private property <bool> live-drag-rejected: false;
     private property <string> live-drag-target-path;
@@ -436,7 +433,6 @@ component PaneSlotSurface inherits Rectangle {
         root.live-path-focused = root.pane.path_focused;
         if (root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path || root.live-viewport-x != root.pane.viewport_x) {
             root.live-viewport-x = root.pane.viewport_x;
-            root.live-viewport-offset = -root.pane.viewport_x * 1px;
         }
         root.live-slot = root.pane.slot;
         root.live-current-path = root.pane.current_path;
@@ -475,7 +471,6 @@ component PaneSlotSurface inherits Rectangle {
         virtual-start-index: root.pane.virtual_start_index;
         virtual-start-column: root.pane.virtual_start_column;
         viewport-x <=> root.live-viewport-x;
-        viewport-offset <=> root.live-viewport-offset;
         zoom-level: root.pane.zoom_level;
         selection-revision: root.pane.selection_revision;
         show-location: root.pane.show_location;
@@ -503,8 +498,8 @@ component PaneSlotSurface inherits Rectangle {
         chooser-save-name <=> root.pane-chooser-save-name;
         path_text_changed(slot, text) => { root.path_text_changed(slot, text); }
         path_focus_changed(slot, focused) => { root.path_focus_changed(slot, focused); }
-        viewport_changed(slot, viewport-x, viewport-offset) => {
-            root.viewport_changed(slot, viewport-x, viewport-offset);
+        viewport_changed(slot, viewport-x) => {
+            root.viewport_changed(slot, viewport-x);
         }
     }
 }
@@ -1524,7 +1519,7 @@ export component AppWindow inherits Window {
                         path_focus_changed(slot, focused) => {
                             root.pane_path_focus_changed(slot, focused);
                         }
-                        viewport_changed(slot, viewport-x, viewport-offset) => {
+                        viewport_changed(slot, viewport-x) => {
                             root.pane_viewport_changed(slot, viewport-x);
                         }
                     }
