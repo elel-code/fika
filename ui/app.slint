@@ -7,6 +7,7 @@ export global DndApi {
     pure callback make-drag-place(path: string) -> data-transfer;
     pure callback make-drag-folder(path: string) -> data-transfer;
     pure callback make-drag-file(path: string) -> data-transfer;
+    pure callback make-drag-at(slot: int, x: float, y: float) -> data-transfer;
     pure callback event-kind(event: DropEvent) -> DragKind;
     pure callback event-path(event: DropEvent) -> string;
 }
@@ -21,13 +22,13 @@ export global PaneRouting {
     callback search-filters-changed(int, int, int);
     callback search-close-requested();
     callback view-changed(int);
-    callback activated(int, string);
-    callback request-select(int, string, bool, bool);
+    callback item-view-item-pressed(int, float, float, bool, bool) -> bool;
+    callback item-view-item-activated(int, float, float);
+    callback item-view-item-context-menu(int, float, float, length, length) -> bool;
     callback item-view-blank-pressed(int, float, float, int, float, float, float, bool);
     callback item-view-blank-moved(int, float, float) -> bool;
     callback item-view-blank-released(int, float, float);
     callback item-view-blank-cancelled(int);
-    callback request-context-menu(int, string, string, string, string, bool, length, length);
     callback request-blank-context-menu(int, length, length);
     callback zoom-in(int);
     callback zoom-out(int);
@@ -138,13 +139,13 @@ component FilePane inherits Rectangle {
     callback search_close_requested();
     callback viewport_changed(int, float);
     callback view_changed(int);
-    callback activated(int, string);
-    callback request_select(int, string, bool, bool);
+    callback item_view_item_pressed(int, float, float, bool, bool) -> bool;
+    callback item_view_item_activated(int, float, float);
+    callback item_view_item_context_menu(int, float, float, length, length) -> bool;
     callback item_view_blank_pressed(int, float, float, int, float, float, float, bool);
     callback item_view_blank_moved(int, float, float) -> bool;
     callback item_view_blank_released(int, float, float);
     callback item_view_blank_cancelled(int);
-    callback request_context_menu(int, string, string, string, string, bool, length, length);
     callback request_blank_context_menu(int, length, length);
     callback zoom_in(int);
     callback zoom_out(int);
@@ -160,7 +161,7 @@ component FilePane inherits Rectangle {
     callback chooser_accept(string);
     callback chooser_filter_requested(int, length, length);
     callback chooser_choice_requested(int, int, length, length);
-    pure callback make_drag_data(int, string, bool) -> data-transfer;
+    pure callback make_drag_data_at(int, float, float) -> data-transfer;
 
     background: root.shell-base-color;
     clip: true;
@@ -295,8 +296,8 @@ component FilePane inherits Rectangle {
                 drag-active: root.drag-active;
                 drag-rejected: root.drag-rejected;
                 drag-target-path: root.drag-target-path;
-                make_drag_data(path, is-dir) => {
-                    root.make_drag_data(root.pane-slot, path, is-dir)
+                make_drag_data_at(x, y) => {
+                    root.make_drag_data_at(root.pane-slot, x, y)
                 }
                 focus_requested => { root.focus_requested(root.pane-slot); }
                 view_changed => {
@@ -305,9 +306,14 @@ component FilePane inherits Rectangle {
                 }
                 zoom_in => { root.zoom_in(root.pane-slot); }
                 zoom_out => { root.zoom_out(root.pane-slot); }
-                activated(path) => { root.activated(root.pane-slot, path); }
-                request_select(path, toggle, range) => {
-                    root.request_select(root.pane-slot, path, toggle, range);
+                item_pressed(x, y, toggle, range) => {
+                    root.item_view_item_pressed(root.pane-slot, x, y, toggle, range)
+                }
+                item_activated(x, y) => {
+                    root.item_view_item_activated(root.pane-slot, x, y);
+                }
+                item_context_menu(x, y, abs-x, abs-y) => {
+                    root.item_view_item_context_menu(root.pane-slot, x, y, abs-x, abs-y)
                 }
                 blank_pressed(x, y, rows-per-column, cell-width, row-height, padding, toggle) => {
                     root.item_view_blank_pressed(root.pane-slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);
@@ -320,9 +326,6 @@ component FilePane inherits Rectangle {
                 }
                 blank_cancelled => {
                     root.item_view_blank_cancelled(root.pane-slot);
-                }
-                request_context_menu(path, name, size, modified, is-dir, x, y) => {
-                    root.request_context_menu(root.pane-slot, path, name, size, modified, is-dir, x, y);
                 }
                 request_blank_context_menu(x, y) => {
                     root.request_blank_context_menu(root.pane-slot, x, y);
@@ -377,9 +380,14 @@ component PaneSlot inherits FilePane {
     }
     search_close_requested => { PaneRouting.search-close-requested(); }
     view_changed(slot) => { PaneRouting.view-changed(slot); }
-    activated(slot, path) => { PaneRouting.activated(slot, path); }
-    request_select(slot, path, toggle, range) => {
-        PaneRouting.request-select(slot, path, toggle, range);
+    item_view_item_pressed(slot, x, y, toggle, range) => {
+        PaneRouting.item-view-item-pressed(slot, x, y, toggle, range)
+    }
+    item_view_item_activated(slot, x, y) => {
+        PaneRouting.item-view-item-activated(slot, x, y);
+    }
+    item_view_item_context_menu(slot, x, y, abs-x, abs-y) => {
+        PaneRouting.item-view-item-context-menu(slot, x, y, abs-x, abs-y)
     }
     item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle) => {
         PaneRouting.item-view-blank-pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);
@@ -392,9 +400,6 @@ component PaneSlot inherits FilePane {
     }
     item_view_blank_cancelled(slot) => {
         PaneRouting.item-view-blank-cancelled(slot);
-    }
-    request_context_menu(slot, path, name, size, modified, is-dir, x, y) => {
-        PaneRouting.request-context-menu(slot, path, name, size, modified, is-dir, x, y);
     }
     request_blank_context_menu(slot, x, y) => {
         PaneRouting.request-blank-context-menu(slot, x, y);
@@ -423,8 +428,8 @@ component PaneSlot inherits FilePane {
     chooser_choice_requested(slot, index, x, y) => {
         PaneRouting.chooser-choice-requested(slot, index, x, y);
     }
-    make_drag_data(slot, path, is-dir) => {
-        is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)
+    make_drag_data_at(slot, x, y) => {
+        DndApi.make-drag-at(slot, x, y)
     }
 }
 
@@ -795,8 +800,9 @@ export component AppWindow inherits Window {
     callback cancel_search();
     callback search_filters_changed(int, int, int);
     callback toggle_split_view();
-    callback pane_activated(int, string);
-    callback pane_request_select(int, string, bool, bool);
+    callback pane_item_view_item_pressed(int, float, float, bool, bool) -> bool;
+    callback pane_item_view_item_activated(int, float, float);
+    callback pane_item_view_item_context_menu(int, float, float, length, length) -> bool;
     callback pane_item_view_blank_pressed(int, float, float, int, float, float, float, bool);
     callback pane_item_view_blank_moved(int, float, float) -> bool;
     callback pane_item_view_blank_released(int, float, float);
@@ -841,7 +847,6 @@ export component AppWindow inherits Window {
     callback cancel_queued_operations();
     callback persist_ui_state();
     callback async_results_ready();
-    pure callback pane_is_selected(int, string) -> bool;
     pure callback is_place(string) -> bool;
 
     function close-child-submenus() {
@@ -1009,12 +1014,19 @@ export component AppWindow inherits Window {
         root.pane_view_changed(slot);
     }
 
-    public function route-pane-activated(slot: int, path: string) {
-        root.pane_activated(slot, path);
+    public function route-pane-item-view-item-pressed(slot: int, x: float, y: float, toggle: bool, range: bool) -> bool {
+        root.route-pane-focus(slot);
+        return root.pane_item_view_item_pressed(slot, x, y, toggle, range);
     }
 
-    public function route-pane-request-select(slot: int, path: string, toggle: bool, range: bool) {
-        root.pane_request_select(slot, path, toggle, range);
+    public function route-pane-item-view-item-activated(slot: int, x: float, y: float) {
+        root.route-pane-focus(slot);
+        root.pane_item_view_item_activated(slot, x, y);
+    }
+
+    public function route-pane-item-view-item-context-menu(slot: int, x: float, y: float, abs-x: length, abs-y: length) -> bool {
+        root.route-pane-focus(slot);
+        return root.pane_item_view_item_context_menu(slot, x, y, abs-x, abs-y);
     }
 
     public function route-pane-item-view-blank-pressed(slot: int, x: float, y: float, rows-per-column: int, cell-width: float, row-height: float, padding: float, toggle: bool) {
@@ -1042,9 +1054,6 @@ export component AppWindow inherits Window {
     public function route-pane-request-context-menu(slot: int, path: string, name: string, size: string, modified: string, is-dir: bool, x: length, y: length) {
         root.route-pane-focus(slot);
         root.sync_clipboard_state();
-        if (!root.pane_is_selected(slot, path)) {
-            root.pane_request_select(slot, path, false, false);
-        }
         root.context-menu-kind = 1;
         root.context-menu-path = path;
         root.context-menu-name = name;

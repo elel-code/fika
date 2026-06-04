@@ -36,10 +36,10 @@ Slint SplitPaneView 自管 viewport-x
 
 ```
 Rectangle viewport shell (clip: true)
-  ├─ full-viewport TouchArea (wheel / blank click / rectangle selection)
+  ├─ full-viewport DragArea + TouchArea (wheel / item click / double click / context / blank click / rectangle selection)
   ├─ Rust-projected item-view layout metrics (rows/cell/content/scroll extent)
   ├─ slice-layer (x = padding + virtual_start_column * cell_width - viewport_x)
-  │    └─ for item in entries: FileTile  (tile geometry + display tokens 来自 Rust item-view render plan)
+  │    └─ for item in entries: FileTile  (纯渲染；tile geometry + display tokens 来自 Rust item-view render plan)
   ├─ selection rectangle overlay
   └─ self-managed horizontal scrollbar
 ```
@@ -55,7 +55,7 @@ Rectangle viewport shell (clip: true)
 | 普通滚轮不重复请求焦点 | `split_pane.slint:78` | 减少 FFI 调用 |
 | 自管滚动条消费 Rust item-view layout metrics | `split_view.rs` / `split_pane.slint` | `rows_per_column`、content width、scroll max 与虚拟切片使用同一 Rust layouter |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
-| Rust item-view hit-test | `item_view.rs` | DnD/context/drop target 命中不再散落在 transfer 几何代码中 |
+| Rust item-view hit-test | `item_view.rs` | click/activation/context/DnD/drop target 命中不再散落在 Slint tile 或 transfer 几何代码中 |
 | Rust item-view render plan | `item_view.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 x/y/width 和尺寸/字体 token 不再由 Slint 每项公式计算 |
 
 ---
@@ -287,11 +287,12 @@ Slint: Rectangle viewport + input/DnD overlays
 **收益预期**：理论上可以接近 Dolphin 的架构上限，因为性能边界从 Slint 的每 tile 组件树和通用滚动容器，转移到 Rust 侧的布局、命中测试、缓存和绘制策略。是否真正媲美 Dolphin 需要用 spike 和实测确认，尤其是文字/icon 绘制缓存、DnD 启动层、滚动条手感和 HiDPI 下的 frame 更新成本。
 
 **当前进度**：
-1. 主文件区已直接替换为 `Rectangle { clip: true; } + TouchArea + self-managed scrollbar`，删除 `ScrollView` / `Flickable` viewport 写回。
-2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD 与 selection 不再私有持有主视图几何。
+1. 主文件区已直接替换为 `Rectangle { clip: true; } + DragArea + TouchArea + self-managed scrollbar`，删除 `ScrollView` / `Flickable` viewport 写回。
+2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD、selection、activation 与 context menu 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
-4. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max），可见 tile 的 `x/y/width` 和展示尺寸/字体 token 也由 Rust item-view render plan 投影。Slint 不再在主视图内计算 column/row、content width、scroll extent 或 zoom 派生公式。
-5. DnD 仍保留 Slint 原生 `data-transfer` 路径，目标解析继续向 Rust hit-test 收敛。
+4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；`FileTile` 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
+5. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max），可见 tile 的 `x/y/width` 和展示尺寸/字体 token 也由 Rust item-view render plan 投影。Slint 不再在主视图内计算 column/row、content width、scroll extent 或 zoom 派生公式。
+6. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
 
 ---
 
@@ -518,7 +519,7 @@ selected: root.selection-revision >= 0 && root.is_selected(item.path);
 selected: item.selected;
 ```
 
-选择变化时，Rust 侧通过 `update_file_entries_model_selection` 对当前 pane 的虚拟 `VecModel<FileEntry>` 做逐行 `set_row_data` 脏更新；后台虚拟视图结果应用时也会用当前 pane 的 selection 调用 `annotate_selection_state`，防止旧异步结果覆盖当前高亮。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除，`pane_is_selected(slot, path)` 仅保留给右键菜单命令逻辑。
+选择变化时，Rust 侧通过 `update_file_entries_model_selection` 对当前 pane 的虚拟 `VecModel<FileEntry>` 做逐行 `set_row_data` 脏更新；后台虚拟视图结果应用时也会用当前 pane 的 selection 调用 `annotate_selection_state`，防止旧异步结果覆盖当前高亮。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
 
 **收益**：每次选择变化（点击、框选、Ctrl+A）省 80-120 次 FFI 调用。
 
@@ -755,9 +756,9 @@ TouchArea {
     height: parent.height;
 ```
 
-当前 `TouchArea` 只覆盖可见 viewport，不随目录内容宽度增长。大目录的主要 UI 成本仍是可见 `FileTile` 组件树和后续 renderer/reuse 策略。
+当前 `TouchArea` / `DragArea` 只覆盖可见 viewport，不随目录内容宽度增长。大目录的主要 UI 成本仍是可见 `FileTile` 组件树和后续 renderer/reuse 策略。
 
-空白区输入现在通过 pane-local item-view controller 决策。`SplitPaneView` 报告 press/move/release/cancel，Rust 按同一套 item-view geometry 决定清空选择或提交 rectangle selection；这一步减少了 Slint 内部选择逻辑分支，但还没有移除 `FileTile` Repeater 的渲染成本。
+空白区和 item 输入现在都通过 pane-local item-view controller 决策。`SplitPaneView` 报告 press/move/release/cancel 或 item 坐标，Rust 按同一套 item-view geometry 决定选择、激活、右键菜单、drag payload、清空选择或提交 rectangle selection；这一步减少了 Slint 内部选择逻辑分支，但还没有移除 `FileTile` Repeater 的渲染成本。
 
 ### pan-horizontal 中的 viewport-x 比较
 

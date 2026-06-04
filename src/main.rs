@@ -53,7 +53,7 @@ use app::geometry::{
 };
 use app::item_view::{
     ItemViewInputMetrics, ItemViewReleaseAction, ItemViewRenderMetrics, SelectionRect,
-    decorate_render_plan,
+    decorate_render_plan, entry_at_pane_point,
 };
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
@@ -246,34 +246,58 @@ fn main() -> Result<(), slint::PlatformError> {
 
         #[derive(Clone, Debug)]
         enum FikaDragInfo {
+            Pending,
             Place(String),
             Folder(String),
             File(String),
+        }
+
+        fn drag_transfer(info: FikaDragInfo) -> DataTransfer {
+            let mut dt = DataTransfer::default();
+            dt.set_user_data(Rc::new(info));
+            dt
         }
 
         let dnd_api = ui.global::<DndApi>();
 
         // ── DragArea.data constructors ──────────────────────────
         dnd_api.on_make_drag_place(|path: SharedString| -> DataTransfer {
-            let mut dt = DataTransfer::default();
-            dt.set_user_data(Rc::new(FikaDragInfo::Place(path.to_string())));
-            dt
+            drag_transfer(FikaDragInfo::Place(path.to_string()))
         });
         dnd_api.on_make_drag_folder(|path: SharedString| -> DataTransfer {
-            let mut dt = DataTransfer::default();
-            dt.set_user_data(Rc::new(FikaDragInfo::Folder(path.to_string())));
-            dt
+            drag_transfer(FikaDragInfo::Folder(path.to_string()))
         });
         dnd_api.on_make_drag_file(|path: SharedString| -> DataTransfer {
-            let mut dt = DataTransfer::default();
-            dt.set_user_data(Rc::new(FikaDragInfo::File(path.to_string())));
-            dt
+            drag_transfer(FikaDragInfo::File(path.to_string()))
         });
+        {
+            let ui_weak = ui.as_weak();
+            let state = Rc::clone(&state);
+            dnd_api.on_make_drag_at(move |slot, x, y| -> DataTransfer {
+                if x < 0.0 || y < 0.0 {
+                    return drag_transfer(FikaDragInfo::Pending);
+                }
+                let Some(ui) = ui_weak.upgrade() else {
+                    return DataTransfer::default();
+                };
+                let state_ref = state.borrow();
+                let Some(entry) = entry_at_pane_point(&ui, &state_ref, slot, x, y) else {
+                    return DataTransfer::default();
+                };
+                let path = entry.path.to_string();
+                if entry.is_dir {
+                    drag_transfer(FikaDragInfo::Folder(path))
+                } else {
+                    drag_transfer(FikaDragInfo::File(path))
+                }
+            });
+        }
 
         // ── DropEvent inspectors ────────────────────────────────
         dnd_api.on_event_kind(|event: DropEvent| -> DragKind {
             if let Some(rc) = event.data.user_data() {
                 match rc.downcast_ref::<FikaDragInfo>() {
+                    Some(FikaDragInfo::Pending) => return DragKind::Unsupported,
                     Some(FikaDragInfo::Place(_)) => return DragKind::Place,
                     Some(FikaDragInfo::Folder(_)) => return DragKind::Folder,
                     Some(FikaDragInfo::File(_)) => return DragKind::File,
@@ -291,6 +315,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     FikaDragInfo::Place(p) | FikaDragInfo::Folder(p) | FikaDragInfo::File(p) => {
                         SharedString::from(p.as_str())
                     }
+                    FikaDragInfo::Pending => SharedString::new(),
                 };
             }
             SharedString::new()
@@ -859,10 +884,20 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_pane_item_view_item_pressed(move |slot, x, y, toggle, range| {
+            ui_weak.upgrade().is_some_and(|ui| {
+                press_item_view_entry_at_point_for_slot(&ui, &state, slot, x, y, toggle, range)
+            })
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_pane_activated(move |slot, path| {
+        ui.on_pane_item_view_item_activated(move |slot, x, y| {
             if let Some(ui) = ui_weak.upgrade() {
-                open_path_for_slot(&ui, &state, slot, path.as_str(), &bridge);
+                activate_item_view_entry_at_point_for_slot(&ui, &state, slot, x, y, &bridge);
             }
         });
     }
@@ -870,10 +905,22 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_pane_request_select(move |slot, path, toggle, range| {
-            if let Some(ui) = ui_weak.upgrade() {
-                select_path_for_slot(&ui, &state, slot, path.as_str(), toggle, range);
-            }
+        let bridge = bridge.clone();
+        ui.on_pane_item_view_item_context_menu(move |slot, x, y, abs_x, abs_y| {
+            ui_weak.upgrade().is_some_and(|ui| {
+                request_item_view_entry_context_menu_at_point_for_slot(
+                    &ui,
+                    &state,
+                    &bridge,
+                    ItemViewContextMenuRequest {
+                        slot,
+                        x,
+                        y,
+                        abs_x,
+                        abs_y,
+                    },
+                )
+            })
         });
     }
 
@@ -937,19 +984,6 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(ui) = ui_weak.upgrade() {
                 clear_selection(&ui, &state);
             }
-        });
-    }
-
-    {
-        let state = Rc::clone(&state);
-        ui.on_pane_is_selected(move |slot, path| {
-            let state = state.borrow();
-            state.panes.pane_for_slot(slot).is_some_and(|pane| {
-                pane.selection
-                    .paths
-                    .iter()
-                    .any(|selected| selected == path.as_str())
-            })
         });
     }
 
@@ -1453,19 +1487,28 @@ fn register_pane_routing_callbacks(
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_activated(move |slot, path| {
+        routing.on_item_view_item_pressed(move |slot, x, y, toggle, range| {
+            ui_weak.upgrade().is_some_and(|ui| {
+                ui.invoke_route_pane_item_view_item_pressed(slot, x, y, toggle, range)
+            })
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_item_view_item_activated(move |slot, x, y| {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_activated(slot, path);
+                ui.invoke_route_pane_item_view_item_activated(slot, x, y);
             }
         });
     }
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_request_select(move |slot, path, toggle, range| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_request_select(slot, path, toggle, range);
-            }
+        routing.on_item_view_item_context_menu(move |slot, x, y, abs_x, abs_y| {
+            ui_weak.upgrade().is_some_and(|ui| {
+                ui.invoke_route_pane_item_view_item_context_menu(slot, x, y, abs_x, abs_y)
+            })
         });
     }
 
@@ -1512,28 +1555,6 @@ fn register_pane_routing_callbacks(
         routing.on_item_view_blank_cancelled(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.invoke_route_pane_item_view_blank_cancelled(slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(state);
-        let bridge = bridge.clone();
-        routing.on_request_context_menu(move |slot, path, name, size, modified, is_dir, x, y| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let service_menu_paths =
-                    context_service_menu::item_paths(&state, slot, path.as_str());
-                context_service_menu::refresh_actions_async(
-                    &ui,
-                    &state,
-                    &bridge,
-                    slot,
-                    service_menu_paths,
-                );
-                ui.invoke_route_pane_request_context_menu(
-                    slot, path, name, size, modified, is_dir, x, y,
-                );
             }
         });
     }
@@ -3780,6 +3801,105 @@ fn select_path_for_slot(
     update_selection_ui_for_slot(ui, state, slot, &selected_paths);
 }
 
+fn item_view_entry_at_point_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    x: f32,
+    y: f32,
+) -> Option<FileEntry> {
+    let state_ref = state.borrow();
+    entry_at_pane_point(ui, &state_ref, slot, x, y)
+}
+
+fn press_item_view_entry_at_point_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    x: f32,
+    y: f32,
+    toggle: bool,
+    range: bool,
+) -> bool {
+    let Some(entry) = item_view_entry_at_point_for_slot(ui, state, slot, x, y) else {
+        return false;
+    };
+    select_path_for_slot(ui, state, slot, entry.path.as_str(), toggle, range);
+    true
+}
+
+fn activate_item_view_entry_at_point_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    x: f32,
+    y: f32,
+    bridge: &AsyncBridge,
+) {
+    let Some(entry) = item_view_entry_at_point_for_slot(ui, state, slot, x, y) else {
+        return;
+    };
+    open_path_for_slot(ui, state, slot, entry.path.as_str(), bridge);
+}
+
+#[derive(Clone, Copy)]
+struct ItemViewContextMenuRequest {
+    slot: i32,
+    x: f32,
+    y: f32,
+    abs_x: f32,
+    abs_y: f32,
+}
+
+fn request_item_view_entry_context_menu_at_point_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    request: ItemViewContextMenuRequest,
+) -> bool {
+    let Some(entry) =
+        item_view_entry_at_point_for_slot(ui, state, request.slot, request.x, request.y)
+    else {
+        return false;
+    };
+    let path = entry.path.to_string();
+    let already_selected = {
+        let state_ref = state.borrow();
+        state_ref
+            .panes
+            .pane_for_slot(request.slot)
+            .is_some_and(|pane| {
+                pane.selection
+                    .paths
+                    .iter()
+                    .any(|selected| selected == path.as_str())
+            })
+    };
+    if !already_selected {
+        select_path_for_slot(ui, state, request.slot, path.as_str(), false, false);
+    }
+
+    let service_menu_paths = context_service_menu::item_paths(state, request.slot, path.as_str());
+    context_service_menu::refresh_actions_async(
+        ui,
+        state,
+        bridge,
+        request.slot,
+        service_menu_paths,
+    );
+    ui.invoke_route_pane_request_context_menu(
+        request.slot,
+        entry.path,
+        entry.name,
+        entry.size,
+        entry.modified,
+        entry.is_dir,
+        request.abs_x,
+        request.abs_y,
+    );
+    true
+}
+
 fn select_all_visible(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let slot = { state.borrow().panes.focused_slot() };
     let selected_paths = {
@@ -5932,8 +6052,8 @@ mod tests {
     fn context_service_menu_actions_are_pane_routed_and_model_backed() {
         let source = include_str!("main.rs");
         let item_route = source
-            .split_once("routing.on_request_context_menu")
-            .and_then(|(_, rest)| rest.split_once("routing.on_request_blank_context_menu"))
+            .split_once("fn request_item_view_entry_context_menu_at_point_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn select_all_visible("))
             .map(|(body, _)| body)
             .expect("item context menu routing body should be present");
         let blank_route = source
@@ -5943,10 +6063,18 @@ mod tests {
             .expect("blank context menu routing body should be present");
 
         assert!(
-            item_route.contains("context_service_menu::item_paths(&state, slot, path.as_str())")
-                && item_route.contains("context_service_menu::refresh_actions_async(")
-                && item_route.contains("&ui,\n                    &state,\n                    &bridge,\n                    slot,"),
-            "item service menu discovery should be routed through the pane slot that opened the context menu"
+            item_route.contains(
+                "item_view_entry_at_point_for_slot(ui, state, request.slot, request.x, request.y)"
+            )
+                && item_route
+                    .contains("select_path_for_slot(ui, state, request.slot, path.as_str(), false, false);")
+                && item_route
+                    .contains("context_service_menu::item_paths(state, request.slot, path.as_str())")
+                && item_route.contains(
+                    "context_service_menu::refresh_actions_async(\n        ui,\n        state,\n        bridge,\n        request.slot,\n        service_menu_paths,\n    );"
+                )
+                && item_route.contains("ui.invoke_route_pane_request_context_menu("),
+            "item service menu discovery should be driven by Rust coordinate hit-test for the pane slot that opened the context menu"
         );
         assert!(
             blank_route.contains("context_service_menu::blank_paths(&state, slot)")

@@ -26,19 +26,19 @@ export component SplitPaneView inherits Rectangle {
     in property <string> drag-target-path;
     callback view_changed();
     callback focus_requested();
-    callback activated(string);
-    callback request_select(string, bool, bool);
+    callback item_pressed(float, float, bool, bool) -> bool;
+    callback item_activated(float, float);
+    callback item_context_menu(float, float, length, length) -> bool;
     callback blank_pressed(float, float, int, float, float, float, bool);
     callback blank_moved(float, float) -> bool;
     callback blank_released(float, float);
     callback blank_cancelled();
-    callback request_context_menu(string, string, string, string, bool, length, length);
     callback request_blank_context_menu(length, length);
     callback navigate_back();
     callback navigate_forward();
     callback zoom_in();
     callback zoom_out();
-    pure callback make_drag_data(string, bool) -> data-transfer;
+    pure callback make_drag_data_at(float, float) -> data-transfer;
 
     clip: true;
 
@@ -49,7 +49,6 @@ export component SplitPaneView inherits Rectangle {
     private property <color> drop-border-color: root.dark ? #f59e0b : #d97706;
     private property <color> drop-background-color: root.dark ? #3a2a12 : #fff7dd;
     private property <color> selected-background-color: root.dark ? #223f4f : #e4f0f8;
-    private property <color> hover-background-color: root.dark ? #171b1f : #f0f4f8;
     private property <color> metadata-group-color: root.dark ? #9bc7ec : #2b6f9f;
     private property <color> metadata-location-color: root.dark ? #9aa5af : #697684;
     private property <color> title-color: root.dark ? #edf2f7 : #1f2933;
@@ -75,6 +74,8 @@ export component SplitPaneView inherits Rectangle {
     private property <length> selection-rect-start-y: 0px;
     private property <length> selection-rect-current-x: 0px;
     private property <length> selection-rect-current-y: 0px;
+    private property <length> item-pointer-abs-x: -1px;
+    private property <length> item-pointer-abs-y: -1px;
 
     function set-viewport-x(raw: float) {
         root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(raw);
@@ -110,6 +111,35 @@ export component SplitPaneView inherits Rectangle {
         } else {
             root.pan-horizontal(root.scroll-pan-delta(delta-x, delta-y));
         }
+    }
+
+    function set-item-pointer-abs(x: length, y: length) {
+        root.item-pointer-abs-x = x;
+        root.item-pointer-abs-y = y;
+    }
+
+    function clear-item-pointer-abs() {
+        root.item-pointer-abs-x = -1px;
+        root.item-pointer-abs-y = -1px;
+    }
+
+    function begin-blank-press(mouse-x: length, mouse-y: length, toggle: bool) {
+        root.selection-rect-pending = true;
+        root.selection-rect-active = false;
+        root.selection-rect-toggle = toggle;
+        root.selection-rect-start-x = mouse-x + root.viewport-x * 1px;
+        root.selection-rect-start-y = mouse-y;
+        root.selection-rect-current-x = mouse-x + root.viewport-x * 1px;
+        root.selection-rect-current-y = mouse-y;
+        root.blank_pressed(
+            root.selection-rect-start-x / 1px,
+            root.selection-rect-start-y / 1px,
+            root.rows-per-column,
+            root.cell-width / 1px,
+            root.row-height / 1px,
+            root.preview-padding / 1px,
+            root.selection-rect-toggle
+        );
     }
 
     function relayout-visible-slice() {
@@ -188,135 +218,118 @@ export component SplitPaneView inherits Rectangle {
         height: parent.height;
         clip: true;
 
-        TouchArea {
+        item-drag-area := DragArea {
             width: parent.width;
             height: parent.height;
-            pointer-event(event) => {
-                if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
-                    root.focus_requested();
-                    root.navigate_back();
-                } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
-                    root.focus_requested();
-                    root.navigate_forward();
-                } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
-                    root.focus_requested();
-                    root.selection-rect-pending = true;
-                    root.selection-rect-active = false;
-                    root.selection-rect-toggle = event.modifiers.control;
-                    root.selection-rect-start-x = self.mouse-x + root.viewport-x * 1px;
-                    root.selection-rect-start-y = self.mouse-y;
-                    root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
-                    root.selection-rect-current-y = self.mouse-y;
-                    root.blank_pressed(
-                        root.selection-rect-start-x / 1px,
-                        root.selection-rect-start-y / 1px,
-                        root.rows-per-column,
-                        root.cell-width / 1px,
-                        root.row-height / 1px,
-                        root.preview-padding / 1px,
-                        root.selection-rect-toggle
-                    );
-                } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
-                    if (root.selection-rect-pending) {
+            enabled: root.interactive;
+            data: root.make_drag_data_at(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px);
+
+            input-touch := TouchArea {
+                width: parent.width;
+                height: parent.height;
+
+                changed has-hover => {
+                    if (!self.has-hover) {
+                        root.clear-item-pointer-abs();
+                    }
+                }
+
+                pointer-event(event) => {
+                    root.set-item-pointer-abs(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
+                        root.focus_requested();
+                        root.navigate_back();
+                    } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
+                        root.focus_requested();
+                        root.navigate_forward();
+                    } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                        root.focus_requested();
+                        if (root.item_pressed(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px, event.modifiers.control, event.modifiers.shift)) {
+                            root.selection-rect-active = false;
+                            root.selection-rect-pending = false;
+                        } else {
+                            root.begin-blank-press(self.mouse-x, self.mouse-y, event.modifiers.control);
+                        }
+                    } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                        if (root.selection-rect-pending) {
+                            root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
+                            root.selection-rect-current-y = self.mouse-y;
+                            root.blank_released(root.selection-rect-current-x / 1px, root.selection-rect-current-y / 1px);
+                        }
+                        root.selection-rect-active = false;
+                        root.selection-rect-pending = false;
+                    } else if (root.interactive && event.kind == PointerEventKind.cancel) {
+                        if (root.selection-rect-pending) {
+                            root.blank_cancelled();
+                        }
+                        root.selection-rect-active = false;
+                        root.selection-rect-pending = false;
+                    } else if (root.interactive && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                        root.focus_requested();
+                        if (!root.item_context_menu(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px, root.item-pointer-abs-x, root.item-pointer-abs-y)) {
+                            root.request_blank_context_menu(root.item-pointer-abs-x, root.item-pointer-abs-y);
+                        }
+                    }
+                }
+
+                double-clicked => {
+                    if (root.interactive) {
+                        root.focus_requested();
+                        root.item_activated(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px);
+                    }
+                }
+
+                moved => {
+                    root.set-item-pointer-abs(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    if (root.interactive && self.pressed && root.selection-rect-pending) {
                         root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
                         root.selection-rect-current-y = self.mouse-y;
-                        root.blank_released(root.selection-rect-current-x / 1px, root.selection-rect-current-y / 1px);
+                        root.selection-rect-active = root.blank_moved(root.selection-rect-current-x / 1px, root.selection-rect-current-y / 1px);
                     }
-                    root.selection-rect-active = false;
-                    root.selection-rect-pending = false;
-                } else if (root.interactive && event.kind == PointerEventKind.cancel) {
-                    if (root.selection-rect-pending) {
-                        root.blank_cancelled();
+                }
+
+                scroll-event(event) => {
+                    if (root.interactive) {
+                        root.handle-scroll(event.delta-x, event.delta-y, event.modifiers.control);
                     }
-                    root.selection-rect-active = false;
-                    root.selection-rect-pending = false;
-                } else if (root.interactive && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                    root.focus_requested();
-                    root.request_blank_context_menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    return accept;
                 }
             }
-            moved => {
-                if (root.interactive && self.pressed && root.selection-rect-pending) {
-                    root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
-                    root.selection-rect-current-y = self.mouse-y;
-                    root.selection-rect-active = root.blank_moved(root.selection-rect-current-x / 1px, root.selection-rect-current-y / 1px);
-                }
-            }
-            scroll-event(event) => {
-                if (root.interactive) {
-                    root.handle-scroll(event.delta-x, event.delta-y, event.modifiers.control);
-                }
-                return accept;
-            }
-        }
 
-        slice-layer := Rectangle {
-            x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;
-            y: 0px;
-            width: root.virtual-slice-width;
-            height: parent.height;
+            slice-layer := Rectangle {
+                x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;
+                y: 0px;
+                width: root.virtual-slice-width;
+                height: parent.height;
 
-            for item in root.entries: FileTile {
-                drag-data-source: root.make_drag_data(item.path, item.is_dir);
-                x: item.tile_x * 1px;
-                y: item.tile_y * 1px;
-                width: item.tile_width * 1px;
-                entry: item;
-                selected: item.selected;
-                dark: root.dark;
-                show-location: root.show-location;
-                interactive: root.interactive;
-                drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;
-                selection-border-color: root.selection-border-color;
-                drop-border-color: root.drop-border-color;
-                drop-background-color: root.drop-background-color;
-                selected-background-color: root.selected-background-color;
-                hover-background-color: root.hover-background-color;
-                metadata-group-color: root.metadata-group-color;
-                metadata-location-color: root.metadata-location-color;
-                title-color: root.title-color;
-                request_select(path, toggle, range) => {
-                    root.focus_requested();
-                    root.request_select(path, toggle, range);
-                }
-                request_context_menu(path, name, x, y) => {
-                    root.focus_requested();
-                    root.request_context_menu(path, name, item.size, item.modified, item.is_dir, x, y);
-                }
-                activated(path) => {
-                    root.focus_requested();
-                    root.activated(path);
-                }
-                navigate_back => {
-                    root.focus_requested();
-                    root.navigate_back();
-                }
-                navigate_forward => {
-                    root.focus_requested();
-                    root.navigate_forward();
-                }
-                zoom_in => {
-                    root.focus_requested();
-                    root.zoom_in();
-                }
-                zoom_out => {
-                    root.focus_requested();
-                    root.zoom_out();
-                }
-                pan_horizontal(delta) => {
-                    root.pan-horizontal(delta);
+                for item in root.entries: FileTile {
+                    x: item.tile_x * 1px;
+                    y: item.tile_y * 1px;
+                    width: item.tile_width * 1px;
+                    entry: item;
+                    selected: item.selected;
+                    dark: root.dark;
+                    show-location: root.show-location;
+                    drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;
+                    selection-border-color: root.selection-border-color;
+                    drop-border-color: root.drop-border-color;
+                    drop-background-color: root.drop-background-color;
+                    selected-background-color: root.selected-background-color;
+                    metadata-group-color: root.metadata-group-color;
+                    metadata-location-color: root.metadata-location-color;
+                    title-color: root.title-color;
                 }
             }
-        }
 
-        if (root.selection-rect-active): Rectangle {
-            x: min(root.selection-rect-start-x, root.selection-rect-current-x) - root.viewport-x * 1px;
-            y: min(root.selection-rect-start-y, root.selection-rect-current-y);
-            width: max(1px, max(root.selection-rect-start-x, root.selection-rect-current-x) - min(root.selection-rect-start-x, root.selection-rect-current-x));
-            height: max(1px, max(root.selection-rect-start-y, root.selection-rect-current-y) - min(root.selection-rect-start-y, root.selection-rect-current-y));
-            background: root.dark ? #51a9d433 : #2b86b733;
-            border-width: 1px;
-            border-color: root.dark ? #51a9d4 : #2b86b7;
+            if (root.selection-rect-active): Rectangle {
+                x: min(root.selection-rect-start-x, root.selection-rect-current-x) - root.viewport-x * 1px;
+                y: min(root.selection-rect-start-y, root.selection-rect-current-y);
+                width: max(1px, max(root.selection-rect-start-x, root.selection-rect-current-x) - min(root.selection-rect-start-x, root.selection-rect-current-x));
+                height: max(1px, max(root.selection-rect-start-y, root.selection-rect-current-y) - min(root.selection-rect-start-y, root.selection-rect-current-y));
+                background: root.dark ? #51a9d433 : #2b86b733;
+                border-width: 1px;
+                border-color: root.dark ? #51a9d4 : #2b86b7;
+            }
         }
 
         if (root.scrollbar-visible): scrollbar-track := Rectangle {

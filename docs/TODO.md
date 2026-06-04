@@ -443,8 +443,9 @@ Acceptance for all:
   - Acceptance: DnD remains on Slint's native `data-transfer` path, with Rust hit-test deciding item/blank/drop target semantics for both internal file drags and external file-list clipboard/paste-adjacent workflows.
   - Acceptance: `/etc`, `/usr/lib`, split view dual-pane scrolling, end-of-directory fullscreen/resize, rectangle selection, context menus, and drag/drop are tested against the current self-managed viewport + `FileTile` visible-slice path.
   - Reference: Dolphin's `kfileitemmodel`, `kitemlistviewlayouter`, `kitemlistview`, `kitemlistcontroller`, and `kstandarditemlistwidget` split. The goal is Dolphin-like model/layouter/controller/rendering ownership, not a lower-level replacement for `Flickable` alone.
-  - Current: the main file area now uses `Rectangle + TouchArea + self-managed scrollbar` directly, and transfer/DnD target hit-test plus rectangle-selection item geometry have moved into `src/app/item_view.rs`.
+  - Current: the main file area now uses `Rectangle + TouchArea + DragArea + self-managed scrollbar` directly, and transfer/DnD target hit-test plus rectangle-selection item geometry have moved into `src/app/item_view.rs`.
   - Current: each pane owns a pane-local `ItemViewInputState`; Slint now reports blank-area press/move/release/cancel events while Rust decides whether the gesture clears selection or commits a rectangle selection.
+  - Current: item press, double-click activation, item context menus, and the internal main-view drag source are pane-level coordinate events; `FileTile` no longer owns `TouchArea`, `DragArea`, wheel handling, activation callbacks, context-menu callbacks, or path-based DnD data sources.
   - Current: visible tile `x/y/width` plus tile sizing/font display tokens are projected by the Rust item-view render plan before the virtual slice reaches Slint, and pane row data carries Rust-projected rows/cell/content/scroll metrics, so `SplitPaneView` no longer computes column/row geometry, scrollbar extent, or zoom-derived tile metrics inside the Slint main-view layer.
   - Next: remove the remaining `FileTile` Repeater as the core rendering path by adding the renderer/reuse side of the Dolphin-style item view layer, then decide whether to use reusable primitives or `SharedPixelBuffer`/`Image` self-rendered tile frames.
 
@@ -622,7 +623,7 @@ Acceptance for all:
 - [x] Keep pointer-scope behavior aligned with COSMIC's mouse-area approach.
   - Reference: `cosmic-files/src/mouse_area.rs`.
   - Acceptance: side-button navigation and future pointer gestures remain scoped to the intended pane and do not leak into sidebar/topbar interactions.
-  - Current: mouse Back/Forward follows COSMIC's area-owned pointer handling model: Slint `PointerEventButton.back` / `forward` handling lives on the main-pane blank/grid layer and `FileTile`, while sidebar, topbar, splitter, menus, and status bar do not emit history navigation.
+  - Current: mouse Back/Forward follows COSMIC's area-owned pointer handling model: Slint `PointerEventButton.back` / `forward` handling lives on the main-pane viewport input layer, while sidebar, topbar, splitter, menus, and status bar do not emit history navigation.
   - Current: a source-level regression test guards that side-button navigation stays out of non-main-view Slint sources.
 
 - [x] Re-evaluate transparent external-editor saves after D-Bus writeback is stable.

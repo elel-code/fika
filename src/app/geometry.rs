@@ -2006,19 +2006,26 @@ mod tests {
                 && pane_routing.contains("callback go-back(int);")
                 && pane_routing.contains("callback go-forward(int);")
                 && pane_routing.contains("callback view-changed(int);")
-                && pane_routing.contains("callback activated(int, string);")
-                && pane_routing.contains("callback request-select(int, string, bool, bool);")
+                && pane_routing.contains(
+                    "callback item-view-item-pressed(int, float, float, bool, bool) -> bool;"
+                )
+                && pane_routing.contains("callback item-view-item-activated(int, float, float);")
+                && pane_routing.contains(
+                    "callback item-view-item-context-menu(int, float, float, length, length) -> bool;"
+                )
                 && pane_routing.contains(
                     "callback item-view-blank-pressed(int, float, float, int, float, float, float, bool);"
                 )
                 && pane_routing.contains("callback item-view-blank-moved(int, float, float) -> bool;")
                 && pane_routing.contains("callback item-view-blank-released(int, float, float);")
                 && pane_routing.contains("callback item-view-blank-cancelled(int);")
-                && pane_routing.contains("callback request-context-menu(int, string, string, string, string, bool, length, length);")
                 && pane_routing.contains("callback request-blank-context-menu(int, length, length);")
                 && pane_routing.contains("callback drop-target-path(int, float, float, string) -> string;")
                 && pane_routing.contains("callback drop-allowed(int, float, float, string) -> bool;")
                 && pane_routing.contains("callback prepare-transfer(int, string, float, float) -> bool;")
+                && !pane_routing.contains("callback activated")
+                && !pane_routing.contains("request-select")
+                && !pane_routing.contains("callback request-context-menu")
                 && !pane_routing.contains("select-rect")
                 && !pane_routing.contains("clear-selection")
                 && !pane_routing.contains("is-selected"),
@@ -2068,7 +2075,9 @@ mod tests {
             "FilePane should not tint the entire pane during drag; only concrete drop targets should show feedback"
         );
         assert!(
-            file_pane.contains("callback request_context_menu")
+            file_pane.contains("callback item_view_item_pressed")
+                && file_pane.contains("callback item_view_item_activated")
+                && file_pane.contains("callback item_view_item_context_menu")
                 && file_pane.contains("callback request_blank_context_menu")
                 && file_pane.contains("callback item_view_blank_pressed")
                 && file_pane.contains("callback item_view_blank_moved")
@@ -2077,7 +2086,10 @@ mod tests {
                 && file_pane.contains("callback drop_target_path")
                 && file_pane.contains("callback drop_allowed")
                 && file_pane.contains("callback prepare_transfer")
-                && file_pane.contains("callback make_drag_data"),
+                && file_pane.contains("callback make_drag_data_at")
+                && !file_pane.contains("callback request_context_menu")
+                && !file_pane.contains("callback activated")
+                && !file_pane.contains("callback request_select"),
             "FilePane should expose the full interactive surface shared by both panes"
         );
         assert!(
@@ -2087,12 +2099,16 @@ mod tests {
                 && file_pane.contains("callback go_back(int);")
                 && file_pane.contains("callback go_forward(int);")
                 && file_pane.contains("callback view_changed(int);")
-                && file_pane.contains("callback activated(int, string);")
-                && file_pane.contains("callback request_select(int, string, bool, bool);")
+                && file_pane.contains(
+                    "callback item_view_item_pressed(int, float, float, bool, bool) -> bool;"
+                )
+                && file_pane.contains("callback item_view_item_activated(int, float, float);")
+                && file_pane.contains(
+                    "callback item_view_item_context_menu(int, float, float, length, length) -> bool;"
+                )
                 && file_pane.contains("callback item_view_blank_pressed(int,")
-                && file_pane.contains("callback request_context_menu(int,")
                 && file_pane
-                    .contains("pure callback make_drag_data(int, string, bool) -> data-transfer;")
+                    .contains("pure callback make_drag_data_at(int, float, float) -> data-transfer;")
                 && !file_pane.contains("pure callback is_selected"),
             "FilePane callbacks should carry the pane slot instead of baking in left/right behavior"
         );
@@ -2102,7 +2118,10 @@ mod tests {
                 && file_pane.contains("go_forward => { root.go_forward(root.pane-slot); }")
                 && file_pane
                     .contains("path_submitted(path) => { root.path_submitted(root.pane-slot, path); }")
-                && file_pane.contains("root.request_context_menu(root.pane-slot, path, name, size, modified, is-dir, x, y);")
+                && file_pane.contains("make_drag_data_at(x, y) => {\n                    root.make_drag_data_at(root.pane-slot, x, y)\n                }")
+                && file_pane.contains("item_pressed(x, y, toggle, range) => {\n                    root.item_view_item_pressed(root.pane-slot, x, y, toggle, range)\n                }")
+                && file_pane.contains("item_activated(x, y) => {\n                    root.item_view_item_activated(root.pane-slot, x, y);")
+                && file_pane.contains("item_context_menu(x, y, abs-x, abs-y) => {\n                    root.item_view_item_context_menu(root.pane-slot, x, y, abs-x, abs-y)\n                }")
                 && file_pane.contains("navigate_back => { root.go_back(root.pane-slot); }")
                 && file_pane.contains("navigate_forward => { root.go_forward(root.pane-slot); }")
                 && file_pane.contains(
@@ -2124,13 +2143,13 @@ mod tests {
             "cancel_search => { PaneRouting.cancel-search(); }",
             "search_close_requested => { PaneRouting.search-close-requested(); }",
             "view_changed(slot) => { PaneRouting.view-changed(slot); }",
-            "activated(slot, path) => { PaneRouting.activated(slot, path); }",
-            "request_select(slot, path, toggle, range) => {\n        PaneRouting.request-select(slot, path, toggle, range);\n    }",
+            "item_view_item_pressed(slot, x, y, toggle, range) => {\n        PaneRouting.item-view-item-pressed(slot, x, y, toggle, range)\n    }",
+            "item_view_item_activated(slot, x, y) => {\n        PaneRouting.item-view-item-activated(slot, x, y);\n    }",
+            "item_view_item_context_menu(slot, x, y, abs-x, abs-y) => {\n        PaneRouting.item-view-item-context-menu(slot, x, y, abs-x, abs-y)\n    }",
             "item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle) => {\n        PaneRouting.item-view-blank-pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);\n    }",
             "item_view_blank_moved(slot, x, y) => {\n        PaneRouting.item-view-blank-moved(slot, x, y)\n    }",
             "item_view_blank_released(slot, x, y) => {\n        PaneRouting.item-view-blank-released(slot, x, y);\n    }",
             "item_view_blank_cancelled(slot) => {\n        PaneRouting.item-view-blank-cancelled(slot);\n    }",
-            "request_context_menu(slot, path, name, size, modified, is-dir, x, y) => {\n        PaneRouting.request-context-menu(slot, path, name, size, modified, is-dir, x, y);\n    }",
             "request_blank_context_menu(slot, x, y) => {\n        PaneRouting.request-blank-context-menu(slot, x, y);\n    }",
             "zoom_in(slot) => { PaneRouting.zoom-in(slot); }",
             "zoom_out(slot) => { PaneRouting.zoom-out(slot); }",
@@ -2146,7 +2165,7 @@ mod tests {
             "chooser_accept(value) => { PaneRouting.chooser-accept(value); }",
             "chooser_filter_requested(slot, x, y) => { PaneRouting.chooser-filter-requested(slot, x, y); }",
             "chooser_choice_requested(slot, index, x, y) => {\n        PaneRouting.chooser-choice-requested(slot, index, x, y);\n    }",
-            "make_drag_data(slot, path, is-dir) => {\n        is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)\n    }",
+            "make_drag_data_at(slot, x, y) => {\n        DndApi.make-drag-at(slot, x, y)\n    }",
         ];
         for binding in pane_slot_bindings {
             assert!(
@@ -2278,12 +2297,21 @@ mod tests {
         assert!(
             route_functions.contains("public function route-pane-view-changed(slot: int)")
                 && route_functions.contains("root.pane_view_changed(slot);")
-                && route_functions.contains("public function route-pane-activated(slot: int, path: string)")
-                && route_functions.contains("root.pane_activated(slot, path);")
                 && route_functions.contains(
-                    "public function route-pane-request-select(slot: int, path: string, toggle: bool, range: bool)"
+                    "public function route-pane-item-view-item-pressed(slot: int, x: float, y: float, toggle: bool, range: bool) -> bool"
                 )
-                && route_functions.contains("root.pane_request_select(slot, path, toggle, range);")
+                && route_functions
+                    .contains("return root.pane_item_view_item_pressed(slot, x, y, toggle, range);")
+                && route_functions.contains(
+                    "public function route-pane-item-view-item-activated(slot: int, x: float, y: float)"
+                )
+                && route_functions.contains("root.pane_item_view_item_activated(slot, x, y);")
+                && route_functions.contains(
+                    "public function route-pane-item-view-item-context-menu(slot: int, x: float, y: float, abs-x: length, abs-y: length) -> bool"
+                )
+                && route_functions.contains(
+                    "return root.pane_item_view_item_context_menu(slot, x, y, abs-x, abs-y);"
+                )
                 && route_functions.contains(
                     "public function route-pane-item-view-blank-pressed(slot: int,"
                 )
@@ -2297,16 +2325,18 @@ mod tests {
                     "return root.pane_item_view_blank_moved(slot, x, y);"
                 )
                 && !route_functions.contains("route-pane-select-rect")
-                && !route_functions.contains("root.pane_select_rect"),
+                && !route_functions.contains("root.pane_select_rect")
+                && !route_functions.contains("route-pane-activated")
+                && !route_functions.contains("route-pane-request-select")
+                && !route_functions.contains("root.pane_request_select"),
             "shared pane route functions should dispatch activation, item-view input, selection, and view state by slot"
         );
         assert!(
             route_functions.contains("public function route-pane-request-context-menu(slot: int,")
                 && context_menu_route.contains("root.sync_clipboard_state();")
                 && !context_menu_route.contains("root.refresh_clipboard_availability();")
-                && context_menu_route.contains("if (!root.pane_is_selected(slot, path))")
-                && context_menu_route
-                    .contains("root.pane_request_select(slot, path, false, false);")
+                && !context_menu_route.contains("root.pane_is_selected")
+                && !context_menu_route.contains("root.pane_request_select")
                 && context_menu_route.contains("root.show-context-menu(1, x, y);")
                 && route_functions
                     .contains("public function route-pane-request-blank-context-menu(slot: int,")
@@ -2394,20 +2424,19 @@ mod tests {
             ),
             "ordinary pane scrolling should not request focus after every viewport change"
         );
-        let tile_activation = split_pane
-            .split_once("activated(path) => {")
-            .expect("tile activation handler should be present")
-            .1
-            .split_once("navigate_back =>")
-            .expect("tile activation handler should precede side-button handlers")
-            .0;
-        assert!(
-            tile_activation.contains("root.focus_requested();")
-                && tile_activation.contains("root.activated(path);"),
-            "tile activation should focus the pane before opening the path"
-        );
         assert!(!split_pane.contains("Click to focus it."));
-        assert!(split_pane.contains("callback activated(string);"));
+        assert!(split_pane.contains("callback item_pressed(float, float, bool, bool) -> bool;"));
+        assert!(split_pane.contains("callback item_activated(float, float);"));
+        assert!(
+            split_pane
+                .contains("callback item_context_menu(float, float, length, length) -> bool;")
+        );
+        assert!(
+            split_pane.contains("pure callback make_drag_data_at(float, float) -> data-transfer;")
+        );
+        assert!(!split_pane.contains("callback activated(string);"));
+        assert!(!split_pane.contains("callback request_select"));
+        assert!(!split_pane.contains("callback request_context_menu"));
         assert!(split_pane.contains("callback zoom_in();"));
         assert!(split_pane.contains("callback zoom_out();"));
         assert!(
@@ -2428,13 +2457,16 @@ mod tests {
         let file_tile = include_str!("../../ui/file_tile.slint");
         let widgets = include_str!("../../ui/widgets.slint");
         assert!(
-            file_tile
-                .contains("function scroll-pan-delta(delta-x: length, delta-y: length) -> length")
-                && file_tile.contains(
-                    "root.pan_horizontal(root.scroll-pan-delta(event.delta-x, event.delta-y));"
-                )
-                && !file_tile.contains("delta-y + delta-x"),
-            "tile scrolling should use the same dominant-axis wheel rule as blank pane scrolling"
+            !file_tile.contains("TouchArea")
+                && !file_tile.contains("DragArea")
+                && !file_tile.contains("callback activated")
+                && !file_tile.contains("callback request_select")
+                && !file_tile.contains("callback request_context_menu")
+                && !file_tile.contains("scroll-event")
+                && !file_tile.contains("pointer-event")
+                && !file_tile.contains("double-clicked")
+                && !file_tile.contains("drag-data-source"),
+            "FileTile should stay a pure renderer; pane-level input owns selection, activation, context menus, wheel events, and DnD"
         );
         assert!(
             !split_pane.contains("private property <length> tile-height:")
@@ -2485,16 +2517,30 @@ mod tests {
         assert!(split_pane.contains("scroll-event(event)"));
         assert!(split_pane.contains("for item in root.entries: FileTile"));
         assert!(
-            split_pane.contains("drag-data-source: root.make_drag_data(item.path, item.is_dir);")
+            split_pane.contains("item-drag-area := DragArea")
+                && split_pane.contains("data: root.make_drag_data_at(")
+                && split_pane.contains("input-touch := TouchArea")
+                && split_pane.contains(
+                    "root.item_pressed(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px, event.modifiers.control, event.modifiers.shift)"
+                )
+                && split_pane.contains(
+                    "root.item_context_menu(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px, root.item-pointer-abs-x, root.item-pointer-abs-y)"
+                )
+                && split_pane.contains(
+                    "root.item_activated(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px);"
+                )
+                && split_pane.contains("root.begin-blank-press(")
+                && !split_pane.contains("drag-data-source:")
+                && !split_pane.contains("activated(path) =>")
+                && !split_pane.contains("request_select(path")
+                && !split_pane.contains("request_context_menu(path"),
+            "SplitPaneView should use one pane-level input controller with Rust coordinate hit-test instead of per-tile handlers"
         );
         assert!(split_pane.contains("show-location: root.show-location;"));
         assert!(split_pane.contains(
             "drop-target: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path;"
         ));
-        assert!(split_pane.contains(
-            "root.request_context_menu(path, name, item.size, item.modified, item.is_dir, x, y);"
-        ));
-        assert!(split_pane.contains("root.pan-horizontal(delta);"));
+        assert!(!split_pane.contains("root.request_context_menu("));
         assert!(
             split_pane.contains("slice-layer := Rectangle")
                 && split_pane.contains(

@@ -7,123 +7,65 @@ export component FileTile inherits Rectangle {
     in property <bool> dark;
     in property <bool> drop-target;
     in property <bool> show-location;
-    in property <bool> interactive: true;
-    in property <data-transfer> drag-data-source;
     in property <color> selection-border-color;
     in property <color> drop-border-color;
     in property <color> drop-background-color;
     in property <color> selected-background-color;
-    in property <color> hover-background-color;
     in property <color> metadata-group-color;
     in property <color> metadata-location-color;
     in property <color> title-color;
-    callback activated(string);
-    callback request_select(string, bool, bool);
-    callback request_context_menu(string, string, length, length);
-    callback zoom_in();
-    callback zoom_out();
-    callback pan_horizontal(length);
-    callback navigate_back();
-    callback navigate_forward();
-
-    function scroll-pan-delta(delta-x: length, delta-y: length) -> length {
-        return (delta-x < 0px ? -delta-x : delta-x) > (delta-y < 0px ? -delta-y : delta-y) ? -delta-x : -delta-y;
-    }
 
     height: root.entry.tile_height * 1px;
     border-radius: 7px;
     border-width: selected || drop-target ? 1px : 0px;
     border-color: drop-target ? root.drop-border-color : root.selection-border-color;
-    background: drop-target ? root.drop-background-color : (selected ? root.selected-background-color : (root.interactive && touch-area.has-hover ? root.hover-background-color : transparent));
+    background: drop-target ? root.drop-background-color : (selected ? root.selected-background-color : transparent);
 
-    drag-area := DragArea {
-        enabled: root.interactive && root.entry.path != "";
-        data: root.drag-data-source;
+    HorizontalLayout {
+        padding-left: root.entry.tile_padding_x * 1px;
+        padding-right: root.entry.tile_padding_x * 1px;
+        spacing: root.entry.tile_spacing * 1px;
 
-        touch-area := TouchArea {
-            width: parent.width;
-            height: parent.height;
-
-            pointer-event(event) => {
-                if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
-                    root.navigate_back();
-                } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
-                    root.navigate_forward();
-                } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
-                    root.request_select(root.entry.path, event.modifiers.control, event.modifiers.shift);
-                } else if (root.interactive && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                    root.request_context_menu(root.entry.path, root.entry.name, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-                }
-            }
-
-            double-clicked => {
-                if (root.interactive) {
-                    root.activated(root.entry.path);
-                }
-            }
-
-            scroll-event(event) => {
-                if (!root.interactive) {
-                    return accept;
-                } else if (event.modifiers.control && event.delta-y < 0px) {
-                    root.zoom_out();
-                    return accept;
-                } else if (event.modifiers.control && event.delta-y > 0px) {
-                    root.zoom_in();
-                    return accept;
-                } else {
-                    root.pan_horizontal(root.scroll-pan-delta(event.delta-x, event.delta-y));
-                    return accept;
-                }
-            }
+        if (!root.entry.is_dir && root.entry.thumbnail_state == 2): Image {
+            width: root.entry.thumbnail_width * 1px;
+            height: root.entry.thumbnail_height * 1px;
+            source: root.entry.thumbnail;
+            image-fit: contain;
         }
 
-        HorizontalLayout {
-            padding-left: root.entry.tile_padding_x * 1px;
-            padding-right: root.entry.tile_padding_x * 1px;
-            spacing: root.entry.tile_spacing * 1px;
+        if (root.entry.is_dir || root.entry.thumbnail_state != 2): FolderGlyph {
+            width: root.entry.thumbnail_width * 1px;
+            height: root.entry.thumbnail_height * 1px;
+            dir: root.entry.is_dir;
+            dark: root.dark;
+            doc-font-size: root.entry.glyph_doc_font_size * 1px;
+        }
 
-            if (!root.entry.is_dir && root.entry.thumbnail_state == 2): Image {
-                width: root.entry.thumbnail_width * 1px;
-                height: root.entry.thumbnail_height * 1px;
-                source: root.entry.thumbnail;
-                image-fit: contain;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+
+            if (root.show-location && root.entry.group != ""): Text {
+                text: root.entry.group;
+                color: root.metadata-group-color;
+                font-size: root.entry.metadata_font_size * 1px;
+                font-weight: 700;
+                overflow: elide;
             }
 
-            if (root.entry.is_dir || root.entry.thumbnail_state != 2): FolderGlyph {
-                width: root.entry.thumbnail_width * 1px;
-                height: root.entry.thumbnail_height * 1px;
-                dir: root.entry.is_dir;
-                dark: root.dark;
-                doc-font-size: root.entry.glyph_doc_font_size * 1px;
+            Text {
+                text: root.entry.name;
+                color: root.title-color;
+                font-size: root.entry.title_font_size * 1px;
+                overflow: elide;
+                vertical-alignment: center;
             }
 
-            VerticalLayout {
-                alignment: center;
-                spacing: 2px;
-
-                if (root.show-location && root.entry.group != ""): Text {
-                    text: root.entry.group;
-                    color: root.metadata-group-color;
-                    font-size: root.entry.metadata_font_size * 1px;
-                    font-weight: 700;
-                    overflow: elide;
-                }
-
-                Text {
-                    text: root.entry.name;
-                    color: root.title-color;
-                    font-size: root.entry.title_font_size * 1px;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
-
-                if (root.show-location && root.entry.location != ""): Text {
-                    text: root.entry.location;
-                    color: root.metadata-location-color;
-                    font-size: root.entry.metadata_font_size * 1px;
-                    overflow: elide;
-                }
+            if (root.show-location && root.entry.location != ""): Text {
+                text: root.entry.location;
+                color: root.metadata-location-color;
+                font-size: root.entry.metadata_font_size * 1px;
+                overflow: elide;
             }
         }
     }

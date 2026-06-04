@@ -276,8 +276,9 @@ mod tests {
         assert!(split_pane.contains("root.navigate_forward();"));
 
         let file_tile = include_str!("../../ui/file_tile.slint");
-        assert!(file_tile.contains("PointerEventButton.back"));
-        assert!(file_tile.contains("PointerEventButton.forward"));
+        assert!(!file_tile.contains("PointerEventButton.back"));
+        assert!(!file_tile.contains("PointerEventButton.forward"));
+        assert!(!file_tile.contains("pointer-event"));
 
         for (name, source) in [
             ("top_bar.slint", include_str!("../../ui/top_bar.slint")),
