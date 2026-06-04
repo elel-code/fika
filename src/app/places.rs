@@ -3,13 +3,50 @@ use crate::config::paths::expand_user_path;
 use crate::desktop::systemd_launch;
 use crate::fs::places::{builtin_places, place_entry, save_places};
 use crate::{AppWindow, PlaceEntry, set_status};
-use slint::{ModelRc, VecModel};
+use slint::{Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
 pub(crate) fn sync_places(ui: &AppWindow, places: &[PlaceEntry]) {
-    ui.set_places(ModelRc::new(Rc::new(VecModel::from(places.to_vec()))));
+    let current = ui.get_places();
+    if let Some(model) = update_places_model(&current, places) {
+        ui.set_places(model);
+    }
+}
+
+fn new_places_model(places: &[PlaceEntry]) -> ModelRc<PlaceEntry> {
+    ModelRc::new(Rc::new(VecModel::from(places.to_vec())))
+}
+
+fn update_places_model(
+    current: &ModelRc<PlaceEntry>,
+    places: &[PlaceEntry],
+) -> Option<ModelRc<PlaceEntry>> {
+    let Some(model) = current.as_any().downcast_ref::<VecModel<PlaceEntry>>() else {
+        return Some(new_places_model(places));
+    };
+
+    update_places_vec_model(model, places);
+    None
+}
+
+fn update_places_vec_model(model: &VecModel<PlaceEntry>, places: &[PlaceEntry]) {
+    let shared_rows = model.row_count().min(places.len());
+    for (row, place) in places.iter().take(shared_rows).enumerate() {
+        if model.row_data(row).as_ref() != Some(place) {
+            model.set_row_data(row, place.clone());
+        }
+    }
+
+    while model.row_count() > places.len() {
+        model.remove(model.row_count() - 1);
+    }
+
+    let current_len = model.row_count();
+    if current_len < places.len() {
+        model.extend(places[current_len..].iter().cloned());
+    }
 }
 
 pub(crate) fn contains_place_path(state: &AppState, path: &str) -> bool {
@@ -234,6 +271,17 @@ mod tests {
     use super::*;
     use crate::desktop::systemd_launch::LaunchResult;
 
+    fn test_place(label: &str) -> PlaceEntry {
+        place_entry(label, PathBuf::from(format!("/tmp/{label}")), &label[..1])
+    }
+
+    fn model_labels(model: &ModelRc<PlaceEntry>) -> Vec<String> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|place| place.label.to_string())
+            .collect()
+    }
+
     #[test]
     fn new_window_status_includes_systemd_unit_when_available() {
         assert_eq!(
@@ -283,6 +331,41 @@ mod tests {
 
         assert!(contains_place_path(&state, "/tmp/projects"));
         assert!(!contains_place_path(&state, "/tmp/projects-old"));
+    }
+
+    #[test]
+    fn places_model_updates_rows_without_replacing_vec_model() {
+        let model =
+            new_places_model(&[test_place("Alpha"), test_place("Beta"), test_place("Gamma")]);
+        let original = model.clone();
+
+        assert!(
+            update_places_model(
+                &model,
+                &[test_place("Beta"), test_place("Gamma"), test_place("Delta")],
+            )
+            .is_none()
+        );
+        assert_eq!(model, original);
+        assert_eq!(model_labels(&model), ["Beta", "Gamma", "Delta"]);
+
+        assert!(update_places_model(&model, &[test_place("Beta")]).is_none());
+        assert_eq!(model, original);
+        assert_eq!(model_labels(&model), ["Beta"]);
+
+        assert!(
+            update_places_model(
+                &model,
+                &[
+                    test_place("Beta"),
+                    test_place("Epsilon"),
+                    test_place("Zeta")
+                ],
+            )
+            .is_none()
+        );
+        assert_eq!(model, original);
+        assert_eq!(model_labels(&model), ["Beta", "Epsilon", "Zeta"]);
     }
 
     #[test]

@@ -605,7 +605,11 @@ pub(crate) fn sync_places(ui: &AppWindow, places: &[PlaceEntry]) {
 
 add/remove/rename/reorder 均触发全量重建。
 
-**建议**：搁置。Places 通常 < 20 条目，操作不频繁，投入产出比极低。除非将来支持大列表（数百个书签），否则不值得。
+**实际实现**（✅ 已完成）：`sync_places` 现在优先复用当前 `VecModel<PlaceEntry>`，按行比较后用 `set_row_data` 更新 rename/reorder 变化，用 `remove` 删除尾部多余行，并用 `extend` 追加新增 Places。只有当前模型不是 `VecModel<PlaceEntry>` 时才回退到新建 model。
+
+**收益**：Places add/remove/rename/reorder 不再重建整个 Slint model，避免 sidebar row 组件不必要重建。虽然 Places 列表通常较小，但这让 Places 与文件虚拟列表的 model 更新策略保持一致。
+
+**验证**：`places_model_updates_rows_without_replacing_vec_model` 覆盖 rename/reorder、remove、append 场景，并确认 `ModelRc` 保持同一个 `VecModel`。
 
 ---
 
@@ -740,13 +744,11 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | 阶段 | 改进 | 预计工作量 | 状态 |
 |------|------|-----------|------|
 | **Phase S0** | 缩略图后台 spawn 批量化 | 15min | ✅ 已完成 |
-| **Phase S1** | Places 模型增量更新 | 搁置 | — |
+| **Phase S1** | Places 模型增量更新 | 10min | ✅ 已完成 |
 | **Phase S2** | 右键菜单跳过剪贴板读取 | 10min | ✅ 已完成 |
 | **Phase S3** | `file-operation-shortcuts-blocked` 归约 | 5min | ✅ 已完成 |
 
-**综合建议**：S1 继续搁置，除非 Places 列表规模显著变大。
-
-**综合建议**：滚动 Phase 1-6、焦点 F0-F2/G0、V0-V4、S0/S2/S3 已完成。剩余 S1 搁置。
+**综合建议**：滚动 Phase 1-6、焦点 F0-F2/G0、V0-V4、S0-S3 已完成。后续性能工作应优先来自实测卡顿或新的 Dolphin/COSMIC 对照发现，而不是继续堆叠低收益微优化。
 
 ### 验证方法
 

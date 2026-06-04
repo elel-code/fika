@@ -48,6 +48,7 @@
 - [x] Right-click folder menu with `Add to Places`.
   - Current: `Add to Places` is hidden when the folder path already exists in Places, matching Dolphin's single-directory action behavior.
 - [x] Places persistence.
+  - Current: Places model updates reuse the existing Slint `VecModel` with row-level updates for add/remove/rename/reorder instead of replacing the sidebar model.
 - [x] Places drag reorder with ghost preview and insertion line.
 - [x] Internal folder drag from main view into Places.
 - [~] Devices sidebar.
