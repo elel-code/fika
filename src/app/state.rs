@@ -1,9 +1,9 @@
-use crate::app::pane::PanesState;
+use crate::app::pane::{PanesState, PreparedDirectoryEntries};
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::thumbnails;
 use crate::support::generation::GenerationCounter;
-use crate::{DesktopApp, DeviceEntry, FileEntry, PlaceEntry};
+use crate::{DesktopApp, DeviceEntry, PlaceEntry};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,7 +24,7 @@ pub(crate) struct AppState {
     pub(crate) chooser_choices: Vec<ChooserChoice>,
     pub(crate) chooser_return_choices: bool,
     pub(crate) chooser_parent_window: Option<String>,
-    pub(crate) directory_cache: HashMap<PathBuf, Vec<FileEntry>>,
+    pub(crate) directory_cache: HashMap<PathBuf, PreparedDirectoryEntries>,
     pub(crate) directory_cache_order: VecDeque<PathBuf>,
     pub(crate) directory_prefetch_pending: HashSet<PathBuf>,
     pub(crate) thumbnail_cache: HashMap<thumbnails::ThumbnailKey, thumbnails::ThumbnailData>,
@@ -96,13 +96,20 @@ impl AppState {
         }
     }
 
-    pub(crate) fn cached_directory_entries(&mut self, path: &Path) -> Option<Vec<FileEntry>> {
+    pub(crate) fn cached_directory_entries(
+        &mut self,
+        path: &Path,
+    ) -> Option<PreparedDirectoryEntries> {
         let entries = self.directory_cache.get(path).cloned()?;
         self.refresh_directory_cache_order(path);
         Some(entries)
     }
 
-    pub(crate) fn insert_directory_cache(&mut self, path: PathBuf, entries: Vec<FileEntry>) {
+    pub(crate) fn insert_directory_cache(
+        &mut self,
+        path: PathBuf,
+        entries: PreparedDirectoryEntries,
+    ) {
         self.directory_cache.insert(path.clone(), entries);
         self.refresh_directory_cache_order(&path);
         while self.directory_cache_order.len() > MAX_DIRECTORY_CACHE_ENTRIES {
@@ -186,14 +193,14 @@ pub(crate) struct FileUndoItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use slint::Image;
+    use crate::app::pane::PaneEntrySnapshot;
 
     #[test]
     fn directory_cache_evicts_oldest_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         for index in 0..(MAX_DIRECTORY_CACHE_ENTRIES + 3) {
             let path = PathBuf::from(format!("/tmp/dir-{index}"));
-            state.insert_directory_cache(path.clone(), vec![test_entry(index)]);
+            state.insert_directory_cache(path.clone(), test_entries(index));
         }
 
         assert_eq!(state.directory_cache.len(), MAX_DIRECTORY_CACHE_ENTRIES);
@@ -212,14 +219,15 @@ mod tests {
         let first = PathBuf::from("/tmp/first");
         let second = PathBuf::from("/tmp/second");
 
-        state.insert_directory_cache(first.clone(), vec![test_entry(1)]);
-        state.insert_directory_cache(second.clone(), vec![test_entry(2)]);
+        state.insert_directory_cache(first.clone(), test_entries(1));
+        state.insert_directory_cache(second.clone(), test_entries(2));
 
         assert_eq!(
             state.cached_directory_entries(&first).map(|entries| {
                 entries
-                    .into_iter()
-                    .map(|entry| entry.path.to_string())
+                    .entries
+                    .iter()
+                    .map(|entry| entry.path.clone())
                     .collect::<Vec<_>>()
             }),
             Some(vec!["/tmp/file-1".to_string()])
@@ -229,32 +237,60 @@ mod tests {
     }
 
     #[test]
+    fn directory_cache_preserves_location_summary() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let path = PathBuf::from("/tmp/search");
+        state.insert_directory_cache(
+            path.clone(),
+            PreparedDirectoryEntries::new(vec![PaneEntrySnapshot {
+                location: "docs".to_string(),
+                ..test_entry(1)
+            }]),
+        );
+
+        assert_eq!(
+            state.cached_directory_entries(&path).map(|entries| {
+                (
+                    entries.has_locations,
+                    entries
+                        .entries
+                        .iter()
+                        .map(|entry| entry.location.clone())
+                        .collect::<Vec<_>>(),
+                )
+            }),
+            Some((true, vec!["docs".to_string()]))
+        );
+    }
+
+    #[test]
     fn directory_cache_remove_clears_lru_order() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let path = PathBuf::from("/tmp/remove-me");
 
-        state.insert_directory_cache(path.clone(), vec![test_entry(1)]);
+        state.insert_directory_cache(path.clone(), test_entries(1));
         state.remove_directory_cache(&path);
 
         assert!(!state.directory_cache.contains_key(&path));
         assert!(!state.directory_cache_order.contains(&path));
     }
 
-    fn test_entry(index: usize) -> FileEntry {
-        FileEntry {
-            name: format!("file-{index}").into(),
-            path: format!("/tmp/file-{index}").into(),
-            group: String::new().into(),
-            location: String::new().into(),
-            kind: "File".into(),
-            size: "1 KB".into(),
+    fn test_entries(index: usize) -> PreparedDirectoryEntries {
+        PreparedDirectoryEntries::new(vec![test_entry(index)])
+    }
+
+    fn test_entry(index: usize) -> PaneEntrySnapshot {
+        PaneEntrySnapshot {
+            name: format!("file-{index}"),
+            path: format!("/tmp/file-{index}"),
+            group: String::new(),
+            location: String::new(),
+            kind: "File".to_string(),
+            size: "1 KB".to_string(),
             size_bytes: 1024.0,
-            modified: "Today".into(),
+            modified: "Today".to_string(),
             modified_age_days: 0,
             is_dir: false,
-            selected: false,
-            thumbnail_state: 0,
-            thumbnail: Image::default(),
         }
     }
 }

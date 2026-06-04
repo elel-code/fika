@@ -448,6 +448,7 @@ fn operation_item_label(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::pane::PreparedDirectoryEntries;
     use crate::app::state::AppState;
     use std::fs;
     use std::path::PathBuf;
@@ -773,8 +774,8 @@ mod tests {
         let target_dir = PathBuf::from("/tmp/target");
         let source = PathBuf::from("/tmp/source/item.txt");
         let source_parent = source.parent().unwrap().to_path_buf();
-        state.insert_directory_cache(target_dir.clone(), Vec::new());
-        state.insert_directory_cache(source_parent.clone(), Vec::new());
+        state.insert_directory_cache(target_dir.clone(), PreparedDirectoryEntries::default());
+        state.insert_directory_cache(source_parent.clone(), PreparedDirectoryEntries::default());
         state.queue_file_operation(request("move"), OperationQueuePosition::Back);
         state.begin_file_operation(7);
 
@@ -812,7 +813,7 @@ mod tests {
     fn complete_file_operation_ignores_stale_result_ids() {
         let mut state = AppState::new(PathBuf::from("/tmp/target"), Vec::new());
         let target_dir = PathBuf::from("/tmp/target");
-        state.insert_directory_cache(target_dir.clone(), Vec::new());
+        state.insert_directory_cache(target_dir.clone(), PreparedDirectoryEntries::default());
         state.begin_file_operation(7);
 
         assert_eq!(

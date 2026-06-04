@@ -515,7 +515,10 @@ mod tests {
             rgba: vec![255, 0, 0, 255],
         };
 
-        state.panes.focused_mut().entries = vec![test_entry("photo.png", path)];
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries(vec![test_entry("photo.png", path)]);
         state.panes.focused_mut().view.virtual_view.range = 0..1;
         state
             .panes
@@ -540,7 +543,13 @@ mod tests {
         assert!(!state.panes.focused().view.has_thumbnail_pending(path));
         assert!(state.thumbnail_cache.contains_key(&key));
         assert!(!state.thumbnail_failures.contains_key(&key));
-        assert_eq!(state.panes.focused().entries[0].thumbnail_state, 0);
+        assert_eq!(state.panes.focused().entries[0].path, path);
+        assert_eq!(
+            state.panes.focused().entries[0]
+                .to_file_entry()
+                .thumbnail_state,
+            0
+        );
     }
 
     #[test]
@@ -552,7 +561,7 @@ mod tests {
 
         let mut entry = test_entry("photo.png", path);
         entry.thumbnail_state = 1;
-        state.panes.focused_mut().entries = vec![entry];
+        state.panes.focused_mut().set_file_entries(vec![entry]);
         state.panes.focused_mut().view.virtual_view.range = 0..1;
         state
             .panes
@@ -575,7 +584,13 @@ mod tests {
         assert!(should_refresh);
         assert!(!state.panes.focused().view.has_thumbnail_pending(path));
         assert!(state.thumbnail_failures.contains_key(&key));
-        assert_eq!(state.panes.focused().entries[0].thumbnail_state, 1);
+        assert_eq!(state.panes.focused().entries[0].path, path);
+        assert_eq!(
+            state.panes.focused().entries[0]
+                .to_file_entry()
+                .thumbnail_state,
+            0
+        );
     }
 
     #[test]
@@ -773,9 +788,11 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_uses_identity_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = (0..6)
-            .map(|index| test_entry(&format!("{index}.png"), &format!("/tmp/{index}.png")))
-            .collect();
+        state.panes.focused_mut().set_file_entries(
+            (0..6)
+                .map(|index| test_entry(&format!("{index}.png"), &format!("/tmp/{index}.png")))
+                .collect(),
+        );
         state.panes.focused_mut().view.virtual_view.range = 2..5;
 
         assert!(path_is_in_virtual_range(&state, "/tmp/2.png"));
@@ -787,12 +804,12 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_uses_filtered_visible_indices() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             test_entry("alpha.png", "/tmp/alpha.png"),
             test_entry("skip.log", "/tmp/skip.log"),
             test_entry("beta.png", "/tmp/beta.png"),
             test_entry("gamma.png", "/tmp/gamma.png"),
-        ];
+        ]);
         state.panes.focused_mut().search.visible_entry_indices = Some(vec![0, 2, 3]);
         state.panes.focused_mut().view.virtual_view.range = 1..3;
 
@@ -805,7 +822,10 @@ mod tests {
     #[test]
     fn virtual_range_path_lookup_rejects_empty_or_stale_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = vec![test_entry("alpha.png", "/tmp/alpha.png")];
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries(vec![test_entry("alpha.png", "/tmp/alpha.png")]);
         state.panes.focused_mut().view.virtual_view.range = 0..0;
         assert!(!path_is_in_virtual_range(&state, "/tmp/alpha.png"));
 

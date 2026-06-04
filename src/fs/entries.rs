@@ -1,6 +1,6 @@
-use crate::FileEntry;
 use crate::fs::file_ops;
-use slint::{Image, SharedString};
+use slint::SharedString;
+#[cfg(test)]
 use std::cmp::Ordering;
 use std::fs::Metadata;
 use std::io;
@@ -52,12 +52,16 @@ pub fn read_entries_sync(path: &Path) -> io::Result<Vec<RawFileEntry>> {
         }
     }
 
-    if decorate_trash_metadata {
-        entries.sort_by(compare_trash_entries);
-    } else {
-        entries.sort_by(compare_raw_entries);
-    }
+    sort_entries(&mut entries, decorate_trash_metadata);
     Ok(entries)
+}
+
+fn sort_entries(entries: &mut Vec<RawFileEntry>, trash: bool) {
+    if trash {
+        entries.sort_by_cached_key(trash_sort_key);
+    } else {
+        entries.sort_by_cached_key(raw_sort_key);
+    }
 }
 
 fn decorate_trash_entry(entry: &mut RawFileEntry, path: &Path) {
@@ -94,24 +98,6 @@ fn format_trash_deletion_date(value: &str) -> String {
         .to_string()
 }
 
-pub fn to_file_entry(entry: RawFileEntry) -> FileEntry {
-    FileEntry {
-        name: entry.name.into(),
-        path: entry.path.into(),
-        group: entry.group.into(),
-        location: entry.location.into(),
-        kind: entry.kind.into(),
-        size: entry.size.into(),
-        size_bytes: entry.size_bytes as f32,
-        modified: entry.modified.into(),
-        modified_age_days: entry.modified_age_days,
-        is_dir: entry.is_dir,
-        selected: false,
-        thumbnail_state: 0,
-        thumbnail: Image::default(),
-    }
-}
-
 pub fn format_size(bytes: u64) -> SharedString {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
@@ -129,34 +115,28 @@ pub fn format_size(bytes: u64) -> SharedString {
     }
 }
 
+#[cfg(test)]
 fn compare_raw_entries(left: &RawFileEntry, right: &RawFileEntry) -> Ordering {
-    match (left.is_dir, right.is_dir) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        _ => left
-            .name
-            .to_ascii_lowercase()
-            .cmp(&right.name.to_ascii_lowercase()),
-    }
+    raw_sort_key(left).cmp(&raw_sort_key(right))
 }
 
+#[cfg(test)]
 fn compare_trash_entries(left: &RawFileEntry, right: &RawFileEntry) -> Ordering {
-    let left_bucket = trash_sort_bucket(left);
-    let right_bucket = trash_sort_bucket(right);
-    left_bucket
-        .cmp(&right_bucket)
-        .then_with(|| {
-            if left_bucket == 0 && right_bucket == 0 {
-                right.modified.cmp(&left.modified)
-            } else {
-                Ordering::Equal
-            }
-        })
-        .then_with(|| {
-            left.name
-                .to_ascii_lowercase()
-                .cmp(&right.name.to_ascii_lowercase())
-        })
+    trash_sort_key(left).cmp(&trash_sort_key(right))
+}
+
+fn raw_sort_key(entry: &RawFileEntry) -> (u8, String) {
+    (u8::from(!entry.is_dir), entry.name.to_ascii_lowercase())
+}
+
+fn trash_sort_key(entry: &RawFileEntry) -> (u8, std::cmp::Reverse<String>, String) {
+    let bucket = trash_sort_bucket(entry);
+    let deletion_date = if bucket == 0 {
+        std::cmp::Reverse(entry.modified.clone())
+    } else {
+        std::cmp::Reverse(String::new())
+    };
+    (bucket, deletion_date, entry.name.to_ascii_lowercase())
 }
 
 fn trash_sort_bucket(entry: &RawFileEntry) -> u8 {

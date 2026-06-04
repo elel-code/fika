@@ -1,5 +1,5 @@
 use crate::app::async_bridge::AsyncBridge;
-use crate::app::pane::PaneTarget;
+use crate::app::pane::{PaneEntrySnapshot, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
@@ -535,7 +535,9 @@ fn sync_focused_ui(
     sync_pane_slots_ui(ui, state);
 }
 
-pub(crate) fn directory_status_text<'a>(entries: impl Iterator<Item = &'a FileEntry>) -> String {
+pub(crate) fn directory_status_text<'a>(
+    entries: impl Iterator<Item = &'a PaneEntrySnapshot>,
+) -> String {
     let mut folders = 0usize;
     let mut files = 0usize;
     for entry in entries {

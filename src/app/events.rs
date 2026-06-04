@@ -1,8 +1,8 @@
 use crate::DeviceEntry;
+use crate::app::pane::PreparedDirectoryEntries;
 use crate::app::virtual_view::VirtualViewSnapshotUpdate;
 use crate::desktop::clipboard;
 use crate::desktop::open_with;
-use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_actions, file_ops, privilege, search, thumbnails};
 use std::io;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ pub(crate) struct DirectoryLoadResult {
     pub(crate) path: PathBuf,
     pub(crate) preserve_view: bool,
     pub(crate) defer_view_restore: bool,
-    pub(crate) result: io::Result<Vec<RawFileEntry>>,
+    pub(crate) result: io::Result<PreparedDirectoryEntries>,
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ pub(crate) struct RecursiveSearchResult {
     pub(crate) generation: u64,
     pub(crate) query: String,
     pub(crate) root: PathBuf,
-    pub(crate) result: io::Result<Vec<RawFileEntry>>,
+    pub(crate) result: io::Result<PreparedDirectoryEntries>,
 }
 
 #[derive(Debug)]
@@ -124,7 +124,7 @@ pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
     DirectoryPrefetched {
         path: PathBuf,
-        result: io::Result<Vec<RawFileEntry>>,
+        result: io::Result<PreparedDirectoryEntries>,
     },
     FileOpened(FileOpenResult),
     RecursiveSearchProgress(RecursiveSearchProgress),

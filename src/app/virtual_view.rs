@@ -485,7 +485,10 @@ mod tests {
     #[test]
     fn virtual_view_update_reuses_model_inside_same_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = (0..100).map(test_entry).collect();
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries((0..100).map(test_entry).collect());
 
         let first = prepare_virtual_view_update(
             &mut state,
@@ -522,7 +525,10 @@ mod tests {
     #[test]
     fn virtual_view_update_reuses_model_while_cached_range_covers_visible_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = (0..160).map(test_entry).collect();
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries((0..160).map(test_entry).collect());
 
         let first = prepare_virtual_view_update(
             &mut state,
@@ -560,7 +566,10 @@ mod tests {
     #[test]
     fn virtual_view_update_clamps_out_of_bounds_viewport() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = (0..10).map(test_entry).collect();
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries((0..10).map(test_entry).collect());
 
         let update = prepare_virtual_view_update(
             &mut state,

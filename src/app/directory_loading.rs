@@ -1,7 +1,5 @@
-use crate::FileEntry;
-use crate::app::pane::PaneTarget;
+use crate::app::pane::{PaneEntrySnapshot, PaneTarget, PreparedDirectoryEntries};
 use crate::app::state::AppState;
-use crate::fs::entries::RawFileEntry;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
@@ -10,7 +8,7 @@ pub(crate) struct DirectoryLoadPreparation {
     pub(crate) pane_id: u64,
     pub(crate) current_dir: PathBuf,
     pub(crate) generation: u64,
-    pub(crate) cached_entries: Option<Vec<FileEntry>>,
+    pub(crate) cached_entries: Option<PreparedDirectoryEntries>,
     pub(crate) defer_view_restore: bool,
 }
 
@@ -57,35 +55,16 @@ pub(crate) fn prepare_directory_load_for_target(
 }
 
 pub(crate) fn directory_entries_match(
-    current_entries: &[FileEntry],
-    incoming_entries: &[RawFileEntry],
+    current_entries: &[PaneEntrySnapshot],
+    incoming_entries: &PreparedDirectoryEntries,
 ) -> bool {
-    current_entries.len() == incoming_entries.len()
-        && current_entries
-            .iter()
-            .zip(incoming_entries)
-            .all(|(current, incoming)| file_entry_matches_raw(current, incoming))
-}
-
-fn file_entry_matches_raw(current: &FileEntry, incoming: &RawFileEntry) -> bool {
-    current.name.as_str() == incoming.name
-        && current.path.as_str() == incoming.path
-        && current.group.as_str() == incoming.group
-        && current.location.as_str() == incoming.location
-        && current.kind.as_str() == incoming.kind
-        && current.size.as_str() == incoming.size
-        && current.size_bytes == incoming.size_bytes as f32
-        && current.modified.as_str() == incoming.modified
-        && current.modified_age_days == incoming.modified_age_days
-        && current.is_dir == incoming.is_dir
+    current_entries == incoming_entries.entries.as_ref()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FileEntry;
     use crate::fs::thumbnails;
-    use slint::Image;
     use std::path::Path;
 
     #[test]
@@ -102,7 +81,7 @@ mod tests {
         state.panes.focused_mut().selection.anchor = Some("/tmp/current/photo.png".to_string());
         state.insert_directory_cache(
             PathBuf::from("/tmp/current"),
-            vec![test_entry("photo.png", "/tmp/current/photo.png")],
+            test_entries(vec![("photo.png", "/tmp/current/photo.png")]),
         );
         let thumbnail_generation = state.panes.focused().thumbnail_generation.current();
 
@@ -234,7 +213,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp/current"), Vec::new());
         state.insert_directory_cache(
             PathBuf::from("/tmp/current"),
-            vec![test_entry("cached.txt", "/tmp/current/cached.txt")],
+            test_entries(vec![("cached.txt", "/tmp/current/cached.txt")]),
         );
 
         let preparation = prepare_directory_load(&mut state, false);
@@ -243,52 +222,42 @@ mod tests {
         assert!(!preparation.defer_view_restore);
     }
 
-    fn test_entry(name: &str, path: &str) -> FileEntry {
-        FileEntry {
-            name: name.into(),
-            path: path.into(),
-            group: String::new().into(),
-            location: String::new().into(),
-            kind: "File".into(),
-            size: "1 KB".into(),
-            size_bytes: 1024.0,
-            modified: "Today".into(),
-            modified_age_days: 0,
-            is_dir: false,
-            selected: false,
-            thumbnail_state: 0,
-            thumbnail: Image::default(),
-        }
-    }
-
-    fn test_raw_entry(name: &str, path: &str) -> RawFileEntry {
-        RawFileEntry {
-            name: name.to_string(),
-            path: path.to_string(),
-            group: String::new(),
-            location: String::new(),
-            kind: "File".to_string(),
-            size: "1 KB".to_string(),
-            size_bytes: 1024,
-            modified: "Today".to_string(),
-            modified_age_days: 0,
-            is_dir: false,
-        }
+    fn test_entries(entries: Vec<(&str, &str)>) -> PreparedDirectoryEntries {
+        PreparedDirectoryEntries::new(
+            entries
+                .into_iter()
+                .map(|(name, path)| PaneEntrySnapshot {
+                    name: name.to_string(),
+                    path: path.to_string(),
+                    group: String::new(),
+                    location: String::new(),
+                    kind: "File".to_string(),
+                    size: "1 KB".to_string(),
+                    size_bytes: 1024.0,
+                    modified: "Today".to_string(),
+                    modified_age_days: 0,
+                    is_dir: false,
+                })
+                .collect(),
+        )
     }
 
     #[test]
     fn directory_entries_match_detects_equivalent_visible_model() {
-        let current = vec![test_entry("photo.png", "/tmp/current/photo.png")];
-        let incoming = vec![test_raw_entry("photo.png", "/tmp/current/photo.png")];
+        let current = test_entries(vec![("photo.png", "/tmp/current/photo.png")]);
+        let incoming = test_entries(vec![("photo.png", "/tmp/current/photo.png")]);
 
-        assert!(directory_entries_match(&current, &incoming));
+        assert!(directory_entries_match(current.entries.as_ref(), &incoming));
     }
 
     #[test]
     fn directory_entries_match_detects_visible_changes() {
-        let current = vec![test_entry("photo.png", "/tmp/current/photo.png")];
-        let incoming = vec![test_raw_entry("notes.txt", "/tmp/current/notes.txt")];
+        let current = test_entries(vec![("photo.png", "/tmp/current/photo.png")]);
+        let incoming = test_entries(vec![("notes.txt", "/tmp/current/notes.txt")]);
 
-        assert!(!directory_entries_match(&current, &incoming));
+        assert!(!directory_entries_match(
+            current.entries.as_ref(),
+            &incoming
+        ));
     }
 }

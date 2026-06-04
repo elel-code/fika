@@ -48,15 +48,16 @@ use app::file_clipboard::{
 use app::geometry::{
     MainGridLayout, SelectionRect, active_main_pane_width, clamped_split_pane_ratio,
     inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
+    virtual_grid_plan,
 };
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
     OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
     operation_finished_label,
 };
+use app::pane::{DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries};
 #[cfg(test)]
-use app::pane::PaneHistory;
-use app::pane::{DirectoryViewState, PaneTarget};
+use app::pane::{PaneEntrySnapshot, PaneHistory};
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
     rename_place, reorder_place_path, restore_default_places, sync_places,
@@ -67,7 +68,7 @@ use app::search_ui::{
     set_search_filters,
 };
 use app::selection::{
-    annotate_selection_state, append_unique_paths, entries_have_locations, filtered_entry_count,
+    annotate_selection_state, append_unique_paths, filtered_entry_count,
     filtered_entry_paths_for_slot, rebuild_visible_entry_index, retained_visible_paths,
     selection_range_paths_filtered_for_slot, selection_rect_paths_filtered_for_slot,
 };
@@ -95,7 +96,7 @@ use desktop::{mime_open, open_with, terminal};
 use fs::devices::{
     device_diagnostics_report, eject_device, mount_device, mounted_devices, unmount_device,
 };
-use fs::entries::{RawFileEntry, read_entries_async, to_file_entry};
+use fs::entries::read_entries_async;
 use fs::places::default_places;
 use fs::{file_actions, privilege, search, thumbnails};
 
@@ -157,6 +158,20 @@ impl PaneViewSyncScheduler {
 struct ThumbnailFlushScheduler {
     timer: Timer,
     pending: Rc<RefCell<VecDeque<(u64, u64, thumbnails::ThumbnailLoad)>>>,
+}
+
+enum VirtualViewSyncRequest {
+    Cached {
+        viewport_x: f32,
+        viewport_clamped: bool,
+    },
+    Prepare {
+        pane_id: u64,
+        generation: u64,
+        rows_per_column: usize,
+        cell_width: f32,
+        input: VirtualViewSnapshotInput,
+    },
 }
 
 impl ThumbnailFlushScheduler {
@@ -388,7 +403,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_pane_layout_changed(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 pane_view_sync.flush_all();
-                sync_visible_pane_viewports(&ui, &state, &bridge);
+                sync_visible_pane_layouts(&ui, &state, &bridge);
             }
         });
     }
@@ -443,14 +458,10 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     {
-        let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         ui.on_pane_viewport_changed(move |slot, viewport_x| {
             if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
                 pane.view.viewport_x = viewport_x;
-            }
-            if let Some(ui) = ui_weak.upgrade() {
-                sync_pane_slot_ui(&ui, &state, slot);
             }
         });
     }
@@ -1773,8 +1784,8 @@ fn load_prepared_pane_directory(
         {
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
-                pane.set_entries(cached_entries);
-                pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
+                pane.search.visible_entries_have_locations = cached_entries.has_locations;
+                pane.set_entries(Arc::clone(&cached_entries.entries));
                 pane.view.virtual_view.invalidate();
             }
         }
@@ -1811,7 +1822,9 @@ fn load_prepared_pane_directory(
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {
-        let result = read_entries_async(&current_dir).await;
+        let result = read_entries_async(&current_dir)
+            .await
+            .map(PreparedDirectoryEntries::from_raw_entries);
         send_async_event(
             async_tx,
             notify_ui,
@@ -1839,7 +1852,9 @@ fn prefetch_sidebar_locations_async(state: &Rc<RefCell<AppState>>, bridge: &Asyn
             if fs::file_ops::is_trash_files_dir(&path) {
                 let _ = fs::file_ops::ensure_trash_dirs();
             }
-            let result = read_entries_async(&path).await;
+            let result = read_entries_async(&path)
+                .await
+                .map(PreparedDirectoryEntries::from_raw_entries);
             send_async_event(
                 async_tx,
                 notify_ui,
@@ -2069,7 +2084,9 @@ fn watch_current_directory(path: &Path, pane_id: u64, generation: u64, bridge: &
                 return;
             }
 
-            let result = read_entries_async(&reload_path).await;
+            let result = read_entries_async(&reload_path)
+                .await
+                .map(PreparedDirectoryEntries::from_raw_entries);
             send_async_event(
                 async_tx,
                 notify_ui,
@@ -2261,7 +2278,6 @@ fn apply_pane_directory_result(
             if result.defer_view_restore {
                 restore_pane_view_state(ui, state, slot, &result.path);
             }
-            let mut entries = Some(entries);
             let mut unchanged = false;
             {
                 let mut state = state.borrow_mut();
@@ -2271,31 +2287,21 @@ fn apply_pane_directory_result(
                 else {
                     return;
                 };
-                let incoming = entries.as_ref().expect("entries should be present");
-                if directory_entries_match(&pane.entries, incoming) {
-                    let cache_entries = pane.entries.clone();
-                    state.insert_directory_cache(result.path.clone(), cache_entries);
+                if directory_entries_match(&pane.entries, &entries) {
                     unchanged = true;
                 } else {
-                    pane.set_entries(
-                        entries
-                            .take()
-                            .expect("entries should be present")
-                            .into_iter()
-                            .map(to_file_entry)
-                            .collect(),
-                    );
-                    pane.search.visible_entries_have_locations =
-                        entries_have_locations(&pane.entries);
+                    pane.search.visible_entries_have_locations = entries.has_locations;
+                    pane.set_entries(Arc::clone(&entries.entries));
                     pane.view.virtual_view.invalidate();
                     if !result.preserve_view {
                         pane.search.reset_all();
                         pane.selection.clear();
                     }
-                    let cache_entries = pane.entries.clone();
-                    state.insert_directory_cache(result.path.clone(), cache_entries);
                 }
             }
+            state
+                .borrow_mut()
+                .insert_directory_cache(result.path.clone(), entries.clone());
             if unchanged {
                 debug_log(&format!(
                     "directory_loaded unchanged slot={slot} generation={} path={}",
@@ -2334,7 +2340,7 @@ fn apply_pane_directory_result(
 fn apply_directory_prefetch_result(
     state: &Rc<RefCell<AppState>>,
     path: PathBuf,
-    result: io::Result<Vec<RawFileEntry>>,
+    result: io::Result<PreparedDirectoryEntries>,
 ) {
     let mut state = state.borrow_mut();
     state.directory_prefetch_pending.remove(&path);
@@ -2347,7 +2353,6 @@ fn apply_directory_prefetch_result(
                 ));
                 return;
             }
-            let entries = entries.into_iter().map(to_file_entry).collect();
             state.insert_directory_cache(path.clone(), entries);
             debug_log(&format!(
                 "directory_prefetched cached path={}",
@@ -2549,8 +2554,8 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         let current_dir = state.panes.focused().current_dir.clone();
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
             let pane = state.panes.focused_mut();
-            pane.set_entries(entries);
-            pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
+            pane.search.visible_entries_have_locations = entries.has_locations;
+            pane.set_entries(Arc::clone(&entries.entries));
             pane.view.virtual_view.invalidate();
         }
         (query, progress)
@@ -2645,7 +2650,8 @@ fn start_recursive_search(
                     }),
                 );
             })
-            .await;
+            .await
+            .map(PreparedDirectoryEntries::from_raw_entries);
         send_async_event(
             async_tx,
             notify_ui,
@@ -2715,23 +2721,12 @@ fn apply_recursive_search_result(
 
     match result.result {
         Ok(entries) => {
-            let mut entries = entries.into_iter().map(to_file_entry).collect::<Vec<_>>();
-            let size_px = thumbnail_size_px(ui);
-            {
-                let state_ref = state.borrow();
-                decorate_entries_with_cached_thumbnails_for_pane(
-                    &state_ref,
-                    state_ref.panes.focused().id,
-                    &mut entries,
-                    size_px,
-                );
-            }
             let total = entries.len();
             {
                 let mut state = state.borrow_mut();
                 let pane = state.panes.focused_mut();
-                pane.set_entries(entries);
-                pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
+                pane.search.visible_entries_have_locations = entries.has_locations;
+                pane.set_entries(Arc::clone(&entries.entries));
                 pane.view.virtual_view.invalidate();
             }
             apply_filter(ui, state, bridge, true);
@@ -3326,7 +3321,15 @@ pub(crate) fn sync_virtual_entries_for_slot(
     slot: i32,
     schedule_thumbnails: bool,
 ) {
-    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, schedule_thumbnails, None);
+    sync_virtual_entries_for_slot_with_count(
+        ui,
+        state,
+        bridge,
+        slot,
+        schedule_thumbnails,
+        None,
+        false,
+    );
 }
 
 fn pane_slot_width(ui: &AppWindow, main_width: f32, slot: i32) -> f32 {
@@ -3355,6 +3358,7 @@ fn sync_virtual_entries_with_count(
         slot,
         schedule_thumbnails,
         visible_count_override,
+        false,
     );
 }
 
@@ -3365,13 +3369,14 @@ fn sync_virtual_entries_for_slot_with_count(
     slot: i32,
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
+    immediate: bool,
 ) {
     let size_px = thumbnail_size_px(ui);
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
     let viewport_width = pane_slot_width(ui, main_width, slot);
     let mut layout = MainGridLayout::from_ui_for_pane_width(ui, viewport_width);
-    let Some((pane_id, generation, input)) = ({
+    let Some(request) = ({
         let mut state_ref = state.borrow_mut();
         let chooser_patterns = state_ref
             .chooser_filters
@@ -3381,34 +3386,89 @@ fn sync_virtual_entries_for_slot_with_count(
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             return;
         };
-        let generation = pane.view.virtual_generation.next();
         let requested_viewport_x = pane.view.viewport_x;
         layout.viewport_x = requested_viewport_x;
-        let query = pane.search.query.to_ascii_lowercase();
-        Some((
-            pane.id,
-            generation,
-            VirtualViewSnapshotInput {
-                layout,
-                requested_viewport_x,
-                viewport_width,
-                thumbnail_size_px: size_px,
-                schedule_thumbnails,
-                visible_count_override,
-                cache: pane.view.virtual_view.clone(),
-                entries: pane.entry_snapshot(),
-                visible_entry_indices: pane.search.visible_entry_indices.clone(),
-                visible_entries_have_locations: pane.search.visible_entries_have_locations,
-                query,
-                kind_filter: pane.search.kind_filter,
-                modified_filter: pane.search.modified_filter,
-                size_filter: pane.search.size_filter,
-                chooser_patterns,
-            },
-        ))
+        if let Some((viewport_x, viewport_clamped)) = cached_virtual_viewport_sync(
+            pane,
+            &layout,
+            requested_viewport_x,
+            viewport_width,
+            size_px,
+            schedule_thumbnails,
+            visible_count_override,
+            &chooser_patterns,
+        ) {
+            pane.view.virtual_generation.next();
+            Some(VirtualViewSyncRequest::Cached {
+                viewport_x,
+                viewport_clamped,
+            })
+        } else {
+            let generation = pane.view.virtual_generation.next();
+            let query = pane.search.query.to_ascii_lowercase();
+            Some(VirtualViewSyncRequest::Prepare {
+                pane_id: pane.id,
+                generation,
+                rows_per_column: layout.rows_per_column,
+                cell_width: layout.cell_width,
+                input: VirtualViewSnapshotInput {
+                    layout,
+                    requested_viewport_x,
+                    viewport_width,
+                    thumbnail_size_px: size_px,
+                    schedule_thumbnails,
+                    visible_count_override,
+                    cache: pane.view.virtual_view.clone(),
+                    entries: pane.entry_snapshot(),
+                    visible_entry_indices: pane.search.visible_entry_indices.clone(),
+                    visible_entries_have_locations: pane.search.visible_entries_have_locations,
+                    query,
+                    kind_filter: pane.search.kind_filter,
+                    modified_filter: pane.search.modified_filter,
+                    size_filter: pane.search.size_filter,
+                    chooser_patterns,
+                },
+            })
+        }
     }) else {
         return;
     };
+
+    let (pane_id, generation, rows_per_column, cell_width, input) = match request {
+        VirtualViewSyncRequest::Cached {
+            viewport_x,
+            viewport_clamped,
+        } => {
+            set_pane_viewport_ui_if_clamped(ui, slot, viewport_x, viewport_clamped, state);
+            return;
+        }
+        VirtualViewSyncRequest::Prepare {
+            pane_id,
+            generation,
+            rows_per_column,
+            cell_width,
+            input,
+        } => (pane_id, generation, rows_per_column, cell_width, input),
+    };
+
+    if immediate {
+        let update = prepare_virtual_view_snapshot_update(input);
+        apply_virtual_view_result(
+            ui,
+            state,
+            bridge,
+            VirtualViewResult {
+                pane_id,
+                generation,
+                thumbnail_size_px: size_px,
+                schedule_thumbnails,
+                rows_per_column,
+                cell_width,
+                update,
+            },
+        );
+        return;
+    }
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -3426,12 +3486,73 @@ fn sync_virtual_entries_for_slot_with_count(
                 generation,
                 thumbnail_size_px: size_px,
                 schedule_thumbnails,
-                rows_per_column: layout.rows_per_column,
-                cell_width: layout.cell_width,
+                rows_per_column,
+                cell_width,
                 update,
             }),
         );
     });
+}
+
+fn cached_virtual_viewport_sync(
+    pane: &mut PaneState,
+    layout: &MainGridLayout,
+    requested_viewport_x: f32,
+    viewport_width: f32,
+    thumbnail_size_px: u32,
+    schedule_thumbnails: bool,
+    visible_count_override: Option<usize>,
+    chooser_patterns: &[String],
+) -> Option<(f32, bool)> {
+    if !schedule_thumbnails || visible_count_override.is_some() {
+        return None;
+    }
+
+    let visible_count = if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
+        indices.len()
+    } else if pane.search.query.is_empty()
+        && pane.search.kind_filter == 0
+        && pane.search.modified_filter == 0
+        && pane.search.size_filter == 0
+        && chooser_patterns.is_empty()
+    {
+        pane.entries.len()
+    } else {
+        return None;
+    };
+
+    let plan = virtual_grid_plan(
+        visible_count,
+        layout.rows_per_column,
+        requested_viewport_x,
+        viewport_width,
+        layout.cell_width,
+        layout.padding,
+        2,
+    );
+    if pane.view.virtual_view.entry_count != visible_count
+        || pane.view.virtual_view.rows_per_column != plan.rows_per_column
+        || pane.view.virtual_view.cell_width != plan.cell_width
+        || pane.view.virtual_view.thumbnail_size_px != thumbnail_size_px
+        || !virtual_cache_covers_visible_range(&pane.view.virtual_view.range, &plan.visible_range)
+    {
+        return None;
+    }
+
+    pane.view.viewport_x = plan.viewport_x;
+    let viewport_clamped = (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON;
+    Some((plan.viewport_x, viewport_clamped))
+}
+
+fn virtual_cache_covers_visible_range(
+    cached_range: &std::ops::Range<usize>,
+    visible_range: &std::ops::Range<usize>,
+) -> bool {
+    if visible_range.is_empty() {
+        return cached_range.is_empty();
+    }
+
+    cached_range.start <= visible_range.start && cached_range.end >= visible_range.end
 }
 
 fn apply_virtual_view_result(
@@ -3845,20 +3966,16 @@ fn selection_status_text(selected_paths: &[String]) -> SharedString {
     }
 }
 
-fn sync_visible_pane_viewports(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-) {
+fn sync_visible_pane_layouts(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     let slots = ui.get_pane_slots();
     if slots.row_count() == 0 {
-        sync_pane_viewport_for_slot(ui, state, bridge, 0);
+        sync_pane_layout_for_slot(ui, state, bridge, 0);
         return;
     }
 
     for row in 0..slots.row_count() {
         if let Some(pane) = slots.row_data(row) {
-            sync_pane_viewport_for_slot(ui, state, bridge, pane.slot);
+            sync_pane_layout_for_slot(ui, state, bridge, pane.slot);
         }
     }
 }
@@ -3870,6 +3987,15 @@ fn sync_pane_viewport_for_slot(
     slot: i32,
 ) {
     sync_virtual_entries_for_slot(ui, state, bridge, slot, true);
+}
+
+fn sync_pane_layout_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true);
 }
 
 fn sync_pane_view_for_slot(
@@ -4527,11 +4653,11 @@ mod tests {
     #[test]
     fn filtered_entry_paths_returns_only_visible_matches() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             test_entry("Alpha.txt", "/tmp/Alpha.txt"),
             test_entry("Beta.txt", "/tmp/Beta.txt"),
             test_entry("notes.md", "/tmp/project-notes.md"),
-        ];
+        ]);
         state.panes.focused_mut().search.query = "project".to_string();
 
         assert_eq!(
@@ -4557,7 +4683,10 @@ mod tests {
         archive.size_bytes = 150_000_000.0;
         archive.modified_age_days = 20;
 
-        state.panes.focused_mut().entries = vec![folder, image, archive];
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries(vec![folder, image, archive]);
 
         state.panes.focused_mut().search.kind_filter = 1;
         assert_eq!(
@@ -4589,9 +4718,13 @@ mod tests {
     #[test]
     fn filtered_entries_range_clones_only_requested_filtered_window() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = (0..8)
-            .map(|index| test_entry(&format!("item-{index}.txt"), &format!("/tmp/item-{index}")))
-            .collect();
+        state.panes.focused_mut().set_file_entries(
+            (0..8)
+                .map(|index| {
+                    test_entry(&format!("item-{index}.txt"), &format!("/tmp/item-{index}"))
+                })
+                .collect(),
+        );
         state.panes.focused_mut().search.query = "item".to_string();
 
         assert_eq!(filtered_entry_count(&state), 8);
@@ -4611,11 +4744,11 @@ mod tests {
     #[test]
     fn filtered_entry_at_clones_only_requested_visible_item() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
-        ];
+        ]);
         state.panes.focused_mut().search.query = ".txt".to_string();
 
         assert_eq!(
@@ -4632,11 +4765,11 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let mut folder = test_entry("item-folder", "/tmp/item-folder");
         folder.is_dir = true;
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             folder,
             test_entry("item-file.txt", "/tmp/item-file.txt"),
             test_entry("hidden.log", "/tmp/hidden.log"),
-        ];
+        ]);
         state.panes.focused_mut().search.query = "item".to_string();
 
         let summary = filtered_entry_summary(&state, true);
@@ -4656,10 +4789,10 @@ mod tests {
     #[test]
     fn visible_entry_index_uses_identity_fast_path_without_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             test_entry("alpha", "/tmp/alpha"),
             test_entry("beta", "/tmp/beta"),
-        ];
+        ]);
 
         let summary = rebuild_visible_entry_index(&mut state, true);
 
@@ -4677,12 +4810,12 @@ mod tests {
     #[test]
     fn visible_entry_index_drives_virtual_range_without_rescanning_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
-        ];
+        ]);
         state.panes.focused_mut().search.query = ".txt".to_string();
 
         let summary = rebuild_visible_entry_index(&mut state, false);
@@ -4719,7 +4852,10 @@ mod tests {
         let mut hidden = test_entry("hidden.log", "/tmp/docs/hidden.log");
         hidden.location = "docs".into();
         let visible = test_entry("visible.txt", "/tmp/visible.txt");
-        state.panes.focused_mut().entries = vec![hidden, visible];
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries(vec![hidden, visible]);
         state.panes.focused_mut().search.query = ".txt".to_string();
 
         let summary = rebuild_visible_entry_index(&mut state, false);
@@ -4745,7 +4881,10 @@ mod tests {
         let mut visible_file = test_entry("visible.txt", "/tmp/docs/visible.txt");
         visible_file.location = "docs".into();
         visible_file.modified_age_days = 0;
-        state.panes.focused_mut().entries = vec![old_file, visible_file];
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries(vec![old_file, visible_file]);
         state.panes.focused_mut().search.modified_filter = 1;
 
         let summary = rebuild_visible_entry_index(&mut state, false);
@@ -4769,7 +4908,10 @@ mod tests {
         second.location = "docs".into();
         let mut third = test_entry("third.txt", "/tmp/docs/third.txt");
         third.location = "docs".into();
-        state.panes.focused_mut().entries = vec![first, second, third];
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries(vec![first, second, third]);
         rebuild_visible_entry_index(&mut state, false);
 
         assert_eq!(
@@ -4790,11 +4932,11 @@ mod tests {
         let mut folder = test_entry("Documents", "/tmp/Documents");
         folder.is_dir = true;
         folder.kind = "Folder".into();
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             folder,
             test_entry("photo.PNG", "/tmp/photo.PNG"),
             test_entry("notes.txt", "/tmp/notes.txt"),
-        ];
+        ]);
         state.chooser_filters = vec![parse_chooser_filter_spec("Images\t*.png;*.jpg").unwrap()];
 
         assert_eq!(
@@ -4852,12 +4994,12 @@ mod tests {
     #[test]
     fn filtered_selection_range_scans_only_visible_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
-        ];
+        ]);
         state.panes.focused_mut().search.query = ".txt".to_string();
 
         assert_eq!(
@@ -4920,12 +5062,12 @@ mod tests {
     #[test]
     fn filtered_selection_rect_scans_visible_order_without_cloning_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = vec![
+        state.panes.focused_mut().set_file_entries(vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
-        ];
+        ]);
         state.panes.focused_mut().search.query = ".txt".to_string();
 
         let selected = selection_rect_paths_filtered(
@@ -4951,9 +5093,11 @@ mod tests {
     #[test]
     fn filtered_selection_rect_limits_scan_to_intersecting_columns() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.focused_mut().entries = (0..20)
-            .map(|index| test_entry(&format!("entry-{index}"), &format!("/tmp/{index}")))
-            .collect();
+        state.panes.focused_mut().set_file_entries(
+            (0..20)
+                .map(|index| test_entry(&format!("entry-{index}"), &format!("/tmp/{index}")))
+                .collect(),
+        );
 
         let selected = selection_rect_paths_filtered(
             &state,
@@ -5314,7 +5458,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_changes_use_viewport_only_pane_sync() {
+    fn layout_changes_rebuild_the_visible_slice_immediately() {
         let source = include_str!("main.rs");
         let main_body = source
             .split_once("ui.on_pane_layout_changed(move ||")
@@ -5323,15 +5467,20 @@ mod tests {
             .expect("pane layout callback body should be present");
         let viewport_body = source
             .split_once("fn sync_pane_viewport_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_view_for_slot("))
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_layout_for_slot("))
             .map(|(body, _)| body)
             .expect("viewport-only pane sync body should be present");
+        let layout_body = source
+            .split_once("fn sync_pane_layout_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_view_for_slot("))
+            .map(|(body, _)| body)
+            .expect("pane layout sync body should be present");
 
         assert!(
             main_body.contains("pane_view_sync.flush_all();")
-                && main_body.contains("sync_visible_pane_viewports(&ui, &state, &bridge);")
+                && main_body.contains("sync_visible_pane_layouts(&ui, &state, &bridge);")
                 && !main_body.contains("sync_pane_view_for_slot"),
-            "layout changes should flush pending scroll work and use viewport-only pane sync"
+            "layout changes should flush pending scroll work and rebuild visible pane slices immediately"
         );
         assert!(
             viewport_body.contains("sync_virtual_entries_for_slot(ui, state, bridge, slot, true);")
@@ -5340,6 +5489,12 @@ mod tests {
                 && !viewport_body.contains("filtered_entry_count_for_slot")
                 && !viewport_body.contains("return;"),
             "pane layout/scroll sync should update the target slot through the shared virtual slice path"
+        );
+        assert!(
+            layout_body.contains(
+                "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true);"
+            ),
+            "layout changes must synchronously clamp/rebuild the visible slice before Slint reuses old virtual coordinates"
         );
     }
 
@@ -5663,7 +5818,9 @@ mod tests {
         ];
         state.insert_directory_cache(
             PathBuf::from("/tmp/cached"),
-            vec![test_entry("a", "/tmp/a")],
+            PreparedDirectoryEntries::new(vec![PaneEntrySnapshot::from_entry(&test_entry(
+                "a", "/tmp/a",
+            ))]),
         );
 
         let expected = vec![
@@ -5676,7 +5833,11 @@ mod tests {
         assert!(sidebar_prefetch_paths(&mut state).is_empty());
 
         let state = Rc::new(RefCell::new(state));
-        apply_directory_prefetch_result(&state, expected[0].clone(), Ok(Vec::new()));
+        apply_directory_prefetch_result(
+            &state,
+            expected[0].clone(),
+            Ok(PreparedDirectoryEntries::default()),
+        );
         assert!(
             !state
                 .borrow()

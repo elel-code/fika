@@ -1,4 +1,5 @@
 use crate::FileEntry;
+use crate::fs::entries::RawFileEntry;
 use crate::fs::{search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use slint::ModelRc;
@@ -17,8 +18,7 @@ pub(crate) struct PaneState {
     pub(crate) path_input_text: String,
     pub(crate) path_focused: bool,
     pub(crate) status: String,
-    pub(crate) entries: Vec<FileEntry>,
-    pub(crate) entry_snapshot: Arc<[PaneEntrySnapshot]>,
+    pub(crate) entries: Arc<[PaneEntrySnapshot]>,
     pub(crate) history: PaneHistory,
     pub(crate) selection: PaneSelection,
     pub(crate) search: PaneSearch,
@@ -44,8 +44,7 @@ impl PaneState {
             current_dir,
             path_focused: false,
             status: String::new(),
-            entries: Vec::new(),
-            entry_snapshot: Arc::from([]),
+            entries: Arc::from([]),
             history: PaneHistory::default(),
             selection: PaneSelection::default(),
             search: PaneSearch::default(),
@@ -61,7 +60,7 @@ impl PaneState {
 
     pub(crate) fn split_snapshot(&self, id: u64) -> Self {
         let mut pane = Self::new_with_id(id, self.current_dir.clone());
-        pane.set_entries(self.entries.clone());
+        pane.set_entries(Arc::clone(&self.entries));
         pane.search = self.search.clone();
         pane.view.viewport_x = self.view.viewport_x;
         pane.view.virtual_view = self.view.virtual_view.clone();
@@ -70,35 +69,32 @@ impl PaneState {
         pane
     }
 
-    pub(crate) fn set_entries(&mut self, entries: Vec<FileEntry>) {
+    pub(crate) fn set_entries(&mut self, entries: Arc<[PaneEntrySnapshot]>) {
         self.entries = entries;
-        self.refresh_entry_snapshot();
         self.view.virtual_generation.next();
     }
 
     pub(crate) fn clear_entries(&mut self) {
-        self.entries.clear();
-        self.entry_snapshot = Arc::from([]);
+        self.entries = Arc::from([]);
         self.view.virtual_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
         self.view.virtual_start_column = 0;
         self.view.virtual_generation.next();
     }
 
-    pub(crate) fn entry_snapshot(&mut self) -> Arc<[PaneEntrySnapshot]> {
-        if self.entry_snapshot.len() != self.entries.len() {
-            self.refresh_entry_snapshot();
-        }
-        Arc::clone(&self.entry_snapshot)
+    pub(crate) fn entry_snapshot(&self) -> Arc<[PaneEntrySnapshot]> {
+        Arc::clone(&self.entries)
     }
 
-    fn refresh_entry_snapshot(&mut self) {
-        self.entry_snapshot = self
-            .entries
-            .iter()
-            .map(PaneEntrySnapshot::from_entry)
-            .collect::<Vec<_>>()
-            .into();
+    #[cfg(test)]
+    pub(crate) fn set_file_entries(&mut self, entries: Vec<FileEntry>) {
+        self.set_entries(
+            entries
+                .iter()
+                .map(PaneEntrySnapshot::from_entry)
+                .collect::<Vec<_>>()
+                .into(),
+        );
     }
 }
 
@@ -132,6 +128,21 @@ impl PaneEntrySnapshot {
         }
     }
 
+    pub(crate) fn from_raw(entry: RawFileEntry) -> Self {
+        Self {
+            name: entry.name,
+            path: entry.path,
+            group: entry.group,
+            location: entry.location,
+            kind: entry.kind,
+            size: entry.size,
+            size_bytes: entry.size_bytes as f32,
+            modified: entry.modified,
+            modified_age_days: entry.modified_age_days,
+            is_dir: entry.is_dir,
+        }
+    }
+
     pub(crate) fn to_file_entry(&self) -> FileEntry {
         FileEntry {
             name: self.name.as_str().into(),
@@ -148,6 +159,35 @@ impl PaneEntrySnapshot {
             thumbnail_state: 0,
             thumbnail: Default::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PreparedDirectoryEntries {
+    pub(crate) entries: Arc<[PaneEntrySnapshot]>,
+    pub(crate) has_locations: bool,
+}
+
+impl PreparedDirectoryEntries {
+    pub(crate) fn new(entries: Vec<PaneEntrySnapshot>) -> Self {
+        let has_locations = entries.iter().any(|entry| !entry.location.is_empty());
+        Self {
+            entries: entries.into(),
+            has_locations,
+        }
+    }
+
+    pub(crate) fn from_raw_entries(entries: Vec<RawFileEntry>) -> Self {
+        Self::new(
+            entries
+                .into_iter()
+                .map(PaneEntrySnapshot::from_raw)
+                .collect(),
+        )
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
     }
 }
 
@@ -845,10 +885,10 @@ mod tests {
     fn inactive_pane_snapshot_copies_directory_view_and_search_not_history_or_selection() {
         let mut panes = PanesState::new(PathBuf::from("/tmp/active"));
         let active_id = panes.focused().id;
-        panes.focused_mut().entries = vec![
+        panes.focused_mut().set_file_entries(vec![
             test_entry("one.txt", "/tmp/active/one.txt"),
             test_entry("two.txt", "/tmp/active/two.txt"),
-        ];
+        ]);
         panes.focused_mut().search = PaneSearch {
             query: "one".to_string(),
             recursive: false,
