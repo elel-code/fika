@@ -113,13 +113,7 @@ fn paste_into(
     }
 
     let (operation, paths, pruned_missing) = {
-        let needs_clipboard_refresh = {
-            let state_ref = state.borrow();
-            state_ref.clipboard_paths.is_empty() && state_ref.clipboard_content_kind.is_none()
-        };
-        if needs_clipboard_refresh {
-            refresh_clipboard_availability(ui, state);
-        }
+        refresh_clipboard_availability(ui, state);
         let mut state_ref = state.borrow_mut();
         if state_ref.clipboard_paths.is_empty() {
             drop(state_ref);

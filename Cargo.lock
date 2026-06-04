@@ -1316,9 +1316,13 @@ dependencies = [
  "image",
  "notify",
  "png 0.18.1",
+ "rustix 1.1.4",
  "slint",
  "slint-build",
  "tokio",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "zbus",
  "zbus_polkit",
 ]

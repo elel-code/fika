@@ -254,7 +254,7 @@
   - Current: paste reuses the existing async copy/move operation queue and privileged fallback.
   - Current: Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+Z, and Delete are declared with Slint `KeyBinding`; they operate on the selected files/current directory/last undo entry only when menus, dialogs, and text inputs are not active.
   - Current: Cut / Copy also publishes `x-special/gnome-copied-files` to the Wayland desktop clipboard through `wl-copy` when available; Copy falls back to `text/uri-list` if the desktop helper cannot publish the GNOME file-list MIME type.
-  - Current: startup and context-menu entry trigger an asynchronous `x-special/gnome-copied-files` / `text/uri-list` clipboard refresh through `wl-paste`; Paste visibility uses the cached result instead of synchronously reading the clipboard from transient menu handling. Ctrl+V / Paste still performs a synchronous fallback read only if the cache is empty.
+  - Current: startup and context-menu entry trigger an asynchronous `x-special/gnome-copied-files` / `text/uri-list` clipboard refresh through Fika's built-in Wayland data-control reader; Paste visibility uses the cached result instead of synchronously reading the clipboard from transient menu handling. Ctrl+V / Paste always imports the current desktop clipboard first, then falls back to Fika's internal clipboard state if Wayland data-control is unavailable or the read fails.
   - Current: when importing `text/uri-list`, Fika also checks KDE/Dolphin's `application/x-kde-cutselection` marker so Dolphin Cut pastes as a move rather than a copy.
   - Current: when a desktop file clipboard is available, the cached desktop clipboard replaces Fika's older internal clipboard state, so external Copy/Cut actions take precedence over stale in-app selections. Clipboard refreshes use a generation counter, so stale background reads cannot overwrite a newer Fika Cut/Copy.
   - Current: internal and imported desktop clipboard paths are deduplicated while preserving order, so Paste does not enqueue duplicate transfers for the same source.
@@ -515,7 +515,7 @@ Acceptance for all:
   - Reference: `cosmic-files/src/clipboard.rs` and clipboard handling in `cosmic-files/src/app.rs`.
   - Acceptance: paste availability does not depend on reading clipboard from transient menu contexts, and future paste-image/text/video-to-file workflows have a documented path.
   - Current: file-list paste availability now uses Fika's cached clipboard state; startup and menu entry only schedule background refreshes.
-  - Current: when the clipboard has no file-list payload, Fika probes `wl-paste --list-types` and caches whether image, video, or text content is pasteable without reading the full payload from transient menu handling. Paste then follows COSMIC's order: files first, then image, video, and text, writing non-file contents as unique `Pasted Image.*`, `Pasted Video.*`, or `Pasted Text.txt` files with Undo support.
+  - Current: when the clipboard has no file-list payload, Fika probes the advertised MIME types through its built-in Wayland data-control reader and caches whether image, video, or text content is pasteable without reading the full payload from transient menu handling. Paste then follows COSMIC's order: files first, then image, video, and text, writing non-file contents as unique `Pasted Image.*`, `Pasted Video.*`, or `Pasted Text.txt` files with Undo support.
 
 - [~] Evolve file operation progress toward COSMIC's controller split.
   - Reference: `cosmic-files/src/operation/controller.rs`, `recursive.rs`, and `notifiers.rs`.

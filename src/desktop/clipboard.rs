@@ -1,3 +1,4 @@
+use crate::desktop::wayland_clipboard;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -5,6 +6,7 @@ use std::process::{Command, Stdio};
 const FILE_CLIPBOARD_MIME: &str = "x-special/gnome-copied-files";
 const URI_LIST_MIME: &str = "text/uri-list";
 const KDE_CUT_SELECTION_MIME: &str = "application/x-kde-cutselection";
+const WAYLAND_CLIPBOARD_SOURCE: &str = "Wayland data-control";
 const TEXT_PLAIN_MIME: &str = "text/plain";
 const TEXT_CLIPBOARD_MIMES: &[&str] = &[
     TEXT_PLAIN_MIME,
@@ -116,50 +118,71 @@ pub(crate) fn copy_file_list(paths: &[PathBuf], cut: bool) -> Result<String, Str
     }
 }
 
-pub(crate) fn read_file_list() -> Result<FileClipboard, String> {
-    match read_mime(FILE_CLIPBOARD_MIME).and_then(|(helper, payload)| {
-        parse_file_list_payload(&payload, Some(helper))
-            .ok_or_else(|| "clipboard does not contain file paths".to_string())
-    }) {
-        Ok(clipboard) => Ok(clipboard),
-        Err(special_error) => read_mime(URI_LIST_MIME)
-            .and_then(|(helper, payload)| {
-                let cut = read_kde_cut_selection();
-                parse_uri_list_payload(&payload, helper, cut)
-                    .ok_or_else(|| "clipboard uri-list does not contain file paths".to_string())
-            })
-            .map_err(|uri_error| format!("{special_error}; {uri_error}")),
-    }
-}
-
 pub(crate) fn read_clipboard_snapshot() -> Result<ClipboardSnapshot, String> {
-    match read_file_list() {
+    let mime_types = read_available_mime_types()?;
+    match read_file_list_from_mime_types(&mime_types) {
         Ok(files) => Ok(ClipboardSnapshot {
             files: Some(files),
             content_kind: None,
         }),
-        Err(file_error) => match read_non_file_content_kind() {
-            Ok(content_kind) => Ok(ClipboardSnapshot {
-                files: None,
-                content_kind,
-            }),
-            Err(content_error) => Err(format!("{file_error}; {content_error}")),
-        },
+        Err(file_error) => {
+            let content_kind = content_kind_from_mime_types(mime_types.iter());
+            if content_kind.is_some() {
+                Ok(ClipboardSnapshot {
+                    files: None,
+                    content_kind,
+                })
+            } else {
+                Err(format!(
+                    "{file_error}; clipboard does not contain pasteable image, video, or text data"
+                ))
+            }
+        }
     }
 }
 
-pub(crate) fn read_non_file_content_kind() -> Result<Option<ClipboardContentKind>, String> {
-    read_available_mime_types().map(|mimes| content_kind_from_mime_types(mimes.iter()))
+fn read_file_list_from_mime_types(mime_types: &[String]) -> Result<FileClipboard, String> {
+    let mut errors = Vec::new();
+
+    if mime_types_contain(mime_types, FILE_CLIPBOARD_MIME) {
+        match read_mime_text(FILE_CLIPBOARD_MIME).and_then(|payload| {
+            parse_file_list_payload(&payload, Some(WAYLAND_CLIPBOARD_SOURCE.to_string()))
+                .ok_or_else(|| "clipboard file-list does not contain file paths".to_string())
+        }) {
+            Ok(clipboard) => return Ok(clipboard),
+            Err(err) => errors.push(err),
+        }
+    }
+
+    if mime_types_contain(mime_types, URI_LIST_MIME) {
+        match read_mime_text(URI_LIST_MIME).and_then(|payload| {
+            let cut = read_kde_cut_selection(mime_types);
+            parse_uri_list_payload(&payload, WAYLAND_CLIPBOARD_SOURCE.to_string(), cut)
+                .ok_or_else(|| "clipboard uri-list does not contain file paths".to_string())
+        }) {
+            Ok(clipboard) => return Ok(clipboard),
+            Err(err) => errors.push(err),
+        }
+    }
+
+    if errors.is_empty() {
+        Err(format!(
+            "clipboard does not advertise {FILE_CLIPBOARD_MIME} or {URI_LIST_MIME}"
+        ))
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 pub(crate) fn read_non_file_content() -> Result<ClipboardContent, String> {
+    let mime_types = read_available_mime_types()?;
     let mut errors = Vec::new();
     for (kind, mimes) in [
         (ClipboardContentKind::Image, IMAGE_CLIPBOARD_MIMES),
         (ClipboardContentKind::Video, VIDEO_CLIPBOARD_MIMES),
         (ClipboardContentKind::Text, TEXT_CLIPBOARD_MIMES),
     ] {
-        match read_first_content_mime(kind, mimes) {
+        match read_first_content_mime(kind, mimes, &mime_types) {
             Ok(content) => return Ok(content),
             Err(err) => errors.push(err),
         }
@@ -171,18 +194,7 @@ pub(crate) fn read_non_file_content() -> Result<ClipboardContent, String> {
 }
 
 fn read_available_mime_types() -> Result<Vec<String>, String> {
-    match read_with("wl-paste", &["--list-types"]) {
-        Ok(payload) => Ok(payload
-            .lines()
-            .map(str::trim)
-            .filter(|mime| !mime.is_empty())
-            .map(str::to_string)
-            .collect()),
-        Err(CopyError::Missing) => {
-            Err("no Wayland clipboard helper found; install wl-paste".to_string())
-        }
-        Err(CopyError::Failed(err)) => Err(format!("wl-paste --list-types: {err}")),
-    }
+    wayland_clipboard::list_mime_types()
 }
 
 fn content_kind_from_mime_types<'a>(
@@ -273,10 +285,13 @@ fn parse_uri_list_payload(payload: &str, helper: String, cut: bool) -> Option<Fi
     }
 }
 
-fn read_kde_cut_selection() -> bool {
-    read_mime(KDE_CUT_SELECTION_MIME)
+fn read_kde_cut_selection(mime_types: &[String]) -> bool {
+    if !mime_types_contain(mime_types, KDE_CUT_SELECTION_MIME) {
+        return false;
+    }
+    read_mime_text(KDE_CUT_SELECTION_MIME)
         .ok()
-        .is_some_and(|(_, payload)| kde_cut_selection_payload_is_cut(&payload))
+        .is_some_and(|payload| kde_cut_selection_payload_is_cut(&payload))
 }
 
 fn kde_cut_selection_payload_is_cut(payload: &str) -> bool {
@@ -333,49 +348,46 @@ fn hex(value: u8) -> char {
     }
 }
 
-fn read_mime(mime: &str) -> Result<(String, String), String> {
-    match read_mime_bytes(mime, true) {
-        Ok((helper, payload)) => String::from_utf8(payload)
-            .map(|payload| (helper, payload))
-            .map_err(|err| format!("wl-paste {mime}: {err}")),
-        Err(err) => Err(err),
-    }
+fn mime_types_contain(mime_types: &[String], mime: &str) -> bool {
+    mime_types.iter().any(|candidate| candidate == mime)
+}
+
+fn read_mime_text(mime: &str) -> Result<String, String> {
+    String::from_utf8(read_mime_bytes(mime)?)
+        .map_err(|err| format!("Wayland clipboard {mime}: {err}"))
 }
 
 fn read_first_content_mime(
     kind: ClipboardContentKind,
     mimes: &[&str],
+    available_mimes: &[String],
 ) -> Result<ClipboardContent, String> {
     let mut errors = Vec::new();
     for mime in mimes {
-        match read_mime_bytes(mime, !matches!(kind, ClipboardContentKind::Text)) {
-            Ok((_helper, data)) if !data.is_empty() => {
+        if !mime_types_contain(available_mimes, mime) {
+            continue;
+        }
+        match read_mime_bytes(mime) {
+            Ok(data) if !data.is_empty() => {
                 return Ok(ClipboardContent {
                     kind,
                     data,
                     mime_type: (*mime).to_string(),
                 });
             }
-            Ok((_helper, _)) => errors.push(format!("{mime}: empty clipboard data")),
+            Ok(_) => errors.push(format!("{mime}: empty clipboard data")),
             Err(err) => errors.push(err),
         }
     }
-    Err(errors.join("; "))
+    if errors.is_empty() {
+        Err(format!("clipboard does not advertise {}", mimes.join(", ")))
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
-fn read_mime_bytes(mime: &str, no_newline: bool) -> Result<(String, Vec<u8>), String> {
-    let mut args = Vec::new();
-    if no_newline {
-        args.push("--no-newline");
-    }
-    args.extend(["--type", mime]);
-    match read_bytes_with("wl-paste", &args) {
-        Ok(payload) => Ok(("wl-paste".to_string(), payload)),
-        Err(CopyError::Missing) => Err(format!(
-            "no Wayland clipboard helper found for {mime}; install wl-paste"
-        )),
-        Err(CopyError::Failed(err)) => Err(format!("wl-paste: {err}")),
-    }
+fn read_mime_bytes(mime: &str) -> Result<Vec<u8>, String> {
+    wayland_clipboard::read_mime(mime).map(|data| data.data)
 }
 
 fn image_extension(mime: &str) -> Option<&'static str> {
@@ -443,35 +455,6 @@ fn copy_with(program: &str, args: &[&str], text: &str) -> Result<(), CopyError> 
         .map_err(|err| CopyError::Failed(err.to_string()))?;
     if output.status.success() {
         Ok(())
-    } else {
-        Err(CopyError::Failed(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ))
-    }
-}
-
-fn read_with(program: &str, args: &[&str]) -> Result<String, CopyError> {
-    String::from_utf8(read_bytes_with(program, args)?)
-        .map_err(|err| CopyError::Failed(err.to_string()))
-}
-
-fn read_bytes_with(program: &str, args: &[&str]) -> Result<Vec<u8>, CopyError> {
-    let output = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                CopyError::Missing
-            } else {
-                CopyError::Failed(err.to_string())
-            }
-        })?;
-
-    if output.status.success() {
-        Ok(output.stdout)
     } else {
         Err(CopyError::Failed(
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
