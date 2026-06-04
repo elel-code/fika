@@ -1,7 +1,8 @@
 use image::GenericImageView;
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::env;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,6 +16,15 @@ pub(crate) struct ThumbnailKey {
     size_px: u32,
     freedesktop_size: FreedesktopThumbnailSize,
     freedesktop_cache_filename: Option<String>,
+}
+
+impl ThumbnailKey {
+    pub(crate) fn item_view_media_token(&self) -> i32 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        let hash = hasher.finish();
+        (((hash ^ (hash >> 32)) as u32 & 0x3fff_ffff) | 0x4000_0000) as i32
+    }
 }
 
 #[derive(Clone, Debug)]

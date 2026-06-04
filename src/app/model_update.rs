@@ -99,7 +99,11 @@ fn update_vec_model(
 
     let overlap_rows = overlap_start - new_start..overlap_end - new_start;
     for row in overlap_rows {
-        if model.row_data(row).as_ref() != Some(&entries[row]) {
+        if model
+            .row_data(row)
+            .as_ref()
+            .is_none_or(|current| item_view_row_needs_update(current, &entries[row]))
+        {
             model.set_row_data(row, entries[row].clone());
         }
     }
@@ -114,11 +118,37 @@ fn update_vec_model(
     }
 }
 
+fn item_view_row_needs_update(current: &ItemViewEntry, next: &ItemViewEntry) -> bool {
+    current.name != next.name
+        || current.path != next.path
+        || current.group != next.group
+        || current.location != next.location
+        || current.is_dir != next.is_dir
+        || current.selected != next.selected
+        || current.thumbnail_state != next.thumbnail_state
+        || current.media_token != next.media_token
+        || current.tile_width != next.tile_width
+        || current.tile_height != next.tile_height
+        || current.media_x != next.media_x
+        || current.media_y != next.media_y
+        || current.text_x != next.text_x
+        || current.text_width != next.text_width
+        || current.group_y != next.group_y
+        || current.title_y != next.title_y
+        || current.location_y != next.location_y
+        || current.metadata_line_height != next.metadata_line_height
+        || current.title_line_height != next.title_line_height
+        || current.media_width != next.media_width
+        || current.media_height != next.media_height
+        || current.metadata_font_size != next.metadata_font_size
+        || current.title_font_size != next.title_font_size
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::pane::PaneView;
-    use slint::Image;
+    use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
     fn entry(index: usize) -> ItemViewEntry {
         ItemViewEntry {
@@ -130,6 +160,7 @@ mod tests {
             selected: false,
             thumbnail_state: 0,
             media: Image::default(),
+            media_token: 0,
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,
@@ -161,6 +192,19 @@ mod tests {
             .filter(|entry| entry.selected)
             .map(|entry| entry.path.to_string())
             .collect()
+    }
+
+    fn colored_image(pixel: Rgba8Pixel) -> Image {
+        let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
+        buffer.make_mut_slice()[0] = pixel;
+        Image::from_rgba8(buffer)
+    }
+
+    fn first_pixel(image: &Image) -> Rgba8Pixel {
+        image
+            .to_rgba8()
+            .expect("test image should be rgba")
+            .as_slice()[0]
     }
 
     #[test]
@@ -252,6 +296,36 @@ mod tests {
                 .map(|index| format!("/tmp/item-{index}"))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn item_view_entry_model_uses_media_token_instead_of_image_comparison_for_overlap() {
+        let mut old_entry = entry(0);
+        old_entry.media = colored_image(Rgba8Pixel::new(255, 0, 0, 255));
+        old_entry.media_token = 42;
+        let model = new_item_view_entries_model(vec![old_entry]);
+        let original = model.clone();
+
+        let mut same_token_entry = entry(0);
+        same_token_entry.media = colored_image(Rgba8Pixel::new(0, 0, 255, 255));
+        same_token_entry.media_token = 42;
+        assert!(update_item_view_entries_model(&model, 0, 0, vec![same_token_entry]).is_none());
+
+        assert_eq!(model, original);
+        let unchanged = model.row_data(0).expect("row should remain present");
+        assert_eq!(
+            first_pixel(&unchanged.media),
+            Rgba8Pixel::new(255, 0, 0, 255)
+        );
+
+        let mut new_token_entry = entry(0);
+        new_token_entry.media = colored_image(Rgba8Pixel::new(0, 0, 255, 255));
+        new_token_entry.media_token = 43;
+        assert!(update_item_view_entries_model(&model, 0, 0, vec![new_token_entry]).is_none());
+
+        let updated = model.row_data(0).expect("row should remain present");
+        assert_eq!(updated.media_token, 43);
+        assert_eq!(first_pixel(&updated.media), Rgba8Pixel::new(0, 0, 255, 255));
     }
 
     #[test]

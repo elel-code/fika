@@ -48,6 +48,8 @@ impl ItemViewRenderMetrics {
 pub(crate) struct ItemViewMediaCache {
     folder: Image,
     file: Image,
+    folder_token: i32,
+    file_token: i32,
 }
 
 impl ItemViewMediaCache {
@@ -57,6 +59,8 @@ impl ItemViewMediaCache {
         Self {
             folder: fallback_media_image(true, dark, width, height),
             file: fallback_media_image(false, dark, width, height),
+            folder_token: fallback_media_token(true, dark, width, height),
+            file_token: fallback_media_token(false, dark, width, height),
         }
     }
 
@@ -65,6 +69,14 @@ impl ItemViewMediaCache {
             self.folder.clone()
         } else {
             self.file.clone()
+        }
+    }
+
+    fn token_for(&self, is_dir: bool) -> i32 {
+        if is_dir {
+            self.folder_token
+        } else {
+            self.file_token
         }
     }
 }
@@ -289,6 +301,7 @@ pub(crate) fn decorate_fallback_media(entries: &mut [ItemViewEntry], cache: &Ite
     for entry in entries.iter_mut() {
         if entry.is_dir || entry.thumbnail_state != 2 {
             entry.media = cache.image_for(entry.is_dir);
+            entry.media_token = cache.token_for(entry.is_dir);
         }
     }
 }
@@ -422,6 +435,14 @@ fn fallback_media_image(is_dir: bool, dark: bool, width: u32, height: u32) -> Im
         draw_file_glyph(&mut buffer, dark);
     }
     Image::from_rgba8(buffer)
+}
+
+fn fallback_media_token(is_dir: bool, dark: bool, width: u32, height: u32) -> i32 {
+    let kind = if is_dir { 1 } else { 2 };
+    let theme = if dark { 1 } else { 0 };
+    let width = width.min(0xfff);
+    let height = height.min(0xfff);
+    0x1000_0000 | (kind << 25) | (theme << 24) | ((width as i32) << 12) | height as i32
 }
 
 fn draw_folder_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
@@ -661,6 +682,7 @@ mod tests {
             selected: false,
             thumbnail_state: 0,
             media: Image::default(),
+            media_token: 0,
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,

@@ -185,6 +185,7 @@ impl PaneEntrySnapshot {
             selected: false,
             thumbnail_state: 0,
             media: Default::default(),
+            media_token: 0,
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,

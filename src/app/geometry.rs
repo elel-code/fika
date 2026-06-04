@@ -2486,6 +2486,7 @@ mod tests {
                 && item_view_entry.contains("selected: bool")
                 && item_view_entry.contains("thumbnail_state: int")
                 && item_view_entry.contains("media: image")
+                && item_view_entry.contains("media_token: int")
                 && item_view_entry.contains("tile_width: float")
                 && item_view_entry.contains("media_x: float")
                 && item_view_entry.contains("media_width: float")

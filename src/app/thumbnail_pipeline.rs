@@ -28,6 +28,7 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
         };
         if let Some(data) = state.thumbnail_cache.get(&key) {
             entry.media = image_from_thumbnail(data);
+            entry.media_token = key.item_view_media_token();
             entry.thumbnail_state = 2;
         } else if state.thumbnail_failures.contains_key(&key) {
             entry.thumbnail_state = 0;
@@ -316,6 +317,7 @@ mod tests {
             selected: false,
             thumbnail_state: 0,
             media: Image::default(),
+            media_token: 0,
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,
