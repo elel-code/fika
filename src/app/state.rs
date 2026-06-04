@@ -1,4 +1,5 @@
 use crate::app::pane::{PanesState, PreparedDirectoryEntries};
+use crate::config::service_menu_policy::ServiceMenuPolicy;
 use crate::desktop::clipboard::ClipboardContentKind;
 use crate::desktop::service_menu::ServiceMenuAction;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
@@ -17,8 +18,10 @@ pub(crate) struct AppState {
     pub(crate) places: Vec<PlaceEntry>,
     pub(crate) other_application_apps: Vec<DesktopApp>,
     pub(crate) context_service_menu_actions: Vec<ServiceMenuAction>,
+    pub(crate) context_service_menu_all_actions: Vec<ServiceMenuAction>,
     pub(crate) context_service_menu_paths: Vec<PathBuf>,
     pub(crate) context_service_menu_pane_id: Option<u64>,
+    pub(crate) service_menu_policy: ServiceMenuPolicy,
     pub(crate) clipboard_paths: Vec<PathBuf>,
     pub(crate) clipboard_cut: bool,
     pub(crate) clipboard_content_kind: Option<ClipboardContentKind>,
@@ -68,8 +71,10 @@ impl AppState {
             places,
             other_application_apps: Vec::new(),
             context_service_menu_actions: Vec::new(),
+            context_service_menu_all_actions: Vec::new(),
             context_service_menu_paths: Vec::new(),
             context_service_menu_pane_id: None,
+            service_menu_policy: ServiceMenuPolicy::default(),
             clipboard_paths: Vec::new(),
             clipboard_cut: false,
             clipboard_content_kind: None,

@@ -2,8 +2,9 @@ use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::events::{AsyncEvent, ServiceMenuActionLaunchResult};
 use crate::app::split_view::sync_pane_slot_ui;
 use crate::app::state::AppState;
+use crate::config::service_menu_policy::{ServiceMenuPolicy, save_service_menu_policy};
 use crate::desktop::service_menu;
-use crate::{AppWindow, ContextServiceAction};
+use crate::{AppWindow, ContextServiceAction, ContextServicePolicyAction};
 use slint::{ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -61,10 +62,11 @@ pub(crate) fn refresh_actions_async(
         let generation = state.service_menu_generation.next();
         state.context_service_menu_paths = paths.clone();
         state.context_service_menu_actions.clear();
+        state.context_service_menu_all_actions.clear();
         state.context_service_menu_pane_id = state.panes.pane_for_slot(slot).map(|pane| pane.id);
         generation
     };
-    sync_actions_ui(ui, &[]);
+    sync_service_menu_ui(ui, &[], &[], &ServiceMenuPolicy::default());
 
     if paths.is_empty() {
         return;
@@ -95,25 +97,58 @@ pub(crate) fn apply_actions_result(
     state: &Rc<RefCell<AppState>>,
     result: service_menu::ServiceMenuActionsResult,
 ) {
-    let actions = {
+    let (visible_actions, all_actions, policy) = {
         let mut state = state.borrow_mut();
         if !state.service_menu_generation.is_current(result.generation)
             || state.context_service_menu_paths != result.paths
         {
             return;
         }
-        state.context_service_menu_actions = result.result.unwrap_or_default();
-        state.context_service_menu_actions.clone()
+        state.context_service_menu_all_actions = result.result.unwrap_or_default();
+        state.context_service_menu_actions = enabled_actions(
+            &state.context_service_menu_all_actions,
+            &state.service_menu_policy,
+        );
+        (
+            state.context_service_menu_actions.clone(),
+            state.context_service_menu_all_actions.clone(),
+            state.service_menu_policy.clone(),
+        )
     };
-    sync_actions_ui(ui, &actions);
+    sync_service_menu_ui(ui, &visible_actions, &all_actions, &policy);
 }
 
-fn sync_actions_ui(ui: &AppWindow, actions: &[service_menu::ServiceMenuAction]) {
+fn sync_service_menu_ui(
+    ui: &AppWindow,
+    visible_actions: &[service_menu::ServiceMenuAction],
+    all_actions: &[service_menu::ServiceMenuAction],
+    policy: &ServiceMenuPolicy,
+) {
+    sync_actions_ui(ui, visible_actions, all_actions.len());
+    sync_policy_actions_ui(ui, all_actions, policy);
+}
+
+fn sync_actions_ui(
+    ui: &AppWindow,
+    actions: &[service_menu::ServiceMenuAction],
+    all_action_count: usize,
+) {
     let (rows, counts) = menu_rows(actions);
     ui.set_context_service_actions(ModelRc::new(Rc::new(VecModel::from(rows))));
     ui.set_context_service_child_actions(empty_actions_model());
     ui.set_context_service_action_rows(counts.action_rows);
     ui.set_context_service_submenu_rows(counts.submenu_rows);
+    ui.set_context_service_config_rows(i32::from(all_action_count > 0));
+}
+
+fn sync_policy_actions_ui(
+    ui: &AppWindow,
+    actions: &[service_menu::ServiceMenuAction],
+    policy: &ServiceMenuPolicy,
+) {
+    ui.set_context_service_policy_actions(ModelRc::new(Rc::new(VecModel::from(
+        policy_action_rows(actions, policy),
+    ))));
 }
 
 fn menu_rows(
@@ -149,6 +184,61 @@ pub(crate) fn prepare_submenu_actions(ui: &AppWindow, state: &Rc<RefCell<AppStat
     ui.set_context_service_child_actions(ModelRc::new(Rc::new(VecModel::from(rows))));
 }
 
+pub(crate) fn set_action_enabled(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    action_id: &str,
+    enabled: bool,
+) {
+    let (visible_actions, all_actions, policy, pane_id, save_result) = {
+        let mut state = state.borrow_mut();
+        let previous_policy = state.service_menu_policy.clone();
+        let mut next_policy = previous_policy.clone();
+        next_policy.set_enabled(action_id, enabled);
+        let save_result = save_service_menu_policy(&next_policy);
+        state.service_menu_policy = if save_result.is_ok() {
+            next_policy
+        } else {
+            previous_policy
+        };
+        state.context_service_menu_actions = enabled_actions(
+            &state.context_service_menu_all_actions,
+            &state.service_menu_policy,
+        );
+        (
+            state.context_service_menu_actions.clone(),
+            state.context_service_menu_all_actions.clone(),
+            state.service_menu_policy.clone(),
+            state.context_service_menu_pane_id,
+            save_result,
+        )
+    };
+
+    sync_service_menu_ui(ui, &visible_actions, &all_actions, &policy);
+
+    let Some(pane_id) = pane_id else {
+        return;
+    };
+    match save_result {
+        Ok(()) => set_status_for_pane_id(
+            ui,
+            state,
+            pane_id,
+            if enabled {
+                "Service menu action enabled"
+            } else {
+                "Service menu action disabled"
+            },
+        ),
+        Err(err) => set_status_for_pane_id(
+            ui,
+            state,
+            pane_id,
+            &format!("Cannot save service menu policy: {err}"),
+        ),
+    }
+}
+
 fn child_menu_rows(
     actions: &[service_menu::ServiceMenuAction],
     group: &str,
@@ -182,6 +272,32 @@ fn service_menu_submenu_row(group: &str) -> ContextServiceAction {
         action_index: -1,
         row_kind: SERVICE_ROW_SUBMENU,
     }
+}
+
+fn policy_action_rows(
+    actions: &[service_menu::ServiceMenuAction],
+    policy: &ServiceMenuPolicy,
+) -> Vec<ContextServicePolicyAction> {
+    actions
+        .iter()
+        .map(|action| ContextServicePolicyAction {
+            id: action.id.clone().into(),
+            name: action.name.clone().into(),
+            group: action.submenu.clone().into(),
+            enabled: policy.is_enabled(&action.id),
+        })
+        .collect()
+}
+
+fn enabled_actions(
+    actions: &[service_menu::ServiceMenuAction],
+    policy: &ServiceMenuPolicy,
+) -> Vec<service_menu::ServiceMenuAction> {
+    actions
+        .iter()
+        .filter(|action| policy.is_enabled(&action.id))
+        .cloned()
+        .collect()
 }
 
 fn empty_actions_model() -> ModelRc<ContextServiceAction> {
@@ -365,14 +481,19 @@ mod tests {
         assert!(
             refresh_body.contains(
                 "state.context_service_menu_pane_id = state.panes.pane_for_slot(slot).map(|pane| pane.id);"
-            ) && refresh_body.contains("sync_actions_ui(ui, &[]);"),
+            ) && refresh_body.contains("state.context_service_menu_all_actions.clear();")
+                && refresh_body.contains("sync_service_menu_ui(ui, &[], &[], &ServiceMenuPolicy::default());"),
             "opening a context menu should remember the source pane and clear stale service action rows before async discovery"
         );
         assert!(
-            apply_body.contains("let actions = {\n        let mut state = state.borrow_mut();")
+            apply_body.contains("let (visible_actions, all_actions, policy) = {\n        let mut state = state.borrow_mut();")
+                && apply_body.contains("state.context_service_menu_all_actions = result.result.unwrap_or_default();")
+                && apply_body.contains("state.context_service_menu_actions = enabled_actions(")
                 && apply_body.contains("state.context_service_menu_actions.clone()")
-                && apply_body.contains("sync_actions_ui(ui, &actions);"),
-            "service menu discovery results should update AppState first, release the borrow, then write the Slint model"
+                && apply_body.contains("state.context_service_menu_all_actions.clone()")
+                && apply_body.contains("state.service_menu_policy.clone()")
+                && apply_body.contains("sync_service_menu_ui(ui, &visible_actions, &all_actions, &policy);"),
+            "service menu discovery results should keep all actions for policy editing, filter the visible menu snapshot, release the borrow, then write Slint models"
         );
         assert!(
             launch_body.contains("state_ref.context_service_menu_pane_id")
@@ -435,6 +556,34 @@ mod tests {
             .map(|row| (row.row_kind, row.name.to_string(), row.action_index))
             .collect::<Vec<_>>(),
             vec![(0, "Edit A".to_string(), 1), (0, "Edit B".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn service_menu_policy_rows_keep_disabled_actions_configurable() {
+        let actions = vec![
+            service_action("top", "Top Action", "", true),
+            service_action("tools", "Tool", "Tools", false),
+        ];
+        let mut policy = ServiceMenuPolicy::default();
+        policy.set_enabled("tools", false);
+
+        assert_eq!(
+            enabled_actions(&actions, &policy)
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["top"]
+        );
+        assert_eq!(
+            policy_action_rows(&actions, &policy)
+                .iter()
+                .map(|row| (row.id.to_string(), row.name.to_string(), row.enabled))
+                .collect::<Vec<_>>(),
+            vec![
+                ("top".to_string(), "Top Action".to_string(), true),
+                ("tools".to_string(), "Tool".to_string(), false),
+            ]
         );
     }
 

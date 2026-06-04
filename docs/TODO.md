@@ -446,7 +446,8 @@ Acceptance for all:
   - Current: item and blank-area right-click routing refresh a generation-guarded `AppState` snapshot of matching service-menu actions off the UI thread, clear stale popup rows immediately, then update the Slint action model when discovery returns.
   - Current: matching service-menu actions now render in file/viewport context menus, clicking launches the stored shell-free argv through the existing systemd user-scope launch path, and status reports back to the source pane.
   - Current: context action UI/controller behavior is isolated in `src/app/context_service_menu.rs`; top-level actions stay as direct rows, non-top-level `X-KDE-Submenu` groups render as true hover submenus through the shared `MenuLifecycleController` / `ChildSubmenuLayer` path, and popup geometry counts only root action/submenu rows.
-  - Remaining: optional icons and user enable/disable policy.
+  - Current: matching service-menu actions now keep both an all-actions snapshot and a policy-filtered visible snapshot. The file/viewport menu exposes `Configure Service Actions...` when actions exist, and the dialog lets users enable/disable the current matching service actions without losing disabled rows. Policy is persisted in `service-menu-policy.tsv`.
+  - Remaining: optional icons.
 
 - [x] Apply Dolphin-like context menu grouping and submenu grace.
   - Acceptance: context menus use grouped separators, submenu indicators are separate from labels, child menus anchor to their parent row and have a hover bridge to avoid accidental disappearance while moving between parent and child.

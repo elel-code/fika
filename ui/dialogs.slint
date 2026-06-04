@@ -1,5 +1,5 @@
 import { LineEdit, ScrollView } from "std-widgets.slint";
-import { DesktopApp } from "models.slint";
+import { ContextServicePolicyAction, DesktopApp } from "models.slint";
 import { CheckOption, MenuItem } from "widgets.slint";
 
 export component TextInputDialog inherits Rectangle {
@@ -360,6 +360,91 @@ export component ConfirmationPopup inherits Rectangle {
         accept-label: root.accept-label;
         cancelled => { root.cancelled(); }
         accepted => { root.accepted(); }
+    }
+}
+
+export component ServiceMenuPolicyDialog inherits Rectangle {
+    in property <bool> dark;
+    in property <[ContextServicePolicyAction]> actions;
+    callback action_toggled(string, bool);
+    callback closed();
+
+    border-radius: 8px;
+    background: root.dark ? #24282c : #fcfdfe;
+    border-width: 1px;
+    border-color: root.dark ? #3f474f : #d9e1e8;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+
+        Text {
+            text: "Service Actions";
+            color: root.dark ? #f1f1f1 : #17212b;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: as-needed;
+            vertical-scrollbar-policy: as-needed;
+            viewport-width: parent.width;
+            viewport-height: max(38px, root.actions.length * 38px);
+
+            if (root.actions.length == 0): Text {
+                text: "No service actions for this selection.";
+                height: 38px;
+                x: 12px;
+                width: parent.width - 24px;
+                color: root.dark ? #d8d8d8 : #475569;
+                font-size: 13px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
+            for action[index] in root.actions: CheckOption {
+                y: index * 38px;
+                height: 34px;
+                width: parent.width;
+                label: action.group == "" ? action.name : (action.group + " / " + action.name);
+                dark: root.dark;
+                checked: action.enabled;
+                toggled(enabled) => { root.action_toggled(action.id, enabled); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle { horizontal-stretch: 1; }
+
+            MenuItem {
+                width: 82px;
+                label: "Close";
+                dark: root.dark;
+                clicked => { root.closed(); }
+            }
+        }
+    }
+}
+
+export component ServiceMenuPolicyPopup inherits Rectangle {
+    in property <bool> dark;
+    in property <[ContextServicePolicyAction]> actions;
+    callback action_toggled(string, bool);
+    callback closed();
+
+    background: transparent;
+
+    ServiceMenuPolicyDialog {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 460px;
+        height: 420px;
+        dark: root.dark;
+        actions: root.actions;
+        action_toggled(id, enabled) => { root.action_toggled(id, enabled); }
+        closed => { root.closed(); }
     }
 }
 

@@ -754,6 +754,7 @@ export component FileContextMenu inherits PopupSurface {
     in property <bool> add-to-places-visible;
     in property <bool> in-trash;
     in property <[ContextServiceAction]> service-actions;
+    in property <bool> service-config-visible;
     callback open_folder_with_hover(bool);
     callback open_folder_with_clicked();
     callback default_open_requested();
@@ -774,6 +775,7 @@ export component FileContextMenu inherits PopupSurface {
     callback service_action_requested(int);
     callback service_submenu_hovered(string, length, bool);
     callback service_submenu_clicked(string, length);
+    callback configure_service_actions();
 
     VerticalLayout {
         spacing: 0px;
@@ -813,6 +815,12 @@ export component FileContextMenu inherits PopupSurface {
             submenu_clicked(group, row-y) => {
                 root.service_submenu_clicked(group, row-y);
             }
+        }
+
+        if (root.service-config-visible): ActionMenuRow {
+            label: "Configure Service Actions...";
+            dark: root.dark;
+            clicked => { root.configure_service_actions(); }
         }
 
         if (root.selected-count <= 1): MenuSeparator {
@@ -908,6 +916,7 @@ export component ViewportContextMenu inherits PopupSurface {
     in property <bool> clipboard-cut;
     in property <bool> in-trash;
     in property <[ContextServiceAction]> service-actions;
+    in property <bool> service-config-visible;
     callback create_new_hover(bool);
     callback create_new_clicked();
     callback select_all_requested();
@@ -919,6 +928,7 @@ export component ViewportContextMenu inherits PopupSurface {
     callback service_action_requested(int);
     callback service_submenu_hovered(string, length, bool);
     callback service_submenu_clicked(string, length);
+    callback configure_service_actions();
 
     VerticalLayout {
         spacing: 0px;
@@ -978,6 +988,12 @@ export component ViewportContextMenu inherits PopupSurface {
                 root.service_submenu_clicked(group, row-y);
             }
         }
+
+        if (root.service-config-visible): ActionMenuRow {
+            label: "Configure Service Actions...";
+            dark: root.dark;
+            clicked => { root.configure_service_actions(); }
+        }
     }
 }
 
@@ -1017,6 +1033,7 @@ export component RootContextMenuLayer inherits Rectangle {
     in property <[ContextServiceAction]> service-actions;
     in property <int> service-action-rows;
     in property <int> service-submenu-rows;
+    in property <bool> service-config-visible;
     out property <length> active-menu-left: MenuGeometry.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     out property <length> active-menu-top: MenuGeometry.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     out property <length> active-menu-width: (root.menu-kind == 2 || root.menu-kind == 5) ? root.place-menu-width : ((root.menu-kind == 3 || root.menu-kind == 4) ? root.blank-menu-width : root.file-menu-width);
@@ -1044,6 +1061,7 @@ export component RootContextMenuLayer inherits Rectangle {
     callback file_service_action_requested(int);
     callback file_service_submenu_hovered(string, length, bool);
     callback file_service_submenu_clicked(string, length);
+    callback file_configure_service_actions();
     callback place_open_new_window();
     callback place_rename_requested();
     callback place_remove_requested();
@@ -1064,6 +1082,7 @@ export component RootContextMenuLayer inherits Rectangle {
     callback viewport_service_action_requested(int);
     callback viewport_service_submenu_hovered(string, length, bool);
     callback viewport_service_submenu_clicked(string, length);
+    callback viewport_configure_service_actions();
 
     background: transparent;
 
@@ -1082,6 +1101,7 @@ export component RootContextMenuLayer inherits Rectangle {
         add-to-places-visible: root.add-to-places-visible;
         in-trash: root.in-trash;
         service-actions: root.service-actions;
+        service-config-visible: root.service-config-visible;
         open_folder_with_hover(is-hovered) => { root.file_open_folder_with_hover(root.active-menu-top, is-hovered); }
         open_folder_with_clicked => { root.file_open_folder_with_clicked(root.active-menu-top); }
         default_open_requested => { root.file_default_open_requested(); }
@@ -1106,6 +1126,7 @@ export component RootContextMenuLayer inherits Rectangle {
         service_submenu_clicked(group, row-y) => {
             root.file_service_submenu_clicked(group, row-y);
         }
+        configure_service_actions => { root.file_configure_service_actions(); }
     }
 
     if (root.menu-open && root.menu-kind == 2): PlaceContextMenu {
@@ -1160,6 +1181,7 @@ export component RootContextMenuLayer inherits Rectangle {
         clipboard-cut: root.clipboard-cut;
         in-trash: root.in-trash;
         service-actions: root.service-actions;
+        service-config-visible: root.service-config-visible;
         create_new_hover(is-hovered) => { root.viewport_create_new_hover(root.create-new-row-y, is-hovered); }
         create_new_clicked => { root.viewport_create_new_clicked(root.create-new-row-y); }
         select_all_requested => { root.viewport_select_all_requested(); }
@@ -1175,5 +1197,6 @@ export component RootContextMenuLayer inherits Rectangle {
         service_submenu_clicked(group, row-y) => {
             root.viewport_service_submenu_clicked(group, row-y);
         }
+        configure_service_actions => { root.viewport_configure_service_actions(); }
     }
 }

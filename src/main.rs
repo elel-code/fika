@@ -93,6 +93,7 @@ use app::transfer::{
 use app::virtual_view::{VirtualViewSnapshotInput, prepare_virtual_view_snapshot_update};
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
+use config::service_menu_policy::load_service_menu_policy;
 use config::settings::{AppSettings, load_settings, save_settings};
 use desktop::{mime_open, open_with, terminal};
 use fs::devices::{
@@ -232,6 +233,7 @@ fn main() -> Result<(), slint::PlatformError> {
         normalize_start_dir(start_dir),
         default_places(),
     )));
+    state.borrow_mut().service_menu_policy = load_service_menu_policy();
 
     let ui = AppWindow::new()?;
 
@@ -729,6 +731,16 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_prepare_context_service_submenu(move |group| {
             if let Some(ui) = ui_weak.upgrade() {
                 context_service_menu::prepare_submenu_actions(&ui, &state, group.as_str());
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_context_service_action_enabled(move |id, enabled| {
+            if let Some(ui) = ui_weak.upgrade() {
+                context_service_menu::set_action_enabled(&ui, &state, id.as_str(), enabled);
             }
         });
     }
