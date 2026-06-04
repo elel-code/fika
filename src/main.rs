@@ -3129,7 +3129,12 @@ fn apply_file_operation_progress(
     state: &Rc<RefCell<AppState>>,
     progress: FileOperationProgress,
 ) {
-    if let Some(update) = state.borrow_mut().file_operation_progress_update(&progress) {
+    let update = {
+        let mut state = state.borrow_mut();
+        state.file_operation_progress_update(&progress)
+    };
+
+    if let Some(update) = update {
         set_status_for_panes(ui, state, &update.pane_ids, &update.status);
     }
 }
@@ -5593,6 +5598,14 @@ mod tests {
         assert!(
             body.contains("set_status_for_panes(ui, state, &update.pane_ids, &update.status);"),
             "file operation progress status should write to the panes captured when the operation started"
+        );
+        assert!(
+            body.contains(
+                "let update = {\n        let mut state = state.borrow_mut();\n        state.file_operation_progress_update(&progress)\n    };"
+            ) && !body.contains(
+                "if let Some(update) = state.borrow_mut().file_operation_progress_update(&progress)"
+            ),
+            "file operation progress must release the mutable AppState borrow before updating pane status"
         );
         assert!(
             !body.contains("set_status(ui, state, &update.status);"),

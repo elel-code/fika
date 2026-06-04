@@ -553,4 +553,43 @@ mod tests {
         assert_eq!(text.base_file_name(), "Pasted Text");
         assert_eq!(text.extension(), Some("txt"));
     }
+
+    #[test]
+    fn clipboard_scope_does_not_keep_external_helper_commands() {
+        let clipboard_sources = [
+            include_str!("clipboard.rs"),
+            include_str!("wayland_clipboard.rs"),
+            include_str!("../app/file_clipboard.rs"),
+        ];
+
+        let external_helpers = [
+            ["wl", "-", "paste"].concat(),
+            ["wl", "-", "copy"].concat(),
+            ["x", "clip"].concat(),
+            ["x", "sel"].concat(),
+        ];
+        for source in clipboard_sources {
+            for helper in &external_helpers {
+                assert!(
+                    !source.contains(helper.as_str()),
+                    "clipboard integration must stay on built-in Wayland data-control without external helper command {helper}"
+                );
+            }
+        }
+
+        let command_spawn_tokens = [
+            ["Command", "::", "new"].concat(),
+            ["std", "::", "process", "::", "Command"].concat(),
+            ["process", "::", "Command"].concat(),
+            ["tokio", "::", "process", "::", "Command"].concat(),
+        ];
+        for source in clipboard_sources {
+            for token in &command_spawn_tokens {
+                assert!(
+                    !source.contains(token.as_str()),
+                    "clipboard integration must not spawn external helper commands"
+                );
+            }
+        }
+    }
 }
