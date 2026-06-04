@@ -167,11 +167,8 @@ pub(crate) fn register_callbacks(
                     "Copy Location",
                     affected_dir,
                     move || {
-                        Ok((
-                            clipboard::copy_text(&path)
-                                .map(|helper| format!("copied via {helper}"))?,
-                            None,
-                        ))
+                        clipboard::copy_text(&path)?;
+                        Ok(("copied via Wayland data-control".to_string(), None))
                     },
                     None,
                 );

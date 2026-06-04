@@ -645,16 +645,16 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 
 **中文**：
 
-- 桌面剪贴板写入：Cut/Copy 操作写入 `x-special/gnome-copied-files`（第一行为 `cut` 或 `copy`，后续为 `file://` URI）
-- 回退到 `text/uri-list`（无 cut 语义时）
-- 读取端：通过内置 Wayland data-control 列 MIME 并读取 payload，解析 `x-special/gnome-copied-files`、`text/uri-list`、`application/x-kde-cutselection`，不回退到外部读取 helper
+- 桌面剪贴板写入：Cut/Copy 通过内置 Wayland data-control 发布 `x-special/gnome-copied-files`、`text/uri-list` 和 `application/x-kde-cutselection`
+- 读取端：通过内置 Wayland data-control 列 MIME 并读取 payload，解析 `x-special/gnome-copied-files`、`text/uri-list`、`application/x-kde-cutselection`
+- 剪贴板读写都不调用外部 clipboard helper 命令
 - 非文件剪贴板：按 COSMIC 顺序检测 image → video → text
 
 **English**:
 
-- Desktop clipboard write: Cut/Copy writes `x-special/gnome-copied-files` (first line `cut`/`copy`, rest `file://` URIs)
-- Fallback to `text/uri-list` (without cut semantics)
-- Read side: uses the built-in Wayland data-control reader to list MIME types and read payloads, parses `x-special/gnome-copied-files`, `text/uri-list`, `application/x-kde-cutselection`, and does not fall back to an external read helper
+- Desktop clipboard write: Cut/Copy publishes `x-special/gnome-copied-files`, `text/uri-list`, and `application/x-kde-cutselection` through the built-in Wayland data-control owner
+- Read side: uses the built-in Wayland data-control reader to list MIME types and read payloads, and parses `x-special/gnome-copied-files`, `text/uri-list`, `application/x-kde-cutselection`
+- Clipboard read/write does not call external clipboard helper commands
 - Non-file clipboard: detects image → video → text in COSMIC order
 
 ### 8.3 终端启动 / Terminal Launch (`src/desktop/terminal.rs`)

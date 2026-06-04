@@ -1,12 +1,9 @@
 use crate::desktop::wayland_clipboard;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 const FILE_CLIPBOARD_MIME: &str = "x-special/gnome-copied-files";
 const URI_LIST_MIME: &str = "text/uri-list";
 const KDE_CUT_SELECTION_MIME: &str = "application/x-kde-cutselection";
-const WAYLAND_CLIPBOARD_SOURCE: &str = "Wayland data-control";
 const TEXT_PLAIN_MIME: &str = "text/plain";
 const TEXT_CLIPBOARD_MIMES: &[&str] = &[
     TEXT_PLAIN_MIME,
@@ -54,7 +51,6 @@ const VIDEO_CLIPBOARD_MIMES: &[&str] = &[
 pub(crate) struct FileClipboard {
     pub(crate) paths: Vec<PathBuf>,
     pub(crate) cut: bool,
-    pub(crate) helper: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,27 +91,15 @@ impl ClipboardContent {
     }
 }
 
-pub(crate) fn copy_text(text: &str) -> Result<String, String> {
-    match copy_with("wl-copy", &[], text) {
-        Ok(()) => Ok("wl-copy".to_string()),
-        Err(CopyError::Missing) => {
-            Err("no Wayland clipboard helper found; install wl-copy".to_string())
-        }
-        Err(CopyError::Failed(err)) => Err(format!("wl-copy: {err}")),
-    }
+pub(crate) fn copy_text(text: &str) -> Result<(), String> {
+    wayland_clipboard::publish_mime_data(text_clipboard_offers(text))
 }
 
-pub(crate) fn copy_file_list(paths: &[PathBuf], cut: bool) -> Result<String, String> {
+pub(crate) fn copy_file_list(paths: &[PathBuf], cut: bool) -> Result<(), String> {
     if paths.is_empty() {
         return Err("no files to copy".to_string());
     }
-    match copy_mime(FILE_CLIPBOARD_MIME, &file_list_payload(paths, cut)) {
-        Ok(helper) => Ok(helper),
-        Err(special_error) if !cut => copy_mime(URI_LIST_MIME, &uri_list_payload(paths))
-            .map(|helper| format!("{helper} ({URI_LIST_MIME} fallback)"))
-            .map_err(|uri_error| format!("{special_error}; {uri_error}")),
-        Err(err) => Err(err),
-    }
+    wayland_clipboard::publish_mime_data(file_list_clipboard_offers(paths, cut))
 }
 
 pub(crate) fn read_clipboard_snapshot() -> Result<ClipboardSnapshot, String> {
@@ -146,7 +130,7 @@ fn read_file_list_from_mime_types(mime_types: &[String]) -> Result<FileClipboard
 
     if mime_types_contain(mime_types, FILE_CLIPBOARD_MIME) {
         match read_mime_text(FILE_CLIPBOARD_MIME).and_then(|payload| {
-            parse_file_list_payload(&payload, Some(WAYLAND_CLIPBOARD_SOURCE.to_string()))
+            parse_file_list_payload(&payload)
                 .ok_or_else(|| "clipboard file-list does not contain file paths".to_string())
         }) {
             Ok(clipboard) => return Ok(clipboard),
@@ -157,7 +141,7 @@ fn read_file_list_from_mime_types(mime_types: &[String]) -> Result<FileClipboard
     if mime_types_contain(mime_types, URI_LIST_MIME) {
         match read_mime_text(URI_LIST_MIME).and_then(|payload| {
             let cut = read_kde_cut_selection(mime_types);
-            parse_uri_list_payload(&payload, WAYLAND_CLIPBOARD_SOURCE.to_string(), cut)
+            parse_uri_list_payload(&payload, cut)
                 .ok_or_else(|| "clipboard uri-list does not contain file paths".to_string())
         }) {
             Ok(clipboard) => return Ok(clipboard),
@@ -218,16 +202,6 @@ fn content_kind_from_mime_types<'a>(
     }
 }
 
-fn copy_mime(mime: &str, text: &str) -> Result<String, String> {
-    match copy_with("wl-copy", &["--type", mime], text) {
-        Ok(()) => Ok("wl-copy".to_string()),
-        Err(CopyError::Missing) => Err(format!(
-            "no Wayland clipboard helper found for {mime}; install wl-copy"
-        )),
-        Err(CopyError::Failed(err)) => Err(format!("wl-copy: {err}")),
-    }
-}
-
 fn file_list_payload(paths: &[PathBuf], cut: bool) -> String {
     let action = if cut { "cut" } else { "copy" };
     let mut payload = String::from(action);
@@ -248,7 +222,33 @@ fn uri_list_payload(paths: &[PathBuf]) -> String {
     payload
 }
 
-fn parse_file_list_payload(payload: &str, helper: Option<String>) -> Option<FileClipboard> {
+fn file_list_clipboard_offers(
+    paths: &[PathBuf],
+    cut: bool,
+) -> Vec<wayland_clipboard::ClipboardOffer> {
+    let kde_cut_payload = if cut {
+        b"1\n".to_vec()
+    } else {
+        b"0\n".to_vec()
+    };
+    vec![
+        wayland_clipboard::ClipboardOffer::new(
+            FILE_CLIPBOARD_MIME,
+            file_list_payload(paths, cut).into_bytes(),
+        ),
+        wayland_clipboard::ClipboardOffer::new(URI_LIST_MIME, uri_list_payload(paths).into_bytes()),
+        wayland_clipboard::ClipboardOffer::new(KDE_CUT_SELECTION_MIME, kde_cut_payload),
+    ]
+}
+
+fn text_clipboard_offers(text: &str) -> Vec<wayland_clipboard::ClipboardOffer> {
+    TEXT_CLIPBOARD_MIMES
+        .iter()
+        .map(|mime| wayland_clipboard::ClipboardOffer::new(*mime, text.as_bytes().to_vec()))
+        .collect()
+}
+
+fn parse_file_list_payload(payload: &str) -> Option<FileClipboard> {
     let mut lines = payload
         .lines()
         .map(str::trim)
@@ -263,15 +263,11 @@ fn parse_file_list_payload(payload: &str, helper: Option<String>) -> Option<File
     if paths.is_empty() {
         None
     } else {
-        Some(FileClipboard {
-            paths,
-            cut,
-            helper: helper.unwrap_or_else(|| "test".to_string()),
-        })
+        Some(FileClipboard { paths, cut })
     }
 }
 
-fn parse_uri_list_payload(payload: &str, helper: String, cut: bool) -> Option<FileClipboard> {
+fn parse_uri_list_payload(payload: &str, cut: bool) -> Option<FileClipboard> {
     let paths = payload
         .lines()
         .map(str::trim)
@@ -281,7 +277,7 @@ fn parse_uri_list_payload(payload: &str, helper: String, cut: bool) -> Option<Fi
     if paths.is_empty() {
         None
     } else {
-        Some(FileClipboard { paths, cut, helper })
+        Some(FileClipboard { paths, cut })
     }
 }
 
@@ -425,48 +421,6 @@ fn video_extension(mime: &str) -> Option<&'static str> {
     }
 }
 
-fn copy_with(program: &str, args: &[&str], text: &str) -> Result<(), CopyError> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                CopyError::Missing
-            } else {
-                CopyError::Failed(err.to_string())
-            }
-        })?;
-
-    let Some(mut stdin) = child.stdin.take() else {
-        return Err(CopyError::Failed(
-            "clipboard helper has no stdin".to_string(),
-        ));
-    };
-    stdin
-        .write_all(text.as_bytes())
-        .map_err(|err| CopyError::Failed(err.to_string()))?;
-    drop(stdin);
-
-    let output = child
-        .wait_with_output()
-        .map_err(|err| CopyError::Failed(err.to_string()))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(CopyError::Failed(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ))
-    }
-}
-
-enum CopyError {
-    Missing,
-    Failed(String),
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,9 +442,8 @@ mod tests {
     #[test]
     fn parses_desktop_file_clipboard_payload() {
         let payload = "cut\n# comment\nfile:///tmp/Fika%20Test/a.txt\nfile://localhost/tmp/%E6%95%B0%E5%80%BC.txt\n";
-        let clipboard = parse_file_list_payload(payload, Some("test-helper".to_string())).unwrap();
+        let clipboard = parse_file_list_payload(payload).unwrap();
         assert!(clipboard.cut);
-        assert_eq!(clipboard.helper, "test-helper");
         assert_eq!(
             clipboard.paths,
             vec![
@@ -503,7 +456,7 @@ mod tests {
     #[test]
     fn parses_text_uri_list_as_copy() {
         let payload = "# comment\nfile:///tmp/one.txt\nfile:///tmp/two.txt\n";
-        let clipboard = parse_uri_list_payload(payload, "test-helper".to_string(), false).unwrap();
+        let clipboard = parse_uri_list_payload(payload, false).unwrap();
         assert!(!clipboard.cut);
         assert_eq!(
             clipboard.paths,
@@ -528,7 +481,7 @@ mod tests {
     #[test]
     fn parses_kde_cutselection_marker_for_uri_list() {
         let payload = "file:///tmp/cut-me.txt\n";
-        let clipboard = parse_uri_list_payload(payload, "test-helper".to_string(), true).unwrap();
+        let clipboard = parse_uri_list_payload(payload, true).unwrap();
         assert!(clipboard.cut);
         assert_eq!(clipboard.paths, vec![PathBuf::from("/tmp/cut-me.txt")]);
     }

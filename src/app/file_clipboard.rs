@@ -91,7 +91,11 @@ fn copy_paths(ui: &AppWindow, state: &Rc<RefCell<AppState>>, context_path: &str,
     let count = state.borrow().clipboard_paths.len();
     let action = if cut { "Cut" } else { "Copied" };
     match desktop_clipboard {
-        Ok(helper) => set_status(ui, state, &format!("{action} {count} item(s) via {helper}")),
+        Ok(()) => set_status(
+            ui,
+            state,
+            &format!("{action} {count} item(s) via Wayland data-control"),
+        ),
         Err(err) => set_status(
             ui,
             state,
@@ -393,11 +397,7 @@ mod tests {
 
     fn file_snapshot(paths: Vec<PathBuf>, cut: bool) -> ClipboardSnapshot {
         ClipboardSnapshot {
-            files: Some(FileClipboard {
-                paths,
-                cut,
-                helper: "test".to_string(),
-            }),
+            files: Some(FileClipboard { paths, cut }),
             content_kind: None,
         }
     }
