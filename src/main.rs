@@ -80,7 +80,7 @@ use app::split_view::{
     set_pane_viewport_ui_if_clamped, sync_focus_navigation_ui, sync_navigation_ui,
     sync_pane_slot_ui, sync_pane_slots_ui, toggle_split_view,
 };
-use app::state::{AppState, DeviceAction, FileUndo, PaneExternalEdit};
+use app::state::{AppState, DeviceAction, PaneExternalEdit};
 use app::thumbnail_pipeline::{
     apply_thumbnail_load_to_state_for_pane, decorate_entries_with_cached_thumbnails_for_pane,
     prioritize_thumbnail_entries, thumbnail_schedule_batch_for_pane,
@@ -2241,15 +2241,7 @@ fn apply_async_event(
             context_service_menu::apply_launch_result(ui, state, result);
         }
         AsyncEvent::FileActionFinished(result) => {
-            let applied = file_actions::apply_file_action_result(ui, state, result);
-            if let Some(undo) = applied.undo {
-                register_undo(ui, state, undo);
-            }
-            if let Some(status) = applied.status {
-                let pane_ids =
-                    refresh_affected_directories(ui, state, bridge, &applied.affected_dirs);
-                set_status_for_panes(ui, state, &pane_ids, &status);
-            }
+            apply_file_action_result(ui, state, bridge, result);
         }
         AsyncEvent::FileOperationProgress(progress) => {
             apply_file_operation_progress(ui, state, progress);
@@ -2894,6 +2886,31 @@ fn apply_file_operation_result(
     start_next_operation(ui, state, bridge);
 }
 
+fn apply_file_action_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: file_actions::FileActionResult,
+) {
+    let summary = {
+        let mut state = state.borrow_mut();
+        state.complete_file_action(result)
+    };
+
+    if let Some(registration) = summary.undo_registration {
+        apply_undo_registration(ui, registration);
+    }
+    if let Some(request) = summary.privileged_request {
+        let command = request.command;
+        let reason = request.reason;
+        file_actions::request_privileged_action(ui, state, command, &reason);
+    }
+    if let Some(status) = summary.status {
+        let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);
+        set_status_for_panes(ui, state, &pane_ids, &status);
+    }
+}
+
 fn register_transfer_undo(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -2914,14 +2931,6 @@ fn register_transfer_undo(
     if let Some(summary) = summary {
         apply_undo_registration(ui, summary);
     }
-}
-
-fn register_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, undo: FileUndo) {
-    let summary = {
-        let mut state = state.borrow_mut();
-        state.register_file_undo(undo)
-    };
-    apply_undo_registration(ui, summary);
 }
 
 fn apply_undo_registration(ui: &AppWindow, summary: FileUndoRegistrationSummary) {
@@ -5684,6 +5693,55 @@ mod tests {
         assert!(
             !body.contains("set_status(ui, state, &status_message);"),
             "file operation completion status must not jump to whichever pane is focused when the async result returns"
+        );
+    }
+
+    #[test]
+    fn file_action_completion_state_is_controller_owned() {
+        let source = include_str!("main.rs");
+        let async_body = source
+            .split_once("fn apply_async_event(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_directory_result("))
+            .map(|(body, _)| body)
+            .expect("apply_async_event body should be present");
+        let result_body = source
+            .split_once("fn apply_file_action_result(")
+            .and_then(|(_, rest)| rest.split_once("fn register_transfer_undo("))
+            .map(|(body, _)| body)
+            .expect("apply_file_action_result body should be present");
+        let file_actions_source = include_str!("fs/file_actions.rs");
+
+        assert!(
+            async_body.contains(
+                "AsyncEvent::FileActionFinished(result) => {\n            apply_file_action_result(ui, state, bridge, result);\n        }"
+            ) && !async_body.contains("file_actions::apply_file_action_result("),
+            "async dispatch should route FileActionFinished through the local UI applier only"
+        );
+        assert!(
+            result_body.contains("state.complete_file_action(result)")
+                && result_body.contains("apply_undo_registration(ui, registration);")
+                && result_body.contains("let command = request.command;")
+                && result_body.contains("let reason = request.reason;")
+                && result_body
+                    .contains("file_actions::request_privileged_action(ui, state, command, &reason);")
+                && result_body.contains(
+                    "let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);"
+                )
+                && result_body.contains("set_status_for_panes(ui, state, &pane_ids, &status);"),
+            "file action completion should consume the controller summary after releasing AppState borrow"
+        );
+        assert!(
+            !result_body.contains("register_file_undo(")
+                && !result_body.contains("FileUndo {")
+                && !result_body.contains("format!(\"{action} complete:")
+                && !result_body.contains("format!(\"{action} failed:"),
+            "main.rs must not rebuild file action Undo/status decisions"
+        );
+        assert!(
+            !file_actions_source.contains("FileActionApplyResult")
+                && !file_actions_source.contains("fn file_action_apply_result(")
+                && !file_actions_source.contains("pub(crate) fn apply_file_action_result("),
+            "file_actions.rs should not keep a second action-result application path"
         );
     }
 

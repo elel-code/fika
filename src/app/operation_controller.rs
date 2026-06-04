@@ -1,6 +1,6 @@
 use crate::app::events::FileOperationProgress;
 use crate::app::state::{AppState, FileOperationRequest, FileUndo, TransferConflict};
-use crate::fs::{file_ops, privilege};
+use crate::fs::{file_actions, file_ops, privilege};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -107,6 +107,28 @@ pub(crate) struct FileUndoRegistrationSummary {
 pub(crate) struct FileUndoUiState {
     pub(crate) available: bool,
     pub(crate) label: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FileActionCompletionSummary {
+    pub(crate) status: Option<String>,
+    pub(crate) undo_registration: Option<FileUndoRegistrationSummary>,
+    pub(crate) affected_dirs: Vec<PathBuf>,
+    pub(crate) privileged_request: Option<FileActionPrivilegeRequest>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FileActionPrivilegeRequest {
+    pub(crate) command: privilege::PrivilegedCommand,
+    pub(crate) reason: String,
+}
+
+#[derive(Clone, Debug)]
+struct FileActionCompletionDecision {
+    status: Option<String>,
+    undo: Option<FileUndo>,
+    affected_dirs: Vec<PathBuf>,
+    privileged_request: Option<FileActionPrivilegeRequest>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -222,6 +244,25 @@ impl AppState {
                     undo_ui: restored.then(|| self.file_undo_ui_state()),
                 }
             }
+        }
+    }
+
+    pub(crate) fn complete_file_action(
+        &mut self,
+        result: file_actions::FileActionResult,
+    ) -> FileActionCompletionSummary {
+        let FileActionCompletionDecision {
+            status,
+            undo,
+            affected_dirs,
+            privileged_request,
+        } = file_action_completion_decision(result);
+        let undo_registration = undo.map(|undo| self.register_file_undo(undo));
+        FileActionCompletionSummary {
+            status,
+            undo_registration,
+            affected_dirs,
+            privileged_request,
         }
     }
 
@@ -506,6 +547,61 @@ impl AppState {
         }
         changed
     }
+}
+
+fn file_action_completion_decision(
+    result: file_actions::FileActionResult,
+) -> FileActionCompletionDecision {
+    let file_actions::FileActionResult {
+        action,
+        affected_dir,
+        privileged_command,
+        result,
+        undo,
+    } = result;
+
+    match result {
+        Ok(message) => FileActionCompletionDecision {
+            status: Some(file_action_complete_status(action, &message)),
+            undo,
+            affected_dirs: vec![affected_dir],
+            privileged_request: None,
+        },
+        Err(error) if privilege::is_permission_error(&error) => {
+            if let Some(command) = privileged_command {
+                FileActionCompletionDecision {
+                    status: None,
+                    undo: None,
+                    affected_dirs: Vec::new(),
+                    privileged_request: Some(FileActionPrivilegeRequest {
+                        command,
+                        reason: error,
+                    }),
+                }
+            } else {
+                FileActionCompletionDecision {
+                    status: Some(file_action_failed_status(action, &error)),
+                    undo: None,
+                    affected_dirs: vec![affected_dir],
+                    privileged_request: None,
+                }
+            }
+        }
+        Err(error) => FileActionCompletionDecision {
+            status: Some(file_action_failed_status(action, &error)),
+            undo: None,
+            affected_dirs: vec![affected_dir],
+            privileged_request: None,
+        },
+    }
+}
+
+fn file_action_complete_status(action: &str, message: &str) -> String {
+    format!("{action} complete: {message}")
+}
+
+fn file_action_failed_status(action: &str, error: &str) -> String {
+    format!("{action} failed: {error}")
 }
 
 fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
@@ -1096,6 +1192,100 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn complete_file_action_registers_undo_and_reports_affected_dir() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let mut previous = undo("copy", "/tmp/old-source.txt", "/tmp/old-target.txt");
+        previous.overwritten_backup = Some(PathBuf::from("/tmp/old-backup"));
+        state.last_undo = Some(previous);
+
+        let summary = state.complete_file_action(file_actions::FileActionResult {
+            action: "Create file",
+            affected_dir: PathBuf::from("/tmp/right"),
+            privileged_command: None,
+            result: Ok("note.txt".to_string()),
+            undo: Some(undo(
+                "create-file",
+                "/tmp/right/note.txt",
+                "/tmp/right/note.txt",
+            )),
+        });
+
+        assert_eq!(
+            summary.status,
+            Some("Create file complete: note.txt".to_string())
+        );
+        assert_eq!(summary.affected_dirs, vec![PathBuf::from("/tmp/right")]);
+        assert!(summary.privileged_request.is_none());
+        assert_eq!(
+            summary.undo_registration,
+            Some(FileUndoRegistrationSummary {
+                cleanup_backup: Some(PathBuf::from("/tmp/old-backup")),
+                undo_ui: FileUndoUiState {
+                    available: true,
+                    label: "Undo Create File".to_string(),
+                },
+            })
+        );
+        assert_eq!(
+            state.last_undo.as_ref().map(|undo| undo.operation.as_str()),
+            Some("create-file")
+        );
+    }
+
+    #[test]
+    fn complete_file_action_defers_refresh_when_privilege_is_requested() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let command = privilege::PrivilegedCommand::CreateFolder {
+            parent: PathBuf::from("/tmp/protected"),
+            name: "new".to_string(),
+        };
+
+        let summary = state.complete_file_action(file_actions::FileActionResult {
+            action: "Create folder",
+            affected_dir: PathBuf::from("/tmp/protected"),
+            privileged_command: Some(command),
+            result: Err("Permission denied".to_string()),
+            undo: None,
+        });
+
+        assert!(summary.status.is_none());
+        assert!(summary.undo_registration.is_none());
+        assert!(summary.affected_dirs.is_empty());
+        let Some(request) = summary.privileged_request else {
+            panic!("permission error should request privileged action");
+        };
+        assert_eq!(request.reason, "Permission denied");
+        match request.command {
+            privilege::PrivilegedCommand::CreateFolder { parent, name } => {
+                assert_eq!(parent, PathBuf::from("/tmp/protected"));
+                assert_eq!(name, "new");
+            }
+            other => panic!("unexpected privileged request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn complete_file_action_without_privilege_command_reports_failure() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+
+        let summary = state.complete_file_action(file_actions::FileActionResult {
+            action: "Create folder",
+            affected_dir: PathBuf::from("/tmp/protected"),
+            privileged_command: None,
+            result: Err("Permission denied".to_string()),
+            undo: None,
+        });
+
+        assert_eq!(
+            summary.status,
+            Some("Create folder failed: Permission denied".to_string())
+        );
+        assert!(summary.undo_registration.is_none());
+        assert_eq!(summary.affected_dirs, vec![PathBuf::from("/tmp/protected")]);
+        assert!(summary.privileged_request.is_none());
     }
 
     #[test]
