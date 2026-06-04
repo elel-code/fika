@@ -125,6 +125,7 @@ pub(crate) struct VirtualViewResult {
     pub(crate) schedule_thumbnails: bool,
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
+    pub(crate) row_height: f32,
     pub(crate) update: VirtualViewSnapshotUpdate,
 }
 

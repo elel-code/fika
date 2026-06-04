@@ -175,6 +175,9 @@ impl PaneEntrySnapshot {
             selected: false,
             thumbnail_state: 0,
             thumbnail: Default::default(),
+            tile_x: 0.0,
+            tile_y: 0.0,
+            tile_width: 0.0,
         }
     }
 }
@@ -444,6 +447,7 @@ pub(crate) struct VirtualViewPrepareRequest {
     pub(crate) schedule_thumbnails: bool,
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
+    pub(crate) row_height: f32,
     pub(crate) input: Box<VirtualViewSnapshotInput>,
 }
 
@@ -581,6 +585,7 @@ pub(crate) struct VirtualViewCache {
     pub(crate) entry_count: usize,
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
+    pub(crate) row_height: f32,
     pub(crate) thumbnail_size_px: u32,
 }
 
@@ -591,6 +596,7 @@ impl Default for VirtualViewCache {
             entry_count: 0,
             rows_per_column: 0,
             cell_width: 0.0,
+            row_height: 0.0,
             thumbnail_size_px: 0,
         }
     }
@@ -677,11 +683,13 @@ mod tests {
             schedule_thumbnails: true,
             rows_per_column: 4,
             cell_width: 100.0,
+            row_height: 90.0,
             input: Box::new(VirtualViewSnapshotInput {
                 layout: MainGridLayout {
                     viewport_x: requested_viewport_x,
                     rows_per_column: 4,
                     cell_width: 100.0,
+                    row_height: 90.0,
                     padding: 10.0,
                 },
                 requested_viewport_x,
@@ -1064,6 +1072,7 @@ mod tests {
             entry_count: 24,
             rows_per_column: 4,
             cell_width: 208.0,
+            row_height: 90.0,
             thumbnail_size_px: 80,
         };
         panes.focused_mut().view.virtual_start_index = 4;
@@ -1092,6 +1101,7 @@ mod tests {
         assert_eq!(inactive.view.virtual_view.entry_count, 24);
         assert_eq!(inactive.view.virtual_view.rows_per_column, 4);
         assert_eq!(inactive.view.virtual_view.cell_width, 208.0);
+        assert_eq!(inactive.view.virtual_view.row_height, 90.0);
         assert_eq!(inactive.view.virtual_view.thumbnail_size_px, 80);
         assert_eq!(inactive.view.virtual_start_index, 4);
         assert_eq!(inactive.view.virtual_start_column, 1);
@@ -1137,6 +1147,7 @@ mod tests {
                 entry_count: 64,
                 rows_per_column: 8,
                 cell_width: 96.0,
+                row_height: 78.0,
                 thumbnail_size_px: 128,
             },
             ..PaneView::default()
@@ -1148,6 +1159,7 @@ mod tests {
         assert_eq!(view.virtual_view.entry_count, 64);
         assert_eq!(view.virtual_view.rows_per_column, 8);
         assert_eq!(view.virtual_view.cell_width, 96.0);
+        assert_eq!(view.virtual_view.row_height, 78.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
     }
 
@@ -1182,6 +1194,7 @@ mod tests {
                 entry_count: 64,
                 rows_per_column: 8,
                 cell_width: 96.0,
+                row_height: 78.0,
                 thumbnail_size_px: 128,
             },
             ..PaneView::default()
@@ -1265,6 +1278,9 @@ mod tests {
             selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
+            tile_x: 0.0,
+            tile_y: 0.0,
+            tile_width: 0.0,
         }
     }
 }

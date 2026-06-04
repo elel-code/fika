@@ -38,7 +38,7 @@ Slint SplitPaneView 自管 viewport-x
 Rectangle viewport shell (clip: true)
   ├─ full-viewport TouchArea (wheel / blank click / rectangle selection)
   ├─ slice-layer (x = padding + virtual_start_column * cell_width - viewport_x)
-  │    └─ for item in entries: FileTile  (当前仍是每 tile 完整 Slint 组件)
+  │    └─ for item in entries: FileTile  (tile x/y/width 来自 Rust item-view render plan)
   ├─ selection rectangle overlay
   └─ self-managed horizontal scrollbar
 ```
@@ -55,6 +55,7 @@ Rectangle viewport shell (clip: true)
 | 自管滚动条按 `entry_count` / `rows_per_column` 计算全内容宽度 | `split_pane.slint` | 避免滚动条宽度随虚拟切片抖动 |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
 | Rust item-view hit-test | `item_view.rs` | DnD/context/drop target 命中不再散落在 transfer 几何代码中 |
+| Rust item-view render plan | `item_view.rs` / `split_pane.slint` | 可见 tile 的 x/y/width 不再由 Slint 每项公式计算 |
 
 ---
 
@@ -287,7 +288,7 @@ Slint: Rectangle viewport + input/DnD overlays
 1. 主文件区已直接替换为 `Rectangle { clip: true; } + TouchArea + self-managed scrollbar`，删除 `ScrollView` / `Flickable` viewport 写回。
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD 与 selection 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
-4. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，下一步需要把 renderer/reuse 从 Slint tile 组件树中拆出来。
+4. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，但可见 tile 的 `x/y/width` 已由 Rust item-view render plan 投影，Slint 不再在每个 tile 上计算 column/row 公式。
 5. DnD 仍保留 Slint 原生 `data-transfer` 路径，目标解析继续向 Rust hit-test 收敛。
 
 ---

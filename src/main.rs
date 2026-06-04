@@ -51,7 +51,9 @@ use app::geometry::{
     MainGridLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
     place_drop_geometry, register_menu_geometry_callbacks, virtual_grid_plan,
 };
-use app::item_view::{ItemViewInputMetrics, ItemViewReleaseAction, SelectionRect};
+use app::item_view::{
+    ItemViewInputMetrics, ItemViewReleaseAction, SelectionRect, decorate_render_plan,
+};
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
@@ -3306,6 +3308,7 @@ fn sync_virtual_entries_for_slot_with_count(
                 schedule_thumbnails,
                 rows_per_column: layout.rows_per_column,
                 cell_width: layout.cell_width,
+                row_height: layout.row_height,
                 input: Box::new(VirtualViewSnapshotInput {
                     layout,
                     requested_viewport_x,
@@ -3359,6 +3362,7 @@ fn sync_virtual_entries_for_slot_with_count(
             schedule_thumbnails,
             rows_per_column,
             cell_width,
+            row_height,
             input,
         } = request;
         let update = prepare_virtual_view_snapshot_update(*input);
@@ -3373,6 +3377,7 @@ fn sync_virtual_entries_for_slot_with_count(
                 schedule_thumbnails,
                 rows_per_column,
                 cell_width,
+                row_height,
                 update,
             },
         );
@@ -3390,6 +3395,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
         schedule_thumbnails,
         rows_per_column,
         cell_width,
+        row_height,
         input,
     } = request;
     let async_tx = bridge.tx.clone();
@@ -3408,6 +3414,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
                     schedule_thumbnails,
                     rows_per_column,
                     cell_width,
+                    row_height,
                     update,
                 }),
             ),
@@ -3463,6 +3470,7 @@ fn cached_virtual_viewport_sync(
     if pane.view.virtual_view.entry_count != visible_count
         || pane.view.virtual_view.rows_per_column != plan.rows_per_column
         || pane.view.virtual_view.cell_width != plan.cell_width
+        || pane.view.virtual_view.row_height != layout.row_height
         || pane.view.virtual_view.thumbnail_size_px != thumbnail_size_px
         || !virtual_cache_covers_visible_range(&pane.view.virtual_view.range, &plan.visible_range)
     {
@@ -3513,6 +3521,7 @@ fn apply_virtual_view_result(
                 pane.view.virtual_view.entry_count = update.entry_count;
                 pane.view.virtual_view.rows_per_column = result.rows_per_column;
                 pane.view.virtual_view.cell_width = result.cell_width;
+                pane.view.virtual_view.row_height = result.row_height;
                 pane.view.virtual_view.thumbnail_size_px = result.thumbnail_size_px;
             }
         }
@@ -3544,6 +3553,14 @@ fn apply_virtual_view_result(
         .into_iter()
         .map(|entry| entry.to_file_entry())
         .collect::<Vec<_>>();
+    decorate_render_plan(
+        &mut entries,
+        update.range.start,
+        update.start_column,
+        result.rows_per_column,
+        result.cell_width,
+        result.row_height,
+    );
     {
         let state_ref = state.borrow();
         if let Some(pane) = state_ref.panes.pane_by_id(result.pane_id) {
@@ -6208,6 +6225,9 @@ mod tests {
             selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
+            tile_x: 0.0,
+            tile_y: 0.0,
+            tile_width: 0.0,
         }
     }
 }

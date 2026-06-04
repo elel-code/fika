@@ -15,6 +15,7 @@ pub(crate) struct MainGridLayout {
     pub(crate) viewport_x: f32,
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
+    pub(crate) row_height: f32,
     pub(crate) padding: f32,
 }
 
@@ -77,6 +78,7 @@ impl MainGridLayout {
             viewport_x: 0.0,
             rows_per_column,
             cell_width,
+            row_height,
             padding,
         }
     }
@@ -2473,7 +2475,7 @@ mod tests {
             "Ctrl+wheel zoom should still request pane focus before changing zoom"
         );
         assert!(split_pane.contains("scroll-event(event)"));
-        assert!(split_pane.contains("for item[index] in root.entries: FileTile"));
+        assert!(split_pane.contains("for item in root.entries: FileTile"));
         assert!(
             split_pane.contains("drag-data-source: root.make_drag_data(item.path, item.is_dir);")
         );
@@ -2523,16 +2525,14 @@ mod tests {
                     "x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;"
                 )
                 && split_pane.contains("width: root.virtual-slice-width;")
-                && split_pane
-                    .contains("property <int> local-index: index + root.virtual-start-index - root.virtual-start-column * root.rows-per-column;")
-                && split_pane.contains(
-                    "x: floor(local-index / root.rows-per-column) * root.cell-width;"
-                )
-                && split_pane.contains(
-                    "y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;"
-                )
+                && split_pane.contains("x: item.tile_x * 1px;")
+                && split_pane.contains("y: item.tile_y * 1px;")
+                && split_pane.contains("width: item.tile_width * 1px;")
+                && !split_pane.contains("property <int> local-index:")
+                && !split_pane.contains("floor(local-index")
+                && !split_pane.contains("mod(local-index")
                 && !split_pane.contains("property <int> global-index:"),
-            "virtualized pane slices should be positioned by the self-managed viewport while tile coordinates remain local to the slice"
+            "virtualized pane slices should be positioned by the self-managed viewport while tile coordinates come from the Rust item-view render plan"
         );
         assert!(!split_pane.contains("root.viewport-content-width - self.x"));
         assert!(split_pane.contains("clip: true;"));

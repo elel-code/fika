@@ -201,6 +201,33 @@ fn ordered_pair(a: f32, b: f32) -> (f32, f32) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
+pub(crate) fn decorate_render_plan(
+    entries: &mut [FileEntry],
+    virtual_start_index: usize,
+    virtual_start_column: usize,
+    rows_per_column: usize,
+    cell_width: f32,
+    row_height: f32,
+) {
+    let rows_per_column = rows_per_column.max(1);
+    let cell_width = cell_width.max(1.0);
+    let row_height = row_height.max(1.0);
+    let slice_offset = virtual_start_column.saturating_mul(rows_per_column);
+    let tile_width = (cell_width - TILE_TRAILING_GAP).max(1.0);
+
+    for (visible_offset, entry) in entries.iter_mut().enumerate() {
+        let local_index = visible_offset
+            .saturating_add(virtual_start_index)
+            .saturating_sub(slice_offset);
+        let column = local_index / rows_per_column;
+        let row = local_index % rows_per_column;
+
+        entry.tile_x = column as f32 * cell_width;
+        entry.tile_y = ITEM_VIEW_PADDING + row as f32 * row_height;
+        entry.tile_width = tile_width;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct RectBounds {
     x1: f32,
@@ -358,6 +385,28 @@ pub(crate) fn entry_at_pane_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slint::Image;
+
+    fn test_entry(index: usize) -> FileEntry {
+        FileEntry {
+            name: format!("item-{index}").into(),
+            path: format!("/tmp/item-{index}").into(),
+            group: String::new().into(),
+            location: String::new().into(),
+            kind: "File".into(),
+            size: "1 KB".into(),
+            size_bytes: 1024.0,
+            modified: "Today".into(),
+            modified_age_days: 0,
+            is_dir: false,
+            selected: false,
+            thumbnail_state: 0,
+            thumbnail: Image::default(),
+            tile_x: 0.0,
+            tile_y: 0.0,
+            tile_width: 0.0,
+        }
+    }
 
     #[test]
     fn item_view_layout_hit_test_uses_column_first_order_and_viewport() {
@@ -374,6 +423,28 @@ mod tests {
         assert_eq!(layout.index_at_point(105.0, 65.0), None);
         assert_eq!(layout.index_at_point(199.0, 65.0), None);
         assert_eq!(layout.index_at_point(115.0, 265.0), None);
+    }
+
+    #[test]
+    fn render_plan_decorates_slice_local_tile_geometry() {
+        let mut entries = (4..9).map(test_entry).collect::<Vec<_>>();
+
+        decorate_render_plan(&mut entries, 4, 1, 3, 100.0, 50.0);
+
+        let geometry = entries
+            .iter()
+            .map(|entry| (entry.tile_x, entry.tile_y, entry.tile_width))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            geometry,
+            vec![
+                (0.0, 64.0, 88.0),
+                (0.0, 114.0, 88.0),
+                (100.0, 14.0, 88.0),
+                (100.0, 64.0, 88.0),
+                (100.0, 114.0, 88.0),
+            ]
+        );
     }
 
     #[test]

@@ -259,12 +259,11 @@ export component SplitPaneView inherits Rectangle {
             width: root.virtual-slice-width;
             height: parent.height;
 
-            for item[index] in root.entries: FileTile {
+            for item in root.entries: FileTile {
                 drag-data-source: root.make_drag_data(item.path, item.is_dir);
-                property <int> local-index: index + root.virtual-start-index - root.virtual-start-column * root.rows-per-column;
-                x: floor(local-index / root.rows-per-column) * root.cell-width;
-                y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;
-                width: root.cell-width - 12px;
+                x: item.tile_x * 1px;
+                y: item.tile_y * 1px;
+                width: item.tile_width * 1px;
                 entry: item;
                 selected: item.selected;
                 dark: root.dark;

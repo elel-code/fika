@@ -444,6 +444,7 @@ Acceptance for all:
   - Reference: Dolphin's `kfileitemmodel`, `kitemlistviewlayouter`, `kitemlistview`, `kitemlistcontroller`, and `kstandarditemlistwidget` split. The goal is Dolphin-like model/layouter/controller/rendering ownership, not a lower-level replacement for `Flickable` alone.
   - Current: the main file area now uses `Rectangle + TouchArea + self-managed scrollbar` directly, and transfer/DnD target hit-test plus rectangle-selection item geometry have moved into `src/app/item_view.rs`.
   - Current: each pane owns a pane-local `ItemViewInputState`; Slint now reports blank-area press/move/release/cancel events while Rust decides whether the gesture clears selection or commits a rectangle selection.
+  - Current: visible tile `x/y/width` is projected by the Rust item-view render plan before the virtual slice reaches Slint, so `SplitPaneView` no longer computes column/row geometry inside each `FileTile` instance.
   - Next: remove the remaining `FileTile` Repeater as the core rendering path by adding the renderer/reuse side of the Dolphin-style item view layer, then decide whether to use reusable primitives or `SharedPixelBuffer`/`Image` self-rendered tile frames.
 
 - [x] Apply Dolphin DnD target validation.

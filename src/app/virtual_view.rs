@@ -56,6 +56,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
             &input.cache,
             &plan,
             visible_count,
+            input.layout.row_height,
             input.thumbnail_size_px,
         );
 
@@ -91,11 +92,13 @@ fn should_rebuild_virtual_cache(
     cache: &VirtualViewCache,
     plan: &VirtualGridPlan,
     entry_count: usize,
+    row_height: f32,
     thumbnail_size_px: u32,
 ) -> bool {
     cache.entry_count != entry_count
         || cache.rows_per_column != plan.rows_per_column
         || cache.cell_width != plan.cell_width
+        || cache.row_height != row_height
         || cache.thumbnail_size_px != thumbnail_size_px
         || !cached_range_covers_visible_range(cache, &plan.visible_range)
 }
@@ -354,6 +357,7 @@ mod tests {
             viewport_x: 0.0,
             rows_per_column: 4,
             cell_width: 100.0,
+            row_height: 90.0,
             padding: 10.0,
         }
     }
@@ -428,6 +432,7 @@ mod tests {
                 entry_count: first.entry_count,
                 rows_per_column: layout().rows_per_column,
                 cell_width: layout().cell_width,
+                row_height: layout().row_height,
                 thumbnail_size_px: 64,
             },
         ));
@@ -457,6 +462,7 @@ mod tests {
                 entry_count: first.entry_count,
                 rows_per_column: layout().rows_per_column,
                 cell_width: layout().cell_width,
+                row_height: layout().row_height,
                 thumbnail_size_px: 64,
             },
         ));
