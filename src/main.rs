@@ -52,8 +52,8 @@ use app::geometry::{
     place_drop_geometry, register_menu_geometry_callbacks, virtual_grid_plan,
 };
 use app::item_view::{
-    ItemViewInputMetrics, ItemViewReleaseAction, ItemViewRenderMetrics, SelectionRect,
-    decorate_render_plan, entry_at_pane_point,
+    ItemViewInputMetrics, ItemViewReleaseAction, ItemViewRenderMetrics, ItemViewRenderPlanInput,
+    SelectionRect, decorate_render_plan, entry_at_pane_point,
 };
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
@@ -2600,6 +2600,7 @@ fn submit_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBr
         cancel_active_search(&mut state);
         let pane = state.panes.focused_mut();
         pane.search.query = query.clone();
+        pane.search.recursive = ui.get_recursive_search() && !query.is_empty();
         pane.search_generation.next();
     }
 
@@ -2625,6 +2626,7 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
         let query = state.panes.focused().search.query.clone();
         let progress = state.panes.focused().search_progress;
         let current_dir = state.panes.focused().current_dir.clone();
+        state.panes.focused_mut().search.recursive = false;
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
             let pane = state.panes.focused_mut();
             pane.set_entries_with_location_state(
@@ -3581,14 +3583,27 @@ fn apply_virtual_view_result(
         .into_iter()
         .map(|entry| entry.to_file_entry())
         .collect::<Vec<_>>();
+    let show_location = {
+        let state_ref = state.borrow();
+        state_ref
+            .panes
+            .pane_by_id(result.pane_id)
+            .is_some_and(|pane| {
+                fs::file_ops::is_trash_files_dir(&pane.current_dir)
+                    || (pane.search.recursive && !pane.search.query.is_empty())
+            })
+    };
     decorate_render_plan(
         &mut entries,
-        update.range.start,
-        update.start_column,
-        result.rows_per_column,
-        result.cell_width,
-        result.row_height,
-        result.render_metrics,
+        ItemViewRenderPlanInput {
+            virtual_start_index: update.range.start,
+            virtual_start_column: update.start_column,
+            rows_per_column: result.rows_per_column,
+            cell_width: result.cell_width,
+            row_height: result.row_height,
+            render_metrics: result.render_metrics,
+            show_location,
+        },
     );
     {
         let state_ref = state.borrow();
@@ -6365,8 +6380,15 @@ mod tests {
             tile_y: 0.0,
             tile_width: 0.0,
             tile_height: 0.0,
-            tile_padding_x: 0.0,
-            tile_spacing: 0.0,
+            media_x: 0.0,
+            media_y: 0.0,
+            text_x: 0.0,
+            text_width: 0.0,
+            group_y: 0.0,
+            title_y: 0.0,
+            location_y: 0.0,
+            metadata_line_height: 0.0,
+            title_line_height: 0.0,
             thumbnail_width: 0.0,
             thumbnail_height: 0.0,
             metadata_font_size: 0.0,

@@ -132,7 +132,7 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         } else {
             SharedString::new()
         },
-        recursive_search: is_focused && ui.get_recursive_search(),
+        recursive_search: is_focused && pane_slot_recursive_search(state, slot),
         search_kind_filter: ui.get_search_kind_filter(),
         search_modified_filter: ui.get_search_modified_filter(),
         search_size_filter: ui.get_search_size_filter(),
@@ -165,8 +165,7 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         item_view_virtual_slice_width: item_view_metrics.virtual_slice_width,
         item_view_scroll_max_x: item_view_metrics.scroll_max_x,
         selection_revision,
-        show_location: pane_slot_in_trash(slot)
-            || (is_focused && ui.get_recursive_search() && !search_query.is_empty()),
+        show_location: pane_slot_show_location(state, slot, is_focused),
         empty_message_visible: if is_focused {
             !ui.get_directory_loading()
         } else {
@@ -338,9 +337,18 @@ fn pane_slot_viewport_x(slot: i32, state: &AppState) -> f32 {
         .unwrap_or_default()
 }
 
-fn pane_slot_in_trash(_slot: i32) -> bool {
-    // per-pane trash status comes from PaneSlotData.show_location now
-    false
+fn pane_slot_recursive_search(state: &AppState, slot: i32) -> bool {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .is_some_and(|pane| pane.search.recursive)
+}
+
+fn pane_slot_show_location(state: &AppState, slot: i32, is_focused: bool) -> bool {
+    state.panes.pane_for_slot(slot).is_some_and(|pane| {
+        crate::fs::file_ops::is_trash_files_dir(&pane.current_dir)
+            || (is_focused && pane.search.recursive && !pane.search.query.is_empty())
+    })
 }
 
 fn pane_slot_status(state: &AppState, slot: i32) -> SharedString {

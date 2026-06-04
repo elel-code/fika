@@ -312,53 +312,60 @@ export component SplitPaneView inherits Rectangle {
                     border-color: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-border-color : root.selection-border-color;
                     background: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-background-color : (item.selected ? root.selected-background-color : transparent);
 
-                    HorizontalLayout {
-                        padding-left: item.tile_padding_x * 1px;
-                        padding-right: item.tile_padding_x * 1px;
-                        spacing: item.tile_spacing * 1px;
+                    if (!item.is_dir && item.thumbnail_state == 2): Image {
+                        x: item.media_x * 1px;
+                        y: item.media_y * 1px;
+                        width: item.thumbnail_width * 1px;
+                        height: item.thumbnail_height * 1px;
+                        source: item.thumbnail;
+                        image-fit: contain;
+                    }
 
-                        if (!item.is_dir && item.thumbnail_state == 2): Image {
-                            width: item.thumbnail_width * 1px;
-                            height: item.thumbnail_height * 1px;
-                            source: item.thumbnail;
-                            image-fit: contain;
-                        }
+                    if (item.is_dir || item.thumbnail_state != 2): FolderGlyph {
+                        x: item.media_x * 1px;
+                        y: item.media_y * 1px;
+                        width: item.thumbnail_width * 1px;
+                        height: item.thumbnail_height * 1px;
+                        dir: item.is_dir;
+                        dark: root.dark;
+                        doc-font-size: item.glyph_doc_font_size * 1px;
+                    }
 
-                        if (item.is_dir || item.thumbnail_state != 2): FolderGlyph {
-                            width: item.thumbnail_width * 1px;
-                            height: item.thumbnail_height * 1px;
-                            dir: item.is_dir;
-                            dark: root.dark;
-                            doc-font-size: item.glyph_doc_font_size * 1px;
-                        }
+                    if (root.show-location && item.group != ""): Text {
+                        x: item.text_x * 1px;
+                        y: item.group_y * 1px;
+                        width: item.text_width * 1px;
+                        height: item.metadata_line_height * 1px;
+                        text: item.group;
+                        color: root.metadata-group-color;
+                        font-size: item.metadata_font_size * 1px;
+                        font-weight: 700;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
 
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 2px;
+                    Text {
+                        x: item.text_x * 1px;
+                        y: item.title_y * 1px;
+                        width: item.text_width * 1px;
+                        height: item.title_line_height * 1px;
+                        text: item.name;
+                        color: root.title-color;
+                        font-size: item.title_font_size * 1px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
 
-                            if (root.show-location && item.group != ""): Text {
-                                text: item.group;
-                                color: root.metadata-group-color;
-                                font-size: item.metadata_font_size * 1px;
-                                font-weight: 700;
-                                overflow: elide;
-                            }
-
-                            Text {
-                                text: item.name;
-                                color: root.title-color;
-                                font-size: item.title_font_size * 1px;
-                                overflow: elide;
-                                vertical-alignment: center;
-                            }
-
-                            if (root.show-location && item.location != ""): Text {
-                                text: item.location;
-                                color: root.metadata-location-color;
-                                font-size: item.metadata_font_size * 1px;
-                                overflow: elide;
-                            }
-                        }
+                    if (root.show-location && item.location != ""): Text {
+                        x: item.text_x * 1px;
+                        y: item.location_y * 1px;
+                        width: item.text_width * 1px;
+                        height: item.metadata_line_height * 1px;
+                        text: item.location;
+                        color: root.metadata-location-color;
+                        font-size: item.metadata_font_size * 1px;
+                        overflow: elide;
+                        vertical-alignment: center;
                     }
                 }
             }

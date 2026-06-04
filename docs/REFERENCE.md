@@ -193,14 +193,14 @@ ui/
 
 **中文**：定义四个核心数据结构：
 
-- **`FileEntry`**：文件/目录项的完整描述，包含名称、路径、类型、大小、修改时间、缩略图状态等 14 个字段
+- **`FileEntry`**：文件/目录项的完整描述，包含名称、路径、类型、大小、修改时间、缩略图状态、选择状态，以及当前虚拟切片使用的 Rust item-view render-plan 字段
 - **`PlaceEntry`**：侧栏位置条目，含标签、路径、图标标记、是否内置
 - **`DeviceEntry`**：设备条目，含挂载状态、挂载/卸载/弹出能力、操作状态和错误信息
 - **`DesktopApp`**：桌面应用程序，含 ID、显示名称和是否默认应用标记
 
 **English**: Defines four core data structures:
 
-- **`FileEntry`**: Complete file/directory item descriptor with 14 fields including name, path, kind, size, modified time, thumbnail state
+- **`FileEntry`**: Complete file/directory item descriptor including name, path, kind, size, modified time, thumbnail state, selection state, and the Rust item-view render-plan fields used by the current virtual slice
 - **`PlaceEntry`**: Sidebar place entry with label, path, icon marker, and built-in flag
 - **`DeviceEntry`**: Device entry with mount status, mount/unmount/eject capabilities, action state, and error info
 - **`DesktopApp`**: Desktop application with ID, display name, and default-app marker

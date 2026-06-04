@@ -2461,12 +2461,20 @@ mod tests {
             .split_once("export component FolderGlyph")
             .expect("widgets.slint should define FolderGlyph")
             .1;
+        let visible_tile_loop = split_pane
+            .split_once("for item in root.entries: Rectangle")
+            .and_then(|(_, rest)| rest.split_once("if (root.selection-rect-active): Rectangle"))
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should have a visible item primitive loop");
         assert!(
             split_pane.contains("for item in root.entries: Rectangle")
                 && split_pane.contains("height: item.tile_height * 1px;")
                 && split_pane.contains("if (!item.is_dir && item.thumbnail_state == 2): Image")
                 && split_pane
                     .contains("if (item.is_dir || item.thumbnail_state != 2): FolderGlyph")
+                && split_pane.contains("x: item.media_x * 1px;")
+                && split_pane.contains("x: item.text_x * 1px;")
+                && split_pane.contains("height: item.title_line_height * 1px;")
                 && split_pane.contains("text: item.name;")
                 && !split_pane.contains("entry: item;")
                 && !split_pane.contains("selected: item.selected;")
@@ -2484,6 +2492,13 @@ mod tests {
                 && split_pane.contains("width: item.thumbnail_width * 1px;")
                 && split_pane.contains("font-size: item.title_font_size * 1px;")
                 && split_pane.contains("doc-font-size: item.glyph_doc_font_size * 1px;")
+                && split_pane.contains("width: item.text_width * 1px;")
+                && split_pane.contains("y: item.title_y * 1px;")
+                && split_pane.contains("height: item.metadata_line_height * 1px;")
+                && !split_pane.contains("item.tile_padding_x")
+                && !split_pane.contains("item.tile_spacing")
+                && !visible_tile_loop.contains("HorizontalLayout")
+                && !visible_tile_loop.contains("VerticalLayout")
                 && !split_pane.contains("height: root.zoom-level ==")
                 && !split_pane.contains("font-size: root.zoom-level ==")
                 && folder_glyph.contains("in property <length> doc-font-size;")
