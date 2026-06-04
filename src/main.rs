@@ -43,7 +43,8 @@ use app::events::{
     VirtualViewResult,
 };
 use app::file_clipboard::{
-    apply_clipboard_load_result, refresh_clipboard_availability_async, sync_clipboard_ui,
+    apply_clipboard_load_result, apply_clipboard_paste_load_result,
+    refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
     MainGridLayout, SelectionRect, active_main_pane_width, clamped_split_pane_ratio,
@@ -2204,6 +2205,9 @@ fn apply_async_event(
         }
         AsyncEvent::ClipboardLoaded(result) => {
             apply_clipboard_load_result(ui, state, result);
+        }
+        AsyncEvent::ClipboardPasteLoaded(result) => {
+            apply_clipboard_paste_load_result(ui, state, bridge, result);
         }
         AsyncEvent::VirtualViewPrepared(result) => {
             apply_virtual_view_result(ui, state, bridge, result);

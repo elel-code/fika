@@ -1151,7 +1151,6 @@ export component AppWindow inherits Window {
             keys: @keys(Control + V);
             activated => {
                 if (!root.file-operation-shortcuts-blocked) {
-                    root.refresh_clipboard_availability();
                     root.paste_into(root.current_path);
                 }
             }

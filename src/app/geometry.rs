@@ -1876,6 +1876,18 @@ mod tests {
         assert!(app.contains(
             "private property <bool> file-operation-shortcuts-blocked: root.search-input-focused || root.chooser-save-input-focused || root.transient-popup-open;"
         ));
+        let paste_shortcut = app
+            .split_once("keys: @keys(Control + V);")
+            .expect("AppWindow should keep a Ctrl+V paste shortcut")
+            .1
+            .split_once("keys: @keys(Control + Z);")
+            .expect("Ctrl+V shortcut should be before Ctrl+Z")
+            .0;
+        assert!(
+            paste_shortcut.contains("root.paste_into(root.current_path);")
+                && !paste_shortcut.contains("root.refresh_clipboard_availability();"),
+            "Ctrl+V should request paste directly; the Rust paste path owns async clipboard import"
+        );
         assert!(app.contains("import { SplitPaneView } from \"split_pane.slint\";"));
         assert!(app.contains("component PaneSlotSurface inherits Rectangle"));
         assert!(app.contains("private property <length> pane-slot-0-width"));

@@ -647,6 +647,7 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 
 - 桌面剪贴板写入：Cut/Copy 通过内置 Wayland data-control 发布 `x-special/gnome-copied-files`、`text/uri-list` 和 `application/x-kde-cutselection`
 - 读取端：通过内置 Wayland data-control 列 MIME 并读取 payload，解析 `x-special/gnome-copied-files`、`text/uri-list`、`application/x-kde-cutselection`
+- Paste 入口通过异步事件桥读取桌面剪贴板后再入队传输，不在 UI 线程同步等待 Wayland selection
 - 剪贴板读写都不调用外部 clipboard helper 命令
 - 非文件剪贴板：按 COSMIC 顺序检测 image → video → text
 
@@ -654,6 +655,7 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 
 - Desktop clipboard write: Cut/Copy publishes `x-special/gnome-copied-files`, `text/uri-list`, and `application/x-kde-cutselection` through the built-in Wayland data-control owner
 - Read side: uses the built-in Wayland data-control reader to list MIME types and read payloads, and parses `x-special/gnome-copied-files`, `text/uri-list`, `application/x-kde-cutselection`
+- Paste reads the desktop clipboard through the async event bridge before queueing transfers instead of synchronously waiting for the Wayland selection on the UI thread
 - Clipboard read/write does not call external clipboard helper commands
 - Non-file clipboard: detects image → video → text in COSMIC order
 

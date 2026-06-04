@@ -496,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn uri_list_payload_uses_plain_file_uri_lines_for_copy_fallback() {
+    fn uri_list_payload_uses_plain_file_uri_lines_for_interop() {
         assert_eq!(
             uri_list_payload(&[
                 PathBuf::from("/tmp/Fika Test/a.txt"),

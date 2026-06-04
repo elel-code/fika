@@ -1,5 +1,5 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
-use crate::app::events::{AsyncEvent, ClipboardLoadResult};
+use crate::app::events::{AsyncEvent, ClipboardLoadResult, ClipboardPasteLoadResult};
 use crate::app::pane::PaneTarget;
 use crate::app::state::{AppState, FileUndo};
 use crate::app::transfer::{
@@ -116,40 +116,17 @@ fn paste_into(
         return;
     }
 
-    let (operation, paths, pruned_missing) = {
-        refresh_clipboard_availability(ui, state);
-        let mut state_ref = state.borrow_mut();
-        if state_ref.clipboard_paths.is_empty() {
-            drop(state_ref);
-            paste_non_file_content_async(ui, state, bridge, target_dir);
-            return;
-        }
-        let (existing_paths, missing_count) =
-            existing_clipboard_paths(&state_ref.clipboard_paths, file_ops::path_exists);
-        if missing_count > 0 {
-            state_ref.clipboard_paths = existing_paths;
-            if state_ref.clipboard_paths.is_empty() {
-                state_ref.clipboard_cut = false;
-                drop(state_ref);
-                sync_clipboard_ui(ui, state);
-                set_status(ui, state, "Clipboard item(s) no longer exist");
-                return;
-            }
-        }
-        (
-            if state_ref.clipboard_cut {
-                "move"
-            } else {
-                "copy"
-            },
-            state_ref.clipboard_paths.clone(),
-            missing_count > 0,
-        )
-    };
-    if pruned_missing {
-        sync_clipboard_ui(ui, state);
-    }
+    request_clipboard_paste(ui, state, bridge, target_dir);
+}
 
+fn start_file_clipboard_paste(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    target_dir: PathBuf,
+    operation: &'static str,
+    paths: Vec<PathBuf>,
+) {
     let mut accepted = 0usize;
     let mut cut_clipboard_changed = false;
     for path in &paths {
@@ -183,6 +160,151 @@ fn paste_into(
 
     if accepted > 1 {
         set_status(ui, state, &format!("Queued {accepted} paste operation(s)"));
+    }
+}
+
+fn request_clipboard_paste(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    target_dir: PathBuf,
+) {
+    let generation = state.borrow_mut().clipboard_generation.next();
+    set_status(ui, state, "Reading clipboard...");
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let result = tokio::task::spawn_blocking(clipboard::read_clipboard_snapshot)
+            .await
+            .unwrap_or_else(|err| Err(format!("clipboard read task failed: {err}")));
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::ClipboardPasteLoaded(ClipboardPasteLoadResult {
+                generation,
+                target_dir,
+                result,
+            }),
+        );
+    });
+}
+
+pub(crate) fn apply_clipboard_paste_load_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: ClipboardPasteLoadResult,
+) {
+    let target_dir = result.target_dir.clone();
+    let plan = {
+        let mut state_ref = state.borrow_mut();
+        prepare_clipboard_paste(&mut state_ref, result, file_ops::path_exists)
+    };
+    if matches!(plan, ClipboardPastePlan::Stale) {
+        return;
+    }
+
+    sync_clipboard_ui(ui, state);
+
+    if !target_dir.is_dir() {
+        set_status(ui, state, "Paste target is not a folder");
+        return;
+    }
+
+    match plan {
+        ClipboardPastePlan::Files {
+            operation, paths, ..
+        } => start_file_clipboard_paste(ui, state, bridge, target_dir, operation, paths),
+        ClipboardPastePlan::NonFileContent => {
+            paste_non_file_content_async(ui, state, bridge, target_dir);
+        }
+        ClipboardPastePlan::MissingItems => {
+            set_status(ui, state, "Clipboard item(s) no longer exist");
+        }
+        ClipboardPastePlan::Empty { read_error } => {
+            if let Some(err) = read_error {
+                set_status(ui, state, &format!("Clipboard is not pasteable: {err}"));
+            } else {
+                set_status(ui, state, "Clipboard does not contain pasteable items");
+            }
+        }
+        ClipboardPastePlan::Stale => {}
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ClipboardPastePlan {
+    Files {
+        operation: &'static str,
+        paths: Vec<PathBuf>,
+        pruned_missing: bool,
+    },
+    NonFileContent,
+    MissingItems,
+    Empty {
+        read_error: Option<String>,
+    },
+    Stale,
+}
+
+fn prepare_clipboard_paste(
+    state: &mut AppState,
+    result: ClipboardPasteLoadResult,
+    exists: impl Fn(&Path) -> bool,
+) -> ClipboardPastePlan {
+    if !state.clipboard_generation.is_current(result.generation) {
+        return ClipboardPastePlan::Stale;
+    }
+
+    let mut read_error = None;
+    let mut pruned_missing = false;
+    match result.result {
+        Ok(clipboard) => {
+            pruned_missing = merge_desktop_clipboard(state, clipboard, &exists) > 0;
+        }
+        Err(err) => {
+            read_error = Some(err);
+        }
+    }
+
+    match clipboard_paste_plan_from_state(state, exists, pruned_missing) {
+        ClipboardPastePlan::Empty { .. } => ClipboardPastePlan::Empty { read_error },
+        plan => plan,
+    }
+}
+
+fn clipboard_paste_plan_from_state(
+    state: &mut AppState,
+    exists: impl Fn(&Path) -> bool,
+    already_pruned_missing: bool,
+) -> ClipboardPastePlan {
+    let mut pruned_missing = already_pruned_missing;
+    if !state.clipboard_paths.is_empty() {
+        let (existing_paths, missing_count) =
+            existing_clipboard_paths(&state.clipboard_paths, exists);
+        if missing_count > 0 {
+            pruned_missing = true;
+            state.clipboard_paths = existing_paths;
+        }
+        if state.clipboard_paths.is_empty() {
+            state.clipboard_cut = false;
+            return ClipboardPastePlan::MissingItems;
+        }
+        return ClipboardPastePlan::Files {
+            operation: if state.clipboard_cut { "move" } else { "copy" },
+            paths: state.clipboard_paths.clone(),
+            pruned_missing,
+        };
+    }
+
+    if already_pruned_missing && state.clipboard_content_kind.is_none() {
+        state.clipboard_cut = false;
+        ClipboardPastePlan::MissingItems
+    } else if state.clipboard_content_kind.is_some() {
+        ClipboardPastePlan::NonFileContent
+    } else {
+        state.clipboard_cut = false;
+        ClipboardPastePlan::Empty { read_error: None }
     }
 }
 
@@ -298,22 +420,6 @@ fn existing_clipboard_paths(
     (existing, missing)
 }
 
-fn refresh_clipboard_availability(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let generation = state.borrow_mut().clipboard_generation.next();
-    if let Ok(clipboard) = clipboard::read_clipboard_snapshot() {
-        let mut state_ref = state.borrow_mut();
-        apply_clipboard_load(
-            &mut state_ref,
-            ClipboardLoadResult {
-                generation,
-                result: Ok(clipboard),
-            },
-            file_ops::path_exists,
-        );
-    }
-    sync_clipboard_ui(ui, state);
-}
-
 fn apply_clipboard_load(
     state: &mut AppState,
     result: ClipboardLoadResult,
@@ -386,10 +492,11 @@ fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_clipboard_load, clipboard_paths_for_context, clipboard_paths_for_focused_context,
-        existing_clipboard_paths, merge_desktop_clipboard, unique_paths,
+        ClipboardPastePlan, apply_clipboard_load, clipboard_paths_for_context,
+        clipboard_paths_for_focused_context, existing_clipboard_paths, merge_desktop_clipboard,
+        prepare_clipboard_paste, unique_paths,
     };
-    use crate::app::events::ClipboardLoadResult;
+    use crate::app::events::{ClipboardLoadResult, ClipboardPasteLoadResult};
     use crate::app::state::AppState;
     use crate::app::transfer::target_is_source_or_descendant;
     use crate::desktop::clipboard::{ClipboardContentKind, ClipboardSnapshot, FileClipboard};
@@ -649,6 +756,108 @@ mod tests {
         assert_eq!(
             state.clipboard_content_kind,
             Some(ClipboardContentKind::Image)
+        );
+    }
+
+    #[test]
+    fn paste_load_uses_desktop_clipboard_without_blocking_ui_thread() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_paths = vec![PathBuf::from("/tmp/internal")];
+        state.clipboard_cut = true;
+        let generation = state.clipboard_generation.next();
+
+        let plan = prepare_clipboard_paste(
+            &mut state,
+            ClipboardPasteLoadResult {
+                generation,
+                target_dir: PathBuf::from("/tmp/target"),
+                result: Ok(file_snapshot(vec![PathBuf::from("/tmp/external")], false)),
+            },
+            |_| true,
+        );
+
+        assert_eq!(
+            plan,
+            ClipboardPastePlan::Files {
+                operation: "copy",
+                paths: vec![PathBuf::from("/tmp/external")],
+                pruned_missing: false,
+            }
+        );
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/external")]);
+        assert!(!state.clipboard_cut);
+    }
+
+    #[test]
+    fn paste_load_uses_current_internal_clipboard_on_wayland_read_error() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.clipboard_paths = vec![PathBuf::from("/tmp/internal")];
+        state.clipboard_cut = true;
+        let generation = state.clipboard_generation.next();
+
+        let plan = prepare_clipboard_paste(
+            &mut state,
+            ClipboardPasteLoadResult {
+                generation,
+                target_dir: PathBuf::from("/tmp/target"),
+                result: Err("Wayland data-control clipboard protocol is not available".to_string()),
+            },
+            |_| true,
+        );
+
+        assert_eq!(
+            plan,
+            ClipboardPastePlan::Files {
+                operation: "move",
+                paths: vec![PathBuf::from("/tmp/internal")],
+                pruned_missing: false,
+            }
+        );
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/internal")]);
+        assert!(state.clipboard_cut);
+    }
+
+    #[test]
+    fn stale_paste_load_does_not_apply_or_queue_internal_clipboard() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let stale_generation = state.clipboard_generation.next();
+        state.clipboard_generation.next();
+        state.clipboard_paths = vec![PathBuf::from("/tmp/internal")];
+        state.clipboard_cut = true;
+
+        let plan = prepare_clipboard_paste(
+            &mut state,
+            ClipboardPasteLoadResult {
+                generation: stale_generation,
+                target_dir: PathBuf::from("/tmp/target"),
+                result: Ok(file_snapshot(vec![PathBuf::from("/tmp/external")], false)),
+            },
+            |_| true,
+        );
+
+        assert_eq!(plan, ClipboardPastePlan::Stale);
+        assert_eq!(state.clipboard_paths, vec![PathBuf::from("/tmp/internal")]);
+        assert!(state.clipboard_cut);
+    }
+
+    #[test]
+    fn paste_into_does_not_synchronously_read_wayland_clipboard() {
+        let source = include_str!("file_clipboard.rs");
+        let paste_section = source
+            .split_once("fn paste_into(")
+            .expect("paste_into should exist")
+            .1
+            .split_once("fn start_file_clipboard_paste(")
+            .expect("start_file_clipboard_paste should follow paste_into")
+            .0;
+
+        assert!(
+            !paste_section.contains("read_clipboard_snapshot"),
+            "paste_into must request an async clipboard read instead of blocking the UI thread"
+        );
+        assert!(
+            source.contains("AsyncEvent::ClipboardPasteLoaded"),
+            "paste requests should resume through the async event bridge"
         );
     }
 }

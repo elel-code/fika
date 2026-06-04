@@ -109,6 +109,13 @@ pub(crate) struct ClipboardLoadResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct ClipboardPasteLoadResult {
+    pub(crate) generation: u64,
+    pub(crate) target_dir: PathBuf,
+    pub(crate) result: Result<clipboard::ClipboardSnapshot, String>,
+}
+
+#[derive(Debug)]
 pub(crate) struct VirtualViewResult {
     pub(crate) pane_id: u64,
     pub(crate) generation: u64,
@@ -141,6 +148,7 @@ pub(crate) enum AsyncEvent {
     DevicesChanged,
     DevicesLoaded(DevicesLoadedResult),
     ClipboardLoaded(ClipboardLoadResult),
+    ClipboardPasteLoaded(ClipboardPasteLoadResult),
     VirtualViewPrepared(VirtualViewResult),
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),
