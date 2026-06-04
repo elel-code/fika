@@ -30,6 +30,7 @@
   - Current: filtering/search rebuilds a lightweight visible-index cache once; normal unfiltered directories use an implicit identity fast path.
   - Current: viewport changes clone only the requested virtual range through that visible-index cache, avoiding repeated full filtered-model allocation during horizontal scrolling.
   - Current: virtual slice preparation lives in `src/app/virtual_view.rs`, so range planning, viewport clamping, rebuild decisions, filtered slicing, and thumbnail-cache decoration are testable away from Slint property updates.
+  - Current: virtual view tests now cover the same owned snapshot pipeline used at runtime; the old state-backed test-only virtual update helper has been removed.
   - Current: ScrollView keeps a stable full-width virtual content layer for scrollbar geometry, while rendered tiles live in a local slice layer anchored at the first virtualized column, so large directories avoid both scrollbar-width churn and huge per-tile global coordinates.
   - Current: virtual range metadata is cached; scrolling inside the same range does not reset the Slint model.
   - Current: virtual range reuse now keeps the current Slint model while its cached overscan slice still covers the newly visible columns, and ScrollView viewport writeback ignores sub-pixel drift, reducing large-directory horizontal jitter during small scroll steps.

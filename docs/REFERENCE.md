@@ -808,14 +808,14 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 **中文**：
 
 - `VirtualGridPlan` 结构体：统一计算 clamped viewport、scroll max、visible range、overscan range、Slint anchor column
-- `prepare_virtual_view_update()`：用 `VirtualViewInput` 计算新虚拟切片，包括缩放/缩放不变规则、viewport 夹紧、overscan 范围扩展
+- `prepare_virtual_view_snapshot_update()`：用 `VirtualViewSnapshotInput` 在后台纯函数路径计算新虚拟切片，包括 viewport 夹紧、overscan 范围扩展、过滤切片和 location group 标注
 - 可见列优先 + overscan 后置的缩略图调度策略
 - 虚拟范围不变时跳过 Slint model 重置
 
 **English**:
 
 - `VirtualGridPlan` struct: unified clamped viewport, scroll max, visible/overscan range, Slint anchor column
-- `prepare_virtual_view_update()`: computes new virtual slice from `VirtualViewInput`, including zoom invariants, viewport clamping, overscan expansion
+- `prepare_virtual_view_snapshot_update()`: computes the new virtual slice from `VirtualViewSnapshotInput` on the background pure-function path, including viewport clamping, overscan expansion, filtered slicing, and location-group annotation
 - Visible-column-first + overscan-deferred thumbnail scheduling
 - Skips Slint model reset when virtual range unchanged
 

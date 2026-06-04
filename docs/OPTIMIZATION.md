@@ -16,11 +16,13 @@ Slint ScrollView.viewport-x 变化
             └─ Rust: register_pane_routing_callbacks → view_changed_handler
                  └─ sync_virtual_entries()  [src/main.rs:3354, UI 线程]
                       ├─ MainGridLayout::from_ui()             [geometry.rs:44]
-                      ├─ prepare_virtual_view_update()          [virtual_view.rs:55]
+                      ├─ VirtualViewSnapshotInput               [virtual_view.rs]
+                      ├─ prepare_virtual_view_snapshot_update()  [virtual_view.rs, 后台线程]
                       │    ├─ virtual_grid_plan()              [geometry.rs:169]
-                      │    ├─ should_rebuild_virtual_model()   [virtual_view.rs:180]
-                      │    ├─ filtered_entries_range()         (缓存未命中时)
-                      │    └─ decorate_entries_with_cached..()  [thumbnail_pipeline.rs:12]
+                      │    ├─ should_rebuild_virtual_cache()
+                      │    ├─ snapshot_entries_range()
+                      │    └─ annotate_snapshot_location_groups()
+                      ├─ decorate_entries_with_cached_thumbnails_for_pane()
                       ├─ prioritize_thumbnail_entries()         [thumbnail_pipeline.rs:40]
                       ├─ schedule_visible_thumbnails()          (异步)
                       ├─ set_virtual_entries(VecModel)          → Slint
@@ -152,7 +154,7 @@ fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 **改进**：保留当前 `VecModel` 引用，比较新旧范围的重叠部分，增量更新：
 
 ```rust
-fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewUpdate) {
+fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSnapshotUpdate) {
     let current = ui.get_virtual_entries(); // 假设有此 getter
     let overlap = compute_range_overlap(&current_range, &update.range);
     if overlap > 0.5 && current.row_count() > 0 {
@@ -179,7 +181,7 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewUpd
 
 **涉及代码**：
 - `src/main.rs` — `schedule_visible_thumbnails` 及相关回调
-- `src/app/thumbnail_pipeline.rs:12` — `decorate_entries_with_cached_thumbnails`
+- `src/app/thumbnail_pipeline.rs` — `decorate_entries_with_cached_thumbnails_for_pane`
 
 **改进**：将缩略图完成事件收集到一个批次缓冲区中，每 16ms（一帧）批量写入 Slint model：
 
@@ -200,11 +202,11 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewUpd
 
 **涉及代码**：
 - `src/main.rs:3354-3412` — `sync_virtual_entries` / `sync_virtual_entries_with_count`
-- `src/app/virtual_view.rs:55` — `prepare_virtual_view_update`
+- `src/app/virtual_view.rs` — `prepare_virtual_view_snapshot_update`
 
 **改进**：将计算阶段和写入阶段分离：
 
-- **后台线程**：`prepare_virtual_view_update` 的计算部分（输入为 `VirtualViewInput`，输出为 `VirtualViewUpdate`）
+- **后台线程**：`prepare_virtual_view_snapshot_update` 的纯函数计算（输入为 `VirtualViewSnapshotInput`，输出为 `VirtualViewSnapshotUpdate`）
 - **UI 线程**：只做 Slint 属性写入（`set_virtual_entries`、`set_entry_count`）
 
 这需要将 `AppState` 的访问模式改为线程安全（`Arc<Mutex<>>` 或读时快照），复杂度高。
@@ -704,7 +706,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 - **Phase 6**: `FileTile` 所有 zoom/dark 计算上移到 `SplitPaneView`
 
 **审查发现的后继微优化**：
-- **cleanup-1**: 老路径 `prepare_virtual_view_update`（`VirtualViewUpdate`）已无主路径调用，可加 `#[allow(dead_code)]` 或移除
+- **cleanup-1**: 旧 state-based 虚拟视图更新 helper 和测试路径已删除，虚拟视图测试改为覆盖当前 snapshot 管线
 - **f2-note**: `sync_focus_navigation_ui` 调用的 `sync_focused_ui` 内部仍执行 `sync_pane_slots_ui`。Phase 1 的 row_data 脏检查使其开销极小（O(2) 次比较），进一步跳过属于可选微优化
 
 ### 焦点优化

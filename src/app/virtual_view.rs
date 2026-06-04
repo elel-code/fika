@@ -1,28 +1,7 @@
-#[cfg(test)]
-use crate::FileEntry;
 use crate::app::geometry::{MainGridLayout, VirtualGridPlan, virtual_grid_plan};
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
-#[cfg(test)]
-use crate::app::selection::{filtered_entries_range, filtered_entry_count};
-#[cfg(test)]
-use crate::app::state::AppState;
-#[cfg(test)]
-use crate::app::thumbnail_pipeline::decorate_entries_with_cached_thumbnails;
 use std::ops::Range;
 use std::sync::Arc;
-
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct VirtualViewUpdate {
-    pub(crate) entry_count: usize,
-    pub(crate) viewport_x: f32,
-    pub(crate) viewport_clamped: bool,
-    pub(crate) range: Range<usize>,
-    pub(crate) visible_range: Range<usize>,
-    pub(crate) start_column: usize,
-    pub(crate) entries: Vec<FileEntry>,
-    pub(crate) rebuild_model: bool,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VirtualViewSnapshotUpdate {
@@ -34,17 +13,6 @@ pub(crate) struct VirtualViewSnapshotUpdate {
     pub(crate) start_column: usize,
     pub(crate) entries: Vec<PaneEntrySnapshot>,
     pub(crate) rebuild_model: bool,
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct VirtualViewInput {
-    pub(crate) layout: MainGridLayout,
-    pub(crate) requested_viewport_x: f32,
-    pub(crate) viewport_width: f32,
-    pub(crate) thumbnail_size_px: u32,
-    pub(crate) schedule_thumbnails: bool,
-    pub(crate) visible_count_override: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -65,69 +33,6 @@ pub(crate) struct VirtualViewSnapshotInput {
     pub(crate) modified_filter: i32,
     pub(crate) size_filter: i32,
     pub(crate) chooser_patterns: Vec<String>,
-}
-
-#[cfg(test)]
-pub(crate) fn prepare_virtual_view_update(
-    state: &mut AppState,
-    input: VirtualViewInput,
-) -> VirtualViewUpdate {
-    let visible_count = input
-        .visible_count_override
-        .unwrap_or_else(|| filtered_entry_count(state));
-    let plan = virtual_grid_plan(
-        visible_count,
-        input.layout.rows_per_column,
-        input.requested_viewport_x,
-        input.viewport_width,
-        input.layout.cell_width,
-        input.layout.padding,
-        2,
-    );
-    let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
-    state.panes.focused_mut().view.viewport_x = plan.viewport_x;
-
-    let rebuild_model = should_rebuild_virtual_model(
-        state,
-        &plan,
-        visible_count,
-        input.thumbnail_size_px,
-        input.schedule_thumbnails,
-    );
-    if !rebuild_model {
-        return VirtualViewUpdate {
-            entry_count: visible_count,
-            viewport_x: plan.viewport_x,
-            viewport_clamped,
-            range: plan.range,
-            visible_range: plan.visible_range,
-            start_column: plan.start_column,
-            entries: Vec::new(),
-            rebuild_model: false,
-        };
-    }
-
-    let mut entries = filtered_entries_range(state, plan.range.clone());
-    decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
-    {
-        let pane = state.panes.focused_mut();
-        pane.view.virtual_view.range = plan.range.clone();
-        pane.view.virtual_view.entry_count = visible_count;
-        pane.view.virtual_view.rows_per_column = input.layout.rows_per_column;
-        pane.view.virtual_view.cell_width = input.layout.cell_width;
-        pane.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
-    }
-
-    VirtualViewUpdate {
-        entry_count: visible_count,
-        viewport_x: plan.viewport_x,
-        viewport_clamped,
-        range: plan.range,
-        visible_range: plan.visible_range,
-        start_column: plan.start_column,
-        entries,
-        rebuild_model: true,
-    }
 }
 
 pub(crate) fn prepare_virtual_view_snapshot_update(
@@ -180,23 +85,6 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         entries,
         rebuild_model: true,
     }
-}
-
-#[cfg(test)]
-fn should_rebuild_virtual_model(
-    state: &AppState,
-    plan: &VirtualGridPlan,
-    visible_count: usize,
-    thumbnail_size_px: u32,
-    schedule_thumbnails: bool,
-) -> bool {
-    !schedule_thumbnails
-        || should_rebuild_virtual_cache(
-            &state.panes.focused().view.virtual_view,
-            plan,
-            visible_count,
-            thumbnail_size_px,
-        )
 }
 
 fn should_rebuild_virtual_cache(
@@ -461,10 +349,6 @@ fn snapshot_glob_matches_bytes(pattern: &[u8], text: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FileEntry;
-    use crate::app::state::AppState;
-    use slint::Image;
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     fn layout() -> MainGridLayout {
@@ -476,135 +360,125 @@ mod tests {
         }
     }
 
-    fn test_entry(index: usize) -> FileEntry {
-        FileEntry {
-            name: format!("item-{index}.txt").into(),
-            path: format!("/tmp/item-{index}.txt").into(),
-            group: String::new().into(),
-            location: String::new().into(),
-            kind: "File".into(),
-            size: "1 KB".into(),
+    fn snapshot_test_entry(index: usize, location: &str) -> PaneEntrySnapshot {
+        PaneEntrySnapshot {
+            name: format!("item-{index}.txt"),
+            path: format!("/tmp/item-{index}.txt"),
+            group: String::new(),
+            location: location.to_string(),
+            kind: "File".to_string(),
+            size: "1 KB".to_string(),
             size_bytes: 1024.0,
-            modified: "Today".into(),
+            modified: "Today".to_string(),
             modified_age_days: 0,
             is_dir: false,
-            selected: false,
-            thumbnail_state: 0,
-            thumbnail: Image::default(),
         }
     }
 
-    fn snapshot_test_entry(index: usize, location: &str) -> PaneEntrySnapshot {
-        let mut entry = PaneEntrySnapshot::from_entry(&test_entry(index));
-        entry.location = location.to_string();
-        entry
+    fn snapshot_entries(count: usize) -> Arc<[PaneEntrySnapshot]> {
+        Arc::from(
+            (0..count)
+                .map(|index| snapshot_test_entry(index, ""))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn snapshot_input(
+        entries: Arc<[PaneEntrySnapshot]>,
+        requested_viewport_x: f32,
+        cache: VirtualViewCache,
+    ) -> VirtualViewSnapshotInput {
+        VirtualViewSnapshotInput {
+            layout: layout(),
+            requested_viewport_x,
+            viewport_width: 250.0,
+            thumbnail_size_px: 64,
+            schedule_thumbnails: true,
+            visible_count_override: None,
+            cache,
+            entries,
+            visible_entry_indices: None,
+            visible_entries_have_locations: false,
+            visible_location_groups: None,
+            query: String::new(),
+            kind_filter: 0,
+            modified_filter: 0,
+            size_filter: 0,
+            chooser_patterns: Vec::new(),
+        }
     }
 
     #[test]
-    fn virtual_view_update_reuses_model_inside_same_range() {
-        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state
-            .panes
-            .focused_mut()
-            .set_file_entries((0..100).map(test_entry).collect());
+    fn snapshot_update_reuses_model_inside_same_range() {
+        let entries = snapshot_entries(100);
 
-        let first = prepare_virtual_view_update(
-            &mut state,
-            VirtualViewInput {
-                layout: layout(),
-                requested_viewport_x: 0.0,
-                viewport_width: 250.0,
-                thumbnail_size_px: 64,
-                schedule_thumbnails: true,
-                visible_count_override: None,
-            },
-        );
+        let first = prepare_virtual_view_snapshot_update(snapshot_input(
+            Arc::clone(&entries),
+            0.0,
+            VirtualViewCache::default(),
+        ));
         assert!(first.rebuild_model);
         assert_eq!(first.range, 0..20);
         assert_eq!(first.entries.len(), 20);
-        assert_eq!(state.panes.focused().view.viewport_x, 0.0);
+        assert_eq!(first.viewport_x, 0.0);
 
-        let second = prepare_virtual_view_update(
-            &mut state,
-            VirtualViewInput {
-                layout: layout(),
-                requested_viewport_x: 40.0,
-                viewport_width: 250.0,
+        let second = prepare_virtual_view_snapshot_update(snapshot_input(
+            entries,
+            40.0,
+            VirtualViewCache {
+                range: first.range.clone(),
+                entry_count: first.entry_count,
+                rows_per_column: layout().rows_per_column,
+                cell_width: layout().cell_width,
                 thumbnail_size_px: 64,
-                schedule_thumbnails: true,
-                visible_count_override: None,
             },
-        );
+        ));
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
-        assert_eq!(state.panes.focused().view.viewport_x, 40.0);
+        assert_eq!(second.viewport_x, 40.0);
     }
 
     #[test]
-    fn virtual_view_update_reuses_model_while_cached_range_covers_visible_range() {
-        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state
-            .panes
-            .focused_mut()
-            .set_file_entries((0..160).map(test_entry).collect());
+    fn snapshot_update_reuses_model_while_cached_range_covers_visible_range() {
+        let entries = snapshot_entries(160);
 
-        let first = prepare_virtual_view_update(
-            &mut state,
-            VirtualViewInput {
-                layout: layout(),
-                requested_viewport_x: 0.0,
-                viewport_width: 250.0,
-                thumbnail_size_px: 64,
-                schedule_thumbnails: true,
-                visible_count_override: None,
-            },
-        );
+        let first = prepare_virtual_view_snapshot_update(snapshot_input(
+            Arc::clone(&entries),
+            0.0,
+            VirtualViewCache::default(),
+        ));
         assert!(first.rebuild_model);
         assert_eq!(first.range, 0..20);
         assert_eq!(first.visible_range, 0..12);
 
-        let second = prepare_virtual_view_update(
-            &mut state,
-            VirtualViewInput {
-                layout: layout(),
-                requested_viewport_x: 115.0,
-                viewport_width: 250.0,
+        let second = prepare_virtual_view_snapshot_update(snapshot_input(
+            entries,
+            115.0,
+            VirtualViewCache {
+                range: first.range.clone(),
+                entry_count: first.entry_count,
+                rows_per_column: layout().rows_per_column,
+                cell_width: layout().cell_width,
                 thumbnail_size_px: 64,
-                schedule_thumbnails: true,
-                visible_count_override: None,
             },
-        );
+        ));
         assert_eq!(second.visible_range, 4..16);
         assert_eq!(second.range, 0..24);
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
-        assert_eq!(state.panes.focused().view.virtual_view.range, first.range);
     }
 
     #[test]
-    fn virtual_view_update_clamps_out_of_bounds_viewport() {
-        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state
-            .panes
-            .focused_mut()
-            .set_file_entries((0..10).map(test_entry).collect());
-
-        let update = prepare_virtual_view_update(
-            &mut state,
-            VirtualViewInput {
-                layout: layout(),
-                requested_viewport_x: 800.0,
-                viewport_width: 250.0,
-                thumbnail_size_px: 64,
-                schedule_thumbnails: true,
-                visible_count_override: None,
-            },
-        );
+    fn snapshot_update_clamps_out_of_bounds_viewport() {
+        let update = prepare_virtual_view_snapshot_update(snapshot_input(
+            snapshot_entries(10),
+            800.0,
+            VirtualViewCache::default(),
+        ));
 
         assert!(update.viewport_clamped);
         assert_eq!(update.viewport_x, 70.0);
         assert_eq!(update.range, 0..10);
-        assert_eq!(state.panes.focused().view.viewport_x, 70.0);
     }
 
     #[test]

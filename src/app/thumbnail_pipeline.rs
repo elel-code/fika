@@ -9,20 +9,6 @@ pub(crate) const MAX_THUMBNAIL_CACHE_ENTRIES: usize = 512;
 pub(crate) const MAX_THUMBNAIL_FAILURE_ENTRIES: usize = 512;
 pub(crate) const MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC: usize = 96;
 
-#[cfg(test)]
-pub(crate) fn decorate_entries_with_cached_thumbnails(
-    state: &AppState,
-    entries: &mut [FileEntry],
-    size_px: u32,
-) {
-    decorate_entries_with_cached_thumbnails_for_pane(
-        state,
-        state.panes.focused().id,
-        entries,
-        size_px,
-    );
-}
-
 pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
     state: &AppState,
     pane_id: u64,
