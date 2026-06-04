@@ -5,7 +5,7 @@ use crate::app::state::AppState;
 use crate::config::service_menu_policy::{ServiceMenuPolicy, save_service_menu_policy};
 use crate::desktop::service_menu;
 use crate::{AppWindow, ContextServiceAction, ContextServicePolicyAction};
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{Image, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -255,9 +255,12 @@ fn service_menu_action_row(
     action: &service_menu::ServiceMenuAction,
     index: usize,
 ) -> ContextServiceAction {
+    let (icon, has_icon) = service_menu_icon(action);
     ContextServiceAction {
         id: action.id.clone().into(),
         name: action.name.clone().into(),
+        icon,
+        has_icon,
         group: action.submenu.clone().into(),
         action_index: index as i32,
         row_kind: SERVICE_ROW_ACTION,
@@ -268,6 +271,8 @@ fn service_menu_submenu_row(group: &str) -> ContextServiceAction {
     ContextServiceAction {
         id: group.into(),
         name: group.into(),
+        icon: Image::default(),
+        has_icon: false,
         group: group.into(),
         action_index: -1,
         row_kind: SERVICE_ROW_SUBMENU,
@@ -280,13 +285,27 @@ fn policy_action_rows(
 ) -> Vec<ContextServicePolicyAction> {
     actions
         .iter()
-        .map(|action| ContextServicePolicyAction {
-            id: action.id.clone().into(),
-            name: action.name.clone().into(),
-            group: action.submenu.clone().into(),
-            enabled: policy.is_enabled(&action.id),
+        .map(|action| {
+            let (icon, has_icon) = service_menu_icon(action);
+            ContextServicePolicyAction {
+                id: action.id.clone().into(),
+                name: action.name.clone().into(),
+                icon,
+                has_icon,
+                group: action.submenu.clone().into(),
+                enabled: policy.is_enabled(&action.id),
+            }
         })
         .collect()
+}
+
+fn service_menu_icon(action: &service_menu::ServiceMenuAction) -> (Image, bool) {
+    action
+        .icon_path
+        .as_deref()
+        .and_then(|path| Image::load_from_path(path).ok())
+        .map(|image| (image, true))
+        .unwrap_or_else(|| (Image::default(), false))
 }
 
 fn enabled_actions(
@@ -597,6 +616,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             icon: String::new(),
+            icon_path: None,
             desktop_path: PathBuf::from("/tmp/action.desktop"),
             action_key: id.to_string(),
             exec: "true".to_string(),

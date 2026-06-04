@@ -632,7 +632,7 @@ add/remove/rename/reorder 均触发全量重建。
 
 **实际实现**（✅ 已完成）：右键菜单回调中将 `refresh_clipboard_availability()` 替换为 Slint 回调 `sync_clipboard_state()`；Rust 侧 `ui.on_sync_clipboard_state` 只调用 `sync_clipboard_ui(&ui, &state)`，不读取 Wayland clipboard。Ctrl+V / Paste 也不再同步刷新缓存，而是通过 `ClipboardPasteLoaded` 异步事件先导入当前桌面剪贴板，结果回到 UI 线程后再入队传输。启动/菜单入口的后台 availability refresh 现在带 `clipboard_refresh_pending` single-flight 保护，已有读取未返回时不会重复 spawn Wayland clipboard 查询。
 
-右键 service-menu 发现同样保持异步和 generation guarded：打开 item/blank 菜单时先清空旧的 Slint action model，再在后台扫描 desktop/service-menu 文件并只应用仍匹配当前路径快照的结果，避免同步读取 desktop metadata 阻塞弹窗打开。这条路径现在由 `src/app/context_service_menu.rs` 独立拥有，`main.rs` 只做 slot 路由和 async event 分发。`X-KDE-Submenu` 分组现在同步为根菜单 submenu 父行，hover 时再按组名写入当前 child action model，并复用 `MenuLifecycleController` / `ChildSubmenuLayer`；菜单几何只统计根 action/submenu 行和一个配置入口行，避免 Slint 侧遍历模型或把分组子项误算进根菜单高度。用户启用/禁用策略在 Rust 侧先过滤可见 action model，同时保留全量匹配快照给配置弹窗，禁用项不会从配置界面丢失。
+右键 service-menu 发现同样保持异步和 generation guarded：打开 item/blank 菜单时先清空旧的 Slint action model，再在后台扫描 desktop/service-menu 文件并只应用仍匹配当前路径快照的结果，避免同步读取 desktop metadata 阻塞弹窗打开。这条路径现在由 `src/app/context_service_menu.rs` 独立拥有，`main.rs` 只做 slot 路由和 async event 分发。`X-KDE-Submenu` 分组现在同步为根菜单 submenu 父行，hover 时再按组名写入当前 child action model，并复用 `MenuLifecycleController` / `ChildSubmenuLayer`；菜单几何只统计根 action/submenu 行和一个配置入口行，避免 Slint 侧遍历模型或把分组子项误算进根菜单高度。用户启用/禁用策略在 Rust 侧先过滤可见 action model，同时保留全量匹配快照给配置弹窗，禁用项不会从配置界面丢失。`Icon=` 元数据在后台发现阶段通过 `src/desktop/icons.rs` 解析为图标文件路径，UI 同步阶段只加载已解析路径，避免右键菜单弹出后再同步扫描 icon theme 目录。
 
 **收益**：消除每次右键的 clipboard 协议查询延迟。
 

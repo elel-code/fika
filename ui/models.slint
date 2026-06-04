@@ -44,6 +44,8 @@ export struct DesktopApp {
 export struct ContextServiceAction {
     id: string,
     name: string,
+    icon: image,
+    has_icon: bool,
     group: string,
     action_index: int,
     row_kind: int,
@@ -52,6 +54,8 @@ export struct ContextServiceAction {
 export struct ContextServicePolicyAction {
     id: string,
     name: string,
+    icon: image,
+    has_icon: bool,
     group: string,
     enabled: bool,
 }

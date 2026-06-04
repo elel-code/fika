@@ -26,6 +26,8 @@ component SubmenuMenuRow inherits Rectangle {
 component ActionMenuRow inherits Rectangle {
     in property <string> label;
     in property <string> shortcut: "";
+    in property <image> icon;
+    in property <bool> has-icon: false;
     in property <bool> dark;
     in property <bool> enabled: true;
     callback clicked();
@@ -38,6 +40,8 @@ component ActionMenuRow inherits Rectangle {
         height: parent.height;
         label: root.label;
         shortcut: root.shortcut;
+        icon: root.icon;
+        has-icon: root.has-icon;
         dark: root.dark;
         enabled: root.enabled;
         clicked => { root.clicked(); }
@@ -57,6 +61,8 @@ component ServiceActionMenuRow inherits Rectangle {
     if (root.action.row_kind == 0): ActionMenuRow {
         width: parent.width;
         label: root.action.name;
+        icon: root.action.icon;
+        has-icon: root.action.has_icon;
         dark: root.dark;
         clicked => { root.action_requested(root.action.action_index); }
     }
@@ -77,6 +83,8 @@ component ServiceActionMenuRow inherits Rectangle {
 component HoverActionMenuRow inherits Rectangle {
     in property <string> label;
     in property <string> shortcut: "";
+    in property <image> icon;
+    in property <bool> has-icon: false;
     in property <bool> dark;
     in property <bool> enabled: true;
     callback hovered(bool);
@@ -90,6 +98,8 @@ component HoverActionMenuRow inherits Rectangle {
         height: parent.height;
         label: root.label;
         shortcut: root.shortcut;
+        icon: root.icon;
+        has-icon: root.has-icon;
         dark: root.dark;
         enabled: root.enabled;
         hovered(is-hovered) => { root.hovered(is-hovered); }
@@ -247,6 +257,8 @@ export component ServiceMenuGroupMenu inherits PopupSurface {
 
         for action in root.actions: HoverActionMenuRow {
             label: action.name;
+            icon: action.icon;
+            has-icon: action.has_icon;
             dark: root.dark;
             hovered(is-hovered) => { root.keep_alive(is-hovered); }
             clicked => { root.action_selected(action.action_index); }

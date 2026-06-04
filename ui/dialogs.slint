@@ -408,6 +408,8 @@ export component ServiceMenuPolicyDialog inherits Rectangle {
                 height: 34px;
                 width: parent.width;
                 label: action.group == "" ? action.name : (action.group + " / " + action.name);
+                icon: action.icon;
+                has-icon: action.has_icon;
                 dark: root.dark;
                 checked: action.enabled;
                 toggled(enabled) => { root.action_toggled(action.id, enabled); }

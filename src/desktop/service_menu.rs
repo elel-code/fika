@@ -1,4 +1,4 @@
-use super::{mime_open, systemd_launch};
+use super::{icons, mime_open, systemd_launch};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
@@ -13,6 +13,7 @@ pub(crate) struct ServiceMenuAction {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) icon: String,
+    pub(crate) icon_path: Option<PathBuf>,
     pub(crate) desktop_path: PathBuf,
     pub(crate) action_key: String,
     pub(crate) exec: String,
@@ -254,10 +255,14 @@ fn service_menu_action(
         .collect::<Vec<_>>();
     let argv = expand_service_menu_exec(exec, &paths, name, &entry.path).ok()?;
 
+    let icon = section.get("Icon").cloned().unwrap_or_default();
+    let icon_path = icons::resolve_icon_path(&icon, 20);
+
     Some(ServiceMenuAction {
         id: format!("{}:{action_key}", entry.path.display()),
         name: name.to_string(),
-        icon: section.get("Icon").cloned().unwrap_or_default(),
+        icon,
+        icon_path,
         desktop_path: entry.path.clone(),
         action_key: action_key.to_string(),
         exec: exec.to_string(),
