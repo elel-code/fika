@@ -484,10 +484,10 @@ pub(crate) fn toggle_split_view(
             let current_dir = state.panes.focused().current_dir.clone();
             state.panes.open_peer_from_focused();
             state.panes.focused_mut().view.viewport_x = 0.0;
-            state.panes.focused_mut().view.virtual_view.invalidate();
+            state.panes.focused_mut().view.invalidate_virtual_view();
             for (_slot, pane) in state.panes.iter_mut().skip(1) {
                 pane.view.viewport_x = 0.0;
-                pane.view.virtual_view.invalidate();
+                pane.view.invalidate_virtual_view();
             }
             (
                 true,

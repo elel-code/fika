@@ -48,6 +48,7 @@ ScrollView (viewport-x 双向绑定)
 | 子像素漂移忽略 (epsilon=0.75) | `split_pane.slint:49-50` | 避免微小 viewport 变化触发同步 |
 | 普通滚轮不重复请求焦点 | `split_pane.slint:78` | 减少 FFI 调用 |
 | 滚动条 viewport-content-width 稳定全宽 | `split_pane.slint:45` | 避免滚动条宽度随虚拟切片抖动 |
+| 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
 
 ---
 
@@ -232,6 +233,55 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSna
 **收益**：减少大量 tile 时的属性绑定评估开销。
 
 **难度**：中。涉及 Slint 组件重构，需要确认 Slint 1.16.1 的组件实例化模型。
+
+### P0-next — Dolphin-style 自管主视图
+
+**问题**：Phase 1-6 和 V0-V4 已经把大量无效同步、后台计算、缩略图 flush、选择 FFI、FileTile 重复绑定降到较低水平，但 `/etc` 这种基本没有图片的大目录仍然会在滚动、末尾 fullscreen/resize 后出现明显卡顿或空白恢复延迟。这说明剩余瓶颈更可能在 Slint 主视图组件树本身：`ScrollView`/`Flickable` 管 viewport，`for item in entries: FileTile` 管可见 tile，每个 tile 仍是一个完整 Slint 组件。
+
+**Dolphin 对照**：
+- `dolphin/src/kitemviews/kfileitemmodel.*` — 文件模型
+- `dolphin/src/kitemviews/private/kitemlistviewlayouter.*` — visible index / item rect 布局
+- `dolphin/src/kitemviews/kitemlistview.*` — viewport、可见 widget 管理、drop indicator
+- `dolphin/src/kitemviews/kitemlistcontroller.*` — selection、activation、drag 控制
+- `dolphin/src/kitemviews/kstandarditemlistwidget.*` — item 绘制与复用
+
+Dolphin 的关键不是某个滚动控件，而是 model、layouter、view/controller、item rendering/reuse 分层。Fika 要接近 Dolphin 的滚动上限，也应该把主视图核心从通用 `ScrollView`/`Repeater` 转成 Rust 自管 item view。
+
+**Slint 底座**：
+- `Rectangle { clip: true; }`：只做 viewport 壳、背景和裁剪，不承担滚动模型
+- `TouchArea`：统一接管滚轮、pointer move、click、double click、右键、框选、hover
+- `DropArea`：覆盖 viewport，`can-drop` / `dropped` 坐标交给 Rust hit-test 决定目标 item 或 blank area
+- `DragArea`：优先验证 viewport-level drag source；如果 Slint 需要更具体的 press target，再做最小数量的 drag layer，而不是每个文件一个完整 tile
+- `Image` / `SharedPixelBuffer`：作为后续自绘路径，把 Rust 绘制好的 tile/icon/text frame 交给 Slint 显示
+
+**目标架构**：
+
+```
+Slint: Rectangle viewport + input/DnD overlays
+  └─ Rust: ItemViewController
+       ├─ model snapshot / visible index
+       ├─ layouter: scroll_offset -> visible indexes + item rects
+       ├─ hit-test: pointer/drop point -> item/blank/gap
+       ├─ selection/hover/drag/drop state
+       └─ renderer:
+            ├─ v1: 只输出可见 primitive/model，移除 ScrollView/Flickable 主导权
+            └─ v2: SharedPixelBuffer/Image 自绘 tile frame
+```
+
+**验收标准**：
+- 主文件网格核心不再依赖 `ScrollView` / `Flickable` 的 viewport 状态作为 source of truth
+- 滚动位置、可见范围、item rect、hit-test、selection、drop target 都由 Rust 自管并可测试
+- 不再以全量 `FileTile` 组件树作为核心渲染路径；第一版可以保留少量可见 primitive，最终目标是自绘 frame 或可复用 item layer
+- DnD 仍使用 Slint 原生 `DragArea` / `DropArea` 和 `data-transfer`，但目标解析完全走 Rust hit-test
+- `/etc`、`/usr/lib`、split view 双 pane、末尾 fullscreen/resize、快速滚轮、拖放、框选、右键菜单都要单独验证
+
+**收益预期**：理论上可以接近 Dolphin 的架构上限，因为性能边界从 Slint 的每 tile 组件树和通用滚动容器，转移到 Rust 侧的布局、命中测试、缓存和绘制策略。是否真正媲美 Dolphin 需要用 spike 和实测确认，尤其是文字/icon 绘制缓存、DnD 启动层、滚动条手感和 HiDPI 下的 frame 更新成本。
+
+**第一步 spike**：
+1. 新增一个隐藏/可切换的 self-managed viewport 组件，不替换现有路径前先做并排验证。
+2. Rust 侧实现 `scroll_offset -> visible_range/item_rects`，Slint 侧用 `Rectangle + TouchArea + DropArea + DragArea` 承载。
+3. 先支持滚轮、点击选中、右键命中、blank-area、基本 DnD drop target。
+4. 对比现有 `ScrollView + FileTile` 在 `/etc`、`/usr/lib` 的滚动帧稳定性，再决定是否推进 `SharedPixelBuffer` 自绘。
 
 ---
 

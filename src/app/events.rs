@@ -161,6 +161,10 @@ pub(crate) enum AsyncEvent {
     ClipboardLoaded(ClipboardLoadResult),
     ClipboardPasteLoaded(ClipboardPasteLoadResult),
     VirtualViewPrepared(VirtualViewResult),
+    VirtualViewPrepareFailed {
+        pane_id: u64,
+        generation: u64,
+    },
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),
     ThumbnailLoaded {

@@ -11,7 +11,7 @@ pub(crate) fn cancel_active_search(state: &mut AppState) {
 pub(crate) fn reset_search_state(state: &mut AppState) {
     let pane = state.panes.focused_mut();
     pane.search.reset_all();
-    pane.view.virtual_view.invalidate();
+    pane.view.invalidate_virtual_view();
 }
 
 pub(crate) fn set_search_filters(state: &mut AppState, kind: i32, modified: i32, size: i32) {

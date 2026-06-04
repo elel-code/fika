@@ -57,7 +57,9 @@ use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
     affected_directory_pane_ids, cleanup_file_undo_backup,
 };
-use app::pane::{DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries};
+use app::pane::{
+    DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries, VirtualViewPrepareRequest,
+};
 #[cfg(test)]
 use app::pane::{PaneEntrySnapshot, PaneHistory};
 use app::places::{
@@ -171,13 +173,8 @@ enum VirtualViewSyncRequest {
         viewport_x: f32,
         viewport_clamped: bool,
     },
-    Prepare {
-        pane_id: u64,
-        generation: u64,
-        rows_per_column: usize,
-        cell_width: f32,
-        input: Box<VirtualViewSnapshotInput>,
-    },
+    Deferred,
+    Prepare(VirtualViewPrepareRequest),
 }
 
 impl ThumbnailFlushScheduler {
@@ -1861,7 +1858,6 @@ fn load_prepared_pane_directory(
                     Arc::clone(&cached_entries.entries),
                     cached_entries.has_locations,
                 );
-                pane.view.virtual_view.invalidate();
             }
         }
         if target_is_focused {
@@ -1876,7 +1872,6 @@ fn load_prepared_pane_directory(
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
                 pane.clear_entries();
                 pane.search.visible_entries_have_locations = false;
-                pane.view.virtual_view.invalidate();
             }
         }
         if target_is_focused {
@@ -2282,6 +2277,12 @@ fn apply_async_event(
         AsyncEvent::VirtualViewPrepared(result) => {
             apply_virtual_view_result(ui, state, bridge, result);
         }
+        AsyncEvent::VirtualViewPrepareFailed {
+            pane_id,
+            generation,
+        } => {
+            apply_virtual_view_prepare_failure(state, bridge, pane_id, generation);
+        }
         AsyncEvent::PrivilegedOperationFinished(result) => {
             apply_privileged_operation_result(ui, state, bridge, result);
         }
@@ -2370,7 +2371,6 @@ fn apply_pane_directory_result(
                         Arc::clone(&entries.entries),
                         entries.has_locations,
                     );
-                    pane.view.virtual_view.invalidate();
                     if !result.preserve_view {
                         pane.search.reset_all();
                         pane.selection.clear();
@@ -2583,7 +2583,6 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
                 Arc::clone(&entries.entries),
                 entries.has_locations,
             );
-            pane.view.virtual_view.invalidate();
         }
         (query, progress)
     };
@@ -2652,7 +2651,7 @@ fn start_recursive_search(
         let mut state = state.borrow_mut();
         let pane = state.panes.focused_mut();
         pane.search.visible_entry_indices = None;
-        pane.view.virtual_view.invalidate();
+        pane.view.invalidate_virtual_view();
     }
     ui.set_entry_count(0);
     update_selection_ui(ui, state, &[]);
@@ -2756,7 +2755,6 @@ fn apply_recursive_search_result(
                     Arc::clone(&entries.entries),
                     entries.has_locations,
                 );
-                pane.view.virtual_view.invalidate();
             }
             apply_filter(ui, state, bridge, true);
             let visible = filtered_entry_count(&state.borrow());
@@ -3253,6 +3251,9 @@ fn sync_virtual_entries_for_slot_with_count(
         };
         let requested_viewport_x = pane.view.viewport_x;
         layout.viewport_x = requested_viewport_x;
+        if immediate {
+            pane.view.cancel_virtual_prepare_queue();
+        }
         if let Some((viewport_x, viewport_clamped)) = cached_virtual_viewport_sync(
             pane,
             &layout,
@@ -3264,6 +3265,7 @@ fn sync_virtual_entries_for_slot_with_count(
             &chooser_patterns,
         ) {
             pane.view.virtual_generation.next();
+            pane.view.clear_pending_virtual_prepare();
             Some(VirtualViewSyncRequest::Cached {
                 viewport_x,
                 viewport_clamped,
@@ -3271,9 +3273,11 @@ fn sync_virtual_entries_for_slot_with_count(
         } else {
             let generation = pane.view.virtual_generation.next();
             let query = pane.search.query.to_ascii_lowercase();
-            Some(VirtualViewSyncRequest::Prepare {
+            let request = VirtualViewPrepareRequest {
                 pane_id: pane.id,
                 generation,
+                thumbnail_size_px: size_px,
+                schedule_thumbnails,
                 rows_per_column: layout.rows_per_column,
                 cell_width: layout.cell_width,
                 input: Box::new(VirtualViewSnapshotInput {
@@ -3294,13 +3298,22 @@ fn sync_virtual_entries_for_slot_with_count(
                     size_filter: pane.search.size_filter,
                     chooser_patterns,
                 }),
-            })
+            };
+            if !immediate && pane.view.has_virtual_prepare_in_flight() {
+                pane.view.defer_virtual_prepare(request);
+                Some(VirtualViewSyncRequest::Deferred)
+            } else {
+                if !immediate {
+                    pane.view.mark_virtual_prepare_started(generation);
+                }
+                Some(VirtualViewSyncRequest::Prepare(request))
+            }
         }
     }) else {
         return;
     };
 
-    let (pane_id, generation, rows_per_column, cell_width, input) = match request {
+    let request = match request {
         VirtualViewSyncRequest::Cached {
             viewport_x,
             viewport_clamped,
@@ -3308,17 +3321,21 @@ fn sync_virtual_entries_for_slot_with_count(
             set_pane_viewport_ui_if_clamped(ui, slot, viewport_x, viewport_clamped, state);
             return;
         }
-        VirtualViewSyncRequest::Prepare {
-            pane_id,
-            generation,
-            rows_per_column,
-            cell_width,
-            input,
-        } => (pane_id, generation, rows_per_column, cell_width, *input),
+        VirtualViewSyncRequest::Deferred => return,
+        VirtualViewSyncRequest::Prepare(request) => request,
     };
 
     if immediate {
-        let update = prepare_virtual_view_snapshot_update(input);
+        let VirtualViewPrepareRequest {
+            pane_id,
+            generation,
+            thumbnail_size_px,
+            schedule_thumbnails,
+            rows_per_column,
+            cell_width,
+            input,
+        } = request;
+        let update = prepare_virtual_view_snapshot_update(*input);
         apply_virtual_view_result(
             ui,
             state,
@@ -3326,7 +3343,7 @@ fn sync_virtual_entries_for_slot_with_count(
             VirtualViewResult {
                 pane_id,
                 generation,
-                thumbnail_size_px: size_px,
+                thumbnail_size_px,
                 schedule_thumbnails,
                 rows_per_column,
                 cell_width,
@@ -3336,27 +3353,47 @@ fn sync_virtual_entries_for_slot_with_count(
         return;
     }
 
+    start_virtual_view_prepare(bridge, request);
+}
+
+fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareRequest) {
+    let VirtualViewPrepareRequest {
+        pane_id,
+        generation,
+        thumbnail_size_px,
+        schedule_thumbnails,
+        rows_per_column,
+        cell_width,
+        input,
+    } = request;
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {
-        let Ok(update) =
-            tokio::task::spawn_blocking(move || prepare_virtual_view_snapshot_update(input)).await
-        else {
-            return;
-        };
-        send_async_event(
-            async_tx,
-            notify_ui,
-            AsyncEvent::VirtualViewPrepared(VirtualViewResult {
-                pane_id,
-                generation,
-                thumbnail_size_px: size_px,
-                schedule_thumbnails,
-                rows_per_column,
-                cell_width,
-                update,
-            }),
-        );
+        match tokio::task::spawn_blocking(move || prepare_virtual_view_snapshot_update(*input))
+            .await
+        {
+            Ok(update) => send_async_event(
+                async_tx,
+                notify_ui,
+                AsyncEvent::VirtualViewPrepared(VirtualViewResult {
+                    pane_id,
+                    generation,
+                    thumbnail_size_px,
+                    schedule_thumbnails,
+                    rows_per_column,
+                    cell_width,
+                    update,
+                }),
+            ),
+            Err(_) => send_async_event(
+                async_tx,
+                notify_ui,
+                AsyncEvent::VirtualViewPrepareFailed {
+                    pane_id,
+                    generation,
+                },
+            ),
+        }
     });
 }
 
@@ -3430,6 +3467,8 @@ fn apply_virtual_view_result(
 ) {
     let update = result.update;
     let slot;
+    let follow_up_request;
+    let result_is_current;
     {
         let mut state_ref = state.borrow_mut();
         slot = match state_ref.panes.slot_for_id(result.pane_id) {
@@ -3439,17 +3478,29 @@ fn apply_virtual_view_result(
         let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
             return;
         };
-        if !pane.view.virtual_generation.is_current(result.generation) {
-            return;
+        follow_up_request = pane.view.finish_virtual_prepare(result.generation);
+        result_is_current = pane.view.virtual_generation.is_current(result.generation);
+        if result_is_current {
+            pane.view.viewport_x = update.viewport_x;
+            if update.rebuild_model {
+                pane.view.virtual_view.range = update.range.clone();
+                pane.view.virtual_view.entry_count = update.entry_count;
+                pane.view.virtual_view.rows_per_column = result.rows_per_column;
+                pane.view.virtual_view.cell_width = result.cell_width;
+                pane.view.virtual_view.thumbnail_size_px = result.thumbnail_size_px;
+            }
         }
-        pane.view.viewport_x = update.viewport_x;
-        if update.rebuild_model {
-            pane.view.virtual_view.range = update.range.clone();
-            pane.view.virtual_view.entry_count = update.entry_count;
-            pane.view.virtual_view.rows_per_column = result.rows_per_column;
-            pane.view.virtual_view.cell_width = result.cell_width;
-            pane.view.virtual_view.thumbnail_size_px = result.thumbnail_size_px;
-        }
+    }
+
+    if let Some(request) = follow_up_request {
+        start_virtual_view_prepare(bridge, request);
+    }
+    if !result_is_current {
+        debug_log(&format!(
+            "virtual_view_result stale pane_id={} generation={}",
+            result.pane_id, result.generation
+        ));
+        return;
     }
 
     set_pane_viewport_ui_if_clamped(ui, slot, update.viewport_x, update.viewport_clamped, state);
@@ -3506,6 +3557,27 @@ fn apply_virtual_view_result(
     sync_pane_slot_ui(ui, state, slot);
 }
 
+fn apply_virtual_view_prepare_failure(
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    pane_id: u64,
+    generation: u64,
+) {
+    let follow_up_request = {
+        let mut state_ref = state.borrow_mut();
+        let Some(pane) = state_ref.panes.pane_mut_by_id(pane_id) else {
+            return;
+        };
+        pane.view.finish_virtual_prepare(generation)
+    };
+    if let Some(request) = follow_up_request {
+        start_virtual_view_prepare(bridge, request);
+    }
+    debug_log(&format!(
+        "virtual_view_prepare_failed pane_id={pane_id} generation={generation}"
+    ));
+}
+
 fn set_pane_virtual_entries(
     state: &Rc<RefCell<AppState>>,
     slot: i32,
@@ -3527,7 +3599,7 @@ fn apply_filter(
     let (query, filters_active, total, summary) = {
         let mut state_ref = state.borrow_mut();
         let summary = rebuild_visible_entry_index(&mut state_ref, preserve_selection);
-        state_ref.panes.focused_mut().view.virtual_view.invalidate();
+        state_ref.panes.focused_mut().view.invalidate_virtual_view();
         (
             state_ref.panes.focused().search.query.to_ascii_lowercase(),
             search_filters_active(&state_ref),

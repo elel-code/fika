@@ -36,7 +36,7 @@ pub(crate) fn prepare_directory_load_for_target(
         if !preserve_view {
             pane.thumbnail_generation.next();
             pane.view.clear_thumbnail_pending();
-            pane.view.virtual_view.invalidate();
+            pane.view.invalidate_virtual_view();
             pane.selection.clear();
             pane.search.reset_all();
         }

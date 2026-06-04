@@ -1,4 +1,5 @@
 use crate::FileEntry;
+use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{search, thumbnails};
 use crate::support::generation::GenerationCounter;
@@ -83,7 +84,7 @@ impl PaneState {
         self.search.visible_entry_indices = None;
         self.search.visible_entries_have_locations = has_locations;
         self.search.visible_location_groups = None;
-        self.view.virtual_generation.next();
+        self.view.invalidate_virtual_view();
     }
 
     pub(crate) fn clear_entries(&mut self) {
@@ -94,7 +95,7 @@ impl PaneState {
         self.view.virtual_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
         self.view.virtual_start_column = 0;
-        self.view.virtual_generation.next();
+        self.view.invalidate_virtual_view();
     }
 
     pub(crate) fn entry_snapshot(&self) -> Arc<[PaneEntrySnapshot]> {
@@ -426,12 +427,67 @@ pub(crate) struct PaneView {
     pub(crate) virtual_entries: ModelRc<FileEntry>,
     pub(crate) virtual_start_index: usize,
     pub(crate) virtual_start_column: usize,
+    virtual_prepare_in_flight: Option<u64>,
+    virtual_prepare_pending: Option<VirtualViewPrepareRequest>,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
     state_cache: HashMap<PathBuf, DirectoryViewState>,
     state_cache_order: VecDeque<PathBuf>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct VirtualViewPrepareRequest {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) thumbnail_size_px: u32,
+    pub(crate) schedule_thumbnails: bool,
+    pub(crate) rows_per_column: usize,
+    pub(crate) cell_width: f32,
+    pub(crate) input: Box<VirtualViewSnapshotInput>,
+}
+
 impl PaneView {
+    pub(crate) fn invalidate_virtual_view(&mut self) {
+        self.virtual_view.invalidate();
+        self.virtual_generation.next();
+        self.cancel_virtual_prepare_queue();
+    }
+
+    pub(crate) fn has_virtual_prepare_in_flight(&self) -> bool {
+        self.virtual_prepare_in_flight.is_some()
+    }
+
+    pub(crate) fn mark_virtual_prepare_started(&mut self, generation: u64) {
+        self.virtual_prepare_in_flight = Some(generation);
+    }
+
+    pub(crate) fn defer_virtual_prepare(&mut self, request: VirtualViewPrepareRequest) {
+        self.virtual_prepare_pending = Some(request);
+    }
+
+    pub(crate) fn clear_pending_virtual_prepare(&mut self) {
+        self.virtual_prepare_pending = None;
+    }
+
+    pub(crate) fn cancel_virtual_prepare_queue(&mut self) {
+        self.virtual_prepare_in_flight = None;
+        self.virtual_prepare_pending = None;
+    }
+
+    pub(crate) fn finish_virtual_prepare(
+        &mut self,
+        generation: u64,
+    ) -> Option<VirtualViewPrepareRequest> {
+        if self.virtual_prepare_in_flight != Some(generation) {
+            return None;
+        }
+        self.virtual_prepare_in_flight = None;
+        if let Some(pending) = self.virtual_prepare_pending.take() {
+            self.virtual_prepare_in_flight = Some(pending.generation);
+            return Some(pending);
+        }
+        None
+    }
+
     pub(crate) fn thumbnail_pending_key(&self, path: &str) -> Option<&thumbnails::ThumbnailKey> {
         self.thumbnail_pending.get(path)
     }
@@ -605,7 +661,56 @@ impl PaneHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::geometry::MainGridLayout;
     use slint::Image;
+
+    fn virtual_prepare_request(
+        generation: u64,
+        requested_viewport_x: f32,
+    ) -> VirtualViewPrepareRequest {
+        VirtualViewPrepareRequest {
+            pane_id: 7,
+            generation,
+            thumbnail_size_px: 64,
+            schedule_thumbnails: true,
+            rows_per_column: 4,
+            cell_width: 100.0,
+            input: Box::new(VirtualViewSnapshotInput {
+                layout: MainGridLayout {
+                    viewport_x: requested_viewport_x,
+                    rows_per_column: 4,
+                    cell_width: 100.0,
+                    padding: 10.0,
+                },
+                requested_viewport_x,
+                viewport_width: 250.0,
+                thumbnail_size_px: 64,
+                schedule_thumbnails: true,
+                visible_count_override: None,
+                cache: VirtualViewCache::default(),
+                entries: Arc::from([PaneEntrySnapshot {
+                    name: "item.txt".to_string(),
+                    path: "/tmp/item.txt".to_string(),
+                    group: String::new(),
+                    location: String::new(),
+                    kind: "File".to_string(),
+                    size: "1 KB".to_string(),
+                    size_bytes: 1024.0,
+                    modified: "Today".to_string(),
+                    modified_age_days: 0,
+                    is_dir: false,
+                }]),
+                visible_entry_indices: None,
+                visible_entries_have_locations: false,
+                visible_location_groups: None,
+                query: String::new(),
+                kind_filter: 0,
+                modified_filter: 0,
+                size_filter: 0,
+                chooser_patterns: Vec::new(),
+            }),
+        }
+    }
 
     #[test]
     fn pane_history_navigation_keeps_back_and_forward_independent() {
@@ -1042,6 +1147,53 @@ mod tests {
         assert_eq!(view.virtual_view.rows_per_column, 8);
         assert_eq!(view.virtual_view.cell_width, 96.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
+    }
+
+    #[test]
+    fn pane_view_virtual_prepare_queue_keeps_latest_pending_request() {
+        let mut view = PaneView::default();
+
+        view.mark_virtual_prepare_started(1);
+        assert!(view.has_virtual_prepare_in_flight());
+        view.defer_virtual_prepare(virtual_prepare_request(2, 100.0));
+        view.defer_virtual_prepare(virtual_prepare_request(3, 300.0));
+
+        assert!(view.finish_virtual_prepare(99).is_none());
+        assert!(view.has_virtual_prepare_in_flight());
+
+        let next = view
+            .finish_virtual_prepare(1)
+            .expect("latest pending request should follow the completed in-flight request");
+        assert_eq!(next.generation, 3);
+        assert_eq!(next.input.requested_viewport_x, 300.0);
+        assert!(view.has_virtual_prepare_in_flight());
+
+        assert!(view.finish_virtual_prepare(3).is_none());
+        assert!(!view.has_virtual_prepare_in_flight());
+    }
+
+    #[test]
+    fn pane_view_virtual_invalidation_clears_prepare_queue() {
+        let mut view = PaneView {
+            virtual_view: VirtualViewCache {
+                range: 4..12,
+                entry_count: 64,
+                rows_per_column: 8,
+                cell_width: 96.0,
+                thumbnail_size_px: 128,
+            },
+            ..PaneView::default()
+        };
+        let old_generation = view.virtual_generation.current();
+        view.mark_virtual_prepare_started(old_generation);
+        view.defer_virtual_prepare(virtual_prepare_request(old_generation + 1, 200.0));
+
+        view.invalidate_virtual_view();
+
+        assert!(view.virtual_view.range.is_empty());
+        assert!(!view.virtual_generation.is_current(old_generation));
+        assert!(!view.has_virtual_prepare_in_flight());
+        assert!(view.finish_virtual_prepare(old_generation).is_none());
     }
 
     #[test]

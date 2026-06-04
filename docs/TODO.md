@@ -436,6 +436,14 @@ Acceptance for all:
   - Current direction: split both `.rs` and `.slint` incrementally alongside real feature/performance work, keeping each extraction tied to tested behavior rather than preserving historical compatibility paths.
   - Current: service-menu context action snapshotting, Slint model synchronization, shell-free launch dispatch, and source-pane status updates now live in `src/app/context_service_menu.rs`; `main.rs` only routes pane/menu callbacks and async events.
 
+- [ ] Spike Dolphin-style self-managed main viewport.
+  - Acceptance: main file view has a prototype path whose scroll offset, visible range, item rects, selection hit-test, right-click hit-test, and drop target resolution are owned by Rust instead of `ScrollView` / `Flickable`.
+  - Acceptance: the Slint layer is reduced to a clipped viewport shell plus input/DnD primitives (`Rectangle`, `TouchArea`, `DragArea`, `DropArea`) and does not use the full `FileTile` `Repeater` tree as the core performance path.
+  - Acceptance: DnD remains on Slint's native `data-transfer` path, with Rust hit-test deciding item/blank/drop target semantics for both internal file drags and external file-list clipboard/paste-adjacent workflows.
+  - Acceptance: `/etc`, `/usr/lib`, split view dual-pane scrolling, end-of-directory fullscreen/resize, rectangle selection, context menus, and drag/drop are tested against the current virtualized `ScrollView + FileTile` path.
+  - Reference: Dolphin's `kfileitemmodel`, `kitemlistviewlayouter`, `kitemlistview`, `kitemlistcontroller`, and `kstandarditemlistwidget` split. The goal is Dolphin-like model/layouter/controller/rendering ownership, not a lower-level replacement for `Flickable` alone.
+  - Next: first implement a narrow hidden/prototype viewport that proves `Rectangle + TouchArea + DropArea + DragArea` can preserve selection, right-click, scrolling, and DnD semantics before considering a `SharedPixelBuffer`/`Image` self-rendered tile frame.
+
 - [x] Apply Dolphin DnD target validation.
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.
   - Current: transfer preparation and execution both reject self/descendant targets.
