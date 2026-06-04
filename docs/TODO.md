@@ -552,6 +552,7 @@ Acceptance for all:
   - Current: Undo start/take decisions now flow through `FileUndoStartDecision`, including empty-state copy, affected-pane routing, start status text, and Undo UI state; `main.rs` applies the returned UI state after releasing the mutable `AppState` borrow and then dispatches the async task.
   - Current: transfer Undo registration and generic FileAction Undo replacement now return `FileUndoRegistrationSummary`; the controller owns transfer-operation eligibility, previous overwrite-backup cleanup decisions, and Undo button label/availability state instead of letting `main.rs` rebuild that state from `last_undo`.
   - Current: FileAction completion now flows through `FileActionCompletionSummary`; success/failure status text, permission-denied privilege requests, affected-directory refresh lists, and generic FileAction Undo registration are produced by `operation_controller.rs`, while `main.rs` only applies the returned UI effects.
+  - Current: privileged operation completion now flows through `PrivilegedOperationCompletionSummary`; success/failure status text and affected-directory refresh lists are produced by `operation_controller.rs`, while `main.rs` only refreshes affected panes and applies the returned status after releasing the mutable `AppState` borrow.
 
 - [x] Add split view / dual-pane browsing.
   - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.

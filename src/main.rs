@@ -3119,22 +3119,12 @@ fn apply_privileged_operation_result(
     bridge: &AsyncBridge,
     result: privilege::PrivilegedOperationResult,
 ) {
-    let pane_ids = refresh_affected_directories(ui, state, bridge, &result.affected_dirs);
-
-    match result.result {
-        Ok(message) => set_status_for_panes(
-            ui,
-            state,
-            &pane_ids,
-            &format!("{} complete: {message}", result.label),
-        ),
-        Err(err) => set_status_for_panes(
-            ui,
-            state,
-            &pane_ids,
-            &format!("{} failed: {err}", result.label),
-        ),
-    }
+    let summary = {
+        let mut state = state.borrow_mut();
+        state.complete_privileged_operation(result)
+    };
+    let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);
+    set_status_for_panes(ui, state, &pane_ids, &summary.status);
 }
 
 fn register_external_edit(
@@ -5901,17 +5891,23 @@ mod tests {
             .expect("apply_privileged_operation_result body should be present");
 
         assert!(
-            body.contains(
-                "let pane_ids = refresh_affected_directories(ui, state, bridge, &result.affected_dirs);"
-            ) && body.matches("set_status_for_panes(").count() == 2,
-            "privileged operation result status should use the same affected-pane route as its refresh"
+            body.contains("state.complete_privileged_operation(result)")
+                && body.contains(
+                    "let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);"
+                )
+                && body.contains("set_status_for_panes(ui, state, &pane_ids, &summary.status);")
+                && body.matches("set_status_for_panes(").count() == 1,
+            "privileged operation result status should consume the controller summary after releasing AppState borrow"
         );
         assert!(
             !body.contains(
                 "set_status(ui, state, &format!(\"{} complete: {message}\", result.label))"
             ) && !body
-                .contains("set_status(ui, state, &format!(\"{} failed: {err}\", result.label))"),
-            "privileged operation result status must not jump to whichever pane is focused when the helper returns"
+                .contains("set_status(ui, state, &format!(\"{} failed: {err}\", result.label))")
+                && !body.contains("format!(\"{} complete: {message}\", result.label)")
+                && !body.contains("format!(\"{} failed: {err}\", result.label)")
+                && !body.contains("match result.result"),
+            "privileged operation result status must not jump to the focused pane or rebuild success/failure copy in main.rs"
         );
     }
 

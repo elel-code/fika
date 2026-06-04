@@ -108,6 +108,12 @@ pub(crate) struct PrivilegeRequestSummary {
     pub(crate) reason: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivilegedOperationCompletionSummary {
+    pub(crate) affected_dirs: Vec<PathBuf>,
+    pub(crate) status: String,
+}
+
 #[derive(Clone, Debug)]
 struct FileActionCompletionDecision {
     status: Option<String>,
@@ -248,6 +254,17 @@ impl AppState {
             undo_registration,
             affected_dirs,
             privileged_request,
+        }
+    }
+
+    pub(crate) fn complete_privileged_operation(
+        &mut self,
+        result: privilege::PrivilegedOperationResult,
+    ) -> PrivilegedOperationCompletionSummary {
+        let status = privileged_operation_complete_status(&result.label, result.result);
+        PrivilegedOperationCompletionSummary {
+            affected_dirs: result.affected_dirs,
+            status,
         }
     }
 
@@ -651,6 +668,13 @@ fn file_action_complete_status(action: &str, message: &str) -> String {
 
 fn file_action_failed_status(action: &str, error: &str) -> String {
     format!("{action} failed: {error}")
+}
+
+fn privileged_operation_complete_status(label: &str, result: Result<String, String>) -> String {
+    match result {
+        Ok(message) => format!("{label} complete: {message}"),
+        Err(error) => format!("{label} failed: {error}"),
+    }
 }
 
 fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
@@ -1315,6 +1339,34 @@ mod tests {
         assert!(summary.undo_registration.is_none());
         assert_eq!(summary.affected_dirs, vec![PathBuf::from("/tmp/protected")]);
         assert!(summary.privileged_request.is_none());
+    }
+
+    #[test]
+    fn complete_privileged_operation_reports_status_and_affected_dirs() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+
+        assert_eq!(
+            state.complete_privileged_operation(privilege::PrivilegedOperationResult {
+                label: "Create file".to_string(),
+                affected_dirs: vec![PathBuf::from("/tmp/protected")],
+                result: Ok("created note.txt".to_string()),
+            }),
+            PrivilegedOperationCompletionSummary {
+                affected_dirs: vec![PathBuf::from("/tmp/protected")],
+                status: "Create file complete: created note.txt".to_string(),
+            }
+        );
+        assert_eq!(
+            state.complete_privileged_operation(privilege::PrivilegedOperationResult {
+                label: "Rename".to_string(),
+                affected_dirs: vec![PathBuf::from("/tmp/protected")],
+                result: Err("Permission denied".to_string()),
+            }),
+            PrivilegedOperationCompletionSummary {
+                affected_dirs: vec![PathBuf::from("/tmp/protected")],
+                status: "Rename failed: Permission denied".to_string(),
+            }
+        );
     }
 
     #[test]
