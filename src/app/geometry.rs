@@ -185,11 +185,11 @@ pub(crate) fn virtual_grid_plan(
 
 pub(crate) fn icon_cell_width(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 172.0,
-        1 => 208.0,
-        2 => 248.0,
-        3 => 292.0,
-        _ => 340.0,
+        0 => 144.0,
+        1 => 172.0,
+        2 => 208.0,
+        3 => 248.0,
+        _ => 292.0,
     }
 }
 
@@ -2510,6 +2510,9 @@ mod tests {
                 && split_pane.contains("font-size: item.title_font_size * 1px;")
                 && split_pane.contains("width: item.text_width * 1px;")
                 && split_pane.contains("y: item.title_y * 1px;")
+                && split_pane.contains(
+                    "horizontal-alignment: root.show-location && (item.group != \"\" || item.location != \"\") ? left : center;"
+                )
                 && split_pane.contains("height: item.metadata_line_height * 1px;")
                 && !split_pane.contains("item.thumbnail_width")
                 && !split_pane.contains("doc-font-size:")

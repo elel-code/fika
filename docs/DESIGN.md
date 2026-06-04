@@ -62,7 +62,7 @@ The non-main-pane chrome is intentionally allowed to track COSMIC Files more clo
 - 过滤、搜索、缩放或窗口尺寸变化导致内容变窄时，Rust 会按同一套列宽规则夹紧横向滚动位置，避免旧 viewport 落在新内容之外造成空白主栏。
 - tile 的真实全局索引由 Rust item-view layout/hit-test 根据 viewport、rows-per-column 和可见索引缓存解析，因此选择范围、拖拽命中和右键语义仍然基于完整模型，而不是 Slint row index。
 - 横向滚动、缩放和窗口尺寸变化会重新切片 `virtual_entries`，避免大目录一次性实例化所有可见 tile primitive。
-- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为 `ItemViewEntry`。`ItemViewEntry` 在进入 Slint 前已经带有 Rust item-view render plan：tile size、media rect、text rect、group/title/location y 坐标、line height、字体和图标尺寸都已预计算；缩略图或 fallback 文件/目录图标也由 Rust item-view media renderer 投影为单个 `media` image。`SplitPaneView` 的可见 item loop 只按这些字段和 loop index 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成 fallback glyph。
+- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为 `ItemViewEntry`。`ItemViewEntry` 在进入 Slint 前已经带有 Rust item-view render plan：tile size、media rect、text rect、group/title/location y 坐标、line height、字体和图标尺寸都已预计算；普通 item 使用图标居中、标题在图标下方居中的图标视图布局，带 group/location 的递归搜索结果使用横向 media + text 元数据布局。缩略图或 fallback 文件/目录图标也由 Rust item-view media renderer 投影为单个 `media` image。`SplitPaneView` 的可见 item loop 只按这些字段和 loop index 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成 fallback glyph。
 - 框选仍按完整可见顺序返回路径，但候选项会先裁剪到选择矩形横向覆盖的列范围；搜索/过滤状态下通过可见索引缓存解析真实条目。
 - 缩略图调度按“当前可见列优先，overscan 后置”排序，减少大目录图片预览队列对当前屏幕反馈的拖慢。
 - 离屏缩略图完成时只更新 Rust 缓存，不重置 Slint 模型；缩略图所属路径落在当前虚拟切片内时才刷新 `virtual_entries`。
@@ -317,7 +317,7 @@ Places 分为内置项和用户项：
 
 切换 `Search subfolders` 时，如果已有查询，会立即按新模式重新提交搜索。
 
-Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为 `ItemViewEntry`，额外携带 selection、thumbnail 状态、Rust render-plan 字段和 Rust 侧选好的 `media` image，因此主视图只消费预计算后的绘制坐标和图像。
+Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为 `ItemViewEntry`，额外携带 selection、thumbnail 状态、Rust render-plan 字段和 Rust 侧选好的 `media` image，因此主视图只消费预计算后的绘制坐标和图像；普通图标标题不依赖递归搜索的 group/location 元数据布局。
 
 ### Thumbnails
 
