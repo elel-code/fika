@@ -85,10 +85,12 @@ pub(crate) struct FileUndoStartSummary {
     pub(crate) status: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FileUndoRestoreSummary {
-    pub(crate) restored: bool,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileUndoCompletionSummary {
+    pub(crate) affected_dirs: Vec<PathBuf>,
+    pub(crate) status: String,
     pub(crate) cleanup_backup: Option<PathBuf>,
+    pub(crate) undo_available_changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -144,17 +146,33 @@ impl AppState {
         })
     }
 
-    pub(crate) fn restore_failed_file_undo(&mut self, undo: FileUndo) -> FileUndoRestoreSummary {
-        if self.last_undo.is_none() {
-            self.last_undo = Some(undo);
-            FileUndoRestoreSummary {
-                restored: true,
+    pub(crate) fn complete_file_undo(
+        &mut self,
+        undo: FileUndo,
+        result: Result<String, String>,
+    ) -> FileUndoCompletionSummary {
+        let affected_dirs = file_undo_affected_dirs(&undo);
+        match result {
+            Ok(message) => FileUndoCompletionSummary {
+                affected_dirs,
+                status: file_undo_complete_status(&message),
                 cleanup_backup: None,
-            }
-        } else {
-            FileUndoRestoreSummary {
-                restored: false,
-                cleanup_backup: file_undo_backup_path(Some(undo)),
+                undo_available_changed: false,
+            },
+            Err(error) => {
+                let restored = self.last_undo.is_none();
+                let cleanup_backup = if restored {
+                    self.last_undo = Some(undo);
+                    None
+                } else {
+                    file_undo_backup_path(Some(undo))
+                };
+                FileUndoCompletionSummary {
+                    affected_dirs,
+                    status: file_undo_failed_status(&error, restored),
+                    cleanup_backup,
+                    undo_available_changed: restored,
+                }
             }
         }
     }
@@ -442,7 +460,7 @@ impl AppState {
     }
 }
 
-pub(crate) fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
+fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     push_unique_parent(&mut dirs, &undo.original_source);
     push_unique_parent(&mut dirs, &undo.destination);
@@ -523,6 +541,18 @@ pub(crate) fn operation_started_status(operation: &str, source: &Path) -> String
 
 pub(crate) fn file_undo_started_status(operation: &str) -> String {
     format!("Undoing {}...", operation_finished_label(operation))
+}
+
+pub(crate) fn file_undo_complete_status(message: &str) -> String {
+    format!("Undo complete: {message}")
+}
+
+pub(crate) fn file_undo_failed_status(error: &str, restored: bool) -> String {
+    if restored {
+        format!("Undo failed: {error}; Undo can be retried")
+    } else {
+        format!("Undo failed: {error}; newer Undo is available")
+    }
 }
 
 pub(crate) fn operation_skipped_status(error: &str) -> String {
@@ -885,15 +915,17 @@ mod tests {
     }
 
     #[test]
-    fn failed_file_undo_is_restored_when_no_newer_undo_exists() {
+    fn complete_file_undo_restores_failed_undo_when_no_newer_undo_exists() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let undo = undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
 
         assert_eq!(
-            state.restore_failed_file_undo(undo.clone()),
-            FileUndoRestoreSummary {
-                restored: true,
+            state.complete_file_undo(undo.clone(), Err("permission denied".to_string())),
+            FileUndoCompletionSummary {
+                affected_dirs: vec![PathBuf::from("/tmp"), PathBuf::from("/tmp/target")],
+                status: "Undo failed: permission denied; Undo can be retried".to_string(),
                 cleanup_backup: None,
+                undo_available_changed: true,
             }
         );
 
@@ -904,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_file_undo_does_not_replace_newer_undo() {
+    fn complete_file_undo_does_not_replace_newer_undo() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let newer = undo("move", "/tmp/new-source.txt", "/tmp/new-target.txt");
         state.last_undo = Some(newer.clone());
@@ -912,10 +944,12 @@ mod tests {
         failed.overwritten_backup = Some(PathBuf::from("/tmp/fika-backup"));
 
         assert_eq!(
-            state.restore_failed_file_undo(failed),
-            FileUndoRestoreSummary {
-                restored: false,
+            state.complete_file_undo(failed, Err("target changed".to_string())),
+            FileUndoCompletionSummary {
+                affected_dirs: vec![PathBuf::from("/tmp"), PathBuf::from("/tmp/target")],
+                status: "Undo failed: target changed; newer Undo is available".to_string(),
                 cleanup_backup: Some(PathBuf::from("/tmp/fika-backup")),
+                undo_available_changed: false,
             }
         );
 
@@ -923,6 +957,25 @@ mod tests {
         assert_eq!(retained.operation, newer.operation);
         assert_eq!(retained.original_source, newer.original_source);
         assert_eq!(retained.destination, newer.destination);
+    }
+
+    #[test]
+    fn complete_file_undo_reports_success_without_restoring_undo() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+
+        assert_eq!(
+            state.complete_file_undo(
+                undo("copy", "/tmp/source.txt", "/tmp/target/source.txt"),
+                Ok("removed /tmp/target/source.txt".to_string())
+            ),
+            FileUndoCompletionSummary {
+                affected_dirs: vec![PathBuf::from("/tmp"), PathBuf::from("/tmp/target")],
+                status: "Undo complete: removed /tmp/target/source.txt".to_string(),
+                cleanup_backup: None,
+                undo_available_changed: false,
+            }
+        );
+        assert!(state.last_undo.is_none());
     }
 
     #[test]

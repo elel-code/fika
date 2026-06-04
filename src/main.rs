@@ -55,8 +55,7 @@ use app::geometry::{
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
     FileUndoStartDecision, OperationResultDisposition, affected_directory_pane_ids,
-    cleanup_file_undo_backup, file_undo_affected_dirs, operation_final_status,
-    operation_finished_label,
+    cleanup_file_undo_backup, operation_final_status, operation_finished_label,
 };
 use app::pane::{DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries};
 #[cfg(test)]
@@ -3003,37 +3002,16 @@ fn apply_file_undo_result(
     bridge: &AsyncBridge,
     result: FileUndoResult,
 ) {
-    let affected_dirs = file_undo_affected_dirs(&result.undo);
-    let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);
-
-    match result.result {
-        Ok(message) => {
-            set_status_for_panes(ui, state, &pane_ids, &format!("Undo complete: {message}"));
-        }
-        Err(err) => {
-            let restore = {
-                let mut state = state.borrow_mut();
-                state.restore_failed_file_undo(result.undo)
-            };
-            cleanup_file_undo_backup(restore.cleanup_backup);
-            sync_undo_ui(ui, state);
-            if restore.restored {
-                set_status_for_panes(
-                    ui,
-                    state,
-                    &pane_ids,
-                    &format!("Undo failed: {err}; Undo can be retried"),
-                );
-            } else {
-                set_status_for_panes(
-                    ui,
-                    state,
-                    &pane_ids,
-                    &format!("Undo failed: {err}; newer Undo is available"),
-                );
-            }
-        }
+    let summary = {
+        let mut state = state.borrow_mut();
+        state.complete_file_undo(result.undo, result.result)
+    };
+    cleanup_file_undo_backup(summary.cleanup_backup);
+    if summary.undo_available_changed {
+        sync_undo_ui(ui, state);
     }
+    let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);
+    set_status_for_panes(ui, state, &pane_ids, &summary.status);
 }
 
 fn apply_device_mount_result(
@@ -5762,13 +5740,17 @@ mod tests {
             "file undo start status should use the controller summary after releasing AppState borrow"
         );
         assert!(
-            result_body.contains(
-                "let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);"
-            ) && result_body.contains("state.restore_failed_file_undo(result.undo)")
-                && result_body.contains("cleanup_file_undo_backup(restore.cleanup_backup);")
-                && result_body.contains("if restore.restored {")
-                && result_body.matches("set_status_for_panes(").count() == 3,
-            "file undo result status should use the same affected-pane route as its refresh"
+            result_body.contains("state.complete_file_undo(result.undo, result.result)")
+                && result_body.contains("cleanup_file_undo_backup(summary.cleanup_backup);")
+                && result_body.contains("if summary.undo_available_changed {")
+                && result_body.contains("sync_undo_ui(ui, state);")
+                && result_body.contains(
+                    "let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);"
+                )
+                && result_body
+                    .contains("set_status_for_panes(ui, state, &pane_ids, &summary.status);")
+                && result_body.matches("set_status_for_panes(").count() == 1,
+            "file undo result status should use the controller completion summary after releasing AppState borrow"
         );
         assert!(
             !production_source.contains("fn file_undo_affected_dirs(")
@@ -5782,6 +5764,13 @@ mod tests {
                 && !start_body.contains("affected_directory_pane_ids(")
                 && !start_body.contains("operation_finished_label(&undo.operation)"),
             "file undo start should not re-derive controller-owned state in main.rs"
+        );
+        assert!(
+            !result_body.contains("file_undo_affected_dirs(")
+                && !result_body.contains("restore_failed_file_undo(")
+                && !result_body.contains("format!(\"Undo complete:")
+                && !result_body.contains("format!(\"Undo failed:"),
+            "file undo completion should not re-derive controller-owned state or status copy in main.rs"
         );
         assert!(
             !start_body.contains("set_status(\n        ui,\n        &format!(\"Undoing {}...\"")
