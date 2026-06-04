@@ -11,6 +11,7 @@ use std::ops::Range;
 const ITEM_VIEW_PADDING: f32 = 14.0;
 const TILE_TRAILING_GAP: f32 = 12.0;
 const TITLE_MEDIA_GAP: f32 = 5.0;
+const TITLE_PADDING_X: f32 = 6.0;
 const SELECTION_DRAG_THRESHOLD: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -373,7 +374,7 @@ pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemVie
             entry.metadata_line_height = text_plan.metadata_line_height;
             entry.title_line_height = text_plan.title_line_height;
         } else {
-            let text_padding_x = render_metrics.media_padding_x.min(tile_width / 4.0);
+            let text_padding_x = TITLE_PADDING_X.min(tile_width / 4.0);
             entry.media_x = ((tile_width - render_metrics.media_width) / 2.0).max(0.0);
             let title_block_height = render_metrics.media_height
                 + TITLE_MEDIA_GAP
@@ -849,19 +850,19 @@ mod tests {
             render_tokens,
             vec![
                 (
-                    98.0, 4.0, 2.0, 16.0, 56.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 4.0, 2.0, 16.0, 56.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 4.0, 2.0, 16.0, 56.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 4.0, 2.0, 16.0, 56.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    98.0, 4.0, 2.0, 16.0, 56.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    98.0, 4.0, 2.0, 6.0, 76.0, 77.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
             ]
         );
@@ -915,8 +916,8 @@ mod tests {
 
         let entry = &entries[0];
         assert_eq!(entry.media_x, 4.0);
-        assert_eq!(entry.text_x, 16.0);
-        assert_eq!(entry.text_width, 56.0);
+        assert_eq!(entry.text_x, 6.0);
+        assert_eq!(entry.text_width, 76.0);
         assert_eq!(entry.title_y, 77.0);
     }
 

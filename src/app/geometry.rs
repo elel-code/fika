@@ -185,11 +185,11 @@ pub(crate) fn virtual_grid_plan(
 
 pub(crate) fn icon_cell_width(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 144.0,
-        1 => 172.0,
-        2 => 208.0,
-        3 => 248.0,
-        _ => 292.0,
+        0 => 112.0,
+        1 => 132.0,
+        2 => 156.0,
+        3 => 184.0,
+        _ => 216.0,
     }
 }
 
@@ -2474,7 +2474,7 @@ mod tests {
                 && split_pane.contains("source: item.media;")
                 && split_pane.contains("x: item.media_x * 1px;")
                 && split_pane.contains("x: item.text_x * 1px;")
-                && split_pane.contains("height: item.title_line_height * 1px;")
+                && split_pane.contains("height: max(16px, item.title_line_height * 1px);")
                 && split_pane.contains("text: item.name;")
                 && !split_pane.contains("item.thumbnail")
                 && !visible_tile_loop.contains("thumbnail_state")
@@ -2507,9 +2507,16 @@ mod tests {
                 && split_pane.contains("color: root.metadata-group-color;")
                 && split_pane.contains("height: item.tile_height * 1px;")
                 && split_pane.contains("width: item.media_width * 1px;")
-                && split_pane.contains("font-size: item.title_font_size * 1px;")
-                && split_pane.contains("width: item.text_width * 1px;")
-                && split_pane.contains("y: item.title_y * 1px;")
+                && split_pane.contains("font-size: max(12px, item.title_font_size * 1px);")
+                && split_pane.contains(
+                    "x: root.show-location && (item.group != \"\" || item.location != \"\") ? item.text_x * 1px : 6px;"
+                )
+                && split_pane.contains(
+                    "y: root.show-location && (item.group != \"\" || item.location != \"\") ? item.title_y * 1px : max(0px, parent.height - max(16px, item.title_line_height * 1px) - 2px);"
+                )
+                && split_pane.contains(
+                    "width: root.show-location && (item.group != \"\" || item.location != \"\") ? item.text_width * 1px : max(1px, parent.width - 12px);"
+                )
                 && split_pane.contains(
                     "horizontal-alignment: root.show-location && (item.group != \"\" || item.location != \"\") ? left : center;"
                 )
