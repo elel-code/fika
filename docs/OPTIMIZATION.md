@@ -664,6 +664,8 @@ viewport-width: max(parent.width, root.viewport-content-width);
 
 `viewport-content-width` 依赖 `column-count`，而 `column-count` 依赖 `entry-count`。在目录切换时 `entry-count` 变化会导致 viewport 宽度变化，触发 ScrollView 内部重布局。当前 `entry-count` 只在模型重建时更新，路径是正常的。
 
+已处理的布局恢复问题：`SplitPaneView` 现在在 pane-local `width` 或 `rows-per-column` 变化时主动夹紧 `viewport-x` 并请求虚拟切片刷新。这样全屏/布局变化发生在大目录末尾时，不再依赖后续手动拖动滚动条来触发旧切片重建。
+
 ### TouchArea 覆盖全宽
 
 ```slint

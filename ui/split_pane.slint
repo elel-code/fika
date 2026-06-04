@@ -100,6 +100,23 @@ export component SplitPaneView inherits Rectangle {
         }
     }
 
+    function relayout-visible-slice() {
+        root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(root.viewport-x);
+        if (root.viewport-x != root.pan-target-viewport-x) {
+            root.viewport-x = root.pan-target-viewport-x;
+            root.viewport-offset = -root.viewport-x * 1px;
+        }
+        root.view_changed();
+    }
+
+    changed width => {
+        root.relayout-visible-slice();
+    }
+
+    changed rows-per-column => {
+        root.relayout-visible-slice();
+    }
+
     background: root.dark ? #101418 : #f8fafc;
 
     if (root.entry-count == 0): Rectangle {

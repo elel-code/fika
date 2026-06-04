@@ -2407,6 +2407,17 @@ mod tests {
                 && !split_pane.contains("root.viewport-x != max(0, -self.viewport-x / 1px)"),
             "ScrollView viewport writeback should quantize and ignore sub-pixel drift instead of churning virtual slices"
         );
+        assert!(
+            split_pane.contains("function relayout-visible-slice()")
+                && split_pane.contains("changed width => {\n        root.relayout-visible-slice();\n    }")
+                && split_pane.contains(
+                    "changed rows-per-column => {\n        root.relayout-visible-slice();\n    }"
+                )
+                && split_pane.contains(
+                    "root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(root.viewport-x);"
+                ),
+            "pane-local geometry changes should clamp the viewport and request a virtual slice refresh without waiting for scrollbar input"
+        );
         assert!(split_pane.contains("virtual-layer := Rectangle"));
         assert!(split_pane.contains(
             "private property <length> virtual-layer-width: root.viewport-content-width;"
