@@ -664,6 +664,7 @@ export component AppWindow inherits Window {
     in property <[ContextServiceAction]> context_service_actions;
     in property <[ContextServiceAction]> context_service_child_actions;
     in property <[ContextServicePolicyAction]> context_service_policy_actions;
+    in property <int> context_service_policy_mode;
     in property <int> context_service_action_rows;
     in property <int> context_service_submenu_rows;
     in property <int> context_service_config_rows;
@@ -748,6 +749,7 @@ export component AppWindow inherits Window {
     callback open_with_custom_command(string, string);
     callback context_service_action(int);
     callback context_service_action_enabled(string, bool);
+    callback context_service_policy_mode_changed(int);
     callback open_place(string);
     callback open_device(string, bool);
     callback unmount_device(string, string);
@@ -1923,7 +1925,9 @@ export component AppWindow inherits Window {
         height: parent.height;
         dark: root.dark_mode;
         actions: root.context_service_policy_actions;
+        policy-mode: root.context_service_policy_mode;
         action_toggled(id, enabled) => { root.context_service_action_enabled(id, enabled); }
+        policy_mode_changed(mode) => { root.context_service_policy_mode_changed(mode); }
         closed => { root.service-policy-open = false; }
     }
 

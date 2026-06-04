@@ -2,6 +2,56 @@ import { LineEdit, ScrollView } from "std-widgets.slint";
 import { ContextServicePolicyAction, DesktopApp } from "models.slint";
 import { CheckOption, MenuItem } from "widgets.slint";
 
+component PolicyModeOption inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    in property <bool> dark;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 8px;
+    border-width: root.checked ? 1px : 0px;
+    border-color: root.dark ? #4f6576 : #b6c8d8;
+    background: root.checked ? (root.dark ? #19303c : #e5f1f7) : (touch-area.has-hover ? (root.dark ? #1f262d : #f2f5f8) : transparent);
+
+    touch-area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        spacing: 8px;
+
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            border-width: 1px;
+            border-color: root.checked ? (root.dark ? #65b9dd : #2279aa) : (root.dark ? #65727f : #a1adba);
+            background: transparent;
+
+            if (root.checked): Rectangle {
+                x: 3px;
+                y: 3px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.dark ? #65b9dd : #2279aa;
+            }
+        }
+
+        Text {
+            text: root.label;
+            color: root.checked ? (root.dark ? #eef8fc : #12384c) : (root.dark ? #dfe7ee : #24303b);
+            font-size: 13px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component TextInputDialog inherits Rectangle {
     in property <bool> dark;
     in property <string> title;
@@ -366,7 +416,9 @@ export component ConfirmationPopup inherits Rectangle {
 export component ServiceMenuPolicyDialog inherits Rectangle {
     in property <bool> dark;
     in property <[ContextServicePolicyAction]> actions;
+    in property <int> policy-mode;
     callback action_toggled(string, bool);
+    callback policy_mode_changed(int);
     callback closed();
 
     border-radius: 8px;
@@ -383,6 +435,26 @@ export component ServiceMenuPolicyDialog inherits Rectangle {
             color: root.dark ? #f1f1f1 : #17212b;
             font-size: 14px;
             font-weight: 700;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            PolicyModeOption {
+                horizontal-stretch: 1;
+                label: "All Except Disabled";
+                dark: root.dark;
+                checked: root.policy-mode == 0;
+                clicked => { root.policy_mode_changed(0); }
+            }
+
+            PolicyModeOption {
+                horizontal-stretch: 1;
+                label: "Only Checked";
+                dark: root.dark;
+                checked: root.policy-mode == 1;
+                clicked => { root.policy_mode_changed(1); }
+            }
         }
 
         ScrollView {
@@ -433,7 +505,9 @@ export component ServiceMenuPolicyDialog inherits Rectangle {
 export component ServiceMenuPolicyPopup inherits Rectangle {
     in property <bool> dark;
     in property <[ContextServicePolicyAction]> actions;
+    in property <int> policy-mode;
     callback action_toggled(string, bool);
+    callback policy_mode_changed(int);
     callback closed();
 
     background: transparent;
@@ -445,7 +519,9 @@ export component ServiceMenuPolicyPopup inherits Rectangle {
         height: 420px;
         dark: root.dark;
         actions: root.actions;
+        policy-mode: root.policy-mode;
         action_toggled(id, enabled) => { root.action_toggled(id, enabled); }
+        policy_mode_changed(mode) => { root.policy_mode_changed(mode); }
         closed => { root.closed(); }
     }
 }

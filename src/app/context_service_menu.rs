@@ -2,7 +2,9 @@ use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::events::{AsyncEvent, ServiceMenuActionLaunchResult};
 use crate::app::split_view::sync_pane_slot_ui;
 use crate::app::state::AppState;
-use crate::config::service_menu_policy::{ServiceMenuPolicy, save_service_menu_policy};
+use crate::config::service_menu_policy::{
+    ServiceMenuPolicy, ServiceMenuPolicyMode, save_service_menu_policy,
+};
 use crate::desktop::service_menu;
 use crate::{AppWindow, ContextServiceAction, ContextServicePolicyAction};
 use slint::{Image, ModelRc, SharedString, VecModel};
@@ -12,6 +14,8 @@ use std::rc::Rc;
 
 const SERVICE_ROW_ACTION: i32 = 0;
 const SERVICE_ROW_SUBMENU: i32 = 1;
+const SERVICE_POLICY_MODE_ALL_EXCEPT_DISABLED: i32 = 0;
+const SERVICE_POLICY_MODE_ONLY_ENABLED: i32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ServiceMenuRowCounts {
@@ -66,7 +70,8 @@ pub(crate) fn refresh_actions_async(
         state.context_service_menu_pane_id = state.panes.pane_for_slot(slot).map(|pane| pane.id);
         generation
     };
-    sync_service_menu_ui(ui, &[], &[], &ServiceMenuPolicy::default());
+    let policy = state.borrow().service_menu_policy.clone();
+    sync_service_menu_ui(ui, &[], &[], &policy);
 
     if paths.is_empty() {
         return;
@@ -124,6 +129,7 @@ fn sync_service_menu_ui(
     all_actions: &[service_menu::ServiceMenuAction],
     policy: &ServiceMenuPolicy,
 ) {
+    ui.set_context_service_policy_mode(policy_mode_index(policy.mode));
     sync_actions_ui(ui, visible_actions, all_actions.len());
     sync_policy_actions_ui(ui, all_actions, policy);
 }
@@ -239,6 +245,50 @@ pub(crate) fn set_action_enabled(
     }
 }
 
+pub(crate) fn set_policy_mode(ui: &AppWindow, state: &Rc<RefCell<AppState>>, mode: i32) {
+    let Some(mode) = policy_mode_from_index(mode) else {
+        return;
+    };
+    let (visible_actions, all_actions, policy, pane_id, save_result) = {
+        let mut state = state.borrow_mut();
+        let previous_policy = state.service_menu_policy.clone();
+        let mut next_policy = previous_policy.clone();
+        next_policy.mode = mode;
+        let save_result = save_service_menu_policy(&next_policy);
+        state.service_menu_policy = if save_result.is_ok() {
+            next_policy
+        } else {
+            previous_policy
+        };
+        state.context_service_menu_actions = enabled_actions(
+            &state.context_service_menu_all_actions,
+            &state.service_menu_policy,
+        );
+        (
+            state.context_service_menu_actions.clone(),
+            state.context_service_menu_all_actions.clone(),
+            state.service_menu_policy.clone(),
+            state.context_service_menu_pane_id,
+            save_result,
+        )
+    };
+
+    sync_service_menu_ui(ui, &visible_actions, &all_actions, &policy);
+
+    let Some(pane_id) = pane_id else {
+        return;
+    };
+    match save_result {
+        Ok(()) => set_status_for_pane_id(ui, state, pane_id, "Service menu policy updated"),
+        Err(err) => set_status_for_pane_id(
+            ui,
+            state,
+            pane_id,
+            &format!("Cannot save service menu policy: {err}"),
+        ),
+    }
+}
+
 fn child_menu_rows(
     actions: &[service_menu::ServiceMenuAction],
     group: &str,
@@ -317,6 +367,21 @@ fn enabled_actions(
         .filter(|action| policy.is_enabled(&action.id))
         .cloned()
         .collect()
+}
+
+fn policy_mode_index(mode: ServiceMenuPolicyMode) -> i32 {
+    match mode {
+        ServiceMenuPolicyMode::AllExceptDisabled => SERVICE_POLICY_MODE_ALL_EXCEPT_DISABLED,
+        ServiceMenuPolicyMode::OnlyEnabled => SERVICE_POLICY_MODE_ONLY_ENABLED,
+    }
+}
+
+fn policy_mode_from_index(index: i32) -> Option<ServiceMenuPolicyMode> {
+    match index {
+        SERVICE_POLICY_MODE_ALL_EXCEPT_DISABLED => Some(ServiceMenuPolicyMode::AllExceptDisabled),
+        SERVICE_POLICY_MODE_ONLY_ENABLED => Some(ServiceMenuPolicyMode::OnlyEnabled),
+        _ => None,
+    }
 }
 
 fn empty_actions_model() -> ModelRc<ContextServiceAction> {
@@ -501,8 +566,9 @@ mod tests {
             refresh_body.contains(
                 "state.context_service_menu_pane_id = state.panes.pane_for_slot(slot).map(|pane| pane.id);"
             ) && refresh_body.contains("state.context_service_menu_all_actions.clear();")
-                && refresh_body.contains("sync_service_menu_ui(ui, &[], &[], &ServiceMenuPolicy::default());"),
-            "opening a context menu should remember the source pane and clear stale service action rows before async discovery"
+                && refresh_body.contains("let policy = state.borrow().service_menu_policy.clone();")
+                && refresh_body.contains("sync_service_menu_ui(ui, &[], &[], &policy);"),
+            "opening a context menu should remember the source pane, clear stale service action rows, and keep the current policy mode before async discovery"
         );
         assert!(
             apply_body.contains("let (visible_actions, all_actions, policy) = {\n        let mut state = state.borrow_mut();")
@@ -604,6 +670,52 @@ mod tests {
                 ("tools".to_string(), "Tool".to_string(), false),
             ]
         );
+    }
+
+    #[test]
+    fn service_menu_policy_mode_filters_visible_actions() {
+        let actions = vec![
+            service_action("top", "Top Action", "", true),
+            service_action("tools", "Tool", "Tools", false),
+            service_action("edit", "Edit", "Edit", false),
+        ];
+        let mut policy = ServiceMenuPolicy {
+            mode: ServiceMenuPolicyMode::OnlyEnabled,
+            ..ServiceMenuPolicy::default()
+        };
+        policy.set_enabled("tools", true);
+
+        assert_eq!(
+            enabled_actions(&actions, &policy)
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tools"]
+        );
+        assert_eq!(
+            policy_action_rows(&actions, &policy)
+                .iter()
+                .map(|row| (row.id.to_string(), row.enabled))
+                .collect::<Vec<_>>(),
+            vec![
+                ("top".to_string(), false),
+                ("tools".to_string(), true),
+                ("edit".to_string(), false),
+            ]
+        );
+        assert_eq!(
+            policy_mode_index(ServiceMenuPolicyMode::AllExceptDisabled),
+            SERVICE_POLICY_MODE_ALL_EXCEPT_DISABLED
+        );
+        assert_eq!(
+            policy_mode_index(ServiceMenuPolicyMode::OnlyEnabled),
+            SERVICE_POLICY_MODE_ONLY_ENABLED
+        );
+        assert_eq!(
+            policy_mode_from_index(SERVICE_POLICY_MODE_ONLY_ENABLED),
+            Some(ServiceMenuPolicyMode::OnlyEnabled)
+        );
+        assert_eq!(policy_mode_from_index(99), None);
     }
 
     fn service_action(

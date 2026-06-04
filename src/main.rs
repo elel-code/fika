@@ -748,6 +748,16 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_context_service_policy_mode_changed(move |mode| {
+            if let Some(ui) = ui_weak.upgrade() {
+                context_service_menu::set_policy_mode(&ui, &state, mode);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         let save_files = args.chooser_save_files.clone();
         ui.on_chooser_accept(move |name| {
             if let Some(ui) = ui_weak.upgrade() {
