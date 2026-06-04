@@ -2006,13 +2006,19 @@ mod tests {
                 && pane_routing.contains("callback view-changed(int);")
                 && pane_routing.contains("callback activated(int, string);")
                 && pane_routing.contains("callback request-select(int, string, bool, bool);")
-                && pane_routing.contains("callback select-rect(int, float, float, float, float, int, float, float, float, bool);")
-                && pane_routing.contains("callback clear-selection(int);")
+                && pane_routing.contains(
+                    "callback item-view-blank-pressed(int, float, float, int, float, float, float, bool);"
+                )
+                && pane_routing.contains("callback item-view-blank-moved(int, float, float) -> bool;")
+                && pane_routing.contains("callback item-view-blank-released(int, float, float);")
+                && pane_routing.contains("callback item-view-blank-cancelled(int);")
                 && pane_routing.contains("callback request-context-menu(int, string, string, string, string, bool, length, length);")
                 && pane_routing.contains("callback request-blank-context-menu(int, length, length);")
                 && pane_routing.contains("callback drop-target-path(int, float, float, string) -> string;")
                 && pane_routing.contains("callback drop-allowed(int, float, float, string) -> bool;")
                 && pane_routing.contains("callback prepare-transfer(int, string, float, float) -> bool;")
+                && !pane_routing.contains("select-rect")
+                && !pane_routing.contains("clear-selection")
                 && !pane_routing.contains("is-selected"),
             "PaneRouting should expose one slot-aware surface for every pane interaction"
         );
@@ -2062,8 +2068,10 @@ mod tests {
         assert!(
             file_pane.contains("callback request_context_menu")
                 && file_pane.contains("callback request_blank_context_menu")
-                && file_pane.contains("callback select_rect")
-                && file_pane.contains("callback clear_selection")
+                && file_pane.contains("callback item_view_blank_pressed")
+                && file_pane.contains("callback item_view_blank_moved")
+                && file_pane.contains("callback item_view_blank_released")
+                && file_pane.contains("callback item_view_blank_cancelled")
                 && file_pane.contains("callback drop_target_path")
                 && file_pane.contains("callback drop_allowed")
                 && file_pane.contains("callback prepare_transfer")
@@ -2079,6 +2087,7 @@ mod tests {
                 && file_pane.contains("callback view_changed(int);")
                 && file_pane.contains("callback activated(int, string);")
                 && file_pane.contains("callback request_select(int, string, bool, bool);")
+                && file_pane.contains("callback item_view_blank_pressed(int,")
                 && file_pane.contains("callback request_context_menu(int,")
                 && file_pane
                     .contains("pure callback make_drag_data(int, string, bool) -> data-transfer;")
@@ -2115,7 +2124,10 @@ mod tests {
             "view_changed(slot) => { PaneRouting.view-changed(slot); }",
             "activated(slot, path) => { PaneRouting.activated(slot, path); }",
             "request_select(slot, path, toggle, range) => {\n        PaneRouting.request-select(slot, path, toggle, range);\n    }",
-            "clear_selection(slot) => { PaneRouting.clear-selection(slot); }",
+            "item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle) => {\n        PaneRouting.item-view-blank-pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);\n    }",
+            "item_view_blank_moved(slot, x, y) => {\n        PaneRouting.item-view-blank-moved(slot, x, y)\n    }",
+            "item_view_blank_released(slot, x, y) => {\n        PaneRouting.item-view-blank-released(slot, x, y);\n    }",
+            "item_view_blank_cancelled(slot) => {\n        PaneRouting.item-view-blank-cancelled(slot);\n    }",
             "request_context_menu(slot, path, name, size, modified, is-dir, x, y) => {\n        PaneRouting.request-context-menu(slot, path, name, size, modified, is-dir, x, y);\n    }",
             "request_blank_context_menu(slot, x, y) => {\n        PaneRouting.request-blank-context-menu(slot, x, y);\n    }",
             "zoom_in(slot) => { PaneRouting.zoom-in(slot); }",
@@ -2270,9 +2282,21 @@ mod tests {
                     "public function route-pane-request-select(slot: int, path: string, toggle: bool, range: bool)"
                 )
                 && route_functions.contains("root.pane_request_select(slot, path, toggle, range);")
-                && route_functions.contains("public function route-pane-select-rect(slot: int,")
-                && route_functions.contains("root.pane_select_rect(slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);"),
-            "shared pane route functions should dispatch activation, selection, and view state by slot"
+                && route_functions.contains(
+                    "public function route-pane-item-view-blank-pressed(slot: int,"
+                )
+                && route_functions.contains(
+                    "root.pane_item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);"
+                )
+                && route_functions.contains(
+                    "public function route-pane-item-view-blank-moved(slot: int, x: float, y: float) -> bool"
+                )
+                && route_functions.contains(
+                    "return root.pane_item_view_blank_moved(slot, x, y);"
+                )
+                && !route_functions.contains("route-pane-select-rect")
+                && !route_functions.contains("root.pane_select_rect"),
+            "shared pane route functions should dispatch activation, item-view input, selection, and view state by slot"
         );
         assert!(
             route_functions.contains("public function route-pane-request-context-menu(slot: int,")

@@ -51,7 +51,7 @@ use app::geometry::{
     MainGridLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
     place_drop_geometry, register_menu_geometry_callbacks, virtual_grid_plan,
 };
-use app::item_view::SelectionRect;
+use app::item_view::{ItemViewInputMetrics, ItemViewReleaseAction, SelectionRect};
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
@@ -877,37 +877,54 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_pane_select_rect(
-            move |slot,
-                  x1,
-                  y1,
-                  x2,
-                  y2,
-                  rows_per_column,
-                  cell_width,
-                  row_height,
-                  padding,
-                  toggle| {
-                if let Some(ui) = ui_weak.upgrade() {
-                    select_rect_for_slot(
-                        &ui,
+        ui.on_pane_item_view_blank_pressed(
+            move |slot, x, y, rows_per_column, cell_width, row_height, padding, toggle| {
+                if let Some(_ui) = ui_weak.upgrade() {
+                    press_item_view_blank_for_slot(
                         &state,
                         slot,
-                        SelectionRect {
-                            x1,
-                            y1,
-                            x2,
-                            y2,
-                            rows_per_column,
-                            cell_width,
-                            row_height,
-                            padding,
-                        },
+                        x,
+                        y,
+                        ItemViewInputMetrics::new(rows_per_column, cell_width, row_height, padding),
                         toggle,
                     );
                 }
             },
         );
+    }
+
+    {
+        let state = Rc::clone(&state);
+        ui.on_pane_item_view_blank_moved(move |slot, x, y| {
+            move_item_view_blank_for_slot(&state, slot, x, y)
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_pane_item_view_blank_released(move |slot, x, y| {
+            if let Some(ui) = ui_weak.upgrade() {
+                release_item_view_blank_for_slot(&ui, &state, slot, x, y);
+            }
+        });
+    }
+
+    {
+        let state = Rc::clone(&state);
+        ui.on_pane_item_view_blank_cancelled(move |slot| {
+            cancel_item_view_blank_for_slot(&state, slot);
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_pane_clear_selection(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                clear_selection_for_slot(&ui, &state, slot);
+            }
+        });
     }
 
     {
@@ -1451,24 +1468,13 @@ fn register_pane_routing_callbacks(
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_select_rect(
-            move |slot,
-                  x1,
-                  y1,
-                  x2,
-                  y2,
-                  rows_per_column,
-                  cell_width,
-                  row_height,
-                  padding,
-                  toggle| {
+        routing.on_item_view_blank_pressed(
+            move |slot, x, y, rows_per_column, cell_width, row_height, padding, toggle| {
                 if let Some(ui) = ui_weak.upgrade() {
-                    ui.invoke_route_pane_select_rect(
+                    ui.invoke_route_pane_item_view_blank_pressed(
                         slot,
-                        x1,
-                        y1,
-                        x2,
-                        y2,
+                        x,
+                        y,
                         rows_per_column,
                         cell_width,
                         row_height,
@@ -1482,9 +1488,27 @@ fn register_pane_routing_callbacks(
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_clear_selection(move |slot| {
+        routing.on_item_view_blank_moved(move |slot, x, y| {
+            ui_weak
+                .upgrade()
+                .is_some_and(|ui| ui.invoke_route_pane_item_view_blank_moved(slot, x, y))
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_item_view_blank_released(move |slot, x, y| {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_clear_selection(slot);
+                ui.invoke_route_pane_item_view_blank_released(slot, x, y);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_item_view_blank_cancelled(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_item_view_blank_cancelled(slot);
             }
         });
     }
@@ -3771,14 +3795,73 @@ fn select_rect_for_slot(
     update_selection_ui_for_slot(ui, state, slot, &selected_paths);
 }
 
-fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let slot = { state.borrow().panes.focused_slot() };
+fn press_item_view_blank_for_slot(
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    x: f32,
+    y: f32,
+    metrics: ItemViewInputMetrics,
+    toggle: bool,
+) {
+    let mut state = state.borrow_mut();
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return;
+    };
+    pane.view.input.press_blank(x, y, metrics, toggle);
+}
+
+fn move_item_view_blank_for_slot(state: &Rc<RefCell<AppState>>, slot: i32, x: f32, y: f32) -> bool {
+    let mut state = state.borrow_mut();
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return false;
+    };
+    pane.view.input.move_blank(x, y)
+}
+
+fn release_item_view_blank_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    x: f32,
+    y: f32,
+) {
+    let action = {
+        let mut state = state.borrow_mut();
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
+        pane.view.input.release_blank(x, y)
+    };
+
+    match action {
+        ItemViewReleaseAction::None => {}
+        ItemViewReleaseAction::ClearSelection => clear_selection_for_slot(ui, state, slot),
+        ItemViewReleaseAction::SelectRect { rect, toggle } => {
+            select_rect_for_slot(ui, state, slot, rect, toggle);
+        }
+    }
+}
+
+fn cancel_item_view_blank_for_slot(state: &Rc<RefCell<AppState>>, slot: i32) {
+    let mut state = state.borrow_mut();
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return;
+    };
+    pane.view.input.cancel_blank();
+}
+
+fn clear_selection_for_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
     let mut state_mut = state.borrow_mut();
     if let Some(pane) = state_mut.panes.pane_mut_for_slot(slot) {
         pane.selection.clear();
     }
     drop(state_mut);
     update_selection_ui_for_slot(ui, state, slot, &[]);
+}
+
+fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let slot = { state.borrow().panes.focused_slot() };
+    clear_selection_for_slot(ui, state, slot);
 }
 
 fn clear_active_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {

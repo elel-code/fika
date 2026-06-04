@@ -10,6 +10,7 @@ use std::ops::Range;
 
 const ITEM_VIEW_PADDING: f32 = 14.0;
 const TILE_TRAILING_GAP: f32 = 12.0;
+const SELECTION_DRAG_THRESHOLD: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewLayout {
@@ -49,9 +50,7 @@ impl SelectionRect {
         let first_column = ((self.x1 - self.padding - tile_width) / cell_width)
             .floor()
             .max(0.0) as usize;
-        let last_column = ((self.x2 - self.padding) / cell_width)
-            .floor()
-            .max(0.0) as usize;
+        let last_column = ((self.x2 - self.padding) / cell_width).floor().max(0.0) as usize;
 
         let start = first_column
             .saturating_mul(rows_per_column)
@@ -72,6 +71,134 @@ impl SelectionRect {
         RectBounds::new(self.x1, self.y1, self.x2, self.y2)
             .intersects(RectBounds::new(tile_x1, tile_y1, tile_x2, tile_y2))
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewInputMetrics {
+    pub(crate) rows_per_column: i32,
+    pub(crate) cell_width: f32,
+    pub(crate) row_height: f32,
+    pub(crate) padding: f32,
+}
+
+impl ItemViewInputMetrics {
+    pub(crate) fn new(
+        rows_per_column: i32,
+        cell_width: f32,
+        row_height: f32,
+        padding: f32,
+    ) -> Self {
+        Self {
+            rows_per_column: rows_per_column.max(1),
+            cell_width: cell_width.max(1.0),
+            row_height: row_height.max(1.0),
+            padding: padding.max(0.0),
+        }
+    }
+
+    fn selection_rect(self, gesture: SelectionRectGesture) -> SelectionRect {
+        let (x1, x2) = ordered_pair(gesture.start_x, gesture.current_x);
+        let (y1, y2) = ordered_pair(gesture.start_y, gesture.current_y);
+        SelectionRect {
+            x1,
+            y1,
+            x2,
+            y2,
+            rows_per_column: self.rows_per_column,
+            cell_width: self.cell_width,
+            row_height: self.row_height,
+            padding: self.padding,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ItemViewInputState {
+    selection_rect: Option<SelectionRectGesture>,
+}
+
+impl ItemViewInputState {
+    pub(crate) fn press_blank(
+        &mut self,
+        x: f32,
+        y: f32,
+        metrics: ItemViewInputMetrics,
+        toggle: bool,
+    ) {
+        self.selection_rect = Some(SelectionRectGesture {
+            start_x: x,
+            start_y: y,
+            current_x: x,
+            current_y: y,
+            metrics,
+            toggle,
+            active: false,
+        });
+    }
+
+    pub(crate) fn move_blank(&mut self, x: f32, y: f32) -> bool {
+        let Some(mut gesture) = self.selection_rect else {
+            return false;
+        };
+        gesture.current_x = x;
+        gesture.current_y = y;
+        gesture.active |= selection_drag_threshold_crossed(gesture.start_x, gesture.start_y, x, y);
+        self.selection_rect = Some(gesture);
+        gesture.active
+    }
+
+    pub(crate) fn release_blank(&mut self, x: f32, y: f32) -> ItemViewReleaseAction {
+        let Some(mut gesture) = self.selection_rect.take() else {
+            return ItemViewReleaseAction::None;
+        };
+        gesture.current_x = x;
+        gesture.current_y = y;
+        gesture.active |= selection_drag_threshold_crossed(gesture.start_x, gesture.start_y, x, y);
+        if gesture.active {
+            ItemViewReleaseAction::SelectRect {
+                rect: gesture.metrics.selection_rect(gesture),
+                toggle: gesture.toggle,
+            }
+        } else {
+            ItemViewReleaseAction::ClearSelection
+        }
+    }
+
+    pub(crate) fn cancel_blank(&mut self) {
+        self.selection_rect = None;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SelectionRectGesture {
+    start_x: f32,
+    start_y: f32,
+    current_x: f32,
+    current_y: f32,
+    metrics: ItemViewInputMetrics,
+    toggle: bool,
+    active: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ItemViewReleaseAction {
+    None,
+    ClearSelection,
+    SelectRect { rect: SelectionRect, toggle: bool },
+}
+
+fn selection_drag_threshold_crossed(
+    start_x: f32,
+    start_y: f32,
+    current_x: f32,
+    current_y: f32,
+) -> bool {
+    (current_x - start_x).abs() > SELECTION_DRAG_THRESHOLD
+        || (current_y - start_y).abs() > SELECTION_DRAG_THRESHOLD
+}
+
+fn ordered_pair(a: f32, b: f32) -> (f32, f32) {
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -303,5 +430,69 @@ mod tests {
         assert!(rect.intersects_index(5));
         assert!(!rect.intersects_index(2));
         assert!(!rect.intersects_index(6));
+    }
+
+    #[test]
+    fn item_view_input_turns_blank_click_into_clear_selection() {
+        let mut input = ItemViewInputState::default();
+        input.press_blank(
+            10.0,
+            20.0,
+            ItemViewInputMetrics::new(3, 100.0, 50.0, 14.0),
+            false,
+        );
+
+        assert!(!input.move_blank(14.0, 24.0));
+        assert_eq!(
+            input.release_blank(14.0, 24.0),
+            ItemViewReleaseAction::ClearSelection
+        );
+    }
+
+    #[test]
+    fn item_view_input_turns_blank_drag_into_selection_rect() {
+        let mut input = ItemViewInputState::default();
+        input.press_blank(
+            120.0,
+            80.0,
+            ItemViewInputMetrics::new(3, 100.0, 50.0, 14.0),
+            true,
+        );
+
+        assert!(input.move_blank(40.0, 140.0));
+        assert_eq!(
+            input.release_blank(40.0, 140.0),
+            ItemViewReleaseAction::SelectRect {
+                rect: SelectionRect {
+                    x1: 40.0,
+                    y1: 80.0,
+                    x2: 120.0,
+                    y2: 140.0,
+                    rows_per_column: 3,
+                    cell_width: 100.0,
+                    row_height: 50.0,
+                    padding: 14.0,
+                },
+                toggle: true,
+            }
+        );
+    }
+
+    #[test]
+    fn item_view_input_cancel_drops_pending_blank_selection() {
+        let mut input = ItemViewInputState::default();
+        input.press_blank(
+            10.0,
+            20.0,
+            ItemViewInputMetrics::new(3, 100.0, 50.0, 14.0),
+            false,
+        );
+
+        input.cancel_blank();
+
+        assert_eq!(
+            input.release_blank(100.0, 120.0),
+            ItemViewReleaseAction::None
+        );
     }
 }

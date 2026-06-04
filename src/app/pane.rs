@@ -1,4 +1,5 @@
 use crate::FileEntry;
+use crate::app::item_view::ItemViewInputState;
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{search, thumbnails};
@@ -422,6 +423,7 @@ impl PaneSearch {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PaneView {
     pub(crate) viewport_x: f32,
+    pub(crate) input: ItemViewInputState,
     pub(crate) virtual_view: VirtualViewCache,
     pub(crate) virtual_generation: GenerationCounter,
     pub(crate) virtual_entries: ModelRc<FileEntry>,

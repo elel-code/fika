@@ -286,8 +286,9 @@ Slint: Rectangle viewport + input/DnD overlays
 **当前进度**：
 1. 主文件区已直接替换为 `Rectangle { clip: true; } + TouchArea + self-managed scrollbar`，删除 `ScrollView` / `Flickable` viewport 写回。
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD 与 selection 不再私有持有主视图几何。
-3. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，下一步需要把 renderer/reuse 从 Slint tile 组件树中拆出来。
-4. DnD 仍保留 Slint 原生 `data-transfer` 路径，目标解析继续向 Rust hit-test 收敛。
+3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
+4. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，下一步需要把 renderer/reuse 从 Slint tile 组件树中拆出来。
+5. DnD 仍保留 Slint 原生 `data-transfer` 路径，目标解析继续向 Rust hit-test 收敛。
 
 ---
 
@@ -752,6 +753,8 @@ TouchArea {
 ```
 
 当前 `TouchArea` 只覆盖可见 viewport，不随目录内容宽度增长。大目录的主要 UI 成本仍是可见 `FileTile` 组件树和后续 renderer/reuse 策略。
+
+空白区输入现在通过 pane-local item-view controller 决策。`SplitPaneView` 报告 press/move/release/cancel，Rust 按同一套 item-view geometry 决定清空选择或提交 rectangle selection；这一步减少了 Slint 内部选择逻辑分支，但还没有移除 `FileTile` Repeater 的渲染成本。
 
 ### pan-horizontal 中的 viewport-x 比较
 

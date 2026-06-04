@@ -23,8 +23,10 @@ export global PaneRouting {
     callback view-changed(int);
     callback activated(int, string);
     callback request-select(int, string, bool, bool);
-    callback select-rect(int, float, float, float, float, int, float, float, float, bool);
-    callback clear-selection(int);
+    callback item-view-blank-pressed(int, float, float, int, float, float, float, bool);
+    callback item-view-blank-moved(int, float, float) -> bool;
+    callback item-view-blank-released(int, float, float);
+    callback item-view-blank-cancelled(int);
     callback request-context-menu(int, string, string, string, string, bool, length, length);
     callback request-blank-context-menu(int, length, length);
     callback zoom-in(int);
@@ -132,8 +134,10 @@ component FilePane inherits Rectangle {
     callback view_changed(int);
     callback activated(int, string);
     callback request_select(int, string, bool, bool);
-    callback select_rect(int, float, float, float, float, int, float, float, float, bool);
-    callback clear_selection(int);
+    callback item_view_blank_pressed(int, float, float, int, float, float, float, bool);
+    callback item_view_blank_moved(int, float, float) -> bool;
+    callback item_view_blank_released(int, float, float);
+    callback item_view_blank_cancelled(int);
     callback request_context_menu(int, string, string, string, string, bool, length, length);
     callback request_blank_context_menu(int, length, length);
     callback zoom_in(int);
@@ -293,10 +297,18 @@ component FilePane inherits Rectangle {
                 request_select(path, toggle, range) => {
                     root.request_select(root.pane-slot, path, toggle, range);
                 }
-                select_rect(x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
-                    root.select_rect(root.pane-slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+                blank_pressed(x, y, rows-per-column, cell-width, row-height, padding, toggle) => {
+                    root.item_view_blank_pressed(root.pane-slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);
                 }
-                clear_selection => { root.clear_selection(root.pane-slot); }
+                blank_moved(x, y) => {
+                    root.item_view_blank_moved(root.pane-slot, x, y)
+                }
+                blank_released(x, y) => {
+                    root.item_view_blank_released(root.pane-slot, x, y);
+                }
+                blank_cancelled => {
+                    root.item_view_blank_cancelled(root.pane-slot);
+                }
                 request_context_menu(path, name, size, modified, is-dir, x, y) => {
                     root.request_context_menu(root.pane-slot, path, name, size, modified, is-dir, x, y);
                 }
@@ -357,10 +369,18 @@ component PaneSlot inherits FilePane {
     request_select(slot, path, toggle, range) => {
         PaneRouting.request-select(slot, path, toggle, range);
     }
-    select_rect(slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle) => {
-        PaneRouting.select-rect(slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+    item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle) => {
+        PaneRouting.item-view-blank-pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);
     }
-    clear_selection(slot) => { PaneRouting.clear-selection(slot); }
+    item_view_blank_moved(slot, x, y) => {
+        PaneRouting.item-view-blank-moved(slot, x, y)
+    }
+    item_view_blank_released(slot, x, y) => {
+        PaneRouting.item-view-blank-released(slot, x, y);
+    }
+    item_view_blank_cancelled(slot) => {
+        PaneRouting.item-view-blank-cancelled(slot);
+    }
     request_context_menu(slot, path, name, size, modified, is-dir, x, y) => {
         PaneRouting.request-context-menu(slot, path, name, size, modified, is-dir, x, y);
     }
@@ -759,7 +779,11 @@ export component AppWindow inherits Window {
     callback toggle_split_view();
     callback pane_activated(int, string);
     callback pane_request_select(int, string, bool, bool);
-    callback pane_select_rect(int, float, float, float, float, int, float, float, float, bool);
+    callback pane_item_view_blank_pressed(int, float, float, int, float, float, float, bool);
+    callback pane_item_view_blank_moved(int, float, float) -> bool;
+    callback pane_item_view_blank_released(int, float, float);
+    callback pane_item_view_blank_cancelled(int);
+    callback pane_clear_selection(int);
     callback select_all_visible();
     callback clear_selection();
     callback add_place(string);
@@ -975,13 +999,26 @@ export component AppWindow inherits Window {
         root.pane_request_select(slot, path, toggle, range);
     }
 
-    public function route-pane-select-rect(slot: int, x1: float, y1: float, x2: float, y2: float, rows-per-column: int, cell-width: float, row-height: float, padding: float, toggle: bool) {
-        root.pane_select_rect(slot, x1, y1, x2, y2, rows-per-column, cell-width, row-height, padding, toggle);
+    public function route-pane-item-view-blank-pressed(slot: int, x: float, y: float, rows-per-column: int, cell-width: float, row-height: float, padding: float, toggle: bool) {
+        root.route-pane-focus(slot);
+        root.pane_item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);
+    }
+
+    public function route-pane-item-view-blank-moved(slot: int, x: float, y: float) -> bool {
+        return root.pane_item_view_blank_moved(slot, x, y);
+    }
+
+    public function route-pane-item-view-blank-released(slot: int, x: float, y: float) {
+        root.pane_item_view_blank_released(slot, x, y);
+    }
+
+    public function route-pane-item-view-blank-cancelled(slot: int) {
+        root.pane_item_view_blank_cancelled(slot);
     }
 
     public function route-pane-clear-selection(slot: int) {
         root.route-pane-focus(slot);
-        root.clear_selection();
+        root.pane_clear_selection(slot);
     }
 
     public function route-pane-request-context-menu(slot: int, path: string, name: string, size: string, modified: string, is-dir: bool, x: length, y: length) {

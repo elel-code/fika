@@ -22,8 +22,10 @@ export component SplitPaneView inherits Rectangle {
     callback focus_requested();
     callback activated(string);
     callback request_select(string, bool, bool);
-    callback select_rect(float, float, float, float, int, float, float, float, bool);
-    callback clear_selection();
+    callback blank_pressed(float, float, int, float, float, float, bool);
+    callback blank_moved(float, float) -> bool;
+    callback blank_released(float, float);
+    callback blank_cancelled();
     callback request_context_menu(string, string, string, string, bool, length, length);
     callback request_blank_context_menu(length, length);
     callback navigate_back();
@@ -148,7 +150,15 @@ export component SplitPaneView inherits Rectangle {
                     root.navigate_forward();
                 } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                     root.focus_requested();
-                    root.clear_selection();
+                    root.selection-rect-start-x = self.mouse-x;
+                    root.selection-rect-start-y = self.mouse-y;
+                    root.selection-rect-current-x = self.mouse-x;
+                    root.selection-rect-current-y = self.mouse-y;
+                    root.blank_pressed(self.mouse-x / 1px, self.mouse-y / 1px, 1, 1, 1, 0, false);
+                } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                    root.blank_released(self.mouse-x / 1px, self.mouse-y / 1px);
+                } else if (root.interactive && event.kind == PointerEventKind.cancel) {
+                    root.blank_cancelled();
                 } else if (root.interactive && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                     root.focus_requested();
                     root.request_blank_context_menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
@@ -200,21 +210,26 @@ export component SplitPaneView inherits Rectangle {
                     root.selection-rect-start-y = self.mouse-y;
                     root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
                     root.selection-rect-current-y = self.mouse-y;
+                    root.blank_pressed(
+                        root.selection-rect-start-x / 1px,
+                        root.selection-rect-start-y / 1px,
+                        root.rows-per-column,
+                        root.cell-width / 1px,
+                        root.row-height / 1px,
+                        root.preview-padding / 1px,
+                        root.selection-rect-toggle
+                    );
                 } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
-                    if (root.selection-rect-active) {
-                        root.select_rect(
-                            min(root.selection-rect-start-x, root.selection-rect-current-x) / 1px,
-                            min(root.selection-rect-start-y, root.selection-rect-current-y) / 1px,
-                            max(root.selection-rect-start-x, root.selection-rect-current-x) / 1px,
-                            max(root.selection-rect-start-y, root.selection-rect-current-y) / 1px,
-                            root.rows-per-column,
-                            root.cell-width / 1px,
-                            root.row-height / 1px,
-                            root.preview-padding / 1px,
-                            root.selection-rect-toggle
-                        );
-                    } else if (root.selection-rect-pending) {
-                        root.clear_selection();
+                    if (root.selection-rect-pending) {
+                        root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
+                        root.selection-rect-current-y = self.mouse-y;
+                        root.blank_released(root.selection-rect-current-x / 1px, root.selection-rect-current-y / 1px);
+                    }
+                    root.selection-rect-active = false;
+                    root.selection-rect-pending = false;
+                } else if (root.interactive && event.kind == PointerEventKind.cancel) {
+                    if (root.selection-rect-pending) {
+                        root.blank_cancelled();
                     }
                     root.selection-rect-active = false;
                     root.selection-rect-pending = false;
@@ -227,9 +242,7 @@ export component SplitPaneView inherits Rectangle {
                 if (root.interactive && self.pressed && root.selection-rect-pending) {
                     root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
                     root.selection-rect-current-y = self.mouse-y;
-                    if (!root.selection-rect-active && (root.selection-rect-current-x > root.selection-rect-start-x + 5px || root.selection-rect-current-x + 5px < root.selection-rect-start-x || self.mouse-y > root.selection-rect-start-y + 5px || self.mouse-y + 5px < root.selection-rect-start-y)) {
-                        root.selection-rect-active = true;
-                    }
+                    root.selection-rect-active = root.blank_moved(root.selection-rect-current-x / 1px, root.selection-rect-current-y / 1px);
                 }
             }
             scroll-event(event) => {

@@ -443,7 +443,8 @@ Acceptance for all:
   - Acceptance: `/etc`, `/usr/lib`, split view dual-pane scrolling, end-of-directory fullscreen/resize, rectangle selection, context menus, and drag/drop are tested against the current self-managed viewport + `FileTile` visible-slice path.
   - Reference: Dolphin's `kfileitemmodel`, `kitemlistviewlayouter`, `kitemlistview`, `kitemlistcontroller`, and `kstandarditemlistwidget` split. The goal is Dolphin-like model/layouter/controller/rendering ownership, not a lower-level replacement for `Flickable` alone.
   - Current: the main file area now uses `Rectangle + TouchArea + self-managed scrollbar` directly, and transfer/DnD target hit-test plus rectangle-selection item geometry have moved into `src/app/item_view.rs`.
-  - Next: remove the remaining `FileTile` Repeater as the core rendering path by adding a Dolphin-style item view controller/renderer layer, then decide whether to use reusable primitives or `SharedPixelBuffer`/`Image` self-rendered tile frames.
+  - Current: each pane owns a pane-local `ItemViewInputState`; Slint now reports blank-area press/move/release/cancel events while Rust decides whether the gesture clears selection or commits a rectangle selection.
+  - Next: remove the remaining `FileTile` Repeater as the core rendering path by adding the renderer/reuse side of the Dolphin-style item view layer, then decide whether to use reusable primitives or `SharedPixelBuffer`/`Image` self-rendered tile frames.
 
 - [x] Apply Dolphin DnD target validation.
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.
