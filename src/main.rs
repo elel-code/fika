@@ -54,8 +54,9 @@ use app::geometry::{
 };
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
-    FileUndoStartDecision, OperationResultDisposition, affected_directory_pane_ids,
-    cleanup_file_undo_backup, operation_final_status, operation_finished_label,
+    FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
+    OperationResultDisposition, affected_directory_pane_ids, cleanup_file_undo_backup,
+    operation_final_status,
 };
 use app::pane::{DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries};
 #[cfg(test)]
@@ -2860,7 +2861,7 @@ fn apply_file_operation_result(
             overwritten_backup,
             status,
         } => {
-            register_file_undo(
+            register_transfer_undo(
                 ui,
                 state,
                 &operation,
@@ -2893,7 +2894,7 @@ fn apply_file_operation_result(
     start_next_operation(ui, state, bridge);
 }
 
-fn register_file_undo(
+fn register_transfer_undo(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     operation: &str,
@@ -2901,41 +2902,36 @@ fn register_file_undo(
     destination: &Path,
     overwritten_backup: Option<PathBuf>,
 ) {
-    if !matches!(operation, "move" | "copy" | "link") {
-        return;
-    }
-
-    register_undo(
-        ui,
-        state,
-        FileUndo {
-            operation: operation.to_string(),
-            original_source: original_source.to_path_buf(),
-            destination: destination.to_path_buf(),
+    let summary = {
+        let mut state = state.borrow_mut();
+        state.register_transfer_file_undo(
+            operation,
+            original_source,
+            destination,
             overwritten_backup,
-            items: Vec::new(),
-        },
-    );
+        )
+    };
+    if let Some(summary) = summary {
+        apply_undo_registration(ui, summary);
+    }
 }
 
 fn register_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, undo: FileUndo) {
-    let cleanup_backup = {
+    let summary = {
         let mut state = state.borrow_mut();
-        state.replace_file_undo(Some(undo))
+        state.register_file_undo(undo)
     };
-    cleanup_file_undo_backup(cleanup_backup);
-    sync_undo_ui(ui, state);
+    apply_undo_registration(ui, summary);
 }
 
-fn sync_undo_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let state = state.borrow();
-    ui.set_undo_available(state.last_undo.is_some());
-    let label = state
-        .last_undo
-        .as_ref()
-        .map(|undo| format!("Undo {}", operation_finished_label(&undo.operation)))
-        .unwrap_or_default();
-    ui.set_undo_label(label.into());
+fn apply_undo_registration(ui: &AppWindow, summary: FileUndoRegistrationSummary) {
+    cleanup_file_undo_backup(summary.cleanup_backup);
+    apply_undo_ui(ui, &summary.undo_ui);
+}
+
+fn apply_undo_ui(ui: &AppWindow, undo_ui: &FileUndoUiState) {
+    ui.set_undo_available(undo_ui.available);
+    ui.set_undo_label(undo_ui.label.clone().into());
 }
 
 fn start_file_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
@@ -2943,15 +2939,16 @@ fn start_file_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Async
         let mut state = state.borrow_mut();
         state.take_file_undo_start()
     };
-    sync_undo_ui(ui, state);
     let summary = match decision {
         FileUndoStartDecision::Started(summary) => summary,
-        FileUndoStartDecision::Empty { status } => {
+        FileUndoStartDecision::Empty { status, undo_ui } => {
+            apply_undo_ui(ui, &undo_ui);
             set_status(ui, state, &status);
             return;
         }
     };
 
+    apply_undo_ui(ui, &summary.undo_ui);
     set_status_for_panes(ui, state, &summary.pane_ids, &summary.status);
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -3007,8 +3004,8 @@ fn apply_file_undo_result(
         state.complete_file_undo(result.undo, result.result)
     };
     cleanup_file_undo_backup(summary.cleanup_backup);
-    if summary.undo_available_changed {
-        sync_undo_ui(ui, state);
+    if let Some(undo_ui) = &summary.undo_ui {
+        apply_undo_ui(ui, undo_ui);
     }
     let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);
     set_status_for_panes(ui, state, &pane_ids, &summary.status);
@@ -5668,7 +5665,7 @@ mod tests {
         let source = include_str!("main.rs");
         let body = source
             .split_once("fn apply_file_operation_result(")
-            .and_then(|(_, rest)| rest.split_once("fn register_file_undo("))
+            .and_then(|(_, rest)| rest.split_once("fn register_transfer_undo("))
             .map(|(body, _)| body)
             .expect("apply_file_operation_result body should be present");
 
@@ -5677,6 +5674,12 @@ mod tests {
                 "set_status_for_panes(ui, state, &summary.refresh_pane_ids, &status_message);"
             ),
             "file operation completion status should write to the panes affected by the operation"
+        );
+        assert!(
+            body.contains("register_transfer_undo(")
+                && !body.contains("FileUndo {")
+                && !body.contains("matches!(operation, \"move\" | \"copy\" | \"link\")"),
+            "file operation completion should delegate transfer Undo registration decisions to the controller"
         );
         assert!(
             !body.contains("set_status(ui, state, &status_message);"),
@@ -5731,9 +5734,10 @@ mod tests {
 
         assert!(
             start_body.contains("state.take_file_undo_start()")
-                && start_body.contains("sync_undo_ui(ui, state);")
+                && start_body.contains("apply_undo_ui(ui, &summary.undo_ui);")
                 && start_body.contains("FileUndoStartDecision::Started(summary) => summary")
-                && start_body.contains("FileUndoStartDecision::Empty { status }")
+                && start_body.contains("FileUndoStartDecision::Empty { status, undo_ui }")
+                && start_body.contains("apply_undo_ui(ui, &undo_ui);")
                 && start_body.contains(
                     "set_status_for_panes(ui, state, &summary.pane_ids, &summary.status);"
                 ),
@@ -5742,8 +5746,8 @@ mod tests {
         assert!(
             result_body.contains("state.complete_file_undo(result.undo, result.result)")
                 && result_body.contains("cleanup_file_undo_backup(summary.cleanup_backup);")
-                && result_body.contains("if summary.undo_available_changed {")
-                && result_body.contains("sync_undo_ui(ui, state);")
+                && result_body.contains("if let Some(undo_ui) = &summary.undo_ui {")
+                && result_body.contains("apply_undo_ui(ui, undo_ui);")
                 && result_body.contains(
                     "let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);"
                 )
@@ -5771,6 +5775,13 @@ mod tests {
                 && !result_body.contains("format!(\"Undo complete:")
                 && !result_body.contains("format!(\"Undo failed:"),
             "file undo completion should not re-derive controller-owned state or status copy in main.rs"
+        );
+        assert!(
+            !production_source.contains("fn sync_undo_ui(")
+                && !production_source.contains("state.last_undo.is_some()")
+                && !production_source.contains("operation_finished_label(&undo.operation)")
+                && !production_source.contains("state.replace_file_undo("),
+            "main.rs should apply controller-provided Undo UI state instead of reading last_undo directly"
         );
         assert!(
             !start_body.contains("set_status(\n        ui,\n        &format!(\"Undoing {}...\"")
