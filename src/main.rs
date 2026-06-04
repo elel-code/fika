@@ -39,9 +39,9 @@ use app::dnd::{
 };
 use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
-    ExternalEditResult, FileOpenResult, FileOpenSuccess, FileOperationProgress,
-    FileOperationResult, FileUndoResult, RecursiveSearchProgress, RecursiveSearchResult,
-    VirtualViewResult,
+    EXTERNAL_EDIT_DISCARD_OPERATION, EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult,
+    FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult, FileUndoResult,
+    RecursiveSearchProgress, RecursiveSearchResult, VirtualViewResult,
 };
 use app::file_clipboard::{
     apply_clipboard_load_result, apply_clipboard_paste_load_result,
@@ -105,8 +105,6 @@ use fs::{file_actions, privilege, search, thumbnails};
 
 slint::include_modules!();
 
-const EXTERNAL_EDIT_SAVE_OPERATION: &str = "Admin Save";
-const EXTERNAL_EDIT_DISCARD_OPERATION: &str = "Discard";
 const PANE_VIEW_SYNC_COALESCE: Duration = Duration::from_millis(8);
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
 
@@ -3210,49 +3208,18 @@ fn apply_external_edit_result(
     bridge: &AsyncBridge,
     result: ExternalEditResult,
 ) {
-    if result.result.is_ok() {
+    let summary = {
         let mut state = state.borrow_mut();
-        state
-            .external_edits
-            .retain(|edit| edit.session.token != result.session.token);
-    }
-    sync_external_edit_ui(ui, state);
+        state.complete_external_edit(result)
+    };
 
-    match result.result {
-        Ok(path) => {
-            if result.operation == EXTERNAL_EDIT_SAVE_OPERATION {
-                let affected_dirs = path
-                    .parent()
-                    .map(|parent| vec![parent.to_path_buf()])
-                    .unwrap_or_default();
-                let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);
-                let status_pane_ids = if pane_ids.is_empty() {
-                    vec![result.pane_id]
-                } else {
-                    pane_ids
-                };
-                set_status_for_panes(
-                    ui,
-                    state,
-                    &status_pane_ids,
-                    &format!("Admin write-back saved: {}", path.display()),
-                );
-            } else {
-                set_status_for_panes(
-                    ui,
-                    state,
-                    &[result.pane_id],
-                    &format!("Admin write-back discarded: {}", path.display()),
-                );
-            }
-        }
-        Err(err) => set_status_for_panes(
-            ui,
-            state,
-            &[result.pane_id],
-            &format!("{} failed: {err}", result.operation),
-        ),
+    if summary.pending_changed {
+        sync_external_edit_ui(ui, state);
     }
+    let refreshed_pane_ids =
+        refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);
+    let status_pane_ids = summary.status_pane_ids(&refreshed_pane_ids);
+    set_status_for_panes(ui, state, &status_pane_ids, &summary.status);
 }
 
 fn sync_external_edit_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -5921,18 +5888,31 @@ mod tests {
             .expect("apply_external_edit_result body should be present");
 
         assert!(
-            body.contains("let affected_dirs = path")
-                && body.contains("let pane_ids = refresh_affected_directories(ui, state, bridge, &affected_dirs);")
-                && body.contains("let status_pane_ids = if pane_ids.is_empty()")
-                && body.contains("vec![result.pane_id]")
-                && body.contains("set_status_for_panes(\n                    ui,\n                    state,\n                    &status_pane_ids,"),
-            "admin write-back save status should write to the pane whose directory was refreshed"
+            body.contains("state.complete_external_edit(result)")
+                && body.contains(
+                    "if summary.pending_changed {\n        sync_external_edit_ui(ui, state);\n    }"
+                )
+                && body.contains(
+                    "refresh_affected_directories(ui, state, bridge, &summary.affected_dirs)"
+                )
+                && body.contains(
+                    "let status_pane_ids = summary.status_pane_ids(&refreshed_pane_ids);"
+                )
+                && body.contains(
+                    "set_status_for_panes(ui, state, &status_pane_ids, &summary.status);"
+                )
+                && body.matches("set_status_for_panes(").count() == 1,
+            "admin write-back result status should consume the controller summary after releasing AppState borrow"
         );
         assert!(
             !body.contains(
                 "set_status(ui, state, &format!(\"Admin write-back saved: {}\", path.display()))"
-            ),
-            "admin write-back save status must not jump to whichever pane is focused when the helper returns"
+            ) && !body.contains(".external_edits\n            .retain")
+                && !body.contains("match result.result")
+                && !body.contains("format!(\"Admin write-back saved:")
+                && !body.contains("format!(\"Admin write-back discarded:")
+                && !body.contains("format!(\"{} failed: {err}\", result.operation)"),
+            "admin write-back result status must not jump to focus or rebuild pending cleanup/status copy in main.rs"
         );
     }
 

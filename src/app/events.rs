@@ -6,6 +6,9 @@ use crate::fs::{file_actions, file_ops, privilege, search, thumbnails};
 use std::io;
 use std::path::PathBuf;
 
+pub(crate) const EXTERNAL_EDIT_SAVE_OPERATION: &str = "Admin Save";
+pub(crate) const EXTERNAL_EDIT_DISCARD_OPERATION: &str = "Discard";
+
 #[derive(Debug)]
 pub(crate) struct DirectoryLoadResult {
     pub(crate) pane_id: u64,

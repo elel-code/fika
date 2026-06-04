@@ -1,4 +1,4 @@
-use crate::app::events::FileOperationProgress;
+use crate::app::events::{EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult, FileOperationProgress};
 use crate::app::state::{AppState, FileOperationRequest, FileUndo, TransferConflict};
 use crate::fs::{file_actions, file_ops, privilege};
 use std::collections::VecDeque;
@@ -112,6 +112,36 @@ pub(crate) struct PrivilegeRequestSummary {
 pub(crate) struct PrivilegedOperationCompletionSummary {
     pub(crate) affected_dirs: Vec<PathBuf>,
     pub(crate) status: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ExternalEditStatusTarget {
+    SourcePane,
+    RefreshedPanesOrSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExternalEditCompletionSummary {
+    pub(crate) source_pane_id: u64,
+    pub(crate) affected_dirs: Vec<PathBuf>,
+    pub(crate) status: String,
+    pub(crate) status_target: ExternalEditStatusTarget,
+    pub(crate) pending_changed: bool,
+}
+
+impl ExternalEditCompletionSummary {
+    pub(crate) fn status_pane_ids(&self, refreshed_pane_ids: &[u64]) -> Vec<u64> {
+        match self.status_target {
+            ExternalEditStatusTarget::SourcePane => vec![self.source_pane_id],
+            ExternalEditStatusTarget::RefreshedPanesOrSource => {
+                if refreshed_pane_ids.is_empty() {
+                    vec![self.source_pane_id]
+                } else {
+                    refreshed_pane_ids.to_vec()
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -265,6 +295,32 @@ impl AppState {
         PrivilegedOperationCompletionSummary {
             affected_dirs: result.affected_dirs,
             status,
+        }
+    }
+
+    pub(crate) fn complete_external_edit(
+        &mut self,
+        result: ExternalEditResult,
+    ) -> ExternalEditCompletionSummary {
+        let ExternalEditResult {
+            pane_id,
+            operation,
+            session,
+            result,
+        } = result;
+        let pending_changed = result.is_ok();
+        if pending_changed {
+            self.external_edits
+                .retain(|edit| edit.session.token != session.token);
+        }
+        let (affected_dirs, status, status_target) =
+            external_edit_completion_result(&operation, result);
+        ExternalEditCompletionSummary {
+            source_pane_id: pane_id,
+            affected_dirs,
+            status,
+            status_target,
+            pending_changed,
         }
     }
 
@@ -677,6 +733,31 @@ fn privileged_operation_complete_status(label: &str, result: Result<String, Stri
     }
 }
 
+fn external_edit_completion_result(
+    operation: &str,
+    result: Result<PathBuf, String>,
+) -> (Vec<PathBuf>, String, ExternalEditStatusTarget) {
+    match result {
+        Ok(path) if operation == EXTERNAL_EDIT_SAVE_OPERATION => (
+            path.parent()
+                .map(|parent| vec![parent.to_path_buf()])
+                .unwrap_or_default(),
+            format!("Admin write-back saved: {}", path.display()),
+            ExternalEditStatusTarget::RefreshedPanesOrSource,
+        ),
+        Ok(path) => (
+            Vec::new(),
+            format!("Admin write-back discarded: {}", path.display()),
+            ExternalEditStatusTarget::SourcePane,
+        ),
+        Err(error) => (
+            Vec::new(),
+            format!("{operation} failed: {error}"),
+            ExternalEditStatusTarget::SourcePane,
+        ),
+    }
+}
+
 fn file_undo_affected_dirs(undo: &FileUndo) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     push_unique_parent(&mut dirs, &undo.original_source);
@@ -1076,8 +1157,9 @@ fn operation_item_label(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::events::EXTERNAL_EDIT_DISCARD_OPERATION;
     use crate::app::pane::PreparedDirectoryEntries;
-    use crate::app::state::{AppState, FileUndo, FileUndoItem};
+    use crate::app::state::{AppState, FileUndo, FileUndoItem, PaneExternalEdit};
     use std::collections::VecDeque;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1099,6 +1181,22 @@ mod tests {
             destination: PathBuf::from(destination),
             overwritten_backup: None,
             items: Vec::new(),
+        }
+    }
+
+    fn external_edit_session(original_path: &str, token: &str) -> privilege::ExternalEditSession {
+        privilege::ExternalEditSession {
+            original_path: PathBuf::from(original_path),
+            scratch_path: PathBuf::from(format!("/tmp/{token}")),
+            token: token.to_string(),
+            unit: None,
+        }
+    }
+
+    fn pane_external_edit(pane_id: u64, original_path: &str, token: &str) -> PaneExternalEdit {
+        PaneExternalEdit {
+            pane_id,
+            session: external_edit_session(original_path, token),
         }
     }
 
@@ -1367,6 +1465,72 @@ mod tests {
                 status: "Rename failed: Permission denied".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn complete_external_edit_summarizes_save_discard_and_failure() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.external_edits = vec![
+            pane_external_edit(7, "/etc/one.conf", "one"),
+            pane_external_edit(7, "/etc/two.conf", "two"),
+        ];
+
+        let save_summary = state.complete_external_edit(ExternalEditResult {
+            pane_id: 7,
+            operation: EXTERNAL_EDIT_SAVE_OPERATION.to_string(),
+            session: external_edit_session("/etc/one.conf", "one"),
+            result: Ok(PathBuf::from("/etc/one.conf")),
+        });
+        assert_eq!(
+            save_summary,
+            ExternalEditCompletionSummary {
+                source_pane_id: 7,
+                affected_dirs: vec![PathBuf::from("/etc")],
+                status: "Admin write-back saved: /etc/one.conf".to_string(),
+                status_target: ExternalEditStatusTarget::RefreshedPanesOrSource,
+                pending_changed: true,
+            }
+        );
+        assert_eq!(save_summary.status_pane_ids(&[]), vec![7]);
+        assert_eq!(save_summary.status_pane_ids(&[11, 13]), vec![11, 13]);
+        assert_eq!(state.external_edits.len(), 1);
+        assert_eq!(state.external_edits[0].session.token, "two");
+
+        let discard_summary = state.complete_external_edit(ExternalEditResult {
+            pane_id: 7,
+            operation: EXTERNAL_EDIT_DISCARD_OPERATION.to_string(),
+            session: external_edit_session("/etc/two.conf", "two"),
+            result: Ok(PathBuf::from("/etc/two.conf")),
+        });
+        assert_eq!(
+            discard_summary,
+            ExternalEditCompletionSummary {
+                source_pane_id: 7,
+                affected_dirs: Vec::new(),
+                status: "Admin write-back discarded: /etc/two.conf".to_string(),
+                status_target: ExternalEditStatusTarget::SourcePane,
+                pending_changed: true,
+            }
+        );
+        assert!(state.external_edits.is_empty());
+
+        let failed_summary = state.complete_external_edit(ExternalEditResult {
+            pane_id: 7,
+            operation: EXTERNAL_EDIT_SAVE_OPERATION.to_string(),
+            session: external_edit_session("/etc/missing.conf", "missing"),
+            result: Err("Permission denied".to_string()),
+        });
+        assert_eq!(
+            failed_summary,
+            ExternalEditCompletionSummary {
+                source_pane_id: 7,
+                affected_dirs: Vec::new(),
+                status: "Admin Save failed: Permission denied".to_string(),
+                status_target: ExternalEditStatusTarget::SourcePane,
+                pending_changed: false,
+            }
+        );
+        assert_eq!(failed_summary.status_pane_ids(&[11]), vec![7]);
     }
 
     #[test]
