@@ -292,6 +292,8 @@ pub(crate) struct MenuMetricsInput {
     pub(crate) device_can_unmount: bool,
     pub(crate) device_can_eject: bool,
     pub(crate) service_action_count: i32,
+    pub(crate) service_title_count: i32,
+    pub(crate) service_separator_count: i32,
     pub(crate) item_height: f32,
     pub(crate) separator_height: f32,
     pub(crate) title_height: f32,
@@ -653,6 +655,8 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
                  device_can_unmount,
                  device_can_eject,
                  service_action_count,
+                 service_title_count,
+                 service_separator_count,
                  item_height,
                  separator_height,
                  title_height| {
@@ -671,6 +675,8 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
                         device_can_unmount,
                         device_can_eject,
                         service_action_count,
+                        service_title_count,
+                        service_separator_count,
                         item_height,
                         separator_height,
                         title_height,
@@ -722,12 +728,11 @@ fn file_context_menu_metrics(
     separator: f32,
     title: f32,
 ) -> MenuMetrics {
+    let service_rows = service_rows_height(input, item, separator, title);
     if input.selected_count > 1 {
         let action_rows = if input.in_trash { 4.0 } else { 3.0 };
         return MenuMetrics {
-            height: title
-                + (action_rows + input.service_action_count.max(0) as f32) * item
-                + separator,
+            height: title + action_rows * item + service_rows + separator,
             open_with_row_y_offset: 0.0,
             create_new_row_y_offset: 0.0,
         };
@@ -741,9 +746,8 @@ fn file_context_menu_metrics(
     if input.in_trash {
         item_count += 1;
     }
-    item_count += input.service_action_count.max(0);
     MenuMetrics {
-        height: item_count as f32 * item + 2.0 * separator,
+        height: item_count as f32 * item + service_rows + 2.0 * separator,
         open_with_row_y_offset: if input.is_dir {
             0.0
         } else if input.default_open_visible {
@@ -760,19 +764,26 @@ fn viewport_context_menu_metrics(
     item: f32,
     separator: f32,
 ) -> MenuMetrics {
+    let service_rows = service_rows_height(input, item, separator, input.title_height.max(0.0));
     if input.in_trash {
         return MenuMetrics {
-            height: (2.0 + input.service_action_count.max(0) as f32) * item + separator,
+            height: 2.0 * item + service_rows + separator,
             open_with_row_y_offset: 0.0,
             create_new_row_y_offset: 0.0,
         };
     }
 
     MenuMetrics {
-        height: (5.0 + input.service_action_count.max(0) as f32) * item + separator,
+        height: 5.0 * item + service_rows + separator,
         open_with_row_y_offset: 3.0 * item + separator,
         create_new_row_y_offset: 0.0,
     }
+}
+
+fn service_rows_height(input: MenuMetricsInput, item: f32, separator: f32, title: f32) -> f32 {
+    input.service_action_count.max(0) as f32 * item
+        + input.service_title_count.max(0) as f32 * title
+        + input.service_separator_count.max(0) as f32 * separator
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2610,6 +2621,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height: MENU_ITEM_HEIGHT,
             separator_height: MENU_SEPARATOR_HEIGHT,
             title_height: MENU_TITLE_HEIGHT,
@@ -2689,6 +2702,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2714,6 +2729,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2738,6 +2755,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2763,6 +2782,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2784,6 +2805,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2808,6 +2831,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2835,6 +2860,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2860,6 +2887,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2882,6 +2911,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2903,6 +2934,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2927,6 +2960,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2951,6 +2986,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2972,6 +3009,8 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2993,6 +3032,8 @@ mod tests {
             device_can_unmount: true,
             device_can_eject: true,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -3017,6 +3058,8 @@ mod tests {
             device_can_unmount: true,
             device_can_eject: true,
             service_action_count: 0,
+            service_title_count: 0,
+            service_separator_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -3061,33 +3104,39 @@ mod tests {
     }
 
     #[test]
-    fn context_menu_metrics_include_service_action_rows() {
+    fn context_menu_metrics_include_service_menu_rows() {
         let mut single_file = menu_metrics_input(1);
         single_file.selected_count = 1;
         single_file.default_open_visible = true;
         single_file.service_action_count = 2;
+        single_file.service_title_count = 1;
+        single_file.service_separator_count = 1;
         let file_metrics = context_menu_metrics(single_file);
         assert_eq!(
             file_metrics.height,
-            11.0 * MENU_ITEM_HEIGHT + 2.0 * MENU_SEPARATOR_HEIGHT
+            11.0 * MENU_ITEM_HEIGHT + MENU_TITLE_HEIGHT + 3.0 * MENU_SEPARATOR_HEIGHT
         );
         assert_eq!(file_metrics.open_with_row_y_offset, MENU_ITEM_HEIGHT);
 
         let mut multi_file = menu_metrics_input(1);
         multi_file.selected_count = 3;
         multi_file.service_action_count = 2;
+        multi_file.service_title_count = 1;
+        multi_file.service_separator_count = 1;
         let multi_metrics = context_menu_metrics(multi_file);
         assert_eq!(
             multi_metrics.height,
-            MENU_TITLE_HEIGHT + 5.0 * MENU_ITEM_HEIGHT + MENU_SEPARATOR_HEIGHT
+            2.0 * MENU_TITLE_HEIGHT + 5.0 * MENU_ITEM_HEIGHT + 2.0 * MENU_SEPARATOR_HEIGHT
         );
 
         let mut viewport = menu_metrics_input(3);
         viewport.service_action_count = 2;
+        viewport.service_title_count = 1;
+        viewport.service_separator_count = 1;
         let viewport_metrics = context_menu_metrics(viewport);
         assert_eq!(
             viewport_metrics.height,
-            7.0 * MENU_ITEM_HEIGHT + MENU_SEPARATOR_HEIGHT
+            7.0 * MENU_ITEM_HEIGHT + MENU_TITLE_HEIGHT + 2.0 * MENU_SEPARATOR_HEIGHT
         );
         assert_eq!(
             viewport_metrics.open_with_row_y_offset,

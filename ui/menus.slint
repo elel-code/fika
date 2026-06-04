@@ -44,6 +44,33 @@ component ActionMenuRow inherits Rectangle {
     }
 }
 
+component ServiceActionMenuRow inherits Rectangle {
+    in property <ContextServiceAction> action;
+    in property <bool> dark;
+    callback clicked(int);
+
+    horizontal-stretch: 1;
+    height: root.action.row_kind == 1 ? 30px : (root.action.row_kind == 2 ? 8px : 38px);
+
+    if (root.action.row_kind == 1): MenuTitle {
+        width: parent.width;
+        label: root.action.name;
+        dark: root.dark;
+    }
+
+    if (root.action.row_kind == 2): MenuSeparator {
+        width: parent.width;
+        dark: root.dark;
+    }
+
+    if (root.action.row_kind == 0): ActionMenuRow {
+        width: parent.width;
+        label: root.action.name;
+        dark: root.dark;
+        clicked => { root.clicked(root.action.action_index); }
+    }
+}
+
 component HoverActionMenuRow inherits Rectangle {
     in property <string> label;
     in property <string> shortcut: "";
@@ -727,10 +754,10 @@ export component FileContextMenu inherits PopupSurface {
             clicked => { root.open_with_clicked(); }
         }
 
-        for action[index] in root.service-actions: ActionMenuRow {
-            label: action.name;
+        for action in root.service-actions: ServiceActionMenuRow {
+            action: action;
             dark: root.dark;
-            clicked => { root.service_action_requested(index); }
+            clicked(index) => { root.service_action_requested(index); }
         }
 
         if (root.selected-count <= 1): MenuSeparator {
@@ -883,10 +910,10 @@ export component ViewportContextMenu inherits PopupSurface {
             clicked => { root.open_terminal_here(); }
         }
 
-        for action[index] in root.service-actions: ActionMenuRow {
-            label: action.name;
+        for action in root.service-actions: ServiceActionMenuRow {
+            action: action;
             dark: root.dark;
-            clicked => { root.service_action_requested(index); }
+            clicked(index) => { root.service_action_requested(index); }
         }
     }
 }
@@ -925,13 +952,16 @@ export component RootContextMenuLayer inherits Rectangle {
     in property <bool> device-can-eject;
     in property <string> device-pending-action: "";
     in property <[ContextServiceAction]> service-actions;
+    in property <int> service-action-rows;
+    in property <int> service-title-rows;
+    in property <int> service-separator-rows;
     out property <length> active-menu-left: MenuGeometry.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     out property <length> active-menu-top: MenuGeometry.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x / 1px, root.menu-y / 1px, root.active-menu-width / 1px, root.active-menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     out property <length> active-menu-width: (root.menu-kind == 2 || root.menu-kind == 5) ? root.place-menu-width : ((root.menu-kind == 3 || root.menu-kind == 4) ? root.blank-menu-width : root.file-menu-width);
-    out property <length> active-menu-height: MenuGeometry.context_menu_height(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.service-actions.length, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    out property <length> active-menu-height: MenuGeometry.context_menu_height(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.service-action-rows, root.service-title-rows, root.service-separator-rows, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
     private property <bool> metrics-device-pending: root.menu-kind == 5 && root.device-pending-action != "";
-    private property <length> open-with-row-y: root.active-menu-top + MenuGeometry.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.service-actions.length, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
-    private property <length> create-new-row-y: root.active-menu-top + MenuGeometry.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.service-actions.length, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    private property <length> open-with-row-y: root.active-menu-top + MenuGeometry.context_menu_open_with_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.service-action-rows, root.service-title-rows, root.service-separator-rows, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
+    private property <length> create-new-row-y: root.active-menu-top + MenuGeometry.context_menu_create_new_row_offset(root.menu-kind, root.selected-count, root.is-dir, root.default-open-visible, root.add-to-places-visible, root.clipboard-has-paths, root.in-trash, root.place-builtin, root.device-mounted, root.metrics-device-pending, root.device-can-mount, root.device-can-unmount, root.device-can-eject, root.service-action-rows, root.service-title-rows, root.service-separator-rows, root.item-height / 1px, root.separator-height / 1px, root.title-height / 1px) * 1px;
     callback file_open_folder_with_hover(length, bool);
     callback file_open_folder_with_clicked(length);
     callback file_default_open_requested();

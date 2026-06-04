@@ -632,7 +632,7 @@ add/remove/rename/reorder 均触发全量重建。
 
 **实际实现**（✅ 已完成）：右键菜单回调中将 `refresh_clipboard_availability()` 替换为 Slint 回调 `sync_clipboard_state()`；Rust 侧 `ui.on_sync_clipboard_state` 只调用 `sync_clipboard_ui(&ui, &state)`，不读取 Wayland clipboard。Ctrl+V / Paste 也不再同步刷新缓存，而是通过 `ClipboardPasteLoaded` 异步事件先导入当前桌面剪贴板，结果回到 UI 线程后再入队传输。启动/菜单入口的后台 availability refresh 现在带 `clipboard_refresh_pending` single-flight 保护，已有读取未返回时不会重复 spawn Wayland clipboard 查询。
 
-右键 service-menu 发现同样保持异步和 generation guarded：打开 item/blank 菜单时先清空旧的 Slint action model，再在后台扫描 desktop/service-menu 文件并只应用仍匹配当前路径快照的结果，避免同步读取 desktop metadata 阻塞弹窗打开。这条路径现在由 `src/app/context_service_menu.rs` 独立拥有，`main.rs` 只做 slot 路由和 async event 分发。
+右键 service-menu 发现同样保持异步和 generation guarded：打开 item/blank 菜单时先清空旧的 Slint action model，再在后台扫描 desktop/service-menu 文件并只应用仍匹配当前路径快照的结果，避免同步读取 desktop metadata 阻塞弹窗打开。这条路径现在由 `src/app/context_service_menu.rs` 独立拥有，`main.rs` 只做 slot 路由和 async event 分发。`X-KDE-Submenu` 分组行同步时会同时写入 action/title/separator 三类计数，菜单几何直接按真实行高计算，避免 Slint 侧遍历模型或把标题行误当普通 action 行。
 
 **收益**：消除每次右键的 clipboard 协议查询延迟。
 

@@ -9,6 +9,17 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+const SERVICE_ROW_ACTION: i32 = 0;
+const SERVICE_ROW_TITLE: i32 = 1;
+const SERVICE_ROW_SEPARATOR: i32 = 2;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ServiceMenuRowCounts {
+    action_rows: i32,
+    title_rows: i32,
+    separator_rows: i32,
+}
+
 pub(crate) fn item_paths(
     state: &Rc<RefCell<AppState>>,
     slot: i32,
@@ -100,14 +111,64 @@ pub(crate) fn apply_actions_result(
 }
 
 fn sync_actions_ui(ui: &AppWindow, actions: &[service_menu::ServiceMenuAction]) {
-    let actions = actions
-        .iter()
-        .map(|action| ContextServiceAction {
+    let (rows, counts) = menu_rows(actions);
+    ui.set_context_service_actions(ModelRc::new(Rc::new(VecModel::from(rows))));
+    ui.set_context_service_action_rows(counts.action_rows);
+    ui.set_context_service_title_rows(counts.title_rows);
+    ui.set_context_service_separator_rows(counts.separator_rows);
+}
+
+fn menu_rows(
+    actions: &[service_menu::ServiceMenuAction],
+) -> (Vec<ContextServiceAction>, ServiceMenuRowCounts) {
+    let mut rows = Vec::new();
+    let mut counts = ServiceMenuRowCounts::default();
+    let mut current_group = String::new();
+    let mut grouped = false;
+
+    for (index, action) in actions.iter().enumerate() {
+        if !action.top_level && !action.submenu.is_empty() && action.submenu != current_group {
+            if grouped {
+                rows.push(service_menu_separator_row());
+                counts.separator_rows += 1;
+            }
+            current_group = action.submenu.clone();
+            grouped = true;
+            rows.push(service_menu_title_row(&current_group));
+            counts.title_rows += 1;
+        }
+
+        rows.push(ContextServiceAction {
             id: action.id.clone().into(),
             name: action.name.clone().into(),
-        })
-        .collect::<Vec<_>>();
-    ui.set_context_service_actions(ModelRc::new(Rc::new(VecModel::from(actions))));
+            group: action.submenu.clone().into(),
+            action_index: index as i32,
+            row_kind: SERVICE_ROW_ACTION,
+        });
+        counts.action_rows += 1;
+    }
+
+    (rows, counts)
+}
+
+fn service_menu_title_row(label: &str) -> ContextServiceAction {
+    ContextServiceAction {
+        id: "".into(),
+        name: label.into(),
+        group: label.into(),
+        action_index: -1,
+        row_kind: SERVICE_ROW_TITLE,
+    }
+}
+
+fn service_menu_separator_row() -> ContextServiceAction {
+    ContextServiceAction {
+        id: "".into(),
+        name: "".into(),
+        group: "".into(),
+        action_index: -1,
+        row_kind: SERVICE_ROW_SEPARATOR,
+    }
 }
 
 pub(crate) fn launch_action_async(
@@ -315,5 +376,57 @@ mod tests {
                 && status_body.contains("sync_pane_slot_ui(ui, state, slot);"),
             "service menu status updates should target the source pane row and not fall back to the focused pane"
         );
+    }
+
+    #[test]
+    fn service_menu_rows_group_submenu_actions_without_changing_action_indices() {
+        let (rows, counts) = menu_rows(&[
+            service_action("top", "Top Action", "", true),
+            service_action("edit", "Edit A", "Edit", false),
+            service_action("edit2", "Edit B", "Edit", false),
+            service_action("tools", "Tool", "Tools", false),
+        ]);
+
+        assert_eq!(
+            counts,
+            ServiceMenuRowCounts {
+                action_rows: 4,
+                title_rows: 2,
+                separator_rows: 1,
+            }
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.row_kind, row.name.to_string(), row.action_index))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, "Top Action".to_string(), 0),
+                (1, "Edit".to_string(), -1),
+                (0, "Edit A".to_string(), 1),
+                (0, "Edit B".to_string(), 2),
+                (2, "".to_string(), -1),
+                (1, "Tools".to_string(), -1),
+                (0, "Tool".to_string(), 3),
+            ]
+        );
+    }
+
+    fn service_action(
+        id: &str,
+        name: &str,
+        submenu: &str,
+        top_level: bool,
+    ) -> service_menu::ServiceMenuAction {
+        service_menu::ServiceMenuAction {
+            id: id.to_string(),
+            name: name.to_string(),
+            icon: String::new(),
+            desktop_path: PathBuf::from("/tmp/action.desktop"),
+            action_key: id.to_string(),
+            exec: "true".to_string(),
+            argv: vec!["true".to_string()],
+            top_level,
+            submenu: submenu.to_string(),
+        }
     }
 }

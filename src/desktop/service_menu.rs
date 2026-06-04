@@ -119,6 +119,7 @@ fn actions_for_service_menu_dirs(
         right
             .top_level
             .cmp(&left.top_level)
+            .then_with(|| left.submenu.cmp(&right.submenu))
             .then_with(|| left.name.cmp(&right.name))
             .then_with(|| left.id.cmp(&right.id))
     });
@@ -504,6 +505,65 @@ mod tests {
         assert_eq!(actions[0].icon, "zed");
         assert_eq!(actions[0].argv, vec!["zeditor", "/tmp/a.txt", "/tmp/b.txt"]);
         assert!(actions[0].top_level);
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn service_menu_actions_sort_top_level_then_submenu_groups() {
+        let temp = test_dir("submenu-sort");
+        let menu_dir = temp.join("kio").join("servicemenus");
+        fs::create_dir_all(&menu_dir).unwrap();
+        for (file, submenu, action, name, priority) in [
+            ("tools-b.desktop", "Tools", "toolsb", "Tools B", ""),
+            ("edit.desktop", "Edit", "edit", "Edit A", ""),
+            (
+                "top.desktop",
+                "",
+                "top",
+                "Top Action",
+                "X-KDE-Priority=TopLevel\n",
+            ),
+            ("tools-a.desktop", "Tools", "toolsa", "Tools A", ""),
+        ] {
+            fs::write(
+                menu_dir.join(file),
+                format!(
+                    "[Desktop Entry]\n\
+                     Type=Service\n\
+                     ServiceTypes=KonqPopupMenu/Plugin\n\
+                     MimeType=text/plain\n\
+                     X-KDE-Submenu={submenu}\n\
+                     {priority}\
+                     Actions={action}\n\
+                     \n\
+                     [Desktop Action {action}]\n\
+                     Name={name}\n\
+                     Exec=app %F\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        let actions =
+            actions_for_service_menu_dirs(&[menu_dir], &[selected("/tmp/file.txt", "text/plain")]);
+
+        assert_eq!(
+            actions
+                .iter()
+                .map(|action| (
+                    action.name.as_str(),
+                    action.submenu.as_str(),
+                    action.top_level
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Top Action", "", true),
+                ("Edit A", "Edit", false),
+                ("Tools A", "Tools", false),
+                ("Tools B", "Tools", false),
+            ]
+        );
 
         let _ = fs::remove_dir_all(temp);
     }

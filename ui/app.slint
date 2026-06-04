@@ -661,6 +661,9 @@ export component AppWindow inherits Window {
     private property <length> chooser-filter-menu-width: 220px;
     private property <bool> custom-open-with-open: false;
     in property <[ContextServiceAction]> context_service_actions;
+    in property <int> context_service_action_rows;
+    in property <int> context_service_title_rows;
+    in property <int> context_service_separator_rows;
     in property <[DesktopApp]> open_with_apps;
     in property <[DesktopApp]> other_application_apps;
     in-out property <string> open_with_path;
@@ -1615,6 +1618,9 @@ export component AppWindow inherits Window {
         device-can-eject: root.context-menu-device-can-eject;
         device-pending-action: root.context-menu-device-pending-action;
         service-actions: root.context_service_actions;
+        service-action-rows: root.context_service_action_rows;
+        service-title-rows: root.context_service_title_rows;
+        service-separator-rows: root.context_service_separator_rows;
         file_open_folder_with_hover(row-y, is-hovered) => {
             root.open-with-submenu-hover(root.context-menu-path, row-y, is-hovered);
         }
