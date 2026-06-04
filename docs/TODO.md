@@ -530,6 +530,7 @@ Acceptance for all:
   - Current: operation progress events now go through an `OperationProgressUpdate` in `operation_controller.rs`; stale progress ids are ignored by the controller instead of being special-cased in `main.rs`.
   - Current: the controller also tracks the last active-operation progress bucket, so repeated progress callbacks inside the same percentage/unknown-size state do not churn status-bar updates.
   - Current: transfer-conflict status text for Skip and Apply to remaining is now computed by `operation_controller.rs`, keeping `transfer.rs` focused on queue mutation and popup routing while preserving tested user-facing copy.
+  - Current: cancelling queued/active operations now returns the active operation's pane ids in `OperationCancelSummary`; cancellation status is applied through the same affected-pane status route as operation start/progress/completion instead of jumping to the pane focused when Cancel is clicked.
 
 - [x] Add split view / dual-pane browsing.
   - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.

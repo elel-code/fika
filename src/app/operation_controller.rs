@@ -19,10 +19,11 @@ pub(crate) struct OperationQueueSnapshot {
     pub(crate) pending_conflict: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OperationCancelSummary {
     pub(crate) queued_cancelled: usize,
     pub(crate) active_cancelled: bool,
+    pub(crate) pane_ids: Vec<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,12 +143,18 @@ impl AppState {
         let queued_cancelled = self.operation_queue.len();
         self.operation_queue.clear();
         let active_cancelled = self.active_operation_cancel.is_some();
+        let pane_ids = if active_cancelled {
+            self.active_operation_pane_ids.clone()
+        } else {
+            Vec::new()
+        };
         if let Some(cancel) = &self.active_operation_cancel {
             cancel.store(true, Ordering::Relaxed);
         }
         OperationCancelSummary {
             queued_cancelled,
             active_cancelled,
+            pane_ids,
         }
     }
 
@@ -245,7 +252,7 @@ pub(crate) fn operation_queued_status(snapshot: OperationQueueSnapshot) -> Strin
     )
 }
 
-pub(crate) fn operation_cancel_status(summary: OperationCancelSummary) -> String {
+pub(crate) fn operation_cancel_status(summary: &OperationCancelSummary) -> String {
     if summary.queued_cancelled == 0 && !summary.active_cancelled {
         "No queued operations to cancel".to_string()
     } else if summary.active_cancelled {
@@ -500,6 +507,7 @@ mod tests {
             OperationCancelSummary {
                 queued_cancelled: 1,
                 active_cancelled: true,
+                pane_ids: Vec::new(),
             }
         );
         assert!(cancel.load(Ordering::Relaxed));
@@ -522,16 +530,18 @@ mod tests {
             "Queued operation #3 (2 pending)"
         );
         assert_eq!(
-            operation_cancel_status(OperationCancelSummary {
+            operation_cancel_status(&OperationCancelSummary {
                 queued_cancelled: 0,
                 active_cancelled: false,
+                pane_ids: Vec::new(),
             }),
             "No queued operations to cancel"
         );
         assert_eq!(
-            operation_cancel_status(OperationCancelSummary {
+            operation_cancel_status(&OperationCancelSummary {
                 queued_cancelled: 4,
                 active_cancelled: true,
+                pane_ids: Vec::new(),
             }),
             "Cancelling active operation; removed 4 queued operation(s)"
         );
@@ -697,6 +707,24 @@ mod tests {
         assert!(state.finish_file_operation(7));
         assert_eq!(state.active_operation_progress_key, None);
         assert!(state.active_operation_pane_ids.is_empty());
+    }
+
+    #[test]
+    fn cancel_file_operations_reports_active_operation_pane_ids() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.queue_file_operation(request("copy"), OperationQueuePosition::Back);
+        let cancel = state.begin_file_operation_for_panes(7, vec![3, 5]);
+
+        assert_eq!(
+            state.cancel_file_operations(),
+            OperationCancelSummary {
+                queued_cancelled: 1,
+                active_cancelled: true,
+                pane_ids: vec![3, 5],
+            }
+        );
+        assert!(cancel.load(Ordering::Relaxed));
+        assert_eq!(state.active_operation_pane_ids, vec![3, 5]);
     }
 
     #[test]

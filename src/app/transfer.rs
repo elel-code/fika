@@ -930,7 +930,8 @@ fn default_rename_suggestion_with_reserved(
 
 pub(crate) fn cancel_queued_operations(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let summary = state.borrow_mut().cancel_file_operations();
-    set_status(ui, state, &operation_cancel_status(summary));
+    let status = operation_cancel_status(&summary);
+    set_status_for_panes(ui, state, &summary.pane_ids, &status);
 }
 
 pub(crate) fn path_label(path: &str) -> String {
@@ -1443,6 +1444,26 @@ mod tests {
         assert!(
             !body.contains("set_status(\n        ui,\n        &operation_started_status"),
             "file operation start status must not jump to whichever pane is focused when the queued operation starts"
+        );
+    }
+
+    #[test]
+    fn cancel_transfer_status_uses_active_operation_pane_route() {
+        let source = include_str!("transfer.rs");
+        let body = source
+            .split_once("pub(crate) fn cancel_queued_operations(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn path_label("))
+            .map(|(body, _)| body)
+            .expect("cancel_queued_operations body should be present");
+
+        assert!(
+            body.contains("let status = operation_cancel_status(&summary);")
+                && body.contains("set_status_for_panes(ui, state, &summary.pane_ids, &status);"),
+            "operation cancellation status should use the active operation's affected-pane route"
+        );
+        assert!(
+            !body.contains("set_status(ui, state, &operation_cancel_status(summary));"),
+            "operation cancellation status must not jump to whichever pane is focused"
         );
     }
 
