@@ -32,10 +32,10 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 入口 UI 在 `ui/app.slint`，共享组件已拆分：
 
 - `AppWindow` 是主窗口。
-- `ui/models.slint` 定义 `FileEntry` / `PlaceEntry` / `DesktopApp`。
+- `ui/models.slint` 定义 Slint-facing 的 `ItemViewEntry` / `PlaceEntry` / `DesktopApp` 等 UI row；Rust-native `FileEntry` 是业务条目，保留在 Rust 侧。
 - `ui/widgets.slint` 包含通用按钮、菜单项、popup surface、Places 行和 `FolderGlyph`。
 - `ui/top_bar.slint` 导出两个 chrome 组件：`TopBar` 负责窗口顶栏里的 COSMIC-style 搜索入口、Split 状态入口和主题切换；`PathBar` 负责主栏内容顶部的 Back/Forward 导航组和路径输入。`AppWindow` 只保留动作 callback、输入状态和持久化转发。
-- `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile primitive 渲染；选择、命中、右键、激活、DnD payload 语义以及可见 tile 的 size/media/text rect 由 Rust item-view controller/render plan 决定，tile local x/y 由可复用 loop index 计算，避免写入每个 `FileEntry` row。
+- `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile primitive 渲染；选择、命中、右键、激活、DnD payload 语义以及可见 tile 的 size/media/text rect 由 Rust item-view controller/render plan 决定，tile local x/y 由可复用 loop index 计算，避免写入每个 `ItemViewEntry` row。
 - `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
 
 Shell surface layering now follows the COSMIC direction outside the main file arrangement: `AppWindow` owns one shared base surface with a separate window-wide shell/header row. That shell/header row hosts global search, split, and theme controls through `TopBar`, and it intentionally does not draw a horizontal divider above the main content. Below it, the left sidebar panel and right main pane share one equal-height content row. The main pane starts with `PathBar` for Back/Forward and address editing, followed by the search filter strip, file grid, and status bar; these rows render transparent backgrounds and keep only necessary internal separators. Sidebar rows are inset inside the rounded panel, and the sidebar border is intentionally a little stronger than the flat shell separators.
@@ -53,16 +53,16 @@ The non-main-pane chrome is intentionally allowed to track COSMIC Files more clo
 主栏现在使用轻量虚拟化：
 
 - `entry_count` 只保存当前过滤后的条目数量，用于空状态和横向滚动宽度。
-- `virtual_entries` 只包含当前可见列附近的条目，额外保留少量左右 overscan 列；Slint 不再持有完整 `FileEntry` 模型。
+- `virtual_entries` 只包含当前可见列附近的 `ItemViewEntry` row，额外保留少量左右 overscan 列；Slint 不再持有完整业务 `FileEntry` 模型。
 - Rust 侧维护轻量可见索引缓存：无搜索/过滤时使用隐式 identity fast path，有搜索/过滤时只保存匹配条目的 `usize` 索引。
 - 滚动同步时 Rust 直接通过可见索引缓存克隆当前虚拟范围的条目；不会为了更新可视窗口构造完整过滤结果模型，也不会在每次滚动事件中重复扫描完整目录。
-- Slint 侧把虚拟 tile 放进以 `virtual_start_column` 为锚点的局部 layer；tile local x/y 由 `for item[index]` 下标和 pane row metrics 计算，避免超大目录产生很大的每项坐标，也避免虚拟窗口滑动时把局部坐标变化写进重叠 `FileEntry` row。
+- Slint 侧把虚拟 tile 放进以 `virtual_start_column` 为锚点的局部 layer；tile local x/y 由 `for item[index]` 下标和 pane row metrics 计算，避免超大目录产生很大的每项坐标，也避免虚拟窗口滑动时把局部坐标变化写进重叠 `ItemViewEntry` row。
 - Rust 缓存虚拟范围、行数、列宽和缩略图尺寸；滚动仍落在同一虚拟范围时不重置 Slint model。
 - Rust 侧的 `VirtualGridPlan` 统一计算 clamped viewport、scroll max、可见范围、overscan 范围和 Slint 锚点列，防止滚动条、缩略图调度和模型切片各用一套边界规则。
 - 过滤、搜索、缩放或窗口尺寸变化导致内容变窄时，Rust 会按同一套列宽规则夹紧横向滚动位置，避免旧 viewport 落在新内容之外造成空白主栏。
 - tile 的真实全局索引由 Rust item-view layout/hit-test 根据 viewport、rows-per-column 和可见索引缓存解析，因此选择范围、拖拽命中和右键语义仍然基于完整模型，而不是 Slint row index。
 - 横向滚动、缩放和窗口尺寸变化会重新切片 `virtual_entries`，避免大目录一次性实例化所有可见 tile primitive。
-- `FileEntry` 在进入 Slint 前已经带有 Rust item-view render plan：tile size、media rect、text rect、group/title/location y 坐标、line height、字体和图标尺寸都已预计算；`SplitPaneView` 的可见 item loop 只按这些字段和 loop index 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`。
+- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为 `ItemViewEntry`。`ItemViewEntry` 在进入 Slint 前已经带有 Rust item-view render plan：tile size、media rect、text rect、group/title/location y 坐标、line height、字体和图标尺寸都已预计算；`SplitPaneView` 的可见 item loop 只按这些字段和 loop index 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`。
 - 框选仍按完整可见顺序返回路径，但候选项会先裁剪到选择矩形横向覆盖的列范围；搜索/过滤状态下通过可见索引缓存解析真实条目。
 - 缩略图调度按“当前可见列优先，overscan 后置”排序，减少大目录图片预览队列对当前屏幕反馈的拖慢。
 - 离屏缩略图完成时只更新 Rust 缓存，不重置 Slint 模型；缩略图所属路径落在当前虚拟切片内时才刷新 `virtual_entries`。
@@ -317,13 +317,13 @@ Places 分为内置项和用户项：
 
 切换 `Search subfolders` 时，如果已有查询，会立即按新模式重新提交搜索。
 
-`FileEntry` 同时保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`，以及当前虚拟切片的 Rust render-plan 字段。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑，而 Slint 主视图只消费预计算后的绘制坐标。
+Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为 `ItemViewEntry`，额外携带 selection、thumbnail 和 Rust render-plan 字段，因此主视图只消费预计算后的绘制坐标。
 
 ### Thumbnails
 
 缩略图流水线当前覆盖 PNG/JPEG/WebP：
 
-- `FileEntry` 包含 `thumbnail_state` 和 `thumbnail`，失败或未完成时继续显示通用文件图标。
+- `ItemViewEntry` 包含 `thumbnail_state` 和 `thumbnail`，失败或未完成时继续显示通用文件图标。
 - 当前可见顺序的前若干项会先被调度，符合列优先图标视图的首屏优先策略。
 - 后台任务用 `image` crate 解码并缩放到当前 zoom 对应尺寸，回传 RGBA 像素给 UI 线程构造 Slint `Image`。
 - 缓存 key 为路径、mtime 和目标尺寸；重复访问或刷新同一目录时可复用。

@@ -1,10 +1,10 @@
-import { FileEntry } from "models.slint";
+import { ItemViewEntry } from "models.slint";
 import { FolderGlyph } from "widgets.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
-    in property <[FileEntry]> entries;
+    in property <[ItemViewEntry]> entries;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;

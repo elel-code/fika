@@ -55,7 +55,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, FileEntry, PaneSlotData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewEntry, PaneSlotData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -91,7 +91,7 @@ component FilePane inherits Rectangle {
     in property <bool> drop-ready: true;
     in property <string> drop-trace-prefix;
     in property <int> entry-count;
-    in property <[FileEntry]> entries;
+    in property <[ItemViewEntry]> entries;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;

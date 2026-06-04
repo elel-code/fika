@@ -1,9 +1,9 @@
-use crate::FileEntry;
 use crate::app::item_view::{ItemViewInputState, ItemViewRenderMetrics};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{search, thumbnails};
 use crate::support::generation::GenerationCounter;
+use crate::{FileEntry, ItemViewEntry};
 use slint::ModelRc;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -171,6 +171,16 @@ impl PaneEntrySnapshot {
             size_bytes: self.size_bytes,
             modified: self.modified.as_str().into(),
             modified_age_days: self.modified_age_days,
+            is_dir: self.is_dir,
+        }
+    }
+
+    pub(crate) fn to_item_view_entry(&self) -> ItemViewEntry {
+        ItemViewEntry {
+            name: self.name.as_str().into(),
+            path: self.path.as_str().into(),
+            group: self.group.as_str().into(),
+            location: self.location.as_str().into(),
             is_dir: self.is_dir,
             selected: false,
             thumbnail_state: 0,
@@ -442,7 +452,7 @@ pub(crate) struct PaneView {
     pub(crate) input: ItemViewInputState,
     pub(crate) virtual_view: VirtualViewCache,
     pub(crate) virtual_generation: GenerationCounter,
-    pub(crate) virtual_entries: ModelRc<FileEntry>,
+    pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
     pub(crate) virtual_start_index: usize,
     pub(crate) virtual_start_column: usize,
     virtual_prepare_in_flight: Option<u64>,
@@ -684,7 +694,6 @@ impl PaneHistory {
 mod tests {
     use super::*;
     use crate::app::geometry::MainGridLayout;
-    use slint::Image;
 
     fn virtual_prepare_request(
         generation: u64,
@@ -1290,25 +1299,6 @@ mod tests {
             modified: "Today".into(),
             modified_age_days: 0,
             is_dir: false,
-            selected: false,
-            thumbnail_state: 0,
-            thumbnail: Image::default(),
-            tile_width: 0.0,
-            tile_height: 0.0,
-            media_x: 0.0,
-            media_y: 0.0,
-            text_x: 0.0,
-            text_width: 0.0,
-            group_y: 0.0,
-            title_y: 0.0,
-            location_y: 0.0,
-            metadata_line_height: 0.0,
-            title_line_height: 0.0,
-            thumbnail_width: 0.0,
-            thumbnail_height: 0.0,
-            metadata_font_size: 0.0,
-            title_font_size: 0.0,
-            glyph_doc_font_size: 0.0,
         }
     }
 }

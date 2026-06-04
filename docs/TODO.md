@@ -210,7 +210,7 @@
 ## Phase 5: Thumbnail Pipeline
 
 - [x] Add thumbnail model fields.
-  - Acceptance: `FileEntry` can represent thumbnail state without breaking existing icon fallback.
+  - Acceptance: `ItemViewEntry` can represent thumbnail state without breaking existing icon fallback.
 
 - [x] Async image thumbnail generation.
   - Acceptance: PNG/JPEG/WebP files eventually show thumbnails.
@@ -428,7 +428,7 @@ Acceptance for all:
 
 - [x] Split virtual main-view preparation out of `main.rs`.
   - Acceptance: large-directory viewport slicing and rebuild decisions are testable outside UI callback wiring.
-  - Current: `src/app/virtual_view.rs` prepares clamped viewport state and the current virtual `FileEntry` slice; `main.rs` only applies Slint properties and schedules visible thumbnails.
+  - Current: `src/app/virtual_view.rs` prepares clamped viewport state and the current virtual business slice, then `main.rs` projects it into visible `ItemViewEntry` rows, applies Slint properties, and schedules visible thumbnails.
 
 - [x] Split directory-load preparation out of `main.rs`.
   - Acceptance: navigation vs same-directory refresh state transitions are testable outside UI callback wiring.

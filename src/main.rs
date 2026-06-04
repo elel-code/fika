@@ -55,7 +55,9 @@ use app::item_view::{
     ItemViewInputMetrics, ItemViewReleaseAction, ItemViewRenderMetrics, ItemViewRenderPlanInput,
     SelectionRect, decorate_render_plan, entry_at_pane_point,
 };
-use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
+use app::model_update::{
+    update_item_view_entries_model_selection, update_pane_item_view_entries_model,
+};
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
     affected_directory_pane_ids, cleanup_file_undo_backup,
@@ -111,6 +113,20 @@ use fs::places::default_places;
 use fs::{file_actions, privilege, search, thumbnails};
 
 slint::include_modules!();
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct FileEntry {
+    pub(crate) name: SharedString,
+    pub(crate) path: SharedString,
+    pub(crate) group: SharedString,
+    pub(crate) location: SharedString,
+    pub(crate) kind: SharedString,
+    pub(crate) size: SharedString,
+    pub(crate) size_bytes: f32,
+    pub(crate) modified: SharedString,
+    pub(crate) modified_age_days: i32,
+    pub(crate) is_dir: bool,
+}
 
 const PANE_VIEW_SYNC_COALESCE: Duration = Duration::from_millis(8);
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
@@ -3581,7 +3597,7 @@ fn apply_virtual_view_result(
     let mut entries = update
         .entries
         .into_iter()
-        .map(|entry| entry.to_file_entry())
+        .map(|entry| entry.to_item_view_entry())
         .collect::<Vec<_>>();
     let show_location = {
         let state_ref = state.borrow();
@@ -3666,10 +3682,10 @@ fn set_pane_virtual_entries(
     slot: i32,
     start_index: usize,
     start_column: usize,
-    entries: Vec<FileEntry>,
+    entries: Vec<ItemViewEntry>,
 ) {
     if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
-        update_pane_file_entries_model(&mut pane.view, start_index, start_column, entries);
+        update_pane_item_view_entries_model(&mut pane.view, start_index, start_column, entries);
     }
 }
 
@@ -4032,7 +4048,7 @@ fn schedule_visible_thumbnails(
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     pane_id: u64,
-    entries: &[&FileEntry],
+    entries: &[&ItemViewEntry],
     size_px: u32,
     announce: bool,
 ) {
@@ -4283,7 +4299,7 @@ fn update_virtual_selection_for_slot(
             .map(|pane| pane.view.virtual_entries.clone())
     };
     if let Some(model) = model {
-        update_file_entries_model_selection(&model, selected_paths);
+        update_item_view_entries_model_selection(&model, selected_paths);
     }
 }
 
@@ -4838,7 +4854,6 @@ mod tests {
         rebuild_visible_entry_index, selection_range_paths, selection_range_paths_filtered,
         selection_rect_paths, selection_rect_paths_filtered,
     };
-    use slint::Image;
 
     #[test]
     fn drops_selection_paths_that_are_no_longer_visible() {
@@ -6400,25 +6415,6 @@ mod tests {
             modified: "Today".into(),
             modified_age_days: 0,
             is_dir: false,
-            selected: false,
-            thumbnail_state: 0,
-            thumbnail: Image::default(),
-            tile_width: 0.0,
-            tile_height: 0.0,
-            media_x: 0.0,
-            media_y: 0.0,
-            text_x: 0.0,
-            text_width: 0.0,
-            group_y: 0.0,
-            title_y: 0.0,
-            location_y: 0.0,
-            metadata_line_height: 0.0,
-            title_line_height: 0.0,
-            thumbnail_width: 0.0,
-            thumbnail_height: 0.0,
-            metadata_font_size: 0.0,
-            title_font_size: 0.0,
-            glyph_doc_font_size: 0.0,
         }
     }
 }

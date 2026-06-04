@@ -1,47 +1,47 @@
-use crate::FileEntry;
+use crate::ItemViewEntry;
 use crate::app::pane::PaneView;
 use slint::{Model, ModelRc, VecModel};
 use std::collections::HashSet;
 use std::rc::Rc;
 
-pub(crate) fn new_file_entries_model(entries: Vec<FileEntry>) -> ModelRc<FileEntry> {
+pub(crate) fn new_item_view_entries_model(entries: Vec<ItemViewEntry>) -> ModelRc<ItemViewEntry> {
     ModelRc::new(Rc::new(VecModel::from(entries)))
 }
 
-pub(crate) fn update_file_entries_model(
-    current: &ModelRc<FileEntry>,
+pub(crate) fn update_item_view_entries_model(
+    current: &ModelRc<ItemViewEntry>,
     old_start: usize,
     new_start: usize,
-    entries: Vec<FileEntry>,
-) -> Option<ModelRc<FileEntry>> {
-    let Some(model) = current.as_any().downcast_ref::<VecModel<FileEntry>>() else {
-        return Some(new_file_entries_model(entries));
+    entries: Vec<ItemViewEntry>,
+) -> Option<ModelRc<ItemViewEntry>> {
+    let Some(model) = current.as_any().downcast_ref::<VecModel<ItemViewEntry>>() else {
+        return Some(new_item_view_entries_model(entries));
     };
 
     update_vec_model(model, old_start, new_start, entries);
     None
 }
 
-pub(crate) fn update_pane_file_entries_model(
+pub(crate) fn update_pane_item_view_entries_model(
     view: &mut PaneView,
     start_index: usize,
     start_column: usize,
-    entries: Vec<FileEntry>,
+    entries: Vec<ItemViewEntry>,
 ) {
     let current = view.virtual_entries.clone();
     let old_start = view.virtual_start_index;
-    if let Some(model) = update_file_entries_model(&current, old_start, start_index, entries) {
+    if let Some(model) = update_item_view_entries_model(&current, old_start, start_index, entries) {
         view.virtual_entries = model;
     }
     view.virtual_start_index = start_index;
     view.virtual_start_column = start_column;
 }
 
-pub(crate) fn update_file_entries_model_selection(
-    current: &ModelRc<FileEntry>,
+pub(crate) fn update_item_view_entries_model_selection(
+    current: &ModelRc<ItemViewEntry>,
     selected_paths: &[String],
 ) -> bool {
-    let Some(model) = current.as_any().downcast_ref::<VecModel<FileEntry>>() else {
+    let Some(model) = current.as_any().downcast_ref::<VecModel<ItemViewEntry>>() else {
         return false;
     };
     let selected = selected_paths
@@ -64,10 +64,10 @@ pub(crate) fn update_file_entries_model_selection(
 }
 
 fn update_vec_model(
-    model: &VecModel<FileEntry>,
+    model: &VecModel<ItemViewEntry>,
     old_start: usize,
     new_start: usize,
-    entries: Vec<FileEntry>,
+    entries: Vec<ItemViewEntry>,
 ) {
     let old_len = model.row_count();
     if old_len == 0 || entries.is_empty() {
@@ -120,17 +120,12 @@ mod tests {
     use crate::app::pane::PaneView;
     use slint::Image;
 
-    fn entry(index: usize) -> FileEntry {
-        FileEntry {
+    fn entry(index: usize) -> ItemViewEntry {
+        ItemViewEntry {
             name: format!("item-{index}").into(),
             path: format!("/tmp/item-{index}").into(),
             group: String::new().into(),
             location: String::new().into(),
-            kind: "File".into(),
-            size: "1 KB".into(),
-            size_bytes: 1024.0,
-            modified: "Today".into(),
-            modified_age_days: 0,
             is_dir: false,
             selected: false,
             thumbnail_state: 0,
@@ -154,14 +149,14 @@ mod tests {
         }
     }
 
-    fn rows(model: &ModelRc<FileEntry>) -> Vec<String> {
+    fn rows(model: &ModelRc<ItemViewEntry>) -> Vec<String> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| entry.path.to_string())
             .collect()
     }
 
-    fn selected_rows(model: &ModelRc<FileEntry>) -> Vec<String> {
+    fn selected_rows(model: &ModelRc<ItemViewEntry>) -> Vec<String> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .filter(|entry| entry.selected)
@@ -170,12 +165,12 @@ mod tests {
     }
 
     #[test]
-    fn pane_file_entry_model_updates_each_view_independently() {
+    fn pane_item_view_entry_model_updates_each_view_independently() {
         let mut left = PaneView::default();
         let mut right = PaneView::default();
 
-        update_pane_file_entries_model(&mut left, 0, 0, (0..3).map(entry).collect());
-        update_pane_file_entries_model(&mut right, 20, 4, (20..23).map(entry).collect());
+        update_pane_item_view_entries_model(&mut left, 0, 0, (0..3).map(entry).collect());
+        update_pane_item_view_entries_model(&mut right, 20, 4, (20..23).map(entry).collect());
 
         assert_eq!(left.virtual_start_index, 0);
         assert_eq!(left.virtual_start_column, 0);
@@ -194,7 +189,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        update_pane_file_entries_model(&mut right, 22, 5, (22..25).map(entry).collect());
+        update_pane_item_view_entries_model(&mut right, 22, 5, (22..25).map(entry).collect());
 
         assert_eq!(
             rows(&left.virtual_entries),
@@ -207,11 +202,13 @@ mod tests {
     }
 
     #[test]
-    fn file_entry_model_reuses_vec_model_when_range_slides_forward() {
-        let model = new_file_entries_model((0..6).map(entry).collect());
+    fn item_view_entry_model_reuses_vec_model_when_range_slides_forward() {
+        let model = new_item_view_entries_model((0..6).map(entry).collect());
         let original = model.clone();
 
-        assert!(update_file_entries_model(&model, 0, 2, (2..8).map(entry).collect()).is_none());
+        assert!(
+            update_item_view_entries_model(&model, 0, 2, (2..8).map(entry).collect()).is_none()
+        );
 
         assert_eq!(model, original);
         assert_eq!(
@@ -223,11 +220,13 @@ mod tests {
     }
 
     #[test]
-    fn file_entry_model_reuses_vec_model_when_range_slides_backward() {
-        let model = new_file_entries_model((4..10).map(entry).collect());
+    fn item_view_entry_model_reuses_vec_model_when_range_slides_backward() {
+        let model = new_item_view_entries_model((4..10).map(entry).collect());
         let original = model.clone();
 
-        assert!(update_file_entries_model(&model, 4, 2, (2..8).map(entry).collect()).is_none());
+        assert!(
+            update_item_view_entries_model(&model, 4, 2, (2..8).map(entry).collect()).is_none()
+        );
 
         assert_eq!(model, original);
         assert_eq!(
@@ -239,11 +238,13 @@ mod tests {
     }
 
     #[test]
-    fn file_entry_model_resets_same_vec_model_without_overlap() {
-        let model = new_file_entries_model((0..3).map(entry).collect());
+    fn item_view_entry_model_resets_same_vec_model_without_overlap() {
+        let model = new_item_view_entries_model((0..3).map(entry).collect());
         let original = model.clone();
 
-        assert!(update_file_entries_model(&model, 0, 20, (20..23).map(entry).collect()).is_none());
+        assert!(
+            update_item_view_entries_model(&model, 0, 20, (20..23).map(entry).collect()).is_none()
+        );
 
         assert_eq!(model, original);
         assert_eq!(
@@ -255,12 +256,12 @@ mod tests {
     }
 
     #[test]
-    fn pane_file_entry_model_updates_selection_without_replacing_entries() {
+    fn pane_item_view_entry_model_updates_selection_without_replacing_entries() {
         let mut view = PaneView::default();
-        update_pane_file_entries_model(&mut view, 0, 0, (0..4).map(entry).collect());
+        update_pane_item_view_entries_model(&mut view, 0, 0, (0..4).map(entry).collect());
         let original = view.virtual_entries.clone();
 
-        assert!(update_file_entries_model_selection(
+        assert!(update_item_view_entries_model_selection(
             &view.virtual_entries,
             &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         ));
@@ -270,12 +271,12 @@ mod tests {
             vec!["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         );
 
-        assert!(!update_file_entries_model_selection(
+        assert!(!update_item_view_entries_model_selection(
             &view.virtual_entries,
             &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         ));
 
-        assert!(update_file_entries_model_selection(
+        assert!(update_item_view_entries_model_selection(
             &view.virtual_entries,
             &[]
         ));

@@ -2445,7 +2445,7 @@ mod tests {
             split_pane.contains("item.selected ? root.selected-background-color : transparent")
                 && !split_pane.contains("pure callback is_selected")
                 && !split_pane.contains("root.is_selected(item.path)"),
-            "SplitPaneView should derive tile highlight from precomputed FileEntry selection state"
+            "SplitPaneView should derive tile highlight from precomputed ItemViewEntry selection state"
         );
         assert!(split_pane.contains("function handle-scroll("));
         assert!(
@@ -2458,11 +2458,11 @@ mod tests {
         );
         let widgets = include_str!("../../ui/widgets.slint");
         let models = include_str!("../../ui/models.slint");
-        let file_entry = models
-            .split_once("export struct FileEntry")
+        let item_view_entry = models
+            .split_once("export struct ItemViewEntry")
             .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
             .map(|(body, _)| body)
-            .expect("models.slint should define FileEntry before PlaceEntry");
+            .expect("models.slint should define ItemViewEntry before PlaceEntry");
         let folder_glyph = widgets
             .split_once("export component FolderGlyph")
             .expect("widgets.slint should define FolderGlyph")
@@ -2485,9 +2485,16 @@ mod tests {
                 && !split_pane.contains("entry: item;")
                 && !split_pane.contains("selected: item.selected;")
                 && !split_pane.contains("drag-data-source:")
-                && !file_entry.contains("tile_x")
-                && !file_entry.contains("tile_y"),
-            "SplitPaneView should inline visible tile primitives without a FileTile component boundary, and FileEntry should not carry reusable local tile coordinates"
+                && !models.contains("export struct FileEntry")
+                && item_view_entry.contains("selected: bool")
+                && item_view_entry.contains("thumbnail_state: int")
+                && item_view_entry.contains("tile_width: float")
+                && item_view_entry.contains("media_x: float")
+                && item_view_entry.contains("text_x: float")
+                && item_view_entry.contains("title_line_height: float")
+                && !item_view_entry.contains("tile_x")
+                && !item_view_entry.contains("tile_y"),
+            "SplitPaneView should inline visible tile primitives without a FileTile component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
         );
         assert!(
             !split_pane.contains("private property <length> tile-height:")
@@ -2638,7 +2645,7 @@ mod tests {
                 && !split_pane.contains("item.tile_x")
                 && !split_pane.contains("item.tile_y")
                 && !split_pane.contains("property <int> global-index:"),
-            "virtualized pane slices should be positioned by the self-managed viewport while local tile coordinates come from the reusable loop index instead of FileEntry row data"
+            "virtualized pane slices should be positioned by the self-managed viewport while local tile coordinates come from the reusable loop index instead of ItemViewEntry row data"
         );
         assert!(!split_pane.contains("root.viewport-content-width - self.x"));
         assert!(split_pane.contains("clip: true;"));

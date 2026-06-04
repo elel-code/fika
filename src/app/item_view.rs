@@ -4,7 +4,7 @@ use crate::app::geometry::{
 };
 use crate::app::selection::filtered_entry_at_for_slot;
 use crate::app::state::AppState;
-use crate::{AppWindow, FileEntry};
+use crate::{AppWindow, FileEntry, ItemViewEntry};
 use slint::ComponentHandle;
 use std::ops::Range;
 
@@ -235,7 +235,7 @@ fn ordered_pair(a: f32, b: f32) -> (f32, f32) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
-pub(crate) fn decorate_render_plan(entries: &mut [FileEntry], input: ItemViewRenderPlanInput) {
+pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemViewRenderPlanInput) {
     let cell_width = input.cell_width.max(1.0);
     let render_metrics = input.render_metrics;
     let tile_width = (cell_width - TILE_TRAILING_GAP).max(1.0);
@@ -274,7 +274,7 @@ struct ItemTextRenderPlan {
 }
 
 impl ItemTextRenderPlan {
-    fn new(entry: &FileEntry, metrics: ItemViewRenderMetrics, show_location: bool) -> Self {
+    fn new(entry: &ItemViewEntry, metrics: ItemViewRenderMetrics, show_location: bool) -> Self {
         let metadata_line_height = metrics.metadata_font_size + 3.0;
         let title_line_height = metrics.title_font_size + 4.0;
         let has_group = show_location && !entry.group.is_empty();
@@ -525,17 +525,12 @@ mod tests {
     use super::*;
     use slint::Image;
 
-    fn test_entry(index: usize) -> FileEntry {
-        FileEntry {
+    fn test_entry(index: usize) -> ItemViewEntry {
+        ItemViewEntry {
             name: format!("item-{index}").into(),
             path: format!("/tmp/item-{index}").into(),
             group: String::new().into(),
             location: String::new().into(),
-            kind: "File".into(),
-            size: "1 KB".into(),
-            size_bytes: 1024.0,
-            modified: "Today".into(),
-            modified_age_days: 0,
             is_dir: false,
             selected: false,
             thumbnail_state: 0,
@@ -577,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn render_plan_keeps_file_entry_geometry_tokens_stable() {
+    fn render_plan_keeps_item_view_entry_geometry_tokens_stable() {
         let mut entries = (4..9).map(test_entry).collect::<Vec<_>>();
 
         decorate_render_plan(
@@ -637,7 +632,7 @@ mod tests {
 
     #[test]
     fn render_plan_precomputes_location_text_lines() {
-        let mut entries = vec![FileEntry {
+        let mut entries = vec![ItemViewEntry {
             group: "Documents".into(),
             location: "/home/user/Documents".into(),
             ..test_entry(0)

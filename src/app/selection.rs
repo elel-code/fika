@@ -1,7 +1,7 @@
-use crate::FileEntry;
 use crate::app::item_view::SelectionRect;
 use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneState};
 use crate::app::state::AppState;
+use crate::{FileEntry, ItemViewEntry};
 use std::collections::HashSet;
 use std::ops::Range;
 
@@ -25,8 +25,7 @@ pub(crate) fn retained_visible_paths(
         .collect()
 }
 
-#[allow(dead_code)]
-pub(crate) fn annotate_selection_state(entries: &mut [FileEntry], selected_paths: &[String]) {
+pub(crate) fn annotate_selection_state(entries: &mut [ItemViewEntry], selected_paths: &[String]) {
     if selected_paths.is_empty() {
         for entry in entries {
             entry.selected = false;
@@ -349,7 +348,6 @@ pub(crate) fn filtered_entries_range_for_slot(
     };
 
     annotate_visible_location_groups_for_pane(state, pane, range.start, &mut entries);
-    annotate_selection_state(&mut entries, &pane.selection.paths);
     entries
 }
 

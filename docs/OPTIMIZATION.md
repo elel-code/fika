@@ -59,7 +59,7 @@ Rectangle viewport shell (clip: true)
 | 自管滚动条消费 Rust item-view layout metrics | `split_view.rs` / `split_pane.slint` | `rows_per_column`、content width、scroll max 与虚拟切片使用同一 Rust layouter |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
 | Rust item-view hit-test | `item_view.rs` | click/activation/context/DnD/drop target 命中不再散落在 Slint tile 或 transfer 几何代码中 |
-| Rust item-view render plan | `item_view.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 width/height、media/text rect、尺寸/字体 token 不再由 Slint 每项公式或 layout 容器计算；local x/y 由 `for item[index]` 复用层计算，避免进入 `FileEntry` row data |
+| Rust item-view render plan | `item_view.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 width/height、media/text rect、尺寸/字体 token 不再由 Slint 每项公式或 layout 容器计算；local x/y 由 `for item[index]` 复用层计算，避免进入 `ItemViewEntry` row data |
 
 ---
 
@@ -241,7 +241,7 @@ fn apply_virtual_model_update(ui: &AppWindow, slot: i32, update: &VirtualViewSna
 - `ui/split_pane.slint` — tile primitive 循环
 
 **改进**：
-1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `FileEntry` 字段，避免每个 tile 独立计算
+1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `ItemViewEntry` 字段，避免每个 tile 独立计算
 2. 删除独立 tile 组件边界，把可见 tile primitive 内联到 `SplitPaneView` 的 slice layer，避免继续维护旧 path-based item 组件
 3. 将 icon/media rect、text rect、group/title/location y 坐标和 line height 继续迁到 Rust render plan，`SplitPaneView` 的可见 item loop 不再为每项使用 `HorizontalLayout` / `VerticalLayout`
 4. pane-level 颜色 token 仍由 `SplitPaneView` 下发；后续若切换到自绘 renderer，再把颜色/字体/icon cache 一并纳入 renderer state
@@ -298,7 +298,7 @@ Slint: Rectangle viewport + input/DnD overlays
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD、selection、activation 与 context menu 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
 4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；可见 tile primitive 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
-5. 虚拟切片仍输出 `virtual_entries`，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；local `x/y` 改由 `for item[index]` 下标和 pane row metrics 计算，不再写入 `FileEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
+5. 虚拟切片仍输出 `virtual_entries`，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；local `x/y` 改由 `for item[index]` 下标和 pane row metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
 7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只按 `media_x/media_y/text_x/text_width/group_y/title_y/location_y` 等字段绘制 `Image` / `FolderGlyph` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。
 8. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
@@ -522,13 +522,13 @@ selected: root.selection-revision >= 0 && root.is_selected(item.path);
 - `PaneRouting.is-selected` — 全局回调注册
 - `src/app/selection.rs` — `PaneSelection` 查找逻辑
 
-**实际实现**（✅ 已完成）：`FileEntry` 已新增 `selected: bool` 字段，`SplitPaneView` tile 直接读 model 字段：
+**实际实现**（✅ 已完成）：`ItemViewEntry` 带有 `selected: bool` 字段，`SplitPaneView` tile 直接读 model 字段：
 
 ```slint
 selected: item.selected;
 ```
 
-选择变化时，Rust 侧通过 `update_file_entries_model_selection` 对当前 pane 的虚拟 `VecModel<FileEntry>` 做逐行 `set_row_data` 脏更新；后台虚拟视图结果应用时也会用当前 pane 的 selection 调用 `annotate_selection_state`，防止旧异步结果覆盖当前高亮。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
+选择变化时，Rust 侧通过 `update_item_view_entries_model_selection` 对当前 pane 的虚拟 `VecModel<ItemViewEntry>` 做逐行 `set_row_data` 脏更新；后台虚拟视图结果应用时也会用当前 pane 的 selection 调用 `annotate_selection_state`，防止旧异步结果覆盖当前高亮。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
 
 **收益**：每次选择变化（点击、框选、Ctrl+A）省 80-120 次 FFI 调用。
 
@@ -823,7 +823,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 
 | 阶段 | 改进 | 预计工作量 | 状态 |
 |------|------|-----------|------|
-| **Phase V0** | `is_selected` FFI 预计算到 FileEntry | 1h | ✅ 已完成 |
+| **Phase V0** | `is_selected` FFI 预计算到 ItemViewEntry | 1h | ✅ 已完成 |
 | **Phase V1** | `virtual_entry_range` 双重计算融合 | 15min | ✅ 已完成 |
 | **Phase V2** | `filtered_entries_range` filter_map→map | 5min | ✅ 已完成 |
 | **Phase V3** | 旧 preview 路径删除 | 5min | ✅ 已完成/不适用 |

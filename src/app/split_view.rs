@@ -6,7 +6,7 @@ use crate::app::pane::{PaneEntrySnapshot, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
-use crate::{AppWindow, FileEntry, PaneSlotData, set_status, sync_virtual_entries_for_slot};
+use crate::{AppWindow, ItemViewEntry, PaneSlotData, set_status, sync_virtual_entries_for_slot};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -330,7 +330,7 @@ fn pane_slot_can_go_forward(state: &AppState, slot: i32) -> bool {
         .is_some_and(|pane| pane.history.forward_len() > 0)
 }
 
-fn pane_slot_entries(slot: i32, state: &AppState) -> ModelRc<FileEntry> {
+fn pane_slot_entries(slot: i32, state: &AppState) -> ModelRc<ItemViewEntry> {
     state
         .panes
         .pane_for_slot(slot)

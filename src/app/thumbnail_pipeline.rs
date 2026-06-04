@@ -1,4 +1,4 @@
-use crate::FileEntry;
+use crate::ItemViewEntry;
 use crate::app::state::AppState;
 use crate::fs::thumbnails;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
@@ -12,7 +12,7 @@ pub(crate) const MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC: usize = 96;
 pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
     state: &AppState,
     pane_id: u64,
-    entries: &mut [FileEntry],
+    entries: &mut [ItemViewEntry],
     size_px: u32,
 ) {
     let Some(pane) = state.panes.pane_by_id(pane_id) else {
@@ -38,10 +38,10 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
 }
 
 pub(crate) fn prioritize_thumbnail_entries(
-    entries: &[FileEntry],
+    entries: &[ItemViewEntry],
     virtual_start_index: usize,
     visible_range: Range<usize>,
-) -> Vec<&FileEntry> {
+) -> Vec<&ItemViewEntry> {
     let visible_start = visible_range
         .start
         .saturating_sub(virtual_start_index)
@@ -103,7 +103,7 @@ pub(crate) fn path_is_in_virtual_range_for_pane(
 #[cfg(test)]
 pub(crate) fn thumbnail_schedule_candidate(
     state: &AppState,
-    entry: &FileEntry,
+    entry: &ItemViewEntry,
     size_px: u32,
 ) -> Option<(PathBuf, thumbnails::ThumbnailKey)> {
     thumbnail_schedule_candidate_for_pane(state, state.panes.focused().id, entry, size_px)
@@ -112,7 +112,7 @@ pub(crate) fn thumbnail_schedule_candidate(
 pub(crate) fn thumbnail_schedule_candidate_for_pane(
     state: &AppState,
     pane_id: u64,
-    entry: &FileEntry,
+    entry: &ItemViewEntry,
     size_px: u32,
 ) -> Option<(PathBuf, thumbnails::ThumbnailKey)> {
     if entry.is_dir || entry.thumbnail_state == 2 {
@@ -141,7 +141,7 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane(
 #[cfg(test)]
 pub(crate) fn thumbnail_schedule_batch(
     state: &mut AppState,
-    entries: &[&FileEntry],
+    entries: &[&ItemViewEntry],
     size_px: u32,
 ) -> Vec<PathBuf> {
     thumbnail_schedule_batch_for_pane(state, state.panes.focused().id, entries, size_px)
@@ -150,7 +150,7 @@ pub(crate) fn thumbnail_schedule_batch(
 pub(crate) fn thumbnail_schedule_batch_for_pane(
     state: &mut AppState,
     pane_id: u64,
-    entries: &[&FileEntry],
+    entries: &[&ItemViewEntry],
     size_px: u32,
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -299,23 +299,19 @@ fn image_from_thumbnail(data: &thumbnails::ThumbnailData) -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FileEntry;
     use crate::app::state::AppState;
     use std::io;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    fn test_entry(name: &str, path: &str) -> FileEntry {
-        FileEntry {
+    fn test_entry(name: &str, path: &str) -> ItemViewEntry {
+        ItemViewEntry {
             name: name.into(),
             path: path.into(),
             group: String::new().into(),
             location: String::new().into(),
-            kind: "File".into(),
-            size: "1 KB".into(),
-            size_bytes: 1024.0,
-            modified: "Today".into(),
-            modified_age_days: 0,
             is_dir: false,
             selected: false,
             thumbnail_state: 0,
@@ -336,6 +332,21 @@ mod tests {
             metadata_font_size: 0.0,
             title_font_size: 0.0,
             glyph_doc_font_size: 0.0,
+        }
+    }
+
+    fn business_entry(name: &str, path: &str) -> FileEntry {
+        FileEntry {
+            name: name.into(),
+            path: path.into(),
+            group: String::new().into(),
+            location: String::new().into(),
+            kind: "File".into(),
+            size: "1 KB".into(),
+            size_bytes: 1024.0,
+            modified: "Today".into(),
+            modified_age_days: 0,
+            is_dir: false,
         }
     }
 
@@ -519,7 +530,7 @@ mod tests {
         state
             .panes
             .focused_mut()
-            .set_file_entries(vec![test_entry("photo.png", path)]);
+            .set_file_entries(vec![business_entry("photo.png", path)]);
         state.panes.focused_mut().view.virtual_view.range = 0..1;
         state
             .panes
@@ -546,10 +557,8 @@ mod tests {
         assert!(!state.thumbnail_failures.contains_key(&key));
         assert_eq!(state.panes.focused().entries[0].path, path);
         assert_eq!(
-            state.panes.focused().entries[0]
-                .to_file_entry()
-                .thumbnail_state,
-            0
+            state.panes.focused().entries[0].to_file_entry(),
+            business_entry("photo.png", path)
         );
     }
 
@@ -560,9 +569,10 @@ mod tests {
         let path = "/tmp/photo.png";
         let key = thumbnails::fallback_key(Path::new(path), 64);
 
-        let mut entry = test_entry("photo.png", path);
-        entry.thumbnail_state = 1;
-        state.panes.focused_mut().set_file_entries(vec![entry]);
+        state
+            .panes
+            .focused_mut()
+            .set_file_entries(vec![business_entry("photo.png", path)]);
         state.panes.focused_mut().view.virtual_view.range = 0..1;
         state
             .panes
@@ -587,10 +597,8 @@ mod tests {
         assert!(state.thumbnail_failures.contains_key(&key));
         assert_eq!(state.panes.focused().entries[0].path, path);
         assert_eq!(
-            state.panes.focused().entries[0]
-                .to_file_entry()
-                .thumbnail_state,
-            0
+            state.panes.focused().entries[0].to_file_entry(),
+            business_entry("photo.png", path)
         );
     }
 
@@ -791,7 +799,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         state.panes.focused_mut().set_file_entries(
             (0..6)
-                .map(|index| test_entry(&format!("{index}.png"), &format!("/tmp/{index}.png")))
+                .map(|index| business_entry(&format!("{index}.png"), &format!("/tmp/{index}.png")))
                 .collect(),
         );
         state.panes.focused_mut().view.virtual_view.range = 2..5;
@@ -806,10 +814,10 @@ mod tests {
     fn virtual_range_path_lookup_uses_filtered_visible_indices() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         state.panes.focused_mut().set_file_entries(vec![
-            test_entry("alpha.png", "/tmp/alpha.png"),
-            test_entry("skip.log", "/tmp/skip.log"),
-            test_entry("beta.png", "/tmp/beta.png"),
-            test_entry("gamma.png", "/tmp/gamma.png"),
+            business_entry("alpha.png", "/tmp/alpha.png"),
+            business_entry("skip.log", "/tmp/skip.log"),
+            business_entry("beta.png", "/tmp/beta.png"),
+            business_entry("gamma.png", "/tmp/gamma.png"),
         ]);
         state.panes.focused_mut().search.visible_entry_indices = Some(vec![0, 2, 3]);
         state.panes.focused_mut().view.virtual_view.range = 1..3;
@@ -826,7 +834,7 @@ mod tests {
         state
             .panes
             .focused_mut()
-            .set_file_entries(vec![test_entry("alpha.png", "/tmp/alpha.png")]);
+            .set_file_entries(vec![business_entry("alpha.png", "/tmp/alpha.png")]);
         state.panes.focused_mut().view.virtual_view.range = 0..0;
         assert!(!path_is_in_virtual_range(&state, "/tmp/alpha.png"));
 
