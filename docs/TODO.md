@@ -442,8 +442,9 @@ Acceptance for all:
 - [~] Add Dolphin-style user custom context menu actions.
   - Acceptance: users can expose opt-in custom file/folder context actions backed by desktop/service-menu style metadata, with visibility constrained by target type and selection.
   - Current: `src/desktop/service_menu.rs` discovers KDE/Dolphin `kio/servicemenus` desktop entries from XDG data dirs, filters `KonqPopupMenu/Plugin` actions by MIME and multi-selection-safe Exec fields, expands desktop Exec field codes into shell-free argv, and sorts top-level actions first.
-  - Current: item and blank-area right-click routing now refresh a generation-guarded `AppState` snapshot of matching service-menu actions off the UI thread, so later menu UI/execution can consume ready action metadata without blocking popup opening.
-  - Remaining: render these actions in the file/viewport context menus, add user-visible grouping/enablement, and execute the stored argv through the existing desktop launch/status path when the user chooses an action.
+  - Current: item and blank-area right-click routing refresh a generation-guarded `AppState` snapshot of matching service-menu actions off the UI thread, clear stale popup rows immediately, then update the Slint action model when discovery returns.
+  - Current: matching service-menu actions now render in file/viewport context menus, dynamic row count participates in popup geometry, and clicking launches the stored shell-free argv through the existing systemd user-scope launch path while reporting status back to the source pane.
+  - Remaining: add better grouping/submenus for `X-KDE-Submenu` / top-level placement, plus optional icons and user enable/disable policy if needed.
 
 - [x] Apply Dolphin-like context menu grouping and submenu grace.
   - Acceptance: context menus use grouped separators, submenu indicators are separate from labels, child menus anchor to their parent row and have a hover bridge to avoid accidental disappearance while moving between parent and child.

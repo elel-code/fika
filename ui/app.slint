@@ -52,7 +52,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, DesktopApp, DeviceEntry, FileEntry, PaneSlotData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, DesktopApp, DeviceEntry, FileEntry, PaneSlotData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -660,6 +660,7 @@ export component AppWindow inherits Window {
     private property <length> chooser-filter-menu-y: 0px;
     private property <length> chooser-filter-menu-width: 220px;
     private property <bool> custom-open-with-open: false;
+    in property <[ContextServiceAction]> context_service_actions;
     in property <[DesktopApp]> open_with_apps;
     in property <[DesktopApp]> other_application_apps;
     in-out property <string> open_with_path;
@@ -738,6 +739,7 @@ export component AppWindow inherits Window {
     callback open_with_app(string, string);
     callback set_default_app(string, string);
     callback open_with_custom_command(string, string);
+    callback context_service_action(int);
     callback open_place(string);
     callback open_device(string, bool);
     callback unmount_device(string, string);
@@ -1612,6 +1614,7 @@ export component AppWindow inherits Window {
         device-can-unmount: root.context-menu-device-can-unmount;
         device-can-eject: root.context-menu-device-can-eject;
         device-pending-action: root.context-menu-device-pending-action;
+        service-actions: root.context_service_actions;
         file_open_folder_with_hover(row-y, is-hovered) => {
             root.open-with-submenu-hover(root.context-menu-path, row-y, is-hovered);
         }
@@ -1695,6 +1698,10 @@ export component AppWindow inherits Window {
                 root.confirm-permanent-delete(root.context-menu-path, false);
             }
         }
+        file_service_action_requested(index) => {
+            root.context_service_action(index);
+            root.close-context-popups();
+        }
         place_open_new_window => {
             root.open_place_new_window(root.context-menu-place-index);
             root.close-context-popups();
@@ -1757,6 +1764,10 @@ export component AppWindow inherits Window {
         }
         viewport_open_terminal_here => {
             root.open_terminal_here(root.current_path);
+            root.close-context-popups();
+        }
+        viewport_service_action_requested(index) => {
+            root.context_service_action(index);
             root.close-context-popups();
         }
     }

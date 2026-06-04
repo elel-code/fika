@@ -1,4 +1,4 @@
-use super::mime_open;
+use super::{mime_open, systemd_launch};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
@@ -53,6 +53,16 @@ pub(crate) fn list_actions_for_paths(paths: &[PathBuf]) -> Result<Vec<ServiceMen
         &service_menu_dirs(),
         &selected,
     ))
+}
+
+pub(crate) fn launch_action(
+    action: &ServiceMenuAction,
+) -> Result<systemd_launch::LaunchResult, String> {
+    let (program, args) = action
+        .argv
+        .split_first()
+        .ok_or_else(|| format!("{} has an empty command", action.name))?;
+    systemd_launch::spawn_in_user_scope(program, args, Some(&action.name))
 }
 
 fn expand_service_menu_exec(
