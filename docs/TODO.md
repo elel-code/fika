@@ -570,10 +570,11 @@ Acceptance for all:
   - Acceptance: local removable devices stay on Fika's UDisks2 system-bus path, while future network/removable abstractions can share one sidebar model.
   - Current: mounted Devices entries participate in the same sidebar directory prefetch path as Places after asynchronous device discovery, reducing uncached transitions when jumping through the Devices section.
 
-- [~] Move thumbnail caching closer to the freedesktop model used by COSMIC.
+- [x] Move thumbnail caching closer to the freedesktop model used by COSMIC.
   - Reference: `cosmic-files/src/thumbnail_cacher.rs` and `thumbnailer.rs`.
   - Acceptance: cache files, failure markers, and external thumbnailer desktop entries are considered before adding more ad-hoc thumbnail code.
   - Current: thumbnail keys now carry freedesktop size buckets and cache filename identity, and thumbnail load reads/writes freedesktop cache/fail-marker paths based on the Thumbnail Managing Standard (`file://` URI MD5, `normal` / `large` / `x-large` / `xx-large`, and `fail/fika-$version`).
+  - Current: freedesktop cache reads now validate PNG text metadata before reuse: `Thumb::URI` must match the source URI and `Thumb::MTime` must match the source mtime. Missing, unreadable, or mismatched metadata is treated as a cache miss and the stale cache file is removed before regenerating.
   - Current: Fika discovers freedesktop `.thumbnailer` entries from XDG thumbnailer directories, honors `TryExec`, matches exact and top-level wildcard MIME entries, expands `%i` / `%u` / `%o` / `%s` Exec field codes without a shell, and lets external thumbnailers generate the standard cache file for non-built-in formats such as PDF/SVG.
   - Current: thumbnail dispatch is now bounded per virtual-view sync and kept in the thumbnail pipeline rather than inline in `main.rs`, matching the COSMIC-inspired separation between directory items, view state, and thumbnail work.
 

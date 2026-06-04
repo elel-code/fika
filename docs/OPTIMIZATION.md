@@ -591,6 +591,8 @@ bridge.handle.spawn(async move {
 
 **实际实现**（✅ 已完成）：`schedule_visible_thumbnails` 现在只创建一个 async task，并在其中用一个 `tokio::spawn_blocking` 顺序处理整批 `paths`。加载成功后仍逐个发送 `AsyncEvent::ThumbnailLoaded`，沿用现有 `ThumbnailFlushScheduler` 的 UI 线程批量写入；如果 blocking task 失败，会按原始 path 逐个生成失败 `ThumbnailLoad`，确保 pending 状态能被清理。
 
+**相关缓存约束**（✅ 已完成）：`src/fs/thumbnails.rs` 读取 freedesktop 缩略图缓存时不再只看缓存文件 mtime；复用前会验证 PNG 文本元数据中的 `Thumb::URI` 和 `Thumb::MTime`，缺失、不匹配或读取失败时删除旧缓存并重新生成，避免把外部/陈旧缓存误当成当前文件的有效缩略图。
+
 **难度**：已完成。`paths` 直接移入单个 spawn；失败兜底保留每个 path 自己的 fallback key。
 
 ---

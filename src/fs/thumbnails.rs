@@ -371,6 +371,15 @@ fn read_thumbnail_cache(
         return None;
     }
 
+    if !thumbnail_cache_metadata_matches(
+        &cache_paths.thumbnail_path,
+        &cache_paths.source_uri,
+        source_modified_secs,
+    ) {
+        let _ = fs::remove_file(&cache_paths.thumbnail_path);
+        return None;
+    }
+
     match decode_thumbnail(&cache_paths.thumbnail_path, size_px) {
         Ok(data) => Some(data),
         Err(_) => {
@@ -378,6 +387,81 @@ fn read_thumbnail_cache(
             None
         }
     }
+}
+
+fn thumbnail_cache_metadata_matches(
+    path: &Path,
+    expected_uri: &str,
+    source_modified_secs: u64,
+) -> bool {
+    let Ok(mut text_chunks) = png_text_chunks(path) else {
+        return false;
+    };
+    thumbnail_cache_text_metadata_matches(&text_chunks, expected_uri, source_modified_secs) || {
+        if png_tail_text_chunks(path, &mut text_chunks).is_err() {
+            return false;
+        }
+        thumbnail_cache_text_metadata_matches(&text_chunks, expected_uri, source_modified_secs)
+    }
+}
+
+fn thumbnail_cache_text_metadata_matches(
+    text_chunks: &[(String, String)],
+    expected_uri: &str,
+    source_modified_secs: u64,
+) -> bool {
+    let expected_mtime = source_modified_secs.to_string();
+    let uri_matches = text_chunks
+        .iter()
+        .any(|(keyword, text)| keyword == "Thumb::URI" && text == expected_uri);
+    let mtime_matches = text_chunks
+        .iter()
+        .any(|(keyword, text)| keyword == "Thumb::MTime" && text == &expected_mtime);
+
+    uri_matches && mtime_matches
+}
+
+fn png_text_chunks(path: &Path) -> io::Result<Vec<(String, String)>> {
+    let file = fs::File::open(path)?;
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let reader = decoder.read_info().map_err(io::Error::other)?;
+    collect_png_text_chunks(reader.info())
+}
+
+fn png_tail_text_chunks(path: &Path, text_chunks: &mut Vec<(String, String)>) -> io::Result<()> {
+    let file = fs::File::open(path)?;
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let mut reader = decoder.read_info().map_err(io::Error::other)?;
+    reader.finish().map_err(io::Error::other)?;
+    *text_chunks = collect_png_text_chunks(reader.info())?;
+    Ok(())
+}
+
+fn collect_png_text_chunks(info: &png::Info<'_>) -> io::Result<Vec<(String, String)>> {
+    let mut text_chunks = info
+        .uncompressed_latin1_text
+        .iter()
+        .map(|chunk| Ok((chunk.keyword.clone(), chunk.text.clone())))
+        .collect::<io::Result<Vec<_>>>()?;
+
+    for chunk in &info.compressed_latin1_text {
+        let mut chunk = chunk.clone();
+        chunk.decompress_text().map_err(io::Error::other)?;
+        text_chunks.push((
+            chunk.keyword.clone(),
+            chunk.get_text().map_err(io::Error::other)?,
+        ));
+    }
+    for chunk in &info.utf8_text {
+        let mut chunk = chunk.clone();
+        chunk.decompress_text().map_err(io::Error::other)?;
+        text_chunks.push((
+            chunk.keyword.clone(),
+            chunk.get_text().map_err(io::Error::other)?,
+        ));
+    }
+
+    Ok(text_chunks)
 }
 
 fn write_thumbnail_cache(
@@ -982,16 +1066,58 @@ mod tests {
         .unwrap();
     }
 
-    fn png_text_chunks(path: &Path) -> Vec<(String, String)> {
-        let file = fs::File::open(path).unwrap();
-        let decoder = png::Decoder::new(std::io::BufReader::new(file));
-        let reader = decoder.read_info().unwrap();
-        reader
-            .info()
-            .uncompressed_latin1_text
-            .iter()
-            .map(|chunk| (chunk.keyword.clone(), chunk.text.clone()))
-            .collect()
+    fn write_test_cache_png(
+        cache_paths: &FreedesktopThumbnailCachePaths,
+        data: &ThumbnailData,
+        source_uri: &str,
+        source_modified_secs: u64,
+    ) {
+        if let Some(parent) = cache_paths.thumbnail_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        write_thumbnail_cache_png(
+            &cache_paths.thumbnail_path,
+            data,
+            source_uri,
+            source_modified_secs,
+        )
+        .unwrap();
+    }
+
+    fn write_test_cache_png_with_tail_metadata(
+        cache_paths: &FreedesktopThumbnailCachePaths,
+        data: &ThumbnailData,
+        source_uri: &str,
+        source_modified_secs: u64,
+    ) {
+        if let Some(parent) = cache_paths.thumbnail_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let file = fs::File::create(&cache_paths.thumbnail_path).unwrap();
+        let writer = BufWriter::new(file);
+        let mut encoder = png::Encoder::new(writer, data.width, data.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&data.rgba).unwrap();
+        writer
+            .write_text_chunk(&png::text_metadata::TEXtChunk::new(
+                "Thumb::URI".to_string(),
+                source_uri.to_string(),
+            ))
+            .unwrap();
+        writer
+            .write_text_chunk(&png::text_metadata::TEXtChunk::new(
+                "Thumb::MTime".to_string(),
+                source_modified_secs.to_string(),
+            ))
+            .unwrap();
+    }
+
+    fn png_text_chunks_for_test(path: &Path) -> Vec<(String, String)> {
+        let mut chunks = super::png_text_chunks(path).unwrap();
+        super::png_tail_text_chunks(path, &mut chunks).unwrap();
+        chunks
     }
 
     #[test]
@@ -1221,7 +1347,7 @@ mod tests {
             &cache_paths.thumbnail_path,
             key_for(&source, 64).unwrap().modified_secs
         ));
-        let text_chunks = png_text_chunks(&cache_paths.thumbnail_path);
+        let text_chunks = png_text_chunks_for_test(&cache_paths.thumbnail_path);
         assert!(text_chunks.contains(&("Thumb::URI".to_string(), cache_paths.source_uri)));
         assert!(text_chunks.iter().any(|(keyword, text)| {
             keyword == "Thumb::MTime"
@@ -1258,6 +1384,111 @@ mod tests {
             load.cache_paths.unwrap().thumbnail_path,
             cache_paths.thumbnail_path
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_thumbnail_rejects_cache_with_wrong_freedesktop_uri() {
+        let dir = test_dir("cache-wrong-uri");
+        let source = dir.join("source.png");
+        let cache_base = dir.join("cache").join("thumbnails");
+        write_rgba_png(&source, &[0, 255, 0, 255], 1, 1);
+        let source_mtime = key_for(&source, 64).unwrap().modified_secs;
+        let cache_paths =
+            freedesktop_thumbnail_cache_paths_for_path_base(&source, 64, &cache_base).unwrap();
+        write_test_cache_png(
+            &cache_paths,
+            &ThumbnailData {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 0, 0, 255],
+            },
+            "file:///tmp/wrong-source.png",
+            source_mtime,
+        );
+
+        let load = load_thumbnail_with_cache_base(source.clone(), 64, Some(&cache_base));
+        let data = load.data.unwrap();
+
+        assert_eq!(data.rgba, vec![0, 255, 0, 255]);
+        assert!(thumbnail_cache_metadata_matches(
+            &cache_paths.thumbnail_path,
+            &cache_paths.source_uri,
+            source_mtime
+        ));
+        assert!(
+            !png_text_chunks_for_test(&cache_paths.thumbnail_path).contains(&(
+                "Thumb::URI".to_string(),
+                "file:///tmp/wrong-source.png".to_string()
+            ))
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_thumbnail_rejects_cache_with_wrong_freedesktop_mtime() {
+        let dir = test_dir("cache-wrong-mtime");
+        let source = dir.join("source.png");
+        let cache_base = dir.join("cache").join("thumbnails");
+        write_rgba_png(&source, &[0, 255, 0, 255], 1, 1);
+        let source_mtime = key_for(&source, 64).unwrap().modified_secs;
+        let cache_paths =
+            freedesktop_thumbnail_cache_paths_for_path_base(&source, 64, &cache_base).unwrap();
+        write_test_cache_png(
+            &cache_paths,
+            &ThumbnailData {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 0, 0, 255],
+            },
+            &cache_paths.source_uri,
+            source_mtime.saturating_add(1),
+        );
+
+        let load = load_thumbnail_with_cache_base(source.clone(), 64, Some(&cache_base));
+        let data = load.data.unwrap();
+
+        assert_eq!(data.rgba, vec![0, 255, 0, 255]);
+        assert!(thumbnail_cache_metadata_matches(
+            &cache_paths.thumbnail_path,
+            &cache_paths.source_uri,
+            source_mtime
+        ));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_thumbnail_accepts_freedesktop_cache_with_tail_metadata() {
+        let dir = test_dir("cache-tail-metadata");
+        let source = dir.join("source.png");
+        let cache_base = dir.join("cache").join("thumbnails");
+        write_rgba_png(&source, &[0, 0, 255, 255], 1, 1);
+        let source_mtime = key_for(&source, 64).unwrap().modified_secs;
+        let cache_paths =
+            freedesktop_thumbnail_cache_paths_for_path_base(&source, 64, &cache_base).unwrap();
+        write_test_cache_png_with_tail_metadata(
+            &cache_paths,
+            &ThumbnailData {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 0, 0, 255],
+            },
+            &cache_paths.source_uri,
+            source_mtime,
+        );
+
+        let load = load_thumbnail_with_cache_base(source, 64, Some(&cache_base));
+        let data = load.data.unwrap();
+
+        assert_eq!(data.rgba, vec![255, 0, 0, 255]);
+        assert!(thumbnail_cache_metadata_matches(
+            &cache_paths.thumbnail_path,
+            &cache_paths.source_uri,
+            source_mtime
+        ));
 
         let _ = fs::remove_dir_all(dir);
     }
