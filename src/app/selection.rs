@@ -1,5 +1,5 @@
 use crate::FileEntry;
-use crate::app::geometry::{RectBounds, SelectionRect};
+use crate::app::item_view::SelectionRect;
 use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneState};
 use crate::app::state::AppState;
 use std::collections::HashSet;
@@ -668,20 +668,11 @@ pub(crate) fn selection_range_paths_filtered_for_slot(
 
 #[cfg(test)]
 pub(crate) fn selection_rect_paths(entries: &[FileEntry], rect: SelectionRect) -> Vec<String> {
-    let rows_per_column = rect.rows_per_column.max(1) as usize;
     entries
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            let column = index / rows_per_column;
-            let row = index % rows_per_column;
-            let tile_x1 = rect.padding + column as f32 * rect.cell_width;
-            let tile_y1 = rect.padding + row as f32 * rect.row_height;
-            let tile_x2 = tile_x1 + (rect.cell_width - 12.0).max(1.0);
-            let tile_y2 = tile_y1 + rect.row_height.max(1.0);
-            if RectBounds::new(rect.x1, rect.y1, rect.x2, rect.y2)
-                .intersects(RectBounds::new(tile_x1, tile_y1, tile_x2, tile_y2))
-            {
+            if rect.intersects_index(index) {
                 Some(entry.path.to_string())
             } else {
                 None
@@ -700,19 +691,11 @@ pub(crate) fn selection_rect_paths_filtered_for_slot(
     slot: i32,
     rect: SelectionRect,
 ) -> Vec<String> {
-    let rows_per_column = rect.rows_per_column.max(1) as usize;
-    let selection_bounds = RectBounds::new(rect.x1, rect.y1, rect.x2, rect.y2);
     let mut selected = Vec::new();
     let visible_range = selection_rect_visible_range_for_slot(state, slot, rect);
 
     for (visible_index, entry) in visible_entries_range_iter_for_slot(state, slot, visible_range) {
-        let column = visible_index / rows_per_column;
-        let row = visible_index % rows_per_column;
-        let tile_x1 = rect.padding + column as f32 * rect.cell_width;
-        let tile_y1 = rect.padding + row as f32 * rect.row_height;
-        let tile_x2 = tile_x1 + (rect.cell_width - 12.0).max(1.0);
-        let tile_y2 = tile_y1 + rect.row_height.max(1.0);
-        if selection_bounds.intersects(RectBounds::new(tile_x1, tile_y1, tile_x2, tile_y2)) {
+        if rect.intersects_index(visible_index) {
             selected.push(entry.path.to_string());
         }
     }
@@ -731,24 +714,7 @@ fn selection_rect_visible_range_for_slot(
     rect: SelectionRect,
 ) -> Range<usize> {
     let visible_count = filtered_entry_count_for_slot(state, slot);
-    if visible_count == 0 {
-        return 0..0;
-    }
-
-    let rows_per_column = rect.rows_per_column.max(1) as usize;
-    let cell_width = rect.cell_width.max(1.0);
-    let tile_width = (cell_width - 12.0).max(1.0);
-
-    let first_column = ((rect.x1 - rect.padding - tile_width) / cell_width)
-        .floor()
-        .max(0.0) as usize;
-    let last_column = ((rect.x2 - rect.padding) / cell_width).floor().max(0.0) as usize;
-
-    let start = first_column
-        .saturating_mul(rows_per_column)
-        .min(visible_count);
-    let end = ((last_column + 1).saturating_mul(rows_per_column)).min(visible_count);
-    start..end.max(start)
+    rect.candidate_range(visible_count)
 }
 
 #[allow(dead_code)]

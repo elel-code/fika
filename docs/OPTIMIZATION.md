@@ -285,7 +285,7 @@ Slint: Rectangle viewport + input/DnD overlays
 
 **当前进度**：
 1. 主文件区已直接替换为 `Rectangle { clip: true; } + TouchArea + self-managed scrollbar`，删除 `ScrollView` / `Flickable` viewport 写回。
-2. `src/app/item_view.rs` 已开始承载 pane-local layout 和 hit-test，transfer/DnD 目标解析不再私有持有主视图几何。
+2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD 与 selection 不再私有持有主视图几何。
 3. 虚拟切片仍输出 `virtual_entries` 给 `FileTile` Repeater，下一步需要把 renderer/reuse 从 Slint tile 组件树中拆出来。
 4. DnD 仍保留 Slint 原生 `data-transfer` 路径，目标解析继续向 Rust hit-test 收敛。
 

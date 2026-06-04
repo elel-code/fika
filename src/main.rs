@@ -48,10 +48,10 @@ use app::file_clipboard::{
     refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    MainGridLayout, SelectionRect, active_main_pane_width, clamped_split_pane_ratio,
-    inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
-    virtual_grid_plan,
+    MainGridLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
+    place_drop_geometry, register_menu_geometry_callbacks, virtual_grid_plan,
 };
+use app::item_view::SelectionRect;
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,

@@ -6,6 +6,7 @@ use crate::app::selection::filtered_entry_at_for_slot;
 use crate::app::state::AppState;
 use crate::{AppWindow, FileEntry};
 use slint::ComponentHandle;
+use std::ops::Range;
 
 const ITEM_VIEW_PADDING: f32 = 14.0;
 const TILE_TRAILING_GAP: f32 = 12.0;
@@ -21,6 +22,74 @@ pub(crate) struct ItemViewLayout {
     pub(crate) cell_width: f32,
     pub(crate) row_height: f32,
     pub(crate) padding: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SelectionRect {
+    pub(crate) x1: f32,
+    pub(crate) y1: f32,
+    pub(crate) x2: f32,
+    pub(crate) y2: f32,
+    pub(crate) rows_per_column: i32,
+    pub(crate) cell_width: f32,
+    pub(crate) row_height: f32,
+    pub(crate) padding: f32,
+}
+
+impl SelectionRect {
+    pub(crate) fn candidate_range(self, visible_count: usize) -> Range<usize> {
+        if visible_count == 0 {
+            return 0..0;
+        }
+
+        let rows_per_column = self.rows_per_column.max(1) as usize;
+        let cell_width = self.cell_width.max(1.0);
+        let tile_width = (cell_width - TILE_TRAILING_GAP).max(1.0);
+
+        let first_column = ((self.x1 - self.padding - tile_width) / cell_width)
+            .floor()
+            .max(0.0) as usize;
+        let last_column = ((self.x2 - self.padding) / cell_width)
+            .floor()
+            .max(0.0) as usize;
+
+        let start = first_column
+            .saturating_mul(rows_per_column)
+            .min(visible_count);
+        let end = ((last_column + 1).saturating_mul(rows_per_column)).min(visible_count);
+        start..end.max(start)
+    }
+
+    pub(crate) fn intersects_index(self, index: usize) -> bool {
+        let rows_per_column = self.rows_per_column.max(1) as usize;
+        let column = index / rows_per_column;
+        let row = index % rows_per_column;
+        let tile_x1 = self.padding + column as f32 * self.cell_width;
+        let tile_y1 = self.padding + row as f32 * self.row_height;
+        let tile_x2 = tile_x1 + (self.cell_width - TILE_TRAILING_GAP).max(1.0);
+        let tile_y2 = tile_y1 + self.row_height.max(1.0);
+
+        RectBounds::new(self.x1, self.y1, self.x2, self.y2)
+            .intersects(RectBounds::new(tile_x1, tile_y1, tile_x2, tile_y2))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RectBounds {
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+}
+
+impl RectBounds {
+    fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        Self { x1, y1, x2, y2 }
+    }
+
+    fn intersects(self, other: Self) -> bool {
+        self.x1 <= other.x2 && self.x2 >= other.x1 && self.y1 <= other.y2 && self.y2 >= other.y1
+    }
 }
 
 impl ItemViewLayout {
@@ -195,5 +264,44 @@ mod tests {
             pane_slot_geometry(280.0, 900.0, true, 0.5, 1),
             Some((730.0, 450.0))
         );
+    }
+
+    #[test]
+    fn selection_rect_uses_column_first_item_geometry() {
+        let rect = SelectionRect {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 109.0,
+            y2: 205.0,
+            rows_per_column: 2,
+            cell_width: 100.0,
+            row_height: 100.0,
+            padding: 10.0,
+        };
+
+        assert!(rect.intersects_index(0));
+        assert!(rect.intersects_index(1));
+        assert!(!rect.intersects_index(2));
+        assert_eq!(rect.candidate_range(4), 0..2);
+    }
+
+    #[test]
+    fn selection_rect_candidate_range_limits_intersecting_columns() {
+        let rect = SelectionRect {
+            x1: 210.0,
+            y1: 0.0,
+            x2: 309.0,
+            y2: 205.0,
+            rows_per_column: 2,
+            cell_width: 100.0,
+            row_height: 100.0,
+            padding: 10.0,
+        };
+
+        assert_eq!(rect.candidate_range(20), 2..6);
+        assert!(rect.intersects_index(4));
+        assert!(rect.intersects_index(5));
+        assert!(!rect.intersects_index(2));
+        assert!(!rect.intersects_index(6));
     }
 }

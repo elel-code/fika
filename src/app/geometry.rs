@@ -3582,33 +3582,3 @@ mod tests {
         );
     }
 }
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct SelectionRect {
-    pub(crate) x1: f32,
-    pub(crate) y1: f32,
-    pub(crate) x2: f32,
-    pub(crate) y2: f32,
-    pub(crate) rows_per_column: i32,
-    pub(crate) cell_width: f32,
-    pub(crate) row_height: f32,
-    pub(crate) padding: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RectBounds {
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-}
-
-impl RectBounds {
-    pub(crate) fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
-        Self { x1, y1, x2, y2 }
-    }
-
-    pub(crate) fn intersects(self, other: Self) -> bool {
-        self.x1 <= other.x2 && self.x2 >= other.x1 && self.y1 <= other.y2 && self.y2 >= other.y1
-    }
-}
