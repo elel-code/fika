@@ -2457,17 +2457,23 @@ mod tests {
             "pane scrolling should use the dominant wheel axis instead of adding touchpad cross-axis jitter"
         );
         let widgets = include_str!("../../ui/widgets.slint");
+        let models = include_str!("../../ui/models.slint");
+        let file_entry = models
+            .split_once("export struct FileEntry")
+            .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
+            .map(|(body, _)| body)
+            .expect("models.slint should define FileEntry before PlaceEntry");
         let folder_glyph = widgets
             .split_once("export component FolderGlyph")
             .expect("widgets.slint should define FolderGlyph")
             .1;
         let visible_tile_loop = split_pane
-            .split_once("for item in root.entries: Rectangle")
+            .split_once("for item[index] in root.entries: Rectangle")
             .and_then(|(_, rest)| rest.split_once("if (root.selection-rect-active): Rectangle"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have a visible item primitive loop");
         assert!(
-            split_pane.contains("for item in root.entries: Rectangle")
+            split_pane.contains("for item[index] in root.entries: Rectangle")
                 && split_pane.contains("height: item.tile_height * 1px;")
                 && split_pane.contains("if (!item.is_dir && item.thumbnail_state == 2): Image")
                 && split_pane
@@ -2478,8 +2484,10 @@ mod tests {
                 && split_pane.contains("text: item.name;")
                 && !split_pane.contains("entry: item;")
                 && !split_pane.contains("selected: item.selected;")
-                && !split_pane.contains("drag-data-source:"),
-            "SplitPaneView should inline visible tile primitives instead of going through a FileTile component boundary"
+                && !split_pane.contains("drag-data-source:")
+                && !file_entry.contains("tile_x")
+                && !file_entry.contains("tile_y"),
+            "SplitPaneView should inline visible tile primitives without a FileTile component boundary, and FileEntry should not carry reusable local tile coordinates"
         );
         assert!(
             !split_pane.contains("private property <length> tile-height:")
@@ -2533,7 +2541,7 @@ mod tests {
             "Ctrl+wheel zoom should still request pane focus before changing zoom"
         );
         assert!(split_pane.contains("scroll-event(event)"));
-        assert!(split_pane.contains("for item in root.entries: Rectangle"));
+        assert!(split_pane.contains("for item[index] in root.entries: Rectangle"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")
                 && split_pane.contains("data: root.make_drag_data_at(")
@@ -2618,14 +2626,19 @@ mod tests {
                     "x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;"
                 )
                 && split_pane.contains("width: root.virtual-slice-width;")
-                && split_pane.contains("x: item.tile_x * 1px;")
-                && split_pane.contains("y: item.tile_y * 1px;")
+                && split_pane.contains(
+                    "private property <int> tile-row: index.mod(root.rows-per-column);"
+                )
+                && split_pane.contains(
+                    "private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;"
+                )
+                && split_pane.contains("x: self.tile-column * root.cell-width;")
+                && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
                 && split_pane.contains("width: item.tile_width * 1px;")
-                && !split_pane.contains("property <int> local-index:")
-                && !split_pane.contains("floor(local-index")
-                && !split_pane.contains("mod(local-index")
+                && !split_pane.contains("item.tile_x")
+                && !split_pane.contains("item.tile_y")
                 && !split_pane.contains("property <int> global-index:"),
-            "virtualized pane slices should be positioned by the self-managed viewport while tile coordinates come from the Rust item-view render plan"
+            "virtualized pane slices should be positioned by the self-managed viewport while local tile coordinates come from the reusable loop index instead of FileEntry row data"
         );
         assert!(!split_pane.contains("root.viewport-content-width - self.x"));
         assert!(split_pane.contains("clip: true;"));

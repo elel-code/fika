@@ -5,7 +5,6 @@ export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
     in property <[FileEntry]> entries;
-    in property <int> virtual-start-index;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
@@ -302,9 +301,12 @@ export component SplitPaneView inherits Rectangle {
                 width: root.virtual-slice-width;
                 height: parent.height;
 
-                for item in root.entries: Rectangle {
-                    x: item.tile_x * 1px;
-                    y: item.tile_y * 1px;
+                for item[index] in root.entries: Rectangle {
+                    private property <int> tile-row: index.mod(root.rows-per-column);
+                    private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
+
+                    x: self.tile-column * root.cell-width;
+                    y: root.preview-padding + self.tile-row * root.row-height;
                     width: item.tile_width * 1px;
                     height: item.tile_height * 1px;
                     border-radius: 7px;

@@ -92,7 +92,6 @@ component FilePane inherits Rectangle {
     in property <string> drop-trace-prefix;
     in property <int> entry-count;
     in property <[FileEntry]> entries;
-    in property <int> virtual-start-index;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
@@ -277,7 +276,6 @@ component FilePane inherits Rectangle {
                 dark: root.dark;
                 entry-count: root.entry-count;
                 entries: root.entries;
-                virtual-start-index: root.virtual-start-index;
                 virtual-start-column: root.virtual-start-column;
                 viewport-x <=> root.viewport-x;
                 item-view-rows-per-column: root.item-view-rows-per-column;
@@ -505,7 +503,6 @@ component PaneSlotSurface inherits Rectangle {
         drop-trace-prefix: root.pane.drop_trace_prefix;
         entry-count: root.pane.entry_count;
         entries: root.pane.entries;
-        virtual-start-index: root.pane.virtual_start_index;
         virtual-start-column: root.pane.virtual_start_column;
         viewport-x <=> root.live-viewport-x;
         item-view-rows-per-column: root.pane.item_view_rows_per_column;

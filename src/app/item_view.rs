@@ -26,11 +26,7 @@ pub(crate) struct ItemViewRenderMetrics {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewRenderPlanInput {
-    pub(crate) virtual_start_index: usize,
-    pub(crate) virtual_start_column: usize,
-    pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
-    pub(crate) row_height: f32,
     pub(crate) render_metrics: ItemViewRenderMetrics,
     pub(crate) show_location: bool,
 }
@@ -240,22 +236,11 @@ fn ordered_pair(a: f32, b: f32) -> (f32, f32) {
 }
 
 pub(crate) fn decorate_render_plan(entries: &mut [FileEntry], input: ItemViewRenderPlanInput) {
-    let rows_per_column = input.rows_per_column.max(1);
     let cell_width = input.cell_width.max(1.0);
-    let row_height = input.row_height.max(1.0);
     let render_metrics = input.render_metrics;
-    let slice_offset = input.virtual_start_column.saturating_mul(rows_per_column);
     let tile_width = (cell_width - TILE_TRAILING_GAP).max(1.0);
 
-    for (visible_offset, entry) in entries.iter_mut().enumerate() {
-        let local_index = visible_offset
-            .saturating_add(input.virtual_start_index)
-            .saturating_sub(slice_offset);
-        let column = local_index / rows_per_column;
-        let row = local_index % rows_per_column;
-
-        entry.tile_x = column as f32 * cell_width;
-        entry.tile_y = ITEM_VIEW_PADDING + row as f32 * row_height;
+    for entry in entries.iter_mut() {
         entry.tile_width = tile_width;
         entry.tile_height = render_metrics.tile_height;
         entry.media_x = render_metrics.media_padding_x;
@@ -555,8 +540,6 @@ mod tests {
             selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
-            tile_x: 0.0,
-            tile_y: 0.0,
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,
@@ -594,17 +577,13 @@ mod tests {
     }
 
     #[test]
-    fn render_plan_decorates_slice_local_tile_geometry() {
+    fn render_plan_keeps_file_entry_geometry_tokens_stable() {
         let mut entries = (4..9).map(test_entry).collect::<Vec<_>>();
 
         decorate_render_plan(
             &mut entries,
             ItemViewRenderPlanInput {
-                virtual_start_index: 4,
-                virtual_start_column: 1,
-                rows_per_column: 3,
                 cell_width: 100.0,
-                row_height: 50.0,
                 render_metrics: ItemViewRenderMetrics::from_zoom_level(2),
                 show_location: false,
             },
@@ -612,18 +591,9 @@ mod tests {
 
         let geometry = entries
             .iter()
-            .map(|entry| (entry.tile_x, entry.tile_y, entry.tile_width))
+            .map(|entry| entry.tile_width)
             .collect::<Vec<_>>();
-        assert_eq!(
-            geometry,
-            vec![
-                (0.0, 64.0, 88.0),
-                (0.0, 114.0, 88.0),
-                (100.0, 14.0, 88.0),
-                (100.0, 64.0, 88.0),
-                (100.0, 114.0, 88.0),
-            ]
-        );
+        assert_eq!(geometry, vec![88.0, 88.0, 88.0, 88.0, 88.0]);
         let render_tokens = entries
             .iter()
             .map(|entry| {
@@ -676,11 +646,7 @@ mod tests {
         decorate_render_plan(
             &mut entries,
             ItemViewRenderPlanInput {
-                virtual_start_index: 0,
-                virtual_start_column: 0,
-                rows_per_column: 1,
                 cell_width: 248.0,
-                row_height: 104.0,
                 render_metrics: ItemViewRenderMetrics::from_zoom_level(2),
                 show_location: true,
             },

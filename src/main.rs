@@ -3596,11 +3596,7 @@ fn apply_virtual_view_result(
     decorate_render_plan(
         &mut entries,
         ItemViewRenderPlanInput {
-            virtual_start_index: update.range.start,
-            virtual_start_column: update.start_column,
-            rows_per_column: result.rows_per_column,
             cell_width: result.cell_width,
-            row_height: result.row_height,
             render_metrics: result.render_metrics,
             show_location,
         },
@@ -6407,8 +6403,6 @@ mod tests {
             selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
-            tile_x: 0.0,
-            tile_y: 0.0,
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,

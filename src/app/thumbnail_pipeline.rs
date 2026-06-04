@@ -320,8 +320,6 @@ mod tests {
             selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
-            tile_x: 0.0,
-            tile_y: 0.0,
             tile_width: 0.0,
             tile_height: 0.0,
             media_x: 0.0,

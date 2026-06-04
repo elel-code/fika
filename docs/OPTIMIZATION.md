@@ -39,8 +39,9 @@ Rectangle viewport shell (clip: true)
   ├─ full-viewport DragArea + TouchArea (wheel / item click / double click / context / blank click / rectangle selection)
   ├─ Rust-projected item-view layout metrics (rows/cell/content/scroll extent)
   ├─ slice-layer (x = padding + virtual_start_column * cell_width - viewport_x)
-  │    └─ for item in entries: Rectangle primitive
-  │         ├─ tile/media/text rects 来自 Rust item-view render plan
+  │    └─ for item[index] in entries: Rectangle primitive
+  │         ├─ local tile x/y 来自 reusable loop index
+  │         ├─ tile size、media/text rects 来自 Rust item-view render plan
   │         └─ 无 per-item HorizontalLayout / VerticalLayout / input handler
   ├─ selection rectangle overlay
   └─ self-managed horizontal scrollbar
@@ -58,7 +59,7 @@ Rectangle viewport shell (clip: true)
 | 自管滚动条消费 Rust item-view layout metrics | `split_view.rs` / `split_pane.slint` | `rows_per_column`、content width、scroll max 与虚拟切片使用同一 Rust layouter |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
 | Rust item-view hit-test | `item_view.rs` | click/activation/context/DnD/drop target 命中不再散落在 Slint tile 或 transfer 几何代码中 |
-| Rust item-view render plan | `item_view.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 x/y/width、media/text rect、尺寸/字体 token 不再由 Slint 每项公式或 layout 容器计算 |
+| Rust item-view render plan | `item_view.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 width/height、media/text rect、尺寸/字体 token 不再由 Slint 每项公式或 layout 容器计算；local x/y 由 `for item[index]` 复用层计算，避免进入 `FileEntry` row data |
 
 ---
 
@@ -164,7 +165,7 @@ fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 **涉及代码**：
 - `src/main.rs:3407` — `set_virtual_entries`
 - `src/app/split_view.rs:399` — `set_pane_slot_entries_ui`
-- `ui/split_pane.slint` — `for item in root.entries: Rectangle`
+- `ui/split_pane.slint` — `for item[index] in root.entries: Rectangle`
 
 **改进**：保留当前 `VecModel` 引用，比较新旧范围的重叠部分，增量更新：
 
@@ -297,7 +298,7 @@ Slint: Rectangle viewport + input/DnD overlays
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD、selection、activation 与 context menu 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
 4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；可见 tile primitive 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
-5. 虚拟切片仍输出 `virtual_entries`，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max），可见 tile primitive 的 `x/y/width` 和展示尺寸/字体 token 也由 Rust item-view render plan 投影。Slint 不再在主视图内计算 column/row、content width、scroll extent 或 zoom 派生公式。
+5. 虚拟切片仍输出 `virtual_entries`，但 pane row 已通过 `PaneSlotData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；local `x/y` 改由 `for item[index]` 下标和 pane row metrics 计算，不再写入 `FileEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
 7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只按 `media_x/media_y/text_x/text_width/group_y/title_y/location_y` 等字段绘制 `Image` / `FolderGlyph` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。
 8. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
@@ -797,7 +798,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 - **Phase 3**: 新模块 `src/app/model_update.rs` — `VecModel::downcast_ref` 增量更新，支持前/后滑动 + `set_row_data` 逐行脏检查
 - **Phase 4**: `ThumbnailFlushScheduler` (16ms) — 缩略图结果入队批量写入，`AsyncEvent::ThumbnailLoaded` 不再逐张触发 `sync_virtual_entries`
 - **Phase 5**: `PaneEntrySnapshot`（不含 `Image` 的轻量快照, `Arc` 零拷贝共享）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）— 虚拟视图的条目过滤/切片/clone/location 标注全部在 `tokio::spawn_blocking` 中完成，UI 线程只做 generation staleness 检查 + Slint 模型写入 + 缩略图缓存装饰。`virtual_generation` 独立于 `load_generation`，目录切换时自动推进。`apply_virtual_view_result` 先在 `borrow_mut` 内写 state 再 drop 后写 Slint，避免 RefCell 跨线程风险。所有可见 pane 走同一条 slot-aware 虚拟视图管线。
-- **Phase 6**: zoom 派生尺寸/字体 token、slice-local tile 几何、media/text rect 和 group/title/location line 坐标迁到 Rust item-view render plan；可见 tile primitive 内联到 `SplitPaneView`，且不再为每个 item 使用 Slint layout 容器
+- **Phase 6**: zoom 派生尺寸/字体 token、tile size、media/text rect 和 group/title/location line 坐标迁到 Rust item-view render plan；slice-local tile x/y 改由 `for item[index]` 下标复用计算，避免滑动窗口时重叠条目因局部坐标变化触发 row-data 写入；可见 tile primitive 内联到 `SplitPaneView`，且不再为每个 item 使用 Slint layout 容器
 
 **审查发现的后继微优化**：
 - **cleanup-1**: 旧 state-based 虚拟视图更新 helper 和测试路径已删除，虚拟视图测试改为覆盖当前 snapshot 管线

@@ -180,7 +180,6 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         drop_trace_prefix: format!("pane-{slot}-").into(),
         entry_count: item_view_metrics.entry_count,
         entries: pane_slot_entries(slot, state),
-        virtual_start_index: pane_slot_virtual_start_index(state, slot),
         virtual_start_column: pane_slot_virtual_start_column(state, slot),
         viewport_x: pane_slot_viewport_x(slot, state),
         item_view_rows_per_column: item_view_metrics.rows_per_column,
@@ -337,14 +336,6 @@ fn pane_slot_entries(slot: i32, state: &AppState) -> ModelRc<FileEntry> {
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_entries.clone())
         .unwrap_or_default()
-}
-
-fn pane_slot_virtual_start_index(state: &AppState, slot: i32) -> i32 {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_start_index as i32)
-        .unwrap_or(0)
 }
 
 fn pane_slot_virtual_start_column(state: &AppState, slot: i32) -> i32 {
