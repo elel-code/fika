@@ -255,7 +255,7 @@ ui/
 
 - **根菜单**：以触发点为锚点，放不下时向左/上翻转，clamp 到窗口安全边距
 - **子菜单**：锚定在父菜单行，有不可见 hover bridge 连接，250ms 延迟关闭
-- **菜单层**：`RootContextMenuLayer`（文件/Places/Devices/空白区）、`TransferMenuLayer`（拖放操作）、`ChildSubmenuLayer`（Open With / Create New）
+- **菜单层**：`RootContextMenuLayer`（文件/Places/Devices/空白区）、`TransferMenuLayer`（拖放操作）、`ChildSubmenuLayer`（Open With / Create New / service-menu 分组）
 - **生命周期**：`MenuLifecycleController` 拥有 delayed-close timer 和 hover/show 辅助
 - **交互**：Open With 不额外显示标题行，应用列表最多 7 行纵向滚动，最后固定 `Other Applications...`
 - **快捷方式提示**：菜单项支持右侧快捷键标注（仅标注已由 `KeyBinding` 处理的快捷键）
@@ -264,7 +264,7 @@ ui/
 
 - **Root menus**: anchored at trigger point, flip left/up when no space, clamp to window safe margins
 - **Child menus**: anchored to parent row, connected by invisible hover bridge, 250ms delayed close
-- **Menu layers**: `RootContextMenuLayer` (file/Places/Devices/blank), `TransferMenuLayer` (drag-drop), `ChildSubmenuLayer` (Open With / Create New)
+- **Menu layers**: `RootContextMenuLayer` (file/Places/Devices/blank), `TransferMenuLayer` (drag-drop), `ChildSubmenuLayer` (Open With / Create New / service-menu groups)
 - **Lifecycle**: `MenuLifecycleController` owns delayed-close timer and hover/show helpers
 - **Interaction**: Open With has no extra title row; app list capped at 7 visible rows with scroll; `Other Applications...` fixed at bottom
 - **Shortcut hints**: menu items support right-aligned shortcut annotations (only for `KeyBinding`-handled actions)

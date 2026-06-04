@@ -661,9 +661,9 @@ export component AppWindow inherits Window {
     private property <length> chooser-filter-menu-width: 220px;
     private property <bool> custom-open-with-open: false;
     in property <[ContextServiceAction]> context_service_actions;
+    in property <[ContextServiceAction]> context_service_child_actions;
     in property <int> context_service_action_rows;
-    in property <int> context_service_title_rows;
-    in property <int> context_service_separator_rows;
+    in property <int> context_service_submenu_rows;
     in property <[DesktopApp]> open_with_apps;
     in property <[DesktopApp]> other_application_apps;
     in-out property <string> open_with_path;
@@ -706,7 +706,7 @@ export component AppWindow inherits Window {
     private property <length> place_list_y: 0px;
     private property <bool> search-input-focused: false;
     private property <bool> chooser-save-input-focused: false;
-    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
+    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || MenuLifecycle.service-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
     private property <bool> file-operation-shortcuts-blocked: root.search-input-focused || root.chooser-save-input-focused || root.transient-popup-open;
 
     callback go_home();
@@ -738,6 +738,7 @@ export component AppWindow inherits Window {
     callback empty_trash();
     callback prepare_open_with(string);
     callback prepare_other_applications(string);
+    callback prepare_context_service_submenu(string);
     callback filter_other_applications(string);
     callback open_with_app(string, string);
     callback set_default_app(string, string);
@@ -824,6 +825,14 @@ export component AppWindow inherits Window {
 
     function create-new-submenu-hover(row-y: length, is-hovered: bool) {
         menu-lifecycle.create-new-submenu-hover(row-y, is-hovered);
+    }
+
+    function show-context-service-submenu(group: string, row-y: length) {
+        menu-lifecycle.show-context-service-submenu(group, row-y);
+    }
+
+    function context-service-submenu-hover(group: string, row-y: length, is-hovered: bool) {
+        menu-lifecycle.context-service-submenu-hover(group, row-y, is-hovered);
     }
 
     function close-context-popups() {
@@ -1113,6 +1122,7 @@ export component AppWindow inherits Window {
 
         menu-lifecycle := MenuLifecycleController {
             prepare_open_with(path) => { root.prepare_open_with(path); }
+            prepare_context_service_submenu(group) => { root.prepare_context_service_submenu(group); }
         }
 
         KeyBinding {
@@ -1619,8 +1629,7 @@ export component AppWindow inherits Window {
         device-pending-action: root.context-menu-device-pending-action;
         service-actions: root.context_service_actions;
         service-action-rows: root.context_service_action_rows;
-        service-title-rows: root.context_service_title_rows;
-        service-separator-rows: root.context_service_separator_rows;
+        service-submenu-rows: root.context_service_submenu_rows;
         file_open_folder_with_hover(row-y, is-hovered) => {
             root.open-with-submenu-hover(root.context-menu-path, row-y, is-hovered);
         }
@@ -1708,6 +1717,12 @@ export component AppWindow inherits Window {
             root.context_service_action(index);
             root.close-context-popups();
         }
+        file_service_submenu_hovered(group, row-y, is-hovered) => {
+            root.context-service-submenu-hover(group, row-y, is-hovered);
+        }
+        file_service_submenu_clicked(group, row-y) => {
+            root.show-context-service-submenu(group, row-y);
+        }
         place_open_new_window => {
             root.open_place_new_window(root.context-menu-place-index);
             root.close-context-popups();
@@ -1776,6 +1791,12 @@ export component AppWindow inherits Window {
             root.context_service_action(index);
             root.close-context-popups();
         }
+        viewport_service_submenu_hovered(group, row-y, is-hovered) => {
+            root.context-service-submenu-hover(group, row-y, is-hovered);
+        }
+        viewport_service_submenu_clicked(group, row-y) => {
+            root.show-context-service-submenu(group, row-y);
+        }
     }
 
     ChildSubmenuLayer {
@@ -1797,6 +1818,9 @@ export component AppWindow inherits Window {
         open-with-open: MenuLifecycle.open-with-open;
         open-with-row-y: MenuLifecycle.open-with-row-y;
         open-with-apps: root.open_with_apps;
+        service-menu-open: MenuLifecycle.service-menu-open;
+        service-menu-row-y: MenuLifecycle.service-menu-row-y;
+        service-menu-actions: root.context_service_child_actions;
         dark: root.dark_mode;
         child_hovered(kind, is-hovered) => {
             root.set-child-submenu-hover(kind, is-hovered);
@@ -1821,6 +1845,10 @@ export component AppWindow inherits Window {
             root.other_application_filter = "";
             root.other_application_set_default = false;
             root.custom-open-with-open = true;
+            root.close-context-popups();
+        }
+        service_action_selected(index) => {
+            root.context_service_action(index);
             root.close-context-popups();
         }
     }

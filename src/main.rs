@@ -726,6 +726,16 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_prepare_context_service_submenu(move |group| {
+            if let Some(ui) = ui_weak.upgrade() {
+                context_service_menu::prepare_submenu_actions(&ui, &state, group.as_str());
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         let save_files = args.chooser_save_files.clone();
         ui.on_chooser_accept(move |name| {
             if let Some(ui) = ui_weak.upgrade() {

@@ -27,9 +27,9 @@ Current Fika mapping:
 - Fika hides `Rename`, `Open With`, `Open Folder With`, and `Add to Places` in multi-selection until those batch backends have clear semantics.
 - Multi-selection currently exposes implemented batch-safe actions: Cut, Copy, and Move Selected to Trash. Paste is exposed from the current-folder and folder-item menus when the internal clipboard has paths.
 - A future batch menu can follow Dolphin further by adding batch rename, Open With for multiple items, properties, and selection actions as each backend exists.
-- Fika implements custom Slint menus, so it must emulate Qt's menu behavior explicitly: root-menu trigger points are resolved by `RootContextMenuLayer`, child submenu open state and row anchors are owned by the `MenuLifecycle` global, both child submenus share one active child-menu placement/bridge property set, horizontal placement flips at the window edge, and delayed close timers are driven only by submenu parent/child leave events.
-- Submenu rows now use a separate arrow indicator instead of baking `>` into the label. Open With and Create New also have invisible hover bridges between the parent row and child menu, matching the feel of Qt's grace area when moving the pointer diagonally into a submenu.
-- Root menu, child menu, transfer menu, and chooser-choice popup placement now share explicit Rust-side popup geometry: context roots and Transfer popups use QMenu-style preferred/flip/clamp rules, Open With / Create New child menus and bridges anchor to the parent row, and chooser-choice popups keep their above-button anchor while clamping to safe margins.
+- Fika implements custom Slint menus, so it must emulate Qt's menu behavior explicitly: root-menu trigger points are resolved by `RootContextMenuLayer`, child submenu open state and row anchors are owned by the `MenuLifecycle` global, Open With, Create New, and service-menu groups share one active child-menu placement/bridge property set, horizontal placement flips at the window edge, and delayed close timers are driven only by submenu parent/child leave events.
+- Submenu rows now use a separate arrow indicator instead of baking `>` into the label. Open With, Create New, and service-menu groups also have invisible hover bridges between the parent row and child menu, matching the feel of Qt's grace area when moving the pointer diagonally into a submenu.
+- Root menu, child menu, transfer menu, and chooser-choice popup placement now share explicit Rust-side popup geometry: context roots and Transfer popups use QMenu-style preferred/flip/clamp rules, Open With / Create New / service-menu group child menus and bridges anchor to the parent row, and chooser-choice popups keep their above-button anchor while clamping to safe margins.
 - Viewport context menu ordering is closer to Dolphin: Create New is first, Open Folder With follows, then Open Terminal Here. The internal drop menu includes an explicit Cancel action like common file-operation menus.
 
 ## Selection
@@ -98,7 +98,7 @@ Current Fika mapping:
 - Root file / Places / Devices / blank-area menu hosting and root popup placement now go through `RootContextMenuLayer`, while delayed-close timers and child-submenu hover transitions live in `MenuLifecycleController`; `AppWindow` keeps action wiring and business-state updates.
 - Transfer operation menus and chooser filter/choice popups now use `TransferMenuLayer`, `ChooserOptionPopupLayer`, and `ChooserChoicePopupLayer`, keeping repeated popup shell, fixed sizing, root-menu flip/clamp placement, and anchored positioning out of `AppWindow` and transfer target logic.
 - Places/main-pane drag feedback now goes through `DragOverlayLayer`, keeping ghost, insertion-line, and rejection visuals out of `AppWindow`.
-- Root context placement, Transfer placement, Open With / Create New child submenu placement, hover bridge geometry, and chooser-choice popup clamping share Rust-side popup geometry helpers.
+- Root context placement, Transfer placement, Open With / Create New / service-menu group child submenu placement, hover bridge geometry, and chooser-choice popup clamping share Rust-side popup geometry helpers.
 
 ## Search
 

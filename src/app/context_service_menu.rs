@@ -10,14 +10,12 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 const SERVICE_ROW_ACTION: i32 = 0;
-const SERVICE_ROW_TITLE: i32 = 1;
-const SERVICE_ROW_SEPARATOR: i32 = 2;
+const SERVICE_ROW_SUBMENU: i32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ServiceMenuRowCounts {
     action_rows: i32,
-    title_rows: i32,
-    separator_rows: i32,
+    submenu_rows: i32,
 }
 
 pub(crate) fn item_paths(
@@ -113,9 +111,9 @@ pub(crate) fn apply_actions_result(
 fn sync_actions_ui(ui: &AppWindow, actions: &[service_menu::ServiceMenuAction]) {
     let (rows, counts) = menu_rows(actions);
     ui.set_context_service_actions(ModelRc::new(Rc::new(VecModel::from(rows))));
+    ui.set_context_service_child_actions(empty_actions_model());
     ui.set_context_service_action_rows(counts.action_rows);
-    ui.set_context_service_title_rows(counts.title_rows);
-    ui.set_context_service_separator_rows(counts.separator_rows);
+    ui.set_context_service_submenu_rows(counts.submenu_rows);
 }
 
 fn menu_rows(
@@ -123,52 +121,71 @@ fn menu_rows(
 ) -> (Vec<ContextServiceAction>, ServiceMenuRowCounts) {
     let mut rows = Vec::new();
     let mut counts = ServiceMenuRowCounts::default();
-    let mut current_group = String::new();
-    let mut grouped = false;
+    let mut current_group: Option<&str> = None;
 
     for (index, action) in actions.iter().enumerate() {
-        if !action.top_level && !action.submenu.is_empty() && action.submenu != current_group {
-            if grouped {
-                rows.push(service_menu_separator_row());
-                counts.separator_rows += 1;
-            }
-            current_group = action.submenu.clone();
-            grouped = true;
-            rows.push(service_menu_title_row(&current_group));
-            counts.title_rows += 1;
+        if action.top_level || action.submenu.is_empty() {
+            rows.push(service_menu_action_row(action, index));
+            counts.action_rows += 1;
+            continue;
         }
 
-        rows.push(ContextServiceAction {
-            id: action.id.clone().into(),
-            name: action.name.clone().into(),
-            group: action.submenu.clone().into(),
-            action_index: index as i32,
-            row_kind: SERVICE_ROW_ACTION,
-        });
-        counts.action_rows += 1;
+        let group = action.submenu.as_str();
+        if current_group != Some(group) {
+            rows.push(service_menu_submenu_row(group));
+            counts.submenu_rows += 1;
+            current_group = Some(group);
+        }
     }
 
     (rows, counts)
 }
 
-fn service_menu_title_row(label: &str) -> ContextServiceAction {
+pub(crate) fn prepare_submenu_actions(ui: &AppWindow, state: &Rc<RefCell<AppState>>, group: &str) {
+    let rows = {
+        let state = state.borrow();
+        child_menu_rows(&state.context_service_menu_actions, group)
+    };
+    ui.set_context_service_child_actions(ModelRc::new(Rc::new(VecModel::from(rows))));
+}
+
+fn child_menu_rows(
+    actions: &[service_menu::ServiceMenuAction],
+    group: &str,
+) -> Vec<ContextServiceAction> {
+    actions
+        .iter()
+        .enumerate()
+        .filter(|(_, action)| !action.top_level && action.submenu == group)
+        .map(|(index, action)| service_menu_action_row(action, index))
+        .collect()
+}
+
+fn service_menu_action_row(
+    action: &service_menu::ServiceMenuAction,
+    index: usize,
+) -> ContextServiceAction {
     ContextServiceAction {
-        id: "".into(),
-        name: label.into(),
-        group: label.into(),
-        action_index: -1,
-        row_kind: SERVICE_ROW_TITLE,
+        id: action.id.clone().into(),
+        name: action.name.clone().into(),
+        group: action.submenu.clone().into(),
+        action_index: index as i32,
+        row_kind: SERVICE_ROW_ACTION,
     }
 }
 
-fn service_menu_separator_row() -> ContextServiceAction {
+fn service_menu_submenu_row(group: &str) -> ContextServiceAction {
     ContextServiceAction {
-        id: "".into(),
-        name: "".into(),
-        group: "".into(),
+        id: group.into(),
+        name: group.into(),
+        group: group.into(),
         action_index: -1,
-        row_kind: SERVICE_ROW_SEPARATOR,
+        row_kind: SERVICE_ROW_SUBMENU,
     }
+}
+
+fn empty_actions_model() -> ModelRc<ContextServiceAction> {
+    ModelRc::new(Rc::new(VecModel::from(Vec::<ContextServiceAction>::new())))
 }
 
 pub(crate) fn launch_action_async(
@@ -390,9 +407,8 @@ mod tests {
         assert_eq!(
             counts,
             ServiceMenuRowCounts {
-                action_rows: 4,
-                title_rows: 2,
-                separator_rows: 1,
+                action_rows: 1,
+                submenu_rows: 2,
             }
         );
         assert_eq!(
@@ -402,12 +418,23 @@ mod tests {
             vec![
                 (0, "Top Action".to_string(), 0),
                 (1, "Edit".to_string(), -1),
-                (0, "Edit A".to_string(), 1),
-                (0, "Edit B".to_string(), 2),
-                (2, "".to_string(), -1),
                 (1, "Tools".to_string(), -1),
-                (0, "Tool".to_string(), 3),
             ]
+        );
+        assert_eq!(
+            child_menu_rows(
+                &[
+                    service_action("top", "Top Action", "", true),
+                    service_action("edit", "Edit A", "Edit", false),
+                    service_action("edit2", "Edit B", "Edit", false),
+                    service_action("tools", "Tool", "Tools", false),
+                ],
+                "Edit",
+            )
+            .iter()
+            .map(|row| (row.row_kind, row.name.to_string(), row.action_index))
+            .collect::<Vec<_>>(),
+            vec![(0, "Edit A".to_string(), 1), (0, "Edit B".to_string(), 2)]
         );
     }
 

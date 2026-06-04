@@ -292,8 +292,7 @@ pub(crate) struct MenuMetricsInput {
     pub(crate) device_can_unmount: bool,
     pub(crate) device_can_eject: bool,
     pub(crate) service_action_count: i32,
-    pub(crate) service_title_count: i32,
-    pub(crate) service_separator_count: i32,
+    pub(crate) service_submenu_count: i32,
     pub(crate) item_height: f32,
     pub(crate) separator_height: f32,
     pub(crate) title_height: f32,
@@ -655,8 +654,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
                  device_can_unmount,
                  device_can_eject,
                  service_action_count,
-                 service_title_count,
-                 service_separator_count,
+                 service_submenu_count,
                  item_height,
                  separator_height,
                  title_height| {
@@ -675,8 +673,7 @@ pub(crate) fn register_menu_geometry_callbacks(ui: &AppWindow) {
                         device_can_unmount,
                         device_can_eject,
                         service_action_count,
-                        service_title_count,
-                        service_separator_count,
+                        service_submenu_count,
                         item_height,
                         separator_height,
                         title_height,
@@ -781,9 +778,8 @@ fn viewport_context_menu_metrics(
 }
 
 fn service_rows_height(input: MenuMetricsInput, item: f32, separator: f32, title: f32) -> f32 {
-    input.service_action_count.max(0) as f32 * item
-        + input.service_title_count.max(0) as f32 * title
-        + input.service_separator_count.max(0) as f32 * separator
+    let _ = (separator, title);
+    (input.service_action_count.max(0) + input.service_submenu_count.max(0)) as f32 * item
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1211,6 +1207,8 @@ mod tests {
             ("length", "open-with-row-y"),
             ("bool", "create-new-open"),
             ("length", "create-new-row-y"),
+            ("bool", "service-menu-open"),
+            ("length", "service-menu-row-y"),
             ("int", "close-kind"),
         ];
         let lifecycle_functions = [
@@ -1220,6 +1218,7 @@ mod tests {
             "begin-close",
             "show-open-with",
             "show-create-new",
+            "show-service-menu",
             "close-pending-child-submenu",
         ];
         let controller_functions = [
@@ -1229,8 +1228,10 @@ mod tests {
             "show-child-submenu",
             "show-open-with-submenu",
             "show-create-new-submenu",
+            "show-context-service-submenu",
             "open-with-submenu-hover",
             "create-new-submenu-hover",
+            "context-service-submenu-hover",
         ];
 
         assert!(app.contains("export { MenuLifecycle } from \"menu_lifecycle.slint\";"));
@@ -1281,8 +1282,10 @@ mod tests {
             "set-child-submenu-hover",
             "show-open-with-submenu",
             "show-create-new-submenu",
+            "show-context-service-submenu",
             "open-with-submenu-hover",
             "create-new-submenu-hover",
+            "context-service-submenu-hover",
         ] {
             assert!(
                 app.contains(&format!("menu-lifecycle.{function}(")),
@@ -1314,6 +1317,7 @@ mod tests {
 
         for component in [
             "ActionMenuRow",
+            "ServiceActionMenuRow",
             "HoverActionMenuRow",
             "SubmenuMenuRow",
             "PasteMenuRow",
@@ -1356,8 +1360,8 @@ mod tests {
         );
         assert_eq!(
             menus.matches("SubmenuMenuRow {").count(),
-            4,
-            "file and viewport menus should reuse the submenu row for Open With/Create New entries"
+            5,
+            "file, viewport, and service-menu group rows should reuse the submenu row"
         );
         assert_eq!(
             menus.matches("PasteMenuRow {").count(),
@@ -1388,18 +1392,30 @@ mod tests {
         let action_row_start = menus
             .find("component ActionMenuRow")
             .expect("ActionMenuRow should exist");
+        let service_action_row_start = menus
+            .find("component ServiceActionMenuRow")
+            .expect("ServiceActionMenuRow should exist after ActionMenuRow");
         let hover_action_row_start = menus
             .find("component HoverActionMenuRow")
             .expect("HoverActionMenuRow should exist after ActionMenuRow");
         let paste_row_start = menus
             .find("component PasteMenuRow")
             .expect("PasteMenuRow should exist after HoverActionMenuRow");
-        let action_row = &menus[action_row_start..hover_action_row_start];
+        let action_row = &menus[action_row_start..service_action_row_start];
+        let service_action_row = &menus[service_action_row_start..hover_action_row_start];
         let hover_action_row = &menus[hover_action_row_start..paste_row_start];
         assert!(
             !action_row.contains("callback hovered(bool);")
                 && !action_row.contains("hovered(is-hovered) =>"),
             "ordinary ActionMenuRow must not participate in child-submenu keep-alive or delayed close"
+        );
+        assert!(
+            service_action_row.contains("callback submenu_hovered(string, length, bool);")
+                && service_action_row.contains("SubmenuMenuRow {")
+                && service_action_row.contains(
+                    "root.submenu_hovered(root.action.group, self.absolute-position.y, is-hovered);"
+                ),
+            "ServiceActionMenuRow should forward hover only for service-menu submenu parents"
         );
         assert!(
             hover_action_row.contains("callback hovered(bool);")
@@ -1446,6 +1462,8 @@ mod tests {
             "file_open_with_hover",
             "viewport_create_new_hover",
             "viewport_open_folder_with_hover",
+            "file_service_submenu_hovered",
+            "viewport_service_submenu_hovered",
         ] {
             assert!(
                 root_layer.contains(callback),
@@ -1461,7 +1479,7 @@ mod tests {
             "ChildSubmenuLayer hover bridge/panel should be the route that keeps or closes a child submenu"
         );
         assert!(
-            menu_lifecycle.contains("} else if (menu == 1 || menu == 2) {\n            MenuLifecycle.begin-close(menu);\n            close-timer.start();\n        }"),
+            menu_lifecycle.contains("} else if (menu == 1 || menu == 2 || menu == 3) {\n            MenuLifecycle.begin-close(menu);\n            close-timer.start();\n        }"),
             "delayed close should only start from explicit child submenu hover loss"
         );
         assert!(
@@ -2621,8 +2639,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height: MENU_ITEM_HEIGHT,
             separator_height: MENU_SEPARATOR_HEIGHT,
             title_height: MENU_TITLE_HEIGHT,
@@ -2702,8 +2719,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2729,8 +2745,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2755,8 +2770,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2782,8 +2796,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2805,8 +2818,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2831,8 +2843,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2860,8 +2871,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2887,8 +2897,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2911,8 +2920,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2934,8 +2942,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2960,8 +2967,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -2986,8 +2992,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -3009,8 +3014,7 @@ mod tests {
             device_can_unmount: false,
             device_can_eject: false,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -3032,8 +3036,7 @@ mod tests {
             device_can_unmount: true,
             device_can_eject: true,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -3058,8 +3061,7 @@ mod tests {
             device_can_unmount: true,
             device_can_eject: true,
             service_action_count: 0,
-            service_title_count: 0,
-            service_separator_count: 0,
+            service_submenu_count: 0,
             item_height,
             separator_height,
             title_height,
@@ -3109,34 +3111,31 @@ mod tests {
         single_file.selected_count = 1;
         single_file.default_open_visible = true;
         single_file.service_action_count = 2;
-        single_file.service_title_count = 1;
-        single_file.service_separator_count = 1;
+        single_file.service_submenu_count = 1;
         let file_metrics = context_menu_metrics(single_file);
         assert_eq!(
             file_metrics.height,
-            11.0 * MENU_ITEM_HEIGHT + MENU_TITLE_HEIGHT + 3.0 * MENU_SEPARATOR_HEIGHT
+            12.0 * MENU_ITEM_HEIGHT + 2.0 * MENU_SEPARATOR_HEIGHT
         );
         assert_eq!(file_metrics.open_with_row_y_offset, MENU_ITEM_HEIGHT);
 
         let mut multi_file = menu_metrics_input(1);
         multi_file.selected_count = 3;
         multi_file.service_action_count = 2;
-        multi_file.service_title_count = 1;
-        multi_file.service_separator_count = 1;
+        multi_file.service_submenu_count = 1;
         let multi_metrics = context_menu_metrics(multi_file);
         assert_eq!(
             multi_metrics.height,
-            2.0 * MENU_TITLE_HEIGHT + 5.0 * MENU_ITEM_HEIGHT + 2.0 * MENU_SEPARATOR_HEIGHT
+            MENU_TITLE_HEIGHT + 6.0 * MENU_ITEM_HEIGHT + MENU_SEPARATOR_HEIGHT
         );
 
         let mut viewport = menu_metrics_input(3);
         viewport.service_action_count = 2;
-        viewport.service_title_count = 1;
-        viewport.service_separator_count = 1;
+        viewport.service_submenu_count = 1;
         let viewport_metrics = context_menu_metrics(viewport);
         assert_eq!(
             viewport_metrics.height,
-            7.0 * MENU_ITEM_HEIGHT + MENU_TITLE_HEIGHT + 2.0 * MENU_SEPARATOR_HEIGHT
+            8.0 * MENU_ITEM_HEIGHT + MENU_SEPARATOR_HEIGHT
         );
         assert_eq!(
             viewport_metrics.open_with_row_y_offset,

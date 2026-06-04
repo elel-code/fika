@@ -3,6 +3,8 @@ export global MenuLifecycle {
     in-out property <length> open-with-row-y: 0px;
     in-out property <bool> create-new-open: false;
     in-out property <length> create-new-row-y: 0px;
+    in-out property <bool> service-menu-open: false;
+    in-out property <length> service-menu-row-y: 0px;
     in-out property <int> close-kind: 0;
 
     public function cancel-close() {
@@ -14,6 +16,8 @@ export global MenuLifecycle {
             root.open-with-open = false;
         } else if (menu == 2) {
             root.create-new-open = false;
+        } else if (menu == 3) {
+            root.service-menu-open = false;
         }
         if (root.close-kind == menu) {
             root.close-kind = 0;
@@ -23,17 +27,19 @@ export global MenuLifecycle {
     public function close-child-submenus() {
         root.open-with-open = false;
         root.create-new-open = false;
+        root.service-menu-open = false;
         root.close-kind = 0;
     }
 
     public function begin-close(menu: int) {
-        if (menu == 1 || menu == 2) {
+        if (menu == 1 || menu == 2 || menu == 3) {
             root.close-kind = menu;
         }
     }
 
     public function show-open-with(row-y: length) {
         root.close-child-submenu(2);
+        root.close-child-submenu(3);
         root.open-with-row-y = row-y;
         root.open-with-open = true;
         root.close-kind = 0;
@@ -41,8 +47,17 @@ export global MenuLifecycle {
 
     public function show-create-new(row-y: length) {
         root.close-child-submenu(1);
+        root.close-child-submenu(3);
         root.create-new-row-y = row-y;
         root.create-new-open = true;
+        root.close-kind = 0;
+    }
+
+    public function show-service-menu(row-y: length) {
+        root.close-child-submenu(1);
+        root.close-child-submenu(2);
+        root.service-menu-row-y = row-y;
+        root.service-menu-open = true;
         root.close-kind = 0;
     }
 
@@ -53,6 +68,7 @@ export global MenuLifecycle {
 
 export component MenuLifecycleController inherits Rectangle {
     callback prepare_open_with(string);
+    callback prepare_context_service_submenu(string);
 
     width: 0px;
     height: 0px;
@@ -72,7 +88,7 @@ export component MenuLifecycleController inherits Rectangle {
         close-timer.stop();
         if (is-hovered) {
             MenuLifecycle.cancel-close();
-        } else if (menu == 1 || menu == 2) {
+        } else if (menu == 1 || menu == 2 || menu == 3) {
             MenuLifecycle.begin-close(menu);
             close-timer.start();
         }
@@ -85,6 +101,9 @@ export component MenuLifecycleController inherits Rectangle {
             MenuLifecycle.show-open-with(row-y);
         } else if (menu == 2) {
             MenuLifecycle.show-create-new(row-y);
+        } else if (menu == 3) {
+            root.prepare_context_service_submenu(path);
+            MenuLifecycle.show-service-menu(row-y);
         }
     }
 
@@ -94,6 +113,10 @@ export component MenuLifecycleController inherits Rectangle {
 
     public function show-create-new-submenu(row-y: length) {
         root.show-child-submenu(2, "", row-y);
+    }
+
+    public function show-context-service-submenu(group: string, row-y: length) {
+        root.show-child-submenu(3, group, row-y);
     }
 
     public function open-with-submenu-hover(path: string, row-y: length, is-hovered: bool) {
@@ -109,6 +132,14 @@ export component MenuLifecycleController inherits Rectangle {
             root.show-create-new-submenu(row-y);
         } else {
             root.set-child-submenu-hover(2, false);
+        }
+    }
+
+    public function context-service-submenu-hover(group: string, row-y: length, is-hovered: bool) {
+        if (is-hovered) {
+            root.show-context-service-submenu(group, row-y);
+        } else {
+            root.set-child-submenu-hover(3, false);
         }
     }
 
