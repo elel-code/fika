@@ -1,5 +1,6 @@
 use crate::app::pane::{PanesState, PreparedDirectoryEntries};
 use crate::desktop::clipboard::ClipboardContentKind;
+use crate::desktop::service_menu::ServiceMenuAction;
 use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::thumbnails;
 use crate::support::generation::GenerationCounter;
@@ -15,6 +16,8 @@ pub(crate) struct AppState {
     pub(crate) panes: PanesState,
     pub(crate) places: Vec<PlaceEntry>,
     pub(crate) other_application_apps: Vec<DesktopApp>,
+    pub(crate) context_service_menu_actions: Vec<ServiceMenuAction>,
+    pub(crate) context_service_menu_paths: Vec<PathBuf>,
     pub(crate) clipboard_paths: Vec<PathBuf>,
     pub(crate) clipboard_cut: bool,
     pub(crate) clipboard_content_kind: Option<ClipboardContentKind>,
@@ -48,6 +51,7 @@ pub(crate) struct AppState {
     pub(crate) next_operation_id: u64,
     pub(crate) clipboard_generation: GenerationCounter,
     pub(crate) device_generation: GenerationCounter,
+    pub(crate) service_menu_generation: GenerationCounter,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +66,8 @@ impl AppState {
             panes: PanesState::new(current_dir),
             places,
             other_application_apps: Vec::new(),
+            context_service_menu_actions: Vec::new(),
+            context_service_menu_paths: Vec::new(),
             clipboard_paths: Vec::new(),
             clipboard_cut: false,
             clipboard_content_kind: None,
@@ -95,6 +101,7 @@ impl AppState {
             next_operation_id: 1,
             clipboard_generation: GenerationCounter::default(),
             device_generation: GenerationCounter::default(),
+            service_menu_generation: GenerationCounter::default(),
         }
     }
 

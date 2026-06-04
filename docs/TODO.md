@@ -439,9 +439,11 @@ Acceptance for all:
   - Acceptance: dropping an item onto itself, or a folder into its own descendant, does not open the transfer menu and shows a status message.
   - Current: transfer preparation and execution both reject self/descendant targets.
 
-- [ ] Add Dolphin-style user custom context menu actions.
+- [~] Add Dolphin-style user custom context menu actions.
   - Acceptance: users can expose opt-in custom file/folder context actions backed by desktop/service-menu style metadata, with visibility constrained by target type and selection.
-  - Current direction: reuse Fika's existing desktop-file parsing and Exec expansion infrastructure where possible, then layer Dolphin-like menu grouping/enablement on top.
+  - Current: `src/desktop/service_menu.rs` discovers KDE/Dolphin `kio/servicemenus` desktop entries from XDG data dirs, filters `KonqPopupMenu/Plugin` actions by MIME and multi-selection-safe Exec fields, expands desktop Exec field codes into shell-free argv, and sorts top-level actions first.
+  - Current: item and blank-area right-click routing now refresh a generation-guarded `AppState` snapshot of matching service-menu actions off the UI thread, so later menu UI/execution can consume ready action metadata without blocking popup opening.
+  - Remaining: render these actions in the file/viewport context menus, add user-visible grouping/enablement, and execute the stored argv through the existing desktop launch/status path when the user chooses an action.
 
 - [x] Apply Dolphin-like context menu grouping and submenu grace.
   - Acceptance: context menus use grouped separators, submenu indicators are separate from labels, child menus anchor to their parent row and have a hover bridge to avoid accidental disappearance while moving between parent and child.

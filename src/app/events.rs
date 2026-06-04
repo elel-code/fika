@@ -3,6 +3,7 @@ use crate::app::pane::PreparedDirectoryEntries;
 use crate::app::virtual_view::VirtualViewSnapshotUpdate;
 use crate::desktop::clipboard;
 use crate::desktop::open_with;
+use crate::desktop::service_menu;
 use crate::fs::{file_actions, file_ops, privilege, search, thumbnails};
 use std::io;
 use std::path::PathBuf;
@@ -139,6 +140,7 @@ pub(crate) enum AsyncEvent {
     OpenWithAppsLoaded(open_with::OpenWithAppsResult),
     OtherApplicationAppsLoaded(open_with::OtherApplicationAppsResult),
     DefaultAppSet(open_with::DefaultAppSetResult),
+    ServiceMenuActionsLoaded(service_menu::ServiceMenuActionsResult),
     FileActionFinished(file_actions::FileActionResult),
     FileOperationProgress(FileOperationProgress),
     FileOperationFinished(FileOperationResult),
