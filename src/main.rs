@@ -55,8 +55,7 @@ use app::geometry::{
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
     FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
-    OperationResultDisposition, affected_directory_pane_ids, cleanup_file_undo_backup,
-    operation_final_status,
+    affected_directory_pane_ids, cleanup_file_undo_backup,
 };
 use app::pane::{DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries};
 #[cfg(test)]
@@ -2831,7 +2830,6 @@ fn apply_file_operation_result(
         privileged_command,
         result,
     } = result;
-    let can_request_privilege = privileged_command.is_some();
     let summary = {
         let mut state = state.borrow_mut();
         state.complete_file_operation(
@@ -2840,48 +2838,27 @@ fn apply_file_operation_result(
             &source,
             &target_dir,
             result,
-            can_request_privilege,
+            privileged_command,
         )
     };
     let Some(summary) = summary else {
         return;
     };
-    let mut requested_privilege = false;
-    let status_message = match summary.disposition {
-        OperationResultDisposition::Completed {
-            destination,
-            overwritten_backup,
-            status,
-        } => {
-            register_transfer_undo(
-                ui,
-                state,
-                &operation,
-                &source,
-                &destination,
-                overwritten_backup,
-            );
-            Some(status)
-        }
-        OperationResultDisposition::RequestPrivilege { error } => {
-            if let Some(command) = privileged_command {
-                file_actions::request_privileged_action(ui, state, command, &error);
-                requested_privilege = true;
-                None
-            } else {
-                Some("Operation failed: missing privileged command".to_string())
-            }
-        }
-        OperationResultDisposition::Failed { status } => Some(status),
-    };
+
+    if let Some(registration) = summary.undo_registration {
+        apply_undo_registration(ui, registration);
+    }
+    if let Some(request) = summary.privileged_request {
+        let command = request.command;
+        let reason = request.reason;
+        file_actions::request_privileged_action(ui, state, command, &reason);
+    }
 
     if !summary.refresh_pane_ids.is_empty() {
         refresh_panes(ui, state, bridge, &summary.refresh_pane_ids);
     }
-    if let Some(status_message) =
-        operation_final_status(status_message, requested_privilege, summary.remaining)
-    {
-        set_status_for_panes(ui, state, &summary.refresh_pane_ids, &status_message);
+    if let Some(status) = summary.status {
+        set_status_for_panes(ui, state, &summary.refresh_pane_ids, &status);
     }
     start_next_operation(ui, state, bridge);
 }
@@ -2908,28 +2885,6 @@ fn apply_file_action_result(
     if let Some(status) = summary.status {
         let pane_ids = refresh_affected_directories(ui, state, bridge, &summary.affected_dirs);
         set_status_for_panes(ui, state, &pane_ids, &status);
-    }
-}
-
-fn register_transfer_undo(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    operation: &str,
-    original_source: &Path,
-    destination: &Path,
-    overwritten_backup: Option<PathBuf>,
-) {
-    let summary = {
-        let mut state = state.borrow_mut();
-        state.register_transfer_file_undo(
-            operation,
-            original_source,
-            destination,
-            overwritten_backup,
-        )
-    };
-    if let Some(summary) = summary {
-        apply_undo_registration(ui, summary);
     }
 }
 
@@ -5674,24 +5629,34 @@ mod tests {
         let source = include_str!("main.rs");
         let body = source
             .split_once("fn apply_file_operation_result(")
-            .and_then(|(_, rest)| rest.split_once("fn register_transfer_undo("))
+            .and_then(|(_, rest)| rest.split_once("fn apply_file_action_result("))
             .map(|(body, _)| body)
             .expect("apply_file_operation_result body should be present");
 
         assert!(
-            body.contains(
-                "set_status_for_panes(ui, state, &summary.refresh_pane_ids, &status_message);"
-            ),
+            body.contains("state.complete_file_operation(")
+                && body.contains("apply_undo_registration(ui, registration);")
+                && body.contains("let command = request.command;")
+                && body.contains("let reason = request.reason;")
+                && body.contains(
+                    "file_actions::request_privileged_action(ui, state, command, &reason);"
+                )
+                && body.contains("refresh_panes(ui, state, bridge, &summary.refresh_pane_ids);")
+                && body.contains(
+                    "set_status_for_panes(ui, state, &summary.refresh_pane_ids, &status);"
+                ),
             "file operation completion status should write to the panes affected by the operation"
         );
         assert!(
-            body.contains("register_transfer_undo(")
+            !body.contains("OperationResultDisposition")
+                && !body.contains("register_transfer_undo(")
+                && !body.contains("operation_final_status(")
                 && !body.contains("FileUndo {")
                 && !body.contains("matches!(operation, \"move\" | \"copy\" | \"link\")"),
-            "file operation completion should delegate transfer Undo registration decisions to the controller"
+            "file operation completion should delegate Undo, privilege, and status decisions to the controller"
         );
         assert!(
-            !body.contains("set_status(ui, state, &status_message);"),
+            !body.contains("set_status(ui, state, &status);"),
             "file operation completion status must not jump to whichever pane is focused when the async result returns"
         );
     }
@@ -5706,7 +5671,7 @@ mod tests {
             .expect("apply_async_event body should be present");
         let result_body = source
             .split_once("fn apply_file_action_result(")
-            .and_then(|(_, rest)| rest.split_once("fn register_transfer_undo("))
+            .and_then(|(_, rest)| rest.split_once("fn apply_undo_registration("))
             .map(|(body, _)| body)
             .expect("apply_file_action_result body should be present");
         let file_actions_source = include_str!("fs/file_actions.rs");

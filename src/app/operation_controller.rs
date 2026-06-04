@@ -43,27 +43,12 @@ pub(crate) struct OperationCancelSummary {
     pub(crate) pane_ids: Vec<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OperationResultDisposition {
-    Completed {
-        destination: PathBuf,
-        overwritten_backup: Option<PathBuf>,
-        status: String,
-    },
-    RequestPrivilege {
-        error: String,
-    },
-    Failed {
-        status: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct OperationCompletionSummary {
-    pub(crate) disposition: OperationResultDisposition,
-    pub(crate) refresh_current_dir: bool,
     pub(crate) refresh_pane_ids: Vec<u64>,
-    pub(crate) remaining: usize,
+    pub(crate) status: Option<String>,
+    pub(crate) undo_registration: Option<FileUndoRegistrationSummary>,
+    pub(crate) privileged_request: Option<PrivilegeRequestSummary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,11 +99,11 @@ pub(crate) struct FileActionCompletionSummary {
     pub(crate) status: Option<String>,
     pub(crate) undo_registration: Option<FileUndoRegistrationSummary>,
     pub(crate) affected_dirs: Vec<PathBuf>,
-    pub(crate) privileged_request: Option<FileActionPrivilegeRequest>,
+    pub(crate) privileged_request: Option<PrivilegeRequestSummary>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct FileActionPrivilegeRequest {
+pub(crate) struct PrivilegeRequestSummary {
     pub(crate) command: privilege::PrivilegedCommand,
     pub(crate) reason: String,
 }
@@ -128,7 +113,7 @@ struct FileActionCompletionDecision {
     status: Option<String>,
     undo: Option<FileUndo>,
     affected_dirs: Vec<PathBuf>,
-    privileged_request: Option<FileActionPrivilegeRequest>,
+    privileged_request: Option<PrivilegeRequestSummary>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -397,7 +382,7 @@ impl AppState {
         source: &Path,
         target_dir: &Path,
         result: Result<file_ops::TransferOutcome, String>,
-        can_request_privilege: bool,
+        privileged_command: Option<privilege::PrivilegedCommand>,
     ) -> Option<OperationCompletionSummary> {
         if !self.finish_file_operation(id) {
             return None;
@@ -413,15 +398,79 @@ impl AppState {
             self,
             [Some(target_dir), source_parent].into_iter().flatten(),
         );
-        let refresh_current_dir = refresh_pane_ids
-            .iter()
-            .any(|id| *id == self.panes.focused().id);
+        let remaining = self.operation_queue.len();
+        let (status, undo_registration, privileged_request) = self
+            .file_operation_completion_result(
+                operation,
+                source,
+                result,
+                privileged_command,
+                remaining,
+            );
         Some(OperationCompletionSummary {
-            disposition: operation_result_disposition(operation, result, can_request_privilege),
-            refresh_current_dir,
             refresh_pane_ids,
-            remaining: self.operation_queue.len(),
+            status,
+            undo_registration,
+            privileged_request,
         })
+    }
+
+    fn file_operation_completion_result(
+        &mut self,
+        operation: &str,
+        source: &Path,
+        result: Result<file_ops::TransferOutcome, String>,
+        privileged_command: Option<privilege::PrivilegedCommand>,
+        remaining: usize,
+    ) -> (
+        Option<String>,
+        Option<FileUndoRegistrationSummary>,
+        Option<PrivilegeRequestSummary>,
+    ) {
+        match result {
+            Ok(outcome) => {
+                let status = operation_completion_status(
+                    Some(operation_complete_status(operation, &outcome.destination)),
+                    false,
+                    remaining,
+                );
+                let undo_registration = self.register_transfer_file_undo(
+                    operation,
+                    source,
+                    &outcome.destination,
+                    outcome.overwritten_backup,
+                );
+                (status, undo_registration, None)
+            }
+            Err(error) if privilege::is_permission_error(&error) => match privileged_command {
+                Some(command) => (
+                    operation_completion_status(None, true, remaining),
+                    None,
+                    Some(PrivilegeRequestSummary {
+                        command,
+                        reason: error,
+                    }),
+                ),
+                None => (
+                    operation_completion_status(
+                        Some(operation_failed_status(operation, &error)),
+                        false,
+                        remaining,
+                    ),
+                    None,
+                    None,
+                ),
+            },
+            Err(error) => (
+                operation_completion_status(
+                    Some(operation_failed_status(operation, &error)),
+                    false,
+                    remaining,
+                ),
+                None,
+                None,
+            ),
+        }
     }
 
     pub(crate) fn file_operation_progress_update(
@@ -573,7 +622,7 @@ fn file_action_completion_decision(
                     status: None,
                     undo: None,
                     affected_dirs: Vec::new(),
-                    privileged_request: Some(FileActionPrivilegeRequest {
+                    privileged_request: Some(PrivilegeRequestSummary {
                         command,
                         reason: error,
                     }),
@@ -757,27 +806,7 @@ pub(crate) fn operation_failed_status(operation: &str, error: &str) -> String {
     format!("{} failed: {error}", operation_finished_label(operation))
 }
 
-pub(crate) fn operation_result_disposition(
-    operation: &str,
-    result: Result<file_ops::TransferOutcome, String>,
-    can_request_privilege: bool,
-) -> OperationResultDisposition {
-    match result {
-        Ok(outcome) => OperationResultDisposition::Completed {
-            status: operation_complete_status(operation, &outcome.destination),
-            destination: outcome.destination,
-            overwritten_backup: outcome.overwritten_backup,
-        },
-        Err(error) if can_request_privilege && privilege::is_permission_error(&error) => {
-            OperationResultDisposition::RequestPrivilege { error }
-        }
-        Err(error) => OperationResultDisposition::Failed {
-            status: operation_failed_status(operation, &error),
-        },
-    }
-}
-
-pub(crate) fn operation_final_status(
+fn operation_completion_status(
     status: Option<String>,
     requested_privilege: bool,
     remaining: usize,
@@ -2036,40 +2065,6 @@ mod tests {
     }
 
     #[test]
-    fn operation_result_disposition_separates_completion_privilege_and_failure() {
-        let completed = operation_result_disposition(
-            "copy",
-            Ok(file_ops::TransferOutcome {
-                destination: PathBuf::from("/tmp/copied.txt"),
-                overwritten_backup: Some(PathBuf::from("/tmp/backup")),
-            }),
-            true,
-        );
-        assert_eq!(
-            completed,
-            OperationResultDisposition::Completed {
-                destination: PathBuf::from("/tmp/copied.txt"),
-                overwritten_backup: Some(PathBuf::from("/tmp/backup")),
-                status: "Copy complete: /tmp/copied.txt".to_string(),
-            }
-        );
-
-        assert_eq!(
-            operation_result_disposition("move", Err("Permission denied".to_string()), true),
-            OperationResultDisposition::RequestPrivilege {
-                error: "Permission denied".to_string(),
-            }
-        );
-
-        assert_eq!(
-            operation_result_disposition("move", Err("Permission denied".to_string()), false),
-            OperationResultDisposition::Failed {
-                status: "Move failed: Permission denied".to_string(),
-            }
-        );
-    }
-
-    #[test]
     fn complete_file_operation_summarizes_state_and_invalidates_caches() {
         let mut state = AppState::new(PathBuf::from("/tmp/target"), Vec::new());
         let target_dir = PathBuf::from("/tmp/target");
@@ -2090,24 +2085,105 @@ mod tests {
                     destination: target_dir.join("item.txt"),
                     overwritten_backup: None,
                 }),
-                false,
+                None,
             )
             .unwrap();
 
-        assert!(summary.refresh_current_dir);
         assert_eq!(summary.refresh_pane_ids, vec![state.panes.focused().id]);
-        assert_eq!(summary.remaining, 1);
         assert_eq!(
-            summary.disposition,
-            OperationResultDisposition::Completed {
-                destination: target_dir.join("item.txt"),
-                overwritten_backup: None,
-                status: "Copy complete: /tmp/target/item.txt".to_string(),
-            }
+            summary.status,
+            Some("Copy complete: /tmp/target/item.txt; 1 queued".to_string())
+        );
+        assert_eq!(
+            summary.undo_registration,
+            Some(FileUndoRegistrationSummary {
+                cleanup_backup: None,
+                undo_ui: FileUndoUiState {
+                    available: true,
+                    label: "Undo Copy".to_string(),
+                },
+            })
+        );
+        assert!(summary.privileged_request.is_none());
+        assert_eq!(
+            state.last_undo.as_ref().map(|undo| undo.operation.as_str()),
+            Some("copy")
         );
         assert_eq!(state.active_operation_id(), None);
         assert!(!state.directory_cache.contains_key(&target_dir));
         assert!(!state.directory_cache.contains_key(&source_parent));
+    }
+
+    #[test]
+    fn complete_file_operation_requests_privilege_and_preserves_queue_status() {
+        let mut state = AppState::new(PathBuf::from("/tmp/target"), Vec::new());
+        let target_dir = PathBuf::from("/tmp/target");
+        let source = PathBuf::from("/tmp/source/item.txt");
+        let command = privilege::PrivilegedCommand::Transfer {
+            operation: "copy".to_string(),
+            source: source.clone(),
+            target_dir: target_dir.clone(),
+        };
+        state.queue_file_operation(request("copy"), OperationQueuePosition::Back);
+        state.begin_file_operation(7);
+
+        let summary = state
+            .complete_file_operation(
+                7,
+                "copy",
+                &source,
+                &target_dir,
+                Err("Permission denied".to_string()),
+                Some(command),
+            )
+            .unwrap();
+
+        assert_eq!(summary.refresh_pane_ids, vec![state.panes.focused().id]);
+        assert_eq!(
+            summary.status,
+            Some("Administrator privileges required; 1 queued".to_string())
+        );
+        assert!(summary.undo_registration.is_none());
+        let Some(request) = summary.privileged_request else {
+            panic!("permission error should request privilege");
+        };
+        assert_eq!(request.reason, "Permission denied");
+        match request.command {
+            privilege::PrivilegedCommand::Transfer {
+                operation,
+                source: request_source,
+                target_dir: request_target,
+            } => {
+                assert_eq!(operation, "copy");
+                assert_eq!(request_source, source);
+                assert_eq!(request_target, target_dir);
+            }
+            other => panic!("unexpected privileged request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn complete_file_operation_reports_permission_failure_without_command() {
+        let mut state = AppState::new(PathBuf::from("/tmp/target"), Vec::new());
+        state.begin_file_operation(7);
+
+        let summary = state
+            .complete_file_operation(
+                7,
+                "move",
+                Path::new("/tmp/source/item.txt"),
+                Path::new("/tmp/target"),
+                Err("Permission denied".to_string()),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            summary.status,
+            Some("Move failed: Permission denied".to_string())
+        );
+        assert!(summary.undo_registration.is_none());
+        assert!(summary.privileged_request.is_none());
     }
 
     #[test]
@@ -2117,16 +2193,17 @@ mod tests {
         state.insert_directory_cache(target_dir.clone(), PreparedDirectoryEntries::default());
         state.begin_file_operation(7);
 
-        assert_eq!(
-            state.complete_file_operation(
-                99,
-                "copy",
-                Path::new("/tmp/source/item.txt"),
-                &target_dir,
-                Err("late result".to_string()),
-                false,
-            ),
-            None
+        assert!(
+            state
+                .complete_file_operation(
+                    99,
+                    "copy",
+                    Path::new("/tmp/source/item.txt"),
+                    &target_dir,
+                    Err("late result".to_string()),
+                    None,
+                )
+                .is_none()
         );
 
         assert_eq!(state.active_operation_id(), Some(7));
@@ -2150,12 +2227,15 @@ mod tests {
                     destination: PathBuf::from("/tmp/right/item.txt"),
                     overwritten_backup: None,
                 }),
-                false,
+                None,
             )
             .unwrap();
 
-        assert!(!summary.refresh_current_dir);
         assert_eq!(summary.refresh_pane_ids, vec![inactive_id]);
+        assert_eq!(
+            summary.status,
+            Some("Copy complete: /tmp/right/item.txt".to_string())
+        );
     }
 
     #[test]
@@ -2176,12 +2256,15 @@ mod tests {
                     destination: PathBuf::from("/tmp/target/item.txt"),
                     overwritten_backup: None,
                 }),
-                false,
+                None,
             )
             .unwrap();
 
-        assert!(summary.refresh_current_dir);
         assert_eq!(summary.refresh_pane_ids, vec![active_id, inactive_id]);
+        assert_eq!(
+            summary.status,
+            Some("Move complete: /tmp/target/item.txt".to_string())
+        );
     }
 
     #[test]
@@ -2205,21 +2288,21 @@ mod tests {
     }
 
     #[test]
-    fn operation_final_status_preserves_prompt_and_queue_semantics() {
+    fn operation_completion_status_preserves_prompt_and_queue_semantics() {
         assert_eq!(
-            operation_final_status(Some("Copy complete: /tmp/a".to_string()), false, 0),
+            operation_completion_status(Some("Copy complete: /tmp/a".to_string()), false, 0),
             Some("Copy complete: /tmp/a".to_string())
         );
         assert_eq!(
-            operation_final_status(Some("Copy complete: /tmp/a".to_string()), false, 2),
+            operation_completion_status(Some("Copy complete: /tmp/a".to_string()), false, 2),
             Some("Copy complete: /tmp/a; 2 queued".to_string())
         );
         assert_eq!(
-            operation_final_status(None, true, 3),
+            operation_completion_status(None, true, 3),
             Some("Administrator privileges required; 3 queued".to_string())
         );
-        assert_eq!(operation_final_status(None, true, 0), None);
-        assert_eq!(operation_final_status(None, false, 3), None);
+        assert_eq!(operation_completion_status(None, true, 0), None);
+        assert_eq!(operation_completion_status(None, false, 3), None);
     }
 
     fn transfer_request(
