@@ -482,18 +482,6 @@ fn active_empty_subtitle(ui: &AppWindow, search_query: &SharedString) -> SharedS
     }
 }
 
-pub(crate) fn set_pane_viewport_ui_if_clamped(
-    ui: &AppWindow,
-    slot: i32,
-    viewport_x: f32,
-    viewport_clamped: bool,
-    state: &Rc<RefCell<AppState>>,
-) {
-    if viewport_clamped {
-        set_pane_viewport_ui(ui, slot, viewport_x, state);
-    }
-}
-
 pub(crate) fn sync_navigation_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let snapshot = {
         let state = state.borrow();

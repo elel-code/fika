@@ -83,9 +83,8 @@ use app::selection::{
     selection_range_paths_filtered_for_slot, selection_rect_paths_filtered_for_slot,
 };
 use app::split_view::{
-    directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui,
-    set_pane_viewport_ui_if_clamped, sync_focus_navigation_ui, sync_navigation_ui,
-    sync_pane_slot_ui, sync_pane_slots_ui, toggle_split_view,
+    directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui, sync_focus_navigation_ui,
+    sync_navigation_ui, sync_pane_slot_ui, sync_pane_slots_ui, toggle_split_view,
 };
 #[cfg(test)]
 use app::state::PaneExternalEdit;
@@ -189,10 +188,7 @@ type ThumbnailPendingLoad = (u64, u64, thumbnails::ThumbnailLoad);
 type ThumbnailPendingQueue = Rc<RefCell<VecDeque<ThumbnailPendingLoad>>>;
 
 enum VirtualViewSyncRequest {
-    Cached {
-        viewport_x: f32,
-        viewport_clamped: bool,
-    },
+    Cached { viewport_x: f32 },
     Deferred,
     Prepare(VirtualViewPrepareRequest),
 }
@@ -3326,7 +3322,7 @@ fn sync_virtual_entries_for_slot_with_count(
         if immediate {
             pane.view.cancel_virtual_prepare_queue();
         }
-        if let Some((viewport_x, viewport_clamped)) = cached_virtual_viewport_sync(
+        if let Some(viewport_x) = cached_virtual_viewport_sync(
             pane,
             &layout,
             requested_viewport_x,
@@ -3338,10 +3334,7 @@ fn sync_virtual_entries_for_slot_with_count(
         ) {
             pane.view.virtual_generation.next();
             pane.view.clear_pending_virtual_prepare();
-            Some(VirtualViewSyncRequest::Cached {
-                viewport_x,
-                viewport_clamped,
-            })
+            Some(VirtualViewSyncRequest::Cached { viewport_x })
         } else {
             let generation = pane.view.virtual_generation.next();
             let query = pane.search.query.to_ascii_lowercase();
@@ -3388,11 +3381,8 @@ fn sync_virtual_entries_for_slot_with_count(
     };
 
     let request = match request {
-        VirtualViewSyncRequest::Cached {
-            viewport_x,
-            viewport_clamped,
-        } => {
-            set_pane_viewport_ui_if_clamped(ui, slot, viewport_x, viewport_clamped, state);
+        VirtualViewSyncRequest::Cached { viewport_x } => {
+            set_pane_viewport_ui(ui, slot, viewport_x, state);
             return;
         }
         VirtualViewSyncRequest::Deferred => return,
@@ -3489,7 +3479,7 @@ fn cached_virtual_viewport_sync(
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
     chooser_patterns: &[String],
-) -> Option<(f32, bool)> {
+) -> Option<f32> {
     if !schedule_thumbnails || visible_count_override.is_some() {
         return None;
     }
@@ -3527,8 +3517,7 @@ fn cached_virtual_viewport_sync(
     }
 
     pane.view.viewport_x = plan.viewport_x;
-    let viewport_clamped = (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON;
-    Some((plan.viewport_x, viewport_clamped))
+    Some(plan.viewport_x)
 }
 
 fn virtual_cache_covers_visible_range(
@@ -3587,7 +3576,7 @@ fn apply_virtual_view_result(
         return;
     }
 
-    set_pane_viewport_ui_if_clamped(ui, slot, update.viewport_x, update.viewport_clamped, state);
+    set_pane_viewport_ui(ui, slot, update.viewport_x, state);
     let target_is_focused = state.borrow().panes.focused_slot() == slot;
     if !update.rebuild_model {
         if target_is_focused && ui.get_entry_count() != update.entry_count as i32 {
@@ -5716,6 +5705,35 @@ mod tests {
                 && viewport_body.contains("sync_pane_slot_ui(ui, state, slot);")
                 && !viewport_body.contains("pane_slot_data(ui"),
             "viewport-only row sync should patch only PaneSlotData.viewport_x and use full row sync only as a missing-row fallback"
+        );
+    }
+
+    #[test]
+    fn virtual_view_sync_publishes_cached_and_async_viewport_rows() {
+        let source = include_str!("main.rs");
+        let sync_body = source
+            .split_once("fn sync_virtual_entries_for_slot_with_count(")
+            .and_then(|(_, rest)| rest.split_once("fn start_virtual_view_prepare("))
+            .map(|(body, _)| body)
+            .expect("virtual entry sync body should be present");
+        let result_body = source
+            .split_once("fn apply_virtual_view_result(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_virtual_view_prepare_failure("))
+            .map(|(body, _)| body)
+            .expect("virtual view result body should be present");
+        let production_body = source
+            .split_once("#[cfg(test)]")
+            .map(|(body, _)| body)
+            .expect("main production body should be present");
+
+        assert!(
+            sync_body.contains("VirtualViewSyncRequest::Cached { viewport_x }")
+                && sync_body.contains("set_pane_viewport_ui(ui, slot, viewport_x, state);")
+                && result_body
+                    .contains("set_pane_viewport_ui(ui, slot, update.viewport_x, state);")
+                && !production_body.contains("set_pane_viewport_ui_if_clamped")
+                && !sync_body.contains("viewport_clamped"),
+            "cached viewport sync and async virtual-view results must publish pane row viewport_x, not only clamp corrections"
         );
     }
 
