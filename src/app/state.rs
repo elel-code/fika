@@ -252,6 +252,7 @@ mod tests {
             modified: "Today".into(),
             modified_age_days: 0,
             is_dir: false,
+            selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
         }

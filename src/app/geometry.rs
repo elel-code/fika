@@ -12,12 +12,9 @@ const SEARCH_PANEL_NARROW_WIDTH: f32 = 760.0;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MainGridLayout {
-    pub(crate) main_x: f32,
-    pub(crate) main_y: f32,
     pub(crate) viewport_x: f32,
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
-    pub(crate) row_height: f32,
     pub(crate) padding: f32,
 }
 
@@ -41,7 +38,7 @@ pub(crate) struct MainPaneBounds {
 }
 
 impl MainGridLayout {
-    pub(crate) fn from_ui(ui: &AppWindow) -> Self {
+    pub(crate) fn from_ui_for_pane_width(ui: &AppWindow, pane_width: f32) -> Self {
         let cell_width = icon_cell_width(ui.get_icon_zoom_level());
         let row_height = icon_row_height(ui.get_icon_zoom_level());
         let padding = 14.0;
@@ -51,18 +48,13 @@ impl MainGridLayout {
             window_size.width,
             window_size.height,
         );
-        let active_width = active_main_pane_width(
-            pane.right - pane.left,
-            ui.get_split_view_open(),
-            ui.get_split_pane_ratio(),
-        );
         let search_panel_height = search_panel_height(
             ui.get_search_bar_open(),
             ui.get_search_query().as_str(),
             ui.get_search_kind_filter(),
             ui.get_search_modified_filter(),
             ui.get_search_size_filter(),
-            active_width,
+            pane_width,
         );
         let available_grid_height = (pane.bottom
             - pane.top
@@ -74,35 +66,11 @@ impl MainGridLayout {
         let rows_per_column = (available_grid_height / row_height).floor().max(1.0) as usize;
 
         Self {
-            main_x: pane.left,
-            main_y: pane.top + PATH_BAR_HEIGHT + search_panel_height,
-            viewport_x: ui.get_main_viewport_x(),
+            viewport_x: 0.0,
             rows_per_column,
             cell_width,
-            row_height,
             padding,
         }
-    }
-
-    pub(crate) fn index_at_point(self, x: f32, y: f32) -> Option<usize> {
-        let local_x = x - self.main_x - self.padding + self.viewport_x;
-        let local_y = y - self.main_y - self.padding;
-        if local_x < 0.0 || local_y < 0.0 {
-            return None;
-        }
-
-        let column = (local_x / self.cell_width).floor() as usize;
-        let row = (local_y / self.row_height).floor() as usize;
-        if row >= self.rows_per_column {
-            return None;
-        }
-
-        let inside_tile_x = local_x - column as f32 * self.cell_width;
-        if inside_tile_x > (self.cell_width - 12.0).max(1.0) {
-            return None;
-        }
-
-        Some(column * self.rows_per_column + row)
     }
 }
 
@@ -212,30 +180,6 @@ pub(crate) fn virtual_grid_plan(
         rows_per_column,
         cell_width,
     }
-}
-
-pub(crate) fn split_preview_plan(
-    entry_count: usize,
-    pane_width: f32,
-    pane_height: f32,
-    requested_viewport_x: f32,
-    zoom_level: i32,
-) -> VirtualGridPlan {
-    let cell_width = icon_cell_width(zoom_level);
-    let row_height = icon_row_height(zoom_level);
-    let padding = 14.0;
-    let available_height = (pane_height - 2.0 * padding).max(row_height);
-    let rows_per_column = (available_height / row_height).floor().max(1.0) as usize;
-
-    virtual_grid_plan(
-        entry_count,
-        rows_per_column,
-        requested_viewport_x,
-        pane_width.max(1.0),
-        cell_width,
-        padding,
-        2,
-    )
 }
 
 pub(crate) fn icon_cell_width(zoom_level: i32) -> f32 {
@@ -1181,8 +1125,7 @@ mod tests {
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
         PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, active_main_pane_width,
         context_menu_metrics, inactive_main_pane_width, main_pane_bounds, main_scroll_max_x,
-        place_drop_geometry, search_panel_height, split_preview_plan, virtual_entry_range,
-        virtual_grid_plan,
+        place_drop_geometry, search_panel_height, virtual_entry_range, virtual_grid_plan,
     };
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
@@ -1649,7 +1592,7 @@ mod tests {
             "sidebar panel should leave a visible bottom gap and avoid stretching the list to fill the window"
         );
         assert!(
-            !app.contains("changed main_viewport_x => { root.main_view_changed(); }"),
+            !app.contains("changed viewport_x => { root.main_view_changed(); }"),
             "main viewport scrolling should not separately trigger a duplicate virtual refresh"
         );
         assert!(
@@ -1895,7 +1838,24 @@ mod tests {
             .split_once("title: chooser_mode")
             .expect("pane route functions should be defined before the window body")
             .0;
+        let context_menu_route = route_functions
+            .split_once("public function route-pane-request-context-menu(slot: int,")
+            .expect("pane route functions should include the item context menu route")
+            .1
+            .split_once("public function route-pane-request-blank-context-menu(slot: int,")
+            .expect("item context menu route should be before the blank context menu route")
+            .0;
+        let blank_context_menu_route = route_functions
+            .split_once("public function route-pane-request-blank-context-menu(slot: int,")
+            .expect("pane route functions should include the blank context menu route")
+            .1
+            .split_once("public function route-pane-zoom-in(slot: int)")
+            .expect("blank context menu route should be before pane zoom routes")
+            .0;
 
+        assert!(app.contains(
+            "private property <bool> file-operation-shortcuts-blocked: root.search-input-focused || root.chooser-save-input-focused || root.transient-popup-open;"
+        ));
         assert!(app.contains("import { SplitPaneView } from \"split_pane.slint\";"));
         assert!(app.contains("component PaneSlotSurface inherits Rectangle"));
         assert!(app.contains("private property <length> pane-slot-0-width"));
@@ -1915,7 +1875,7 @@ mod tests {
         assert!(app.contains(
             "private property <length> pane-slot-1-width: root.split_view_open ? max(1px, root.main-pane-width - root.pane-slot-1-x) : 0px;"
         ));
-        assert!(app.contains("in-out property <float> inactive_pane_viewport_x"));
+        assert!(!app.contains("inactive_pane_viewport_x"));
         assert!(app.contains("pane-shells := Rectangle"));
         assert!(!app.contains("function pane-slot-current-path(slot: int) -> string"));
         assert!(!app.contains("pane-current-path: root.pane-slot-current-path(slot);"));
@@ -1923,9 +1883,9 @@ mod tests {
             !app.contains("pane-virtual-start-index: root.pane-slot-virtual-start-index(slot);")
         );
         assert!(!app.contains("pane-viewport-offset: root.pane-slot-viewport-offset(slot);"));
-        assert!(app.contains("function set-pane-slot-path-text(slot: int, text: string)"));
-        assert!(app.contains("function set-pane-slot-path-focused(slot: int, focused: bool)"));
-        assert!(app.contains(
+        assert!(!app.contains("function set-pane-slot-path-text(slot: int, text: string)"));
+        assert!(!app.contains("function set-pane-slot-path-focused(slot: int, focused: bool)"));
+        assert!(!app.contains(
             "function set-pane-slot-viewport(slot: int, viewport-x: float, viewport-offset: length)"
         ));
         assert!(!app.contains("pane-slot-0-shell := PaneSlotSurface"));
@@ -1979,7 +1939,7 @@ mod tests {
                 && pane_routing.contains("callback drop-target-path(int, float, float, string) -> string;")
                 && pane_routing.contains("callback drop-allowed(int, float, float, string) -> bool;")
                 && pane_routing.contains("callback prepare-transfer(int, string, float, float) -> bool;")
-                && pane_routing.contains("pure callback is-selected(int, string) -> bool;"),
+                && !pane_routing.contains("is-selected"),
             "PaneRouting should expose one slot-aware surface for every pane interaction"
         );
         assert_eq!(
@@ -2043,9 +2003,9 @@ mod tests {
                 && file_pane.contains("callback activated(int, string);")
                 && file_pane.contains("callback request_select(int, string, bool, bool);")
                 && file_pane.contains("callback request_context_menu(int,")
-                && file_pane.contains("pure callback is_selected(int, string) -> bool;")
                 && file_pane
-                    .contains("pure callback make_drag_data(int, string, bool) -> data-transfer;"),
+                    .contains("pure callback make_drag_data(int, string, bool) -> data-transfer;")
+                && !file_pane.contains("pure callback is_selected"),
             "FilePane callbacks should carry the pane slot instead of baking in left/right behavior"
         );
         assert!(
@@ -2057,7 +2017,6 @@ mod tests {
                 && file_pane.contains("root.request_context_menu(root.pane-slot, path, name, size, modified, is-dir, x, y);")
                 && file_pane.contains("navigate_back => { root.go_back(root.pane-slot); }")
                 && file_pane.contains("navigate_forward => { root.go_forward(root.pane-slot); }")
-                && file_pane.contains("root.is_selected(root.pane-slot, path)")
                 && file_pane.contains(
                     "commit_external_edit => { root.commit_external_edit(root.pane-slot); }"
                 )
@@ -2096,7 +2055,6 @@ mod tests {
             "chooser_accept(value) => { PaneRouting.chooser-accept(value); }",
             "chooser_filter_requested(slot, x, y) => { PaneRouting.chooser-filter-requested(slot, x, y); }",
             "chooser_choice_requested(slot, index, x, y) => {\n        PaneRouting.chooser-choice-requested(slot, index, x, y);\n    }",
-            "is_selected(slot, path) => {\n        PaneRouting.is-selected(slot, path)\n    }",
             "make_drag_data(slot, path, is-dir) => {\n        is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)\n    }",
         ];
         for binding in pane_slot_bindings {
@@ -2237,13 +2195,17 @@ mod tests {
         );
         assert!(
             route_functions.contains("public function route-pane-request-context-menu(slot: int,")
-                && route_functions.contains("root.refresh_clipboard_availability();")
-                && route_functions.contains("if (!root.pane_is_selected(slot, path))")
-                && route_functions.contains("root.pane_request_select(slot, path, false, false);")
-                && route_functions.contains("root.show-context-menu(1, x, y);")
+                && context_menu_route.contains("root.sync_clipboard_state();")
+                && !context_menu_route.contains("root.refresh_clipboard_availability();")
+                && context_menu_route.contains("if (!root.pane_is_selected(slot, path))")
+                && context_menu_route.contains("root.pane_request_select(slot, path, false, false);")
+                && context_menu_route.contains("root.show-context-menu(1, x, y);")
                 && route_functions
                     .contains("public function route-pane-request-blank-context-menu(slot: int,")
-                && route_functions.contains("root.show-context-menu(3, x, y);")
+                && blank_context_menu_route.contains("root.sync_clipboard_state();")
+                && !blank_context_menu_route.contains("root.refresh_clipboard_availability();")
+                && route_functions.matches("root.sync_clipboard_state();").count() == 2
+                && blank_context_menu_route.contains("root.show-context-menu(3, x, y);")
                 && route_functions
                     .contains("public function route-pane-drop-target-path(slot: int,")
                 && route_functions
@@ -2276,16 +2238,18 @@ mod tests {
             "pane-local address, status, selection, and external edit state should come from PaneSlotData instead of slot selectors"
         );
         assert!(
-            app.contains("function set-pane-slot-path-text(slot: int, text: string)")
-                && app.contains("root.pane_slots_refresh_requested();")
-                && app.contains("function set-pane-slot-path-focused(slot: int, focused: bool)")
-                && app.contains("function set-pane-slot-viewport(slot: int, viewport-x: float, viewport-offset: length)"),
-            "pane slot callbacks should write each pane's address focus/text and viewport through shared setters"
+            app.contains("callback pane_path_text_changed(int, string);")
+                && app.contains("callback pane_path_focus_changed(int, bool);")
+                && app.contains("callback pane_viewport_changed(int, float);")
+                && app.contains("root.pane_path_text_changed(slot, text);")
+                && app.contains("root.pane_path_focus_changed(slot, focused);")
+                && app.contains("root.pane_viewport_changed(slot, viewport-x);"),
+            "pane slot callbacks should route address focus/text and viewport changes through pane-local callbacks"
         );
         assert!(
             !app.contains("pane-path-text <=> root.left_pane_path_input_text;")
                 && !app.contains("pane-path-text <=> root.inactive_pane_path_input_text;")
-                && !app.contains("pane-viewport-x <=> root.main_viewport_x;")
+                && !app.contains("pane-viewport-x <=> root.viewport_x;")
                 && !app.contains("pane-viewport-x <=> root.inactive_pane_viewport_x;"),
             "physical pane template must not bind directly to a fixed pane state slot"
         );
@@ -2325,6 +2289,12 @@ mod tests {
         assert!(split_pane.contains("callback activated(string);"));
         assert!(split_pane.contains("callback zoom_in();"));
         assert!(split_pane.contains("callback zoom_out();"));
+        assert!(
+            split_pane.contains("selected: item.selected;")
+                && !split_pane.contains("pure callback is_selected")
+                && !split_pane.contains("root.is_selected(item.path)"),
+            "SplitPaneView should derive tile highlight from precomputed FileEntry selection state"
+        );
         assert!(split_pane.contains("function handle-scroll("));
         assert!(
             split_pane
@@ -2491,7 +2461,7 @@ mod tests {
         );
         assert!(
             app.contains(
-                "changed split_pane_ratio => {\n        root.sync-main-viewport();\n        root.pane_layout_changed();\n    }"
+                "changed split_pane_ratio => {\n        root.pane_layout_changed();\n    }"
             ),
             "dragging the divider should resync every visible pane virtual view as the ratio changes"
         );
@@ -3033,21 +3003,6 @@ mod tests {
         assert_eq!(clamped.scroll_max_x, 70.0);
         assert_eq!(clamped.visible_range, 0..10);
         assert_eq!(clamped.range, 0..10);
-        assert_eq!(clamped.start_column, 0);
-    }
-
-    #[test]
-    fn split_preview_plan_uses_bounded_virtual_slice() {
-        let plan = split_preview_plan(1_000, 420.0, 704.0, 1_200.0, 1);
-
-        assert_eq!(plan.viewport_x, 1200.0);
-        assert_eq!(plan.visible_range, 35..56);
-        assert_eq!(plan.range, 21..70);
-        assert_eq!(plan.start_column, 3);
-
-        let clamped = split_preview_plan(12, 420.0, 704.0, 4_000.0, 1);
-        assert_eq!(clamped.viewport_x, 24.0);
-        assert_eq!(clamped.range, 0..12);
         assert_eq!(clamped.start_column, 0);
     }
 

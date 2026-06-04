@@ -83,10 +83,12 @@ pub(crate) fn register_callbacks(
     {
         let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
+        let state = Rc::clone(state);
         ui.on_set_default_app(move |path, desktop_id| {
             if let Some(ui) = ui_weak.upgrade() {
                 set_default_app_async(
                     &ui,
+                    &state,
                     &bridge,
                     PathBuf::from(path.as_str()),
                     desktop_id.to_string(),
@@ -127,7 +129,7 @@ fn open_file_with_app_async(
             .pane_mut_for_target(PaneTarget::Focused)
             .map(|pane| (pane.id, pane.open_generation.next()))
     }) else {
-        set_status(ui, "No split pane target is available");
+        set_status(ui, state, "No split pane target is available");
         return;
     };
     set_status_for_panes(
@@ -168,7 +170,7 @@ fn open_file_with_custom_command_async(
             .pane_mut_for_target(PaneTarget::Focused)
             .map(|pane| (pane.id, pane.open_generation.next()))
     }) else {
-        set_status(ui, "No split pane target is available");
+        set_status(ui, state, "No split pane target is available");
         return;
     };
     set_status_for_panes(ui, state, &[pane_id], "Opening with custom command...");
@@ -341,8 +343,18 @@ fn prepare_other_application_apps(ui: &AppWindow, bridge: &AsyncBridge, path: Pa
     });
 }
 
-fn set_default_app_async(ui: &AppWindow, bridge: &AsyncBridge, path: PathBuf, desktop_id: String) {
-    set_status(ui, &format!("Setting default app to {desktop_id}..."));
+fn set_default_app_async(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    path: PathBuf,
+    desktop_id: String,
+) {
+    set_status(
+        ui,
+        state,
+        &format!("Setting default app to {desktop_id}..."),
+    );
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -365,7 +377,11 @@ fn set_default_app_async(ui: &AppWindow, bridge: &AsyncBridge, path: PathBuf, de
     });
 }
 
-pub(crate) fn apply_open_with_apps_result(ui: &AppWindow, result: OpenWithAppsResult) {
+pub(crate) fn apply_open_with_apps_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    result: OpenWithAppsResult,
+) {
     if ui.get_open_with_path().as_str() != result.path.to_string_lossy().as_ref() {
         return;
     }
@@ -387,7 +403,7 @@ pub(crate) fn apply_open_with_apps_result(ui: &AppWindow, result: OpenWithAppsRe
             ui.set_open_with_apps(ModelRc::new(Rc::new(VecModel::from(
                 Vec::<DesktopApp>::new(),
             ))));
-            set_status(ui, &format!("Cannot list applications: {err}"));
+            set_status(ui, state, &format!("Cannot list applications: {err}"));
         }
     }
 }
@@ -413,7 +429,7 @@ pub(crate) fn apply_other_application_apps_result(
             ui.set_other_application_apps(ModelRc::new(Rc::new(VecModel::from(
                 Vec::<DesktopApp>::new(),
             ))));
-            set_status(ui, &format!("Cannot list applications: {err}"));
+            set_status(ui, state, &format!("Cannot list applications: {err}"));
         }
     }
 }
@@ -434,15 +450,20 @@ fn filter_other_application_apps(ui: &AppWindow, state: &Rc<RefCell<AppState>>, 
     ui.set_other_application_apps(ModelRc::new(Rc::new(VecModel::from(apps))));
 }
 
-pub(crate) fn apply_default_app_set_result(ui: &AppWindow, result: DefaultAppSetResult) {
+pub(crate) fn apply_default_app_set_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    result: DefaultAppSetResult,
+) {
     match result.result {
         Ok(mime_type) => {
             set_status(
                 ui,
+                state,
                 &format!("Default app for {mime_type} set to {}", result.desktop_id),
             );
         }
-        Err(err) => set_status(ui, &format!("Cannot set default app: {err}")),
+        Err(err) => set_status(ui, state, &format!("Cannot set default app: {err}")),
     }
 }
 
@@ -482,8 +503,8 @@ mod tests {
                 "Open With launches should use the focused pane id and write start status to that pane"
             );
             assert!(
-                !body.contains("state.panes.active().id")
-                    && !body.contains("state.panes.active().open_generation.next()"),
+                !body.contains("state.panes.focused().id")
+                    && !body.contains("state.panes.focused().open_generation.next()"),
                 "Open With launches must not hard-code the left/active pane"
             );
         }

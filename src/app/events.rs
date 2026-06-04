@@ -145,6 +145,7 @@ pub(crate) enum AsyncEvent {
     PrivilegedOperationFinished(privilege::PrivilegedOperationResult),
     ExternalEditFinished(ExternalEditResult),
     ThumbnailLoaded {
+        pane_id: u64,
         generation: u64,
         load: thumbnails::ThumbnailLoad,
     },

@@ -38,18 +38,18 @@ fn add_place_at_slot_inner(
 ) {
     let path = normalize_place_path(path);
     if !path.is_dir() {
-        set_status(ui, "Only folders can be added to Places");
+        set_status(ui, state, "Only folders can be added to Places");
         return;
     }
 
-    let mut state = state.borrow_mut();
+    let mut state_ref = state.borrow_mut();
     let path_string = path.display().to_string();
-    if state
+    if state_ref
         .places
         .iter()
         .any(|place| place.path.as_str() == path_string)
     {
-        set_status(ui, "Folder is already in Places");
+        set_status(ui, state, "Folder is already in Places");
         return;
     }
 
@@ -63,12 +63,12 @@ fn add_place_at_slot_inner(
 
     let entry = place_entry(&label, path, marker.as_str());
     let slot = usize::try_from(slot)
-        .unwrap_or(state.places.len())
-        .min(state.places.len());
-    state.places.insert(slot, entry);
-    save_places(&state.places);
-    sync_places(ui, &state.places);
-    set_status(ui, "Folder added to Places");
+        .unwrap_or(state_ref.places.len())
+        .min(state_ref.places.len());
+    state_ref.places.insert(slot, entry);
+    save_places(&state_ref.places);
+    sync_places(ui, &state_ref.places);
+    set_status(ui, state, "Folder added to Places");
 }
 
 pub(crate) fn normalize_place_path(path: PathBuf) -> PathBuf {
@@ -79,54 +79,54 @@ pub(crate) fn normalize_place_path(path: PathBuf) -> PathBuf {
 pub(crate) fn rename_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index: i32, label: &str) {
     let label = label.trim();
     if label.is_empty() {
-        set_status(ui, "Place name cannot be empty");
+        set_status(ui, state, "Place name cannot be empty");
         return;
     }
 
-    let mut state = state.borrow_mut();
+    let mut state_ref = state.borrow_mut();
     let Ok(index) = usize::try_from(index) else {
         return;
     };
-    let Some(place) = state.places.get_mut(index) else {
+    let Some(place) = state_ref.places.get_mut(index) else {
         return;
     };
     if place.is_builtin {
-        set_status(ui, "Built-in places cannot be renamed");
+        set_status(ui, state, "Built-in places cannot be renamed");
         return;
     }
 
     place.label = label.into();
     place.marker = place_marker(label).into();
-    save_places(&state.places);
-    sync_places(ui, &state.places);
-    set_status(ui, "Place renamed");
+    save_places(&state_ref.places);
+    sync_places(ui, &state_ref.places);
+    set_status(ui, state, "Place renamed");
 }
 
 pub(crate) fn remove_place(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index: i32) {
-    let mut state = state.borrow_mut();
+    let mut state_ref = state.borrow_mut();
     let Ok(index) = usize::try_from(index) else {
         return;
     };
-    if index >= state.places.len() {
+    if index >= state_ref.places.len() {
         return;
     }
-    if state.places[index].is_builtin {
-        set_status(ui, "Built-in places cannot be removed");
+    if state_ref.places[index].is_builtin {
+        set_status(ui, state, "Built-in places cannot be removed");
         return;
     }
 
-    state.places.remove(index);
-    save_places(&state.places);
-    sync_places(ui, &state.places);
-    set_status(ui, "Place removed");
+    state_ref.places.remove(index);
+    save_places(&state_ref.places);
+    sync_places(ui, &state_ref.places);
+    set_status(ui, state, "Place removed");
 }
 
 pub(crate) fn restore_default_places(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let mut state = state.borrow_mut();
-    state.places = builtin_places();
-    save_places(&state.places);
-    sync_places(ui, &state.places);
-    set_status(ui, "Default places restored");
+    let mut state_ref = state.borrow_mut();
+    state_ref.places = builtin_places();
+    save_places(&state_ref.places);
+    sync_places(ui, &state_ref.places);
+    set_status(ui, state, "Default places restored");
 }
 
 pub(crate) fn open_place_new_window(ui: &AppWindow, state: &Rc<RefCell<AppState>>, index: i32) {
@@ -141,7 +141,7 @@ pub(crate) fn open_place_new_window(ui: &AppWindow, state: &Rc<RefCell<AppState>
         (place.label.to_string(), place.path.to_string())
     };
     let Ok(exe) = std::env::current_exe() else {
-        set_status(ui, "Cannot locate Fika executable");
+        set_status(ui, state, "Cannot locate Fika executable");
         return;
     };
     let program = exe.to_string_lossy().to_string();
@@ -151,9 +151,9 @@ pub(crate) fn open_place_new_window(ui: &AppWindow, state: &Rc<RefCell<AppState>
             if let Some(unit) = &launch.unit {
                 state.borrow_mut().launched_units.push(unit.clone());
             }
-            set_status(ui, &format_new_window_status(&label, &launch));
+            set_status(ui, state, &format_new_window_status(&label, &launch));
         }
-        Err(err) => set_status(ui, &format!("Cannot open new window: {err}")),
+        Err(err) => set_status(ui, state, &format!("Cannot open new window: {err}")),
     }
 }
 
@@ -172,15 +172,15 @@ pub(crate) fn reorder_place(
     from: i32,
     to_slot: i32,
 ) {
-    let mut state = state.borrow_mut();
-    let Some((from, to)) = place_reorder_indices(state.places.len(), from, to_slot) else {
+    let mut state_ref = state.borrow_mut();
+    let Some((from, to)) = place_reorder_indices(state_ref.places.len(), from, to_slot) else {
         return;
     };
 
-    let place = state.places.remove(from);
-    state.places.insert(to, place);
-    save_places(&state.places);
-    sync_places(ui, &state.places);
+    let place = state_ref.places.remove(from);
+    state_ref.places.insert(to, place);
+    save_places(&state_ref.places);
+    sync_places(ui, &state_ref.places);
 }
 
 pub(crate) fn reorder_place_path(
@@ -190,14 +190,14 @@ pub(crate) fn reorder_place_path(
     to_slot: i32,
 ) {
     let from = {
-        let state = state.borrow();
-        state
+        let state_ref = state.borrow();
+        state_ref
             .places
             .iter()
             .position(|place| place.path.as_str() == path)
     };
     let Some(from) = from else {
-        set_status(ui, "Place is no longer available");
+        set_status(ui, state, "Place is no longer available");
         return;
     };
     reorder_place(ui, state, from as i32, to_slot);

@@ -42,6 +42,7 @@ pub(crate) fn register_callbacks(
                 };
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Create folder",
                     parent.clone(),
@@ -77,6 +78,7 @@ pub(crate) fn register_callbacks(
                 };
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Create file",
                     parent.clone(),
@@ -102,11 +104,12 @@ pub(crate) fn register_callbacks(
     {
         let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
+        let state = Rc::clone(state);
         ui.on_duplicate_path(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let source = PathBuf::from(path.as_str());
                 let Some(parent) = source.parent().map(Path::to_path_buf) else {
-                    set_status(&ui, "Cannot duplicate item without a parent folder");
+                    set_status(&ui, &state, "Cannot duplicate item without a parent folder");
                     return;
                 };
                 let privileged_command = privilege::PrivilegedCommand::Transfer {
@@ -116,6 +119,7 @@ pub(crate) fn register_callbacks(
                 };
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Duplicate Here",
                     parent.clone(),
@@ -148,6 +152,7 @@ pub(crate) fn register_callbacks(
     {
         let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
+        let state = Rc::clone(state);
         ui.on_copy_location(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let path = path.to_string();
@@ -157,6 +162,7 @@ pub(crate) fn register_callbacks(
                     .unwrap_or_else(|| PathBuf::from("/"));
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Copy Location",
                     affected_dir,
@@ -176,6 +182,7 @@ pub(crate) fn register_callbacks(
     {
         let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
+        let state = Rc::clone(state);
         ui.on_rename_path(move |path, name| {
             if let Some(ui) = ui_weak.upgrade() {
                 let path = PathBuf::from(path.as_str());
@@ -189,6 +196,7 @@ pub(crate) fn register_callbacks(
                 };
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Rename",
                     affected_dir,
@@ -215,6 +223,7 @@ pub(crate) fn register_callbacks(
     {
         let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
+        let state = Rc::clone(state);
         ui.on_trash_path(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let path = PathBuf::from(path.as_str());
@@ -227,6 +236,7 @@ pub(crate) fn register_callbacks(
                 };
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Move to Trash",
                     affected_dir,
@@ -253,6 +263,7 @@ pub(crate) fn register_callbacks(
                 };
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Move selected to Trash",
                     affected_dir,
@@ -270,6 +281,7 @@ pub(crate) fn register_callbacks(
     {
         let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
+        let state = Rc::clone(state);
         ui.on_restore_trash_path(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let path = PathBuf::from(path.as_str());
@@ -279,6 +291,7 @@ pub(crate) fn register_callbacks(
                     .unwrap_or_else(file_ops::trash_files_dir);
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Restore From Trash",
                     affected_dir,
@@ -301,6 +314,7 @@ pub(crate) fn register_callbacks(
                 let (paths, affected_dir) = focused_selection_and_dir(&state);
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Restore selected from Trash",
                     affected_dir,
@@ -317,6 +331,7 @@ pub(crate) fn register_callbacks(
     {
         let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
+        let state = Rc::clone(state);
         ui.on_delete_permanently_path(move |path| {
             if let Some(ui) = ui_weak.upgrade() {
                 let path = PathBuf::from(path.as_str());
@@ -326,6 +341,7 @@ pub(crate) fn register_callbacks(
                     .unwrap_or_else(file_ops::trash_files_dir);
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Delete Permanently",
                     affected_dir,
@@ -348,6 +364,7 @@ pub(crate) fn register_callbacks(
                 let (paths, affected_dir) = focused_selection_and_dir(&state);
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Delete selected permanently",
                     affected_dir,
@@ -364,10 +381,12 @@ pub(crate) fn register_callbacks(
     {
         let ui_weak = ui.as_weak();
         let bridge = bridge.clone();
+        let state = Rc::clone(state);
         ui.on_empty_trash(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 spawn_action(
                     &ui,
+                    &state,
                     &bridge,
                     "Empty Trash",
                     file_ops::trash_files_dir(),
@@ -387,7 +406,7 @@ fn focused_current_dir(state: &Rc<RefCell<AppState>>) -> PathBuf {
     state
         .panes
         .pane_for_target(PaneTarget::Focused)
-        .unwrap_or(&state.panes.active())
+        .unwrap_or(&state.panes.focused())
         .current_dir
         .clone()
 }
@@ -397,7 +416,7 @@ fn focused_selection_and_dir(state: &Rc<RefCell<AppState>>) -> (Vec<PathBuf>, Pa
     let pane = state
         .panes
         .pane_for_target(PaneTarget::Focused)
-        .unwrap_or(&state.panes.active());
+        .unwrap_or(&state.panes.focused());
     (
         pane.selection.paths.iter().map(PathBuf::from).collect(),
         pane.current_dir.clone(),
@@ -490,13 +509,14 @@ fn file_action_apply_result(
 
 fn spawn_action(
     ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     action: &'static str,
     affected_dir: PathBuf,
     task: impl FnOnce() -> Result<(String, Option<FileUndo>), String> + Send + 'static,
     privileged_command: Option<privilege::PrivilegedCommand>,
 ) {
-    set_status(ui, &format!("{action}..."));
+    set_status(ui, state, &format!("{action}..."));
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {

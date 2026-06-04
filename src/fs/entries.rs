@@ -106,6 +106,7 @@ pub fn to_file_entry(entry: RawFileEntry) -> FileEntry {
         modified: entry.modified.into(),
         modified_age_days: entry.modified_age_days,
         is_dir: entry.is_dir,
+        selected: false,
         thumbnail_state: 0,
         thumbnail: Image::default(),
     }

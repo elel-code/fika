@@ -32,7 +32,6 @@ export component SplitPaneView inherits Rectangle {
     callback navigate_forward();
     callback zoom_in();
     callback zoom_out();
-    pure callback is_selected(string) -> bool;
     pure callback make_drag_data(string, bool) -> data-transfer;
 
     clip: true;
@@ -248,7 +247,7 @@ export component SplitPaneView inherits Rectangle {
                     y: root.preview-padding + mod(local-index, root.rows-per-column) * root.row-height;
                     width: root.cell-width - 12px;
                     entry: item;
-                    selected: root.selection-revision >= 0 && root.is_selected(item.path);
+                    selected: item.selected;
                     dark: root.dark;
                     zoom-level: root.zoom-level;
                     show-location: root.show-location;

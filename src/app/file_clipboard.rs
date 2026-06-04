@@ -47,6 +47,16 @@ pub(crate) fn register_callbacks(
             refresh_clipboard_availability_async(&state, &bridge);
         });
     }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(state);
+        ui.on_sync_clipboard_state(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                sync_clipboard_ui(&ui, &state);
+            }
+        });
+    }
 }
 
 pub(crate) fn sync_clipboard_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -64,7 +74,7 @@ fn copy_paths(ui: &AppWindow, state: &Rc<RefCell<AppState>>, context_path: &str,
     };
 
     if paths.is_empty() {
-        set_status(ui, "Nothing selected");
+        set_status(ui, state, "Nothing selected");
         return;
     }
 
@@ -81,9 +91,10 @@ fn copy_paths(ui: &AppWindow, state: &Rc<RefCell<AppState>>, context_path: &str,
     let count = state.borrow().clipboard_paths.len();
     let action = if cut { "Cut" } else { "Copied" };
     match desktop_clipboard {
-        Ok(helper) => set_status(ui, &format!("{action} {count} item(s) via {helper}")),
+        Ok(helper) => set_status(ui, state, &format!("{action} {count} item(s) via {helper}")),
         Err(err) => set_status(
             ui,
+            state,
             &format!("{action} {count} item(s) in Fika; desktop clipboard unavailable: {err}"),
         ),
     }
@@ -97,7 +108,7 @@ fn paste_into(
 ) {
     let target_dir = PathBuf::from(target_dir);
     if !target_dir.is_dir() {
-        set_status(ui, "Paste target is not a folder");
+        set_status(ui, state, "Paste target is not a folder");
         return;
     }
 
@@ -112,7 +123,7 @@ fn paste_into(
         let mut state_ref = state.borrow_mut();
         if state_ref.clipboard_paths.is_empty() {
             drop(state_ref);
-            paste_non_file_content_async(ui, bridge, target_dir);
+            paste_non_file_content_async(ui, state, bridge, target_dir);
             return;
         }
         let (existing_paths, missing_count) =
@@ -123,7 +134,7 @@ fn paste_into(
                 state_ref.clipboard_cut = false;
                 drop(state_ref);
                 sync_clipboard_ui(ui, state);
-                set_status(ui, "Clipboard item(s) no longer exist");
+                set_status(ui, state, "Clipboard item(s) no longer exist");
                 return;
             }
         }
@@ -145,7 +156,7 @@ fn paste_into(
     let mut cut_clipboard_changed = false;
     for path in &paths {
         if target_is_source_or_descendant(path, &target_dir) {
-            set_status(ui, "Cannot paste an item into itself");
+            set_status(ui, state, "Cannot paste an item into itself");
             continue;
         }
         match start_transfer_operation(
@@ -173,12 +184,17 @@ fn paste_into(
     }
 
     if accepted > 1 {
-        set_status(ui, &format!("Queued {accepted} paste operation(s)"));
+        set_status(ui, state, &format!("Queued {accepted} paste operation(s)"));
     }
 }
 
-fn paste_non_file_content_async(ui: &AppWindow, bridge: &AsyncBridge, target_dir: PathBuf) {
-    set_status(ui, "Pasting clipboard contents...");
+fn paste_non_file_content_async(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    target_dir: PathBuf,
+) {
+    set_status(ui, state, "Pasting clipboard contents...");
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {
@@ -355,7 +371,7 @@ fn clipboard_paths_for_focused_context(state: &AppState, context_path: &str) -> 
         .panes
         .pane_for_target(PaneTarget::Focused)
         .map(|pane| pane.selection.paths.as_slice())
-        .unwrap_or_else(|| state.panes.active().selection.paths.as_slice());
+        .unwrap_or_else(|| state.panes.focused().selection.paths.as_slice());
     clipboard_paths_for_context(selected_paths, context_path)
 }
 
@@ -455,13 +471,13 @@ mod tests {
     #[test]
     fn clipboard_context_uses_focused_pane_selection() {
         let mut state = AppState::new(PathBuf::from("/tmp/left"), Vec::new());
-        state.panes.active_mut().selection.paths =
+        state.panes.focused_mut().selection.paths =
             vec!["/tmp/left/a".to_string(), "/tmp/left/b".to_string()];
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/right")));
         assert!(state.panes.focus_slot(1));
         state
             .panes
-            .inactive_mut()
+            .pane_mut_for_slot(1)
             .expect("inactive pane")
             .selection
             .paths = vec!["/tmp/right/a".to_string(), "/tmp/right/b".to_string()];

@@ -176,7 +176,7 @@ impl AppState {
         );
         let refresh_current_dir = refresh_pane_ids
             .iter()
-            .any(|id| *id == self.panes.active().id);
+            .any(|id| *id == self.panes.focused().id);
         Some(OperationCompletionSummary {
             disposition: operation_result_disposition(operation, result, can_request_privilege),
             refresh_current_dir,
@@ -220,18 +220,20 @@ pub(crate) fn affected_directory_pane_ids<'a>(
 ) -> Vec<u64> {
     let affected_dirs = affected_dirs.into_iter().collect::<Vec<_>>();
     let mut pane_ids = Vec::new();
+    let focused_id = state.panes.focused().id;
     if affected_dirs
         .iter()
-        .any(|dir| *dir == state.panes.active().current_dir.as_path())
+        .any(|dir| *dir == state.panes.focused().current_dir.as_path())
     {
-        pane_ids.push(state.panes.active().id);
+        pane_ids.push(focused_id);
     }
-    if let Some(inactive) = state.panes.inactive()
-        && affected_dirs
+    for (_slot, pane) in state.panes.iter().filter(|(_, p)| p.id != focused_id) {
+        if affected_dirs
             .iter()
-            .any(|dir| *dir == inactive.current_dir.as_path())
-    {
-        pane_ids.push(inactive.id);
+            .any(|dir| *dir == pane.current_dir.as_path())
+        {
+            pane_ids.push(pane.id);
+        }
     }
     pane_ids
 }
@@ -791,7 +793,7 @@ mod tests {
             .unwrap();
 
         assert!(summary.refresh_current_dir);
-        assert_eq!(summary.refresh_pane_ids, vec![state.panes.active().id]);
+        assert_eq!(summary.refresh_pane_ids, vec![state.panes.focused().id]);
         assert_eq!(summary.remaining, 1);
         assert_eq!(
             summary.disposition,
@@ -832,8 +834,8 @@ mod tests {
     #[test]
     fn complete_file_operation_marks_inactive_pane_for_refresh() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
-        let inactive_id = state.panes.inactive().expect("inactive pane").id;
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/right")));
+        let inactive_id = state.panes.pane_for_slot(1).expect("inactive pane").id;
         state.begin_file_operation(7);
 
         let summary = state
@@ -857,9 +859,9 @@ mod tests {
     #[test]
     fn complete_file_operation_marks_all_affected_split_panes_for_refresh() {
         let mut state = AppState::new(PathBuf::from("/tmp/source"), Vec::new());
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/target")));
-        let active_id = state.panes.active().id;
-        let inactive_id = state.panes.inactive().expect("inactive pane").id;
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/target")));
+        let active_id = state.panes.focused().id;
+        let inactive_id = state.panes.pane_for_slot(1).expect("inactive pane").id;
         state.begin_file_operation(7);
 
         let summary = state
@@ -883,9 +885,9 @@ mod tests {
     #[test]
     fn affected_directory_pane_ids_deduplicates_matching_split_panes() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/right")));
-        let active_id = state.panes.active().id;
-        let inactive_id = state.panes.inactive().expect("inactive pane").id;
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/right")));
+        let active_id = state.panes.focused().id;
+        let inactive_id = state.panes.pane_for_slot(1).expect("inactive pane").id;
 
         let pane_ids = affected_directory_pane_ids(
             &state,

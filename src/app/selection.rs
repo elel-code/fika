@@ -1,6 +1,8 @@
 use crate::FileEntry;
 use crate::app::geometry::{RectBounds, SelectionRect};
+use crate::app::pane::{PaneSearch, PaneState};
 use crate::app::state::AppState;
+use std::collections::HashSet;
 use std::ops::Range;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -27,97 +29,175 @@ pub(crate) fn retained_visible_paths(
         .collect()
 }
 
-pub(crate) fn filtered_entry_paths(state: &AppState) -> Vec<String> {
-    if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
+#[allow(dead_code)]
+pub(crate) fn annotate_selection_state(entries: &mut [FileEntry], selected_paths: &[String]) {
+    if selected_paths.is_empty() {
+        for entry in entries {
+            entry.selected = false;
+        }
+        return;
+    }
+
+    let selected_paths = selected_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    for entry in entries {
+        entry.selected = selected_paths.contains(entry.path.as_str());
+    }
+}
+
+pub(crate) fn filtered_entry_paths_for_slot(state: &AppState, slot: i32) -> Vec<String> {
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return Vec::new();
+    };
+    filtered_entry_paths_for_pane(state, pane)
+}
+
+pub(crate) fn filtered_entry_paths_for_pane(state: &AppState, pane: &PaneState) -> Vec<String> {
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .iter()
-            .filter_map(|index| state.panes.active().entries.get(*index))
+            .filter_map(|index| pane.entries.get(*index))
             .map(|entry| entry.path.to_string())
             .collect();
     }
 
-    if filters_are_identity(state) {
-        return state
-            .panes
-            .active()
+    let chooser_patterns = active_chooser_patterns(state);
+    if filters_are_identity(&pane.search, &chooser_patterns) {
+        return pane
             .entries
             .iter()
             .map(|entry| entry.path.to_string())
             .collect();
     }
 
-    filtered_entries(state)
+    filtered_entries_for_pane(state, pane)
         .iter()
         .map(|entry| entry.path.to_string())
         .collect()
 }
 
-pub(crate) fn filtered_entries(state: &AppState) -> Vec<FileEntry> {
-    let query = state.panes.active().search.query.to_ascii_lowercase();
-    state
-        .panes
-        .active()
-        .entries
+#[cfg(test)]
+pub(crate) fn filtered_entry_paths(state: &AppState) -> Vec<String> {
+    filtered_entry_paths_for_slot(state, 0)
+}
+
+#[allow(dead_code)]
+pub(crate) fn filtered_entries_for_slot(state: &AppState, slot: i32) -> Vec<FileEntry> {
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return Vec::new();
+    };
+    filtered_entries_for_pane(state, pane)
+}
+
+pub(crate) fn filtered_entries_for_pane(state: &AppState, pane: &PaneState) -> Vec<FileEntry> {
+    let chooser_patterns = active_chooser_patterns(state);
+    let query = pane.search.query.to_ascii_lowercase();
+    pane.entries
         .iter()
-        .filter(|entry| matches_entry_filters(entry, state, &query))
+        .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
         .cloned()
         .collect()
 }
 
-pub(crate) fn filtered_entry_count(state: &AppState) -> usize {
-    if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
+#[allow(dead_code)]
+pub(crate) fn filtered_entries(state: &AppState) -> Vec<FileEntry> {
+    filtered_entries_for_slot(state, 0)
+}
+
+pub(crate) fn filtered_entry_count_for_slot(state: &AppState, slot: i32) -> usize {
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return 0;
+    };
+    filtered_entry_count_for_pane(state, pane)
+}
+
+pub(crate) fn filtered_entry_count_for_pane(state: &AppState, pane: &PaneState) -> usize {
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices.len();
     }
 
-    if filters_are_identity(state) {
-        return state.panes.active().entries.len();
+    let chooser_patterns = active_chooser_patterns(state);
+    if filters_are_identity(&pane.search, &chooser_patterns) {
+        return pane.entries.len();
     }
 
-    let query = state.panes.active().search.query.to_ascii_lowercase();
-    state
-        .panes
-        .active()
-        .entries
+    let query = pane.search.query.to_ascii_lowercase();
+    pane.entries
         .iter()
-        .filter(|entry| matches_entry_filters(entry, state, &query))
+        .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
         .count()
 }
 
-pub(crate) fn filtered_entry_at(state: &AppState, index: usize) -> Option<FileEntry> {
-    if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
+pub(crate) fn filtered_entry_count(state: &AppState) -> usize {
+    filtered_entry_count_for_slot(state, 0)
+}
+
+pub(crate) fn filtered_entry_at_for_slot(
+    state: &AppState,
+    slot: i32,
+    index: usize,
+) -> Option<FileEntry> {
+    let pane = state.panes.pane_for_slot(slot)?;
+    filtered_entry_at_for_pane(state, pane, index)
+}
+
+pub(crate) fn filtered_entry_at_for_pane(
+    state: &AppState,
+    pane: &PaneState,
+    index: usize,
+) -> Option<FileEntry> {
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .get(index)
-            .and_then(|entry_index| state.panes.active().entries.get(*entry_index))
+            .and_then(|entry_index| pane.entries.get(*entry_index))
             .cloned();
     }
 
-    if filters_are_identity(state) {
-        return state.panes.active().entries.get(index).cloned();
+    let chooser_patterns = active_chooser_patterns(state);
+    if filters_are_identity(&pane.search, &chooser_patterns) {
+        return pane.entries.get(index).cloned();
     }
 
-    let query = state.panes.active().search.query.to_ascii_lowercase();
-    state
-        .panes
-        .active()
-        .entries
+    let query = pane.search.query.to_ascii_lowercase();
+    pane.entries
         .iter()
-        .filter(|entry| matches_entry_filters(entry, state, &query))
+        .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
         .nth(index)
         .cloned()
+}
+
+pub(crate) fn filtered_entry_at(state: &AppState, index: usize) -> Option<FileEntry> {
+    filtered_entry_at_for_slot(state, 0, index)
 }
 
 pub(crate) fn rebuild_visible_entry_index(
     state: &mut AppState,
     collect_paths: bool,
 ) -> FilteredEntrySummary {
-    if filters_are_identity(state) {
-        state.panes.active_mut().search.visible_entry_indices = None;
+    rebuild_visible_entry_index_for_slot(state, 0, collect_paths)
+}
+
+pub(crate) fn rebuild_visible_entry_index_for_slot(
+    state: &mut AppState,
+    slot: i32,
+    collect_paths: bool,
+) -> FilteredEntrySummary {
+    let chooser_patterns = active_chooser_patterns(state);
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return FilteredEntrySummary::default();
+    };
+
+    if filters_are_identity(&pane.search, &chooser_patterns) {
+        pane.search.visible_entry_indices = None;
+        pane.search.visible_location_groups = None;
         let mut summary = FilteredEntrySummary {
-            count: state.panes.active().entries.len(),
+            count: pane.entries.len(),
             visible_paths: collect_paths.then(Vec::new),
             ..FilteredEntrySummary::default()
         };
-        for entry in &state.panes.active().entries {
+        for entry in &pane.entries {
             if entry.is_dir {
                 summary.folders += 1;
             } else {
@@ -128,28 +208,27 @@ pub(crate) fn rebuild_visible_entry_index(
                 paths.push(entry.path.to_string());
             }
         }
-        state
-            .panes
-            .active_mut()
-            .search
-            .visible_entries_have_locations = summary.has_locations;
+        pane.search.visible_entries_have_locations = summary.has_locations;
+        if summary.has_locations {
+            let groups =
+                location_group_labels(pane.entries.iter().map(|entry| entry.location.as_str()));
+            pane.search.visible_location_groups = Some(groups);
+        }
         return summary;
     }
 
-    let query = state.panes.active().search.query.to_ascii_lowercase();
+    let query = pane.search.query.to_ascii_lowercase();
     let mut summary = FilteredEntrySummary {
         visible_paths: collect_paths.then(Vec::new),
         ..FilteredEntrySummary::default()
     };
     let mut indices = Vec::new();
+    let mut locations = Vec::new();
 
-    for (index, entry) in state
-        .panes
-        .active()
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| matches_entry_filters(entry, state, &query))
+    for (index, entry) in
+        pane.entries.iter().enumerate().filter(|(_, entry)| {
+            matches_entry_filters(entry, &pane.search, &chooser_patterns, &query)
+        })
     {
         summary.count += 1;
         if entry.is_dir {
@@ -161,33 +240,54 @@ pub(crate) fn rebuild_visible_entry_index(
         if let Some(paths) = summary.visible_paths.as_mut() {
             paths.push(entry.path.to_string());
         }
+        locations.push(entry.location.to_string());
         indices.push(index);
     }
 
-    {
-        let search = &mut state.panes.active_mut().search;
-        search.visible_entry_indices = Some(indices);
-        search.visible_entries_have_locations = summary.has_locations;
-    }
+    pane.search.visible_entry_indices = Some(indices);
+    pane.search.visible_entries_have_locations = summary.has_locations;
+    pane.search.visible_location_groups = summary
+        .has_locations
+        .then(|| location_group_labels(locations.iter().map(String::as_str)));
     summary
 }
 
+#[allow(dead_code)]
 pub(crate) fn filtered_entry_summary(
     state: &AppState,
     collect_paths: bool,
 ) -> FilteredEntrySummary {
-    let query = state.panes.active().search.query.to_ascii_lowercase();
+    filtered_entry_summary_for_slot(state, 0, collect_paths)
+}
+
+#[allow(dead_code)]
+pub(crate) fn filtered_entry_summary_for_slot(
+    state: &AppState,
+    slot: i32,
+    collect_paths: bool,
+) -> FilteredEntrySummary {
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return FilteredEntrySummary::default();
+    };
+    filtered_entry_summary_for_pane(state, pane, collect_paths)
+}
+
+pub(crate) fn filtered_entry_summary_for_pane(
+    state: &AppState,
+    pane: &PaneState,
+    collect_paths: bool,
+) -> FilteredEntrySummary {
+    let chooser_patterns = active_chooser_patterns(state);
+    let query = pane.search.query.to_ascii_lowercase();
     let mut summary = FilteredEntrySummary {
         visible_paths: collect_paths.then(Vec::new),
         ..FilteredEntrySummary::default()
     };
 
-    for entry in state
-        .panes
-        .active()
+    for entry in pane
         .entries
         .iter()
-        .filter(|entry| matches_entry_filters(entry, state, &query))
+        .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
     {
         summary.count += 1;
         if entry.is_dir {
@@ -206,58 +306,88 @@ pub(crate) fn filtered_entry_summary(
 
 #[cfg(test)]
 pub(crate) fn filtered_entries_range(state: &AppState, range: Range<usize>) -> Vec<FileEntry> {
+    filtered_entries_range_for_slot(state, 0, range)
+}
+
+#[allow(dead_code)]
+pub(crate) fn filtered_entries_range_for_slot(
+    state: &AppState,
+    slot: i32,
+    range: Range<usize>,
+) -> Vec<FileEntry> {
     if range.is_empty() {
         return Vec::new();
     }
 
-    let mut entries =
-        if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
-            indices
-                .get(range.start..range.end.min(indices.len()))
-                .unwrap_or(&[])
-                .iter()
-                .filter_map(|index| state.panes.active().entries.get(*index))
-                .cloned()
-                .collect()
-        } else if filters_are_identity(state) {
-            state
-                .panes
-                .active()
-                .entries
-                .get(range.start..range.end.min(state.panes.active().entries.len()))
-                .unwrap_or(&[])
-                .to_vec()
-        } else {
-            let query = state.panes.active().search.query.to_ascii_lowercase();
-            state
-                .panes
-                .active()
-                .entries
-                .iter()
-                .filter(|entry| matches_entry_filters(entry, state, &query))
-                .skip(range.start)
-                .take(range.end.saturating_sub(range.start))
-                .cloned()
-                .collect()
-        };
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return Vec::new();
+    };
+    let chooser_patterns = active_chooser_patterns(state);
+    let mut entries = if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
+        let end = range.end.min(indices.len());
+        indices
+            .get(range.start..end)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|&index| pane.entries.get(index).cloned())
+            .collect()
+    } else if filters_are_identity(&pane.search, &chooser_patterns) {
+        pane.entries
+            .get(range.start..range.end.min(pane.entries.len()))
+            .unwrap_or(&[])
+            .to_vec()
+    } else {
+        let query = pane.search.query.to_ascii_lowercase();
+        pane.entries
+            .iter()
+            .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
+            .skip(range.start)
+            .take(range.end.saturating_sub(range.start))
+            .cloned()
+            .collect()
+    };
 
-    annotate_visible_location_groups(state, range.start, &mut entries);
+    annotate_visible_location_groups_for_pane(state, pane, range.start, &mut entries);
+    annotate_selection_state(&mut entries, &pane.selection.paths);
     entries
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn annotate_visible_location_groups(
     state: &AppState,
     start_visible_index: usize,
     entries: &mut [FileEntry],
 ) {
-    if !state.panes.active().search.visible_entries_have_locations {
+    if let Some(pane) = state.panes.pane_for_slot(0) {
+        annotate_visible_location_groups_for_pane(state, pane, start_visible_index, entries);
+    }
+}
+
+#[allow(dead_code)]
+fn annotate_visible_location_groups_for_pane(
+    state: &AppState,
+    pane: &PaneState,
+    start_visible_index: usize,
+    entries: &mut [FileEntry],
+) {
+    if !pane.search.visible_entries_have_locations {
+        return;
+    }
+
+    if let Some(groups) = pane.search.visible_location_groups.as_ref() {
+        for (offset, entry) in entries.iter_mut().enumerate() {
+            entry.group = groups
+                .get(start_visible_index + offset)
+                .map_or_else(String::new, Clone::clone)
+                .into();
+        }
         return;
     }
 
     let mut previous_location = start_visible_index
         .checked_sub(1)
-        .and_then(|index| visible_entry_location_at(state, index));
+        .and_then(|index| visible_entry_location_at_for_pane(state, pane, index));
     for entry in entries {
         if previous_location.as_deref() != Some(entry.location.as_str()) {
             entry.group = search_group_label(entry.location.as_str()).into();
@@ -269,35 +399,43 @@ fn annotate_visible_location_groups(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn visible_entry_location_at(state: &AppState, visible_index: usize) -> Option<String> {
-    if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
+    state
+        .panes
+        .pane_for_slot(0)
+        .and_then(|pane| visible_entry_location_at_for_pane(state, pane, visible_index))
+}
+
+#[allow(dead_code)]
+fn visible_entry_location_at_for_pane(
+    state: &AppState,
+    pane: &PaneState,
+    visible_index: usize,
+) -> Option<String> {
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .get(visible_index)
-            .and_then(|entry_index| state.panes.active().entries.get(*entry_index))
+            .and_then(|entry_index| pane.entries.get(*entry_index))
             .map(|entry| entry.location.to_string());
     }
 
-    if filters_are_identity(state) {
-        return state
-            .panes
-            .active()
+    let chooser_patterns = active_chooser_patterns(state);
+    if filters_are_identity(&pane.search, &chooser_patterns) {
+        return pane
             .entries
             .get(visible_index)
             .map(|entry| entry.location.to_string());
     }
 
-    let query = state.panes.active().search.query.to_ascii_lowercase();
-    state
-        .panes
-        .active()
-        .entries
+    let query = pane.search.query.to_ascii_lowercase();
+    pane.entries
         .iter()
-        .filter(|entry| matches_entry_filters(entry, state, &query))
+        .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
         .nth(visible_index)
         .map(|entry| entry.location.to_string())
 }
 
-#[cfg(test)]
 fn search_group_label(location: &str) -> String {
     if location == "." {
         "Current folder".to_string()
@@ -308,27 +446,49 @@ fn search_group_label(location: &str) -> String {
     }
 }
 
-fn filters_are_identity(state: &AppState) -> bool {
-    state.panes.active().search.query.is_empty()
-        && state.panes.active().search.kind_filter == 0
-        && state.panes.active().search.modified_filter == 0
-        && state.panes.active().search.size_filter == 0
-        && chooser_filter_is_identity(state)
+fn location_group_labels<'a>(locations: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut previous_location: Option<&str> = None;
+    locations
+        .into_iter()
+        .map(|location| {
+            let group = if previous_location != Some(location) {
+                search_group_label(location)
+            } else {
+                String::new()
+            };
+            previous_location = Some(location);
+            group
+        })
+        .collect()
 }
 
-fn chooser_filter_is_identity(state: &AppState) -> bool {
+fn filters_are_identity(search: &PaneSearch, chooser_patterns: &[String]) -> bool {
+    search.query.is_empty()
+        && search.kind_filter == 0
+        && search.modified_filter == 0
+        && search.size_filter == 0
+        && chooser_patterns.is_empty()
+}
+
+fn active_chooser_patterns(state: &AppState) -> Vec<String> {
     state
         .chooser_filters
         .get(state.chooser_filter_index)
-        .is_none_or(|filter| filter.patterns.is_empty())
+        .map(|filter| filter.patterns.clone())
+        .unwrap_or_default()
 }
 
-fn matches_entry_filters(entry: &FileEntry, state: &AppState, query: &str) -> bool {
+fn matches_entry_filters(
+    entry: &FileEntry,
+    search: &PaneSearch,
+    chooser_patterns: &[String],
+    query: &str,
+) -> bool {
     matches_search_query(entry, query)
-        && matches_kind_filter(entry, state.panes.active().search.kind_filter)
-        && matches_modified_filter(entry, state.panes.active().search.modified_filter)
-        && matches_size_filter(entry, state.panes.active().search.size_filter)
-        && matches_chooser_filter(entry, state)
+        && matches_kind_filter(entry, search.kind_filter)
+        && matches_modified_filter(entry, search.modified_filter)
+        && matches_size_filter(entry, search.size_filter)
+        && matches_chooser_patterns(entry, chooser_patterns)
 }
 
 fn matches_search_query(entry: &FileEntry, query: &str) -> bool {
@@ -368,20 +528,17 @@ fn matches_size_filter(entry: &FileEntry, filter: i32) -> bool {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn matches_chooser_filter(entry: &FileEntry, state: &AppState) -> bool {
-    if entry.is_dir || state.chooser_filters.is_empty() {
+    matches_chooser_patterns(entry, &active_chooser_patterns(state))
+}
+
+fn matches_chooser_patterns(entry: &FileEntry, patterns: &[String]) -> bool {
+    if entry.is_dir || patterns.is_empty() {
         return true;
     }
 
-    let Some(filter) = state.chooser_filters.get(state.chooser_filter_index) else {
-        return true;
-    };
-    if filter.patterns.is_empty() {
-        return true;
-    }
-
-    filter
-        .patterns
+    patterns
         .iter()
         .any(|pattern| glob_matches(pattern, entry.name.as_str()))
 }
@@ -454,8 +611,18 @@ pub(crate) fn selection_range_paths(
     visible_paths[start..=end].to_vec()
 }
 
+#[cfg(test)]
 pub(crate) fn selection_range_paths_filtered(
     state: &AppState,
+    anchor: &str,
+    target: &str,
+) -> Vec<String> {
+    selection_range_paths_filtered_for_slot(state, 0, anchor, target)
+}
+
+pub(crate) fn selection_range_paths_filtered_for_slot(
+    state: &AppState,
+    slot: i32,
     anchor: &str,
     target: &str,
 ) -> Vec<String> {
@@ -468,7 +635,7 @@ pub(crate) fn selection_range_paths_filtered(
     let mut found_target = false;
     let mut range = Vec::new();
 
-    for entry in visible_entry_iter(state) {
+    for entry in visible_entry_iter_for_slot(state, slot) {
         let path = entry.path.as_str();
         let is_anchor = path == anchor;
         let is_target = path == target;
@@ -496,6 +663,7 @@ pub(crate) fn selection_range_paths_filtered(
     vec![target.to_string()]
 }
 
+#[cfg(test)]
 pub(crate) fn selection_rect_paths(entries: &[FileEntry], rect: SelectionRect) -> Vec<String> {
     let rows_per_column = rect.rows_per_column.max(1) as usize;
     entries
@@ -519,13 +687,22 @@ pub(crate) fn selection_rect_paths(entries: &[FileEntry], rect: SelectionRect) -
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn selection_rect_paths_filtered(state: &AppState, rect: SelectionRect) -> Vec<String> {
+    selection_rect_paths_filtered_for_slot(state, 0, rect)
+}
+
+pub(crate) fn selection_rect_paths_filtered_for_slot(
+    state: &AppState,
+    slot: i32,
+    rect: SelectionRect,
+) -> Vec<String> {
     let rows_per_column = rect.rows_per_column.max(1) as usize;
     let selection_bounds = RectBounds::new(rect.x1, rect.y1, rect.x2, rect.y2);
     let mut selected = Vec::new();
-    let visible_range = selection_rect_visible_range(state, rect);
+    let visible_range = selection_rect_visible_range_for_slot(state, slot, rect);
 
-    for (visible_index, entry) in visible_entries_range_iter(state, visible_range) {
+    for (visible_index, entry) in visible_entries_range_iter_for_slot(state, slot, visible_range) {
         let column = visible_index / rows_per_column;
         let row = visible_index % rows_per_column;
         let tile_x1 = rect.padding + column as f32 * rect.cell_width;
@@ -540,8 +717,17 @@ pub(crate) fn selection_rect_paths_filtered(state: &AppState, rect: SelectionRec
     selected
 }
 
+#[allow(dead_code)]
 fn selection_rect_visible_range(state: &AppState, rect: SelectionRect) -> Range<usize> {
-    let visible_count = filtered_entry_count(state);
+    selection_rect_visible_range_for_slot(state, 0, rect)
+}
+
+fn selection_rect_visible_range_for_slot(
+    state: &AppState,
+    slot: i32,
+    rect: SelectionRect,
+) -> Range<usize> {
+    let visible_count = filtered_entry_count_for_slot(state, slot);
     if visible_count == 0 {
         return 0..0;
     }
@@ -562,75 +748,91 @@ fn selection_rect_visible_range(state: &AppState, rect: SelectionRect) -> Range<
     start..end.max(start)
 }
 
+#[allow(dead_code)]
 fn visible_entries_range_iter(
     state: &AppState,
+    range: Range<usize>,
+) -> Box<dyn Iterator<Item = (usize, &FileEntry)> + '_> {
+    visible_entries_range_iter_for_slot(state, 0, range)
+}
+
+fn visible_entries_range_iter_for_slot(
+    state: &AppState,
+    slot: i32,
     range: Range<usize>,
 ) -> Box<dyn Iterator<Item = (usize, &FileEntry)> + '_> {
     if range.is_empty() {
         return Box::new(std::iter::empty());
     }
 
-    if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return Box::new(std::iter::empty());
+    };
+
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         let start = range.start.min(indices.len());
         let end = range.end.min(indices.len());
         return Box::new(indices[start..end].iter().enumerate().filter_map(
             move |(offset, index)| {
-                state
-                    .panes
-                    .active()
-                    .entries
+                pane.entries
                     .get(*index)
                     .map(|entry| (start + offset, entry))
             },
         ));
     }
 
-    if filters_are_identity(state) {
-        let start = range.start.min(state.panes.active().entries.len());
-        let end = range.end.min(state.panes.active().entries.len());
+    let chooser_patterns = active_chooser_patterns(state);
+    if filters_are_identity(&pane.search, &chooser_patterns) {
+        let start = range.start.min(pane.entries.len());
+        let end = range.end.min(pane.entries.len());
         return Box::new(
-            state.panes.active().entries[start..end]
+            pane.entries[start..end]
                 .iter()
                 .enumerate()
                 .map(move |(offset, entry)| (start + offset, entry)),
         );
     }
 
-    let query = state.panes.active().search.query.to_ascii_lowercase();
+    let query = pane.search.query.to_ascii_lowercase();
     Box::new(
-        state
-            .panes
-            .active()
-            .entries
+        pane.entries
             .iter()
-            .filter(move |entry| matches_entry_filters(entry, state, &query))
+            .filter(move |entry| {
+                matches_entry_filters(entry, &pane.search, &chooser_patterns, &query)
+            })
             .enumerate()
             .skip(range.start)
             .take(range.end.saturating_sub(range.start)),
     )
 }
 
+#[allow(dead_code)]
 fn visible_entry_iter(state: &AppState) -> Box<dyn Iterator<Item = &FileEntry> + '_> {
-    if let Some(indices) = state.panes.active().search.visible_entry_indices.as_ref() {
-        return Box::new(
-            indices
-                .iter()
-                .filter_map(|index| state.panes.active().entries.get(*index)),
-        );
+    visible_entry_iter_for_slot(state, 0)
+}
+
+fn visible_entry_iter_for_slot(
+    state: &AppState,
+    slot: i32,
+) -> Box<dyn Iterator<Item = &FileEntry> + '_> {
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return Box::new(std::iter::empty());
+    };
+
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
+        return Box::new(indices.iter().filter_map(|index| pane.entries.get(*index)));
     }
 
-    if filters_are_identity(state) {
-        return Box::new(state.panes.active().entries.iter());
+    let chooser_patterns = active_chooser_patterns(state);
+    if filters_are_identity(&pane.search, &chooser_patterns) {
+        return Box::new(pane.entries.iter());
     }
 
-    let query = state.panes.active().search.query.to_ascii_lowercase();
+    let query = pane.search.query.to_ascii_lowercase();
     Box::new(
-        state
-            .panes
-            .active()
-            .entries
-            .iter()
-            .filter(move |entry| matches_entry_filters(entry, state, &query)),
+        pane.entries.iter().filter(move |entry| {
+            matches_entry_filters(entry, &pane.search, &chooser_patterns, &query)
+        }),
     )
 }
 

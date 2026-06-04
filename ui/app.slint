@@ -41,7 +41,6 @@ export global PaneRouting {
     callback chooser-accept(string);
     callback chooser-filter-requested(int, length, length);
     callback chooser-choice-requested(int, int, length, length);
-    pure callback is-selected(int, string) -> bool;
 }
 
 import { DragKind } from "dnd_bridge.slint";
@@ -152,7 +151,6 @@ component FilePane inherits Rectangle {
     callback chooser_accept(string);
     callback chooser_filter_requested(int, length, length);
     callback chooser_choice_requested(int, int, length, length);
-    pure callback is_selected(int, string) -> bool;
     pure callback make_drag_data(int, string, bool) -> data-transfer;
 
     background: root.shell-base-color;
@@ -309,9 +307,6 @@ component FilePane inherits Rectangle {
                 }
                 navigate_back => { root.go_back(root.pane-slot); }
                 navigate_forward => { root.go_forward(root.pane-slot); }
-                is_selected(path) => {
-                    root.is_selected(root.pane-slot, path)
-                }
             }
         }
 
@@ -397,9 +392,6 @@ component PaneSlot inherits FilePane {
     chooser_filter_requested(slot, x, y) => { PaneRouting.chooser-filter-requested(slot, x, y); }
     chooser_choice_requested(slot, index, x, y) => {
         PaneRouting.chooser-choice-requested(slot, index, x, y);
-    }
-    is_selected(slot, path) => {
-        PaneRouting.is-selected(slot, path)
     }
     make_drag_data(slot, path, is-dir) => {
         is-dir ? DndApi.make-drag-folder(path) : DndApi.make-drag-file(path)
@@ -520,17 +512,8 @@ component PaneSlotSurface inherits Rectangle {
 export component AppWindow inherits Window {
     in-out property <string> current_path;
     in-out property <string> items_path;
-    in-out property <string> left_pane_path;
-    in-out property <string> left_pane_path_input_text;
-    in-out property <bool> left_pane_path_focused: false;
-    in-out property <bool> left_pane_can_go_back: false;
-    in-out property <bool> left_pane_can_go_forward: false;
-    in-out property <bool> left_pane_in_trash: false;
     in property <string> current_name;
     in property <string> status;
-    in-out property <string> left_pane_status;
-    in-out property <int> left_pane_selected_count: 0;
-    in-out property <string> left_pane_selected_status;
     in property <bool> chooser_mode;
     in property <bool> chooser_select_directories;
     in property <bool> chooser_multiple;
@@ -544,34 +527,12 @@ export component AppWindow inherits Window {
     in property <[ChooserChoice]> chooser_choices;
     in property <[PaneSlotData]> pane_slots;
     in-out property <int> entry_count: 0;
-    in property <[FileEntry]> virtual_entries;
-    in-out property <int> virtual_start_index: 0;
-    in-out property <int> virtual_start_column: 0;
-    in property <[FileEntry]> inactive_pane_entries;
-    in-out property <string> inactive_pane_path;
-    in-out property <string> inactive_pane_path_input_text;
-    in-out property <bool> inactive_pane_path_focused: false;
-    in-out property <bool> inactive_pane_can_go_back: false;
-    in-out property <bool> inactive_pane_can_go_forward: false;
-    in-out property <int> inactive_pane_entry_count: 0;
-    in-out property <int> inactive_pane_virtual_start_index: 0;
-    in-out property <int> inactive_pane_virtual_start_column: 0;
-    in-out property <float> inactive_pane_viewport_x: 0;
-    in-out property <length> inactive_pane_viewport_offset: 0px;
-    in-out property <string> inactive_pane_status;
-    in-out property <bool> inactive_pane_in_trash: false;
-    in-out property <int> inactive_pane_selected_count: 0;
-    in-out property <string> inactive_pane_selected_status;
     in property <[PlaceEntry]> places;
     in property <[DeviceEntry]> devices;
     in-out property <string> selected_path;
     in-out property <int> selected_count;
     in-out property <string> selected_status;
     in-out property <string> chooser_save_name;
-    in-out property <bool> left_pane_external_edit_active: false;
-    in-out property <string> left_pane_external_edit_status;
-    in-out property <bool> inactive_pane_external_edit_active: false;
-    in-out property <string> inactive_pane_external_edit_status;
     in-out property <bool> undo_available: false;
     in-out property <string> undo_label;
     in-out property <int> selection_revision;
@@ -596,8 +557,6 @@ export component AppWindow inherits Window {
     in-out property <float> places_list_y_px: 108;
     in-out property <float> places_row_stride_px: 38;
     in-out property <bool> directory_loading: false;
-    in-out property <float> main_viewport_x: 0;
-    in-out property <length> main_viewport_offset: 0px;
     private property <length> shell-header-height: 56px;
     private property <length> path-bar-height: 56px;
     private property <length> status-bar-height: 36px;
@@ -744,7 +703,7 @@ export component AppWindow inherits Window {
     private property <bool> search-input-focused: false;
     private property <bool> chooser-save-input-focused: false;
     private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
-    private property <bool> file-operation-shortcuts-blocked: root.left_pane_path_focused || root.inactive_pane_path_focused || root.search-input-focused || root.chooser-save-input-focused || root.context-menu-open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || root.transfer-menu-open || root.transfer_conflict_open || root.rename-place-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open;
+    private property <bool> file-operation-shortcuts-blocked: root.search-input-focused || root.chooser-save-input-focused || root.transient-popup-open;
 
     callback go_home();
     callback go_back();
@@ -764,6 +723,7 @@ export component AppWindow inherits Window {
     callback copy_paths(string, bool);
     callback paste_into(string);
     callback refresh_clipboard_availability();
+    callback sync_clipboard_state();
     callback rename_path(string, string);
     callback trash_path(string);
     callback trash_selected();
@@ -805,13 +765,16 @@ export component AppWindow inherits Window {
     callback prepare_place_transfer(string, int, float, float) -> bool;
     callback prepare_entry_transfer(string, int, float, float) -> bool;
     callback prepare_current_dir_transfer(string, string, float, float) -> bool;
-    callback prepare_main_transfer(string, string, float, float) -> bool;
     callback pane_prepare_transfer(int, string, float, float) -> bool;
     callback pane_drop_target_path(int, float, float, string) -> string;
     callback pane_drop_allowed(int, float, float, string) -> bool;
     callback pane_view_changed(int);
     callback pane_layout_changed();
     callback pane_slots_refresh_requested();
+    callback pane_slot_refresh_requested(int);
+    callback pane_path_text_changed(int, string);
+    callback pane_path_focus_changed(int, bool);
+    callback pane_viewport_changed(int, float);
     callback place_drop_allowed(string, int) -> bool;
     callback place_drop_target(float) -> int;
     callback place_drop_slot(float) -> int;
@@ -931,20 +894,13 @@ export component AppWindow inherits Window {
         root.context-menu-open = true;
     }
 
-    function sync-main-viewport() {
-        root.main_viewport_x = root.entry_count == 0 ? 0 : max(0, root.main_viewport_x);
-        root.main_viewport_offset = -root.main_viewport_x * 1px;
-    }
-
     function zoom-main-in() {
         root.icon_zoom_level = min(4, root.icon_zoom_level + 1);
-        root.sync-main-viewport();
         root.persist_ui_state();
     }
 
     function zoom-main-out() {
         root.icon_zoom_level = max(0, root.icon_zoom_level - 1);
-        root.sync-main-viewport();
         root.persist_ui_state();
     }
 
@@ -971,37 +927,9 @@ export component AppWindow inherits Window {
         return max(1px, root.pane-slot-x(slot + 1) - root.pane-slot-x(slot));
     }
 
-    function set-pane-slot-path-text(slot: int, text: string) {
-        if (slot == 0) {
-            root.left_pane_path_input_text = text;
-        } else {
-            root.inactive_pane_path_input_text = text;
-        }
-        root.pane_slots_refresh_requested();
-    }
-
-    function set-pane-slot-path-focused(slot: int, focused: bool) {
-        if (slot == 0) {
-            root.left_pane_path_focused = focused;
-        } else {
-            root.inactive_pane_path_focused = focused;
-        }
-        root.pane_slots_refresh_requested();
-    }
-
-    function set-pane-slot-viewport(slot: int, viewport-x: float, viewport-offset: length) {
-        if (slot == 0) {
-            root.main_viewport_x = viewport-x;
-            root.main_viewport_offset = viewport-offset;
-        } else {
-            root.inactive_pane_viewport_x = viewport-x;
-            root.inactive_pane_viewport_offset = viewport-offset;
-        }
-    }
-
     public function route-pane-focus(slot: int) {
         if (root.focused_pane == slot) {
-            if (root.left_pane_path_focused || root.inactive_pane_path_focused || root.search-input-focused || root.chooser-save-input-focused) {
+            if root.search-input-focused || root.chooser-save-input-focused {
                 main-focus.focus();
             }
             return;
@@ -1045,7 +973,7 @@ export component AppWindow inherits Window {
 
     public function route-pane-request-context-menu(slot: int, path: string, name: string, size: string, modified: string, is-dir: bool, x: length, y: length) {
         root.route-pane-focus(slot);
-        root.refresh_clipboard_availability();
+        root.sync_clipboard_state();
         if (!root.pane_is_selected(slot, path)) {
             root.pane_request_select(slot, path, false, false);
         }
@@ -1065,7 +993,7 @@ export component AppWindow inherits Window {
 
     public function route-pane-request-blank-context-menu(slot: int, x: length, y: length) {
         root.route-pane-clear-selection(slot);
-        root.refresh_clipboard_availability();
+        root.sync_clipboard_state();
         root.show-context-menu(3, x, y);
     }
 
@@ -1134,11 +1062,9 @@ export component AppWindow inherits Window {
         root.pane_layout_changed();
     }
     changed sidebar_width_px => {
-        root.sync-main-viewport();
         root.pane_layout_changed();
     }
     changed search-panel-height => {
-        root.sync-main-viewport();
         root.pane_layout_changed();
     }
     changed search_bar_open => {
@@ -1160,11 +1086,9 @@ export component AppWindow inherits Window {
         root.pane_slots_refresh_requested();
     }
     changed pane-slot-0-width => {
-        root.sync-main-viewport();
         root.pane_layout_changed();
     }
     changed split_pane_ratio => {
-        root.sync-main-viewport();
         root.pane_layout_changed();
     }
     changed split_view_open => {
@@ -1582,13 +1506,13 @@ export component AppWindow inherits Window {
                         pane-search-size-filter <=> root.search_size_filter;
                         pane-chooser-save-name <=> root.chooser_save_name;
                         path_text_changed(slot, text) => {
-                            root.set-pane-slot-path-text(slot, text);
+                            root.pane_path_text_changed(slot, text);
                         }
                         path_focus_changed(slot, focused) => {
-                            root.set-pane-slot-path-focused(slot, focused);
+                            root.pane_path_focus_changed(slot, focused);
                         }
                         viewport_changed(slot, viewport-x, viewport-offset) => {
-                            root.set-pane-slot-viewport(slot, viewport-x, viewport-offset);
+                            root.pane_viewport_changed(slot, viewport-x);
                         }
                     }
 

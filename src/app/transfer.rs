@@ -1,8 +1,8 @@
 use crate::app::async_bridge::{AsyncBridge, send_async_event};
 use crate::app::file_clipboard::sync_clipboard_ui;
 use crate::app::geometry::{
-    MainGridLayout, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width, icon_cell_width,
-    icon_row_height, inactive_main_pane_width, main_pane_bounds,
+    PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width, icon_cell_width, icon_row_height,
+    inactive_main_pane_width, main_pane_bounds,
 };
 use crate::app::operation_controller::{
     OperationQueuePosition, affected_directory_pane_ids, operation_cancel_status,
@@ -11,7 +11,7 @@ use crate::app::operation_controller::{
     transfer_target_rejection,
 };
 use crate::app::pane::PaneTarget;
-use crate::app::selection::filtered_entry_at;
+use crate::app::selection::{filtered_entry_at, filtered_entry_at_for_slot};
 use crate::app::state::{AppState, FileOperationRequest, TransferConflict};
 use crate::fs::{file_ops, privilege};
 use crate::{
@@ -32,15 +32,16 @@ pub(crate) fn prepare_place_transfer(
     x: f32,
     y: f32,
 ) -> bool {
-    let state = state.borrow();
+    let state_ref = state.borrow();
     let Ok(target_index) = usize::try_from(target_index) else {
         return false;
     };
-    let Some(target) = state.places.get(target_index) else {
+    let Some(target) = state_ref.places.get(target_index) else {
         return false;
     };
     prepare_transfer_menu(
         ui,
+        state,
         source,
         path_label(source).as_str(),
         target.path.as_str(),
@@ -58,14 +59,15 @@ pub(crate) fn prepare_entry_transfer(
     x: f32,
     y: f32,
 ) -> bool {
-    let state = state.borrow();
+    let state_ref = state.borrow();
     let target = usize::try_from(target_index)
         .ok()
-        .and_then(|target_index| filtered_entry_at(&state, target_index));
+        .and_then(|target_index| filtered_entry_at(&state_ref, target_index));
 
     if let Some(target) = target.filter(|target| target.is_dir && target.path.as_str() != source) {
         return prepare_transfer_menu(
             ui,
+            state,
             source,
             path_label(source).as_str(),
             target.path.as_str(),
@@ -75,7 +77,7 @@ pub(crate) fn prepare_entry_transfer(
         );
     }
 
-    prepare_current_dir_transfer_with_state(ui, &state, source, path_label(source).as_str(), x, y)
+    prepare_current_dir_transfer_with_state(ui, state, source, path_label(source).as_str(), x, y)
 }
 
 pub(crate) fn prepare_current_dir_transfer(
@@ -86,8 +88,7 @@ pub(crate) fn prepare_current_dir_transfer(
     x: f32,
     y: f32,
 ) -> bool {
-    let state = state.borrow();
-    prepare_current_dir_transfer_with_state(ui, &state, source, source_label, x, y)
+    prepare_current_dir_transfer_with_state(ui, state, source, source_label, x, y)
 }
 
 pub(crate) fn prepare_pane_transfer(
@@ -98,12 +99,13 @@ pub(crate) fn prepare_pane_transfer(
     x: f32,
     y: f32,
 ) -> bool {
-    let state = state.borrow();
-    if let Some(target) = entry_at_pane_point(ui, &state, slot, x, y)
+    let state_ref = state.borrow();
+    if let Some(target) = entry_at_pane_point(ui, &state_ref, slot, x, y)
         .filter(|target| target.is_dir && target.path.as_str() != source)
     {
         return prepare_transfer_menu(
             ui,
+            state,
             source,
             path_label(source).as_str(),
             target.path.as_str(),
@@ -122,32 +124,6 @@ pub(crate) fn prepare_pane_transfer(
         x,
         y,
     )
-}
-
-pub(crate) fn prepare_main_transfer(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    source: &str,
-    source_label: &str,
-    x: f32,
-    y: f32,
-) -> bool {
-    let state = state.borrow();
-    if let Some(target) = entry_at_main_point(ui, &state, x, y)
-        .filter(|target| target.is_dir && target.path.as_str() != source)
-    {
-        return prepare_transfer_menu(
-            ui,
-            source,
-            source_label,
-            target.path.as_str(),
-            target.name.as_str(),
-            x,
-            y,
-        );
-    }
-
-    prepare_current_dir_transfer_with_state(ui, &state, source, source_label, x, y)
 }
 
 pub(crate) fn pane_drop_allowed(
@@ -190,17 +166,6 @@ pub(crate) fn place_drop_allowed(state: &AppState, source: &Path, target_index: 
     transfer_target_rejection(source, Path::new(target.path.as_str())).is_none()
 }
 
-pub(crate) fn entry_at_main_point(
-    ui: &AppWindow,
-    state: &AppState,
-    x: f32,
-    y: f32,
-) -> Option<FileEntry> {
-    let layout = MainGridLayout::from_ui(ui);
-    let index = layout.index_at_point(x, y)?;
-    filtered_entry_at(state, index)
-}
-
 pub(crate) fn entry_at_pane_point(
     ui: &AppWindow,
     state: &AppState,
@@ -208,11 +173,9 @@ pub(crate) fn entry_at_pane_point(
     x: f32,
     y: f32,
 ) -> Option<FileEntry> {
-    match slot {
-        0 => entry_at_main_point(ui, state, x, y),
-        1 => entry_at_inactive_pane_point(ui, state, x, y),
-        _ => None,
-    }
+    let layout = PaneGridLayout::from_ui(ui, state, slot)?;
+    let index = layout.index_at_point(x, y)?;
+    filtered_entry_at_for_slot(state, slot, index)
 }
 
 fn pane_drop_rejection(
@@ -241,22 +204,8 @@ fn pane_drop_target_dir(
         .or_else(|| pane_current_dir(state, PaneTarget::Slot(slot)).map(Path::to_path_buf))
 }
 
-pub(crate) fn entry_at_inactive_pane_point(
-    ui: &AppWindow,
-    state: &AppState,
-    x: f32,
-    y: f32,
-) -> Option<FileEntry> {
-    let layout = InactivePaneGridLayout::from_ui(ui)?;
-    let index = layout.index_at_point(x, y)?;
-    state
-        .panes
-        .inactive()
-        .and_then(|pane| pane.entries.get(index).cloned())
-}
-
 #[derive(Clone, Copy, Debug)]
-struct InactivePaneGridLayout {
+struct PaneGridLayout {
     main_x: f32,
     main_y: f32,
     width: f32,
@@ -268,9 +217,10 @@ struct InactivePaneGridLayout {
     padding: f32,
 }
 
-impl InactivePaneGridLayout {
-    fn from_ui(ui: &AppWindow) -> Option<Self> {
-        if !ui.get_split_view_open() {
+impl PaneGridLayout {
+    fn from_ui(ui: &AppWindow, state: &AppState, slot: i32) -> Option<Self> {
+        let pane_state = state.panes.pane_for_slot(slot)?;
+        if slot != 0 && !ui.get_split_view_open() {
             return None;
         }
         let cell_width = icon_cell_width(ui.get_icon_zoom_level());
@@ -283,28 +233,35 @@ impl InactivePaneGridLayout {
             window_size.height,
         );
         let main_width = (pane.right - pane.left).max(1.0);
-        let inactive_width = inactive_main_pane_width(
-            main_width,
-            ui.get_split_view_open(),
-            ui.get_split_pane_ratio(),
-        )
-        .max(1.0);
         let active_width = active_main_pane_width(
             main_width,
             ui.get_split_view_open(),
             ui.get_split_pane_ratio(),
         );
+        let (main_x, width) = if slot == 0 {
+            (pane.left, active_width.max(1.0))
+        } else if slot == 1 {
+            let width = inactive_main_pane_width(
+                main_width,
+                ui.get_split_view_open(),
+                ui.get_split_pane_ratio(),
+            )
+            .max(1.0);
+            (pane.left + main_width - width, width)
+        } else {
+            return None;
+        };
         let content_height =
             (pane.bottom - pane.top - PATH_BAR_HEIGHT - STATUS_BAR_HEIGHT).max(1.0);
         let available_grid_height = (content_height - 2.0 * padding).max(row_height);
         let rows_per_column = (available_grid_height / row_height).floor().max(1.0) as usize;
 
         Some(Self {
-            main_x: pane.left + active_width + (main_width - active_width - inactive_width),
+            main_x,
             main_y: pane.top + PATH_BAR_HEIGHT,
-            width: inactive_width,
+            width,
             height: content_height,
-            viewport_x: ui.get_inactive_pane_viewport_x(),
+            viewport_x: pane_state.view.viewport_x,
             rows_per_column,
             cell_width,
             row_height,
@@ -344,17 +301,19 @@ impl InactivePaneGridLayout {
 
 fn prepare_current_dir_transfer_with_state(
     ui: &AppWindow,
-    state: &AppState,
+    state: &Rc<RefCell<AppState>>,
     source: &str,
     source_label: &str,
     x: f32,
     y: f32,
 ) -> bool {
-    let current_dir = focused_current_dir(state);
+    let state_ref = state.borrow();
+    let current_dir = focused_current_dir(&state_ref);
     let target_path = current_dir.display().to_string();
     let target_label = display_location_name(current_dir);
     prepare_transfer_menu(
         ui,
+        state,
         source,
         source_label,
         target_path.as_str(),
@@ -366,15 +325,16 @@ fn prepare_current_dir_transfer_with_state(
 
 fn prepare_current_dir_transfer_for_target_with_state(
     ui: &AppWindow,
-    state: &AppState,
+    state: &Rc<RefCell<AppState>>,
     target: PaneTarget,
     source: &str,
     source_label: &str,
     x: f32,
     y: f32,
 ) -> bool {
-    let Some(current_dir) = pane_current_dir(state, target) else {
-        set_status(ui, "No split pane target is available");
+    let binding = state.borrow();
+    let Some(current_dir) = pane_current_dir(&*binding, target) else {
+        set_status(ui, state, "No split pane target is available");
         ui.set_transfer_source_path("".into());
         ui.set_transfer_target_path("".into());
         return false;
@@ -383,6 +343,7 @@ fn prepare_current_dir_transfer_for_target_with_state(
     let target_label = display_location_name(current_dir);
     prepare_transfer_menu(
         ui,
+        state,
         source,
         source_label,
         target_path.as_str(),
@@ -394,7 +355,7 @@ fn prepare_current_dir_transfer_for_target_with_state(
 
 fn focused_current_dir(state: &AppState) -> &Path {
     pane_current_dir(state, PaneTarget::Focused)
-        .unwrap_or_else(|| state.panes.active().current_dir.as_path())
+        .unwrap_or_else(|| state.panes.focused().current_dir.as_path())
 }
 
 fn pane_current_dir(state: &AppState, target: PaneTarget) -> Option<&Path> {
@@ -406,6 +367,7 @@ fn pane_current_dir(state: &AppState, target: PaneTarget) -> Option<&Path> {
 
 fn prepare_transfer_menu(
     ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
     source_path: &str,
     source_label: &str,
     target_path: &str,
@@ -415,7 +377,7 @@ fn prepare_transfer_menu(
 ) -> bool {
     if let Some(reason) = transfer_target_rejection(Path::new(source_path), Path::new(target_path))
     {
-        set_status(ui, reason);
+        set_status(ui, state, reason);
         ui.set_transfer_source_path("".into());
         ui.set_transfer_target_path("".into());
         return false;
@@ -452,7 +414,7 @@ pub(crate) fn start_transfer_operation(
     let source = PathBuf::from(source);
     let target_dir = PathBuf::from(target_dir);
     if let Some(reason) = transfer_start_rejection(&source, &target_dir) {
-        set_status(ui, reason);
+        set_status(ui, state, reason);
         return TransferStart::Rejected;
     }
 
@@ -519,7 +481,7 @@ pub(crate) fn resolve_transfer_conflict(
     let conflict = state.borrow_mut().pending_transfer_conflict.take();
     ui.set_transfer_conflict_open(false);
     let Some(conflict) = conflict else {
-        set_status(ui, "No transfer conflict is pending");
+        set_status(ui, state, "No transfer conflict is pending");
         return;
     };
 
@@ -532,13 +494,14 @@ pub(crate) fn resolve_transfer_conflict(
             };
             set_status(
                 ui,
+                state,
                 &transfer_conflict_skip_status(&conflict.destination, skipped_remaining),
             );
             start_next_operation(ui, state, bridge);
         }
         "keep-both" | "overwrite" => {
             if decision == "overwrite" && conflict.destination == conflict.source {
-                set_status(ui, "Cannot overwrite an item with itself");
+                set_status(ui, state, "Cannot overwrite an item with itself");
                 return;
             }
             let clipboard_changed = {
@@ -576,7 +539,7 @@ pub(crate) fn resolve_transfer_conflict(
                     decision,
                 );
                 if let Some(status) = transfer_conflict_apply_remaining_status(decision, applied) {
-                    set_status(ui, &status);
+                    set_status(ui, state, &status);
                 }
             }
         }
@@ -587,7 +550,7 @@ pub(crate) fn resolve_transfer_conflict(
                     Err(err) => {
                         state.borrow_mut().pending_transfer_conflict = Some(conflict);
                         ui.set_transfer_conflict_open(true);
-                        set_status(ui, &format!("Cannot rename transfer target: {err}"));
+                        set_status(ui, state, &format!("Cannot rename transfer target: {err}"));
                         return;
                     }
                 };
@@ -629,11 +592,11 @@ pub(crate) fn resolve_transfer_conflict(
                 if let Some(status) =
                     transfer_conflict_apply_remaining_status("rename", applied_remaining)
                 {
-                    set_status(ui, &status);
+                    set_status(ui, state, &status);
                 }
             }
         }
-        _ => set_status(ui, "Unknown conflict decision"),
+        _ => set_status(ui, state, "Unknown conflict decision"),
     }
 }
 
@@ -787,7 +750,7 @@ fn queue_transfer_operation(
             .queue_file_operation(request, position.into())
     };
 
-    set_status(ui, &operation_queued_status(snapshot));
+    set_status(ui, state, &operation_queued_status(snapshot));
     if !snapshot.active && !snapshot.pending_conflict {
         start_next_operation(ui, state, bridge);
     }
@@ -799,17 +762,17 @@ pub(crate) fn start_next_operation(
     bridge: &AsyncBridge,
 ) {
     let request = {
-        let mut state = state.borrow_mut();
-        if !state.can_start_file_operation() {
+        let mut state_ref = state.borrow_mut();
+        if !state_ref.can_start_file_operation() {
             return;
         }
         let request = loop {
-            let Some(mut request) = state.operation_queue.pop_front() else {
+            let Some(mut request) = state_ref.operation_queue.pop_front() else {
                 return;
             };
             match transfer_request_conflict_destination(&request) {
                 Ok(Some(destination)) if request.conflict_policy == "ask" => {
-                    open_transfer_conflict(ui, &mut state, request, destination);
+                    open_transfer_conflict(ui, state, request, destination);
                     return;
                 }
                 Ok(_) => {
@@ -819,18 +782,18 @@ pub(crate) fn start_next_operation(
                     break request;
                 }
                 Err(err) => {
-                    set_status(ui, &format!("Skipped transfer: {err}"));
+                    set_status(ui, state, &format!("Skipped transfer: {err}"));
                     continue;
                 }
             }
         };
         let pane_ids = affected_directory_pane_ids(
-            &state,
+            &state_ref,
             [Some(request.target_dir.as_path()), request.source.parent()]
                 .into_iter()
                 .flatten(),
         );
-        let cancel = state.begin_file_operation_for_panes(request.id, pane_ids.clone());
+        let cancel = state_ref.begin_file_operation_for_panes(request.id, pane_ids.clone());
         (request, cancel, pane_ids)
     };
     let (request, cancel, pane_ids) = request;
@@ -904,7 +867,7 @@ pub(crate) fn start_next_operation(
 
 fn open_transfer_conflict(
     ui: &AppWindow,
-    state: &mut AppState,
+    state: &Rc<RefCell<AppState>>,
     request: FileOperationRequest,
     destination: PathBuf,
 ) {
@@ -914,13 +877,13 @@ fn open_transfer_conflict(
     ui.set_transfer_conflict_target(target_label.as_str().into());
     ui.set_transfer_conflict_rename_name(default_rename_suggestion(&destination).into());
     ui.set_transfer_conflict_open(true);
-    state.pending_transfer_conflict = Some(TransferConflict {
+    state.borrow_mut().pending_transfer_conflict = Some(TransferConflict {
         operation: request.operation,
         source: request.source,
         target_dir: request.target_dir,
         destination,
     });
-    set_status(ui, "Transfer needs a conflict decision");
+    set_status(ui, state, "Transfer needs a conflict decision");
 }
 
 fn default_rename_suggestion(destination: &Path) -> String {
@@ -967,7 +930,7 @@ fn default_rename_suggestion_with_reserved(
 
 pub(crate) fn cancel_queued_operations(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let summary = state.borrow_mut().cancel_file_operations();
-    set_status(ui, &operation_cancel_status(summary));
+    set_status(ui, state, &operation_cancel_status(summary));
 }
 
 pub(crate) fn path_label(path: &str) -> String {
@@ -1107,7 +1070,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
         assert_eq!(focused_current_dir(&state), Path::new("/tmp/fika-left"));
 
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/fika-right")));
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/fika-right")));
         assert_eq!(focused_current_dir(&state), Path::new("/tmp/fika-left"));
 
         assert!(state.panes.focus_slot(1));
@@ -1128,7 +1091,7 @@ mod tests {
     #[test]
     fn pane_current_dir_drop_allowed_accepts_file_into_slot_directory() {
         let mut state = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/fika-right")));
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/fika-right")));
 
         assert!(pane_current_dir_drop_allowed(
             &state,
@@ -1141,12 +1104,12 @@ mod tests {
     fn pane_current_dir_drop_allowed_rejects_self_and_descendant_targets() {
         let source = PathBuf::from("/tmp/fika-source");
         let mut same_target = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
-        assert!(same_target.panes.open_inactive(source.clone()));
+        assert!(same_target.panes.open_pane(source.clone()));
 
         assert!(!pane_current_dir_drop_allowed(&same_target, 1, &source));
 
         let mut descendant_target = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
-        assert!(descendant_target.panes.open_inactive(source.join("child")));
+        assert!(descendant_target.panes.open_pane(source.join("child")));
 
         assert!(!pane_current_dir_drop_allowed(
             &descendant_target,
@@ -1472,7 +1435,7 @@ mod tests {
         assert!(
             body.contains("let pane_ids = affected_directory_pane_ids(")
                 && body.contains(
-                    "let cancel = state.begin_file_operation_for_panes(request.id, pane_ids.clone());"
+                    "let cancel = state_ref.begin_file_operation_for_panes(request.id, pane_ids.clone());"
                 )
                 && body.contains("set_status_for_panes(\n        ui,\n        state,\n        &pane_ids,"),
             "file operation start status should use the same affected-pane route as progress and completion"

@@ -2,7 +2,7 @@ use crate::FileEntry;
 use crate::app::pane::PaneTarget;
 use crate::app::state::AppState;
 use crate::fs::entries::RawFileEntry;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 #[derive(Debug)]
@@ -14,19 +14,12 @@ pub(crate) struct DirectoryLoadPreparation {
     pub(crate) defer_view_restore: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DirectoryLoadErrorRecovery {
-    KeepVisibleModel,
-    RollBackToItemsPath(PathBuf),
-    ClearTarget,
-}
-
 pub(crate) fn prepare_directory_load(
     state: &mut AppState,
     preserve_view: bool,
 ) -> DirectoryLoadPreparation {
-    prepare_directory_load_for_target(state, PaneTarget::Active, preserve_view)
-        .expect("active pane should always exist")
+    prepare_directory_load_for_target(state, PaneTarget::Focused, preserve_view)
+        .expect("focused pane should always exist")
 }
 
 pub(crate) fn prepare_directory_load_for_target(
@@ -61,31 +54,6 @@ pub(crate) fn prepare_directory_load_for_target(
         cached_entries,
         defer_view_restore,
     })
-}
-
-pub(crate) fn directory_load_error_recovery(
-    preserve_view: bool,
-    target_path: &Path,
-    items_path: &str,
-    has_visible_entries: bool,
-) -> DirectoryLoadErrorRecovery {
-    let items_path = (!items_path.is_empty()).then(|| PathBuf::from(items_path));
-    if preserve_view {
-        return if items_path.is_some() || has_visible_entries {
-            DirectoryLoadErrorRecovery::KeepVisibleModel
-        } else {
-            DirectoryLoadErrorRecovery::ClearTarget
-        };
-    }
-
-    match items_path {
-        Some(items_path) if items_path.as_path() == target_path => {
-            DirectoryLoadErrorRecovery::KeepVisibleModel
-        }
-        Some(items_path) => DirectoryLoadErrorRecovery::RollBackToItemsPath(items_path),
-        None if has_visible_entries => DirectoryLoadErrorRecovery::KeepVisibleModel,
-        None => DirectoryLoadErrorRecovery::ClearTarget,
-    }
 }
 
 pub(crate) fn directory_entries_match(
@@ -126,17 +94,17 @@ mod tests {
         let pending_key = thumbnails::fallback_key(Path::new("/tmp/current/photo.png"), 64);
         state
             .panes
-            .active_mut()
+            .focused_mut()
             .view
             .insert_thumbnail_pending("/tmp/current/photo.png".to_string(), pending_key.clone());
-        state.panes.active_mut().search.query = "photo".to_string();
-        state.panes.active_mut().selection.paths = vec!["/tmp/current/photo.png".to_string()];
-        state.panes.active_mut().selection.anchor = Some("/tmp/current/photo.png".to_string());
+        state.panes.focused_mut().search.query = "photo".to_string();
+        state.panes.focused_mut().selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.panes.focused_mut().selection.anchor = Some("/tmp/current/photo.png".to_string());
         state.insert_directory_cache(
             PathBuf::from("/tmp/current"),
             vec![test_entry("photo.png", "/tmp/current/photo.png")],
         );
-        let thumbnail_generation = state.panes.active().thumbnail_generation.current();
+        let thumbnail_generation = state.panes.focused().thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, true);
 
@@ -150,24 +118,24 @@ mod tests {
         );
         assert!(!preparation.defer_view_restore);
         assert_eq!(
-            state.panes.active().thumbnail_generation.current(),
+            state.panes.focused().thumbnail_generation.current(),
             thumbnail_generation
         );
         assert_eq!(
             state
                 .panes
-                .active()
+                .focused()
                 .view
                 .thumbnail_pending_key("/tmp/current/photo.png"),
             Some(&pending_key)
         );
-        assert_eq!(state.panes.active().search.query, "photo");
+        assert_eq!(state.panes.focused().search.query, "photo");
         assert_eq!(
-            state.panes.active().selection.paths,
+            state.panes.focused().selection.paths,
             vec!["/tmp/current/photo.png"]
         );
         assert_eq!(
-            state.panes.active().selection.anchor.as_deref(),
+            state.panes.focused().selection.anchor.as_deref(),
             Some("/tmp/current/photo.png")
         );
     }
@@ -178,49 +146,49 @@ mod tests {
         let pending_key = thumbnails::fallback_key(Path::new("/tmp/current/photo.png"), 64);
         state
             .panes
-            .active_mut()
+            .focused_mut()
             .view
             .insert_thumbnail_pending("/tmp/current/photo.png".to_string(), pending_key);
-        state.panes.active_mut().search.query = "photo".to_string();
-        state.panes.active_mut().search.kind_filter = 3;
-        state.panes.active_mut().selection.paths = vec!["/tmp/current/photo.png".to_string()];
-        state.panes.active_mut().selection.anchor = Some("/tmp/current/photo.png".to_string());
-        let thumbnail_generation = state.panes.active().thumbnail_generation.current();
+        state.panes.focused_mut().search.query = "photo".to_string();
+        state.panes.focused_mut().search.kind_filter = 3;
+        state.panes.focused_mut().selection.paths = vec!["/tmp/current/photo.png".to_string()];
+        state.panes.focused_mut().selection.anchor = Some("/tmp/current/photo.png".to_string());
+        let thumbnail_generation = state.panes.focused().thumbnail_generation.current();
 
         let preparation = prepare_directory_load(&mut state, false);
 
         assert_eq!(preparation.current_dir, PathBuf::from("/tmp/current"));
         assert!(preparation.cached_entries.is_none());
         assert!(preparation.defer_view_restore);
-        assert!(state.panes.active().thumbnail_generation.current() > thumbnail_generation);
+        assert!(state.panes.focused().thumbnail_generation.current() > thumbnail_generation);
         assert!(
             !state
                 .panes
-                .active()
+                .focused()
                 .view
                 .has_thumbnail_pending("/tmp/current/photo.png")
         );
-        assert!(state.panes.active().search.query.is_empty());
-        assert_eq!(state.panes.active().search.kind_filter, 0);
-        assert!(state.panes.active().selection.paths.is_empty());
-        assert!(state.panes.active().selection.anchor.is_none());
+        assert!(state.panes.focused().search.query.is_empty());
+        assert_eq!(state.panes.focused().search.kind_filter, 0);
+        assert!(state.panes.focused().selection.paths.is_empty());
+        assert!(state.panes.focused().selection.anchor.is_none());
     }
 
     #[test]
     fn targeted_directory_load_updates_only_requested_pane() {
         let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
-        state.panes.active_mut().search.query = "active-query".to_string();
-        state.panes.active_mut().selection.paths = vec!["/tmp/active/keep.txt".to_string()];
+        state.panes.focused_mut().search.query = "active-query".to_string();
+        state.panes.focused_mut().selection.paths = vec!["/tmp/active/keep.txt".to_string()];
         let active_pending_key = thumbnails::fallback_key(Path::new("/tmp/active/keep.txt"), 64);
         state
             .panes
-            .active_mut()
+            .focused_mut()
             .view
             .insert_thumbnail_pending("/tmp/active/keep.txt".to_string(), active_pending_key);
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
-        let inactive_id = state.panes.inactive().expect("inactive pane").id;
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/inactive")));
+        let inactive_id = state.panes.pane_for_slot(1).expect("inactive pane").id;
         {
-            let inactive = state.panes.inactive_mut().expect("inactive pane");
+            let inactive = state.panes.pane_mut_for_slot(1).expect("inactive pane");
             inactive.search.query = "inactive-query".to_string();
             inactive.selection.paths = vec!["/tmp/inactive/drop.txt".to_string()];
             inactive.selection.anchor = Some("/tmp/inactive/drop.txt".to_string());
@@ -236,20 +204,20 @@ mod tests {
 
         assert_eq!(preparation.pane_id, inactive_id);
         assert_eq!(preparation.current_dir, PathBuf::from("/tmp/inactive"));
-        assert_eq!(state.panes.active().search.query, "active-query");
+        assert_eq!(state.panes.focused().search.query, "active-query");
         assert_eq!(
-            state.panes.active().selection.paths,
+            state.panes.focused().selection.paths,
             vec!["/tmp/active/keep.txt"]
         );
         assert!(
             state
                 .panes
-                .active()
+                .focused()
                 .view
                 .has_thumbnail_pending("/tmp/active/keep.txt")
         );
 
-        let inactive = state.panes.inactive().expect("inactive pane");
+        let inactive = state.panes.pane_for_slot(1).expect("inactive pane");
         assert!(inactive.search.query.is_empty());
         assert!(inactive.selection.paths.is_empty());
         assert!(inactive.selection.anchor.is_none());
@@ -275,43 +243,6 @@ mod tests {
         assert!(!preparation.defer_view_restore);
     }
 
-    #[test]
-    fn failed_uncached_navigation_rolls_back_to_last_committed_items_path() {
-        assert_eq!(
-            directory_load_error_recovery(
-                false,
-                Path::new("/run/media/yk/missing"),
-                "/home/yk",
-                true,
-            ),
-            DirectoryLoadErrorRecovery::RollBackToItemsPath(PathBuf::from("/home/yk"))
-        );
-    }
-
-    #[test]
-    fn failed_cached_navigation_keeps_cached_target_model() {
-        assert_eq!(
-            directory_load_error_recovery(false, Path::new("/home/yk"), "/home/yk", true),
-            DirectoryLoadErrorRecovery::KeepVisibleModel
-        );
-    }
-
-    #[test]
-    fn failed_refresh_keeps_existing_visible_model() {
-        assert_eq!(
-            directory_load_error_recovery(true, Path::new("/home/yk"), "/home/yk", true),
-            DirectoryLoadErrorRecovery::KeepVisibleModel
-        );
-    }
-
-    #[test]
-    fn failed_initial_load_without_visible_model_clears_target() {
-        assert_eq!(
-            directory_load_error_recovery(false, Path::new("/missing"), "", false),
-            DirectoryLoadErrorRecovery::ClearTarget
-        );
-    }
-
     fn test_entry(name: &str, path: &str) -> FileEntry {
         FileEntry {
             name: name.into(),
@@ -324,6 +255,7 @@ mod tests {
             modified: "Today".into(),
             modified_age_days: 0,
             is_dir: false,
+            selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
         }

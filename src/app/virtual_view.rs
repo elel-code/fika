@@ -1,14 +1,14 @@
+#[cfg(test)]
 use crate::FileEntry;
-use crate::app::geometry::{
-    MainGridLayout, VirtualGridPlan, split_preview_plan, virtual_grid_plan,
-};
-use crate::app::pane::{PaneEntrySnapshot, PaneTarget, VirtualViewCache};
+use crate::app::geometry::{MainGridLayout, VirtualGridPlan, virtual_grid_plan};
+use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
 #[cfg(test)]
 use crate::app::selection::{filtered_entries_range, filtered_entry_count};
+#[cfg(test)]
 use crate::app::state::AppState;
+#[cfg(test)]
 use crate::app::thumbnail_pipeline::decorate_entries_with_cached_thumbnails;
 use std::ops::Range;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -66,27 +66,6 @@ pub(crate) struct VirtualViewSnapshotInput {
     pub(crate) chooser_patterns: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct PanePreviewUpdate {
-    pub(crate) current_dir: PathBuf,
-    pub(crate) entry_count: usize,
-    pub(crate) viewport_x: f32,
-    pub(crate) viewport_clamped: bool,
-    pub(crate) range: Range<usize>,
-    pub(crate) start_column: usize,
-    pub(crate) entries: Vec<FileEntry>,
-    pub(crate) rebuild_model: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PanePreviewInput {
-    pub(crate) pane_width: f32,
-    pub(crate) pane_height: f32,
-    pub(crate) zoom_level: i32,
-    pub(crate) thumbnail_size_px: u32,
-    pub(crate) force_rebuild_model: bool,
-}
-
 #[cfg(test)]
 pub(crate) fn prepare_virtual_view_update(
     state: &mut AppState,
@@ -105,7 +84,7 @@ pub(crate) fn prepare_virtual_view_update(
         2,
     );
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
-    state.panes.active_mut().view.viewport_x = plan.viewport_x;
+    state.panes.focused_mut().view.viewport_x = plan.viewport_x;
 
     let rebuild_model = should_rebuild_virtual_model(
         state,
@@ -130,7 +109,7 @@ pub(crate) fn prepare_virtual_view_update(
     let mut entries = filtered_entries_range(state, plan.range.clone());
     decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
     {
-        let pane = state.panes.active_mut();
+        let pane = state.panes.focused_mut();
         pane.view.virtual_view.range = plan.range.clone();
         pane.view.virtual_view.entry_count = visible_count;
         pane.view.virtual_view.rows_per_column = input.layout.rows_per_column;
@@ -202,69 +181,6 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     }
 }
 
-pub(crate) fn prepare_pane_preview_update(
-    state: &mut AppState,
-    target: PaneTarget,
-    input: PanePreviewInput,
-) -> Option<PanePreviewUpdate> {
-    let (current_dir, entry_count, plan, viewport_clamped, rebuild_model, mut entries) = {
-        let pane = state.panes.pane_mut_for_target(target)?;
-        let entry_count = pane.entries.len();
-        let requested_viewport_x = pane.view.viewport_x;
-        let plan = split_preview_plan(
-            entry_count,
-            input.pane_width,
-            input.pane_height,
-            requested_viewport_x,
-            input.zoom_level,
-        );
-        let viewport_clamped = (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON;
-        let rebuild_model = input.force_rebuild_model
-            || should_rebuild_virtual_cache(
-                &pane.view.virtual_view,
-                &plan,
-                entry_count,
-                input.thumbnail_size_px,
-            );
-        pane.view.viewport_x = plan.viewport_x;
-        let entries = if rebuild_model {
-            pane.entries[plan.range.clone()].to_vec()
-        } else {
-            Vec::new()
-        };
-        if rebuild_model {
-            pane.view.virtual_view.range = plan.range.clone();
-            pane.view.virtual_view.entry_count = entry_count;
-            pane.view.virtual_view.rows_per_column = plan.rows_per_column;
-            pane.view.virtual_view.cell_width = plan.cell_width;
-            pane.view.virtual_view.thumbnail_size_px = input.thumbnail_size_px;
-        }
-        (
-            pane.current_dir.clone(),
-            entry_count,
-            plan,
-            viewport_clamped,
-            rebuild_model,
-            entries,
-        )
-    };
-
-    if rebuild_model {
-        decorate_entries_with_cached_thumbnails(state, &mut entries, input.thumbnail_size_px);
-    }
-
-    Some(PanePreviewUpdate {
-        current_dir,
-        entry_count,
-        viewport_x: plan.viewport_x,
-        viewport_clamped,
-        range: plan.range,
-        start_column: plan.start_column,
-        entries,
-        rebuild_model,
-    })
-}
-
 #[cfg(test)]
 fn should_rebuild_virtual_model(
     state: &AppState,
@@ -275,7 +191,7 @@ fn should_rebuild_virtual_model(
 ) -> bool {
     !schedule_thumbnails
         || should_rebuild_virtual_cache(
-            &state.panes.active().view.virtual_view,
+            &state.panes.focused().view.virtual_view,
             plan,
             visible_count,
             thumbnail_size_px,
@@ -541,12 +457,9 @@ mod tests {
 
     fn layout() -> MainGridLayout {
         MainGridLayout {
-            main_x: 0.0,
-            main_y: 0.0,
             viewport_x: 0.0,
             rows_per_column: 4,
             cell_width: 100.0,
-            row_height: 80.0,
             padding: 10.0,
         }
     }
@@ -563,6 +476,7 @@ mod tests {
             modified: "Today".into(),
             modified_age_days: 0,
             is_dir: false,
+            selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
         }
@@ -571,7 +485,7 @@ mod tests {
     #[test]
     fn virtual_view_update_reuses_model_inside_same_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = (0..100).map(test_entry).collect();
+        state.panes.focused_mut().entries = (0..100).map(test_entry).collect();
 
         let first = prepare_virtual_view_update(
             &mut state,
@@ -587,7 +501,7 @@ mod tests {
         assert!(first.rebuild_model);
         assert_eq!(first.range, 0..20);
         assert_eq!(first.entries.len(), 20);
-        assert_eq!(state.panes.active().view.viewport_x, 0.0);
+        assert_eq!(state.panes.focused().view.viewport_x, 0.0);
 
         let second = prepare_virtual_view_update(
             &mut state,
@@ -602,13 +516,13 @@ mod tests {
         );
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
-        assert_eq!(state.panes.active().view.viewport_x, 40.0);
+        assert_eq!(state.panes.focused().view.viewport_x, 40.0);
     }
 
     #[test]
     fn virtual_view_update_reuses_model_while_cached_range_covers_visible_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = (0..160).map(test_entry).collect();
+        state.panes.focused_mut().entries = (0..160).map(test_entry).collect();
 
         let first = prepare_virtual_view_update(
             &mut state,
@@ -640,13 +554,13 @@ mod tests {
         assert_eq!(second.range, 0..24);
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
-        assert_eq!(state.panes.active().view.virtual_view.range, first.range);
+        assert_eq!(state.panes.focused().view.virtual_view.range, first.range);
     }
 
     #[test]
     fn virtual_view_update_clamps_out_of_bounds_viewport() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = (0..10).map(test_entry).collect();
+        state.panes.focused_mut().entries = (0..10).map(test_entry).collect();
 
         let update = prepare_virtual_view_update(
             &mut state,
@@ -663,186 +577,6 @@ mod tests {
         assert!(update.viewport_clamped);
         assert_eq!(update.viewport_x, 70.0);
         assert_eq!(update.range, 0..10);
-        assert_eq!(state.panes.active().view.viewport_x, 70.0);
-    }
-
-    #[test]
-    fn pane_preview_update_slices_target_pane_and_clamps_viewport() {
-        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
-        {
-            let inactive = state.panes.inactive_mut().unwrap();
-            inactive.entries = (0..100).map(test_entry).collect();
-            inactive.view.viewport_x = 1_200.0;
-        }
-
-        let update = prepare_pane_preview_update(
-            &mut state,
-            PaneTarget::Slot(1),
-            PanePreviewInput {
-                pane_width: 420.0,
-                pane_height: 704.0,
-                zoom_level: 1,
-                thumbnail_size_px: 80,
-                force_rebuild_model: false,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(update.current_dir, PathBuf::from("/tmp/inactive"));
-        assert_eq!(update.entry_count, 100);
-        assert_eq!(update.viewport_x, 1_200.0);
-        assert!(!update.viewport_clamped);
-        assert_eq!(update.range, 21..70);
-        assert_eq!(update.start_column, 3);
-        assert!(update.rebuild_model);
-        assert_eq!(update.entries.len(), 49);
-        assert_eq!(update.entries[0].name.as_str(), "item-21.txt");
-        assert_eq!(
-            state.panes.inactive().unwrap().view.viewport_x,
-            update.viewport_x
-        );
-
-        state.panes.inactive_mut().unwrap().view.viewport_x = 4_000.0;
-        let clamped = prepare_pane_preview_update(
-            &mut state,
-            PaneTarget::Slot(1),
-            PanePreviewInput {
-                pane_width: 420.0,
-                pane_height: 704.0,
-                zoom_level: 1,
-                thumbnail_size_px: 80,
-                force_rebuild_model: false,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(clamped.viewport_x, 2_728.0);
-        assert!(clamped.viewport_clamped);
-        assert_eq!(clamped.range, 77..100);
-        assert!(clamped.rebuild_model);
-        assert_eq!(state.panes.inactive().unwrap().view.viewport_x, 2_728.0);
-    }
-
-    #[test]
-    fn pane_preview_update_reuses_model_inside_same_range() {
-        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
-        state.panes.inactive_mut().unwrap().entries = (0..100).map(test_entry).collect();
-
-        let first = prepare_pane_preview_update(
-            &mut state,
-            PaneTarget::Slot(1),
-            PanePreviewInput {
-                pane_width: 420.0,
-                pane_height: 704.0,
-                zoom_level: 1,
-                thumbnail_size_px: 80,
-                force_rebuild_model: false,
-            },
-        )
-        .unwrap();
-        assert!(first.rebuild_model);
-        assert_eq!(first.range, 0..28);
-        assert_eq!(first.entries.len(), first.range.len());
-
-        state.panes.inactive_mut().unwrap().view.viewport_x = 10.0;
-        let second = prepare_pane_preview_update(
-            &mut state,
-            PaneTarget::Slot(1),
-            PanePreviewInput {
-                pane_width: 420.0,
-                pane_height: 704.0,
-                zoom_level: 1,
-                thumbnail_size_px: 80,
-                force_rebuild_model: false,
-            },
-        )
-        .unwrap();
-
-        assert!(!second.rebuild_model);
-        assert!(second.entries.is_empty());
-        assert_eq!(second.range, first.range);
-
-        let forced = prepare_pane_preview_update(
-            &mut state,
-            PaneTarget::Slot(1),
-            PanePreviewInput {
-                pane_width: 420.0,
-                pane_height: 704.0,
-                zoom_level: 1,
-                thumbnail_size_px: 80,
-                force_rebuild_model: true,
-            },
-        )
-        .unwrap();
-
-        assert!(forced.rebuild_model);
-        assert_eq!(forced.range, first.range);
-        assert_eq!(forced.entries.len(), first.entries.len());
-    }
-
-    #[test]
-    fn pane_preview_update_reuses_model_while_cached_range_covers_visible_range() {
-        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/inactive")));
-        state.panes.inactive_mut().unwrap().entries = (0..160).map(test_entry).collect();
-
-        let first = prepare_pane_preview_update(
-            &mut state,
-            PaneTarget::Slot(1),
-            PanePreviewInput {
-                pane_width: 420.0,
-                pane_height: 704.0,
-                zoom_level: 1,
-                thumbnail_size_px: 80,
-                force_rebuild_model: false,
-            },
-        )
-        .unwrap();
-        assert!(first.rebuild_model);
-        assert_eq!(first.range, 0..28);
-
-        state.panes.inactive_mut().unwrap().view.viewport_x = 230.0;
-        let second = prepare_pane_preview_update(
-            &mut state,
-            PaneTarget::Slot(1),
-            PanePreviewInput {
-                pane_width: 420.0,
-                pane_height: 704.0,
-                zoom_level: 1,
-                thumbnail_size_px: 80,
-                force_rebuild_model: false,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(second.range, 0..42);
-        assert!(!second.rebuild_model);
-        assert!(second.entries.is_empty());
-        assert_eq!(
-            state.panes.inactive().unwrap().view.virtual_view.range,
-            first.range
-        );
-    }
-
-    #[test]
-    fn pane_preview_update_returns_none_without_target_pane() {
-        let mut state = AppState::new(PathBuf::from("/tmp/active"), Vec::new());
-
-        assert!(
-            prepare_pane_preview_update(
-                &mut state,
-                PaneTarget::Slot(1),
-                PanePreviewInput {
-                    pane_width: 420.0,
-                    pane_height: 704.0,
-                    zoom_level: 1,
-                    thumbnail_size_px: 80,
-                    force_rebuild_model: false,
-                },
-            )
-            .is_none()
-        );
+        assert_eq!(state.panes.focused().view.viewport_x, 70.0);
     }
 }

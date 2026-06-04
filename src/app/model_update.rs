@@ -1,5 +1,7 @@
 use crate::FileEntry;
+use crate::app::pane::PaneView;
 use slint::{Model, ModelRc, VecModel};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 pub(crate) fn new_file_entries_model(entries: Vec<FileEntry>) -> ModelRc<FileEntry> {
@@ -18,6 +20,47 @@ pub(crate) fn update_file_entries_model(
 
     update_vec_model(model, old_start, new_start, entries);
     None
+}
+
+pub(crate) fn update_pane_file_entries_model(
+    view: &mut PaneView,
+    start_index: usize,
+    start_column: usize,
+    entries: Vec<FileEntry>,
+) {
+    let current = view.virtual_entries.clone();
+    let old_start = view.virtual_start_index;
+    if let Some(model) = update_file_entries_model(&current, old_start, start_index, entries) {
+        view.virtual_entries = model;
+    }
+    view.virtual_start_index = start_index;
+    view.virtual_start_column = start_column;
+}
+
+pub(crate) fn update_file_entries_model_selection(
+    current: &ModelRc<FileEntry>,
+    selected_paths: &[String],
+) -> bool {
+    let Some(model) = current.as_any().downcast_ref::<VecModel<FileEntry>>() else {
+        return false;
+    };
+    let selected = selected_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut changed = false;
+    for row in 0..model.row_count() {
+        let Some(mut entry) = model.row_data(row) else {
+            continue;
+        };
+        let selected = selected.contains(entry.path.as_str());
+        if entry.selected != selected {
+            entry.selected = selected;
+            model.set_row_data(row, entry);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn update_vec_model(
@@ -74,6 +117,7 @@ fn update_vec_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::pane::PaneView;
     use slint::Image;
 
     fn entry(index: usize) -> FileEntry {
@@ -88,6 +132,7 @@ mod tests {
             modified: "Today".into(),
             modified_age_days: 0,
             is_dir: false,
+            selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
         }
@@ -98,6 +143,51 @@ mod tests {
             .filter_map(|row| model.row_data(row))
             .map(|entry| entry.path.to_string())
             .collect()
+    }
+
+    fn selected_rows(model: &ModelRc<FileEntry>) -> Vec<String> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .filter(|entry| entry.selected)
+            .map(|entry| entry.path.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn pane_file_entry_model_updates_each_view_independently() {
+        let mut left = PaneView::default();
+        let mut right = PaneView::default();
+
+        update_pane_file_entries_model(&mut left, 0, 0, (0..3).map(entry).collect());
+        update_pane_file_entries_model(&mut right, 20, 4, (20..23).map(entry).collect());
+
+        assert_eq!(left.virtual_start_index, 0);
+        assert_eq!(left.virtual_start_column, 0);
+        assert_eq!(right.virtual_start_index, 20);
+        assert_eq!(right.virtual_start_column, 4);
+        assert_eq!(
+            rows(&left.virtual_entries),
+            (0..3)
+                .map(|index| format!("/tmp/item-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rows(&right.virtual_entries),
+            (20..23)
+                .map(|index| format!("/tmp/item-{index}"))
+                .collect::<Vec<_>>()
+        );
+
+        update_pane_file_entries_model(&mut right, 22, 5, (22..25).map(entry).collect());
+
+        assert_eq!(
+            rows(&left.virtual_entries),
+            (0..3)
+                .map(|index| format!("/tmp/item-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(right.virtual_start_index, 22);
+        assert_eq!(right.virtual_start_column, 5);
     }
 
     #[test]
@@ -146,5 +236,33 @@ mod tests {
                 .map(|index| format!("/tmp/item-{index}"))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn pane_file_entry_model_updates_selection_without_replacing_entries() {
+        let mut view = PaneView::default();
+        update_pane_file_entries_model(&mut view, 0, 0, (0..4).map(entry).collect());
+        let original = view.virtual_entries.clone();
+
+        assert!(update_file_entries_model_selection(
+            &view.virtual_entries,
+            &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
+        ));
+        assert_eq!(view.virtual_entries, original);
+        assert_eq!(
+            selected_rows(&view.virtual_entries),
+            vec!["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
+        );
+
+        assert!(!update_file_entries_model_selection(
+            &view.virtual_entries,
+            &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
+        ));
+
+        assert!(update_file_entries_model_selection(
+            &view.virtual_entries,
+            &[]
+        ));
+        assert!(selected_rows(&view.virtual_entries).is_empty());
     }
 }

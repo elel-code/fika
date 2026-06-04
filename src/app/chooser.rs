@@ -112,7 +112,7 @@ pub(crate) fn selected_directory_or_current(state: &AppState) -> PathBuf {
     let focused = state
         .panes
         .pane_for_target(PaneTarget::Focused)
-        .unwrap_or(&state.panes.active());
+        .unwrap_or(&state.panes.focused());
     focused
         .selection
         .paths
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn selected_directory_or_current_uses_focused_pane() {
         let mut state = AppState::new(PathBuf::from("/tmp/fika-left"), Vec::new());
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/fika-right")));
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/fika-right")));
         assert_eq!(
             selected_directory_or_current(&state),
             PathBuf::from("/tmp/fika-left")

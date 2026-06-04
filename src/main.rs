@@ -29,8 +29,8 @@ use app::chooser::{
 };
 use app::device_monitor::start_device_monitor;
 use app::directory_loading::{
-    DirectoryLoadErrorRecovery, DirectoryLoadPreparation, directory_entries_match,
-    directory_load_error_recovery, prepare_directory_load, prepare_directory_load_for_target,
+    DirectoryLoadPreparation, directory_entries_match, prepare_directory_load,
+    prepare_directory_load_for_target,
 };
 use app::dnd::{
     MainDndTrace, PlacesDndTrace, SLINT_DROPAREA_BACKEND_SOURCE, dnd_debug_enabled_from_env,
@@ -47,9 +47,9 @@ use app::file_clipboard::{
 };
 use app::geometry::{
     MainGridLayout, SelectionRect, active_main_pane_width, clamped_split_pane_ratio,
-    place_drop_geometry, register_menu_geometry_callbacks,
+    inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
 };
-use app::model_update::{new_file_entries_model, update_file_entries_model};
+use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
     OperationResultDisposition, affected_directory_pane_ids, operation_final_status,
     operation_finished_label,
@@ -63,29 +63,28 @@ use app::places::{
 };
 use app::search_ui::{
     cancel_active_search, recursive_search_cancelled_status, recursive_search_finished_status,
-    recursive_search_progress_status, recursive_search_status, reset_search_state,
-    search_filters_active, set_search_filters,
+    recursive_search_progress_status, recursive_search_status, search_filters_active,
+    set_search_filters,
 };
 use app::selection::{
-    append_unique_paths, entries_have_locations, filtered_entry_count, filtered_entry_paths,
-    filtered_entry_summary, rebuild_visible_entry_index, retained_visible_paths,
-    selection_range_paths_filtered, selection_rect_paths, selection_rect_paths_filtered,
+    annotate_selection_state, append_unique_paths, entries_have_locations, filtered_entry_count,
+    filtered_entry_paths_for_slot, rebuild_visible_entry_index, retained_visible_paths,
+    selection_range_paths_filtered_for_slot, selection_rect_paths_filtered_for_slot,
 };
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui,
     set_pane_viewport_ui_if_clamped, sync_focus_navigation_ui, sync_navigation_ui,
-    sync_pane_slot_preview_ui, sync_pane_slot_preview_viewport_ui, sync_pane_slot_ui,
-    sync_pane_slots_ui, toggle_split_view,
+    sync_pane_slot_ui, sync_pane_slots_ui, toggle_split_view,
 };
 use app::state::{AppState, DeviceAction, FileUndo, PaneExternalEdit};
 use app::thumbnail_pipeline::{
-    apply_thumbnail_load_to_state, decorate_entries_with_cached_thumbnails,
-    prioritize_thumbnail_entries, thumbnail_schedule_batch,
+    apply_thumbnail_load_to_state_for_pane, decorate_entries_with_cached_thumbnails_for_pane,
+    prioritize_thumbnail_entries, thumbnail_schedule_batch_for_pane,
 };
 use app::transfer::{
     cancel_queued_operations, pane_drop_allowed, pane_drop_target_path, place_drop_allowed,
-    prepare_current_dir_transfer, prepare_entry_transfer, prepare_main_transfer,
-    prepare_pane_transfer, prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
+    prepare_current_dir_transfer, prepare_entry_transfer, prepare_pane_transfer,
+    prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
     start_transfer_operation,
 };
 use app::virtual_view::{VirtualViewSnapshotInput, prepare_virtual_view_snapshot_update};
@@ -157,15 +156,17 @@ impl PaneViewSyncScheduler {
 
 struct ThumbnailFlushScheduler {
     timer: Timer,
-    pending: Rc<RefCell<VecDeque<(u64, thumbnails::ThumbnailLoad)>>>,
+    pending: Rc<RefCell<VecDeque<(u64, u64, thumbnails::ThumbnailLoad)>>>,
 }
 
 impl ThumbnailFlushScheduler {
     fn new(ui: slint::Weak<AppWindow>, state: Rc<RefCell<AppState>>, bridge: AsyncBridge) -> Self {
         let timer = Timer::default();
-        let pending = Rc::new(RefCell::new(
-            VecDeque::<(u64, thumbnails::ThumbnailLoad)>::new(),
-        ));
+        let pending = Rc::new(RefCell::new(VecDeque::<(
+            u64,
+            u64,
+            thumbnails::ThumbnailLoad,
+        )>::new()));
         let timer_pending = Rc::clone(&pending);
 
         timer.start(TimerMode::SingleShot, THUMBNAIL_FLUSH_COALESCE, move || {
@@ -179,8 +180,10 @@ impl ThumbnailFlushScheduler {
         Self { timer, pending }
     }
 
-    fn push(&self, generation: u64, load: thumbnails::ThumbnailLoad) {
-        self.pending.borrow_mut().push_back((generation, load));
+    fn push(&self, pane_id: u64, generation: u64, load: thumbnails::ThumbnailLoad) {
+        self.pending
+            .borrow_mut()
+            .push_back((pane_id, generation, load));
         self.timer.restart();
     }
 }
@@ -392,9 +395,59 @@ fn main() -> Result<(), slint::PlatformError> {
 
     {
         let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         ui.on_pane_slots_refresh_requested(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                sync_pane_slots_ui(&ui);
+                sync_pane_slots_ui(&ui, &state);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_pane_path_text_changed(move |slot, text| {
+            if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
+                pane.path_input_text = text.to_string();
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                sync_pane_slot_ui(&ui, &state, slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_pane_path_focus_changed(move |slot, focused| {
+            if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
+                pane.path_focused = focused;
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                sync_pane_slot_ui(&ui, &state, slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_pane_slot_refresh_requested(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                sync_pane_slot_ui(&ui, &state, slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        ui.on_pane_viewport_changed(move |slot, viewport_x| {
+            if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
+                pane.view.viewport_x = viewport_x;
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                sync_pane_slot_ui(&ui, &state, slot);
             }
         });
     }
@@ -457,7 +510,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 let requested = expand_user_path(path.as_str());
                 if !requested.is_dir() {
                     reset_pane_path_input_for_slot(&ui, slot);
-                    set_status(&ui, "Path is not a readable directory");
+                    set_status(&ui, &state, "Path is not a readable directory");
                     return;
                 }
                 navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
@@ -476,12 +529,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 if fs::file_ops::is_trash_files_dir(&requested) {
                     match fs::file_ops::ensure_trash_dirs() {
                         Ok(()) => navigate_pane_to_slot(&ui, &state, &bridge, slot, requested),
-                        Err(err) => set_status(&ui, &format!("Trash is not available: {err}")),
+                        Err(err) => {
+                            set_status(&ui, &state, &format!("Trash is not available: {err}"))
+                        }
                     }
                 } else if requested.is_dir() {
                     navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
                 } else {
-                    set_status(&ui, "Place is not available");
+                    set_status(&ui, &state, "Place is not available");
                 }
             }
         });
@@ -496,10 +551,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 if !mounted {
                     let device_path = path.to_string();
                     if register_pending_device_action(&state, &device_path, "mount") {
-                        set_status(&ui, "Mounting device...");
+                        set_status(&ui, &state, "Mounting device...");
                         mount_device_async(&bridge, device_path);
                     } else {
-                        set_status(&ui, "Device action already in progress");
+                        set_status(&ui, &state, "Device action already in progress");
                     }
                     return;
                 }
@@ -508,7 +563,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     let slot = focus_current_ui_pane_slot(&ui, &state);
                     navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
                 } else {
-                    set_status(&ui, "Device is not available");
+                    set_status(&ui, &state, "Device is not available");
                 }
             }
         });
@@ -523,10 +578,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 let device_path = device_path.to_string();
                 let mount_path = mounted_device_path(mount_path.as_str());
                 if register_pending_device_action(&state, &device_path, "unmount") {
-                    set_status(&ui, "Unmounting device...");
+                    set_status(&ui, &state, "Unmounting device...");
                     device_action_async(&bridge, "unmount", device_path, mount_path);
                 } else {
-                    set_status(&ui, "Device action already in progress");
+                    set_status(&ui, &state, "Device action already in progress");
                 }
             }
         });
@@ -541,10 +596,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 let device_path = device_path.to_string();
                 let mount_path = mounted_device_path(mount_path.as_str());
                 if register_pending_device_action(&state, &device_path, "eject") {
-                    set_status(&ui, "Ejecting device...");
+                    set_status(&ui, &state, "Ejecting device...");
                     device_action_async(&bridge, "eject", device_path, mount_path);
                 } else {
-                    set_status(&ui, "Device action already in progress");
+                    set_status(&ui, &state, "Device action already in progress");
                 }
             }
         });
@@ -597,12 +652,17 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let async_handle = async_handle.clone();
+        let state = Rc::clone(&state);
         ui.on_open_terminal_here(move |dir| {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
             let dir = PathBuf::from(dir.as_str());
-            set_status(&ui, &format!("Opening terminal in {}...", dir.display()));
+            set_status(
+                &ui,
+                &state,
+                &format!("Opening terminal in {}...", dir.display()),
+            );
             let ui_weak = ui.as_weak();
             async_handle.spawn(async move {
                 let label = dir
@@ -627,7 +687,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     Err(err) => format!("Cannot open terminal: {err}"),
                 };
                 let _ = ui_weak.upgrade_in_event_loop(move |ui| {
-                    set_status(&ui, &message);
+                    ui.set_status(message.into());
                 });
             });
         });
@@ -930,16 +990,6 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_prepare_main_transfer(move |source, label, x, y| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                prepare_main_transfer(&ui, &state, source.as_str(), label.as_str(), x, y)
-            })
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
         ui.on_pane_prepare_transfer(move |slot, source, x, y| {
             ui_weak.upgrade().is_some_and(|ui| {
                 prepare_pane_transfer_for_slot(&ui, &state, slot, source.as_str(), x, y)
@@ -1121,7 +1171,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 let command = state.borrow_mut().pending_privileged_command.take();
                 ui.set_privileged_prompt_open(false);
                 if let Some(command) = command {
-                    start_privileged_operation(&ui, &bridge, command);
+                    start_privileged_operation(&ui, &state, &bridge, command);
                 }
             }
         });
@@ -1134,7 +1184,7 @@ fn main() -> Result<(), slint::PlatformError> {
             state.borrow_mut().pending_privileged_command = None;
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_privileged_prompt_open(false);
-                set_status(&ui, "Administrator operation cancelled");
+                set_status(&ui, &state, "Administrator operation cancelled");
             }
         });
     }
@@ -1522,14 +1572,6 @@ fn register_pane_routing_callbacks(ui: &AppWindow) {
         });
     }
 
-    {
-        let ui_weak = ui.as_weak();
-        routing.on_is_selected(move |slot, path| {
-            ui_weak
-                .upgrade()
-                .is_some_and(|ui| ui.invoke_pane_is_selected(slot, path))
-        });
-    }
 }
 
 fn log_chooser_parent_window(parent_window: Option<&str>) {
@@ -1563,11 +1605,13 @@ fn chooser_parent_window_binding(parent_window: Option<&str>) -> (&'static str, 
 
 fn start_privileged_operation(
     ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     command: privilege::PrivilegedCommand,
 ) {
     set_status(
         ui,
+        state,
         &format!(
             "Requesting administrator privileges for {}...",
             command.label()
@@ -1586,7 +1630,7 @@ fn start_privileged_operation(
 }
 
 fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let current_dir = state.borrow().panes.active().current_dir.clone();
+    let current_dir = state.borrow().panes.focused().current_dir.clone();
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     save_settings(&AppSettings {
         dark_mode: Some(ui.get_dark_mode()),
@@ -1600,9 +1644,7 @@ fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 pub(crate) fn remember_pane_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
-    let Some(viewport_x) = pane_viewport_x_from_ui(ui, slot) else {
-        return;
-    };
+    let viewport_x = pane_viewport_x_from_ui(ui, slot, state);
     let mut state = state.borrow_mut();
     let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
         return;
@@ -1611,10 +1653,6 @@ pub(crate) fn remember_pane_view_state(ui: &AppWindow, state: &Rc<RefCell<AppSta
     pane.view.viewport_x = viewport_x;
     pane.view
         .insert_state_cache(current_dir, DirectoryViewState { viewport_x });
-}
-
-fn restore_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, path: &Path) {
-    restore_pane_view_state(ui, state, 0, path);
 }
 
 fn restore_pane_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32, path: &Path) {
@@ -1627,28 +1665,23 @@ fn restore_pane_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: 
         pane.view.viewport_x = view_state.viewport_x;
         view_state
     };
-    set_pane_viewport_ui(ui, slot, view_state.viewport_x);
+    set_pane_viewport_ui(ui, slot, view_state.viewport_x, state);
 }
 
 fn set_current_location_ui(ui: &AppWindow, path: &Path) {
     let current_path = path.display().to_string();
     let in_trash = fs::file_ops::is_in_trash_files_dir(path);
     ui.set_current_path(current_path.as_str().into());
-    ui.set_left_pane_path(current_path.as_str().into());
-    if !ui.get_left_pane_path_focused() {
-        ui.set_left_pane_path_input_text(current_path.into());
-    }
     ui.set_current_name(display_location_name(path).into());
     ui.set_current_in_trash(in_trash);
-    ui.set_left_pane_in_trash(in_trash);
 }
 
-fn reset_search_controls(ui: &AppWindow) {
+fn reset_search_controls(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_search_query(SharedString::new());
     ui.set_search_kind_filter(0);
     ui.set_search_modified_filter(0);
     ui.set_search_size_filter(0);
-    sync_pane_slots_ui(ui);
+    sync_pane_slots_ui(ui, state);
 }
 
 fn load_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
@@ -1666,12 +1699,7 @@ fn refresh_panes(
     pane_ids: &[u64],
 ) {
     for pane_id in pane_ids {
-        let slot = { state.borrow().panes.slot_for_id(*pane_id) };
-        match slot {
-            Some(0) => refresh_directory(ui, state, bridge),
-            Some(_) => refresh_pane_by_id(ui, state, bridge, *pane_id),
-            None => {}
-        }
+        refresh_pane_by_id(ui, state, bridge, *pane_id);
     }
 }
 
@@ -1731,6 +1759,11 @@ fn load_prepared_pane_directory(
         current_dir.display(),
         cached_entries.is_some()
     ));
+    let target_is_focused = ui.get_focused_pane() == slot;
+    if target_is_focused {
+        set_current_location_ui(ui, &current_dir);
+        ui.set_search_loading(false);
+    }
     if !preserve_view && !defer_view_restore {
         restore_pane_view_state(ui, state, slot, &current_dir);
     }
@@ -1743,7 +1776,12 @@ fn load_prepared_pane_directory(
                 pane.view.virtual_view.invalidate();
             }
         }
-        set_pane_status(ui, slot, "Refreshing cached folder...");
+        if target_is_focused {
+            reset_search_controls(ui, state);
+            ui.set_items_path(current_dir.display().to_string().into());
+            ui.set_directory_loading(false);
+        }
+        set_pane_status(ui, state, slot, "Refreshing cached folder...");
     } else if !preserve_view {
         {
             let mut state = state.borrow_mut();
@@ -1753,9 +1791,17 @@ fn load_prepared_pane_directory(
                 pane.view.virtual_view.invalidate();
             }
         }
-        set_pane_status(ui, slot, "Loading folder...");
+        if target_is_focused {
+            ui.set_directory_loading(true);
+            reset_search_controls(ui, state);
+            update_selection_ui_for_slot(ui, state, slot, &[]);
+        }
+        set_pane_status(ui, state, slot, "Loading folder...");
     } else {
-        set_pane_status(ui, slot, "Refreshing folder...");
+        if target_is_focused {
+            ui.set_directory_loading(false);
+        }
+        set_pane_status(ui, state, slot, "Refreshing folder...");
     }
     sync_pane_view_for_slot(ui, state, bridge, slot);
     watch_current_directory(&current_dir, pane_id, generation, bridge);
@@ -1823,7 +1869,7 @@ fn sidebar_prefetch_paths(state: &mut AppState) -> Vec<PathBuf> {
 }
 
 fn push_sidebar_prefetch_path(state: &mut AppState, paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if path == state.panes.active().current_dir
+    if path == state.panes.focused().current_dir
         || state.directory_cache.contains_key(&path)
         || state.directory_prefetch_pending.contains(&path)
         || paths.iter().any(|existing| existing == &path)
@@ -1840,72 +1886,12 @@ fn load_directory_with_preservation(
     bridge: &AsyncBridge,
     preserve_view: bool,
 ) {
-    let DirectoryLoadPreparation {
-        pane_id,
-        current_dir,
-        generation,
-        cached_entries,
-        defer_view_restore,
-    } = {
+    let preparation = {
         let mut state = state.borrow_mut();
         prepare_directory_load(&mut state, preserve_view)
     };
-    debug_log(&format!(
-        "load_directory pane_id={pane_id} generation={generation} preserve_view={preserve_view} defer_view_restore={defer_view_restore} path={} cache_hit={}",
-        current_dir.display(),
-        cached_entries.is_some()
-    ));
-    set_current_location_ui(ui, &current_dir);
-    ui.set_search_loading(false);
-    sync_pane_slots_ui(ui);
-    if !preserve_view && !defer_view_restore {
-        restore_view_state(ui, state, &current_dir);
-    }
     save_current_settings(ui, state);
-    if preserve_view {
-        ui.set_directory_loading(false);
-        sync_pane_slots_ui(ui);
-        set_left_pane_status(ui, "Refreshing folder...");
-    } else if let Some(cached_entries) = cached_entries {
-        {
-            let mut state = state.borrow_mut();
-            let pane = state.panes.active_mut();
-            pane.set_entries(cached_entries);
-            pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
-            pane.view.virtual_view.invalidate();
-        }
-        reset_search_controls(ui);
-        apply_filter(ui, state, bridge, false);
-        ui.set_items_path(current_dir.display().to_string().into());
-        ui.set_directory_loading(false);
-        sync_pane_slots_ui(ui);
-        set_left_pane_status(ui, "Refreshing cached folder...");
-    } else {
-        ui.set_directory_loading(true);
-        sync_pane_slots_ui(ui);
-        reset_search_controls(ui);
-        update_selection_ui(ui, &[]);
-        set_left_pane_status(ui, "Loading folder...");
-    }
-    watch_current_directory(&current_dir, pane_id, generation, bridge);
-
-    let async_tx = bridge.tx.clone();
-    let notify_ui = bridge.ui_weak.clone();
-    bridge.handle.spawn(async move {
-        let result = read_entries_async(&current_dir).await;
-        send_async_event(
-            async_tx,
-            notify_ui,
-            AsyncEvent::DirectoryLoaded(DirectoryLoadResult {
-                pane_id,
-                generation,
-                path: current_dir,
-                preserve_view,
-                defer_view_restore,
-                result,
-            }),
-        );
-    });
+    load_prepared_pane_directory(ui, state, bridge, preparation, preserve_view);
 }
 
 fn sync_devices(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -2155,12 +2141,14 @@ fn apply_async_event(
             apply_recursive_search_result(ui, state, bridge, result);
         }
         AsyncEvent::OpenWithAppsLoaded(result) => {
-            open_with::apply_open_with_apps_result(ui, result)
+            open_with::apply_open_with_apps_result(ui, state, result)
         }
         AsyncEvent::OtherApplicationAppsLoaded(result) => {
             open_with::apply_other_application_apps_result(ui, state, result);
         }
-        AsyncEvent::DefaultAppSet(result) => open_with::apply_default_app_set_result(ui, result),
+        AsyncEvent::DefaultAppSet(result) => {
+            open_with::apply_default_app_set_result(ui, state, result)
+        }
         AsyncEvent::FileActionFinished(result) => {
             let applied = file_actions::apply_file_action_result(ui, state, result);
             if let Some(undo) = applied.undo {
@@ -2205,7 +2193,11 @@ fn apply_async_event(
         AsyncEvent::ExternalEditFinished(result) => {
             apply_external_edit_result(ui, state, bridge, result);
         }
-        AsyncEvent::ThumbnailLoaded { generation, load } => thumbnail_flush.push(generation, load),
+        AsyncEvent::ThumbnailLoaded {
+            pane_id,
+            generation,
+            load,
+        } => thumbnail_flush.push(pane_id, generation, load),
     }
 }
 
@@ -2242,144 +2234,7 @@ fn apply_directory_result(
     let Some(slot) = state.borrow().panes.slot_for_id(result.pane_id) else {
         return;
     };
-    if slot != 0 {
-        apply_pane_directory_result(ui, state, bridge, result, slot);
-        return;
-    }
-
-    match result.result {
-        Ok(entries) => {
-            debug_log(&format!(
-                "directory_loaded ok pane_id={} generation={} path={} entries={} preserve_view={}",
-                result.pane_id,
-                result.generation,
-                result.path.display(),
-                entries.len(),
-                result.preserve_view
-            ));
-            if result.defer_view_restore {
-                restore_view_state(ui, state, &result.path);
-            }
-            let unchanged = {
-                let mut state = state.borrow_mut();
-                if directory_entries_match(&state.panes.active().entries, &entries) {
-                    let cache_entries = state.panes.active().entries.clone();
-                    state.insert_directory_cache(result.path.clone(), cache_entries);
-                    true
-                } else {
-                    let cache_entries = {
-                        let pane = state.panes.active_mut();
-                        pane.set_entries(entries.into_iter().map(to_file_entry).collect());
-                        pane.search.visible_entries_have_locations =
-                            entries_have_locations(&pane.entries);
-                        pane.view.virtual_view.invalidate();
-                        pane.entries.clone()
-                    };
-                    state.insert_directory_cache(result.path.clone(), cache_entries);
-                    if !result.preserve_view {
-                        reset_search_state(&mut state);
-                        state.panes.active_mut().selection.clear();
-                    }
-                    false
-                }
-            };
-            if unchanged {
-                debug_log(&format!(
-                    "directory_loaded unchanged generation={} path={}",
-                    result.generation,
-                    result.path.display()
-                ));
-                set_left_directory_status_from_entries(ui, state);
-                ui.set_items_path(result.path.display().to_string().into());
-                ui.set_directory_loading(false);
-                sync_pane_slots_ui(ui);
-                return;
-            }
-            if !result.preserve_view {
-                reset_search_controls(ui);
-            }
-            apply_filter(ui, state, bridge, result.preserve_view);
-            ui.set_items_path(result.path.display().to_string().into());
-            ui.set_directory_loading(false);
-            sync_pane_slots_ui(ui);
-        }
-        Err(err) => {
-            debug_log(&format!(
-                "directory_loaded error generation={} path={} preserve_view={} error={err}",
-                result.generation,
-                result.path.display(),
-                result.preserve_view
-            ));
-            let recovery = {
-                let state_ref = state.borrow();
-                directory_load_error_recovery(
-                    result.preserve_view,
-                    &result.path,
-                    ui.get_items_path().as_str(),
-                    !state_ref.panes.active().entries.is_empty(),
-                )
-            };
-            match recovery {
-                DirectoryLoadErrorRecovery::KeepVisibleModel => {
-                    ui.set_directory_loading(false);
-                    sync_pane_slots_ui(ui);
-                    set_left_pane_status(ui, &format!("Cannot refresh directory: {err}"));
-                }
-                DirectoryLoadErrorRecovery::RollBackToItemsPath(path) => {
-                    {
-                        let mut state = state.borrow_mut();
-                        state.panes.active_mut().current_dir = path.clone();
-                    }
-                    set_current_location_ui(ui, &path);
-                    watch_current_directory(&path, result.pane_id, result.generation, bridge);
-                    save_current_settings(ui, state);
-                    sync_virtual_entries(ui, state, bridge, true);
-                    ui.set_directory_loading(false);
-                    sync_pane_slots_ui(ui);
-                    set_left_pane_status(
-                        ui,
-                        &format!(
-                            "Cannot read {}; stayed in {}: {err}",
-                            result.path.display(),
-                            path.display()
-                        ),
-                    );
-                }
-                DirectoryLoadErrorRecovery::ClearTarget => {
-                    {
-                        let mut state = state.borrow_mut();
-                        {
-                            let pane = state.panes.active_mut();
-                            pane.clear_entries();
-                            pane.search.visible_entry_indices = None;
-                            pane.search.visible_entries_have_locations = false;
-                            pane.view.virtual_view.invalidate();
-                        }
-                        if !result.preserve_view {
-                            reset_search_state(&mut state);
-                            state.panes.active_mut().selection.clear();
-                        }
-                    }
-                    ui.set_items_path(result.path.display().to_string().into());
-                    if !result.preserve_view {
-                        reset_search_controls(ui);
-                    }
-                    ui.set_entry_count(0);
-                    ui.set_virtual_start_index(0);
-                    ui.set_virtual_start_column(0);
-                    ui.set_virtual_entries(new_file_entries_model(Vec::<FileEntry>::new()));
-                    ui.set_directory_loading(false);
-                    sync_pane_slots_ui(ui);
-                    if result.preserve_view {
-                        retain_visible_selection(ui, state, &[]);
-                    } else {
-                        update_selection_ui(ui, &[]);
-                    }
-                    set_left_pane_status(ui, &format!("Cannot read directory: {err}"));
-                }
-            }
-        }
-    }
+    apply_pane_directory_result(ui, state, bridge, result, slot);
 }
 
 fn apply_pane_directory_result(
@@ -2389,6 +2244,7 @@ fn apply_pane_directory_result(
     result: DirectoryLoadResult,
     slot: i32,
 ) {
+    let target_is_focused = ui.get_focused_pane() == slot;
     match result.result {
         Ok(entries) => {
             debug_log(&format!(
@@ -2404,6 +2260,7 @@ fn apply_pane_directory_result(
                 restore_pane_view_state(ui, state, slot, &result.path);
             }
             let mut entries = Some(entries);
+            let mut unchanged = false;
             {
                 let mut state = state.borrow_mut();
                 let Some(pane) = state
@@ -2416,6 +2273,7 @@ fn apply_pane_directory_result(
                 if directory_entries_match(&pane.entries, incoming) {
                     let cache_entries = pane.entries.clone();
                     state.insert_directory_cache(result.path.clone(), cache_entries);
+                    unchanged = true;
                 } else {
                     pane.set_entries(
                         entries
@@ -2436,6 +2294,20 @@ fn apply_pane_directory_result(
                     state.insert_directory_cache(result.path.clone(), cache_entries);
                 }
             }
+            if unchanged {
+                debug_log(&format!(
+                    "directory_loaded unchanged slot={slot} generation={} path={}",
+                    result.generation,
+                    result.path.display()
+                ));
+            }
+            if target_is_focused {
+                if !result.preserve_view {
+                    reset_search_controls(ui, state);
+                }
+                ui.set_items_path(result.path.display().to_string().into());
+                ui.set_directory_loading(false);
+            }
             sync_pane_view_for_slot(ui, state, bridge, slot);
             set_directory_status_from_entries(ui, state, result.pane_id);
         }
@@ -2448,8 +2320,11 @@ fn apply_pane_directory_result(
                 result.path.display(),
                 result.preserve_view
             ));
+            if target_is_focused {
+                ui.set_directory_loading(false);
+            }
             sync_pane_view_for_slot(ui, state, bridge, slot);
-            set_pane_status(ui, slot, &format!("Cannot read directory: {err}"));
+            set_pane_status(ui, state, slot, &format!("Cannot read directory: {err}"));
         }
     }
 }
@@ -2463,7 +2338,7 @@ fn apply_directory_prefetch_result(
     state.directory_prefetch_pending.remove(&path);
     match result {
         Ok(entries) => {
-            if state.panes.active().current_dir == path {
+            if state.panes.focused().current_dir == path {
                 debug_log(&format!(
                     "directory_prefetched ignored current path={}",
                     path.display()
@@ -2500,7 +2375,7 @@ fn open_file_for_target_async(
             .pane_mut_for_target(target)
             .map(|pane| (pane.id, pane.open_generation.next()))
     }) else {
-        set_status(ui, "No split pane target is available");
+        set_status(ui, state, "No split pane target is available");
         return;
     };
     let label = path
@@ -2643,7 +2518,7 @@ fn submit_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBr
     {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
-        let pane = state.panes.active_mut();
+        let pane = state.panes.focused_mut();
         pane.search.query = query.clone();
         pane.search_generation.next();
     }
@@ -2666,12 +2541,12 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
     let (query, progress) = {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
-        state.panes.active_mut().search_generation.next();
-        let query = state.panes.active().search.query.clone();
-        let progress = state.panes.active().search_progress;
-        let current_dir = state.panes.active().current_dir.clone();
+        state.panes.focused_mut().search_generation.next();
+        let query = state.panes.focused().search.query.clone();
+        let progress = state.panes.focused().search_progress;
+        let current_dir = state.panes.focused().current_dir.clone();
         if let Some(entries) = state.cached_directory_entries(&current_dir) {
-            let pane = state.panes.active_mut();
+            let pane = state.panes.focused_mut();
             pane.set_entries(entries);
             pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
             pane.view.virtual_view.invalidate();
@@ -2682,10 +2557,11 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
     ui.set_search_loading(false);
     apply_filter(ui, state, bridge, true);
     if query.is_empty() {
-        set_status(ui, "Recursive search cancelled");
+        set_status(ui, state, "Recursive search cancelled");
     } else {
         set_status(
             ui,
+            state,
             &recursive_search_cancelled_status(
                 &query,
                 progress.directories_scanned,
@@ -2710,8 +2586,8 @@ fn update_search_filters(
 
     apply_filter(ui, state, bridge, true);
     if ui.get_search_loading() {
-        let query = state.borrow().panes.active().search.query.clone();
-        set_status(ui, &recursive_search_status(&query));
+        let query = state.borrow().panes.focused().search.query.clone();
+        set_status(ui, state, &recursive_search_status(&query));
     }
 }
 
@@ -2724,27 +2600,28 @@ fn start_recursive_search(
     let (root, generation, cancel) = {
         let mut state = state.borrow_mut();
         cancel_active_search(&mut state);
-        let generation = state.panes.active_mut().search_generation.next();
+        let generation = state.panes.focused_mut().search_generation.next();
         let cancel = Arc::new(AtomicBool::new(false));
-        let pane = state.panes.active_mut();
+        let pane = state.panes.focused_mut();
         pane.search_cancel = Some(cancel.clone());
         pane.search_progress = search::SearchProgress::default();
-        (state.panes.active().current_dir.clone(), generation, cancel)
+        (
+            state.panes.focused().current_dir.clone(),
+            generation,
+            cancel,
+        )
     };
 
     ui.set_search_loading(true);
-    set_status(ui, &recursive_search_status(&query));
+    set_status(ui, state, &recursive_search_status(&query));
     {
         let mut state = state.borrow_mut();
-        let pane = state.panes.active_mut();
+        let pane = state.panes.focused_mut();
         pane.search.visible_entry_indices = None;
         pane.view.virtual_view.invalidate();
     }
     ui.set_entry_count(0);
-    ui.set_virtual_start_index(0);
-    ui.set_virtual_start_column(0);
-    ui.set_virtual_entries(new_file_entries_model(Vec::<FileEntry>::new()));
-    update_selection_ui(ui, &[]);
+    update_selection_ui(ui, state, &[]);
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -2789,20 +2666,21 @@ fn apply_recursive_search_progress(
         let state = state.borrow();
         let stale = !state
             .panes
-            .active()
+            .focused()
             .search_generation
             .is_current(progress.generation)
-            || state.panes.active().current_dir != progress.root
-            || state.panes.active().search.query != progress.query
+            || state.panes.focused().current_dir != progress.root
+            || state.panes.focused().search.query != progress.query
             || !ui.get_search_loading();
         if stale {
             return;
         }
     }
-    state.borrow_mut().panes.active_mut().search_progress = progress.progress;
+    state.borrow_mut().panes.focused_mut().search_progress = progress.progress;
 
     set_status(
         ui,
+        state,
         &recursive_search_progress_status(
             &progress.query,
             progress.progress.directories_scanned,
@@ -2821,15 +2699,15 @@ fn apply_recursive_search_result(
         let mut state = state.borrow_mut();
         let stale = !state
             .panes
-            .active()
+            .focused()
             .search_generation
             .is_current(result.generation)
-            || state.panes.active().current_dir != result.root
-            || state.panes.active().search.query != result.query;
+            || state.panes.focused().current_dir != result.root
+            || state.panes.focused().search.query != result.query;
         if stale {
             return;
         }
-        state.panes.active_mut().search_cancel = None;
+        state.panes.focused_mut().search_cancel = None;
     }
     ui.set_search_loading(false);
 
@@ -2839,27 +2717,33 @@ fn apply_recursive_search_result(
             let size_px = thumbnail_size_px(ui);
             {
                 let state_ref = state.borrow();
-                decorate_entries_with_cached_thumbnails(&state_ref, &mut entries, size_px);
+                decorate_entries_with_cached_thumbnails_for_pane(
+                    &state_ref,
+                    state_ref.panes.focused().id,
+                    &mut entries,
+                    size_px,
+                );
             }
             let total = entries.len();
             {
                 let mut state = state.borrow_mut();
-                let pane = state.panes.active_mut();
+                let pane = state.panes.focused_mut();
                 pane.set_entries(entries);
                 pane.search.visible_entries_have_locations = entries_have_locations(&pane.entries);
                 pane.view.virtual_view.invalidate();
             }
             apply_filter(ui, state, bridge, true);
             let visible = filtered_entry_count(&state.borrow());
-            set_status(ui, &recursive_search_finished_status(visible, total));
+            set_status(ui, state, &recursive_search_finished_status(visible, total));
         }
         Err(err) if err.kind() == io::ErrorKind::Interrupted => {
             set_status(
                 ui,
+                state,
                 &format!("Recursive search for '{}' cancelled", result.query),
             );
         }
-        Err(err) => set_status(ui, &format!("Recursive search failed: {err}")),
+        Err(err) => set_status(ui, state, &format!("Recursive search failed: {err}")),
     }
 }
 
@@ -2991,7 +2875,7 @@ fn start_file_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Async
     let undo = state.borrow_mut().last_undo.take();
     sync_undo_ui(ui, state);
     let Some(undo) = undo else {
-        set_status(ui, "Nothing to undo");
+        set_status(ui, state, "Nothing to undo");
         return;
     };
 
@@ -3130,7 +3014,7 @@ fn apply_device_mount_result(
             clear_device_error(state, &result.device_path);
             sync_devices(ui, state);
             refresh_devices_async(state, bridge);
-            set_status(ui, &format!("Mounted {}", result.device_path));
+            set_status(ui, state, &format!("Mounted {}", result.device_path));
             navigate_to(ui, state, bridge, mount_point);
         }
         Ok(mount_point) => {
@@ -3139,6 +3023,7 @@ fn apply_device_mount_result(
             refresh_devices_async(state, bridge);
             set_status(
                 ui,
+                state,
                 &format!(
                     "Mounted {}, but mount point is not readable: {}",
                     result.device_path,
@@ -3151,7 +3036,7 @@ fn apply_device_mount_result(
             set_device_error(state, &result.device_path, &status);
             sync_devices(ui, state);
             refresh_devices_async(state, bridge);
-            set_status(ui, &status);
+            set_status(ui, state, &status);
         }
     }
 }
@@ -3179,6 +3064,7 @@ fn apply_device_action_result(
             }
             set_status(
                 ui,
+                state,
                 &format!(
                     "{} complete: {}",
                     title_case_action(&result.action),
@@ -3191,7 +3077,7 @@ fn apply_device_action_result(
             set_device_error(state, &result.device_path, &status);
             sync_devices(ui, state);
             refresh_devices_async(state, bridge);
-            set_status(ui, &status);
+            set_status(ui, state, &status);
         }
     }
 }
@@ -3286,9 +3172,9 @@ fn start_external_edit_resolution(
     operation: &str,
 ) {
     let pane_id = {
-        let state = state.borrow();
-        let Some(pane_id) = pane_id_for_slot(&state, slot) else {
-            set_status(ui, "No split pane target is available");
+        let state_ref = state.borrow();
+        let Some(pane_id) = pane_id_for_slot(&state_ref, slot) else {
+            set_status(ui, state, "No split pane target is available");
             return;
         };
         pane_id
@@ -3392,28 +3278,14 @@ fn apply_external_edit_result(
 }
 
 fn sync_external_edit_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let (left_status, inactive_status) = {
-        let state = state.borrow();
-        let left_status =
-            external_edit_status_for_pane(&state.external_edits, state.panes.active().id);
-        let inactive_status = state
-            .panes
-            .inactive()
-            .map(|pane| external_edit_status_for_pane(&state.external_edits, pane.id))
-            .unwrap_or_default();
-        (left_status, inactive_status)
-    };
-    ui.set_left_pane_external_edit_active(!left_status.is_empty());
-    ui.set_left_pane_external_edit_status(left_status.into());
-    ui.set_inactive_pane_external_edit_active(!inactive_status.is_empty());
-    ui.set_inactive_pane_external_edit_status(inactive_status.into());
-    sync_pane_slots_ui(ui);
+    sync_pane_slots_ui(ui, state);
 }
 
 fn pane_id_for_slot(state: &AppState, slot: i32) -> Option<u64> {
     state.panes.pane_for_slot(slot).map(|pane| pane.id)
 }
 
+#[cfg(test)]
 fn external_edit_status_for_pane(edits: &[PaneExternalEdit], pane_id: u64) -> String {
     let mut pane_edits = edits.iter().filter(|edit| edit.pane_id == pane_id);
     let Some(first) = pane_edits.next() else {
@@ -3445,13 +3317,25 @@ fn display_location_name(path: &Path) -> String {
     }
 }
 
-fn sync_virtual_entries(
+pub(crate) fn sync_virtual_entries_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
+    slot: i32,
     schedule_thumbnails: bool,
 ) {
-    sync_virtual_entries_with_count(ui, state, bridge, schedule_thumbnails, None);
+    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, schedule_thumbnails, None);
+}
+
+fn pane_slot_width(ui: &AppWindow, main_width: f32, slot: i32) -> f32 {
+    if !ui.get_split_view_open() || slot <= 0 {
+        return active_main_pane_width(
+            main_width,
+            ui.get_split_view_open(),
+            ui.get_split_pane_ratio(),
+        );
+    }
+    inactive_main_pane_width(main_width, true, ui.get_split_pane_ratio())
 }
 
 fn sync_virtual_entries_with_count(
@@ -3461,16 +3345,30 @@ fn sync_virtual_entries_with_count(
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
 ) {
+    let slot = state.borrow().panes.focused_slot();
+    sync_virtual_entries_for_slot_with_count(
+        ui,
+        state,
+        bridge,
+        slot,
+        schedule_thumbnails,
+        visible_count_override,
+    );
+}
+
+fn sync_virtual_entries_for_slot_with_count(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+    schedule_thumbnails: bool,
+    visible_count_override: Option<usize>,
+) {
     let size_px = thumbnail_size_px(ui);
-    let layout = MainGridLayout::from_ui(ui);
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
-    let viewport_width = active_main_pane_width(
-        main_width,
-        ui.get_split_view_open(),
-        ui.get_split_pane_ratio(),
-    );
-    let requested_viewport_x = ui.get_main_viewport_x();
+    let viewport_width = pane_slot_width(ui, main_width, slot);
+    let mut layout = MainGridLayout::from_ui_for_pane_width(ui, viewport_width);
     let Some((pane_id, generation, input)) = ({
         let mut state_ref = state.borrow_mut();
         let chooser_patterns = state_ref
@@ -3478,9 +3376,12 @@ fn sync_virtual_entries_with_count(
             .get(state_ref.chooser_filter_index)
             .map(|filter| filter.patterns.clone())
             .unwrap_or_default();
-        let pane = state_ref.panes.active_mut();
+        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
         let generation = pane.view.virtual_generation.next();
-        pane.view.viewport_x = requested_viewport_x;
+        let requested_viewport_x = pane.view.viewport_x;
+        layout.viewport_x = requested_viewport_x;
         let query = pane.search.query.to_ascii_lowercase();
         Some((
             pane.id,
@@ -3538,14 +3439,13 @@ fn apply_virtual_view_result(
     result: VirtualViewResult,
 ) {
     let update = result.update;
+    let slot;
     {
         let mut state_ref = state.borrow_mut();
-        let Some(slot) = state_ref.panes.slot_for_id(result.pane_id) else {
-            return;
+        slot = match state_ref.panes.slot_for_id(result.pane_id) {
+            Some(s) => s,
+            None => return,
         };
-        if slot != 0 {
-            return;
-        }
         let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
             return;
         };
@@ -3562,11 +3462,12 @@ fn apply_virtual_view_result(
         }
     }
 
-    set_pane_viewport_ui_if_clamped(ui, 0, update.viewport_x, update.viewport_clamped);
+    set_pane_viewport_ui_if_clamped(ui, slot, update.viewport_x, update.viewport_clamped, state);
+    let target_is_focused = state.borrow().panes.focused_slot() == slot;
     if !update.rebuild_model {
-        if ui.get_entry_count() != update.entry_count as i32 {
+        if target_is_focused && ui.get_entry_count() != update.entry_count as i32 {
             ui.set_entry_count(update.entry_count as i32);
-            sync_pane_slot_ui(ui, 0);
+            sync_pane_slot_ui(ui, state, slot);
         }
         return;
     }
@@ -3578,7 +3479,15 @@ fn apply_virtual_view_result(
         .collect::<Vec<_>>();
     {
         let state_ref = state.borrow();
-        decorate_entries_with_cached_thumbnails(&state_ref, &mut entries, result.thumbnail_size_px);
+        if let Some(pane) = state_ref.panes.pane_by_id(result.pane_id) {
+            annotate_selection_state(&mut entries, &pane.selection.paths);
+        }
+        decorate_entries_with_cached_thumbnails_for_pane(
+            &state_ref,
+            result.pane_id,
+            &mut entries,
+            result.thumbnail_size_px,
+        );
     }
 
     if result.schedule_thumbnails {
@@ -3588,49 +3497,34 @@ fn apply_virtual_view_result(
             ui,
             state,
             bridge,
+            result.pane_id,
             &thumbnail_entries,
             result.thumbnail_size_px,
             false,
         );
     }
-    set_main_virtual_entries_ui(ui, update.range.start, entries);
-    ui.set_virtual_start_index(update.range.start as i32);
-    ui.set_virtual_start_column(update.start_column as i32);
-    ui.set_entry_count(update.entry_count as i32);
-    sync_pane_slot_ui(ui, 0);
-}
-
-fn set_main_virtual_entries_ui(ui: &AppWindow, start_index: usize, entries: Vec<FileEntry>) {
-    let current = ui.get_virtual_entries();
-    let old_start = ui.get_virtual_start_index().max(0) as usize;
-    if let Some(model) = update_file_entries_model(&current, old_start, start_index, entries) {
-        ui.set_virtual_entries(model);
+    set_pane_virtual_entries(
+        state,
+        slot,
+        update.range.start,
+        update.start_column,
+        entries,
+    );
+    if target_is_focused {
+        ui.set_entry_count(update.entry_count as i32);
     }
+    sync_pane_slot_ui(ui, state, slot);
 }
 
-fn set_left_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let (query, filters_active, total, summary) = {
-        let state_ref = state.borrow();
-        (
-            state_ref.panes.active().search.query.to_ascii_lowercase(),
-            search_filters_active(&state_ref),
-            state_ref.panes.active().entries.len(),
-            filtered_entry_summary(&state_ref, false),
-        )
-    };
-    if query.is_empty() && !filters_active {
-        set_left_pane_status(
-            ui,
-            &format!("{} folders, {} files", summary.folders, summary.files),
-        );
-    } else {
-        set_left_pane_status(
-            ui,
-            &format!(
-                "{} of {total} items ({} folders, {} files)",
-                summary.count, summary.folders, summary.files
-            ),
-        );
+fn set_pane_virtual_entries(
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    start_index: usize,
+    start_column: usize,
+    entries: Vec<FileEntry>,
+) {
+    if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
+        update_pane_file_entries_model(&mut pane.view, start_index, start_column, entries);
     }
 }
 
@@ -3643,11 +3537,11 @@ fn apply_filter(
     let (query, filters_active, total, summary) = {
         let mut state_ref = state.borrow_mut();
         let summary = rebuild_visible_entry_index(&mut state_ref, preserve_selection);
-        state_ref.panes.active_mut().view.virtual_view.invalidate();
+        state_ref.panes.focused_mut().view.virtual_view.invalidate();
         (
-            state_ref.panes.active().search.query.to_ascii_lowercase(),
+            state_ref.panes.focused().search.query.to_ascii_lowercase(),
             search_filters_active(&state_ref),
-            state_ref.panes.active().entries.len(),
+            state_ref.panes.focused().entries.len(),
             summary,
         )
     };
@@ -3661,13 +3555,15 @@ fn apply_filter(
     }
 
     if query.is_empty() && !filters_active {
-        set_left_pane_status(
+        set_focused_pane_status(
             ui,
+            state,
             &format!("{} folders, {} files", summary.folders, summary.files),
         );
     } else {
-        set_left_pane_status(
+        set_focused_pane_status(
             ui,
+            state,
             &format!(
                 "{} of {total} items ({} folders, {} files)",
                 summary.count, summary.folders, summary.files
@@ -3683,7 +3579,7 @@ fn retain_visible_selection(
 ) {
     let selected_paths = {
         let mut state = state.borrow_mut();
-        let pane = state.panes.active_mut();
+        let pane = state.panes.focused_mut();
         pane.selection.paths = retained_visible_paths(&pane.selection.paths, visible_paths);
         if pane
             .selection
@@ -3695,7 +3591,12 @@ fn retain_visible_selection(
         }
         pane.selection.paths.clone()
     };
-    update_selection_ui_for_slot(ui, 0, &selected_paths);
+    update_selection_ui_for_slot(
+        ui,
+        state,
+        state.borrow().panes.focused_slot(),
+        &selected_paths,
+    );
 }
 
 fn select_path_for_slot(
@@ -3719,11 +3620,7 @@ fn select_path_for_slot(
                 .as_deref()
                 .or_else(|| pane.selection.paths.last().map(String::as_str))
                 .unwrap_or(path);
-            let range_paths = if slot == 0 {
-                selection_range_paths_filtered(&state, anchor, path)
-            } else {
-                selection_range_paths_in_entries(&pane.entries, anchor, path)
-            };
+            let range_paths = selection_range_paths_filtered_for_slot(&state, slot, anchor, path);
             let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
                 return;
             };
@@ -3767,57 +3664,14 @@ fn select_path_for_slot(
             .unwrap_or_default()
     };
 
-    update_selection_ui_for_slot(ui, slot, &selected_paths);
-}
-
-fn selection_range_paths_in_entries(
-    entries: &[FileEntry],
-    anchor: &str,
-    target: &str,
-) -> Vec<String> {
-    if anchor == target {
-        return vec![target.to_string()];
-    }
-
-    let Some(anchor_index) = entries
-        .iter()
-        .position(|entry| entry.path.as_str() == anchor)
-    else {
-        return vec![target.to_string()];
-    };
-    let Some(target_index) = entries
-        .iter()
-        .position(|entry| entry.path.as_str() == target)
-    else {
-        return vec![target.to_string()];
-    };
-    let start = anchor_index.min(target_index);
-    let end = anchor_index.max(target_index);
-    entries[start..=end]
-        .iter()
-        .map(|entry| entry.path.to_string())
-        .collect()
+    update_selection_ui_for_slot(ui, state, slot, &selected_paths);
 }
 
 fn select_all_visible(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let slot = { state.borrow().panes.focused_slot() };
-    let selected_paths = if slot == 0 {
-        {
-            let state = state.borrow();
-            filtered_entry_paths(&state)
-        }
-    } else {
+    let selected_paths = {
         let state = state.borrow();
-        state
-            .panes
-            .pane_for_slot(slot)
-            .map(|pane| {
-                pane.entries
-                    .iter()
-                    .map(|entry| entry.path.to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
+        filtered_entry_paths_for_slot(&state, slot)
     };
     {
         let mut state = state.borrow_mut();
@@ -3826,7 +3680,7 @@ fn select_all_visible(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             pane.selection.anchor = selected_paths.last().cloned();
         }
     }
-    update_selection_ui_for_slot(ui, slot, &selected_paths);
+    update_selection_ui_for_slot(ui, state, slot, &selected_paths);
 }
 
 fn select_rect_for_slot(
@@ -3838,14 +3692,7 @@ fn select_rect_for_slot(
 ) {
     let selected_paths = {
         let mut state = state.borrow_mut();
-        let selected = if slot == 0 {
-            selection_rect_paths_filtered(&state, rect)
-        } else {
-            let Some(pane) = state.panes.pane_for_slot(slot) else {
-                return;
-            };
-            selection_rect_paths(&pane.entries, rect)
-        };
+        let selected = selection_rect_paths_filtered_for_slot(&state, slot, rect);
         let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
             return;
         };
@@ -3857,38 +3704,42 @@ fn select_rect_for_slot(
         pane.selection.anchor = pane.selection.paths.last().cloned();
         pane.selection.paths.clone()
     };
-    update_selection_ui_for_slot(ui, slot, &selected_paths);
+    update_selection_ui_for_slot(ui, state, slot, &selected_paths);
 }
 
 fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let slot = { state.borrow().panes.focused_slot() };
-    let mut state = state.borrow_mut();
-    if let Some(pane) = state.panes.pane_mut_for_slot(slot) {
+    let mut state_mut = state.borrow_mut();
+    if let Some(pane) = state_mut.panes.pane_mut_for_slot(slot) {
         pane.selection.clear();
     }
-    drop(state);
-    update_selection_ui_for_slot(ui, slot, &[]);
+    drop(state_mut);
+    update_selection_ui_for_slot(ui, state, slot, &[]);
 }
 
 fn clear_active_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let mut state = state.borrow_mut();
-    state.panes.active_mut().selection.clear();
-    drop(state);
-    update_selection_ui_for_slot(ui, 0, &[]);
+    let mut state_mut = state.borrow_mut();
+    state_mut.panes.focused_mut().selection.clear();
+    drop(state_mut);
+    update_selection_ui_for_slot(ui, state, state.borrow().panes.focused_slot(), &[]);
 }
 
 fn schedule_visible_thumbnails(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
+    pane_id: u64,
     entries: &[&FileEntry],
     size_px: u32,
     announce: bool,
 ) {
     let (generation, paths) = {
         let mut state = state.borrow_mut();
-        let generation = state.panes.active().thumbnail_generation.current();
-        let paths = thumbnail_schedule_batch(&mut state, entries, size_px);
+        let Some(pane) = state.panes.pane_by_id(pane_id) else {
+            return;
+        };
+        let generation = pane.thumbnail_generation.current();
+        let paths = thumbnail_schedule_batch_for_pane(&mut state, pane_id, entries, size_px);
 
         (generation, paths)
     };
@@ -3898,54 +3749,74 @@ fn schedule_visible_thumbnails(
     }
 
     if announce {
-        set_status(ui, "Loading thumbnails...");
+        set_status(ui, state, "Loading thumbnails...");
     }
-    for path in paths {
-        let async_tx = bridge.tx.clone();
-        let notify_ui = bridge.ui_weak.clone();
-        bridge.handle.spawn(async move {
-            let fallback_path = path.clone();
-            let load = match tokio::task::spawn_blocking(move || {
-                thumbnails::load_thumbnail(path, size_px)
-            })
-            .await
-            {
-                Ok(load) => load,
-                Err(err) => thumbnails::ThumbnailLoad {
-                    key: thumbnails::fallback_key(&fallback_path, size_px),
-                    path: fallback_path,
-                    cache_paths: None,
-                    data: Err(io::Error::other(format!("thumbnail task failed: {err}"))),
-                },
-            };
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let fallback_paths = paths.clone();
+        let loads = match tokio::task::spawn_blocking(move || {
+            paths
+                .into_iter()
+                .map(|path| thumbnails::load_thumbnail(path, size_px))
+                .collect::<Vec<_>>()
+        })
+        .await
+        {
+            Ok(loads) => loads,
+            Err(err) => {
+                let message = format!("thumbnail task failed: {err}");
+                fallback_paths
+                    .into_iter()
+                    .map(|path| thumbnails::ThumbnailLoad {
+                        key: thumbnails::fallback_key(&path, size_px),
+                        path,
+                        cache_paths: None,
+                        data: Err(io::Error::other(message.clone())),
+                    })
+                    .collect()
+            }
+        };
+        for load in loads {
             send_async_event(
-                async_tx,
-                notify_ui,
-                AsyncEvent::ThumbnailLoaded { generation, load },
+                async_tx.clone(),
+                notify_ui.clone(),
+                AsyncEvent::ThumbnailLoaded {
+                    pane_id,
+                    generation,
+                    load,
+                },
             );
-        });
-    }
+        }
+    });
 }
 
 fn flush_thumbnail_results(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
-    pending: &Rc<RefCell<VecDeque<(u64, thumbnails::ThumbnailLoad)>>>,
+    pending: &Rc<RefCell<VecDeque<(u64, u64, thumbnails::ThumbnailLoad)>>>,
 ) {
-    let should_refresh_virtual = {
+    let refresh_pane_ids = {
         let mut state = state.borrow_mut();
-        let mut should_refresh_virtual = false;
+        let mut refresh_pane_ids = Vec::new();
         let mut pending = pending.borrow_mut();
-        while let Some((generation, load)) = pending.pop_front() {
+        while let Some((pane_id, generation, load)) = pending.pop_front() {
             let path_text = load.path.display().to_string();
-            should_refresh_virtual |=
-                apply_thumbnail_load_to_state(&mut state, generation, &path_text, load);
+            if apply_thumbnail_load_to_state_for_pane(
+                &mut state, pane_id, generation, &path_text, load,
+            ) && !refresh_pane_ids.contains(&pane_id)
+            {
+                refresh_pane_ids.push(pane_id);
+            }
         }
-        should_refresh_virtual
+        refresh_pane_ids
     };
-    if should_refresh_virtual {
-        sync_virtual_entries(ui, state, bridge, false);
+    for pane_id in refresh_pane_ids {
+        let slot = { state.borrow().panes.slot_for_id(pane_id) };
+        if let Some(slot) = slot {
+            sync_virtual_entries_for_slot(ui, state, bridge, slot, false);
+        }
     }
 }
 
@@ -3959,8 +3830,9 @@ fn thumbnail_size_px(ui: &AppWindow) -> u32 {
     }
 }
 
-fn update_selection_ui(ui: &AppWindow, selected_paths: &[String]) {
-    update_selection_ui_for_slot(ui, 0, selected_paths);
+fn update_selection_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, selected_paths: &[String]) {
+    let slot = state.borrow().panes.focused_slot();
+    update_selection_ui_for_slot(ui, state, slot, selected_paths);
 }
 
 fn selection_status_text(selected_paths: &[String]) -> SharedString {
@@ -3995,22 +3867,7 @@ fn sync_pane_viewport_for_slot(
     bridge: &AsyncBridge,
     slot: i32,
 ) {
-    if pane_viewport_x_from_ui(ui, slot).is_none() {
-        return;
-    }
-    if slot == 0 {
-        sync_virtual_entries(ui, state, bridge, true);
-    } else {
-        {
-            let mut state = state.borrow_mut();
-            if let Some(viewport_x) = pane_viewport_x_from_ui(ui, slot)
-                && let Some(pane) = state.panes.pane_mut_for_slot(slot)
-            {
-                pane.view.viewport_x = viewport_x;
-            }
-        }
-        sync_pane_slot_preview_viewport_ui(ui, state, slot);
-    }
+    sync_virtual_entries_for_slot(ui, state, bridge, slot, true);
 }
 
 fn sync_pane_view_for_slot(
@@ -4019,22 +3876,7 @@ fn sync_pane_view_for_slot(
     bridge: &AsyncBridge,
     slot: i32,
 ) {
-    if pane_viewport_x_from_ui(ui, slot).is_none() {
-        return;
-    }
-    if slot == 0 {
-        sync_virtual_entries(ui, state, bridge, true);
-    } else {
-        {
-            let mut state = state.borrow_mut();
-            if let Some(viewport_x) = pane_viewport_x_from_ui(ui, slot)
-                && let Some(pane) = state.panes.pane_mut_for_slot(slot)
-            {
-                pane.view.viewport_x = viewport_x;
-            }
-        }
-        sync_pane_slot_preview_ui(ui, state, slot);
-    }
+    sync_virtual_entries_for_slot(ui, state, bridge, slot, true);
 }
 
 fn focus_pane_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
@@ -4058,12 +3900,8 @@ fn focus_current_ui_pane_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>) -> 
     state.borrow().panes.focused_slot()
 }
 
-fn reset_pane_path_input_for_slot(ui: &AppWindow, slot: i32) {
-    match slot {
-        0 => ui.set_left_pane_path_input_text(ui.get_left_pane_path()),
-        1 => ui.set_inactive_pane_path_input_text(ui.get_inactive_pane_path()),
-        _ => {}
-    }
+fn reset_pane_path_input_for_slot(_ui: &AppWindow, _slot: i32) {
+    // path input sync happens via pane_path_text_changed callback now
 }
 
 fn prepare_pane_transfer_for_slot(
@@ -4099,34 +3937,46 @@ fn pane_drop_allowed_for_slot(
     pane_drop_allowed(ui, state, slot, x, y, source)
 }
 
-fn update_selection_ui_for_slot(ui: &AppWindow, slot: i32, selected_paths: &[String]) {
+fn update_selection_ui_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    selected_paths: &[String],
+) {
     let selected_path = selected_paths
         .last()
         .map_or_else(SharedString::new, |path| path.as_str().into());
     let selected_count = selected_paths.len() as i32;
     let selected_status = selection_status_text(selected_paths);
 
-    match slot {
-        0 => {
-            ui.set_left_pane_selected_count(selected_count);
-            ui.set_left_pane_selected_status(selected_status.clone());
-        }
-        1 => {
-            ui.set_inactive_pane_selected_count(selected_count);
-            ui.set_inactive_pane_selected_status(selected_status.clone());
-        }
-        _ => {}
-    }
+    update_virtual_selection_for_slot(state, slot, selected_paths);
+    sync_pane_slot_ui(ui, state, slot);
 
-    let selected_slot_is_focused =
-        (!ui.get_split_view_open() && slot == 0) || ui.get_focused_pane() == slot;
+    let selected_slot_is_focused = ui.get_focused_pane() == slot;
     if selected_slot_is_focused {
         ui.set_selected_path(selected_path);
         ui.set_selected_count(selected_count);
         ui.set_selected_status(selected_status);
     }
     ui.set_selection_revision(ui.get_selection_revision() + 1);
-    sync_pane_slots_ui(ui);
+    sync_pane_slots_ui(ui, state);
+}
+
+fn update_virtual_selection_for_slot(
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    selected_paths: &[String],
+) {
+    let model = {
+        state
+            .borrow()
+            .panes
+            .pane_for_slot(slot)
+            .map(|pane| pane.view.virtual_entries.clone())
+    };
+    if let Some(model) = model {
+        update_file_entries_model_selection(&model, selected_paths);
+    }
 }
 
 fn navigate_pane_to_slot(
@@ -4142,7 +3992,7 @@ fn navigate_pane_to_slot(
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             drop(state_ref);
             sync_navigation_ui(ui, state);
-            set_status(ui, "No pane target is available");
+            set_status(ui, state, "No pane target is available");
             return;
         };
 
@@ -4229,17 +4079,12 @@ fn load_current_directory_for_slot(
     slot: i32,
     preserve_view: bool,
 ) {
-    if slot == 0 {
-        load_directory_with_preservation(ui, state, bridge, preserve_view);
-        return;
-    }
-
     let Some(preparation) = ({
         let mut state = state.borrow_mut();
         prepare_directory_load_for_target(&mut state, PaneTarget::Slot(slot), preserve_view)
     }) else {
         sync_navigation_ui(ui, state);
-        set_status(ui, "No pane target is available");
+        set_status(ui, state, "No pane target is available");
         return;
     };
     load_prepared_pane_directory(ui, state, bridge, preparation, preserve_view);
@@ -4251,7 +4096,7 @@ fn go_parent(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge
         state
             .panes
             .pane_for_target(PaneTarget::Focused)
-            .unwrap_or(&state.panes.active())
+            .unwrap_or(&state.panes.focused())
             .current_dir
             .clone()
     };
@@ -4288,7 +4133,7 @@ fn go_pane_history_slot(
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             drop(state_ref);
             sync_navigation_ui(ui, state);
-            set_status(ui, "No pane target is available");
+            set_status(ui, state, "No pane target is available");
             return;
         };
         let action = match direction {
@@ -4311,8 +4156,8 @@ fn go_pane_history_slot(
             drop(state_ref);
             sync_navigation_ui(ui, state);
             match direction {
-                HistoryDirection::Back => set_status(ui, "No previous location"),
-                HistoryDirection::Forward => set_status(ui, "No next location"),
+                HistoryDirection::Back => set_status(ui, state, "No previous location"),
+                HistoryDirection::Forward => set_status(ui, state, "No next location"),
             }
             return;
         };
@@ -4346,9 +4191,9 @@ fn open_path_for_slot_impl(
     bridge: &AsyncBridge,
 ) {
     let (path, is_known_dir) = {
-        let state = state.borrow();
-        let Some(pane) = state.panes.pane_for_slot(slot) else {
-            set_status(ui, "No pane target is available");
+        let state_ref = state.borrow();
+        let Some(pane) = state_ref.panes.pane_for_slot(slot) else {
+            set_status(ui, state, "No pane target is available");
             return;
         };
         let entry = pane
@@ -4399,13 +4244,13 @@ fn chooser_accept(
             if paths.len() == save_files.len() {
                 output_chooser_paths_and_exit(paths, chooser_output_metadata(&state_ref));
             } else {
-                set_status(ui, "Cannot save: one or more file names are invalid");
+                set_status(ui, state, "Cannot save: one or more file names are invalid");
             }
             return;
         }
 
         let Some(path) = safe_child_path(&target_dir, save_name) else {
-            set_status(ui, "Cannot save: file name is invalid");
+            set_status(ui, state, "Cannot save: file name is invalid");
             return;
         };
         output_chooser_paths_and_exit(vec![path], chooser_output_metadata(&state_ref));
@@ -4414,10 +4259,10 @@ fn chooser_accept(
             vec![selected_directory_or_current(&state_ref)],
             chooser_output_metadata(&state_ref),
         );
-    } else if !state_ref.panes.active().selection.paths.is_empty() {
+    } else if !state_ref.panes.focused().selection.paths.is_empty() {
         let selected_files = state_ref
             .panes
-            .active()
+            .focused()
             .selection
             .paths
             .iter()
@@ -4425,7 +4270,11 @@ fn chooser_accept(
             .filter(|path| !path.is_dir())
             .collect::<Vec<_>>();
         if selected_files.is_empty() {
-            set_status(ui, "Choose a file, or double-click folders to enter them");
+            set_status(
+                ui,
+                state,
+                "Choose a file, or double-click folders to enter them",
+            );
         } else if ui.get_chooser_multiple() {
             output_chooser_paths_and_exit(selected_files, chooser_output_metadata(&state_ref));
         } else {
@@ -4435,24 +4284,24 @@ fn chooser_accept(
             );
         }
     } else {
-        set_status(ui, "Select a file to continue");
+        set_status(ui, state, "Select a file to continue");
     }
 }
 
 fn sync_chooser_filter_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let state = state.borrow();
-    ui.set_chooser_filter_count(state.chooser_filters.len() as i32);
-    ui.set_chooser_filter_index(state.chooser_filter_index as i32);
+    let state_ref = state.borrow();
+    ui.set_chooser_filter_count(state_ref.chooser_filters.len() as i32);
+    ui.set_chooser_filter_index(state_ref.chooser_filter_index as i32);
     ui.set_chooser_filter_label(
-        state
+        state_ref
             .chooser_filters
-            .get(state.chooser_filter_index)
+            .get(state_ref.chooser_filter_index)
             .map(|filter| filter.label.as_str())
             .unwrap_or("")
             .into(),
     );
     ui.set_chooser_filter_options(ModelRc::new(Rc::new(VecModel::from(
-        state
+        state_ref
             .chooser_filters
             .iter()
             .map(|filter| ChooserChoiceOption {
@@ -4460,7 +4309,7 @@ fn sync_chooser_filter_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             })
             .collect::<Vec<_>>(),
     ))));
-    sync_pane_slots_ui(ui);
+    sync_pane_slots_ui(ui, state);
 }
 
 fn sync_chooser_choices_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -4491,7 +4340,7 @@ fn sync_chooser_choices_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         })
         .collect::<Vec<_>>();
     ui.set_chooser_choices(ModelRc::new(Rc::new(VecModel::from(choices))));
-    sync_pane_slots_ui(ui);
+    sync_pane_slots_ui(ui, state);
 }
 
 fn select_chooser_filter(
@@ -4545,21 +4394,17 @@ fn output_chooser_paths_and_exit(paths: Vec<PathBuf>, metadata: ChooserOutputMet
     std::process::exit(0);
 }
 
-fn set_left_pane_status(ui: &AppWindow, message: &str) {
-    set_pane_status(ui, 0, message);
+fn set_focused_pane_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, message: &str) {
+    let slot = state.borrow().panes.focused_slot();
+    set_pane_status(ui, state, slot, message);
 }
 
-fn set_pane_status(ui: &AppWindow, slot: i32, message: &str) {
+fn set_pane_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32, message: &str) {
     let message: SharedString = message.into();
-    if (!ui.get_split_view_open() && slot == 0) || ui.get_focused_pane() == slot {
-        ui.set_status(message.clone());
+    if ui.get_focused_pane() == slot {
+        ui.set_status(message);
     }
-    match slot {
-        0 => ui.set_left_pane_status(message),
-        1 => ui.set_inactive_pane_status(message),
-        _ => {}
-    }
-    sync_pane_slots_ui(ui);
+    sync_pane_slots_ui(ui, state);
 }
 
 fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState>>, pane_id: u64) {
@@ -4576,7 +4421,7 @@ fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState
             })
     };
     if let Some((slot, status)) = status {
-        set_pane_status(ui, slot, &status);
+        set_pane_status(ui, state, slot, &status);
     }
 }
 
@@ -4592,11 +4437,11 @@ fn set_status_for_panes(
     };
 
     if target_slots.is_empty() {
-        set_status(ui, message);
+        set_status(ui, state, message);
         return;
     }
     for slot in target_slots {
-        set_pane_status(ui, slot, message);
+        set_pane_status(ui, state, slot, message);
     }
 }
 
@@ -4612,15 +4457,10 @@ fn pane_status_target_slots(state: &AppState, pane_ids: &[u64]) -> Vec<i32> {
         .collect()
 }
 
-fn set_status(ui: &AppWindow, message: &str) {
+fn set_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, message: &str) {
     let message: SharedString = message.into();
-    ui.set_status(message.clone());
-    if ui.get_split_view_open() && ui.get_focused_pane() == 1 {
-        ui.set_inactive_pane_status(message);
-    } else {
-        ui.set_left_pane_status(message);
-    }
-    sync_pane_slots_ui(ui);
+    ui.set_status(message);
+    sync_pane_slots_ui(ui, state);
 }
 
 fn debug_log(message: &str) {
@@ -4658,11 +4498,12 @@ fn dnd_debug_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{MainGridLayout, place_drop_geometry, virtual_entry_range};
+    use crate::app::geometry::{place_drop_geometry, virtual_entry_range};
     use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
-        filtered_entries_range, filtered_entry_at, filtered_entry_summary,
-        rebuild_visible_entry_index, selection_range_paths, selection_rect_paths,
+        filtered_entries_range, filtered_entry_at, filtered_entry_paths, filtered_entry_summary,
+        rebuild_visible_entry_index, selection_range_paths, selection_range_paths_filtered,
+        selection_rect_paths, selection_rect_paths_filtered,
     };
     use slint::Image;
 
@@ -4684,12 +4525,12 @@ mod tests {
     #[test]
     fn filtered_entry_paths_returns_only_visible_matches() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = vec![
+        state.panes.focused_mut().entries = vec![
             test_entry("Alpha.txt", "/tmp/Alpha.txt"),
             test_entry("Beta.txt", "/tmp/Beta.txt"),
             test_entry("notes.md", "/tmp/project-notes.md"),
         ];
-        state.panes.active_mut().search.query = "project".to_string();
+        state.panes.focused_mut().search.query = "project".to_string();
 
         assert_eq!(
             filtered_entry_paths(&state),
@@ -4714,29 +4555,29 @@ mod tests {
         archive.size_bytes = 150_000_000.0;
         archive.modified_age_days = 20;
 
-        state.panes.active_mut().entries = vec![folder, image, archive];
+        state.panes.focused_mut().entries = vec![folder, image, archive];
 
-        state.panes.active_mut().search.kind_filter = 1;
+        state.panes.focused_mut().search.kind_filter = 1;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/Images".to_string()]
         );
 
-        state.panes.active_mut().search.kind_filter = 3;
+        state.panes.focused_mut().search.kind_filter = 3;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/photo.png".to_string()]
         );
 
-        state.panes.active_mut().search.kind_filter = 0;
-        state.panes.active_mut().search.size_filter = 3;
+        state.panes.focused_mut().search.kind_filter = 0;
+        state.panes.focused_mut().search.size_filter = 3;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/archive.zip".to_string()]
         );
 
-        state.panes.active_mut().search.size_filter = 0;
-        state.panes.active_mut().search.modified_filter = 2;
+        state.panes.focused_mut().search.size_filter = 0;
+        state.panes.focused_mut().search.modified_filter = 2;
         assert_eq!(
             filtered_entry_paths(&state),
             vec!["/tmp/Images".to_string(), "/tmp/photo.png".to_string()]
@@ -4746,10 +4587,10 @@ mod tests {
     #[test]
     fn filtered_entries_range_clones_only_requested_filtered_window() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = (0..8)
+        state.panes.focused_mut().entries = (0..8)
             .map(|index| test_entry(&format!("item-{index}.txt"), &format!("/tmp/item-{index}")))
             .collect();
-        state.panes.active_mut().search.query = "item".to_string();
+        state.panes.focused_mut().search.query = "item".to_string();
 
         assert_eq!(filtered_entry_count(&state), 8);
         assert_eq!(
@@ -4768,12 +4609,12 @@ mod tests {
     #[test]
     fn filtered_entry_at_clones_only_requested_visible_item() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = vec![
+        state.panes.focused_mut().entries = vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
         ];
-        state.panes.active_mut().search.query = ".txt".to_string();
+        state.panes.focused_mut().search.query = ".txt".to_string();
 
         assert_eq!(
             filtered_entry_at(&state, 1)
@@ -4789,12 +4630,12 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let mut folder = test_entry("item-folder", "/tmp/item-folder");
         folder.is_dir = true;
-        state.panes.active_mut().entries = vec![
+        state.panes.focused_mut().entries = vec![
             folder,
             test_entry("item-file.txt", "/tmp/item-file.txt"),
             test_entry("hidden.log", "/tmp/hidden.log"),
         ];
-        state.panes.active_mut().search.query = "item".to_string();
+        state.panes.focused_mut().search.query = "item".to_string();
 
         let summary = filtered_entry_summary(&state, true);
 
@@ -4813,7 +4654,7 @@ mod tests {
     #[test]
     fn visible_entry_index_uses_identity_fast_path_without_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = vec![
+        state.panes.focused_mut().entries = vec![
             test_entry("alpha", "/tmp/alpha"),
             test_entry("beta", "/tmp/beta"),
         ];
@@ -4821,7 +4662,7 @@ mod tests {
         let summary = rebuild_visible_entry_index(&mut state, true);
 
         assert_eq!(summary.count, 2);
-        assert!(state.panes.active().search.visible_entry_indices.is_none());
+        assert!(state.panes.focused().search.visible_entry_indices.is_none());
         assert_eq!(
             filtered_entries_range(&state, 1..2)
                 .into_iter()
@@ -4834,19 +4675,24 @@ mod tests {
     #[test]
     fn visible_entry_index_drives_virtual_range_without_rescanning_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = vec![
+        state.panes.focused_mut().entries = vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.panes.active_mut().search.query = ".txt".to_string();
+        state.panes.focused_mut().search.query = ".txt".to_string();
 
         let summary = rebuild_visible_entry_index(&mut state, false);
 
         assert_eq!(summary.count, 3);
         assert_eq!(
-            state.panes.active().search.visible_entry_indices.as_deref(),
+            state
+                .panes
+                .focused()
+                .search
+                .visible_entry_indices
+                .as_deref(),
             Some(&[0, 2, 3][..])
         );
         assert_eq!(filtered_entry_count(&state), 3);
@@ -4871,14 +4717,14 @@ mod tests {
         let mut hidden = test_entry("hidden.log", "/tmp/docs/hidden.log");
         hidden.location = "docs".into();
         let visible = test_entry("visible.txt", "/tmp/visible.txt");
-        state.panes.active_mut().entries = vec![hidden, visible];
-        state.panes.active_mut().search.query = ".txt".to_string();
+        state.panes.focused_mut().entries = vec![hidden, visible];
+        state.panes.focused_mut().search.query = ".txt".to_string();
 
         let summary = rebuild_visible_entry_index(&mut state, false);
 
         assert_eq!(summary.count, 1);
         assert!(!summary.has_locations);
-        assert!(!state.panes.active().search.visible_entries_have_locations);
+        assert!(!state.panes.focused().search.visible_entries_have_locations);
         assert_eq!(
             filtered_entries_range(&state, 0..1)
                 .into_iter()
@@ -4897,8 +4743,8 @@ mod tests {
         let mut visible_file = test_entry("visible.txt", "/tmp/docs/visible.txt");
         visible_file.location = "docs".into();
         visible_file.modified_age_days = 0;
-        state.panes.active_mut().entries = vec![old_file, visible_file];
-        state.panes.active_mut().search.modified_filter = 1;
+        state.panes.focused_mut().entries = vec![old_file, visible_file];
+        state.panes.focused_mut().search.modified_filter = 1;
 
         let summary = rebuild_visible_entry_index(&mut state, false);
 
@@ -4921,7 +4767,7 @@ mod tests {
         second.location = "docs".into();
         let mut third = test_entry("third.txt", "/tmp/docs/third.txt");
         third.location = "docs".into();
-        state.panes.active_mut().entries = vec![first, second, third];
+        state.panes.focused_mut().entries = vec![first, second, third];
         rebuild_visible_entry_index(&mut state, false);
 
         assert_eq!(
@@ -4942,7 +4788,7 @@ mod tests {
         let mut folder = test_entry("Documents", "/tmp/Documents");
         folder.is_dir = true;
         folder.kind = "Folder".into();
-        state.panes.active_mut().entries = vec![
+        state.panes.focused_mut().entries = vec![
             folder,
             test_entry("photo.PNG", "/tmp/photo.PNG"),
             test_entry("notes.txt", "/tmp/notes.txt"),
@@ -5005,13 +4851,13 @@ mod tests {
     #[test]
     fn filtered_selection_range_scans_only_visible_range() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = vec![
+        state.panes.focused_mut().entries = vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.panes.active_mut().search.query = ".txt".to_string();
+        state.panes.focused_mut().search.query = ".txt".to_string();
 
         assert_eq!(
             selection_range_paths_filtered(&state, "/tmp/gamma", "/tmp/alpha"),
@@ -5073,13 +4919,13 @@ mod tests {
     #[test]
     fn filtered_selection_rect_scans_visible_order_without_cloning_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = vec![
+        state.panes.focused_mut().entries = vec![
             test_entry("alpha.txt", "/tmp/alpha"),
             test_entry("skip.log", "/tmp/skip"),
             test_entry("beta.txt", "/tmp/beta"),
             test_entry("gamma.txt", "/tmp/gamma"),
         ];
-        state.panes.active_mut().search.query = ".txt".to_string();
+        state.panes.focused_mut().search.query = ".txt".to_string();
 
         let selected = selection_rect_paths_filtered(
             &state,
@@ -5104,7 +4950,7 @@ mod tests {
     #[test]
     fn filtered_selection_rect_limits_scan_to_intersecting_columns() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        state.panes.active_mut().entries = (0..20)
+        state.panes.focused_mut().entries = (0..20)
             .map(|index| test_entry(&format!("entry-{index}"), &format!("/tmp/{index}")))
             .collect();
 
@@ -5123,24 +4969,6 @@ mod tests {
         );
 
         assert_eq!(selected, vec!["/tmp/4".to_string(), "/tmp/5".to_string()]);
-    }
-
-    #[test]
-    fn main_grid_layout_maps_points_to_column_first_indices() {
-        let layout = MainGridLayout {
-            main_x: 328.0,
-            main_y: 64.0,
-            viewport_x: 0.0,
-            rows_per_column: 3,
-            cell_width: 100.0,
-            row_height: 50.0,
-            padding: 10.0,
-        };
-
-        assert_eq!(layout.index_at_point(338.0, 74.0), Some(0));
-        assert_eq!(layout.index_at_point(338.0, 124.0), Some(1));
-        assert_eq!(layout.index_at_point(438.0, 74.0), Some(3));
-        assert_eq!(layout.index_at_point(426.5, 74.0), None);
     }
 
     #[test]
@@ -5200,15 +5028,15 @@ mod tests {
         )));
         {
             let mut state = state.borrow_mut();
-            state.panes.active_mut().history = PaneHistory::from_stacks(
+            state.panes.focused_mut().history = PaneHistory::from_stacks(
                 vec![PathBuf::from("/tmp"), mount_path.join("old")],
                 vec![
                     mount_path.join("future"),
                     PathBuf::from("/run/media/yk/USB-sibling"),
                 ],
             );
-            assert!(state.panes.open_inactive(mount_path.join("other")));
-            let inactive = state.panes.inactive_mut().expect("inactive pane");
+            assert!(state.panes.open_pane(mount_path.join("other")));
+            let inactive = state.panes.pane_mut_for_slot(1).expect("inactive pane");
             inactive.history = PaneHistory::from_stacks(
                 vec![mount_path.join("other-old"), PathBuf::from("/tmp/keep")],
                 vec![mount_path.join("other-future")],
@@ -5221,16 +5049,16 @@ mod tests {
         ));
 
         let state = state.borrow();
-        assert_eq!(state.panes.active().current_dir, home_dir());
+        assert_eq!(state.panes.focused().current_dir, home_dir());
         assert_eq!(
-            state.panes.active().history.back_paths(),
+            state.panes.focused().history.back_paths(),
             &[PathBuf::from("/tmp")]
         );
         assert_eq!(
-            state.panes.active().history.forward_paths(),
+            state.panes.focused().history.forward_paths(),
             &[PathBuf::from("/run/media/yk/USB-sibling")]
         );
-        let inactive = state.panes.inactive().expect("inactive pane");
+        let inactive = state.panes.pane_for_slot(1).expect("inactive pane");
         assert_eq!(inactive.current_dir, home_dir());
         assert_eq!(inactive.history.back_paths(), &[PathBuf::from("/tmp/keep")]);
         assert!(inactive.history.forward_paths().is_empty());
@@ -5249,7 +5077,7 @@ mod tests {
         ));
 
         assert_eq!(
-            state.borrow().panes.active().current_dir,
+            state.borrow().panes.focused().current_dir,
             PathBuf::from("/run/media/yk/USB-sibling")
         );
     }
@@ -5364,9 +5192,9 @@ mod tests {
     #[test]
     fn pane_status_target_slots_route_to_affected_panes() {
         let mut state = AppState::new(PathBuf::from("/tmp/slot-0"), Vec::new());
-        let slot_0_id = state.panes.active().id;
-        assert!(state.panes.open_inactive(PathBuf::from("/tmp/slot-1")));
-        let slot_1_id = state.panes.inactive().expect("slot 1 pane").id;
+        let slot_0_id = state.panes.focused().id;
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/slot-1")));
+        let slot_1_id = state.panes.pane_for_slot(1).expect("slot 1 pane").id;
 
         assert_eq!(pane_status_target_slots(&state, &[slot_1_id]), vec![1]);
         assert_eq!(
@@ -5387,10 +5215,10 @@ mod tests {
             .expect("refresh_panes body should be present");
 
         assert!(
-            body.contains("let slot = { state.borrow().panes.slot_for_id(*pane_id) };")
-                && body.contains("match slot {")
-                && !body.contains("match state.borrow().panes.slot_for_id(*pane_id)"),
-            "refresh_panes must not hold an immutable RefCell borrow while calling refresh paths that borrow_mut"
+            body.contains("for pane_id in pane_ids {")
+                && body.contains("refresh_pane_by_id(ui, state, bridge, *pane_id);")
+                && !body.contains("state.borrow().panes.slot_for_id(*pane_id)"),
+            "refresh_panes should dispatch by pane id without holding a slot lookup borrow"
         );
     }
 
@@ -5444,10 +5272,10 @@ mod tests {
 
         assert!(
             body.contains("if current_slot.slot == slot")
-                && body.contains("let next = pane_slot_data(ui, slot);")
+                && body.contains("let next = pane_slot_data(ui, slot, &state_ref);")
                 && body.contains("if current_slot != next")
                 && body.contains("current.set_row_data(row, next);")
-                && body.contains("sync_pane_slots_ui(ui);"),
+                && body.contains("sync_pane_slots_ui(ui, state);"),
             "viewport-only pane refreshes should update the affected pane row and fall back to full sync only when the row is missing"
         );
     }
@@ -5505,10 +5333,12 @@ mod tests {
             "layout changes should flush pending scroll work and use viewport-only pane sync"
         );
         assert!(
-            viewport_body.contains("sync_virtual_entries(ui, state, bridge, true);")
-                && viewport_body.contains("sync_pane_slot_preview_viewport_ui(ui, state, slot);")
-                && !viewport_body.contains("sync_pane_slot_preview_ui(ui, state, slot);"),
-            "non-primary pane layout/scroll sync should update only viewport and virtual slice state"
+            viewport_body.contains("sync_virtual_entries_for_slot(ui, state, bridge, slot, true);")
+                && !viewport_body.contains("sync_pane_slot_preview")
+                && !viewport_body.contains("sync_virtual_entries(ui, state, bridge, true);")
+                && !viewport_body.contains("filtered_entry_count_for_slot")
+                && !viewport_body.contains("return;"),
+            "pane layout/scroll sync should update the target slot through the shared virtual slice path"
         );
     }
 
@@ -5529,19 +5359,20 @@ mod tests {
         assert!(
             source.contains("const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);")
                 && source.contains("struct ThumbnailFlushScheduler")
-                && async_body
-                    .contains("AsyncEvent::ThumbnailLoaded { generation, load } => thumbnail_flush.push(generation, load)")
+                && async_body.contains(
+                    "AsyncEvent::ThumbnailLoaded {\n            pane_id,\n            generation,\n            load,\n        } => thumbnail_flush.push(pane_id, generation, load)"
+                )
                 && !async_body.contains("sync_virtual_entries(ui, state, bridge, false);"),
             "thumbnail async results should be queued instead of refreshing the virtual model per image"
         );
         assert!(
-            flush_body.contains("while let Some((generation, load)) = pending.pop_front()")
-                && flush_body.contains("should_refresh_virtual |=")
+            flush_body
+                .contains("while let Some((pane_id, generation, load)) = pending.pop_front()")
+                && flush_body.contains("refresh_pane_ids.push(pane_id);")
                 && flush_body
-                    .matches("sync_virtual_entries(ui, state, bridge, false);")
-                    .count()
-                    == 1,
-            "thumbnail flush should apply all pending loads and refresh the virtual slice once"
+                    .contains("sync_virtual_entries_for_slot(ui, state, bridge, slot, false);")
+                && !flush_body.contains("sync_virtual_entries(ui, state, bridge, false);"),
+            "thumbnail flush should apply pending loads and refresh each affected pane slot once"
         );
     }
 
@@ -5561,7 +5392,7 @@ mod tests {
             "file operation completion status should write to the panes affected by the operation"
         );
         assert!(
-            !body.contains("set_status(ui, &status_message);"),
+            !body.contains("set_status(ui, state, &status_message);"),
             "file operation completion status must not jump to whichever pane is focused when the async result returns"
         );
     }
@@ -5580,7 +5411,7 @@ mod tests {
             "file operation progress status should write to the panes captured when the operation started"
         );
         assert!(
-            !body.contains("set_status(ui, &update.status);"),
+            !body.contains("set_status(ui, state, &update.status);"),
             "file operation progress status must not jump to whichever pane is focused while progress events arrive"
         );
     }
@@ -5614,12 +5445,12 @@ mod tests {
         );
         assert!(
             !start_body.contains("set_status(\n        ui,\n        &format!(\"Undoing {}...\"")
-                && !result_body.contains("set_status(ui, &format!(\"Undo complete: {message}\"))")
+                && !result_body.contains("set_status(ui, state, &format!(\"Undo complete: {message}\"))")
                 && !result_body.contains(
-                    "set_status(ui, &format!(\"Undo failed: {err}; Undo can be retried\"))"
+                    "set_status(ui, state, &format!(\"Undo failed: {err}; Undo can be retried\"))"
                 )
                 && !result_body.contains(
-                    "set_status(ui, &format!(\"Undo failed: {err}; newer Undo is available\"))"
+                    "set_status(ui, state, &format!(\"Undo failed: {err}; newer Undo is available\"))"
                 ),
             "file undo status must not jump to whichever pane is focused while the undo runs"
         );
@@ -5654,7 +5485,7 @@ mod tests {
         );
         assert!(
             !result_body.contains("set_status(\n                    ui,\n                    &format!(\n                        \"Opened with default app")
-                && !result_body.contains("set_status(ui, &format!(\"Cannot open {label}: {err}\"));"),
+                && !result_body.contains("set_status(ui, state, &format!(\"Cannot open {label}: {err}\"));"),
             "file-open result status must not jump to whichever pane is focused when the async result returns"
         );
     }
@@ -5675,8 +5506,10 @@ mod tests {
             "privileged operation result status should use the same affected-pane route as its refresh"
         );
         assert!(
-            !body.contains("set_status(ui, &format!(\"{} complete: {message}\", result.label))")
-                && !body.contains("set_status(ui, &format!(\"{} failed: {err}\", result.label))"),
+            !body.contains(
+                "set_status(ui, state, &format!(\"{} complete: {message}\", result.label))"
+            ) && !body
+                .contains("set_status(ui, state, &format!(\"{} failed: {err}\", result.label))"),
             "privileged operation result status must not jump to whichever pane is focused when the helper returns"
         );
     }
@@ -5700,7 +5533,7 @@ mod tests {
         );
         assert!(
             !body.contains(
-                "set_status(ui, &format!(\"Admin write-back saved: {}\", path.display()))"
+                "set_status(ui, state, &format!(\"Admin write-back saved: {}\", path.display()))"
             ),
             "admin write-back save status must not jump to whichever pane is focused when the helper returns"
         );
@@ -5752,7 +5585,7 @@ mod tests {
             .expect("sync_external_edit_ui body should be present");
 
         assert!(
-            start_body.contains("pane_id_for_slot(&state, slot)")
+            start_body.contains("pane_id_for_slot(&state_ref, slot)")
                 && start_body.contains(".find(|edit| edit.pane_id == pane_id)")
                 && start_body.contains("ExternalEditResult {\n                pane_id,"),
             "admin write-back resolution should select the pending session owned by the clicked pane"
@@ -5764,13 +5597,8 @@ mod tests {
             "admin write-back resolution must not fall back to the last global session or root-level pending state"
         );
         assert!(
-            sync_body.contains(
-                "external_edit_status_for_pane(&state.external_edits, state.panes.active().id)"
-            ) && sync_body
-                .contains("external_edit_status_for_pane(&state.external_edits, pane.id)")
-                && sync_body.contains("ui.set_left_pane_external_edit_active")
-                && sync_body.contains("ui.set_inactive_pane_external_edit_active"),
-            "admin write-back UI should publish pane-local pending state"
+            sync_body.contains("sync_pane_slots_ui(ui, state);"),
+            "admin write-back UI should sync pane-local pending state via sync_pane_slots_ui"
         );
     }
 
@@ -5909,6 +5737,7 @@ mod tests {
             modified: "Today".into(),
             modified_age_days: 0,
             is_dir: false,
+            selected: false,
             thumbnail_state: 0,
             thumbnail: Image::default(),
         }
