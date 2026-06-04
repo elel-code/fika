@@ -1,6 +1,6 @@
 use crate::app::events::{
-    EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult, FileOpenResult, FileOpenSuccess,
-    FileOperationProgress,
+    EXTERNAL_EDIT_DISCARD_OPERATION, EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult,
+    FileOpenResult, FileOpenSuccess, FileOperationProgress,
 };
 use crate::app::pane::PaneTarget;
 use crate::app::state::{
@@ -124,6 +124,21 @@ pub(crate) struct PrivilegeRequestSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PrivilegedOperationCompletionSummary {
     pub(crate) affected_dirs: Vec<PathBuf>,
+    pub(crate) status: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ExternalEditStartDecision {
+    MissingPane { status: String },
+    MissingPending { pane_id: u64, status: String },
+    Started(ExternalEditStartSummary),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ExternalEditStartSummary {
+    pub(crate) pane_id: u64,
+    pub(crate) operation: String,
+    pub(crate) session: privilege::ExternalEditSession,
     pub(crate) status: String,
 }
 
@@ -369,6 +384,37 @@ impl AppState {
             affected_dirs: result.affected_dirs,
             status,
         }
+    }
+
+    pub(crate) fn start_external_edit_resolution(
+        &self,
+        slot: i32,
+        operation: &str,
+    ) -> ExternalEditStartDecision {
+        let Some(pane_id) = self.panes.pane_for_slot(slot).map(|pane| pane.id) else {
+            return ExternalEditStartDecision::MissingPane {
+                status: "No split pane target is available".to_string(),
+            };
+        };
+        let Some(session) = self
+            .external_edits
+            .iter()
+            .rev()
+            .find(|edit| edit.pane_id == pane_id)
+            .map(|edit| edit.session.clone())
+        else {
+            return ExternalEditStartDecision::MissingPending {
+                pane_id,
+                status: "No admin write-back is pending".to_string(),
+            };
+        };
+
+        ExternalEditStartDecision::Started(ExternalEditStartSummary {
+            pane_id,
+            operation: operation.to_string(),
+            session,
+            status: external_edit_start_status(operation),
+        })
     }
 
     pub(crate) fn complete_external_edit(
@@ -829,6 +875,15 @@ fn external_edit_completion_result(
             ExternalEditStatusTarget::SourcePane,
         ),
     }
+}
+
+fn external_edit_start_status(operation: &str) -> String {
+    match operation {
+        EXTERNAL_EDIT_SAVE_OPERATION => "Saving admin write-back...",
+        EXTERNAL_EDIT_DISCARD_OPERATION => "Discarding admin write-back...",
+        _ => "Resolving admin write-back...",
+    }
+    .to_string()
 }
 
 fn launch_status_suffix(unit: Option<&str>, diagnostic: Option<&str>) -> String {
@@ -1623,6 +1678,55 @@ mod tests {
             vec!["app.scope".to_string(), "editor.scope".to_string()]
         );
         assert_eq!(state.external_edits.len(), 1);
+    }
+
+    #[test]
+    fn start_external_edit_resolution_selects_pane_local_latest_session() {
+        let mut state = AppState::new(PathBuf::from("/tmp/left"), Vec::new());
+        assert!(state.panes.open_pane(PathBuf::from("/tmp/right")));
+        let left_id = state.panes.pane_for_slot(0).expect("left pane").id;
+        let right_id = state.panes.pane_for_slot(1).expect("right pane").id;
+        state.external_edits = vec![
+            pane_external_edit(left_id, "/etc/left.conf", "left"),
+            pane_external_edit(right_id, "/etc/right-old.conf", "right-old"),
+            pane_external_edit(right_id, "/etc/right-new.conf", "right-new"),
+        ];
+
+        let ExternalEditStartDecision::Started(left) =
+            state.start_external_edit_resolution(0, EXTERNAL_EDIT_SAVE_OPERATION)
+        else {
+            panic!("left pane should start admin write-back resolution");
+        };
+        assert_eq!(left.pane_id, left_id);
+        assert_eq!(left.operation, EXTERNAL_EDIT_SAVE_OPERATION);
+        assert_eq!(left.session.token, "left");
+        assert_eq!(left.status, "Saving admin write-back...");
+
+        let ExternalEditStartDecision::Started(right) =
+            state.start_external_edit_resolution(1, EXTERNAL_EDIT_DISCARD_OPERATION)
+        else {
+            panic!("right pane should start admin write-back resolution");
+        };
+        assert_eq!(right.pane_id, right_id);
+        assert_eq!(right.operation, EXTERNAL_EDIT_DISCARD_OPERATION);
+        assert_eq!(right.session.token, "right-new");
+        assert_eq!(right.status, "Discarding admin write-back...");
+
+        match state.start_external_edit_resolution(99, EXTERNAL_EDIT_SAVE_OPERATION) {
+            ExternalEditStartDecision::MissingPane { status } => {
+                assert_eq!(status, "No split pane target is available");
+            }
+            other => panic!("invalid slot should report missing pane, got {other:?}"),
+        }
+
+        state.external_edits.retain(|edit| edit.pane_id != left_id);
+        match state.start_external_edit_resolution(0, "Unknown") {
+            ExternalEditStartDecision::MissingPending { pane_id, status } => {
+                assert_eq!(pane_id, left_id);
+                assert_eq!(status, "No admin write-back is pending");
+            }
+            other => panic!("missing pending edit should report pane-local status, got {other:?}"),
+        }
     }
 
     #[test]

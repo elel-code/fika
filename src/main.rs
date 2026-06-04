@@ -54,7 +54,7 @@ use app::geometry::{
 };
 use app::model_update::{update_file_entries_model_selection, update_pane_file_entries_model};
 use app::operation_controller::{
-    FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
+    ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
     affected_directory_pane_ids, cleanup_file_undo_backup,
 };
 use app::pane::{DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries};
@@ -3081,42 +3081,29 @@ fn start_external_edit_resolution(
     slot: i32,
     operation: &str,
 ) {
-    let pane_id = {
-        let state_ref = state.borrow();
-        let Some(pane_id) = pane_id_for_slot(&state_ref, slot) else {
-            set_status(ui, state, "No split pane target is available");
-            return;
-        };
-        pane_id
-    };
-    let session = {
+    let decision = {
         let state = state.borrow();
-        state
-            .external_edits
-            .iter()
-            .rev()
-            .find(|edit| edit.pane_id == pane_id)
-            .map(|edit| edit.session.clone())
+        state.start_external_edit_resolution(slot, operation)
     };
-    let Some(session) = session else {
-        set_status_for_panes(ui, state, &[pane_id], "No admin write-back is pending");
-        return;
+    let summary = match decision {
+        ExternalEditStartDecision::MissingPane { status } => {
+            set_status(ui, state, &status);
+            return;
+        }
+        ExternalEditStartDecision::MissingPending { pane_id, status } => {
+            set_status_for_panes(ui, state, &[pane_id], &status);
+            return;
+        }
+        ExternalEditStartDecision::Started(summary) => summary,
     };
 
-    set_status_for_panes(
-        ui,
-        state,
-        &[pane_id],
-        match operation {
-            EXTERNAL_EDIT_SAVE_OPERATION => "Saving admin write-back...",
-            EXTERNAL_EDIT_DISCARD_OPERATION => "Discarding admin write-back...",
-            _ => "Resolving admin write-back...",
-        },
-    );
+    set_status_for_panes(ui, state, &[summary.pane_id], &summary.status);
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
-    let operation = operation.to_string();
+    let pane_id = summary.pane_id;
+    let operation = summary.operation;
+    let session = summary.session;
     bridge.handle.spawn(async move {
         let result = if operation == EXTERNAL_EDIT_SAVE_OPERATION {
             privilege::commit_external_edit_via_dbus(&session).await
@@ -3158,10 +3145,6 @@ fn apply_external_edit_result(
 
 fn sync_external_edit_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     sync_pane_slots_ui(ui, state);
-}
-
-fn pane_id_for_slot(state: &AppState, slot: i32) -> Option<u64> {
-    state.panes.pane_for_slot(slot).map(|pane| pane.id)
 }
 
 #[cfg(test)]
@@ -5900,21 +5883,33 @@ mod tests {
             .expect("start_external_edit_resolution body should be present");
         let sync_body = source
             .split_once("fn sync_external_edit_ui(")
-            .and_then(|(_, rest)| rest.split_once("fn pane_id_for_slot("))
+            .and_then(|(_, rest)| rest.split_once("fn external_edit_status_for_pane("))
             .map(|(body, _)| body)
             .expect("sync_external_edit_ui body should be present");
 
         assert!(
-            start_body.contains("pane_id_for_slot(&state_ref, slot)")
-                && start_body.contains(".find(|edit| edit.pane_id == pane_id)")
-                && start_body.contains("ExternalEditResult {\n                pane_id,"),
-            "admin write-back resolution should select the pending session owned by the clicked pane"
+            start_body.contains("state.start_external_edit_resolution(slot, operation)")
+                && start_body.contains("ExternalEditStartDecision::MissingPane { status }")
+                && start_body
+                    .contains("ExternalEditStartDecision::MissingPending { pane_id, status }")
+                && start_body.contains("ExternalEditStartDecision::Started(summary) => summary")
+                && start_body.contains(
+                    "set_status_for_panes(ui, state, &[summary.pane_id], &summary.status);"
+                )
+                && start_body.contains("let pane_id = summary.pane_id;")
+                && start_body.contains("let operation = summary.operation;")
+                && start_body.contains("let session = summary.session;"),
+            "admin write-back resolution should consume the controller start decision and then dispatch the returned session"
         );
         assert!(
-            !start_body.contains("state.external_edits.last().cloned()")
+            !start_body.contains("pane_id_for_slot")
+                && !start_body.contains(".external_edits")
                 && !start_body.contains("ui.set_external_edit_active")
-                && !start_body.contains("ui.set_external_edit_status"),
-            "admin write-back resolution must not fall back to the last global session or root-level pending state"
+                && !start_body.contains("ui.set_external_edit_status")
+                && !start_body.contains("Saving admin write-back")
+                && !start_body.contains("Discarding admin write-back")
+                && !start_body.contains("No admin write-back is pending"),
+            "admin write-back resolution must not rebuild pane lookup, pending-session selection, or start status copy in main.rs"
         );
         assert!(
             sync_body.contains("sync_pane_slots_ui(ui, state);"),
