@@ -1,9 +1,10 @@
-import { ItemViewEntry } from "models.slint";
+import { ItemViewEntry, ItemViewHighlightEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
     in property <[ItemViewEntry]> entries;
+    in property <[ItemViewHighlightEntry]> highlights;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
@@ -23,7 +24,7 @@ export component SplitPaneView inherits Rectangle {
     in property <bool> show-location: false;
     in property <bool> drag-active: false;
     in property <bool> drag-rejected: false;
-    in property <string> drag-target-path;
+    in property <int> drag-target-slice-index: -1;
     callback view_changed();
     callback focus_requested();
     callback item_pressed(float, float, bool, bool) -> bool;
@@ -306,40 +307,60 @@ export component SplitPaneView inherits Rectangle {
                 width: root.virtual-slice-width;
                 height: parent.height;
 
-                for item[index] in root.entries: Rectangle {
-                    private property <int> tile-row: index.mod(root.rows-per-column);
-                    private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
+                for highlight[index] in root.highlights: Rectangle {
+                    private property <int> tile-row: highlight.slice_index.mod(root.rows-per-column);
+                    private property <int> tile-column: (highlight.slice_index - self.tile-row) / root.rows-per-column;
 
                     x: self.tile-column * root.column-width;
                     y: root.preview-padding + self.tile-row * root.row-height;
-                    width: item.tile_width * 1px;
-                    height: item.tile_height * 1px;
+                    width: highlight.tile_width * 1px;
+                    height: highlight.tile_height * 1px;
                     border-radius: 7px;
-                    border-width: item.selected || (root.drag-active && !root.drag-rejected && root.drag-target-path == item.path) ? 1px : 0px;
-                    border-color: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-border-color : root.selection-border-color;
-                    background: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-background-color : (item.selected ? root.selected-background-color : transparent);
+                    border-width: 1px;
+                    border-color: root.selection-border-color;
+                    background: root.selected-background-color;
+                }
 
-                    Image {
-                        x: item.media_x * 1px;
-                        y: item.media_y * 1px;
-                        width: item.media_width * 1px;
-                        height: item.media_height * 1px;
-                        source: item.media;
-                        image-fit: contain;
-                    }
+                if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle {
+                    private property <int> tile-row: root.drag-target-slice-index.mod(root.rows-per-column);
+                    private property <int> tile-column: (root.drag-target-slice-index - self.tile-row) / root.rows-per-column;
 
-                    Text {
-                        x: item.text_x * 1px;
-                        y: item.title_y * 1px;
-                        width: item.text_width * 1px;
-                        height: item.title_line_height * 1px;
-                        text: item.name;
-                        color: root.title-color;
-                        font-size: item.title_font_size * 1px;
-                        overflow: elide;
-                        horizontal-alignment: left;
-                        vertical-alignment: center;
-                    }
+                    x: self.tile-column * root.column-width;
+                    y: root.preview-padding + self.tile-row * root.row-height;
+                    width: root.cell-width;
+                    height: root.row-height;
+                    border-radius: 7px;
+                    border-width: 1px;
+                    border-color: root.drop-border-color;
+                    background: root.drop-background-color;
+                }
+
+                for item[index] in root.entries: Image {
+                    private property <int> tile-row: index.mod(root.rows-per-column);
+                    private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
+
+                    x: self.tile-column * root.column-width + item.media_x * 1px;
+                    y: root.preview-padding + self.tile-row * root.row-height + item.media_y * 1px;
+                    width: item.media_width * 1px;
+                    height: item.media_height * 1px;
+                    source: item.media;
+                    image-fit: contain;
+                }
+
+                for item[index] in root.entries: Text {
+                    private property <int> tile-row: index.mod(root.rows-per-column);
+                    private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
+
+                    x: self.tile-column * root.column-width + item.text_x * 1px;
+                    y: root.preview-padding + self.tile-row * root.row-height + item.title_y * 1px;
+                    width: item.text_width * 1px;
+                    height: item.title_line_height * 1px;
+                    text: item.name;
+                    color: root.title-color;
+                    font-size: item.title_font_size * 1px;
+                    overflow: elide;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
                 }
 
                 if (root.show-location): Rectangle {

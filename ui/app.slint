@@ -33,6 +33,7 @@ export global PaneRouting {
     callback zoom-in(int);
     callback zoom-out(int);
     callback drop-target-path(int, float, float, string) -> string;
+    callback drop-target-slice-index(int, float, float, string) -> int;
     callback drop-allowed(int, float, float, string) -> bool;
     callback prepare-transfer(int, string, float, float) -> bool;
     callback transfer-menu-requested(int);
@@ -55,7 +56,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewEntry, PaneSlotData, PaneViewData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewEntry, ItemViewHighlightEntry, PaneSlotData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -92,6 +93,7 @@ component FilePane inherits Rectangle {
     in property <string> drop-trace-prefix;
     in property <int> entry-count;
     in property <[ItemViewEntry]> entries;
+    in property <[ItemViewHighlightEntry]> highlights;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
@@ -108,6 +110,7 @@ component FilePane inherits Rectangle {
     in-out property <bool> drag-active;
     in-out property <bool> drag-rejected;
     in-out property <string> drag-target-path;
+    in-out property <int> drag-target-slice-index: -1;
     in property <bool> empty-message-visible: true;
     in property <string> empty-title: "This folder is empty";
     in property <string> empty-subtitle: "";
@@ -151,6 +154,7 @@ component FilePane inherits Rectangle {
     callback zoom_in(int);
     callback zoom_out(int);
     callback drop_target_path(int, float, float, string) -> string;
+    callback drop_target_slice_index(int, float, float, string) -> int;
     callback drop_allowed(int, float, float, string) -> bool;
     callback prepare_transfer(int, string, float, float) -> bool;
     callback transfer_menu_requested(int);
@@ -235,6 +239,7 @@ component FilePane inherits Rectangle {
                         root.drag-active = false;
                         root.drag-rejected = false;
                         root.drag-target-path = "";
+                        root.drag-target-slice-index = -1;
                     }
                 }
                 can-drop(event) => {
@@ -243,18 +248,21 @@ component FilePane inherits Rectangle {
                         root.drag-active = false;
                         root.drag-rejected = true;
                         root.drag-target-path = "";
+                        root.drag-target-slice-index = -1;
                         return DragAction.none;
                     }
                     if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
                         root.drag-active = true;
                         root.drag-target-path = root.drop_target_path(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                         root.drag-rejected = !root.drop_allowed(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                        root.drag-target-slice-index = root.drag-target-path == "" || root.drag-rejected ? -1 : root.drop_target_slice_index(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                         root.trace_drop(root.drop-trace-prefix + (root.drag-rejected ? "can-drop-rejected" : "can-drop-accepted"), DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.drag-rejected, root.drag-target-path);
                         return DragAction.copy;
                     } else {
                         root.drag-active = false;
                         root.drag-rejected = false;
                         root.drag-target-path = "";
+                        root.drag-target-slice-index = -1;
                         root.trace_drop(root.drop-trace-prefix + "can-drop-rejected:unsupported-dnd-payload", "unsupported", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
                         return DragAction.none;
                     }
@@ -268,6 +276,7 @@ component FilePane inherits Rectangle {
                     root.drag-active = false;
                     root.drag-rejected = false;
                     root.drag-target-path = "";
+                    root.drag-target-slice-index = -1;
                     return DragAction.copy;
                 }
             }
@@ -278,6 +287,7 @@ component FilePane inherits Rectangle {
                 dark: root.dark;
                 entry-count: root.entry-count;
                 entries: root.entries;
+                highlights: root.highlights;
                 virtual-start-column: root.virtual-start-column;
                 viewport-x <=> root.viewport-x;
                 item-view-rows-per-column: root.item-view-rows-per-column;
@@ -297,7 +307,7 @@ component FilePane inherits Rectangle {
                 show-location: root.show-location;
                 drag-active: root.drag-active;
                 drag-rejected: root.drag-rejected;
-                drag-target-path: root.drag-target-path;
+                drag-target-slice-index: root.drag-target-slice-index;
                 make_drag_data_at(x, y) => {
                     root.make_drag_data_at(root.pane-slot, x, y)
                 }
@@ -411,6 +421,9 @@ component PaneSlot inherits FilePane {
     drop_target_path(slot, x, y, source) => {
         PaneRouting.drop-target-path(slot, x, y, source)
     }
+    drop_target_slice_index(slot, x, y, source) => {
+        PaneRouting.drop-target-slice-index(slot, x, y, source)
+    }
     drop_allowed(slot, x, y, source) => {
         PaneRouting.drop-allowed(slot, x, y, source)
     }
@@ -439,6 +452,7 @@ component PaneSlotSurface inherits Rectangle {
     in property <PaneSlotData> pane;
     in property <PaneViewData> view;
     in property <[ItemViewEntry]> entries;
+    in property <[ItemViewHighlightEntry]> highlights;
     in property <bool> focused: false;
     in property <bool> dark-mode;
     in property <color> pane-shell-base-color;
@@ -463,6 +477,7 @@ component PaneSlotSurface inherits Rectangle {
     private property <bool> live-drag-active: false;
     private property <bool> live-drag-rejected: false;
     private property <string> live-drag-target-path;
+    private property <int> live-drag-target-slice-index: -1;
 
     background: root.pane-shell-base-color;
     clip: true;
@@ -515,6 +530,7 @@ component PaneSlotSurface inherits Rectangle {
         drop-trace-prefix: root.pane.drop_trace_prefix;
         entry-count: root.view.entry_count;
         entries: root.entries;
+        highlights: root.highlights;
         virtual-start-column: root.view.virtual_start_column;
         viewport-x <=> root.live-viewport-x;
         item-view-rows-per-column: root.view.item_view_rows_per_column;
@@ -531,6 +547,7 @@ component PaneSlotSurface inherits Rectangle {
         drag-active <=> root.live-drag-active;
         drag-rejected <=> root.live-drag-rejected;
         drag-target-path <=> root.live-drag-target-path;
+        drag-target-slice-index <=> root.live-drag-target-slice-index;
         empty-message-visible: root.view.empty_message_visible;
         empty-title: root.view.empty_title;
         empty-subtitle: root.view.empty_subtitle;
@@ -578,6 +595,8 @@ export component AppWindow inherits Window {
     in property <[PaneViewData]> pane_views;
     in property <[ItemViewEntry]> pane_slot_0_entries;
     in property <[ItemViewEntry]> pane_slot_1_entries;
+    in property <[ItemViewHighlightEntry]> pane_slot_0_highlights;
+    in property <[ItemViewHighlightEntry]> pane_slot_1_highlights;
     in-out property <int> entry_count: 0;
     in property <[PlaceEntry]> places;
     in property <[DeviceEntry]> devices;
@@ -836,6 +855,7 @@ export component AppWindow inherits Window {
     callback prepare_current_dir_transfer(string, string, float, float) -> bool;
     callback pane_prepare_transfer(int, string, float, float) -> bool;
     callback pane_drop_target_path(int, float, float, string) -> string;
+    callback pane_drop_target_slice_index(int, float, float, string) -> int;
     callback pane_drop_allowed(int, float, float, string) -> bool;
     callback pane_view_changed(int);
     callback pane_layout_changed();
@@ -1100,6 +1120,10 @@ export component AppWindow inherits Window {
 
     public function route-pane-drop-target-path(slot: int, x: float, y: float, source: string) -> string {
         return root.pane_drop_target_path(slot, x, y, source);
+    }
+
+    public function route-pane-drop-target-slice-index(slot: int, x: float, y: float, source: string) -> int {
+        return root.pane_drop_target_slice_index(slot, x, y, source);
     }
 
     public function route-pane-drop-allowed(slot: int, x: float, y: float, source: string) -> bool {
@@ -1582,6 +1606,7 @@ export component AppWindow inherits Window {
                         pane: pane;
                         view: root.pane_views[index];
                         entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;
+                        highlights: slot == 0 ? root.pane_slot_0_highlights : root.pane_slot_1_highlights;
                         focused: root.focused_pane == slot;
                         dark-mode: root.dark_mode;
                         pane-shell-base-color: root.shell-base-color;

@@ -5,7 +5,8 @@ use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewEntry, PaneSlotData, PaneViewData, set_status, sync_virtual_entries_for_slot,
+    AppWindow, ItemViewEntry, ItemViewHighlightEntry, PaneSlotData, PaneViewData, set_status,
+    sync_virtual_entries_for_slot,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -92,6 +93,14 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
             .map(|slot| (slot, pane_slot_entries(slot, &state_ref)))
             .collect::<Vec<_>>()
     };
+    let highlights = {
+        let state_ref = state.borrow();
+        visible_slots
+            .iter()
+            .copied()
+            .map(|slot| (slot, pane_slot_highlights(slot, &state_ref)))
+            .collect::<Vec<_>>()
+    };
 
     if ui.get_pane_slots().row_count() > slots.len() {
         sync_pane_slots_model(ui, slots);
@@ -101,6 +110,7 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
         sync_pane_slots_model(ui, slots);
     }
     sync_pane_entries_ui(ui, entries);
+    sync_pane_highlights_ui(ui, highlights);
 }
 
 fn sync_pane_slots_model(ui: &AppWindow, slots: Vec<PaneSlotData>) {
@@ -130,17 +140,19 @@ pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
             continue;
         };
         if current_view.slot == slot {
-            let (next, entries) = {
+            let (next, entries, highlights) = {
                 let state_ref = state.borrow();
                 (
                     pane_view_data(ui, slot, &state_ref),
                     pane_slot_entries(slot, &state_ref),
+                    pane_slot_highlights(slot, &state_ref),
                 )
             };
             if current_view != next {
                 current.set_row_data(row, next);
             }
             set_pane_entries_ui(ui, slot, entries);
+            set_pane_highlights_ui(ui, slot, highlights);
             return;
         }
     }
@@ -213,6 +225,31 @@ fn set_pane_entries_ui(ui: &AppWindow, slot: i32, entries: ModelRc<ItemViewEntry
         1 => {
             if ui.get_pane_slot_1_entries() != entries {
                 ui.set_pane_slot_1_entries(entries);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sync_pane_highlights_ui(
+    ui: &AppWindow,
+    highlights: Vec<(i32, ModelRc<ItemViewHighlightEntry>)>,
+) {
+    for (slot, model) in highlights {
+        set_pane_highlights_ui(ui, slot, model);
+    }
+}
+
+fn set_pane_highlights_ui(ui: &AppWindow, slot: i32, highlights: ModelRc<ItemViewHighlightEntry>) {
+    match slot {
+        0 => {
+            if ui.get_pane_slot_0_highlights() != highlights {
+                ui.set_pane_slot_0_highlights(highlights);
+            }
+        }
+        1 => {
+            if ui.get_pane_slot_1_highlights() != highlights {
+                ui.set_pane_slot_1_highlights(highlights);
             }
         }
         _ => {}
@@ -444,6 +481,29 @@ fn pane_slot_entries(slot: i32, state: &AppState) -> ModelRc<ItemViewEntry> {
         .panes
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_entries.clone())
+        .unwrap_or_default()
+}
+
+fn pane_slot_highlights(slot: i32, state: &AppState) -> ModelRc<ItemViewHighlightEntry> {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| {
+            let highlights = pane
+                .view
+                .virtual_entry_tokens
+                .iter()
+                .enumerate()
+                .filter_map(|(row, token)| {
+                    token.selected().then_some(ItemViewHighlightEntry {
+                        slice_index: row as i32,
+                        tile_width: token.tile_width(),
+                        tile_height: token.tile_height(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            ModelRc::new(Rc::new(VecModel::from(highlights)))
+        })
         .unwrap_or_default()
 }
 

@@ -54,7 +54,7 @@ use app::geometry::{
 use app::item_view::{
     ItemViewInputMetrics, ItemViewMediaCache, ItemViewReleaseAction, ItemViewRenderMetrics,
     ItemViewRenderPlanInput, SelectionRect, decorate_fallback_media, decorate_render_plan,
-    entry_at_pane_point,
+    entry_at_pane_point, item_index_at_pane_point,
 };
 use app::model_update::{
     apply_item_view_entry_selection_updates, update_item_view_entry_selection_tokens,
@@ -1144,6 +1144,25 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_pane_drop_target_slice_index(move |slot, x, y, source| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return -1;
+            };
+            let state = state.borrow();
+            pane_drop_target_slice_index_for_slot(
+                &ui,
+                &state,
+                slot,
+                x,
+                y,
+                Path::new(source.as_str()),
+            )
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         ui.on_pane_drop_allowed(move |slot, x, y, source| {
             let Some(ui) = ui_weak.upgrade() else {
                 return false;
@@ -1632,6 +1651,15 @@ fn register_pane_routing_callbacks(
         routing.on_drop_target_path(move |slot, x, y, source| {
             ui_weak.upgrade().map_or_else(SharedString::new, |ui| {
                 ui.invoke_route_pane_drop_target_path(slot, x, y, source)
+            })
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_drop_target_slice_index(move |slot, x, y, source| {
+            ui_weak.upgrade().map_or(-1, |ui| {
+                ui.invoke_route_pane_drop_target_slice_index(slot, x, y, source)
             })
         });
     }
@@ -4301,6 +4329,36 @@ fn pane_drop_target_path_for_slot(
     source: &Path,
 ) -> Option<String> {
     pane_drop_target_path(ui, state, slot, x, y, source)
+}
+
+fn pane_drop_target_slice_index_for_slot(
+    ui: &AppWindow,
+    state: &AppState,
+    slot: i32,
+    x: f32,
+    y: f32,
+    source: &Path,
+) -> i32 {
+    let Some(target_path) = pane_drop_target_path_for_slot(ui, state, slot, x, y, source) else {
+        return -1;
+    };
+    let Some(global_index) = item_index_at_pane_point(ui, state, slot, x, y) else {
+        return -1;
+    };
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return -1;
+    };
+    if global_index < pane.view.virtual_start_index {
+        return -1;
+    }
+    let slice_index = global_index - pane.view.virtual_start_index;
+    let Some(entry) = pane.view.virtual_entries.row_data(slice_index) else {
+        return -1;
+    };
+    if entry.path.as_str() != target_path {
+        return -1;
+    }
+    slice_index as i32
 }
 
 fn pane_drop_allowed_for_slot(

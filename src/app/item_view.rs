@@ -95,6 +95,14 @@ impl ItemViewRowToken {
         self.selected
     }
 
+    pub(crate) fn tile_width(&self) -> f32 {
+        self.tile_width
+    }
+
+    pub(crate) fn tile_height(&self) -> f32 {
+        self.tile_height
+    }
+
     pub(crate) fn set_selected(&mut self, selected: bool) {
         self.selected = selected;
     }
@@ -807,9 +815,19 @@ pub(crate) fn entry_at_pane_point(
     x: f32,
     y: f32,
 ) -> Option<FileEntry> {
-    let layout = ItemViewLayout::from_ui(ui, state, slot)?;
-    let index = layout.index_at_point(x, y)?;
+    let index = item_index_at_pane_point(ui, state, slot, x, y)?;
     filtered_entry_at_for_slot(state, slot, index)
+}
+
+pub(crate) fn item_index_at_pane_point(
+    ui: &AppWindow,
+    state: &AppState,
+    slot: i32,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    let layout = ItemViewLayout::from_ui(ui, state, slot)?;
+    layout.index_at_point(x, y)
 }
 
 #[cfg(test)]

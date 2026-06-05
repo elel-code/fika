@@ -2149,6 +2149,7 @@ mod tests {
                 && pane_routing.contains("callback item-view-blank-cancelled(int);")
                 && pane_routing.contains("callback request-blank-context-menu(int, length, length);")
                 && pane_routing.contains("callback drop-target-path(int, float, float, string) -> string;")
+                && pane_routing.contains("callback drop-target-slice-index(int, float, float, string) -> int;")
                 && pane_routing.contains("callback drop-allowed(int, float, float, string) -> bool;")
                 && pane_routing.contains("callback prepare-transfer(int, string, float, float) -> bool;")
                 && !pane_routing.contains("callback activated")
@@ -2212,6 +2213,7 @@ mod tests {
                 && file_pane.contains("callback item_view_blank_released")
                 && file_pane.contains("callback item_view_blank_cancelled")
                 && file_pane.contains("callback drop_target_path")
+                && file_pane.contains("callback drop_target_slice_index")
                 && file_pane.contains("callback drop_allowed")
                 && file_pane.contains("callback prepare_transfer")
                 && file_pane.contains("callback make_drag_data_at")
@@ -2282,6 +2284,7 @@ mod tests {
             "zoom_in(slot) => { PaneRouting.zoom-in(slot); }",
             "zoom_out(slot) => { PaneRouting.zoom-out(slot); }",
             "drop_target_path(slot, x, y, source) => {\n        PaneRouting.drop-target-path(slot, x, y, source)\n    }",
+            "drop_target_slice_index(slot, x, y, source) => {\n        PaneRouting.drop-target-slice-index(slot, x, y, source)\n    }",
             "drop_allowed(slot, x, y, source) => {\n        PaneRouting.drop-allowed(slot, x, y, source)\n    }",
             "prepare_transfer(slot, source, x, y) => {\n        PaneRouting.prepare-transfer(slot, source, x, y)\n    }",
             "transfer_menu_requested(slot) => { PaneRouting.transfer-menu-requested(slot); }",
@@ -2306,6 +2309,7 @@ mod tests {
                 && pane_slot_surface.contains("in property <PaneSlotData> pane;")
                 && pane_slot_surface.contains("in property <PaneViewData> view;")
                 && pane_slot_surface.contains("in property <[ItemViewEntry]> entries;")
+                && pane_slot_surface.contains("in property <[ItemViewHighlightEntry]> highlights;")
                 && pane_slot_surface.contains("pane-slot: root.pane.slot;")
                 && pane_slot_surface.contains("current-path: root.pane.current_path;")
                 && pane_slot_surface
@@ -2327,12 +2331,17 @@ mod tests {
                 )
                 && pane_slot_surface.contains("viewport-x <=> root.live-viewport-x;")
                 && pane_slot_surface.contains("entries: root.entries;")
+                && pane_slot_surface.contains("highlights: root.highlights;")
                 && pane_slot_surface.contains("callback viewport_changed(int, float);")
                 && pane_slot_surface.contains(
                     "viewport_changed(slot, viewport-x) => {\n            root.viewport_changed(slot, viewport-x);\n        }"
                 )
                 && pane_slot_surface.contains("private property <bool> live-drag-active: false;")
+                && pane_slot_surface
+                    .contains("private property <int> live-drag-target-slice-index: -1;")
                 && pane_slot_surface.contains("drag-active <=> root.live-drag-active;")
+                && pane_slot_surface
+                    .contains("drag-target-slice-index <=> root.live-drag-target-slice-index;")
                 && pane_slot_surface.contains("status: root.pane.status;")
                 && pane_slot_surface.contains("selected-count: root.pane.selected_count;")
                 && pane_slot_surface.contains("selected-status: root.pane.selected_status;")
@@ -2368,6 +2377,7 @@ mod tests {
                 && app.contains("pane: pane;")
                 && app.contains("view: root.pane_views[index];")
                 && app.contains("entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;")
+                && app.contains("highlights: slot == 0 ? root.pane_slot_0_highlights : root.pane_slot_1_highlights;")
                 && app.contains("focused: root.focused_pane == slot;"),
             "split view should render every physical pane through one slot-driven PaneSlotSurface template"
         );
@@ -2488,6 +2498,10 @@ mod tests {
                     .contains("public function route-pane-drop-target-path(slot: int,")
                 && route_functions
                     .contains("return root.pane_drop_target_path(slot, x, y, source);")
+                && route_functions
+                    .contains("public function route-pane-drop-target-slice-index(slot: int,")
+                && route_functions
+                    .contains("return root.pane_drop_target_slice_index(slot, x, y, source);")
                 && route_functions.contains("public function route-pane-drop-allowed(slot: int,")
                 && route_functions.contains("return root.pane_drop_allowed(slot, x, y, source);")
                 && route_functions
@@ -2535,9 +2549,15 @@ mod tests {
         assert!(
             app.contains("callback pane_drop_target_path(int, float, float, string) -> string;")
         );
+        assert!(
+            app.contains(
+                "callback pane_drop_target_slice_index(int, float, float, string) -> int;"
+            )
+        );
         assert!(app.contains("callback pane_drop_allowed(int, float, float, string) -> bool;"));
         assert!(app.contains("root.pane_prepare_transfer(slot, source, x, y)"));
         assert!(app.contains("root.pane_drop_target_path(slot, x, y, source)"));
+        assert!(app.contains("root.pane_drop_target_slice_index(slot, x, y, source)"));
         assert!(app.contains("root.pane_drop_allowed(slot, x, y, source)"));
         assert!(!app.contains("inactive-pane-drag-active"));
         assert!(!app.contains("main_drag_active"));
@@ -2579,10 +2599,14 @@ mod tests {
         assert!(split_pane.contains("callback zoom_in();"));
         assert!(split_pane.contains("callback zoom_out();"));
         assert!(
-            split_pane.contains("item.selected ? root.selected-background-color : transparent")
+            split_pane.contains("in property <[ItemViewHighlightEntry]> highlights;")
+                && split_pane.contains("for highlight[index] in root.highlights: Rectangle")
+                && split_pane.contains("background: root.selected-background-color;")
                 && !split_pane.contains("pure callback is_selected")
-                && !split_pane.contains("root.is_selected(item.path)"),
-            "SplitPaneView should derive tile highlight from precomputed ItemViewEntry selection state"
+                && !split_pane.contains("root.is_selected(item.path)")
+                && !split_pane
+                    .contains("item.selected ? root.selected-background-color : transparent"),
+            "SplitPaneView should draw selection from a sparse pane-local highlight model instead of per-item selected backgrounds"
         );
         assert!(split_pane.contains("function handle-scroll("));
         assert!(
@@ -2600,44 +2624,74 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
             .map(|(body, _)| body)
             .expect("models.slint should define ItemViewEntry before PlaceEntry");
-        let visible_tile_loop = split_pane
-            .split_once("for item[index] in root.entries: Rectangle")
+        let highlight_loop = split_pane
+            .split_once("for highlight[index] in root.highlights: Rectangle")
+            .and_then(|(_, rest)| {
+                rest.split_once(
+                    "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
+                )
+            })
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should have a sparse selection highlight overlay");
+        let drop_target_loop = split_pane
+            .split_once(
+                "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
+            )
+            .and_then(|(_, rest)| rest.split_once("for item[index] in root.entries: Image"))
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should have one concrete drop-target overlay");
+        let base_image_loop = split_pane
+            .split_once("for item[index] in root.entries: Image")
+            .and_then(|(_, rest)| rest.split_once("for item[index] in root.entries: Text"))
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should have an unconditional base image primitive loop");
+        let base_text_loop = split_pane
+            .split_once("for item[index] in root.entries: Text")
             .and_then(|(_, rest)| rest.split_once("if (root.show-location): Rectangle"))
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have an unconditional visible item primitive loop");
+            .expect("SplitPaneView should have an unconditional base text primitive loop");
         let metadata_tile_loop = split_pane
             .split_once("if (root.show-location): Rectangle")
             .and_then(|(_, rest)| rest.split_once("if (root.selection-rect-active): Rectangle"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have a metadata overlay loop");
         assert!(
-            split_pane.contains("for item[index] in root.entries: Rectangle")
-                && split_pane.contains("tile-row: index.mod(root.rows-per-column);")
-                && split_pane
+            split_pane.contains("for item[index] in root.entries: Image")
+                && split_pane.contains("for item[index] in root.entries: Text")
+                && base_image_loop.contains("tile-row: index.mod(root.rows-per-column);")
+                && base_image_loop
+                    .contains("tile-column: (index - self.tile-row) / root.rows-per-column;")
+                && base_text_loop.contains("tile-row: index.mod(root.rows-per-column);")
+                && base_text_loop
                     .contains("tile-column: (index - self.tile-row) / root.rows-per-column;")
                 && split_pane.contains(
                     "x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;"
                 )
-                && split_pane.contains("x: self.tile-column * root.column-width;")
-                && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && split_pane.contains("width: item.tile_width * 1px;")
-                && split_pane.contains("height: item.tile_height * 1px;")
-                && split_pane.contains("source: item.media;")
-                && split_pane.contains("x: item.media_x * 1px;")
-                && split_pane.contains("x: item.text_x * 1px;")
-                && split_pane.contains("y: item.title_y * 1px;")
-                && split_pane.contains("width: item.text_width * 1px;")
-                && split_pane.contains("height: item.title_line_height * 1px;")
-                && split_pane.contains("text: item.name;")
-                && visible_tile_loop.contains("source: item.media;")
-                && visible_tile_loop.contains("text: item.name;")
-                && !visible_tile_loop.contains("metadata_line_height")
-                && !visible_tile_loop.contains("metadata-group-color")
-                && !visible_tile_loop.contains("metadata-location-color")
-                && !visible_tile_loop.contains("item.group")
-                && !visible_tile_loop.contains("item.location")
+                && base_image_loop
+                    .contains("x: self.tile-column * root.column-width + item.media_x * 1px;")
+                && base_image_loop.contains(
+                    "y: root.preview-padding + self.tile-row * root.row-height + item.media_y * 1px;"
+                )
+                && base_image_loop.contains("width: item.media_width * 1px;")
+                && base_image_loop.contains("height: item.media_height * 1px;")
+                && base_image_loop.contains("source: item.media;")
+                && base_text_loop
+                    .contains("x: self.tile-column * root.column-width + item.text_x * 1px;")
+                && base_text_loop.contains(
+                    "y: root.preview-padding + self.tile-row * root.row-height + item.title_y * 1px;"
+                )
+                && base_text_loop.contains("width: item.text_width * 1px;")
+                && base_text_loop.contains("height: item.title_line_height * 1px;")
+                && base_text_loop.contains("text: item.name;")
+                && !base_image_loop.contains("metadata_line_height")
+                && !base_text_loop.contains("metadata_line_height")
+                && !base_text_loop.contains("metadata-group-color")
+                && !base_text_loop.contains("metadata-location-color")
+                && !base_text_loop.contains("item.group")
+                && !base_text_loop.contains("item.location")
                 && !split_pane.contains("item.thumbnail")
-                && !visible_tile_loop.contains("thumbnail_state")
+                && !base_image_loop.contains("thumbnail_state")
+                && !base_text_loop.contains("thumbnail_state")
                 && !widgets.contains("export component FolderGlyph")
                 && !split_pane.contains("entry: item;")
                 && !split_pane.contains("selected: item.selected;")
@@ -2660,6 +2714,28 @@ mod tests {
             "SplitPaneView should inline Dolphin-style horizontal column-first tile primitives without a FileTile or FolderGlyph component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
         );
         assert!(
+            highlight_loop.contains("tile-row: highlight.slice_index.mod(root.rows-per-column);")
+                && highlight_loop.contains(
+                    "tile-column: (highlight.slice_index - self.tile-row) / root.rows-per-column;"
+                )
+                && highlight_loop.contains("x: self.tile-column * root.column-width;")
+                && highlight_loop.contains("y: root.preview-padding + self.tile-row * root.row-height;")
+                && highlight_loop.contains("width: highlight.tile_width * 1px;")
+                && highlight_loop.contains("height: highlight.tile_height * 1px;")
+                && drop_target_loop.contains(
+                    "tile-row: root.drag-target-slice-index.mod(root.rows-per-column);"
+                )
+                && drop_target_loop.contains(
+                    "tile-column: (root.drag-target-slice-index - self.tile-row) / root.rows-per-column;"
+                )
+                && drop_target_loop.contains("width: root.cell-width;")
+                && drop_target_loop.contains("height: root.row-height;")
+                && !split_pane.contains(
+                    "root.drag-active && !root.drag-rejected && root.drag-target-path == item.path"
+                ),
+            "selection and drop feedback should use sparse slice-index overlays with the same horizontal column-first coordinates"
+        );
+        assert!(
             !split_pane.contains("private property <length> tile-height:")
                 && !split_pane.contains("private property <length> thumbnail-width:")
                 && !split_pane.contains("private property <length> title-font-size:")
@@ -2667,12 +2743,15 @@ mod tests {
                 && !split_pane.contains("zoom-level: root.zoom-level;")
                 && split_pane.contains("color: root.metadata-group-color;")
                 && split_pane.contains("height: item.tile_height * 1px;")
-                && split_pane.contains("width: item.media_width * 1px;")
-                && split_pane.contains("font-size: item.title_font_size * 1px;")
-                && split_pane.contains("x: item.text_x * 1px;")
-                && split_pane.contains("y: item.title_y * 1px;")
-                && split_pane.contains("width: item.text_width * 1px;")
-                && split_pane.contains("horizontal-alignment: left;")
+                && base_image_loop.contains("width: item.media_width * 1px;")
+                && base_image_loop.contains("height: item.media_height * 1px;")
+                && base_text_loop.contains("font-size: item.title_font_size * 1px;")
+                && base_text_loop.contains("item.text_x * 1px")
+                && base_text_loop.contains("item.title_y * 1px")
+                && base_text_loop.contains("width: item.text_width * 1px;")
+                && base_text_loop.contains("height: item.title_line_height * 1px;")
+                && base_text_loop.contains("text: item.name;")
+                && base_text_loop.contains("horizontal-alignment: left;")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
                 && !split_pane.contains("parent.width - 12px")
                 && split_pane.contains("height: item.metadata_line_height * 1px;")
@@ -2680,8 +2759,10 @@ mod tests {
                 && !split_pane.contains("doc-font-size:")
                 && !split_pane.contains("item.tile_padding_x")
                 && !split_pane.contains("item.tile_spacing")
-                && !visible_tile_loop.contains("HorizontalLayout")
-                && !visible_tile_loop.contains("VerticalLayout")
+                && !base_image_loop.contains("HorizontalLayout")
+                && !base_image_loop.contains("VerticalLayout")
+                && !base_text_loop.contains("HorizontalLayout")
+                && !base_text_loop.contains("VerticalLayout")
                 && !split_pane.contains("height: root.zoom-level ==")
                 && !split_pane.contains("font-size: root.zoom-level =="),
             "visible tile primitives should consume media and render tokens projected by Rust item-view, with only pane-metric guards for invalid zero title geometry"
@@ -2713,7 +2794,8 @@ mod tests {
             "Ctrl+wheel zoom should still request pane focus before changing zoom"
         );
         assert!(split_pane.contains("scroll-event(event)"));
-        assert!(split_pane.contains("for item[index] in root.entries: Rectangle"));
+        assert!(split_pane.contains("for item[index] in root.entries: Image"));
+        assert!(split_pane.contains("for item[index] in root.entries: Text"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")
                 && split_pane.contains("data: root.make_drag_data_at(")
@@ -2747,9 +2829,6 @@ mod tests {
                 && !metadata_tile_loop.contains("text: item.name;"),
             "ordinary compact items should always render icon/name in the base loop, while group/location metadata is an overlay used only for location mode"
         );
-        assert!(split_pane.contains(
-            "root.drag-active && !root.drag-rejected && root.drag-target-path == item.path"
-        ));
         assert!(!split_pane.contains("root.request_context_menu("));
         assert!(
             split_pane.contains("slice-layer := Rectangle")

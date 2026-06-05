@@ -39,11 +39,14 @@ Rectangle viewport shell (clip: true)
   ├─ full-viewport DragArea + TouchArea (wheel / item click / double click / context / blank click / rectangle selection)
   ├─ Rust-projected item-view layout metrics (rows/cell/column/content/scroll extent)
   ├─ slice-layer (x = padding + column_offset + virtual_start_column * column_width - viewport_x)
-  │    └─ for item[index] in entries: Rectangle primitive
-  │         ├─ local tile x/y 来自 reusable loop index
-  │         ├─ tile size、media/text rects 来自 Rust item-view render plan
-  │         ├─ 基础 compact loop 永远绘制 media + name
-  │         └─ 无 per-item HorizontalLayout / VerticalLayout / input handler
+  │    ├─ for highlight[index] in highlights: Rectangle primitive
+  │    │    └─ 只绘制选中背景，slice_index 使用同一套列优先坐标
+  │    ├─ single drag-target-slice-index Rectangle primitive
+  │    │    └─ 只绘制当前 drop target，不再逐 item 比较 path
+  │    ├─ for item[index] in entries: Image primitive
+  │    │    └─ local tile column/row 来自 reusable loop index
+  │    ├─ for item[index] in entries: Text primitive
+  │    │    └─ 基础 compact layer 永远绘制 `item.name`
   │    └─ optional metadata overlay (show-location only)
   │         └─ 只绘制 group/location，不参与普通目录 item
   ├─ selection rectangle overlay
@@ -161,7 +164,7 @@ changed viewport-x => {
 - `src/app/model_update.rs` — `update_pane_item_view_entries_model`
 - `src/app/pane.rs` — `PaneView.virtual_entries` / `virtual_entry_tokens`
 - `src/app/split_view.rs` — `sync_pane_entries_ui`
-- `ui/split_pane.slint` — `for item[index] in root.entries: Rectangle`
+- `ui/split_pane.slint` — `for item[index] in root.entries: Image` / `Text`
 
 **实际实现**（✅ 已完成）：`update_pane_item_view_entries_model()` 保留 pane-local `VecModel<ItemViewEntry>`，根据 old/new virtual start 处理前后滑动：
 - 无重叠或空模型：`VecModel::set_vec`
@@ -169,7 +172,7 @@ changed viewport-x => {
 - 重叠行：比较 Rust sidecar `ItemViewRowToken`，只有 token 不同才 `set_row_data`
 - 尾部长度差：`remove` / `extend`
 
-`ItemViewRowToken` 覆盖 name/path/selection/media token/tile rect/text rect/font token 等轻量字段，避免为了比较复用而从 Slint `VecModel` 读取并克隆包含 `Image` 的整条 row。split pane snapshot 会复制到独立 `VecModel` 和 sidecar，避免两个 pane 共享同一个可见 row model。
+`ItemViewRowToken` 覆盖 name/path/selection/media token/tile rect/text rect/font token 等轻量字段，避免为了比较复用而从 Slint `VecModel` 读取并克隆包含 `Image` 的整条 row。split pane snapshot 会复制到独立 `VecModel` 和 sidecar，避免两个 pane 共享同一个可见 row model。选中态从 token 投影成 pane-local `ItemViewHighlightEntry` 稀疏 model，由 Slint 单独绘制 highlight overlay；基础 `Image` / `Text` loop 不再携带 per-item selected background。
 
 **收益**：连续滚动时重叠 virtual rows 不再因为 slice-local 坐标变化或 `Image` 对象差异被重发；selection、thumbnail、fallback icon、render rect 变化仍能按 row 精准更新。
 
