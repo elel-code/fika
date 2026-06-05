@@ -877,6 +877,7 @@ export component AppWindow inherits Window {
     callback pane_drop_allowed(int, float, float, string) -> bool;
     callback pane_view_changed(int);
     callback pane_layout_changed();
+    callback icon_zoom_layout_changed();
     callback pane_slots_refresh_requested();
     callback pane_slot_refresh_requested(int);
     callback pane_path_text_changed(int, string);
@@ -1241,7 +1242,7 @@ export component AppWindow inherits Window {
         }
     }
     changed icon_zoom_level => {
-        root.pane_layout_changed();
+        root.icon_zoom_layout_changed();
     }
     changed transfer_conflict_open => {
         if (root.transfer_conflict_open) {

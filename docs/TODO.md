@@ -49,7 +49,7 @@
   - Current: thumbnail scheduling for each virtual-slice sync is capped and owned by `src/app/thumbnail_pipeline.rs`, so large directories cannot enqueue an unbounded number of decode jobs from a single viewport update.
   - Current: rectangle selection narrows candidates to the intersecting column range before resolving paths, so large directories do not scan every visible result for a local drag box.
 - [x] Ctrl+wheel zoom for main file tiles.
-  - Current: zoom changes still rebuild the visible pane layout immediately, but `persist_ui_state()` no longer rebuilds virtual views or synchronously writes `settings.tsv` on the UI thread; interactive settings saves are coalesced and written in the background, while close/navigation keeps a synchronous latest save.
+  - Current: zoom changes use a Dolphin-style dedicated latest-only layout coalescer before rebuilding visible pane slices; ordinary window/sidebar/split layout changes still flush immediately. `persist_ui_state()` no longer rebuilds virtual views or synchronously writes `settings.tsv` on the UI thread; interactive settings saves are coalesced and written in the background, while close/navigation keeps a synchronous latest save.
 - [x] Click blank area clears selection and releases LineEdit focus.
 - [x] Ctrl multi-select.
 - [x] Right-click folder menu with `Add to Places`.

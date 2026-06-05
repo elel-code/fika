@@ -134,6 +134,7 @@ pub(crate) struct FileEntry {
 }
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
+const ICON_ZOOM_LAYOUT_COALESCE: Duration = Duration::from_millis(80);
 
 struct PaneViewSyncScheduler {
     ui: slint::Weak<AppWindow>,
@@ -165,6 +166,63 @@ impl PaneViewSyncScheduler {
     }
 
     fn flush_all(&self) {}
+}
+
+struct PaneLayoutSyncScheduler {
+    timer: Timer,
+    ui: slint::Weak<AppWindow>,
+    state: Rc<RefCell<AppState>>,
+    bridge: AsyncBridge,
+    pane_view_sync: Rc<PaneViewSyncScheduler>,
+}
+
+impl PaneLayoutSyncScheduler {
+    fn new(
+        ui: slint::Weak<AppWindow>,
+        state: Rc<RefCell<AppState>>,
+        bridge: AsyncBridge,
+        pane_view_sync: Rc<PaneViewSyncScheduler>,
+    ) -> Self {
+        let timer = Timer::default();
+        let timer_ui = ui.clone();
+        let timer_state = Rc::clone(&state);
+        let timer_bridge = bridge.clone();
+        let timer_pane_view_sync = Rc::clone(&pane_view_sync);
+
+        timer.start(
+            TimerMode::SingleShot,
+            ICON_ZOOM_LAYOUT_COALESCE,
+            move || {
+                let Some(ui) = timer_ui.upgrade() else {
+                    return;
+                };
+                timer_pane_view_sync.flush_all();
+                sync_visible_pane_layouts(&ui, &timer_state, &timer_bridge);
+            },
+        );
+        timer.stop();
+
+        Self {
+            timer,
+            ui,
+            state,
+            bridge,
+            pane_view_sync,
+        }
+    }
+
+    fn sync_now(&self) {
+        self.timer.stop();
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        self.pane_view_sync.flush_all();
+        sync_visible_pane_layouts(&ui, &self.state, &self.bridge);
+    }
+
+    fn request_icon_zoom_sync(&self) {
+        self.timer.restart();
+    }
 }
 
 struct ThumbnailFlushScheduler {
@@ -401,6 +459,12 @@ fn main() -> Result<(), slint::PlatformError> {
         Rc::clone(&state),
         bridge.clone(),
     ));
+    let pane_layout_sync = Rc::new(PaneLayoutSyncScheduler::new(
+        ui.as_weak(),
+        Rc::clone(&state),
+        bridge.clone(),
+        Rc::clone(&pane_view_sync),
+    ));
     let thumbnail_flush = Rc::new(ThumbnailFlushScheduler::new(
         ui.as_weak(),
         Rc::clone(&state),
@@ -434,15 +498,16 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        let pane_view_sync = Rc::clone(&pane_view_sync);
+        let pane_layout_sync = Rc::clone(&pane_layout_sync);
         ui.on_pane_layout_changed(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                pane_view_sync.flush_all();
-                sync_visible_pane_layouts(&ui, &state, &bridge);
-            }
+            pane_layout_sync.sync_now();
+        });
+    }
+
+    {
+        let pane_layout_sync = Rc::clone(&pane_layout_sync);
+        ui.on_icon_zoom_layout_changed(move || {
+            pane_layout_sync.request_icon_zoom_sync();
         });
     }
 
@@ -6214,7 +6279,7 @@ mod tests {
             .expect("main setup body should be present");
         let scheduler_body = source
             .split_once("struct PaneViewSyncScheduler")
-            .and_then(|(_, rest)| rest.split_once("struct ThumbnailFlushScheduler"))
+            .and_then(|(_, rest)| rest.split_once("struct PaneLayoutSyncScheduler"))
             .map(|(body, _)| body)
             .expect("pane view scheduler body should be present");
 
@@ -6254,12 +6319,24 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn sync_pane_view_for_slot("))
             .map(|(body, _)| body)
             .expect("pane layout sync body should be present");
+        let layout_scheduler_body = source
+            .split_once("struct PaneLayoutSyncScheduler")
+            .and_then(|(_, rest)| rest.split_once("struct ThumbnailFlushScheduler"))
+            .map(|(body, _)| body)
+            .expect("pane layout scheduler body should be present");
 
         assert!(
-            main_body.contains("pane_view_sync.flush_all();")
-                && main_body.contains("sync_visible_pane_layouts(&ui, &state, &bridge);")
+            main_body.contains("pane_layout_sync.sync_now();")
                 && !main_body.contains("sync_pane_view_for_slot"),
-            "layout changes should flush pending scroll work and rebuild visible pane slices immediately"
+            "ordinary layout changes should route through the immediate layout scheduler path"
+        );
+        assert!(
+            layout_scheduler_body.contains("fn sync_now(&self)")
+                && layout_scheduler_body.contains("self.timer.stop();")
+                && layout_scheduler_body.contains("self.pane_view_sync.flush_all();")
+                && layout_scheduler_body
+                    .contains("sync_visible_pane_layouts(&ui, &self.state, &self.bridge);"),
+            "ordinary layout changes should flush pending zoom work and rebuild visible pane slices immediately"
         );
         assert!(
             viewport_body.contains(
@@ -6276,6 +6353,51 @@ mod tests {
                 "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true, true);"
             ),
             "layout changes must synchronously clamp/rebuild the visible slice before Slint reuses old virtual coordinates"
+        );
+    }
+
+    #[test]
+    fn icon_zoom_layout_changes_are_coalesced() {
+        let source = include_str!("main.rs");
+        let app = include_str!("../ui/app.slint");
+        let setup_body = source
+            .split_once("let pane_layout_sync = Rc::new(PaneLayoutSyncScheduler::new(")
+            .and_then(|(_, rest)| rest.split_once("ui.on_pane_slots_refresh_requested"))
+            .map(|(body, _)| body)
+            .expect("pane layout scheduler setup should be present");
+        let scheduler_body = source
+            .split_once("struct PaneLayoutSyncScheduler")
+            .and_then(|(_, rest)| rest.split_once("struct ThumbnailFlushScheduler"))
+            .map(|(body, _)| body)
+            .expect("pane layout scheduler body should be present");
+
+        assert!(
+            source
+                .contains("const ICON_ZOOM_LAYOUT_COALESCE: Duration = Duration::from_millis(80);")
+                && app.contains("callback icon_zoom_layout_changed();")
+                && app.contains(
+                    "changed icon_zoom_level => {\n        root.icon_zoom_layout_changed();\n    }"
+                )
+                && !app.contains(
+                    "changed icon_zoom_level => {\n        root.pane_layout_changed();\n    }"
+                ),
+            "icon zoom should use a dedicated callback instead of the ordinary immediate layout callback"
+        );
+        assert!(
+            setup_body.contains("ui.on_icon_zoom_layout_changed(move ||")
+                && setup_body.contains("pane_layout_sync.request_icon_zoom_sync();"),
+            "icon zoom callback should request a coalesced layout sync"
+        );
+        assert!(
+            scheduler_body.contains("TimerMode::SingleShot")
+                && scheduler_body.contains("ICON_ZOOM_LAYOUT_COALESCE")
+                && scheduler_body.contains("fn request_icon_zoom_sync(&self)")
+                && scheduler_body.contains("self.timer.restart();")
+                && scheduler_body.contains("fn sync_now(&self)")
+                && scheduler_body.contains("self.timer.stop();")
+                && scheduler_body
+                    .contains("sync_visible_pane_layouts(&ui, &timer_state, &timer_bridge);"),
+            "continuous zoom should be latest-only coalesced, while ordinary layout changes can flush it synchronously"
         );
     }
 
