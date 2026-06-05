@@ -44,7 +44,10 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     let visible_count = input
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-    let compact_item_view = input.layout.compact_item_view(visible_count);
+    let visible_names = snapshot_visible_entry_names(&input, visible_count);
+    let compact_item_view = input
+        .layout
+        .compact_item_view_from_names(visible_names.iter().map(String::as_str));
     let plan =
         compact_item_view.virtual_plan(input.requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
     let range = expanded_snapshot_range(
@@ -151,6 +154,37 @@ fn snapshot_visible_entry_count(input: &VirtualViewSnapshotInput) -> usize {
         .iter()
         .filter(|entry| snapshot_matches_entry_filters(entry, input))
         .count()
+}
+
+fn snapshot_visible_entry_names(
+    input: &VirtualViewSnapshotInput,
+    visible_count: usize,
+) -> Vec<String> {
+    let mut names = if let Some(indices) = input.visible_entry_indices.as_ref() {
+        indices
+            .iter()
+            .take(visible_count)
+            .filter_map(|&index| input.entries.get(index).map(|entry| entry.name.clone()))
+            .collect::<Vec<_>>()
+    } else if snapshot_filters_are_identity(input) {
+        input
+            .entries
+            .iter()
+            .take(visible_count)
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>()
+    } else {
+        input
+            .entries
+            .iter()
+            .filter(|entry| snapshot_matches_entry_filters(entry, input))
+            .take(visible_count)
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>()
+    };
+
+    names.resize(visible_count, String::new());
+    names
 }
 
 fn snapshot_entries_range(
@@ -387,6 +421,10 @@ mod tests {
             cell_width: 100.0,
             row_height: 90.0,
             padding: 10.0,
+            item_padding: 0.0,
+            media_width: 1.0,
+            media_text_gap: 0.0,
+            title_font_size: 1.0,
         }
     }
 
@@ -443,11 +481,17 @@ mod tests {
         entry_count: usize,
         thumbnail_size_px: u32,
     ) -> VirtualViewCache {
+        let names = (0..entry_count)
+            .map(|index| format!("item-{index}.txt"))
+            .collect::<Vec<_>>();
         let mut cache = VirtualViewCache {
             range,
             ..VirtualViewCache::default()
         };
-        cache.update_layout_signature(layout().compact_item_view(entry_count), thumbnail_size_px);
+        cache.update_layout_signature(
+            layout().compact_item_view_from_names(names.iter().map(String::as_str)),
+            thumbnail_size_px,
+        );
         cache
     }
 
@@ -493,7 +537,7 @@ mod tests {
             115.0,
             cache_for_layout(first.range.clone(), first.entry_count, 64),
         ));
-        assert_eq!(second.visible_range, 0..16);
+        assert_eq!(second.visible_range, 4..16);
         assert_eq!(second.range, 0..24);
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());

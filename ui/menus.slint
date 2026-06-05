@@ -774,7 +774,6 @@ export component FileContextMenu inherits PopupSurface {
     callback open_with_clicked();
     callback paste_into_folder();
     callback add_to_places();
-    callback open_terminal_here();
     callback rename_requested();
     callback duplicate_requested();
     callback cut_requested();
@@ -850,12 +849,6 @@ export component FileContextMenu inherits PopupSurface {
             label: "Add to Places";
             dark: root.dark;
             clicked => { root.add_to_places(); }
-        }
-
-        if (root.selected-count <= 1 && root.is-dir && !root.in-trash): ActionMenuRow {
-            label: "Open Terminal Here";
-            dark: root.dark;
-            clicked => { root.open_terminal_here(); }
         }
 
         if (root.selected-count <= 1): ActionMenuRow {
@@ -936,7 +929,6 @@ export component ViewportContextMenu inherits PopupSurface {
     callback empty_trash_requested();
     callback open_folder_with_hover(bool);
     callback open_folder_with_clicked();
-    callback open_terminal_here();
     callback service_action_requested(int);
     callback service_submenu_hovered(string, length, bool);
     callback service_submenu_clicked(string, length);
@@ -981,12 +973,6 @@ export component ViewportContextMenu inherits PopupSurface {
             dark: root.dark;
             hovered(is-hovered) => { root.open_folder_with_hover(is-hovered); }
             clicked => { root.open_folder_with_clicked(); }
-        }
-
-        if (!root.in-trash): ActionMenuRow {
-            label: "Open Terminal Here";
-            dark: root.dark;
-            clicked => { root.open_terminal_here(); }
         }
 
         for action in root.service-actions: ServiceActionMenuRow {
@@ -1060,7 +1046,6 @@ export component RootContextMenuLayer inherits Rectangle {
     callback file_open_with_clicked(length);
     callback file_paste_into_folder();
     callback file_add_to_places();
-    callback file_open_terminal_here();
     callback file_rename_requested();
     callback file_duplicate_requested();
     callback file_cut_requested();
@@ -1090,7 +1075,6 @@ export component RootContextMenuLayer inherits Rectangle {
     callback viewport_empty_trash_requested();
     callback viewport_open_folder_with_hover(length, bool);
     callback viewport_open_folder_with_clicked(length);
-    callback viewport_open_terminal_here();
     callback viewport_service_action_requested(int);
     callback viewport_service_submenu_hovered(string, length, bool);
     callback viewport_service_submenu_clicked(string, length);
@@ -1121,7 +1105,6 @@ export component RootContextMenuLayer inherits Rectangle {
         open_with_clicked => { root.file_open_with_clicked(root.open-with-row-y); }
         paste_into_folder => { root.file_paste_into_folder(); }
         add_to_places => { root.file_add_to_places(); }
-        open_terminal_here => { root.file_open_terminal_here(); }
         rename_requested => { root.file_rename_requested(); }
         duplicate_requested => { root.file_duplicate_requested(); }
         cut_requested => { root.file_cut_requested(); }
@@ -1201,7 +1184,6 @@ export component RootContextMenuLayer inherits Rectangle {
         empty_trash_requested => { root.viewport_empty_trash_requested(); }
         open_folder_with_hover(is-hovered) => { root.viewport_open_folder_with_hover(root.open-with-row-y, is-hovered); }
         open_folder_with_clicked => { root.viewport_open_folder_with_clicked(root.open-with-row-y); }
-        open_terminal_here => { root.viewport_open_terminal_here(); }
         service_action_requested(index) => { root.viewport_service_action_requested(index); }
         service_submenu_hovered(group, row-y, is-hovered) => {
             root.viewport_service_submenu_hovered(group, row-y, is-hovered);

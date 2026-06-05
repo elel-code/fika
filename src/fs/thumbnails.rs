@@ -103,8 +103,13 @@ struct ParsedThumbnailerEntry {
 static THUMBNAILER_REGISTRY: OnceLock<Vec<ThumbnailerEntry>> = OnceLock::new();
 
 pub(crate) fn is_thumbnail_candidate(path: &Path) -> bool {
-    is_builtin_thumbnail_candidate(path)
-        || thumbnailer_candidate_for_path(path, thumbnailer_registry()).is_some()
+    if is_builtin_thumbnail_candidate(path) {
+        return true;
+    }
+
+    thumbnailer_mime_from_extension(path.extension())
+        .and_then(|mime_type| thumbnailer_for_mime(thumbnailer_registry(), mime_type))
+        .is_some()
 }
 
 fn is_builtin_thumbnail_candidate(path: &Path) -> bool {
@@ -1135,6 +1140,16 @@ mod tests {
         assert!(is_builtin_thumbnail_candidate(Path::new("photo.JPG")));
         assert!(is_builtin_thumbnail_candidate(Path::new("photo.webp")));
         assert!(!is_builtin_thumbnail_candidate(Path::new("notes.txt")));
+    }
+
+    #[test]
+    fn unknown_extensions_do_not_enter_thumbnailer_lookup() {
+        assert_eq!(
+            thumbnailer_mime_from_extension(Path::new("sysctl.conf").extension()),
+            None
+        );
+        assert!(!is_thumbnail_candidate(Path::new("sysctl.conf")));
+        assert!(!is_thumbnail_candidate(Path::new("passwd")));
     }
 
     #[test]

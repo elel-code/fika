@@ -661,7 +661,7 @@ pub(crate) fn selection_rect_paths_filtered_for_slot(
     rect: SelectionRect,
 ) -> Vec<String> {
     let mut selected = Vec::new();
-    let visible_range = selection_rect_visible_range_for_slot(state, slot, rect);
+    let visible_range = selection_rect_visible_range_for_slot(state, slot, &rect);
 
     for (visible_index, entry) in visible_entries_range_iter_for_slot(state, slot, visible_range) {
         if rect.intersects_index(visible_index) {
@@ -674,13 +674,13 @@ pub(crate) fn selection_rect_paths_filtered_for_slot(
 
 #[allow(dead_code)]
 fn selection_rect_visible_range(state: &AppState, rect: SelectionRect) -> Range<usize> {
-    selection_rect_visible_range_for_slot(state, 0, rect)
+    selection_rect_visible_range_for_slot(state, 0, &rect)
 }
 
 fn selection_rect_visible_range_for_slot(
     state: &AppState,
     slot: i32,
-    rect: SelectionRect,
+    rect: &SelectionRect,
 ) -> Range<usize> {
     let visible_count = filtered_entry_count_for_slot(state, slot);
     rect.candidate_range(visible_count)

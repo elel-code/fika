@@ -44,7 +44,6 @@ are still in progress (see [docs/TODO.md](docs/TODO.md)).
 
 - Built-in MIME type detection and default application launching (no `xdg-open` dependency)
 - Open With menu, resolved from installed `.desktop` files
-- Terminal integration: specify the terminal emulator via `FIKA_TERMINAL` or `TERMINAL`
 
 ### Thumbnails
 
@@ -201,7 +200,6 @@ the active FileChooser. To try the Fika backend, opt in through
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `FIKA_TERMINAL` | Terminal emulator (takes precedence over `TERMINAL`) | `FIKA_TERMINAL="wezterm start --always-new-process"` |
 | `FIKA_ICON_THEME` | Override icon theme | `FIKA_ICON_THEME=Papirus` |
 | `FIKA_GUI` | Override portal backend frontend binary path | Debug use |
 | `FIKA_PRIVILEGED_HELPER` | Override privileged helper binary path | Debug use |

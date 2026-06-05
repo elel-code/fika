@@ -27,7 +27,7 @@ export global PaneRouting {
     callback item-view-item-pressed(int, float, float, bool, bool) -> bool;
     callback item-view-item-activated(int, float, float);
     callback item-view-item-context-menu(int, float, float, length, length) -> bool;
-    callback item-view-blank-pressed(int, float, float, int, float, float, float, float, float, bool);
+    callback item-view-blank-pressed(int, float, float, bool);
     callback item-view-blank-moved(int, float, float) -> bool;
     callback item-view-blank-released(int, float, float);
     callback item-view-blank-cancelled(int);
@@ -58,7 +58,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry, PaneSlotData, PaneViewData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, PaneSlotData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -96,15 +96,15 @@ component FilePane inherits Rectangle {
     in property <string> drop-trace-prefix;
     in property <int> entry-count;
     in property <[ItemViewEntry]> entries;
+    in property <[ItemViewBoundsEntry]> bounds;
     in property <[ItemViewHighlightEntry]> highlights;
+    in property <[ItemViewMediaEntry]> media;
     in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
     in property <int> virtual-start-row;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
     in property <float> item-view-cell-width: 1;
-    in property <float> item-view-column-width: 1;
-    in property <float> item-view-column-offset: 0;
     in property <float> item-view-row-height: 1;
     in property <float> item-view-padding: 14;
     in property <float> item-view-content-width: 1;
@@ -163,7 +163,7 @@ component FilePane inherits Rectangle {
     callback item_view_item_pressed(int, float, float, bool, bool) -> bool;
     callback item_view_item_activated(int, float, float);
     callback item_view_item_context_menu(int, float, float, length, length) -> bool;
-    callback item_view_blank_pressed(int, float, float, int, float, float, float, float, float, bool);
+    callback item_view_blank_pressed(int, float, float, bool);
     callback item_view_blank_moved(int, float, float) -> bool;
     callback item_view_blank_released(int, float, float);
     callback item_view_blank_cancelled(int);
@@ -307,15 +307,15 @@ component FilePane inherits Rectangle {
                 dark: root.dark;
                 entry-count: root.entry-count;
                 entries: root.entries;
+                bounds: root.bounds;
                 highlights: root.highlights;
+                media: root.media;
                 metadata: root.metadata;
                 virtual-start-column: root.virtual-start-column;
                 virtual-start-row: root.virtual-start-row;
                 viewport-x <=> root.viewport-x;
                 item-view-rows-per-column: root.item-view-rows-per-column;
                 item-view-cell-width: root.item-view-cell-width;
-                item-view-column-width: root.item-view-column-width;
-                item-view-column-offset: root.item-view-column-offset;
                 item-view-row-height: root.item-view-row-height;
                 item-view-padding: root.item-view-padding;
                 item-view-content-width: root.item-view-content-width;
@@ -359,8 +359,8 @@ component FilePane inherits Rectangle {
                 item_context_menu(x, y, abs-x, abs-y) => {
                     root.item_view_item_context_menu(root.pane-slot, x, y, abs-x, abs-y)
                 }
-                blank_pressed(x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle) => {
-                    root.item_view_blank_pressed(root.pane-slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle);
+                blank_pressed(x, y, toggle) => {
+                    root.item_view_blank_pressed(root.pane-slot, x, y, toggle);
                 }
                 blank_moved(x, y) => {
                     root.item_view_blank_moved(root.pane-slot, x, y)
@@ -435,8 +435,8 @@ component PaneSlot inherits FilePane {
     item_view_item_context_menu(slot, x, y, abs-x, abs-y) => {
         PaneRouting.item-view-item-context-menu(slot, x, y, abs-x, abs-y)
     }
-    item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle) => {
-        PaneRouting.item-view-blank-pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle);
+    item_view_blank_pressed(slot, x, y, toggle) => {
+        PaneRouting.item-view-blank-pressed(slot, x, y, toggle);
     }
     item_view_blank_moved(slot, x, y) => {
         PaneRouting.item-view-blank-moved(slot, x, y)
@@ -485,9 +485,6 @@ component PaneSlot inherits FilePane {
 component PaneSlotSurface inherits Rectangle {
     in property <PaneSlotData> pane;
     in property <PaneViewData> view;
-    in property <[ItemViewEntry]> entries;
-    in property <[ItemViewHighlightEntry]> highlights;
-    in property <[ItemViewMetadataEntry]> metadata;
     in property <bool> focused: false;
     in property <bool> dark-mode;
     in property <color> pane-shell-base-color;
@@ -575,16 +572,16 @@ component PaneSlotSurface inherits Rectangle {
         drop-ready: root.view.drop_ready;
         drop-trace-prefix: root.pane.drop_trace_prefix;
         entry-count: root.view.entry_count;
-        entries: root.entries;
-        highlights: root.highlights;
-        metadata: root.metadata;
+        entries: root.view.entries;
+        bounds: root.view.bounds;
+        highlights: root.view.highlights;
+        media: root.view.media;
+        metadata: root.view.metadata;
         virtual-start-column: root.view.virtual_start_column;
         virtual-start-row: root.view.virtual_start_row;
         viewport-x <=> root.live-viewport-x;
         item-view-rows-per-column: root.view.item_view_rows_per_column;
         item-view-cell-width: root.view.item_view_cell_width;
-        item-view-column-width: root.view.item_view_column_width;
-        item-view-column-offset: root.view.item_view_column_offset;
         item-view-row-height: root.view.item_view_row_height;
         item-view-padding: root.view.item_view_padding;
         item-view-content-width: root.view.item_view_content_width;
@@ -655,12 +652,6 @@ export component AppWindow inherits Window {
     in property <[ChooserChoice]> chooser_choices;
     in property <[PaneSlotData]> pane_slots;
     in property <[PaneViewData]> pane_views;
-    in property <[ItemViewEntry]> pane_slot_0_entries;
-    in property <[ItemViewEntry]> pane_slot_1_entries;
-    in property <[ItemViewHighlightEntry]> pane_slot_0_highlights;
-    in property <[ItemViewHighlightEntry]> pane_slot_1_highlights;
-    in property <[ItemViewMetadataEntry]> pane_slot_0_metadata;
-    in property <[ItemViewMetadataEntry]> pane_slot_1_metadata;
     in-out property <int> entry_count: 0;
     in property <[PlaceEntry]> places;
     in property <[DeviceEntry]> devices;
@@ -841,7 +832,6 @@ export component AppWindow inherits Window {
     callback go_root();
     callback refresh();
     callback open_path(string);
-    callback open_terminal_here(string);
     callback chooser_accept(string);
     callback chooser_select_filter(int);
     callback chooser_select_choice(int, int);
@@ -890,7 +880,7 @@ export component AppWindow inherits Window {
     callback pane_item_view_item_pressed(int, float, float, bool, bool) -> bool;
     callback pane_item_view_item_activated(int, float, float);
     callback pane_item_view_item_context_menu(int, float, float, length, length) -> bool;
-    callback pane_item_view_blank_pressed(int, float, float, int, float, float, float, float, float, bool);
+    callback pane_item_view_blank_pressed(int, float, float, bool);
     callback pane_item_view_blank_moved(int, float, float) -> bool;
     callback pane_item_view_blank_released(int, float, float);
     callback pane_item_view_blank_cancelled(int);
@@ -1151,9 +1141,9 @@ export component AppWindow inherits Window {
         return root.pane_item_view_item_context_menu(slot, x, y, abs-x, abs-y);
     }
 
-    public function route-pane-item-view-blank-pressed(slot: int, x: float, y: float, rows-per-column: int, cell-width: float, column-width: float, column-offset: float, row-height: float, padding: float, toggle: bool) {
+    public function route-pane-item-view-blank-pressed(slot: int, x: float, y: float, toggle: bool) {
         root.route-pane-focus(slot);
-        root.pane_item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle);
+        root.pane_item_view_blank_pressed(slot, x, y, toggle);
     }
 
     public function route-pane-item-view-blank-moved(slot: int, x: float, y: float) -> bool {
@@ -1649,9 +1639,6 @@ export component AppWindow inherits Window {
                         height: parent.height;
                         pane: pane;
                         view: root.pane_views[index];
-                        entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;
-                        highlights: slot == 0 ? root.pane_slot_0_highlights : root.pane_slot_1_highlights;
-                        metadata: slot == 0 ? root.pane_slot_0_metadata : root.pane_slot_1_metadata;
                         focused: root.focused_pane == slot;
                         dark-mode: root.dark_mode;
                         pane-shell-base-color: root.shell-base-color;
@@ -1802,10 +1789,6 @@ export component AppWindow inherits Window {
             root.add_place(root.context-menu-path);
             root.close-context-popups();
         }
-        file_open_terminal_here => {
-            root.open_terminal_here(root.context-menu-path);
-            root.close-context-popups();
-        }
         file_rename_requested => {
             root.rename-entry-path = root.context-menu-path;
             root.rename-entry-name = root.context-menu-name;
@@ -1934,10 +1917,6 @@ export component AppWindow inherits Window {
         }
         viewport_open_folder_with_clicked(row-y) => {
             root.show-open-with-submenu(root.current_path, row-y);
-        }
-        viewport_open_terminal_here => {
-            root.open_terminal_here(root.current_path);
-            root.close-context-popups();
         }
         viewport_service_action_requested(index) => {
             root.context_service_action(index);

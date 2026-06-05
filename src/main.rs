@@ -54,8 +54,7 @@ use app::geometry::{
     place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
-    ItemViewInputMetrics, ItemViewReleaseAction, SelectionRect, entry_at_pane_point,
-    item_index_at_pane_point,
+    ItemViewReleaseAction, SelectionRect, entry_at_pane_point, item_index_at_pane_point,
 };
 use app::item_view_renderer::{
     ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
@@ -113,7 +112,7 @@ use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::service_menu_policy::load_service_menu_policy;
 use config::settings::{AppSettings, load_settings};
-use desktop::{mime_open, open_with, terminal};
+use desktop::{mime_open, open_with};
 use fs::devices::{
     device_diagnostics_report, eject_device, mount_device, mounted_devices, unmount_device,
 };
@@ -829,50 +828,6 @@ fn main() -> Result<(), slint::PlatformError> {
 
     {
         let ui_weak = ui.as_weak();
-        let async_handle = async_handle.clone();
-        let state = Rc::clone(&state);
-        ui.on_open_terminal_here(move |dir| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return;
-            };
-            let dir = PathBuf::from(dir.as_str());
-            set_status(
-                &ui,
-                &state,
-                &format!("Opening terminal in {}...", dir.display()),
-            );
-            let ui_weak = ui.as_weak();
-            async_handle.spawn(async move {
-                let label = dir
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| dir.to_str().unwrap_or("folder"))
-                    .to_string();
-                let result =
-                    tokio::task::spawn_blocking(move || terminal::open_terminal_here(&dir))
-                        .await
-                        .map_err(|err| format!("terminal launch task failed: {err}"))
-                        .and_then(|result| result);
-                let message = match result {
-                    Ok(launch) => match (launch.unit, launch.diagnostic) {
-                        (Some(unit), _) => format!("Terminal opened in {label} ({unit})"),
-                        (None, Some(diagnostic)) => {
-                            format!("Terminal opened in {label}; {diagnostic}")
-                        }
-                        (None, None) => format!("Terminal opened in {label}"),
-                    },
-                    Err(err) => format!("Cannot open terminal: {err}"),
-                };
-                let _ = ui_weak.upgrade_in_event_loop(move |ui| {
-                    ui.set_status(message.into());
-                });
-            });
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
         ui.on_context_service_action(move |index| {
@@ -1057,38 +1012,10 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     {
-        let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        ui.on_pane_item_view_blank_pressed(
-            move |slot,
-                  x,
-                  y,
-                  rows_per_column,
-                  cell_width,
-                  column_width,
-                  column_offset,
-                  row_height,
-                  padding,
-                  toggle| {
-                if let Some(_ui) = ui_weak.upgrade() {
-                    press_item_view_blank_for_slot(
-                        &state,
-                        slot,
-                        x,
-                        y,
-                        ItemViewInputMetrics::new(
-                            rows_per_column,
-                            cell_width,
-                            column_width,
-                            column_offset,
-                            row_height,
-                            padding,
-                        ),
-                        toggle,
-                    );
-                }
-            },
-        );
+        ui.on_pane_item_view_blank_pressed(move |slot, x, y, toggle| {
+            press_item_view_blank_for_slot(&state, slot, x, y, toggle);
+        });
     }
 
     {
@@ -1711,33 +1638,11 @@ fn register_pane_routing_callbacks(
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_item_view_blank_pressed(
-            move |slot,
-                  x,
-                  y,
-                  rows_per_column,
-                  cell_width,
-                  column_width,
-                  column_offset,
-                  row_height,
-                  padding,
-                  toggle| {
-                if let Some(ui) = ui_weak.upgrade() {
-                    ui.invoke_route_pane_item_view_blank_pressed(
-                        slot,
-                        x,
-                        y,
-                        rows_per_column,
-                        cell_width,
-                        column_width,
-                        column_offset,
-                        row_height,
-                        padding,
-                        toggle,
-                    );
-                }
-            },
-        );
+        routing.on_item_view_blank_pressed(move |slot, x, y, toggle| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_item_view_blank_pressed(slot, x, y, toggle);
+            }
+        });
     }
 
     {
@@ -3704,8 +3609,8 @@ fn sync_virtual_entries_for_slot_with_count(
             let range_hint = if pane.show_item_locations() {
                 None
             } else {
-                zoom_range_visible_count(pane, visible_count_override, &chooser_patterns).and_then(
-                    |visible_count| {
+                zoom_range_visible_names(pane, visible_count_override, &chooser_patterns).and_then(
+                    |visible_names| {
                         icon_zoom_range_hint(
                             ui,
                             viewport_width,
@@ -3713,7 +3618,7 @@ fn sync_virtual_entries_for_slot_with_count(
                             text_line_count,
                             zoom_level,
                             requested_viewport_x,
-                            visible_count,
+                            &visible_names,
                         )
                     },
                 )
@@ -3855,33 +3760,20 @@ fn cached_virtual_viewport_sync(
     thumbnail_size_px: u32,
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
-    chooser_patterns: &[String],
+    _chooser_patterns: &[String],
 ) -> Option<(f32, bool)> {
     if !schedule_thumbnails || visible_count_override.is_some() {
         return None;
     }
 
-    let visible_count = if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
-        indices.len()
-    } else if pane.search.query.is_empty()
-        && pane.search.kind_filter == 0
-        && pane.search.modified_filter == 0
-        && pane.search.size_filter == 0
-        && chooser_patterns.is_empty()
+    let compact_item_view = pane.view.virtual_view.layout.as_ref()?;
+    if !main_layout_matches_compact_layout(layout, compact_item_view)
+        || pane.view.virtual_view.thumbnail_size_px != thumbnail_size_px
     {
-        pane.entries.len()
-    } else {
         return None;
-    };
-
-    let compact_item_view = layout.compact_item_view(visible_count);
+    }
     let plan = compact_item_view.virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
-    if !pane
-        .view
-        .virtual_view
-        .matches_layout(&compact_item_view, thumbnail_size_px)
-        || !virtual_cache_covers_visible_range(&pane.view.virtual_view.range, &plan.visible_range)
-    {
+    if !virtual_cache_covers_visible_range(&pane.view.virtual_view.range, &plan.visible_range) {
         return None;
     }
 
@@ -3892,17 +3784,44 @@ fn cached_virtual_viewport_sync(
     ))
 }
 
-fn zoom_range_visible_count(
+fn main_layout_matches_compact_layout(
+    layout: &MainItemViewLayout,
+    compact_item_view: &CompactItemViewLayout,
+) -> bool {
+    layout.rows_per_column == compact_item_view.rows_per_column
+        && same_layout_metric(layout.viewport_width, compact_item_view.viewport_width)
+        && same_layout_metric(layout.cell_width, compact_item_view.cell_width)
+        && same_layout_metric(layout.row_height, compact_item_view.row_height)
+        && same_layout_metric(layout.padding, compact_item_view.padding)
+}
+
+fn same_layout_metric(left: f32, right: f32) -> bool {
+    (left - right).abs() <= 0.5
+}
+
+fn zoom_range_visible_names(
     pane: &PaneState,
     visible_count_override: Option<usize>,
     chooser_patterns: &[String],
-) -> Option<usize> {
+) -> Option<Vec<String>> {
     if let Some(visible_count) = visible_count_override {
-        return Some(visible_count);
+        let mut names = pane
+            .entries
+            .iter()
+            .take(visible_count)
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>();
+        names.resize(visible_count, String::new());
+        return Some(names);
     }
 
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
-        return Some(indices.len());
+        return Some(
+            indices
+                .iter()
+                .filter_map(|&index| pane.entries.get(index).map(|entry| entry.name.clone()))
+                .collect(),
+        );
     }
 
     (pane.search.query.is_empty()
@@ -3910,7 +3829,12 @@ fn zoom_range_visible_count(
         && pane.search.modified_filter == 0
         && pane.search.size_filter == 0
         && chooser_patterns.is_empty())
-    .then_some(pane.entries.len())
+    .then(|| {
+        pane.entries
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect()
+    })
 }
 
 fn icon_zoom_range_hint(
@@ -3920,8 +3844,9 @@ fn icon_zoom_range_hint(
     text_line_count: usize,
     current_zoom_level: i32,
     requested_viewport_x: f32,
-    visible_count: usize,
+    visible_names: &[String],
 ) -> Option<Range<usize>> {
+    let visible_count = visible_names.len();
     if visible_count == 0 {
         return None;
     }
@@ -3935,14 +3860,16 @@ fn icon_zoom_range_hint(
             zoom_level,
             text_line_count,
         );
-        let plan = layout.compact_item_view(visible_count).virtual_plan(
-            requested_viewport_x,
-            if zoom_level == current_zoom_level {
-                ITEM_VIEW_OVERSCAN_COLUMNS
-            } else {
-                0
-            },
-        );
+        let plan = layout
+            .compact_item_view_from_names(visible_names.iter().map(String::as_str))
+            .virtual_plan(
+                requested_viewport_x,
+                if zoom_level == current_zoom_level {
+                    ITEM_VIEW_OVERSCAN_COLUMNS
+                } else {
+                    0
+                },
+            );
         let candidate = if zoom_level == current_zoom_level {
             plan.range
         } else {
@@ -4037,7 +3964,7 @@ fn apply_virtual_view_result(
                 pane.view.virtual_view.range = update.range.clone();
                 pane.view
                     .virtual_view
-                    .update_layout_signature(update.layout, result.thumbnail_size_px);
+                    .update_layout_signature(update.layout.clone(), result.thumbnail_size_px);
             }
         }
     }
@@ -4094,14 +4021,14 @@ fn apply_virtual_view_result(
         },
         &metadata_sources,
     );
-    let selected_paths = {
+    let (selected_paths, media_entries) = {
         let mut state_ref = state.borrow_mut();
         let selected_paths = state_ref
             .panes
             .pane_by_id(result.pane_id)
             .map(|pane| pane.selection.paths.clone())
             .unwrap_or_default();
-        decorate_entries_with_cached_thumbnails_for_pane(
+        let media_entries = decorate_entries_with_cached_thumbnails_for_pane(
             &state_ref,
             result.pane_id,
             &mut entries,
@@ -4111,7 +4038,7 @@ fn apply_virtual_view_result(
             return;
         };
         prewarm_pane_fallback_media(pane, ui.get_dark_mode());
-        selected_paths
+        (selected_paths, media_entries)
     };
 
     if result.schedule_thumbnails {
@@ -4127,11 +4054,15 @@ fn apply_virtual_view_result(
             false,
         );
     }
+    let bounds_entries =
+        item_view_bounds_entries(&update.layout, update.range.start, entries.len());
     set_pane_virtual_entries(
         state,
         slot,
         update.range.start,
         entries,
+        bounds_entries,
+        media_entries,
         metadata_entries,
         &selected_paths,
     );
@@ -4167,6 +4098,8 @@ fn set_pane_virtual_entries(
     slot: i32,
     start_index: usize,
     entries: Vec<ItemViewEntry>,
+    bounds_entries: Vec<ItemViewBoundsEntry>,
+    media_entries: Vec<ItemViewMediaEntry>,
     metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
 ) {
@@ -4175,10 +4108,29 @@ fn set_pane_virtual_entries(
             &mut pane.view,
             start_index,
             entries,
+            bounds_entries,
+            media_entries,
             metadata_entries,
             selected_paths,
         );
     }
+}
+
+fn item_view_bounds_entries(
+    layout: &CompactItemViewLayout,
+    start_index: usize,
+    count: usize,
+) -> Vec<ItemViewBoundsEntry> {
+    layout
+        .bounds_for_range(start_index, count)
+        .into_iter()
+        .map(|bounds| ItemViewBoundsEntry {
+            slice_index: bounds.slice_index as i32,
+            x: bounds.x,
+            width: bounds.width,
+            text_width: bounds.text_width,
+        })
+        .collect()
 }
 
 fn apply_filter_for_slot(
@@ -4476,14 +4428,19 @@ fn press_item_view_blank_for_slot(
     slot: i32,
     x: f32,
     y: f32,
-    metrics: ItemViewInputMetrics,
     toggle: bool,
 ) {
     let mut state = state.borrow_mut();
     let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
         return;
     };
-    pane.view.input.press_blank(x, y, metrics, toggle);
+    let layout = pane
+        .view
+        .virtual_view
+        .layout
+        .clone()
+        .unwrap_or_else(CompactItemViewLayout::empty);
+    pane.view.input.press_blank(x, y, layout, toggle);
 }
 
 fn move_item_view_blank_for_slot(state: &Rc<RefCell<AppState>>, slot: i32, x: f32, y: f32) -> bool {
@@ -4706,25 +4663,12 @@ fn schedule_visible_thumbnails_for_slot(
 }
 
 fn current_pane_visible_range(pane: &PaneState) -> Range<usize> {
-    let cache = &pane.view.virtual_view;
-    if cache.entry_count == 0 || cache.rows_per_column == 0 {
-        return 0..0;
-    }
-
-    CompactItemViewLayout {
-        entry_count: cache.entry_count,
-        rows_per_column: cache.rows_per_column,
-        viewport_width: cache.viewport_width,
-        cell_width: cache.cell_width,
-        column_width: cache.column_width,
-        column_offset: cache.column_offset,
-        row_height: cache.row_height,
-        padding: cache.padding,
-        content_width: cache.content_width,
-        scroll_max_x: cache.scroll_max_x,
-    }
-    .virtual_plan(pane.view.viewport_x, 0)
-    .visible_range
+    pane.view
+        .virtual_view
+        .layout
+        .as_ref()
+        .map(|layout| layout.virtual_plan(pane.view.viewport_x, 0).visible_range)
+        .unwrap_or(0..0)
 }
 
 fn refresh_visible_pane_fallback_media(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -4881,14 +4825,18 @@ fn try_relayout_cached_pane_icon_zoom_layout(
             return false;
         }
 
-        let entry_count = pane.view.virtual_view.entry_count;
+        let Some(visible_names) = zoom_range_visible_names(pane, None, &[]) else {
+            return false;
+        };
+        let entry_count = visible_names.len();
         if entry_count == 0 {
             return false;
         }
 
         let requested_viewport_x = pane.view.viewport_x;
         layout.viewport_x = requested_viewport_x;
-        let compact_item_view = layout.compact_item_view(entry_count);
+        let compact_item_view =
+            layout.compact_item_view_from_names(visible_names.iter().map(String::as_str));
         let plan = compact_item_view.virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
         let current_range = pane.view.virtual_view.range.clone();
         let Some(relayout_range) =
@@ -4896,8 +4844,17 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         else {
             return false;
         };
+        let bounds_entries = item_view_bounds_entries(
+            &compact_item_view,
+            relayout_range.start,
+            relayout_range.end.saturating_sub(relayout_range.start),
+        );
 
-        if !relayout_pane_item_view_entries_model(&mut pane.view, relayout_range.clone()) {
+        if !relayout_pane_item_view_entries_model(
+            &mut pane.view,
+            relayout_range.clone(),
+            bounds_entries,
+        ) {
             return false;
         }
         prewarm_pane_fallback_media(pane, dark);
@@ -4919,7 +4876,8 @@ fn try_relayout_cached_pane_icon_zoom_layout(
                 .borrow()
                 .panes
                 .pane_for_slot(slot)
-                .map(|pane| pane.view.virtual_view.entry_count)
+                .and_then(|pane| pane.view.virtual_view.layout.as_ref())
+                .map(|layout| layout.entry_count)
                 .unwrap_or_default();
             ui.set_entry_count(entry_count as i32);
         }
@@ -5637,13 +5595,55 @@ fn dnd_debug_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{compact_item_view_layout, place_drop_geometry};
+    use crate::app::geometry::{
+        CompactItemViewLayout, compact_item_view_layout, place_drop_geometry,
+    };
     use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
         filtered_entries_range, filtered_entry_at, filtered_entry_paths, filtered_entry_summary,
         selection_range_paths, selection_range_paths_filtered, selection_rect_paths,
         selection_rect_paths_filtered,
     };
+
+    fn compact_test_layout(
+        viewport_width: f32,
+        entry_count: usize,
+        rows_per_column: usize,
+        cell_width: f32,
+        row_height: f32,
+        padding: f32,
+    ) -> CompactItemViewLayout {
+        let names = (0..entry_count)
+            .map(|index| format!("item-{index}"))
+            .collect::<Vec<_>>();
+        compact_item_view_layout(
+            viewport_width,
+            names.iter().map(String::as_str),
+            rows_per_column,
+            cell_width,
+            row_height,
+            padding,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        )
+    }
+
+    fn selection_test_layout(names: &[&str]) -> CompactItemViewLayout {
+        compact_item_view_layout(
+            300.0,
+            names.iter().copied(),
+            2,
+            100.0,
+            100.0,
+            10.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        )
+    }
 
     #[test]
     fn cached_zoom_relayout_range_only_requires_visible_range() {
@@ -6011,7 +6011,7 @@ mod tests {
 
     #[test]
     fn compact_item_view_layout_keeps_visible_columns_with_overscan() {
-        let compact_layout = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let compact_layout = compact_test_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
         let at_start = compact_layout.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
@@ -6020,8 +6020,7 @@ mod tests {
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
-        let clamped =
-            compact_item_view_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
+        let clamped = compact_test_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
         assert_eq!(clamped.range, 0..10);
         assert_eq!(clamped.visible_range, 0..10);
     }
@@ -6103,12 +6102,7 @@ mod tests {
                 y1: 0.0,
                 x2: 109.0,
                 y2: 205.0,
-                rows_per_column: 2,
-                cell_width: 100.0,
-                column_width: 112.0,
-                column_offset: 10.0,
-                row_height: 100.0,
-                padding: 10.0,
+                layout: selection_test_layout(&["a", "b", "c", "d"]),
             },
         );
 
@@ -6133,12 +6127,7 @@ mod tests {
                 y1: 0.0,
                 x2: 109.0,
                 y2: 205.0,
-                rows_per_column: 2,
-                cell_width: 100.0,
-                column_width: 112.0,
-                column_offset: 10.0,
-                row_height: 100.0,
-                padding: 10.0,
+                layout: selection_test_layout(&["alpha.txt", "beta.txt", "gamma.txt"]),
             },
         );
 
@@ -6162,14 +6151,16 @@ mod tests {
             SelectionRect {
                 x1: 244.0,
                 y1: 0.0,
-                x2: 343.0,
+                x2: 325.0,
                 y2: 205.0,
-                rows_per_column: 2,
-                cell_width: 100.0,
-                column_width: 112.0,
-                column_offset: 10.0,
-                row_height: 100.0,
-                padding: 10.0,
+                layout: selection_test_layout(
+                    &(0..20)
+                        .map(|index| format!("entry-{index}"))
+                        .collect::<Vec<_>>()
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                ),
             },
         );
 
@@ -6491,12 +6482,11 @@ mod tests {
             body.contains("let visible_slots = visible_pane_slots(ui);")
                 && body.contains(".map(|slot| pane_slot_data(ui, slot, &state_ref))")
                 && body.contains(".map(|slot| pane_view_data(ui, slot, &state_ref))")
-                && body.contains(".map(|slot| (slot, pane_slot_entries(slot, &state_ref)))")
-                && body.contains(".map(|slot| (slot, pane_slot_metadata(slot, &state_ref)))")
                 && body.contains("sync_pane_views_model(ui, views);")
                 && body.contains("sync_pane_slots_model(ui, slots);")
-                && body.contains("sync_pane_entries_ui(ui, entries);")
-                && body.contains("sync_pane_metadata_ui(ui, metadata);")
+                && !body.contains("sync_pane_entries_ui(ui, entries);")
+                && !body.contains("sync_pane_media_ui(ui, media);")
+                && !body.contains("sync_pane_metadata_ui(ui, metadata);")
                 && slots_model_body.contains("let current = ui.get_pane_slots();")
                 && slots_model_body.contains("let same_slots = current.row_count() == slots.len()")
                 && slots_model_body.contains(".is_some_and(|current| current.slot == slot.slot)")
@@ -6518,7 +6508,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_entry_models_are_not_nested_inside_pane_view_rows() {
+    fn pane_view_rows_carry_pane_local_item_models_without_slot_sidecars() {
         let models = include_str!("../ui/models.slint");
         let app = include_str!("../ui/app.slint");
         let split_view = include_str!("app/split_view.rs");
@@ -6532,36 +6522,38 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("export component AppWindow"))
             .map(|(body, _)| body)
             .expect("PaneSlotSurface body should be present");
-        let entries_sync_body = split_view
-            .split_once("fn sync_pane_entries_ui(")
-            .and_then(|(_, rest)| rest.split_once("fn pane_slot_data("))
+        let view_data_body = split_view
+            .split_once("fn pane_view_data(")
+            .and_then(|(_, rest)| rest.split_once("fn pane_slot_item_view_render_geometry("))
             .map(|(body, _)| body)
-            .expect("pane entries sync body should be present");
+            .expect("pane_view_data body should be present");
 
         assert!(
-            !pane_view_data.contains("entries: [ItemViewEntry]")
-                && !pane_view_data.contains("metadata: [ItemViewMetadataEntry]")
-                && app.contains("in property <[ItemViewEntry]> pane_slot_0_entries;")
-                && app.contains("in property <[ItemViewEntry]> pane_slot_1_entries;")
-                && app.contains("in property <[ItemViewMetadataEntry]> pane_slot_0_metadata;")
-                && app.contains("in property <[ItemViewMetadataEntry]> pane_slot_1_metadata;")
-                && surface_body.contains("in property <[ItemViewEntry]> entries;")
-                && surface_body.contains("in property <[ItemViewMetadataEntry]> metadata;")
-                && surface_body.contains("entries: root.entries;")
-                && surface_body.contains("metadata: root.metadata;")
-                && app.contains(
-                    "entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;"
-                )
-                && app.contains(
-                    "metadata: slot == 0 ? root.pane_slot_0_metadata : root.pane_slot_1_metadata;"
-                )
-                && entries_sync_body.contains("set_pane_entries_ui(ui, slot, model);")
-                && entries_sync_body.contains("ui.set_pane_slot_0_entries(entries);")
-                && entries_sync_body.contains("ui.set_pane_slot_1_entries(entries);")
-                && entries_sync_body.contains("set_pane_metadata_ui(ui, slot, model);")
-                && entries_sync_body.contains("ui.set_pane_slot_0_metadata(metadata);")
-                && entries_sync_body.contains("ui.set_pane_slot_1_metadata(metadata);"),
-            "visible item and metadata models should stay as pane-local top-level models instead of being nested in PaneViewData rows"
+            pane_view_data.contains("entries: [ItemViewEntry]")
+                && pane_view_data.contains("bounds: [ItemViewBoundsEntry]")
+                && pane_view_data.contains("highlights: [ItemViewHighlightEntry]")
+                && pane_view_data.contains("media: [ItemViewMediaEntry]")
+                && pane_view_data.contains("metadata: [ItemViewMetadataEntry]")
+                && !app.contains("pane_slot_0_entries")
+                && !app.contains("pane_slot_1_entries")
+                && !app.contains("pane_slot_0_media")
+                && !app.contains("pane_slot_1_media")
+                && !app.contains("pane_slot_0_metadata")
+                && !app.contains("pane_slot_1_metadata")
+                && !split_view.contains("fn sync_pane_entries_ui(")
+                && !split_view.contains("fn sync_pane_media_ui(")
+                && !split_view.contains("fn sync_pane_metadata_ui(")
+                && surface_body.contains("entries: root.view.entries;")
+                && surface_body.contains("bounds: root.view.bounds;")
+                && surface_body.contains("highlights: root.view.highlights;")
+                && surface_body.contains("media: root.view.media;")
+                && surface_body.contains("metadata: root.view.metadata;")
+                && view_data_body.contains("entries: pane_slot_entries(slot, state)")
+                && view_data_body.contains("bounds: pane_slot_bounds(slot, state)")
+                && view_data_body.contains("highlights: pane_slot_highlights(slot, state)")
+                && view_data_body.contains("media: pane_slot_media(slot, state)")
+                && view_data_body.contains("metadata: pane_slot_metadata(slot, state)"),
+            "visible item, bounds, selection, thumbnail media, and metadata models should be pane-local data on PaneViewData instead of fixed slot sidecars"
         );
     }
 
@@ -7066,7 +7058,7 @@ mod tests {
                 && schedule_body.contains("prioritize_thumbnail_entries(&entries")
                 && !schedule_body.contains(".virtual_entries")
                 && !schedule_body.contains("row_data("),
-            "coalesced zoom thumbnail scheduling should use Rust row tokens instead of cloning Slint ItemViewEntry rows that carry Image data"
+            "coalesced zoom thumbnail scheduling should use Rust row tokens instead of touching the Slint row model"
         );
     }
 

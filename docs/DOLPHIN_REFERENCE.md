@@ -31,7 +31,7 @@ Current Fika mapping:
 - Submenu rows now use a separate arrow indicator instead of baking `>` into the label. Open With, Create New, and service-menu groups also have invisible hover bridges between the parent row and child menu, matching the feel of Qt's grace area when moving the pointer diagonally into a submenu.
 - Root menu, child menu, transfer menu, and chooser-choice popup placement now share explicit Rust-side popup geometry: context roots and Transfer popups use QMenu-style preferred/flip/clamp rules, Open With / Create New / service-menu group child menus and bridges anchor to the parent row, and chooser-choice popups keep their above-button anchor while clamping to safe margins.
 - Service-menu actions follow Dolphin's user-configurable direction at a smaller scope: discovered actions are filtered by a persisted policy that can either show all non-disabled actions or only explicitly checked actions, while the configuration popup is backed by the full current match set so hidden rows remain recoverable.
-- Viewport context menu ordering is closer to Dolphin: Create New is first, Open Folder With follows, then Open Terminal Here. The internal drop menu includes an explicit Cancel action like common file-operation menus.
+- Viewport context menu ordering is closer to Dolphin: Create New is first, Open Folder With follows, and optional service-menu rows supply user-defined actions such as terminal launchers. The internal drop menu includes an explicit Cancel action like common file-operation menus.
 
 ## Selection
 

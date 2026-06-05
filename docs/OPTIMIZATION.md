@@ -28,7 +28,7 @@ Slint SplitPaneView 自管 viewport-x
                       ├─ decorate_entries_with_cached_thumbnails_for_pane()
                       ├─ prioritize_thumbnail_entries()         [thumbnail_pipeline.rs]
                       ├─ schedule_visible_thumbnails()          (异步)
-                      ├─ set_virtual_entries(VecModel)          → Slint
+                      ├─ set pane-local entries/media/metadata  → Slint
                       └─ sync_pane_view_ui()                   [split_view.rs]
 ```
 
@@ -44,7 +44,9 @@ Rectangle viewport shell (clip: true)
   │    ├─ single drag-target-slice-index Rectangle primitive
   │    │    └─ 只绘制当前 drop target，不再逐 item 比较 path
   │    ├─ for item[index] in entries: Image primitive
-  │    │    └─ local tile column/row 来自 reusable loop index
+  │    │    └─ 绘制 pane-level fallback；local tile column/row 来自 reusable loop index
+  │    ├─ for media[index] in media: Image primitive
+  │    │    └─ 只叠加已加载 thumbnail；slice_index 使用同一套列优先坐标
   │    ├─ for item[index] in entries: Text primitive
   │    │    └─ 普通 compact 标题使用 Dolphin-style whole-tile text frame
   │    └─ optional metadata overlay (show-location only)
@@ -53,7 +55,7 @@ Rectangle viewport shell (clip: true)
   └─ self-managed horizontal scrollbar
 ```
 
-主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。Dolphin 对照点是 `KStandardItemListView::setItemLayout()` 在 CompactLayout 下设置 `Qt::Horizontal`，`KItemListViewLayouter` 通过转置逻辑把纵向流映射成物理横向滚动，`KStandardItemListWidget::updateCompactLayoutTextCache()` 预先计算 compact 文本位置和最大宽度，并把 compact text frame 关联到整个 item 高度；文字本身使用居中的 line position。Fika 同样在 Rust render plan 中投影非零 `title_y/title_line_height/text_width`；普通标题的 Rust-projected `Text` frame 覆盖整 tile 高度并由 Slint vertical alignment 居中，避免大 zoom 下单行 frame 被裁剪导致 name 消失；带 group/location 的标题行继续使用 Rust 投影的 line frame，额外 group/location 行通过 pane-local sparse metadata overlay 绘制。基础 `ItemViewEntry` 热 row 只携带业务身份、目录标记、缩略图状态、真实 thumbnail media 和 media token；media/text/title 几何以及通用 folder/file fallback image 都挂在 pane-level `PaneViewData` / `PaneView` cache 上，不再写入每个 row。metadata 由 Rust render plan 直接投影成 `ItemViewMetadataEntry` 稀疏 rows。`SplitPaneView` 只消费 pane-level 几何，不再在可见 title loop 内按 `group/location` 做 per-item 判断。
+主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。Dolphin 对照点是 `KStandardItemListView::setItemLayout()` 在 CompactLayout 下设置 `Qt::Horizontal`，`KItemListViewLayouter` 通过转置逻辑把纵向流映射成物理横向滚动，`KStandardItemListWidget::updateCompactLayoutTextCache()` 预先计算 compact 文本位置和最大宽度，并把 compact text frame 关联到整个 item 高度；文字本身使用居中的 line position。Fika 同样在 Rust render plan 中投影非零 `title_y/title_line_height/text_width`；普通标题的 Rust-projected `Text` frame 覆盖整 tile 高度并由 Slint vertical alignment 居中，避免大 zoom 下单行 frame 被裁剪导致 name 消失；带 group/location 的标题行继续使用 Rust 投影的 line frame，额外 group/location 行通过 pane-local sparse metadata overlay 绘制。基础 `ItemViewEntry` 热 row 只携带业务身份、目录标记、缩略图状态和 media token；成功 thumbnail media 由 pane-local `ItemViewMediaEntry` 稀疏 overlay 承载，media/text/title 几何以及通用 folder/file fallback image 都挂在 pane-level `PaneViewData` / `PaneView` cache 上，不再写入每个 row。metadata 由 Rust render plan 直接投影成 `ItemViewMetadataEntry` 稀疏 rows。`SplitPaneView` 只消费 pane-level 几何，不再在可见 title loop 内按 `group/location` 做 per-item 判断。
 
 ### 现有优化
 
@@ -69,6 +71,7 @@ Rectangle viewport shell (clip: true)
 | Rust item-view hit-test | `item_view.rs` | click/activation/context/DnD/drop target 命中不再散落在 Slint tile 或 transfer 几何代码中 |
 | Press-pinned drag source | `split_pane.slint` / `item_view.rs` | 主视图 `DragArea.data` 只绑定 left-down 命中的 drag source 坐标；hover/move 不再更新 data-transfer 绑定，也不再反复触发 Rust hit-test |
 | Rust item-view render plan | `item_view_renderer.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、tile width/height、media/text rect、尺寸/字体 token 和 folder/file fallback image 不再由 Slint 每项公式或 row data 承载；local x/y 由 `for item[index]` 复用层计算 |
+| Sparse thumbnail media overlay | `thumbnail_pipeline.rs` / `model_update.rs` / `models.slint` | 基础 `ItemViewEntry` 不再携带 `Image`；已加载 thumbnail 只发布 pane-local `ItemViewMediaEntry` rows，zoom/cached relayout 时可独立裁剪和平移 |
 | Sparse metadata overlay | `item_view.rs` / `model_update.rs` / `models.slint` | 基础 `ItemViewEntry` 不再携带 group/location 字符串和 metadata 几何；show-location 只发布 Rust 预投影的非空 `ItemViewMetadataEntry` rows |
 | Coalesced settings save | `settings_save.rs` / `settings.rs` | zoom/sidebar/split ratio 等交互触发的 `persist_ui_state()` 只抓取最新设置快照并延迟后台写入；窗口关闭和目录导航保留同步 latest 保存，避免连续 zoom 时 UI 线程同步写配置文件 |
 | Coalesced icon zoom thumbnails | `app.slint` / `main.rs` | `icon_zoom_level` 变化立即刷新可见 pane layout，但不立刻调度缩略图；300ms 后按当前可见切片 latest-only 调度预览，贴近 Dolphin 的 icon-size updater 分层 |
@@ -150,14 +153,14 @@ changed viewport-x => {
 
 **实际实现**（✅ 已完成）：
 - `PaneSlotData` 只保留地址栏、搜索、状态栏、chooser、external edit 等 pane chrome 冷数据。
-- `PaneViewData` 承载 viewport、entry count、layout metrics、空状态、drop/content interactive 等主视图热数据；selection 只通过 pane-local cached highlight model 发布。
-- 可见 `ItemViewEntry` 切片作为 `pane_slot_0_entries` / `pane_slot_1_entries` 顶层 model 单独下发，不再嵌套在 `PaneViewData` row 内。
-- `sync_pane_slots_ui()` 先 snapshot visible slots，然后分别同步 `pane_slots`、`pane_views` 和 pane-local entries；slot shape 未变时使用 row-level `set_row_data`。
+- `PaneViewData` 承载 viewport、entry count、layout metrics、空状态、drop/content interactive，以及 pane-local `entries` / `bounds` / `highlights` / `media` / `metadata` models。
+- 可见 `ItemViewEntry` 切片、每项 bounds、选中高亮、缩略图 overlay 和 metadata overlay 都随对应 `PaneViewData` row 下发，不再通过 `pane_slot_0_*` / `pane_slot_1_*` 固定 sidecar 走顶层属性。
+- `sync_pane_slots_ui()` 先 snapshot visible slots，然后分别同步 `pane_slots` 和 `pane_views`；slot shape 未变时使用 row-level `set_row_data`。
 - `set_pane_viewport_ui()` 只写 `AppState.pane.view.viewport_x`，再通过 `sync_pane_view_viewport_ui()` patch 当前 `PaneViewData.viewport_x` 字段；view row 缺失时才回退到 `sync_pane_view_ui()`。
 
-**收益**：虚拟切片、viewport clamp、目录 view-state 恢复、selection 更新不再重建 pane chrome row；item model 刷新从 nested model in row 变成直接顶层 model 更新，更接近 Dolphin 的 model/view 分层。
+**收益**：虚拟切片、viewport clamp、目录 view-state 恢复、selection 更新不再重建 pane chrome row；item/bounds/highlight/media/metadata 都是 pane-local view row 数据，避免全局 slot 0/1 sidecar 重新引入“主 pane”概念。
 
-**验证**：源码守卫测试确认 `PaneViewData` 不含 `entries: [ItemViewEntry]`，`PaneSlotSurface` 单独接收 `entries`，并且 `sync_pane_entries_ui()` 写 `pane_slot_0_entries` / `pane_slot_1_entries`。
+**验证**：源码守卫测试确认 `PaneViewData` 携带 `entries`、`bounds`、`highlights`、`media`、`metadata`，`PaneSlotSurface` 直接绑定 `root.view.*`，并且 `ui/app.slint` / `split_view.rs` 不再包含 `pane_slot_0_*` / `pane_slot_1_*` sidecar 或 `sync_pane_entries_ui()`。
 
 ---
 
@@ -168,7 +171,7 @@ changed viewport-x => {
 **涉及代码**：
 - `src/app/model_update.rs` — `update_pane_item_view_entries_model`
 - `src/app/pane.rs` — `PaneView.virtual_entries` / `virtual_entry_tokens`
-- `src/app/split_view.rs` — `sync_pane_entries_ui`
+- `src/app/split_view.rs` — `pane_view_data`
 - `ui/split_pane.slint` — `for item[index] in root.entries: Image` / `Text`
 
 **实际实现**（✅ 已完成）：`update_pane_item_view_entries_model()` 保留 pane-local `VecModel<ItemViewEntry>`，根据 old/new virtual start 处理前后滑动：
@@ -177,11 +180,11 @@ changed viewport-x => {
 - 重叠行：比较 Rust sidecar `ItemViewRowToken`，只有 token 不同才 `set_row_data`
 - 尾部长度差：`remove` / `extend`
 
-`ItemViewRowToken` 覆盖 name/path/is_dir/selection/thumbnail_state/media token 等轻量身份字段，避免为了比较复用而从 Slint `VecModel` 读取并克隆包含 thumbnail `Image` 的整条 row；它现在归属 `src/app/model_update.rs`，与 virtual row reuse / selection sidecar 更新放在同一层，而不是放在 input/controller/hit-test 的 `item_view.rs`。split pane snapshot 会复制到独立 `VecModel` 和 sidecar，避免两个 pane 共享同一个可见 row model。选中态只保存在 token sidecar 中，并投影成 pane-local cached `ItemViewHighlightEntry` 稀疏 model，由 Slint 单独绘制 highlight overlay；selection 或 virtual row 变化时复用同一个 highlight `VecModel` 做 `set_vec`，不再由 `split_view` 每次同步临时 collect 新 model。基础 `Image` / `Text` loop 和 `ItemViewEntry` row data 不再携带 per-item selected 状态，也不携带 group/location metadata 或 per-row 几何；show-location metadata 从 `FileEntry` snapshot 经 Rust render plan 投影成独立的 pane-local sparse `ItemViewMetadataEntry` model。
+`ItemViewRowToken` 覆盖 name/path/is_dir/selection/thumbnail_state/media token 等轻量身份字段，避免为了比较复用而从 Slint `VecModel` 读取 row；它现在归属 `src/app/model_update.rs`，与 virtual row reuse / selection sidecar/media sidecar 更新放在同一层，而不是放在 input/controller/hit-test 的 `item_view.rs`。split pane snapshot 会复制到独立 `VecModel` 和 sidecar，避免两个 pane 共享同一个可见 row model。选中态只保存在 token sidecar 中，并投影成 pane-local cached `ItemViewHighlightEntry` 稀疏 model，由 Slint 单独绘制 highlight overlay；selection 或 virtual row 变化时复用同一个 highlight `VecModel` 做 `set_vec`，不再由 `split_view` 每次同步临时 collect 新 model。基础 `Image` / `Text` loop 和 `ItemViewEntry` row data 不再携带 per-item selected 状态、成功 thumbnail image、group/location metadata 或 per-row 几何；成功 thumbnail image 从缓存投影成独立的 pane-local sparse `ItemViewMediaEntry` model，show-location metadata 从 `FileEntry` snapshot 经 Rust render plan 投影成独立的 pane-local sparse `ItemViewMetadataEntry` model。
 
-**收益**：连续滚动时重叠 virtual rows 不再因为 slice-local 坐标、pane-level 几何或 pane-level fallback image 变化被重发；selection 变化只刷新 token sidecar/sparse highlight，真实 thumbnail 变化仍能按 row 精准更新。
+**收益**：连续滚动时重叠 virtual rows 不再因为 slice-local 坐标、pane-level 几何或 pane-level fallback image 变化被重发；selection 变化只刷新 token sidecar/sparse highlight，真实 thumbnail 变化只刷新 sparse media overlay。
 
-**验证**：`app::model_update` 测试覆盖前滑、后滑、无重叠、sidecar 修复、media token 比较和 selection sidecar 更新；源码守卫测试防止重叠 row reuse 重新读取 `VecModel::row_data()`，并防止 `ItemViewEntry.selected` 回归。
+**验证**：`app::model_update` 测试覆盖前滑、后滑、无重叠、sidecar 修复、media token 比较、selection sidecar 更新和 cached relayout 裁剪 sparse media overlay；源码守卫测试防止重叠 row reuse 重新读取 `VecModel::row_data()`，并防止 `ItemViewEntry.selected` / `ItemViewEntry.media` 回归。
 
 ---
 
@@ -202,13 +205,14 @@ changed viewport-x => {
 - fast path 覆盖不了新真实可见 range，或 show-location metadata 仍在热路径里时，不再在 Ctrl+wheel/input 事件里同步 snapshot rebuild；`prepare_pane_icon_zoom_layout_for_slot()` 只发起后台 virtual prepare，并在结果返回后更新当前 pane。这样 cache miss 仍保留正确性，但不把过滤、clone、render-plan 装饰压进 zoom 输入路径。
 - `CompactItemVisualMetrics` 只让 media/icon size 随 zoom 改变，title/metadata font metrics 保持稳定，贴近 Dolphin 的 `styleOption.fontMetrics` 用法，减少 Slint 首次 zoom 时的 Text 字体冷启动。
 - `PaneView` 的 fallback file/folder media cache 按 pane/theme 固定为一套 72px 源图；目录/滚动 snapshot、theme refresh 和 zoom fast path 只确保当前主题 cache 已就绪。zoom 只改变 pane-level media 目标几何，不再把新的 folder/file fallback `Image` source 下发给 Slint，贴近 Dolphin 的 pixmap cache 行为并降低 `/etc` 这类 fallback-heavy 目录的首次 zoom 卡顿。
-- `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 300ms 合并连续 zoom 后的缩略图调度；timer flush 时从当前可见 virtual slice 调用 `schedule_visible_thumbnails_for_visible_panes()`。该路径从 pane-local `ItemViewRowToken` sidecar 派生轻量 `ThumbnailScheduleEntry`，不再从 Slint `VecModel<ItemViewEntry>` 读取 row，也就不会为了延迟调度克隆包含 `Image` 的整条可见 row；临时 path 使用 `SharedString`，只有真正入队的缩略图任务才转成 owned `PathBuf`。
+- `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 300ms 合并连续 zoom 后的缩略图调度；timer flush 时从当前可见 virtual slice 调用 `schedule_visible_thumbnails_for_visible_panes()`。该路径从 pane-local `ItemViewRowToken` sidecar 派生轻量 `ThumbnailScheduleEntry`，不再从 Slint `VecModel<ItemViewEntry>` 读取 row；临时 path 使用 `SharedString`，只有真正入队的缩略图任务才转成 owned `PathBuf`。
+- 普通非缩略图候选文件会在首次 virtual slice 装饰时写入 `THUMBNAIL_STATE_NOT_CANDIDATE`，该状态随 `ItemViewRowToken` 复用；zoom 后的延迟缩略图调度看到该 token 会直接跳过，不再重复构造 `PathBuf`、判断扩展名或查询 thumbnailer。`is_thumbnail_candidate()` 也会先用扩展名 MIME 映射预筛，`.conf`、无扩展等文件不会初始化 XDG thumbnailer registry。
 - thumbnail 调度按当前 size 的 media token 判断已加载状态；旧 zoom size 的 thumbnail 不会阻塞新 size 的延迟任务。
 - 普通 `pane_layout_changed()` 仍调用 `sync_now()`，会停止 pending zoom thumbnail timer 并立即刷新；窗口大小、sidebar、split ratio、pane 宽度变化不等待 timer。
 
-**收益**：连续 zoom 时保留即时视觉反馈，避免每个 zoom step 都启动缩略图解码/预览更新；普通目录第一次 zoom 更容易直接命中预热热窗口，未按新行数对齐的热窗口也只做 pane-level layout 更新和 active fallback cache 切换，不再裁剪 `VecModel`；cache miss 也不会同步 clone/装饰虚拟切片；稳定字体减少新 zoom 档位的 Text layout 冷启动；同时保留 resize/fullscreen/末尾 viewport 修复的即时路径。
+**收益**：连续 zoom 时保留即时视觉反馈，避免每个 zoom step 都启动缩略图解码/预览更新；普通目录第一次 zoom 更容易直接命中预热热窗口，未按新行数对齐的热窗口也只做 pane-level layout 更新和 active fallback cache 切换，不再裁剪 `VecModel`；`/etc` 这类非图片目录的首次 zoom 不再因为缩略图候选探测而冷启动 thumbnailer registry；cache miss 也不会同步 clone/装饰虚拟切片；稳定字体减少新 zoom 档位的 Text layout 冷启动；同时保留 resize/fullscreen/末尾 viewport 修复的即时路径。
 
-**验证**：源码守卫测试确认 `PaneViewSyncScheduler` 的滚动路径仍无 timer，`icon_zoom_layout_changed` 同步刷新 layout，优先尝试 cached relayout，cache miss 进入后台 prepare，缩略图调度才走独立 coalesced timer。`virtual_view` 测试覆盖 `range_hint` 的对齐扩展；`main` 测试覆盖 cached zoom relayout 只要求真实可见 range、已对齐和未对齐热窗口都不裁剪，以及 zoom hint 按目标 rows 对齐；`pane` 测试覆盖 fallback media 多槽复用和 split snapshot 继承热 cache；`model_update` 测试覆盖 cached relayout 复用 `VecModel`、保留 selection/highlight；`thumbnail_pipeline` 测试覆盖旧 size thumbnail 不阻塞新 size 调度和 row-token 调度不克隆 `Image`。
+**验证**：源码守卫测试确认 `PaneViewSyncScheduler` 的滚动路径仍无 timer，`icon_zoom_layout_changed` 同步刷新 layout，优先尝试 cached relayout，cache miss 进入后台 prepare，缩略图调度才走独立 coalesced timer。`virtual_view` 测试覆盖 `range_hint` 的对齐扩展；`main` 测试覆盖 cached zoom relayout 只要求真实可见 range、已对齐和未对齐热窗口都不裁剪，以及 zoom hint 按目标 rows 对齐；`pane` 测试覆盖 fallback media 多槽复用和 split snapshot 继承热 cache；`model_update` 测试覆盖 cached relayout 复用 `VecModel`、保留 selection/highlight 并裁剪 sparse media overlay；`thumbnail_pipeline` 测试覆盖旧 size thumbnail 不阻塞新 size 调度、row-token 调度不读取 Slint row model，以及非候选 row/token 在 zoom 后直接跳过；`fs::thumbnails` 测试覆盖未知扩展不进入 thumbnailer lookup。
 
 ---
 
@@ -348,8 +352,8 @@ Slint: Rectangle viewport + input/DnD overlays
 5. 虚拟切片仍输出 `virtual_entries`，但主视图热字段已通过 `PaneViewData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）、media/text/title 几何、pane-level folder/file fallback image、viewport 和空状态；可见 entries、highlights、metadata 都作为 pane-local 顶层 slot model 下发，避免 nested model in row；`PaneSlotData` 只保留 pane chrome/status/search/chooser 冷数据。普通 item 使用 Dolphin-style compact 横向布局，图标在左、名字在右，标题 Text 直接消费 pane-level compact text frame；基础 compact loop 无条件绘制 `item.name`，带 group/location 的递归搜索结果通过 sparse metadata overlay 叠加 group/location 文本。local `x/y` 改由 `for item[index]` 下标和 pane view metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent、zoom 派生公式或 title metadata 分支。
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
 7. 可见 tile 内部的 media/text 布局也已转为 `item_view_renderer.rs` 输出；`SplitPaneView` 只绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。普通 item 标题绘制已按 Dolphin compact text cache 的分层方式由 Rust 投影为整 tile 高度 text frame，避免最大 zoom 下单行 title frame 被裁剪造成 name 消失；递归搜索带位置元数据的 item 继续通过 sparse metadata model 使用 Rust 投影的多行 text frame。基础 title loop 不再读取 `item.group` / `item.location` 来决定自身 frame。
-8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 `item_view_renderer.rs` 并继续下沉为 pane-level cache：`ItemViewEntry.media` 只承载成功缩略图，通用 folder/file fallback image 由 `PaneViewData.item_view_folder_media` / `item_view_file_media` 下发，主视图 loop 用 `thumbnail_state` 在真实 thumbnail 和 pane-level fallback 之间选择。fallback file/folder media cache 挂在 pane-local `PaneView` 上，按 theme 复用固定 72px 源图；目录/滚动 snapshot、theme refresh 和 zoom fast path 只确保当前主题 cache 已就绪，split snapshot 也继承已预热 cache。zoom 时只更新 media rect/row/cell 目标几何，不再切换 fallback `Image` source，为后续 renderer state 继续收敛到 Rust 侧铺路。
-9. `ItemViewEntry.media_token` 作为真实 thumbnail 更新令牌进入可见 row；`src/app/model_update.rs` 同时维护 pane-local `ItemViewRowToken` sidecar。虚拟切片滑动的重叠 row 先比较 sidecar token，token 相同就不读取 `VecModel::row_data()`，因此不会为了判断复用而克隆包含 `Image` 的整条 `ItemViewEntry`。split pane 快照也会复制到独立 `VecModel` 和 cloned row-token sidecar，避免两个 pane 共享同一个可见 row 模型。
+8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 `item_view_renderer.rs` 并继续下沉为 pane-level cache：通用 folder/file fallback image 由 `PaneViewData.item_view_folder_media` / `item_view_file_media` 下发，主视图 base media loop 始终绘制 pane-level fallback，成功 thumbnail image 通过 pane-local sparse `ItemViewMediaEntry` overlay 覆盖。fallback file/folder media cache 挂在 pane-local `PaneView` 上，按 theme 复用固定 72px 源图；目录/滚动 snapshot、theme refresh 和 zoom fast path 只确保当前主题 cache 已就绪，split snapshot 也继承已预热 cache。zoom 时只更新 media rect/row/cell 目标几何，不再切换 fallback `Image` source，为后续 renderer state 继续收敛到 Rust 侧铺路。
+9. `ItemViewEntry.media_token` 作为真实 thumbnail 更新令牌进入可见 row；`src/app/model_update.rs` 同时维护 pane-local `ItemViewRowToken` sidecar 和 `ItemViewMediaEntry` sparse overlay。虚拟切片滑动的重叠 row 先比较 sidecar token，token 相同就不读取 `VecModel::row_data()`；cached relayout 会对 sparse media overlay 做同样的裁剪和平移。split pane 快照也会复制到独立 `VecModel`、cloned row-token sidecar 和 cloned media sidecar，避免两个 pane 共享同一个可见 row 模型。
 10. show-location metadata overlay 已从 per-item 透明 `Rectangle` wrapper 和 `visible:` 过滤，收敛成 pane-local `ItemViewMetadataEntry` 稀疏模型；普通空 metadata row 不再进入 Slint overlay loop，split snapshot 也会复制独立 metadata model，保持 pane 独立。
 11. Dolphin compact visual metrics 已收敛到 `src/app/item_view_metrics.rs`：`geometry.rs` 负责 viewport/visible range/layout，`item_view.rs` 负责 input/controller/hit-test，`item_view_renderer.rs` 负责 render plan、metadata projection 和 fallback media。它们不再分别维护 zoom/media/font/line/cell/row 公式；fallback 源图和 zoom 几何已经解耦，为后续 renderer cache 或 tile-frame 自绘提供更稳定的输入边界。
 12. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。

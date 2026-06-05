@@ -3,12 +3,23 @@ export struct ItemViewEntry {
     path: string,
     is_dir: bool,
     thumbnail_state: int,
-    media: image,
     media_token: int,
 }
 
 export struct ItemViewHighlightEntry {
     slice_index: int,
+}
+
+export struct ItemViewBoundsEntry {
+    slice_index: int,
+    x: float,
+    width: float,
+    text_width: float,
+}
+
+export struct ItemViewMediaEntry {
+    slice_index: int,
+    media: image,
 }
 
 export struct ItemViewMetadataEntry {
@@ -81,14 +92,17 @@ export struct ChooserChoice {
 
 export struct PaneViewData {
     slot: int,
+    entries: [ItemViewEntry],
+    bounds: [ItemViewBoundsEntry],
+    highlights: [ItemViewHighlightEntry],
+    media: [ItemViewMediaEntry],
+    metadata: [ItemViewMetadataEntry],
     entry_count: int,
     virtual_start_column: int,
     virtual_start_row: int,
     viewport_x: float,
     item_view_rows_per_column: int,
     item_view_cell_width: float,
-    item_view_column_width: float,
-    item_view_column_offset: float,
     item_view_row_height: float,
     item_view_padding: float,
     item_view_content_width: float,

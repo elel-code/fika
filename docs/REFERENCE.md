@@ -232,22 +232,22 @@ ui/
 **中文**：主栏采用横向列优先 compact 布局和轻量虚拟化：
 
 - `rows-per-column` 由可见高度和 `icon-row-height` 计算
-- `x = floor(index / rows-per-column) * icon-column-width`
-- `y = mod(index, rows-per-column) * icon-row-height`
-- 普通 item 是左图标、右文件名的横向 tile；内容宽度向右增长，主栏只做横向滚动
-- Slint 端只接收 `entry_count`（用于空状态和滚动条宽度）和当前可见 `virtual_entries` 切片
-- Rust 端通过 `VirtualItemViewPlan` 统一计算 clamped viewport、scroll max、可见范围和 overscan 范围
+- `column = floor(index / rows-per-column)`，每列宽度由该列 item 的最大 bounds 决定
+- `x` 来自 Rust 投影的 `ItemViewBoundsEntry.x` / column offset，`y = mod(index, rows-per-column) * row-height`
+- 普通 item 是左图标、右文件名的横向 tile；文件名不由 Slint 省略，内容宽度向右增长，主栏只做横向滚动
+- Slint 端接收 `PaneViewData` 内的 `entries`、`bounds`、`highlights`、`media`、`metadata` 和滚动/layout metrics
+- Rust 端通过 compact layout / virtual view 统一计算 clamped viewport、scroll max、可见范围和 overscan 范围
 - 横向滚动只克隆需要的虚拟范围条目，避免大目录的性能问题
 - 缩放和窗口尺寸变化会 clamp 横向滚动位置，避免旧 viewport 落在新内容之外
 
 **English**: The main pane uses horizontal column-first compact layout and lightweight virtualization:
 
 - `rows-per-column` computed from visible height and `icon-row-height`
-- `x = floor(index / rows-per-column) * icon-column-width`
-- `y = mod(index, rows-per-column) * icon-row-height`
-- Ordinary items use horizontal tiles with the icon on the left and filename on the right; content grows to the right and the main pane scrolls horizontally only
-- Slint side receives only `entry_count` (for empty state and scrollbar) and visible `virtual_entries` slice
-- Rust side uses `VirtualItemViewPlan` for unified clamped viewport, scroll max, visible range, and overscan
+- `column = floor(index / rows-per-column)`, with each column width derived from the widest item bounds in that column
+- `x` comes from Rust-projected `ItemViewBoundsEntry.x` / column offset, and `y = mod(index, rows-per-column) * row-height`
+- Ordinary items use horizontal tiles with the icon on the left and filename on the right; filenames are not elided by Slint, content grows to the right, and the main pane scrolls horizontally only
+- Slint side receives `entries`, `bounds`, `highlights`, `media`, `metadata`, and scroll/layout metrics through `PaneViewData`
+- Rust side uses compact layout / virtual view logic for unified clamped viewport, scroll max, visible range, and overscan
 - Horizontal scrolling only clones needed virtual range entries, avoiding large-directory performance issues
 - Zoom and resize clamp horizontal scroll position, preventing old viewport from landing outside new content
 
@@ -661,19 +661,21 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 - Clipboard read/write does not call external clipboard helper commands
 - Non-file clipboard: detects image → video → text in COSMIC order
 
-### 8.3 终端启动 / Terminal Launch (`src/desktop/terminal.rs`)
+### 8.3 自定义服务菜单 / Service Menus (`src/desktop/service_menu.rs`)
 
 **中文**：
 
-- 优先级：`$FIKA_TERMINAL` → `$TERMINAL` → `x-scheme-handler/terminal` → 已知终端列表
-- 优先使用 CosmicTerm（当存在时）
-- 启动终端时纳入 systemd user scope
+- Fika 优先读取 `$XDG_DATA_HOME/fika/servicemenus` 和各 XDG data dir 下的 `fika/servicemenus`
+- 之后读取 Dolphin/KDE 兼容的 `kio/servicemenus`
+- 内置 Open Terminal Here 已删除；终端启动等目录动作由 service-menu 条目提供
+- 匹配动作启动时纳入 systemd user scope
 
 **English**:
 
-- Priority: `$FIKA_TERMINAL` → `$TERMINAL` → `x-scheme-handler/terminal` → known terminal list
-- Prefers CosmicTerm when available
-- Terminal launch attached to systemd user scope
+- Fika reads `$XDG_DATA_HOME/fika/servicemenus` and `fika/servicemenus` under each XDG data dir first
+- It then reads Dolphin/KDE-compatible `kio/servicemenus`
+- Built-in Open Terminal Here has been removed; terminal launchers and other directory actions come from service-menu entries
+- Matched actions are launched in a systemd user scope
 
 ### 8.4 Systemd 集成 / Systemd Integration (`src/desktop/systemd_launch.rs`)
 

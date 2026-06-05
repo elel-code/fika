@@ -1,5 +1,5 @@
 use crate::app::async_bridge::AsyncBridge;
-use crate::app::geometry::{MainItemViewLayout, active_main_pane_width, inactive_main_pane_width};
+use crate::app::geometry::CompactItemViewLayout;
 use crate::app::item_view_renderer::{
     ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
 };
@@ -8,10 +8,10 @@ use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry, PaneSlotData,
-    PaneViewData, set_status, sync_virtual_entries_for_slot,
+    AppWindow, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
+    ItemViewMetadataEntry, PaneSlotData, PaneViewData, set_status, sync_virtual_entries_for_slot,
 };
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -88,31 +88,6 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
             .map(|slot| pane_view_data(ui, slot, &state_ref))
             .collect::<Vec<_>>()
     };
-    let entries = {
-        let state_ref = state.borrow();
-        visible_slots
-            .iter()
-            .copied()
-            .map(|slot| (slot, pane_slot_entries(slot, &state_ref)))
-            .collect::<Vec<_>>()
-    };
-    let highlights = {
-        let state_ref = state.borrow();
-        visible_slots
-            .iter()
-            .copied()
-            .map(|slot| (slot, pane_slot_highlights(slot, &state_ref)))
-            .collect::<Vec<_>>()
-    };
-    let metadata = {
-        let state_ref = state.borrow();
-        visible_slots
-            .iter()
-            .copied()
-            .map(|slot| (slot, pane_slot_metadata(slot, &state_ref)))
-            .collect::<Vec<_>>()
-    };
-
     if ui.get_pane_slots().row_count() > slots.len() {
         sync_pane_slots_model(ui, slots);
         sync_pane_views_model(ui, views);
@@ -120,9 +95,6 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
         sync_pane_views_model(ui, views);
         sync_pane_slots_model(ui, slots);
     }
-    sync_pane_entries_ui(ui, entries);
-    sync_pane_highlights_ui(ui, highlights);
-    sync_pane_metadata_ui(ui, metadata);
 }
 
 fn sync_pane_slots_model(ui: &AppWindow, slots: Vec<PaneSlotData>) {
@@ -152,21 +124,13 @@ pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
             continue;
         };
         if current_view.slot == slot {
-            let (next, entries, highlights, metadata) = {
+            let next = {
                 let state_ref = state.borrow();
-                (
-                    pane_view_data(ui, slot, &state_ref),
-                    pane_slot_entries(slot, &state_ref),
-                    pane_slot_highlights(slot, &state_ref),
-                    pane_slot_metadata(slot, &state_ref),
-                )
+                pane_view_data(ui, slot, &state_ref)
             };
             if current_view != next {
                 current.set_row_data(row, next);
             }
-            set_pane_entries_ui(ui, slot, entries);
-            set_pane_highlights_ui(ui, slot, highlights);
-            set_pane_metadata_ui(ui, slot, metadata);
             return;
         }
     }
@@ -221,75 +185,6 @@ fn sync_pane_views_model(ui: &AppWindow, views: Vec<PaneViewData>) {
     }
 
     ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));
-}
-
-fn sync_pane_entries_ui(ui: &AppWindow, entries: Vec<(i32, ModelRc<ItemViewEntry>)>) {
-    for (slot, model) in entries {
-        set_pane_entries_ui(ui, slot, model);
-    }
-}
-
-fn set_pane_entries_ui(ui: &AppWindow, slot: i32, entries: ModelRc<ItemViewEntry>) {
-    match slot {
-        0 => {
-            if ui.get_pane_slot_0_entries() != entries {
-                ui.set_pane_slot_0_entries(entries);
-            }
-        }
-        1 => {
-            if ui.get_pane_slot_1_entries() != entries {
-                ui.set_pane_slot_1_entries(entries);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn sync_pane_highlights_ui(
-    ui: &AppWindow,
-    highlights: Vec<(i32, ModelRc<ItemViewHighlightEntry>)>,
-) {
-    for (slot, model) in highlights {
-        set_pane_highlights_ui(ui, slot, model);
-    }
-}
-
-fn set_pane_highlights_ui(ui: &AppWindow, slot: i32, highlights: ModelRc<ItemViewHighlightEntry>) {
-    match slot {
-        0 => {
-            if ui.get_pane_slot_0_highlights() != highlights {
-                ui.set_pane_slot_0_highlights(highlights);
-            }
-        }
-        1 => {
-            if ui.get_pane_slot_1_highlights() != highlights {
-                ui.set_pane_slot_1_highlights(highlights);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn sync_pane_metadata_ui(ui: &AppWindow, metadata: Vec<(i32, ModelRc<ItemViewMetadataEntry>)>) {
-    for (slot, model) in metadata {
-        set_pane_metadata_ui(ui, slot, model);
-    }
-}
-
-fn set_pane_metadata_ui(ui: &AppWindow, slot: i32, metadata: ModelRc<ItemViewMetadataEntry>) {
-    match slot {
-        0 => {
-            if ui.get_pane_slot_0_metadata() != metadata {
-                ui.set_pane_slot_0_metadata(metadata);
-            }
-        }
-        1 => {
-            if ui.get_pane_slot_1_metadata() != metadata {
-                ui.set_pane_slot_1_metadata(metadata);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
@@ -366,14 +261,17 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
 
     PaneViewData {
         slot,
+        entries: pane_slot_entries(slot, state),
+        bounds: pane_slot_bounds(slot, state),
+        highlights: pane_slot_highlights(slot, state),
+        media: pane_slot_media(slot, state),
+        metadata: pane_slot_metadata(slot, state),
         entry_count: item_view_metrics.entry_count,
         virtual_start_column: item_view_metrics.virtual_start_column,
         virtual_start_row: item_view_metrics.virtual_start_row,
         viewport_x: pane_slot_viewport_x(slot, state),
         item_view_rows_per_column: item_view_metrics.rows_per_column,
         item_view_cell_width: item_view_metrics.cell_width,
-        item_view_column_width: item_view_metrics.column_width,
-        item_view_column_offset: item_view_metrics.column_offset,
         item_view_row_height: item_view_metrics.row_height,
         item_view_padding: item_view_metrics.padding,
         item_view_content_width: item_view_metrics.content_width,
@@ -439,8 +337,6 @@ struct ItemViewSlotMetrics {
     virtual_start_row: i32,
     rows_per_column: i32,
     cell_width: f32,
-    column_width: f32,
-    column_offset: f32,
     row_height: f32,
     padding: f32,
     content_width: f32,
@@ -448,36 +344,26 @@ struct ItemViewSlotMetrics {
     scroll_max_x: f32,
 }
 
-fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> ItemViewSlotMetrics {
-    let viewport_width = pane_slot_width(ui, slot);
-    let (search_panel_visible, text_line_count) = state
+fn pane_slot_item_view_metrics(
+    _ui: &AppWindow,
+    slot: i32,
+    state: &AppState,
+) -> ItemViewSlotMetrics {
+    let (compact_item_view, virtual_slice_count, virtual_start_index) = state
         .panes
         .pane_for_slot(slot)
         .map(|pane| {
             (
-                pane.search.panel_visible(),
-                pane.item_view_text_line_count(),
-            )
-        })
-        .unwrap_or((false, 1));
-    let layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
-        ui,
-        viewport_width,
-        search_panel_visible,
-        text_line_count,
-    );
-    let (entry_count, virtual_slice_count, virtual_start_index) = state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| {
-            (
-                pane.view.virtual_view.entry_count,
+                pane.view
+                    .virtual_view
+                    .layout
+                    .clone()
+                    .unwrap_or_else(CompactItemViewLayout::empty),
                 pane.view.virtual_entries.row_count(),
                 pane.view.virtual_start_index,
             )
         })
-        .unwrap_or((0, 0, 0));
-    let compact_item_view = layout.compact_item_view(entry_count);
+        .unwrap_or_else(|| (CompactItemViewLayout::empty(), 0, 0));
     let rows_per_column = compact_item_view.rows_per_column.max(1);
     let virtual_start_column = virtual_start_index / rows_per_column;
     let virtual_start_row = virtual_start_index % rows_per_column;
@@ -485,37 +371,17 @@ fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> I
         .virtual_slice_width_from_start_row(virtual_slice_count, virtual_start_row);
 
     ItemViewSlotMetrics {
-        entry_count: entry_count as i32,
+        entry_count: compact_item_view.entry_count as i32,
         virtual_start_column: virtual_start_column as i32,
         virtual_start_row: virtual_start_row as i32,
         rows_per_column: compact_item_view.rows_per_column as i32,
         cell_width: compact_item_view.cell_width,
-        column_width: compact_item_view.column_width,
-        column_offset: compact_item_view.column_offset,
         row_height: compact_item_view.row_height,
         padding: compact_item_view.padding,
         content_width: compact_item_view.content_width,
         virtual_slice_width,
         scroll_max_x: compact_item_view.scroll_max_x,
     }
-}
-
-fn pane_slot_width(ui: &AppWindow, slot: i32) -> f32 {
-    let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-    let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
-    if slot == 0 {
-        return active_main_pane_width(
-            main_width,
-            ui.get_split_view_open(),
-            ui.get_split_pane_ratio(),
-        );
-    }
-
-    inactive_main_pane_width(
-        main_width,
-        ui.get_split_view_open(),
-        ui.get_split_pane_ratio(),
-    )
 }
 
 fn pane_slot_current_path(state: &AppState, slot: i32) -> SharedString {
@@ -563,11 +429,27 @@ fn pane_slot_entries(slot: i32, state: &AppState) -> ModelRc<ItemViewEntry> {
         .unwrap_or_default()
 }
 
+fn pane_slot_bounds(slot: i32, state: &AppState) -> ModelRc<ItemViewBoundsEntry> {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.view.virtual_bounds_entries.clone())
+        .unwrap_or_default()
+}
+
 fn pane_slot_highlights(slot: i32, state: &AppState) -> ModelRc<ItemViewHighlightEntry> {
     state
         .panes
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_highlight_entries.clone())
+        .unwrap_or_default()
+}
+
+fn pane_slot_media(slot: i32, state: &AppState) -> ModelRc<ItemViewMediaEntry> {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.view.virtual_media_entries.clone())
         .unwrap_or_default()
 }
 

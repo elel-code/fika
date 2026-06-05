@@ -74,7 +74,7 @@ Reference files:
 - `cosmic-files/src/mime_app.rs`
 - `cosmic-files/src/app.rs`
 
-Useful terminal rules:
+Useful terminal rules, if terminal launchers are reintroduced as service-menu templates:
 
 - Build a terminal candidate list from desktop application metadata, specifically `TerminalEmulator` categories.
 - Prefer the default `x-scheme-handler/terminal` desktop handler when the desktop reports one.
@@ -82,9 +82,8 @@ Useful terminal rules:
 
 Current Fika mapping:
 
-- `src/desktop/terminal.rs` keeps explicit `FIKA_TERMINAL` / `TERMINAL` overrides first.
-- After explicit overrides, Fika queries `xdg-mime query default x-scheme-handler/terminal`, resolves the desktop file, and accepts it when it is a visible `TerminalEmulator`.
-- Fika then prefers `com.system76.CosmicTerm.desktop`, scans visible `TerminalEmulator` desktop entries, and finally falls back to known terminal executable names.
+- Built-in terminal launching has been removed from Fika's context menus.
+- Terminal launchers now belong in user-configurable service-menu entries, discovered from Fika's own `fika/servicemenus` directories before KDE-compatible `kio/servicemenus`.
 
 ## Rust Implementation References
 

@@ -42,7 +42,6 @@
 
 - 内置 MIME 类型推断和默认应用程序启动（不依赖 `xdg-open`）
 - Open With 菜单，从已安装 `.desktop` 文件解析
-- 终端集成：通过 `FIKA_TERMINAL` 或 `TERMINAL` 环境变量指定终端
 
 ### 缩略图
 
@@ -188,7 +187,6 @@ scripts/check-runtime-integration.sh --activate-system-helper
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
-| `FIKA_TERMINAL` | 指定终端模拟器（优先于 `TERMINAL`） | `FIKA_TERMINAL="wezterm start --always-new-process"` |
 | `FIKA_ICON_THEME` | 覆盖图标主题 | `FIKA_ICON_THEME=Papirus` |
 | `FIKA_GUI` | 覆盖 portal 后端前端可执行文件路径 | 调试用 |
 | `FIKA_PRIVILEGED_HELPER` | 覆盖特权 helper 可执行文件路径 | 调试用 |

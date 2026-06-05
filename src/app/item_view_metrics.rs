@@ -48,10 +48,12 @@ impl CompactItemVisualMetrics {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn compact_cell_width(zoom_level: i32) -> f32 {
     CompactItemVisualMetrics::from_zoom_level_with_text_line_count(zoom_level, 1).cell_width
 }
 
+#[cfg(test)]
 pub(crate) fn compact_row_height(zoom_level: i32, text_line_count: usize) -> f32 {
     CompactItemVisualMetrics::from_zoom_level_with_text_line_count(zoom_level, text_line_count)
         .row_height

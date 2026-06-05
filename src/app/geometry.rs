@@ -1,6 +1,4 @@
-use crate::app::item_view_metrics::{
-    COMPACT_COLUMN_MARGIN_WIDTH, compact_cell_width, compact_row_height,
-};
+use crate::app::item_view_metrics::{COMPACT_COLUMN_MARGIN_WIDTH, CompactItemVisualMetrics};
 use crate::{AppWindow, MenuGeometry};
 use slint::ComponentHandle;
 use std::ops::Range;
@@ -24,20 +22,26 @@ pub(crate) struct MainItemViewLayout {
     pub(crate) cell_width: f32,
     pub(crate) row_height: f32,
     pub(crate) padding: f32,
+    pub(crate) item_padding: f32,
+    pub(crate) media_width: f32,
+    pub(crate) media_text_gap: f32,
+    pub(crate) title_font_size: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CompactItemViewLayout {
     pub(crate) entry_count: usize,
     pub(crate) rows_per_column: usize,
     pub(crate) viewport_width: f32,
     pub(crate) cell_width: f32,
-    pub(crate) column_width: f32,
-    pub(crate) column_offset: f32,
     pub(crate) row_height: f32,
     pub(crate) padding: f32,
     pub(crate) content_width: f32,
     pub(crate) scroll_max_x: f32,
+    pub(crate) item_widths: Vec<f32>,
+    pub(crate) item_text_widths: Vec<f32>,
+    pub(crate) column_widths: Vec<f32>,
+    pub(crate) column_offsets: Vec<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +53,32 @@ pub(crate) struct VirtualItemViewPlan {
     pub(crate) start_column: usize,
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewItemBounds {
+    pub(crate) slice_index: usize,
+    pub(crate) x: f32,
+    pub(crate) width: f32,
+    pub(crate) text_width: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RectBounds {
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+}
+
+impl RectBounds {
+    fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        Self { x1, y1, x2, y2 }
+    }
+
+    fn intersects(self, other: Self) -> bool {
+        self.x1 <= other.x2 && self.x2 >= other.x1 && self.y1 <= other.y2 && self.y2 >= other.y1
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -82,8 +112,12 @@ impl MainItemViewLayout {
         zoom_level: i32,
         text_line_count: usize,
     ) -> Self {
-        let cell_width = compact_cell_width(zoom_level);
-        let row_height = compact_row_height(zoom_level, text_line_count);
+        let metrics = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(
+            zoom_level,
+            text_line_count,
+        );
+        let cell_width = metrics.cell_width;
+        let row_height = metrics.row_height;
         let padding = COMPACT_COLUMN_MARGIN_WIDTH;
         let window_size = ui.window().size().to_logical(ui.window().scale_factor());
         let pane = main_pane_bounds(
@@ -107,38 +141,57 @@ impl MainItemViewLayout {
             cell_width,
             row_height,
             padding,
+            item_padding: metrics.item_padding,
+            media_width: metrics.media_size,
+            media_text_gap: metrics.media_text_gap,
+            title_font_size: metrics.title_font_size,
         }
     }
 
-    pub(crate) fn compact_item_view(self, entry_count: usize) -> CompactItemViewLayout {
+    pub(crate) fn compact_item_view_from_names(
+        self,
+        names: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> CompactItemViewLayout {
         compact_item_view_layout(
             self.viewport_width,
-            entry_count,
+            names,
             self.rows_per_column,
             self.cell_width,
             self.row_height,
             self.padding,
+            self.item_padding,
+            self.media_width,
+            self.media_text_gap,
+            self.title_font_size,
         )
     }
 }
 
 impl CompactItemViewLayout {
+    pub(crate) fn empty() -> Self {
+        Self {
+            entry_count: 0,
+            rows_per_column: 1,
+            viewport_width: 1.0,
+            cell_width: 1.0,
+            row_height: 1.0,
+            padding: 0.0,
+            content_width: 1.0,
+            scroll_max_x: 0.0,
+            item_widths: Vec::new(),
+            item_text_widths: Vec::new(),
+            column_widths: Vec::new(),
+            column_offsets: Vec::new(),
+        }
+    }
+
     pub(crate) fn virtual_plan(
-        self,
+        &self,
         requested_viewport_x: f32,
         overscan_columns: usize,
     ) -> VirtualItemViewPlan {
         let viewport_x = requested_viewport_x.clamp(0.0, self.scroll_max_x);
-        let (range, visible_range) = virtual_entry_ranges(
-            self.entry_count,
-            self.rows_per_column,
-            viewport_x,
-            self.viewport_width,
-            self.column_width,
-            self.column_offset,
-            self.padding,
-            overscan_columns,
-        );
+        let (range, visible_range) = self.virtual_entry_ranges(viewport_x, overscan_columns);
         let start_column = range.start / self.rows_per_column.max(1);
 
         VirtualItemViewPlan {
@@ -153,18 +206,261 @@ impl CompactItemViewLayout {
     }
 
     pub(crate) fn virtual_slice_width_from_start_row(
-        self,
+        &self,
         virtual_slice_count: usize,
         start_row: usize,
     ) -> f32 {
-        compact_item_view_virtual_slice_width(
-            virtual_slice_count,
-            start_row,
+        if virtual_slice_count == 0 || self.entry_count == 0 {
+            return 1.0;
+        }
+
+        let rows_per_column = self.rows_per_column.max(1);
+        let start_index = start_row.min(rows_per_column.saturating_sub(1));
+        let end_index = start_index
+            .saturating_add(virtual_slice_count)
+            .min(self.entry_count);
+        self.slice_width(start_index..end_index)
+    }
+
+    pub(crate) fn bounds_for_range(
+        &self,
+        range_start: usize,
+        count: usize,
+    ) -> Vec<ItemViewItemBounds> {
+        let end = range_start.saturating_add(count).min(self.entry_count);
+        (range_start.min(end)..end)
+            .enumerate()
+            .filter_map(|(slice_index, index)| {
+                let column = self.column_for_index(index)?;
+                Some(ItemViewItemBounds {
+                    slice_index,
+                    x: self.column_offsets.get(column).copied().unwrap_or_default(),
+                    width: self
+                        .item_widths
+                        .get(index)
+                        .copied()
+                        .unwrap_or(self.cell_width),
+                    text_width: self.item_text_widths.get(index).copied().unwrap_or(1.0),
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn item_bounds(&self, index: usize) -> Option<ItemViewItemBounds> {
+        if index >= self.entry_count {
+            return None;
+        }
+        let column = self.column_for_index(index)?;
+        Some(ItemViewItemBounds {
+            slice_index: index,
+            x: self.column_offsets.get(column).copied().unwrap_or_default(),
+            width: self
+                .item_widths
+                .get(index)
+                .copied()
+                .unwrap_or(self.cell_width),
+            text_width: self.item_text_widths.get(index).copied().unwrap_or(1.0),
+        })
+    }
+
+    pub(crate) fn index_at_content_point(&self, x: f32, y: f32) -> Option<usize> {
+        if self.entry_count == 0 {
+            return None;
+        }
+
+        let content_x = x - self.padding;
+        let content_y = y - self.padding;
+        if content_x < 0.0 || content_y < 0.0 {
+            return None;
+        }
+
+        let column = self.column_at_x(content_x)?;
+        let row = (content_y / self.row_height.max(1.0)).floor() as usize;
+        if row >= self.rows_per_column.max(1) {
+            return None;
+        }
+
+        let index = column
+            .saturating_mul(self.rows_per_column.max(1))
+            .saturating_add(row);
+        let bounds = self.item_bounds(index)?;
+        let local_x = content_x - bounds.x;
+        if local_x < 0.0 || local_x > bounds.width {
+            return None;
+        }
+
+        Some(index)
+    }
+
+    pub(crate) fn selection_candidate_range(&self, x1: f32, x2: f32) -> Range<usize> {
+        if self.entry_count == 0 {
+            return 0..0;
+        }
+
+        let content_x1 = (x1.min(x2) - self.padding).max(0.0);
+        let content_x2 = (x1.max(x2) - self.padding).max(content_x1);
+        let first_column = self.first_column_intersecting_x(content_x1).unwrap_or(0);
+        let last_column = self
+            .last_column_intersecting_x(content_x2)
+            .unwrap_or(first_column);
+        entry_range_for_columns(
+            first_column,
+            last_column.saturating_add(1),
             self.rows_per_column,
-            self.column_width,
-            self.column_offset,
-            self.cell_width,
+            self.entry_count,
         )
+    }
+
+    pub(crate) fn intersects_index(
+        &self,
+        index: usize,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+    ) -> bool {
+        let Some(bounds) = self.item_bounds(index) else {
+            return false;
+        };
+        let rows_per_column = self.rows_per_column.max(1);
+        let row = index % rows_per_column;
+        let tile_x1 = self.padding + bounds.x;
+        let tile_y1 = self.padding + row as f32 * self.row_height;
+        let tile_x2 = tile_x1 + bounds.width.max(1.0);
+        let tile_y2 = tile_y1 + self.row_height.max(1.0);
+
+        RectBounds::new(x1, y1, x2, y2)
+            .intersects(RectBounds::new(tile_x1, tile_y1, tile_x2, tile_y2))
+    }
+
+    fn virtual_entry_ranges(
+        &self,
+        viewport_x: f32,
+        overscan_columns: usize,
+    ) -> (Range<usize>, Range<usize>) {
+        if self.entry_count == 0 {
+            return (0..0, 0..0);
+        }
+
+        let viewport_x = viewport_x.max(0.0);
+        let viewport_width = self.viewport_width.max(1.0);
+        let content_x = (viewport_x - self.padding.max(0.0)).max(0.0);
+        let content_end_x =
+            (viewport_x + viewport_width - self.padding.max(0.0)).max(content_x + 1.0);
+        let first_visible_column = self.first_column_intersecting_x(content_x).unwrap_or(0);
+        let visible_end_column = self
+            .last_column_intersecting_x(content_end_x)
+            .map(|column| column + 1)
+            .unwrap_or(first_visible_column + 1);
+        let start_column = first_visible_column.saturating_sub(overscan_columns);
+        let end_column = (visible_end_column + overscan_columns).min(self.column_widths.len());
+
+        (
+            entry_range_for_columns(
+                start_column,
+                end_column,
+                self.rows_per_column,
+                self.entry_count,
+            ),
+            entry_range_for_columns(
+                first_visible_column,
+                visible_end_column,
+                self.rows_per_column,
+                self.entry_count,
+            ),
+        )
+    }
+
+    fn slice_width(&self, range: Range<usize>) -> f32 {
+        if range.is_empty() {
+            return 1.0;
+        }
+
+        let rows_per_column = self.rows_per_column.max(1);
+        let start_column = range.start / rows_per_column;
+        let end_column = range
+            .end
+            .saturating_sub(1)
+            .min(self.entry_count.saturating_sub(1))
+            / rows_per_column;
+        let start_x = self
+            .column_offsets
+            .get(start_column)
+            .copied()
+            .unwrap_or_default();
+        let end_x = self
+            .column_offsets
+            .get(end_column)
+            .copied()
+            .unwrap_or(start_x)
+            + self
+                .column_widths
+                .get(end_column)
+                .copied()
+                .unwrap_or(self.cell_width);
+        (end_x - start_x).max(1.0)
+    }
+
+    fn column_for_index(&self, index: usize) -> Option<usize> {
+        if index >= self.entry_count {
+            None
+        } else {
+            Some(index / self.rows_per_column.max(1))
+        }
+    }
+
+    fn column_at_x(&self, x: f32) -> Option<usize> {
+        let column = self.last_column_starting_before_or_at(x)?;
+        let start = self.column_offsets.get(column).copied().unwrap_or_default();
+        let width = self
+            .column_widths
+            .get(column)
+            .copied()
+            .unwrap_or(self.cell_width);
+        if x >= start && x <= start + width {
+            Some(column)
+        } else {
+            None
+        }
+    }
+
+    fn first_column_intersecting_x(&self, x: f32) -> Option<usize> {
+        if self.column_offsets.is_empty() {
+            return None;
+        }
+        let mut low = 0;
+        let mut high = self.column_offsets.len();
+        while low < high {
+            let mid = (low + high) / 2;
+            let end = self.column_offsets[mid] + self.column_widths[mid];
+            if end < x {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        (low < self.column_offsets.len()).then_some(low)
+    }
+
+    fn last_column_intersecting_x(&self, x: f32) -> Option<usize> {
+        self.last_column_starting_before_or_at(x)
+    }
+
+    fn last_column_starting_before_or_at(&self, x: f32) -> Option<usize> {
+        if self.column_offsets.is_empty() {
+            return None;
+        }
+        let mut low = 0;
+        let mut high = self.column_offsets.len();
+        while low < high {
+            let mid = (low + high) / 2;
+            if self.column_offsets[mid] <= x {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        Some(low.saturating_sub(1).min(self.column_offsets.len() - 1))
     }
 }
 
@@ -230,31 +526,66 @@ pub(crate) fn main_pane_bounds(
 
 pub(crate) fn compact_item_view_layout(
     viewport_width: f32,
-    entry_count: usize,
+    names: impl IntoIterator<Item = impl AsRef<str>>,
     rows_per_column: usize,
     cell_width: f32,
     row_height: f32,
     padding: f32,
+    item_padding: f32,
+    media_width: f32,
+    media_text_gap: f32,
+    title_font_size: f32,
 ) -> CompactItemViewLayout {
     let viewport_width = viewport_width.max(1.0);
     let rows_per_column = rows_per_column.max(1);
     let cell_width = cell_width.max(1.0);
     let row_height = row_height.max(1.0);
     let padding = padding.max(0.0);
+    let item_padding = item_padding.max(0.0);
+    let media_width = media_width.max(1.0);
+    let media_text_gap = media_text_gap.max(0.0);
+    let title_font_size = title_font_size.max(1.0);
+    let text_x = item_padding + media_width + media_text_gap;
 
     // Dolphin CompactLayout scrolls horizontally: rows fill the physical height,
-    // then each completed column advances on the X axis by item width + margin.
-    let item_margin = COMPACT_COLUMN_MARGIN_WIDTH;
-    let column_width = (cell_width + item_margin).max(1.0);
-    let column_offset = 0.0;
+    // then each completed column advances on the X axis by that column's
+    // maximum item width. This mirrors Dolphin's size-hint layouter.
+    let item_widths = names
+        .into_iter()
+        .map(|name| {
+            compact_item_view_item_width(
+                name.as_ref(),
+                cell_width,
+                item_padding,
+                media_width,
+                media_text_gap,
+                title_font_size,
+            )
+        })
+        .collect::<Vec<_>>();
+    let entry_count = item_widths.len();
+    let item_text_widths = item_widths
+        .iter()
+        .map(|width| (*width - text_x - item_padding).max(1.0))
+        .collect::<Vec<_>>();
     let column_count = entry_count.div_ceil(rows_per_column).max(1);
-    let content_width = compact_item_view_content_width(
-        column_count,
-        column_width,
-        column_offset,
-        cell_width,
-        padding,
-    );
+    let mut column_widths = Vec::with_capacity(column_count);
+    for column in 0..column_count {
+        let start = column * rows_per_column;
+        let end = (start + rows_per_column).min(entry_count);
+        let width = if start < end {
+            item_widths[start..end]
+                .iter()
+                .copied()
+                .fold(cell_width, f32::max)
+        } else {
+            cell_width
+        };
+        column_widths.push(width.max(1.0));
+    }
+    let column_offsets = compact_item_view_column_offsets(&column_widths);
+    let content_width =
+        compact_item_view_content_width(&column_widths, &column_offsets, cell_width, padding);
     let scroll_max_x = (content_width - viewport_width).max(0.0);
 
     CompactItemViewLayout {
@@ -262,46 +593,68 @@ pub(crate) fn compact_item_view_layout(
         rows_per_column,
         viewport_width,
         cell_width,
-        column_width,
-        column_offset,
         row_height,
         padding,
         content_width,
         scroll_max_x,
+        item_widths,
+        item_text_widths,
+        column_widths,
+        column_offsets,
     }
 }
 
-pub(crate) fn compact_item_view_virtual_slice_width(
-    virtual_slice_count: usize,
-    start_row: usize,
-    rows_per_column: usize,
-    column_width: f32,
-    column_offset: f32,
+fn compact_item_view_item_width(
+    name: &str,
     cell_width: f32,
+    item_padding: f32,
+    media_width: f32,
+    media_text_gap: f32,
+    title_font_size: f32,
 ) -> f32 {
-    let rows_per_column = rows_per_column.max(1);
-    let start_row = start_row.min(rows_per_column.saturating_sub(1));
-    let column_count = (start_row + virtual_slice_count)
-        .div_ceil(rows_per_column)
-        .max(1);
-    (column_offset.max(0.0)
-        + (column_count.saturating_sub(1)) as f32 * column_width.max(1.0)
-        + cell_width.max(1.0))
-    .max(1.0)
+    let text_width = compact_text_width_estimate(name, title_font_size);
+    let required = item_padding * 2.0 + media_width + media_text_gap + text_width;
+    required.max(cell_width).max(1.0)
+}
+
+pub(crate) fn compact_text_width_estimate(text: &str, font_size: f32) -> f32 {
+    let font_size = font_size.max(1.0);
+    let width = text.chars().fold(0.0, |acc, ch| {
+        let factor = if ch.is_whitespace() {
+            0.35
+        } else if ch.is_ascii() {
+            match ch {
+                'i' | 'l' | 'I' | '!' | '|' | '.' | ',' | ':' | ';' | '\'' | '`' => 0.32,
+                'm' | 'w' | 'M' | 'W' | '@' | '#' | '%' | '&' => 0.82,
+                _ => 0.58,
+            }
+        } else {
+            1.0
+        };
+        acc + font_size * factor
+    });
+    width.ceil().max(font_size)
+}
+
+fn compact_item_view_column_offsets(column_widths: &[f32]) -> Vec<f32> {
+    let mut offsets = Vec::with_capacity(column_widths.len());
+    let mut x = 0.0;
+    for width in column_widths {
+        offsets.push(x);
+        x += width.max(1.0) + COMPACT_COLUMN_MARGIN_WIDTH;
+    }
+    offsets
 }
 
 fn compact_item_view_content_width(
-    column_count: usize,
-    column_width: f32,
-    column_offset: f32,
+    column_widths: &[f32],
+    column_offsets: &[f32],
     cell_width: f32,
     padding: f32,
 ) -> f32 {
-    (2.0 * padding.max(0.0)
-        + column_offset.max(0.0)
-        + (column_count.saturating_sub(1)) as f32 * column_width.max(1.0)
-        + cell_width.max(1.0))
-    .max(1.0)
+    let last_width = column_widths.last().copied().unwrap_or(cell_width).max(1.0);
+    let last_offset = column_offsets.last().copied().unwrap_or_default();
+    (2.0 * padding.max(0.0) + last_offset + last_width).max(1.0)
 }
 
 pub(crate) fn search_panel_height(search_panel_visible: bool, main_pane_width: f32) -> f32 {
@@ -314,45 +667,6 @@ pub(crate) fn search_panel_height(search_panel_visible: bool, main_pane_width: f
     } else {
         0.0
     }
-}
-
-fn virtual_entry_ranges(
-    entry_count: usize,
-    rows_per_column: usize,
-    viewport_x: f32,
-    viewport_width: f32,
-    column_width: f32,
-    column_offset: f32,
-    padding: f32,
-    overscan_columns: usize,
-) -> (Range<usize>, Range<usize>) {
-    if entry_count == 0 {
-        return (0..0, 0..0);
-    }
-
-    let rows_per_column = rows_per_column.max(1);
-    let column_width = column_width.max(1.0);
-    let viewport_x = viewport_x.max(0.0);
-    let viewport_width = viewport_width.max(1.0);
-    let content_x = (viewport_x - padding.max(0.0) - column_offset.max(0.0)).max(0.0);
-    let content_end_x = (viewport_x + viewport_width - padding.max(0.0) - column_offset.max(0.0))
-        .max(content_x + 1.0);
-    let first_visible_column = (content_x / column_width).floor() as usize;
-    let visible_end_column = (content_end_x / column_width)
-        .ceil()
-        .max(first_visible_column as f32 + 1.0) as usize;
-    let start_column = first_visible_column.saturating_sub(overscan_columns);
-    let end_column = visible_end_column + overscan_columns;
-
-    (
-        entry_range_for_columns(start_column, end_column, rows_per_column, entry_count),
-        entry_range_for_columns(
-            first_visible_column,
-            visible_end_column,
-            rows_per_column,
-            entry_count,
-        ),
-    )
 }
 
 fn entry_range_for_columns(
@@ -826,7 +1140,7 @@ fn file_context_menu_metrics(
     }
 
     let mut item_count = if input.is_dir {
-        9 + i32::from(!input.in_trash) + input.add_to_places_visible as i32
+        9 + input.add_to_places_visible as i32
     } else {
         8 + input.default_open_visible as i32
     };
@@ -861,7 +1175,7 @@ fn viewport_context_menu_metrics(
     }
 
     MenuMetrics {
-        height: 5.0 * item + service_rows + separator,
+        height: 4.0 * item + service_rows + separator,
         open_with_row_y_offset: 3.0 * item + separator,
         create_new_row_y_offset: 0.0,
     }
@@ -1233,15 +1547,41 @@ pub(crate) fn clamp_popup(position: f32, popup_size: f32, safe_min: f32, safe_ma
 mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
-        HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
-        PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, active_main_pane_width,
-        compact_cell_width, compact_item_view_layout, compact_row_height, context_menu_metrics,
+        CompactItemViewLayout, HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry,
+        PopupPlacement, PopupPoint, PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT,
+        active_main_pane_width, compact_item_view_layout, context_menu_metrics,
         inactive_main_pane_width, main_pane_bounds, place_drop_geometry, search_panel_height,
     };
+    use crate::app::item_view_metrics::{compact_cell_width, compact_row_height};
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
     const MENU_SEPARATOR_HEIGHT: f32 = 8.0;
     const MENU_TITLE_HEIGHT: f32 = 30.0;
+
+    fn compact_test_layout(
+        viewport_width: f32,
+        entry_count: usize,
+        rows_per_column: usize,
+        cell_width: f32,
+        row_height: f32,
+        padding: f32,
+    ) -> CompactItemViewLayout {
+        let names = (0..entry_count)
+            .map(|index| format!("item-{index}"))
+            .collect::<Vec<_>>();
+        compact_item_view_layout(
+            viewport_width,
+            names.iter().map(String::as_str),
+            rows_per_column,
+            cell_width,
+            row_height,
+            padding,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        )
+    }
 
     #[test]
     fn menu_geometry_callbacks_are_global_owned() {
@@ -1534,7 +1874,7 @@ mod tests {
         );
         assert!(file_menu.contains("root.open_folder_with_hover(is-hovered);"));
         assert!(file_menu.contains("root.open_with_hover(is-hovered);"));
-        assert!(!file_menu.contains("ActionMenuRow {\n            label: \"Open Terminal Here\";\n            dark: root.dark;\n            hovered"));
+        assert!(!file_menu.contains("Open Terminal Here"));
         assert!(!file_menu.contains("ActionMenuRow {\n            label: \"Rename\";\n            dark: root.dark;\n            hovered"));
 
         assert_eq!(
@@ -1545,7 +1885,7 @@ mod tests {
         assert!(viewport_menu.contains("root.create_new_hover(is-hovered);"));
         assert!(viewport_menu.contains("root.open_folder_with_hover(is-hovered);"));
         assert!(!viewport_menu.contains("ActionMenuRow {\n            label: \"Select All\";\n            shortcut: \"Ctrl+A\";\n            dark: root.dark;\n            hovered"));
-        assert!(!viewport_menu.contains("ActionMenuRow {\n            label: \"Open Terminal Here\";\n            dark: root.dark;\n            hovered"));
+        assert!(!viewport_menu.contains("Open Terminal Here"));
 
         for callback in [
             "file_open_folder_with_hover",
@@ -2101,7 +2441,7 @@ mod tests {
                     "callback item-view-item-context-menu(int, float, float, length, length) -> bool;"
                 )
                 && pane_routing.contains(
-                    "callback item-view-blank-pressed(int, float, float, int, float, float, float, float, float, bool);"
+                    "callback item-view-blank-pressed(int, float, float, bool);"
                 )
                 && pane_routing.contains("callback item-view-blank-moved(int, float, float) -> bool;")
                 && pane_routing.contains("callback item-view-blank-released(int, float, float);")
@@ -2238,7 +2578,7 @@ mod tests {
             "item_view_item_pressed(slot, x, y, toggle, range) => {\n        PaneRouting.item-view-item-pressed(slot, x, y, toggle, range)\n    }",
             "item_view_item_activated(slot, x, y) => {\n        PaneRouting.item-view-item-activated(slot, x, y);\n    }",
             "item_view_item_context_menu(slot, x, y, abs-x, abs-y) => {\n        PaneRouting.item-view-item-context-menu(slot, x, y, abs-x, abs-y)\n    }",
-            "item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle) => {\n        PaneRouting.item-view-blank-pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle);\n    }",
+            "item_view_blank_pressed(slot, x, y, toggle) => {\n        PaneRouting.item-view-blank-pressed(slot, x, y, toggle);\n    }",
             "item_view_blank_moved(slot, x, y) => {\n        PaneRouting.item-view-blank-moved(slot, x, y)\n    }",
             "item_view_blank_released(slot, x, y) => {\n        PaneRouting.item-view-blank-released(slot, x, y);\n    }",
             "item_view_blank_cancelled(slot) => {\n        PaneRouting.item-view-blank-cancelled(slot);\n    }",
@@ -2270,8 +2610,6 @@ mod tests {
             pane_slot_surface.contains("PaneSlot {")
                 && pane_slot_surface.contains("in property <PaneSlotData> pane;")
                 && pane_slot_surface.contains("in property <PaneViewData> view;")
-                && pane_slot_surface.contains("in property <[ItemViewEntry]> entries;")
-                && pane_slot_surface.contains("in property <[ItemViewHighlightEntry]> highlights;")
                 && pane_slot_surface.contains("pane-slot: root.pane.slot;")
                 && pane_slot_surface.contains("current-path: root.pane.current_path;")
                 && pane_slot_surface
@@ -2292,8 +2630,11 @@ mod tests {
                     "root.live-slot != root.view.slot || root.live-viewport-x != root.view.viewport_x"
                 )
                 && pane_slot_surface.contains("viewport-x <=> root.live-viewport-x;")
-                && pane_slot_surface.contains("entries: root.entries;")
-                && pane_slot_surface.contains("highlights: root.highlights;")
+                && pane_slot_surface.contains("entries: root.view.entries;")
+                && pane_slot_surface.contains("bounds: root.view.bounds;")
+                && pane_slot_surface.contains("highlights: root.view.highlights;")
+                && pane_slot_surface.contains("media: root.view.media;")
+                && pane_slot_surface.contains("metadata: root.view.metadata;")
                 && pane_slot_surface.contains("callback viewport_changed(int, float);")
                 && pane_slot_surface.contains(
                     "viewport_changed(slot, viewport-x) => {\n            root.viewport_changed(slot, viewport-x);\n        }"
@@ -2338,8 +2679,8 @@ mod tests {
             app.contains("for pane[index] in root.pane_slots : PaneSlotSurface {\n                        private property <int> slot: pane.slot;\n                        x: root.pane-slot-x(slot);\n                        width: root.pane-slot-width(slot);\n                        height: parent.height;")
                 && app.contains("pane: pane;")
                 && app.contains("view: root.pane_views[index];")
-                && app.contains("entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;")
-                && app.contains("highlights: slot == 0 ? root.pane_slot_0_highlights : root.pane_slot_1_highlights;")
+                && !app.contains("pane_slot_0_entries")
+                && !app.contains("pane_slot_1_entries")
                 && app.contains("focused: root.focused_pane == slot;"),
             "split view should render every physical pane through one slot-driven PaneSlotSurface template"
         );
@@ -2425,7 +2766,7 @@ mod tests {
                     "public function route-pane-item-view-blank-pressed(slot: int,"
                 )
                 && route_functions.contains(
-                    "root.pane_item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle);"
+                    "root.pane_item_view_blank_pressed(slot, x, y, toggle);"
                 )
                 && route_functions.contains(
                     "public function route-pane-item-view-blank-moved(slot: int, x: float, y: float) -> bool"
@@ -2584,9 +2925,14 @@ mod tests {
         let models = include_str!("../../ui/models.slint");
         let item_view_entry = models
             .split_once("export struct ItemViewEntry")
+            .and_then(|(_, rest)| rest.split_once("export struct ItemViewHighlightEntry"))
+            .map(|(body, _)| body)
+            .expect("models.slint should define ItemViewEntry before ItemViewHighlightEntry");
+        let media_entry = models
+            .split_once("export struct ItemViewMediaEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
             .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewEntry before ItemViewMetadataEntry");
+            .expect("models.slint should define ItemViewMediaEntry before ItemViewMetadataEntry");
         let pane_view_data = models
             .split_once("export struct PaneViewData")
             .and_then(|(_, rest)| rest.split_once("export struct PaneSlotData"))
@@ -2615,9 +2961,14 @@ mod tests {
             .expect("SplitPaneView should have one concrete drop-target overlay");
         let base_image_loop = split_pane
             .split_once("for item[index] in root.entries: Image")
-            .and_then(|(_, rest)| rest.split_once("for item[index] in root.entries: Text"))
+            .and_then(|(_, rest)| rest.split_once("for media[index] in root.media: Image"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have an unconditional base image primitive loop");
+        let media_overlay_loop = split_pane
+            .split_once("for media[index] in root.media: Image")
+            .and_then(|(_, rest)| rest.split_once("for item[index] in root.entries: Text"))
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should have a sparse thumbnail media overlay loop");
         let base_text_loop = split_pane
             .split_once("for item[index] in root.entries: Text")
             .and_then(|(_, rest)| rest.split_once("for metadata[index] in root.metadata: Text"))
@@ -2637,33 +2988,45 @@ mod tests {
             split_pane.contains("for item[index] in root.entries: Image")
                 && split_pane.contains("for item[index] in root.entries: Text")
                 && split_pane.contains("in property <int> virtual-start-row;")
+                && split_pane.contains("in property <[ItemViewBoundsEntry]> bounds;")
                 && base_image_loop.contains("tile-index: root.virtual-start-row + index;")
                 && base_image_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && base_image_loop
-                    .contains("tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;")
+                    .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];")
                 && base_text_loop.contains("tile-index: root.virtual-start-row + index;")
                 && base_text_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && base_text_loop
-                    .contains("tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;")
-                && split_pane.contains(
-                    "x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;"
-                )
+                    .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];")
                 && base_image_loop
-                    .contains("x: self.tile-column * root.column-width + root.media-x;")
+                    .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.media-x;")
                 && base_image_loop.contains(
                     "y: root.preview-padding + self.tile-row * root.row-height + root.media-y;"
                 )
                 && base_image_loop.contains("width: root.media-width;")
                 && base_image_loop.contains("height: root.media-height;")
-                && base_image_loop.contains("source: item.thumbnail_state == 2 ? item.media")
+                && base_image_loop.contains(
+                    "source: item.is_dir ? root.item-view-folder-media : root.item-view-file-media;"
+                )
                 && base_image_loop.contains("root.item-view-folder-media")
                 && base_image_loop.contains("root.item-view-file-media")
+                && media_overlay_loop.contains("tile-index: root.virtual-start-row + media.slice_index;")
+                && media_overlay_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
+                && media_overlay_loop
+                    .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[media.slice_index];")
+                && media_overlay_loop
+                    .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.media-x;")
+                && media_overlay_loop.contains(
+                    "y: root.preview-padding + self.tile-row * root.row-height + root.media-y;"
+                )
+                && media_overlay_loop.contains("width: root.media-width;")
+                && media_overlay_loop.contains("height: root.media-height;")
+                && media_overlay_loop.contains("source: media.media;")
                 && base_text_loop
-                    .contains("x: self.tile-column * root.column-width + root.text-x;")
+                    .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.text-x;")
                 && base_text_loop.contains(
                     "y: root.preview-padding + self.tile-row * root.row-height + root.title-y;"
                 )
-                && base_text_loop.contains("width: root.text-width;")
+                && base_text_loop.contains("width: max(1px, self.item-bounds.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
                 && base_text_loop.contains("text: item.name;")
                 && !base_image_loop.contains("metadata_line_height")
@@ -2677,8 +3040,10 @@ mod tests {
                 && !base_text_loop.contains("text: item.group")
                 && !base_text_loop.contains("text: item.location")
                 && !base_text_loop.contains("item.selected")
-                && base_image_loop.contains("thumbnail_state")
+                && !base_image_loop.contains("thumbnail_state")
                 && !base_text_loop.contains("thumbnail_state")
+                && !base_image_loop.contains("item.media")
+                && !media_overlay_loop.contains("item.")
                 && !widgets.contains("export component FolderGlyph")
                 && !split_pane.contains("entry: item;")
                 && !split_pane.contains("selected: item.selected;")
@@ -2687,14 +3052,17 @@ mod tests {
                 && !models.contains("selection_revision")
                 && !item_view_entry.contains("selected: bool")
                 && item_view_entry.contains("thumbnail_state: int")
-                && item_view_entry.contains("media: image")
                 && item_view_entry.contains("media_token: int")
+                && !item_view_entry.contains("media: image")
+                && media_entry.contains("slice_index: int")
+                && media_entry.contains("media: image")
                 && !item_view_entry.contains("tile_width: float")
                 && !item_view_entry.contains("tile_height: float")
                 && !item_view_entry.contains("media_x: float")
                 && !item_view_entry.contains("media_width: float")
                 && !item_view_entry.contains("text_x: float")
                 && !item_view_entry.contains("title_line_height: float")
+                && pane_view_data.contains("bounds: [ItemViewBoundsEntry]")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")
                 && pane_view_data.contains("item_view_text_x: float")
@@ -2712,6 +3080,9 @@ mod tests {
                 && !item_view_entry.contains("glyph_doc_font_size")
                 && !item_view_entry.contains("tile_x")
                 && !item_view_entry.contains("tile_y")
+                && !split_pane.contains("tile-column")
+                && !split_pane.contains("root.column-offset")
+                && !split_pane.contains("root.column-width")
                 && !split_pane.contains("viewport-y"),
             "SplitPaneView should inline Dolphin-style horizontal column-first tile primitives without a FileTile or FolderGlyph component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
         );
@@ -2719,21 +3090,26 @@ mod tests {
             highlight_loop.contains("tile-index: root.virtual-start-row + highlight.slice_index;")
                 && highlight_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && highlight_loop.contains(
-                    "tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;"
+                    "private property <ItemViewBoundsEntry> item-bounds: root.bounds[highlight.slice_index];"
                 )
-                && highlight_loop.contains("x: self.tile-column * root.column-width;")
+                && highlight_loop.contains(
+                    "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px;"
+                )
                 && highlight_loop
                     .contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && highlight_loop.contains("width: root.cell-width;")
+                && highlight_loop.contains("width: max(1px, self.item-bounds.width * 1px);")
                 && highlight_loop.contains("height: root.row-height;")
                 && drop_target_loop
                     .contains("tile-index: root.virtual-start-row + root.drag-target-slice-index;")
                 && drop_target_loop
                     .contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && drop_target_loop.contains(
-                    "tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;"
+                    "private property <ItemViewBoundsEntry> item-bounds: root.bounds[root.drag-target-slice-index];"
                 )
-                && drop_target_loop.contains("width: root.cell-width;")
+                && drop_target_loop.contains(
+                    "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px;"
+                )
+                && drop_target_loop.contains("width: max(1px, self.item-bounds.width * 1px);")
                 && drop_target_loop.contains("height: root.row-height;")
                 && !split_pane.contains(
                     "root.drag-active && !root.drag-rejected && root.drag-target-path == item.path"
@@ -2750,13 +3126,15 @@ mod tests {
                 )
                 && base_image_loop.contains("width: root.media-width;")
                 && base_image_loop.contains("height: root.media-height;")
+                && media_overlay_loop.contains("source: media.media;")
                 && base_text_loop.contains("font-size: root.title-font-size;")
                 && base_text_loop.contains("root.text-x")
                 && base_text_loop.contains("root.title-y")
-                && base_text_loop.contains("width: root.text-width;")
+                && base_text_loop.contains("width: max(1px, self.item-bounds.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
                 && base_text_loop.contains("text: item.name;")
                 && base_text_loop.contains("horizontal-alignment: left;")
+                && !base_text_loop.contains("overflow: elide")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
                 && !split_pane.contains("parent.width - 12px")
                 && split_pane.contains("height: metadata.line_height * 1px;")
@@ -2835,10 +3213,10 @@ mod tests {
                 && metadata_tile_loop
                     .contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && metadata_tile_loop.contains(
-                    "tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;"
+                    "private property <ItemViewBoundsEntry> item-bounds: root.bounds[metadata.slice_index];"
                 )
                 && metadata_tile_loop
-                    .contains("x: self.tile-column * root.column-width + metadata.text_x * 1px;")
+                    .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + metadata.text_x * 1px;")
                 && metadata_tile_loop.contains(
                     "y: root.preview-padding + self.tile-row * root.row-height + metadata.y * 1px;"
                 )
@@ -2859,9 +3237,7 @@ mod tests {
         assert!(!split_pane.contains("root.request_context_menu("));
         assert!(
             split_pane.contains("slice-layer := Rectangle")
-                && split_pane.contains(
-                    "x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;"
-                )
+                && split_pane.contains("x: 0px;")
                 && split_pane.contains("private property <bool> scrollbar-visible:")
                 && split_pane.contains("scrollbar-track := Rectangle")
                 && split_pane.contains("root.set-viewport-x(root.viewport-x-from-scrollbar-thumb")
@@ -2911,10 +3287,8 @@ mod tests {
         );
         assert!(
             split_pane.contains("slice-layer := Rectangle")
-                && split_pane.contains(
-                    "x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;"
-                )
-                && split_pane.contains("width: root.virtual-slice-width;")
+                && split_pane.contains("x: 0px;")
+                && split_pane.contains("width: parent.width;")
                 && split_pane.contains(
                     "private property <int> tile-index: root.virtual-start-row + index;"
                 )
@@ -2922,10 +3296,10 @@ mod tests {
                     "private property <int> tile-row: self.tile-index.mod(root.rows-per-column);"
                 )
                 && split_pane.contains(
-                    "private property <int> tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;"
+                    "private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];"
                 )
                 && split_pane.contains(
-                    "x: self.tile-column * root.column-width;"
+                    "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.text-x;"
                 )
                 && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
                 && base_text_loop.contains("height: root.title-line-height;")
@@ -3113,7 +3487,7 @@ mod tests {
 
     #[test]
     fn compact_item_view_layout_keeps_visible_columns_with_overscan() {
-        let compact_layout = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let compact_layout = compact_test_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
         let at_start = compact_layout.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
@@ -3122,8 +3496,7 @@ mod tests {
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
-        let clamped =
-            compact_item_view_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
+        let clamped = compact_test_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
         assert_eq!(clamped.range, 0..10);
         assert_eq!(clamped.visible_range, 0..10);
     }
@@ -3141,19 +3514,19 @@ mod tests {
     #[test]
     fn compact_item_view_layout_reports_scroll_extent_from_column_content_width() {
         assert_eq!(
-            compact_item_view_layout(300.0, 0, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            compact_test_layout(300.0, 0, 4, 100.0, 100.0, 10.0).scroll_max_x,
             0.0
         );
         assert_eq!(
-            compact_item_view_layout(300.0, 8, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            compact_test_layout(300.0, 8, 4, 100.0, 100.0, 10.0).scroll_max_x,
             0.0
         );
         assert_eq!(
-            compact_item_view_layout(300.0, 12, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            compact_test_layout(300.0, 12, 4, 100.0, 100.0, 10.0).scroll_max_x,
             36.0
         );
         assert_eq!(
-            compact_item_view_layout(300.0, 13, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            compact_test_layout(300.0, 13, 4, 100.0, 100.0, 10.0).scroll_max_x,
             144.0
         );
     }
@@ -3237,7 +3610,7 @@ mod tests {
         });
         assert_eq!(
             single_folder.height,
-            11.0 * item_height + 2.0 * separator_height
+            10.0 * item_height + 2.0 * separator_height
         );
         assert_eq!(single_folder.open_with_row_y_offset, 0.0);
 
@@ -3310,7 +3683,7 @@ mod tests {
         });
         assert_eq!(
             viewport_with_paste.height,
-            5.0 * item_height + separator_height
+            4.0 * item_height + separator_height
         );
         assert_eq!(
             viewport_with_paste.open_with_row_y_offset,
@@ -3595,7 +3968,7 @@ mod tests {
         let viewport_metrics = context_menu_metrics(viewport);
         assert_eq!(
             viewport_metrics.height,
-            8.0 * MENU_ITEM_HEIGHT + MENU_SEPARATOR_HEIGHT
+            7.0 * MENU_ITEM_HEIGHT + MENU_SEPARATOR_HEIGHT
         );
         assert_eq!(
             viewport_metrics.open_with_row_y_offset,
@@ -3605,7 +3978,7 @@ mod tests {
 
     #[test]
     fn compact_item_view_layout_clamps_viewport_and_reports_anchor_column() {
-        let compact_layout = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let compact_layout = compact_test_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
         let plan = compact_layout.virtual_plan(350.0, 2);
         assert_eq!(plan.viewport_x, 350.0);
         assert_eq!(plan.scroll_max_x, 2462.0);
@@ -3613,8 +3986,7 @@ mod tests {
         assert_eq!(plan.range, 4..32);
         assert_eq!(plan.start_column, 1);
 
-        let clamped =
-            compact_item_view_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 2);
+        let clamped = compact_test_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 2);
         assert_eq!(clamped.viewport_x, 86.0);
         assert_eq!(clamped.scroll_max_x, 86.0);
         assert_eq!(clamped.visible_range, 0..10);

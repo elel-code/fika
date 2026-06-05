@@ -102,9 +102,17 @@ fn selected_items(paths: &[PathBuf]) -> Result<Vec<SelectedServiceMenuItem>, Str
 }
 
 fn service_menu_dirs() -> Vec<PathBuf> {
-    data_dirs()
-        .into_iter()
-        .map(|dir| dir.join("kio").join("servicemenus"))
+    service_menu_dirs_for_data_dirs(data_dirs())
+}
+
+fn service_menu_dirs_for_data_dirs(dirs: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    dirs.into_iter()
+        .flat_map(|dir| {
+            [
+                dir.join("fika").join("servicemenus"),
+                dir.join("kio").join("servicemenus"),
+            ]
+        })
         .collect()
 }
 
@@ -471,6 +479,22 @@ fn home_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_menu_dirs_include_fika_first_and_kde_compatible_paths() {
+        assert_eq!(
+            service_menu_dirs_for_data_dirs([
+                PathBuf::from("/home/yk/.local/share"),
+                PathBuf::from("/usr/share"),
+            ]),
+            vec![
+                PathBuf::from("/home/yk/.local/share/fika/servicemenus"),
+                PathBuf::from("/home/yk/.local/share/kio/servicemenus"),
+                PathBuf::from("/usr/share/fika/servicemenus"),
+                PathBuf::from("/usr/share/kio/servicemenus"),
+            ]
+        );
+    }
 
     #[test]
     fn service_menu_parser_filters_by_mime_and_multiselect_exec() {

@@ -35,18 +35,18 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 - `ui/models.slint` 定义 Slint-facing 的 `ItemViewEntry` / `PlaceEntry` / `DesktopApp` 等 UI row；Rust-native `FileEntry` 是业务条目，保留在 Rust 侧。
 - `ui/widgets.slint` 包含通用按钮、菜单项、popup surface 和 Places 行。
 - `ui/top_bar.slint` 导出两个 chrome 组件：`TopBar` 负责窗口顶栏里的 COSMIC-style 搜索入口、Split 状态入口和主题切换；`PathBar` 负责主栏内容顶部的 Back/Forward 导航组和路径输入。`AppWindow` 只保留动作 callback、输入状态和持久化转发。
-- `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile primitive 渲染；选择、命中、右键、激活、DnD payload 语义由 Rust item-view controller 决定，可见 tile 的 size/media/text rect 和 folder/file fallback image 由 pane-level render plan/cache 下发，tile local x/y 由可复用 loop index 计算，避免写入每个 `ItemViewEntry` row。
+- `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile primitive 渲染；选择、命中、右键、激活、DnD payload 语义由 Rust item-view controller 决定，可见 tile 的 size/media/text rect、每项 bounds 和 folder/file fallback image 由 pane-level render plan/cache 下发，避免写入每个 `ItemViewEntry` row。
 - `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
 
 Shell surface layering now follows the COSMIC direction outside the main file arrangement: `AppWindow` owns one shared base surface with a separate window-wide shell/header row. That shell/header row hosts global search, split, and theme controls through `TopBar`, and it intentionally does not draw a horizontal divider above the main content. Below it, the left sidebar panel and right main pane share one equal-height content row. The main pane starts with `PathBar` for Back/Forward and address editing, followed by the search filter strip, horizontal column-first file view, and status bar; these rows render transparent backgrounds and keep only necessary internal separators. Sidebar rows are inset inside the rounded panel, and the sidebar border is intentionally a little stronger than the flat shell separators.
 
-The non-main-pane chrome is intentionally allowed to track COSMIC Files more closely than Dolphin: the default sidebar width is 280px but remains user-resizable and persisted, Back/Forward plus address editing live at the top of the main pane, and the active search field lives in the window top bar with layout constraints rather than a hard fixed width so opening search does not change main-pane geometry. Future visual passes should copy COSMIC Files freely for palette, spacing, address-bar placement, Back/Forward affordances, search placement/display, menu/dialog styling, and main-pane toolbar treatment. The deliberate exception is the main pane's column-first item arrangement and horizontal scrolling model; the sidebar may keep Fika's rounded raised layer on top of COSMIC proportions.
+The non-main-pane chrome is intentionally allowed to track COSMIC Files more closely than Dolphin: the default sidebar width is 280px but remains user-resizable and persisted, while Back/Forward, address editing, and search controls live inside each pane so split view has no implicit primary pane. Future visual passes should copy COSMIC Files freely for palette, spacing, address-bar placement, Back/Forward affordances, menu/dialog styling, and main-pane toolbar treatment. The deliberate exception is the main pane's column-first item arrangement and horizontal scrolling model; the sidebar may keep Fika's rounded raised layer on top of COSMIC proportions.
 
 主栏当前采用列优先布局：
 
-- `rows-per-column` 由可见高度和 `icon-row-height` 计算。
-- `x = floor(index / rows-per-column) * icon-column-width`
-- `y = mod(index, rows-per-column) * icon-row-height`
+- `rows-per-column` 由可见高度和 row height 计算。
+- `column = floor(index / rows-per-column)`，每列宽度由该列可见 item 的最大 whole-item/text bounds 决定。
+- `x` 来自 Rust 投影的 `ItemViewBoundsEntry.x` / column offset，`y = mod(index, rows-per-column) * row-height`。
 
 这样对应 Dolphin 横向列模式：内容宽度向右增长，普通滚轮驱动横向 viewport。
 
@@ -63,7 +63,7 @@ The non-main-pane chrome is intentionally allowed to track COSMIC Files more clo
 - 过滤、搜索、缩放或窗口尺寸变化导致内容变窄时，Rust 会按同一套列宽规则夹紧横向滚动位置，避免旧 viewport 落在新内容之外造成空白主栏。
 - tile 的真实全局索引由 Rust item-view layout/hit-test 根据 viewport、rows-per-column 和可见索引缓存解析，因此选择范围、拖拽命中和右键语义仍然基于完整模型，而不是 Slint row index。
 - 横向滚动、缩放和窗口尺寸变化会重新切片 `virtual_entries`，避免大目录一次性实例化所有可见 tile primitive。
-- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为瘦身后的 `ItemViewEntry`。`ItemViewEntry` 只携带 name/path/is_dir、thumbnail 状态、成功 thumbnail image 和 media token；普通 item 使用 Dolphin 横向列模式的 compact 布局，图标在左、文件名在右侧居中显示。tile size、media rect、text rect、标题 y/line height、字体和通用 folder/file fallback image 由 pane-level `PaneViewData` / `PaneView` cache 下发；fallback media 按 pane/theme 缓存一套固定 72px 源图，zoom 只改变目标 media 几何，避免每个目录第一次 zoom 让 Slint 接收新的 fallback `Image` source。带 group/location 的递归搜索结果再通过稀疏 `ItemViewMetadataEntry` 模型展开多行信息。`SplitPaneView` 的可见 item loop 只按 pane-level 几何、稀疏 metadata 和 loop index 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成 fallback glyph。
+- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为瘦身后的 `ItemViewEntry`。`ItemViewEntry` 只携带 name/path/is_dir、thumbnail 状态和 media token；成功 thumbnail image 另行投影为 pane-local 稀疏 `ItemViewMediaEntry` overlay。普通 item 使用 Dolphin 横向列模式的 compact 布局，图标在左、文件名在右侧居中显示。tile size、media rect、text rect、标题 y/line height、字体和通用 folder/file fallback image 由 pane-level `PaneViewData` / `PaneView` cache 下发；fallback media 按 pane/theme 缓存一套固定 72px 源图，zoom 只改变目标 media 几何，避免每个目录第一次 zoom 让 Slint 接收新的 fallback `Image` source。带 group/location 的递归搜索结果再通过稀疏 `ItemViewMetadataEntry` 模型展开多行信息。`SplitPaneView` 的可见 item loop 只按 pane-level 几何、稀疏 media/metadata 和 loop index 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成 fallback glyph。
 - 框选仍按完整可见顺序返回路径，但候选项会先裁剪到选择矩形横向覆盖的列范围；搜索/过滤状态下通过可见索引缓存解析真实条目。
 - 缩略图调度按“当前可见列优先，overscan 后置”排序，减少大目录图片预览队列对当前屏幕反馈的拖慢。
 - 离屏缩略图完成时只更新 Rust 缓存，不重置 Slint 模型；缩略图所属路径落在当前虚拟切片内时才刷新 `virtual_entries`。
@@ -169,7 +169,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - Open With 子菜单最后一项是 `Other Applications...`，会打开应用选择框。
 - 应用选择框支持指定 desktop app 打开、一次性自定义命令打开，以及写入用户级 `mimeapps.list` 设置默认应用。
 - `Other Applications` 弹窗使用一个对话框级别的 “Set selected application as default” 勾选框；候选列表只负责选择要打开的应用。
-- `Open Terminal Here` 可从主栏空白菜单作用于当前目录，也可从单个目录项菜单作用于该目录。终端选择参考 cosmic-files 的方式：保留 `FIKA_TERMINAL` / `TERMINAL` 显式覆盖优先级，然后查询 `xdg-mime query default x-scheme-handler/terminal` 并解析对应 `.desktop`；只有可见且 `Categories` 包含 `TerminalEmulator` 的 entry 会作为桌面终端候选。之后再优先尝试 `com.system76.CosmicTerm.desktop`、其它 `TerminalEmulator` desktop entries 和内置终端可执行文件 fallback。
+- 内置 `Open Terminal Here` 已删除；终端或其它目录动作应通过 service-menu 条目提供。Fika 优先读取 `$XDG_DATA_HOME/fika/servicemenus` 和各 XDG data dir 下的 `fika/servicemenus`，随后读取 Dolphin/KDE 兼容的 `kio/servicemenus`。
 
 这个模块目前是同步实现，因此从 UI 调用时必须通过 `spawn_blocking()`。
 
@@ -202,7 +202,7 @@ Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
 - 多选右键菜单只暴露已实现的批量安全动作。当前批量菜单显示选中摘要和 `Move Selected to Trash`；`Rename`、`Open With`、`Add to Places` 等单项动作在多选状态下隐藏，直到存在明确的批量语义。单目录菜单中的 `Add to Places` 也会在该路径已存在于 Places 时隐藏，避免显示无效动作。
 - 右键菜单按 Dolphin/Qt 的父子菜单模型模拟：根菜单以触发点为首选位置，放不下时向左/上翻转，然后 clamp 到窗口安全边距；子菜单锚定在父菜单项行，同样按可用空间水平翻转并垂直 clamp。父项与子菜单之间有不可见 hover bridge，bridge 高度会跟随实际 clamp 后的子菜单位置，避免从父项斜向移动到子菜单时误触发关闭。普通菜单项 hover 不主动关闭已有子菜单，关闭由父/子 hover leave 后的短延迟处理。Open With 子菜单不额外显示标题行，第一项与父菜单行对齐；应用列表最多显示 7 行后纵向滚动，最后固定为 `Other Applications...`。Transfer 根菜单、Open With / Create New / service-menu 分组子菜单和 hover bridge、chooser-choice 上方锚定 popup 都复用 Rust `PopupPlacement` 几何 helper。
 - 菜单外观和通用交互件集中在 `ui/widgets.slint`：`MenuItem` / `MenuSeparator` / `MenuTitle` / `PopupSurface` / `MenuHoverBridge` / `MenuHoverRegion` / `MenuDismissLayer`。具体菜单内容和弹出层承载组件在 `ui/menus.slint`；普通动作、service-menu 动作、子菜单父行、Paste、Cut/Copy 这些重复行分别收敛为内部 `ActionMenuRow` / `ServiceActionMenuRow` / `SubmenuMenuRow` / `PasteMenuRow` / `CutCopyMenuRows`，原始 `MenuItem` 只作为这些内部 row wrapper 的底层绘制件使用。`RootContextMenuLayer` 统一挂载 file / Places / Devices / blank-area 菜单，并负责根菜单宽高选择、触发点 flip/clamp 定位以及 Open With / Create New 父行锚点计算；`TransferMenuLayer` 统一挂载拖放操作菜单，并封装 Transfer 菜单固定尺寸和 root-menu flip/clamp 定位，Rust transfer 逻辑只保留 drop anchor 与目标语义；`ChildSubmenuLayer` 统一承载 Open With / Create New / service-menu 分组子菜单并封装子菜单尺寸、子菜单定位与 hover bridge 定位输入，`ChooserOptionPopupLayer` / `ChooserChoicePopupLayer` 统一挂载 chooser filter 和 choice 弹出菜单并封装锚点定位公式。菜单层直接调用 `ui/menu_geometry.slint` 的 `MenuGeometry` global；Rust 在 `src/app/geometry.rs` 注册这些 pure callback。Open With / Create New / service-menu 分组的子菜单 open 状态、row anchor 和延迟关闭 pending kind 由 `ui/menu_lifecycle.slint` 的 `MenuLifecycle` global 持有，`MenuLifecycleController` 拥有 240ms delayed-close timer 与 hover/show helper，`ui/app.slint` 只保留菜单业务动作和 Open With/service-menu 候选准备，不再转发几何 callback 或直接声明子菜单生命周期状态。所有右键入口通过 `show-context-menu()` 统一写入 kind、触发坐标、关闭子菜单并停止延迟关闭 timer。Open With / Create New / service-menu 分组的父项、hover bridge、子菜单内容和子菜单面板区域都走同一个 child-submenu hover/timer 入口，chooser popup 保留从按钮上方弹出的语义但边界 clamp 也由 Rust helper 计算。Service-menu 的用户策略由 `src/config/service_menu_policy.rs` 持久化；右键菜单可显示所有未禁用动作，也可只显示显式勾选动作，配置弹窗使用当前匹配到的完整动作快照，隐藏项仍可重新启用。Service-menu `Icon=` 通过 `src/desktop/icons.rs` 在后台发现阶段解析为本地图标文件路径，菜单和配置弹窗只在已解析成功时绘制图标。
-- 主栏空白菜单借鉴 COSMIC 的 action enablement 模式：提供 Select All，并且没有可粘贴文件时保留 disabled Paste，而不是隐藏整行，避免后续 Open Folder With / Open Terminal Here 的位置随剪贴板状态跳动。菜单项支持右侧快捷键提示，并只标注已经由 `KeyBinding` 实际接管的动作。
+- 主栏空白菜单借鉴 COSMIC 的 action enablement 模式：提供 Select All，并且没有可粘贴文件时保留 disabled Paste，而不是隐藏整行，避免后续 Open Folder With / service-menu 动作的位置随剪贴板状态跳动。菜单项支持右侧快捷键提示，并只标注已经由 `KeyBinding` 实际接管的动作。
 - 单目录右键菜单也保持 Paste Into Folder 行稳定；剪贴板不可粘贴时该行动作禁用，而不是隐藏。
 - Places 空白菜单同样采用稳定 action layout：当前目录已在 Places 中时，Add Current Folder 保留为 disabled 行，Restore Defaults 的位置不随当前目录变化。
 - 鼠标侧键 Back/Forward 直接通过 Slint `PointerEventButton.back` / `PointerEventButton.forward` 处理，入口只挂在主栏 viewport input layer 上；侧栏、顶栏和分隔条不会触发目录历史导航。不再维护窗口后端自定义输入旁路。
@@ -291,7 +291,7 @@ Places 分为内置项和用户项：
 当前支持：
 
 - 新建：从主栏空白右键菜单 `Create New > Folder` 或 `Create New > File` 打开命名对话框，在当前目录创建；重名时自动生成 `copy` 后缀。
-- Open Terminal Here：主栏空白菜单打开当前目录；单个目录项菜单打开该目录。
+- 自定义服务动作：文件、目录和主栏空白菜单可显示匹配的 service-menu 动作；内置终端动作不再存在，需要时由用户 service-menu 提供。
 - 重命名：文件/文件夹右键菜单打开对话框，只接受单级名称，拒绝路径分隔符。
 - Duplicate Here：右键单项后在同一父目录中排队执行 copy。
 - Copy Location：把当前条目的绝对路径通过内置 Wayland data-control 写入桌面文本剪贴板。
@@ -318,13 +318,13 @@ Places 分为内置项和用户项：
 
 切换 `Search subfolders` 时，如果已有查询，会立即按新模式重新提交搜索。
 
-Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为瘦身后的 `ItemViewEntry`，只携带业务身份、目录标记、thumbnail 状态、成功 thumbnail image 和 media token；selection 存在 pane-local sidecar/highlight model，render-plan 几何和通用 fallback image 存在 pane-level view data/cache，因此主视图只消费预计算后的 pane-level 绘制坐标和图像；普通文件名和递归搜索元数据都使用同一套 Rust 侧横向 text rect。
+Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为瘦身后的 `ItemViewEntry`，只携带业务身份、目录标记、thumbnail 状态和 media token；成功 thumbnail image 存在 pane-local 稀疏 `ItemViewMediaEntry` overlay，selection 存在 pane-local sidecar/highlight model，render-plan 几何和通用 fallback image 存在 pane-level view data/cache，因此主视图只消费预计算后的 pane-level 绘制坐标和图像；普通文件名和递归搜索元数据都使用同一套 Rust 侧横向 text rect。
 
 ### Thumbnails
 
 缩略图流水线当前覆盖 PNG/JPEG/WebP：
 
-- `ItemViewEntry` 包含 `thumbnail_state` 和成功 thumbnail 的 `media` image；缩略图未成功时，`SplitPaneView` 使用 pane-level Rust item-view media renderer cache 生成的通用文件/目录图标。
+- `ItemViewEntry` 包含 `thumbnail_state` 和 `media_token`；成功 thumbnail image 使用 pane-local 稀疏 `ItemViewMediaEntry` overlay 绘制，未成功时 `SplitPaneView` 使用 pane-level Rust item-view media renderer cache 生成的通用文件/目录图标。
 - 当前可见顺序的前若干项会先被调度，符合列优先图标视图的首屏优先策略。
 - 后台任务用 `image` crate 解码并缩放到当前 zoom 对应尺寸，回传 RGBA 像素给 UI 线程构造 Slint `Image`。
 - 缓存 key 为路径、mtime 和目标尺寸；重复访问或刷新同一目录时可复用。
@@ -444,7 +444,7 @@ system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privi
 6. Fika 在状态栏提供 “Admin Save / Discard” 操作作为显式兜底和清理入口；`Admin Save` 调用 `CommitExternalEdit(token, scratch_path)`，`DiscardExternalEdit(token)` 清理 scratch。
 7. `DiscardExternalEdit(token)` 清理 scratch。
 
-这个模型避免了 Dolphin+kio-fuse 的 FUSE 挂载层，但保留“编辑器 Ctrl+S 后写回”的核心体验。Fika 当前通过 D-Bus `org.freedesktop.systemd1.Manager.StartTransientUnit` 把默认 Open / Open With / custom command 启动出的 child PID 纳入 user transient `.scope`；systemd user D-Bus 不可用时会保留普通 spawn 行为并把非致命诊断返回 UI 状态栏。受保护外部编辑会把 token 和 `.scope` unit 通过 `AssociateExternalEditUnit` 交给 helper。helper 使用传入的 session bus 地址订阅 systemd user unit 的 `ActiveState` 属性变化，unit 结束后做一次最终写回并清理 scratch；如果订阅不可用则退回保守轮询。没有 unit 的 token 会在固定 TTL 后做最终写回并过期。这样 scratch 清理和 helper 退出已经不依赖 GUI 进程；普通非保护 Open/Open With/custom command/Open Terminal Here 的状态栏会显示 transient unit 名称，或显示应用已启动但 systemd scope 不可用的诊断。
+这个模型避免了 Dolphin+kio-fuse 的 FUSE 挂载层，但保留“编辑器 Ctrl+S 后写回”的核心体验。Fika 当前通过 D-Bus `org.freedesktop.systemd1.Manager.StartTransientUnit` 把默认 Open / Open With / custom command 启动出的 child PID 纳入 user transient `.scope`；systemd user D-Bus 不可用时会保留普通 spawn 行为并把非致命诊断返回 UI 状态栏。受保护外部编辑会把 token 和 `.scope` unit 通过 `AssociateExternalEditUnit` 交给 helper。helper 使用传入的 session bus 地址订阅 systemd user unit 的 `ActiveState` 属性变化，unit 结束后做一次最终写回并清理 scratch；如果订阅不可用则退回保守轮询。没有 unit 的 token 会在固定 TTL 后做最终写回并过期。这样 scratch 清理和 helper 退出已经不依赖 GUI 进程；普通非保护 Open/Open With/custom command 的状态栏会显示 transient unit 名称，或显示应用已启动但 systemd scope 不可用的诊断。
 
 当前不引入 FUSE 层。scratch/writeback 已覆盖核心体验：helper 监听 scratch 保存并自动写回、GUI 可关闭、编辑器进程结束后按 systemd unit 做最终写回和清理、无 unit 时有 TTL 兜底，且测试覆盖 commit、discard、多次保存、原文件外部变更拒绝和过期清理。只有当真实外部编辑器工作流证明“普通路径 scratch”不足时，才重新评估 FUSE 或其他透明挂载方案。
 

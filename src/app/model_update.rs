@@ -1,5 +1,8 @@
 use crate::app::pane::PaneView;
-use crate::{ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry};
+use crate::{
+    ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
+    ItemViewMetadataEntry,
+};
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::ops::Range;
 use std::rc::Rc;
@@ -71,6 +74,16 @@ pub(crate) fn new_item_view_entries_model(entries: Vec<ItemViewEntry>) -> ModelR
     ModelRc::new(Rc::new(VecModel::from(entries)))
 }
 
+pub(crate) fn new_item_view_bounds_model(
+    bounds_entries: Vec<ItemViewBoundsEntry>,
+) -> ModelRc<ItemViewBoundsEntry> {
+    if bounds_entries.is_empty() {
+        return ModelRc::default();
+    }
+
+    ModelRc::new(Rc::new(VecModel::from(bounds_entries)))
+}
+
 pub(crate) fn new_item_view_metadata_model(
     metadata: Vec<ItemViewMetadataEntry>,
 ) -> ModelRc<ItemViewMetadataEntry> {
@@ -79,6 +92,16 @@ pub(crate) fn new_item_view_metadata_model(
     }
 
     ModelRc::new(Rc::new(VecModel::from(metadata)))
+}
+
+pub(crate) fn new_item_view_media_model(
+    media_entries: Vec<ItemViewMediaEntry>,
+) -> ModelRc<ItemViewMediaEntry> {
+    if media_entries.is_empty() {
+        return ModelRc::default();
+    }
+
+    ModelRc::new(Rc::new(VecModel::from(media_entries)))
 }
 
 fn item_view_highlight_entries(tokens: &[ItemViewRowToken]) -> Vec<ItemViewHighlightEntry> {
@@ -179,9 +202,13 @@ pub(crate) fn update_pane_item_view_entries_model(
     view: &mut PaneView,
     start_index: usize,
     entries: Vec<ItemViewEntry>,
+    bounds_entries: Vec<ItemViewBoundsEntry>,
+    media_entries: Vec<ItemViewMediaEntry>,
     metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
 ) {
+    view.virtual_bounds_entries = new_item_view_bounds_model(bounds_entries);
+    view.virtual_media_entries = new_item_view_media_model(media_entries);
     view.virtual_metadata_entries = new_item_view_metadata_model(metadata_entries);
     let current = view.virtual_entries.clone();
     let old_start = view.virtual_start_index;
@@ -202,6 +229,7 @@ pub(crate) fn update_pane_item_view_entries_model(
 pub(crate) fn relayout_pane_item_view_entries_model(
     view: &mut PaneView,
     range: Range<usize>,
+    bounds_entries: Vec<ItemViewBoundsEntry>,
 ) -> bool {
     let Some(model) = view
         .virtual_entries
@@ -238,8 +266,34 @@ pub(crate) fn relayout_pane_item_view_entries_model(
     }
 
     let _ = update_item_view_highlight_model(view);
+    view.virtual_bounds_entries = new_item_view_bounds_model(bounds_entries);
+    trim_item_view_media_entries_model(&mut view.virtual_media_entries, remove_front, target_len);
     view.virtual_start_index = range.start;
     true
+}
+
+fn trim_item_view_media_entries_model(
+    current: &mut ModelRc<ItemViewMediaEntry>,
+    remove_front: usize,
+    target_len: usize,
+) {
+    let entries = (0..current.row_count())
+        .filter_map(|row| current.row_data(row))
+        .filter_map(|mut entry| {
+            let slice_index = usize::try_from(entry.slice_index).ok()?;
+            if slice_index < remove_front {
+                return None;
+            }
+            let shifted = slice_index - remove_front;
+            if shifted >= target_len {
+                return None;
+            }
+            entry.slice_index = shifted as i32;
+            Some(entry)
+        })
+        .collect::<Vec<_>>();
+
+    *current = new_item_view_media_model(entries);
 }
 
 pub(crate) fn update_pane_item_view_selection_model(
@@ -366,7 +420,6 @@ mod tests {
             path: format!("/tmp/item-{index}").into(),
             is_dir: false,
             thumbnail_state: 0,
-            media: Image::default(),
             media_token: 0,
         }
     }
@@ -382,6 +435,13 @@ mod tests {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| entry.slice_index)
+            .collect()
+    }
+
+    fn media_rows(model: &ModelRc<ItemViewMediaEntry>) -> Vec<(i32, Rgba8Pixel)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| (entry.slice_index, first_pixel(&entry.media)))
             .collect()
     }
 
@@ -412,12 +472,16 @@ mod tests {
             0,
             (0..3).map(entry).collect(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             &[],
         );
         update_pane_item_view_entries_model(
             &mut right,
             20,
             (20..23).map(entry).collect(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             &[],
         );
@@ -441,6 +505,8 @@ mod tests {
             &mut right,
             22,
             (22..25).map(entry).collect(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             &[],
         );
@@ -586,9 +652,8 @@ mod tests {
     }
 
     #[test]
-    fn item_view_entry_model_uses_media_token_instead_of_image_comparison_for_overlap() {
+    fn item_view_entry_model_uses_media_token_without_row_images() {
         let mut old_entry = entry(0);
-        old_entry.media = colored_image(Rgba8Pixel::new(255, 0, 0, 255));
         old_entry.media_token = 42;
         let initial_entries = vec![old_entry];
         let mut tokens = item_view_row_tokens(&initial_entries, &[]);
@@ -596,7 +661,6 @@ mod tests {
         let original = model.clone();
 
         let mut same_token_entry = entry(0);
-        same_token_entry.media = colored_image(Rgba8Pixel::new(0, 0, 255, 255));
         same_token_entry.media_token = 42;
         assert!(
             update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![same_token_entry], &[])
@@ -605,13 +669,9 @@ mod tests {
 
         assert_eq!(model, original);
         let unchanged = model.row_data(0).expect("row should remain present");
-        assert_eq!(
-            first_pixel(&unchanged.media),
-            Rgba8Pixel::new(255, 0, 0, 255)
-        );
+        assert_eq!(unchanged.media_token, 42);
 
         let mut new_token_entry = entry(0);
-        new_token_entry.media = colored_image(Rgba8Pixel::new(0, 0, 255, 255));
         new_token_entry.media_token = 43;
         assert!(
             update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![new_token_entry], &[])
@@ -620,7 +680,6 @@ mod tests {
 
         let updated = model.row_data(0).expect("row should remain present");
         assert_eq!(updated.media_token, 43);
-        assert_eq!(first_pixel(&updated.media), Rgba8Pixel::new(0, 0, 255, 255));
     }
 
     #[test]
@@ -630,6 +689,8 @@ mod tests {
             &mut view,
             0,
             entries_with_tile_metrics(4),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             &[],
         );
@@ -667,6 +728,8 @@ mod tests {
             0,
             entries_with_tile_metrics(4),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             &[],
         );
 
@@ -693,11 +756,17 @@ mod tests {
             10,
             entries_with_tile_metrics(4),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             &["/tmp/item-2".to_string()],
         );
         let original = view.virtual_entries.clone();
 
-        assert!(relayout_pane_item_view_entries_model(&mut view, 11..13,));
+        assert!(relayout_pane_item_view_entries_model(
+            &mut view,
+            11..13,
+            Vec::new()
+        ));
 
         assert_eq!(view.virtual_entries, original);
         assert_eq!(view.virtual_start_index, 11);
@@ -710,6 +779,53 @@ mod tests {
             vec!["/tmp/item-2".to_string()]
         );
         assert_eq!(highlight_rows(&view.virtual_highlight_entries), vec![1]);
+    }
+
+    #[test]
+    fn pane_item_view_cached_relayout_trims_sparse_media_sidecar() {
+        let mut entries = entries_with_tile_metrics(4);
+        entries[1].thumbnail_state = 2;
+        entries[1].media_token = 101;
+        entries[3].thumbnail_state = 2;
+        entries[3].media_token = 103;
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            10,
+            entries,
+            Vec::new(),
+            vec![
+                ItemViewMediaEntry {
+                    slice_index: 1,
+                    media: colored_image(Rgba8Pixel::new(255, 0, 0, 255)),
+                },
+                ItemViewMediaEntry {
+                    slice_index: 3,
+                    media: colored_image(Rgba8Pixel::new(0, 0, 255, 255)),
+                },
+            ],
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(
+            media_rows(&view.virtual_media_entries),
+            vec![
+                (1, Rgba8Pixel::new(255, 0, 0, 255)),
+                (3, Rgba8Pixel::new(0, 0, 255, 255)),
+            ]
+        );
+
+        assert!(relayout_pane_item_view_entries_model(
+            &mut view,
+            11..13,
+            Vec::new()
+        ));
+
+        assert_eq!(
+            media_rows(&view.virtual_media_entries),
+            vec![(0, Rgba8Pixel::new(255, 0, 0, 255))]
+        );
     }
 
     #[test]

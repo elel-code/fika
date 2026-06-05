@@ -1,7 +1,7 @@
-use crate::ItemViewEntry;
 use crate::app::model_update::ItemViewRowToken;
 use crate::app::state::AppState;
 use crate::fs::thumbnails;
+use crate::{ItemViewEntry, ItemViewMediaEntry};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 pub(crate) const MAX_THUMBNAIL_CACHE_ENTRIES: usize = 512;
 pub(crate) const MAX_THUMBNAIL_FAILURE_ENTRIES: usize = 512;
 pub(crate) const MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC: usize = 96;
+pub(crate) const THUMBNAIL_STATE_NOT_CANDIDATE: i32 = -1;
+pub(crate) const THUMBNAIL_STATE_EMPTY: i32 = 0;
+pub(crate) const THUMBNAIL_STATE_PENDING: i32 = 1;
+pub(crate) const THUMBNAIL_STATE_LOADED: i32 = 2;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ThumbnailScheduleEntry {
@@ -95,28 +99,37 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
     pane_id: u64,
     entries: &mut [ItemViewEntry],
     size_px: u32,
-) {
+) -> Vec<ItemViewMediaEntry> {
     let Some(pane) = state.panes.pane_by_id(pane_id) else {
-        return;
+        return Vec::new();
     };
 
-    for entry in entries {
-        if entry.is_dir || !thumbnails::is_thumbnail_candidate(Path::new(entry.path.as_str())) {
+    let mut media_entries = Vec::new();
+    for (row, entry) in entries.iter_mut().enumerate() {
+        if entry.is_dir {
+            continue;
+        }
+        if !thumbnails::is_thumbnail_candidate(Path::new(entry.path.as_str())) {
+            entry.thumbnail_state = THUMBNAIL_STATE_NOT_CANDIDATE;
             continue;
         }
         let Ok(key) = thumbnails::key_for(Path::new(entry.path.as_str()), size_px) else {
             continue;
         };
         if let Some(data) = state.thumbnail_cache.get(&key) {
-            entry.media = image_from_thumbnail(data);
+            media_entries.push(ItemViewMediaEntry {
+                slice_index: row as i32,
+                media: image_from_thumbnail(data),
+            });
             entry.media_token = key.item_view_media_token();
-            entry.thumbnail_state = 2;
+            entry.thumbnail_state = THUMBNAIL_STATE_LOADED;
         } else if state.thumbnail_failures.contains_key(&key) {
-            entry.thumbnail_state = 0;
+            entry.thumbnail_state = THUMBNAIL_STATE_EMPTY;
         } else if pane.view.has_thumbnail_pending(entry.path.as_str()) {
-            entry.thumbnail_state = 1;
+            entry.thumbnail_state = THUMBNAIL_STATE_PENDING;
         }
     }
+    media_entries
 }
 
 pub(crate) fn prioritize_thumbnail_entries<T: ThumbnailScheduleRow>(
@@ -200,6 +213,9 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane<T: ThumbnailScheduleRow + ?S
     if entry.is_dir() {
         return None;
     }
+    if entry.thumbnail_state() == THUMBNAIL_STATE_NOT_CANDIDATE {
+        return None;
+    }
 
     let path = PathBuf::from(entry.path());
     if !thumbnails::is_thumbnail_candidate(&path) {
@@ -209,7 +225,9 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane<T: ThumbnailScheduleRow + ?S
     let Ok(key) = thumbnails::key_for(&path, size_px) else {
         return None;
     };
-    if entry.thumbnail_state() == 2 && entry.media_token() == key.item_view_media_token() {
+    if entry.thumbnail_state() == THUMBNAIL_STATE_LOADED
+        && entry.media_token() == key.item_view_media_token()
+    {
         return None;
     }
     if state.thumbnail_cache.contains_key(&key) || state.thumbnail_failures.contains_key(&key) {
@@ -397,8 +415,7 @@ mod tests {
             name: name.into(),
             path: path.into(),
             is_dir: false,
-            thumbnail_state: 0,
-            media: Image::default(),
+            thumbnail_state: THUMBNAIL_STATE_EMPTY,
             media_token: 0,
         }
     }
@@ -785,6 +802,50 @@ mod tests {
     }
 
     #[test]
+    fn non_candidate_rows_are_marked_once_and_skipped_by_zoom_reschedule() {
+        let temp_dir = temp_test_dir("non-candidate-token");
+        let config_path = temp_dir.join("sysctl.conf");
+        std::fs::write(&config_path, b"kernel.pid_max = 4194304").unwrap();
+
+        let state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let pane_id = state.panes.focused().id;
+        let mut entries = vec![test_entry("sysctl.conf", config_path.to_str().unwrap())];
+
+        let media_entries =
+            decorate_entries_with_cached_thumbnails_for_pane(&state, pane_id, &mut entries, 64);
+
+        assert!(media_entries.is_empty());
+        assert_eq!(entries[0].thumbnail_state, THUMBNAIL_STATE_NOT_CANDIDATE);
+
+        let token = ItemViewRowToken::from_entry(&entries[0]);
+        let schedule_entry = ThumbnailScheduleEntry::from_row_token(&token);
+        let prioritized = vec![&schedule_entry];
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        assert!(thumbnail_schedule_batch(&mut state, &prioritized, 64).is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn thumbnail_schedule_skips_non_candidate_token_without_rechecking_path_type() {
+        let temp_dir = temp_test_dir("forced-non-candidate-token");
+        let image_path = temp_dir.join("photo.png");
+        std::fs::write(&image_path, b"not a real image").unwrap();
+
+        let state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let mut entry = test_entry("photo.png", image_path.to_str().unwrap());
+        entry.thumbnail_state = THUMBNAIL_STATE_NOT_CANDIDATE;
+
+        assert!(
+            thumbnails::is_thumbnail_candidate(&image_path),
+            "fixture should otherwise be eligible for thumbnail scheduling"
+        );
+        assert!(thumbnail_schedule_candidate(&state, &entry, 64).is_none());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn thumbnail_schedule_batch_marks_pending_visible_first_and_respects_cap() {
         let temp_dir = temp_test_dir("batch-cap");
         let mut entries = Vec::new();
@@ -919,7 +980,7 @@ mod tests {
         let state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let old_key = thumbnails::key_for(&image_path, 64).unwrap();
         let mut entry = test_entry("photo.png", image_path.to_str().unwrap());
-        entry.thumbnail_state = 2;
+        entry.thumbnail_state = THUMBNAIL_STATE_LOADED;
         entry.media_token = old_key.item_view_media_token();
 
         assert!(

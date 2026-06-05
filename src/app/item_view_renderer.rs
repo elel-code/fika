@@ -403,7 +403,6 @@ mod tests {
             path: format!("/tmp/item-{index}").into(),
             is_dir: false,
             thumbnail_state: 0,
-            media: Image::default(),
             media_token: 0,
         }
     }
@@ -577,16 +576,6 @@ mod tests {
     #[test]
     fn fallback_media_renderer_supplies_pane_level_icons() {
         let cache = ItemViewMediaCache::new(false);
-        let mut thumbnail_buffer = SharedPixelBuffer::<Rgba8Pixel>::new(2, 2);
-        thumbnail_buffer
-            .make_mut_slice()
-            .fill(Rgba8Pixel::new(255, 0, 0, 255));
-        let thumbnail = Image::from_rgba8(thumbnail_buffer);
-        let thumbnail_entry = ItemViewEntry {
-            thumbnail_state: 2,
-            media: thumbnail,
-            ..test_entry(1)
-        };
 
         let folder_media = cache
             .folder_image()
@@ -606,13 +595,6 @@ mod tests {
                 .as_slice()
                 .iter()
                 .any(|pixel| pixel.a != 0 && (pixel.r != 0 || pixel.g != 0 || pixel.b != 0))
-        );
-        let thumbnail_media = thumbnail_entry.media.to_rgba8().expect("thumbnail media");
-        assert!(
-            thumbnail_media
-                .as_slice()
-                .iter()
-                .all(|pixel| *pixel == Rgba8Pixel::new(255, 0, 0, 255))
         );
     }
 }

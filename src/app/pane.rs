@@ -6,7 +6,10 @@ use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
-use crate::{FileEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry};
+use crate::{
+    FileEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
+    ItemViewMetadataEntry,
+};
 use slint::{Image, Model, ModelRc, VecModel};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -71,9 +74,13 @@ impl PaneState {
         pane.view.viewport_x = self.view.viewport_x;
         pane.view.virtual_view = self.view.virtual_view.clone();
         pane.view.virtual_entries = clone_item_view_entries_model(&self.view.virtual_entries);
+        pane.view.virtual_bounds_entries =
+            clone_item_view_bounds_model(&self.view.virtual_bounds_entries);
         pane.view.virtual_entry_tokens =
             clone_item_view_row_tokens_without_selection(&self.view.virtual_entry_tokens);
         pane.view.virtual_highlight_entries = ModelRc::default();
+        pane.view.virtual_media_entries =
+            clone_item_view_media_model(&self.view.virtual_media_entries);
         pane.view.virtual_metadata_entries =
             clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
         pane.view.fallback_media_caches = self.view.fallback_media_caches.clone();
@@ -105,8 +112,10 @@ impl PaneState {
         self.search.visible_entries_have_locations = false;
         self.search.visible_location_groups = None;
         self.view.virtual_entries = ModelRc::default();
+        self.view.virtual_bounds_entries = ModelRc::default();
         self.view.virtual_entry_tokens.clear();
         self.view.virtual_highlight_entries = ModelRc::default();
+        self.view.virtual_media_entries = ModelRc::default();
         self.view.virtual_metadata_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
         self.view.invalidate_virtual_view();
@@ -144,9 +153,33 @@ fn clone_item_view_entries_model(model: &ModelRc<ItemViewEntry>) -> ModelRc<Item
     ModelRc::new(Rc::new(VecModel::from(entries)))
 }
 
+fn clone_item_view_bounds_model(
+    model: &ModelRc<ItemViewBoundsEntry>,
+) -> ModelRc<ItemViewBoundsEntry> {
+    let entries = (0..model.row_count())
+        .filter_map(|row| model.row_data(row))
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        ModelRc::default()
+    } else {
+        ModelRc::new(Rc::new(VecModel::from(entries)))
+    }
+}
+
 fn clone_item_view_metadata_model(
     model: &ModelRc<ItemViewMetadataEntry>,
 ) -> ModelRc<ItemViewMetadataEntry> {
+    let entries = (0..model.row_count())
+        .filter_map(|row| model.row_data(row))
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        ModelRc::default()
+    } else {
+        ModelRc::new(Rc::new(VecModel::from(entries)))
+    }
+}
+
+fn clone_item_view_media_model(model: &ModelRc<ItemViewMediaEntry>) -> ModelRc<ItemViewMediaEntry> {
     let entries = (0..model.row_count())
         .filter_map(|row| model.row_data(row))
         .collect::<Vec<_>>();
@@ -236,7 +269,6 @@ impl PaneEntrySnapshot {
             path: self.path.as_str().into(),
             is_dir: self.is_dir,
             thumbnail_state: 0,
-            media: Default::default(),
             media_token: 0,
         }
     }
@@ -508,8 +540,10 @@ pub(crate) struct PaneView {
     pub(crate) virtual_view: VirtualViewCache,
     pub(crate) virtual_generation: GenerationCounter,
     pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
+    pub(crate) virtual_bounds_entries: ModelRc<ItemViewBoundsEntry>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
     pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,
+    pub(crate) virtual_media_entries: ModelRc<ItemViewMediaEntry>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     fallback_media_caches: Vec<Rc<ItemViewMediaCache>>,
     active_fallback_media_cache: Option<Rc<ItemViewMediaCache>>,
@@ -716,16 +750,7 @@ pub(crate) struct DirectoryViewState {
 #[derive(Clone, Debug)]
 pub(crate) struct VirtualViewCache {
     pub(crate) range: Range<usize>,
-    pub(crate) entry_count: usize,
-    pub(crate) rows_per_column: usize,
-    pub(crate) viewport_width: f32,
-    pub(crate) cell_width: f32,
-    pub(crate) column_width: f32,
-    pub(crate) column_offset: f32,
-    pub(crate) row_height: f32,
-    pub(crate) padding: f32,
-    pub(crate) content_width: f32,
-    pub(crate) scroll_max_x: f32,
+    pub(crate) layout: Option<CompactItemViewLayout>,
     pub(crate) thumbnail_size_px: u32,
 }
 
@@ -733,16 +758,7 @@ impl Default for VirtualViewCache {
     fn default() -> Self {
         Self {
             range: 0..0,
-            entry_count: 0,
-            rows_per_column: 0,
-            viewport_width: 0.0,
-            cell_width: 0.0,
-            column_width: 0.0,
-            column_offset: 0.0,
-            row_height: 0.0,
-            padding: 0.0,
-            content_width: 0.0,
-            scroll_max_x: 0.0,
+            layout: None,
             thumbnail_size_px: 0,
         }
     }
@@ -758,17 +774,20 @@ impl VirtualViewCache {
         layout: &CompactItemViewLayout,
         thumbnail_size_px: u32,
     ) -> bool {
-        self.entry_count == layout.entry_count
-            && self.rows_per_column == layout.rows_per_column
-            && same_layout_metric(self.viewport_width, layout.viewport_width)
-            && same_layout_metric(self.cell_width, layout.cell_width)
-            && same_layout_metric(self.column_width, layout.column_width)
-            && same_layout_metric(self.column_offset, layout.column_offset)
-            && same_layout_metric(self.row_height, layout.row_height)
-            && same_layout_metric(self.padding, layout.padding)
-            && same_layout_metric(self.content_width, layout.content_width)
-            && same_layout_metric(self.scroll_max_x, layout.scroll_max_x)
-            && self.thumbnail_size_px == thumbnail_size_px
+        self.layout.as_ref().is_some_and(|current| {
+            current.entry_count == layout.entry_count
+                && current.rows_per_column == layout.rows_per_column
+                && same_layout_metric(current.viewport_width, layout.viewport_width)
+                && same_layout_metric(current.cell_width, layout.cell_width)
+                && same_layout_metric(current.row_height, layout.row_height)
+                && same_layout_metric(current.padding, layout.padding)
+                && same_layout_metric(current.content_width, layout.content_width)
+                && same_layout_metric(current.scroll_max_x, layout.scroll_max_x)
+                && same_layout_vec(&current.item_widths, &layout.item_widths)
+                && same_layout_vec(&current.item_text_widths, &layout.item_text_widths)
+                && same_layout_vec(&current.column_widths, &layout.column_widths)
+                && same_layout_vec(&current.column_offsets, &layout.column_offsets)
+        }) && self.thumbnail_size_px == thumbnail_size_px
     }
 
     pub(crate) fn update_layout_signature(
@@ -776,22 +795,20 @@ impl VirtualViewCache {
         layout: CompactItemViewLayout,
         thumbnail_size_px: u32,
     ) {
-        self.entry_count = layout.entry_count;
-        self.rows_per_column = layout.rows_per_column;
-        self.viewport_width = layout.viewport_width;
-        self.cell_width = layout.cell_width;
-        self.column_width = layout.column_width;
-        self.column_offset = layout.column_offset;
-        self.row_height = layout.row_height;
-        self.padding = layout.padding;
-        self.content_width = layout.content_width;
-        self.scroll_max_x = layout.scroll_max_x;
+        self.layout = Some(layout);
         self.thumbnail_size_px = thumbnail_size_px;
     }
 }
 
 fn same_layout_metric(a: f32, b: f32) -> bool {
     (a - b).abs() <= 0.01
+}
+
+fn same_layout_vec(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(left, right)| same_layout_metric(*left, *right))
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -878,6 +895,10 @@ mod tests {
                     cell_width: 100.0,
                     row_height: 90.0,
                     padding: 10.0,
+                    item_padding: 0.0,
+                    media_width: 1.0,
+                    media_text_gap: 0.0,
+                    title_font_size: 1.0,
                 },
                 requested_viewport_x,
                 range_hint: None,
@@ -914,12 +935,26 @@ mod tests {
         entry_count: usize,
         thumbnail_size_px: u32,
     ) -> VirtualViewCache {
+        let names = (0..entry_count)
+            .map(|index| format!("item-{index}"))
+            .collect::<Vec<_>>();
         let mut cache = VirtualViewCache {
             range,
             ..VirtualViewCache::default()
         };
         cache.update_layout_signature(
-            compact_item_view_layout(250.0, entry_count, 4, 100.0, 90.0, 10.0),
+            compact_item_view_layout(
+                250.0,
+                names.iter().map(String::as_str),
+                4,
+                100.0,
+                90.0,
+                10.0,
+                0.0,
+                1.0,
+                0.0,
+                1.0,
+            ),
             thumbnail_size_px,
         );
         cache
@@ -1290,6 +1325,8 @@ mod tests {
             4,
             virtual_entries,
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             &["/tmp/active/one.txt".to_string()],
         );
 
@@ -1323,10 +1360,16 @@ mod tests {
         assert_eq!(inactive.search, panes.focused().search);
         assert_eq!(inactive.view.viewport_x, 128.0);
         assert_eq!(inactive.view.virtual_view.range, 4..12);
-        assert_eq!(inactive.view.virtual_view.entry_count, 24);
-        assert_eq!(inactive.view.virtual_view.rows_per_column, 4);
-        assert_eq!(inactive.view.virtual_view.cell_width, 100.0);
-        assert_eq!(inactive.view.virtual_view.row_height, 90.0);
+        let inactive_layout = inactive
+            .view
+            .virtual_view
+            .layout
+            .as_ref()
+            .expect("inactive pane should keep compact layout");
+        assert_eq!(inactive_layout.entry_count, 24);
+        assert_eq!(inactive_layout.rows_per_column, 4);
+        assert_eq!(inactive_layout.cell_width, 100.0);
+        assert_eq!(inactive_layout.row_height, 90.0);
         assert_eq!(inactive.view.virtual_view.thumbnail_size_px, 80);
         assert_eq!(inactive.view.virtual_start_index, 4);
         assert_eq!(inactive.view.virtual_entries.row_count(), 2);
@@ -1418,10 +1461,15 @@ mod tests {
         view.virtual_view.invalidate();
 
         assert!(view.virtual_view.range.is_empty());
-        assert_eq!(view.virtual_view.entry_count, 64);
-        assert_eq!(view.virtual_view.rows_per_column, 4);
-        assert_eq!(view.virtual_view.cell_width, 100.0);
-        assert_eq!(view.virtual_view.row_height, 90.0);
+        let layout = view
+            .virtual_view
+            .layout
+            .as_ref()
+            .expect("invalidating range should keep compact layout");
+        assert_eq!(layout.entry_count, 64);
+        assert_eq!(layout.rows_per_column, 4);
+        assert_eq!(layout.cell_width, 100.0);
+        assert_eq!(layout.row_height, 90.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
     }
 
@@ -1462,6 +1510,8 @@ mod tests {
             0,
             vec![snapshot.to_item_view_entry()],
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             &[],
         );
 
@@ -1469,7 +1519,15 @@ mod tests {
 
         let mut rendered = snapshot.to_item_view_entry();
         rendered.name = "one.txt".into();
-        update_pane_item_view_entries_model(&mut view, 0, vec![rendered], Vec::new(), &[]);
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            vec![rendered],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
 
         assert!(view.has_renderable_virtual_entries());
 
