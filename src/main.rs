@@ -3985,46 +3985,18 @@ fn merge_ranges(current: Option<Range<usize>>, next: Range<usize>) -> Range<usiz
 
 fn cached_zoom_relayout_range(
     cached_range: &Range<usize>,
-    preferred_range: &Range<usize>,
     visible_range: &Range<usize>,
-    rows_per_column: usize,
     entry_count: usize,
 ) -> Option<Range<usize>> {
     if visible_range.is_empty()
         || !virtual_cache_covers_visible_range(cached_range, visible_range)
         || cached_range.start >= cached_range.end
+        || cached_range.end > entry_count
     {
         return None;
     }
 
-    let rows_per_column = rows_per_column.max(1);
-    if cached_range.start % rows_per_column == 0 && cached_range.end <= entry_count {
-        return Some(cached_range.clone());
-    }
-
-    let desired_start = preferred_range
-        .start
-        .min(visible_range.start)
-        .min(entry_count);
-    let desired_end = preferred_range.end.max(visible_range.end).min(entry_count);
-    let aligned_desired_start = (desired_start / rows_per_column) * rows_per_column;
-    let earliest_cached_start = cached_range
-        .start
-        .min(entry_count)
-        .div_ceil(rows_per_column)
-        * rows_per_column;
-    let start = aligned_desired_start.max(earliest_cached_start);
-    if start > visible_range.start || start < cached_range.start {
-        return None;
-    }
-
-    let aligned_desired_end = desired_end.div_ceil(rows_per_column) * rows_per_column;
-    let end = aligned_desired_end.min(cached_range.end).min(entry_count);
-    if end < visible_range.end || end <= start {
-        return None;
-    }
-
-    Some(start..end)
+    Some(cached_range.clone())
 }
 
 fn virtual_cache_covers_visible_range(
@@ -4159,7 +4131,6 @@ fn apply_virtual_view_result(
         state,
         slot,
         update.range.start,
-        update.start_column,
         entries,
         metadata_entries,
         &selected_paths,
@@ -4195,7 +4166,6 @@ fn set_pane_virtual_entries(
     state: &Rc<RefCell<AppState>>,
     slot: i32,
     start_index: usize,
-    start_column: usize,
     entries: Vec<ItemViewEntry>,
     metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
@@ -4204,7 +4174,6 @@ fn set_pane_virtual_entries(
         update_pane_item_view_entries_model(
             &mut pane.view,
             start_index,
-            start_column,
             entries,
             metadata_entries,
             selected_paths,
@@ -4923,33 +4892,14 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         layout.viewport_x = requested_viewport_x;
         let compact_item_view = layout.compact_item_view(entry_count);
         let plan = compact_item_view.virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
-        let preferred_range = icon_zoom_range_hint(
-            ui,
-            viewport_width,
-            search_panel_visible,
-            text_line_count,
-            zoom_level,
-            requested_viewport_x,
-            entry_count,
-        )
-        .unwrap_or_else(|| plan.range.clone());
         let current_range = pane.view.virtual_view.range.clone();
-        let Some(relayout_range) = cached_zoom_relayout_range(
-            &current_range,
-            &preferred_range,
-            &plan.visible_range,
-            compact_item_view.rows_per_column,
-            entry_count,
-        ) else {
+        let Some(relayout_range) =
+            cached_zoom_relayout_range(&current_range, &plan.visible_range, entry_count)
+        else {
             return false;
         };
-        let start_column = relayout_range.start / compact_item_view.rows_per_column.max(1);
 
-        if !relayout_pane_item_view_entries_model(
-            &mut pane.view,
-            relayout_range.clone(),
-            start_column,
-        ) {
+        if !relayout_pane_item_view_entries_model(&mut pane.view, relayout_range.clone()) {
             return false;
         }
         prewarm_pane_fallback_media(pane, zoom_level, dark);
@@ -5712,33 +5662,36 @@ mod tests {
     #[test]
     fn cached_zoom_relayout_range_only_requires_visible_range() {
         assert_eq!(
-            cached_zoom_relayout_range(&(0..20), &(0..28), &(8..20), 4, 100),
+            cached_zoom_relayout_range(&(0..20), &(8..20), 100),
             Some(0..20)
         );
         assert_eq!(
-            cached_zoom_relayout_range(&(4..24), &(0..32), &(12..24), 4, 100),
+            cached_zoom_relayout_range(&(4..24), &(12..24), 100),
             Some(4..24)
         );
+        assert_eq!(cached_zoom_relayout_range(&(4..24), &(3..24), 100), None);
     }
 
     #[test]
     fn cached_zoom_relayout_range_keeps_aligned_prewarmed_window() {
         assert_eq!(
-            cached_zoom_relayout_range(&(8..44), &(16..32), &(20..28), 4, 100),
+            cached_zoom_relayout_range(&(8..44), &(20..28), 100),
             Some(8..44)
         );
     }
 
     #[test]
-    fn cached_zoom_relayout_range_aligns_start_to_new_rows() {
+    fn cached_zoom_relayout_range_keeps_unaligned_window_when_visible_is_covered() {
         assert_eq!(
-            cached_zoom_relayout_range(&(5..30), &(0..40), &(12..24), 4, 100),
-            Some(8..30)
+            cached_zoom_relayout_range(&(5..30), &(12..24), 100),
+            Some(5..30)
         );
         assert_eq!(
-            cached_zoom_relayout_range(&(5..30), &(0..40), &(6..24), 4, 100),
-            None
+            cached_zoom_relayout_range(&(5..30), &(6..24), 100),
+            Some(5..30)
         );
+        assert_eq!(cached_zoom_relayout_range(&(5..30), &(4..24), 100), None);
+        assert_eq!(cached_zoom_relayout_range(&(5..101), &(12..24), 100), None);
     }
 
     #[test]
@@ -6961,7 +6914,7 @@ mod tests {
                     "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);"
                 )
                 && fast_path_body.contains("relayout_pane_item_view_entries_model(")
-                && fast_path_body.contains("let preferred_range = icon_zoom_range_hint(")
+                && !fast_path_body.contains("let preferred_range = icon_zoom_range_hint(")
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
                 && fast_path_body.contains("prewarm_pane_fallback_media(pane, zoom_level, dark);")

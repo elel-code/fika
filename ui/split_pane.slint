@@ -7,6 +7,7 @@ export component SplitPaneView inherits Rectangle {
     in property <[ItemViewHighlightEntry]> highlights;
     in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
+    in property <int> virtual-start-row;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
     in property <float> item-view-cell-width: 1;
@@ -338,8 +339,9 @@ export component SplitPaneView inherits Rectangle {
                 height: parent.height;
 
                 for highlight[index] in root.highlights: Rectangle {
-                    private property <int> tile-row: highlight.slice_index.mod(root.rows-per-column);
-                    private property <int> tile-column: (highlight.slice_index - self.tile-row) / root.rows-per-column;
+                    private property <int> tile-index: root.virtual-start-row + highlight.slice_index;
+                    private property <int> tile-row: self.tile-index.mod(root.rows-per-column);
+                    private property <int> tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;
 
                     x: self.tile-column * root.column-width;
                     y: root.preview-padding + self.tile-row * root.row-height;
@@ -352,8 +354,9 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle {
-                    private property <int> tile-row: root.drag-target-slice-index.mod(root.rows-per-column);
-                    private property <int> tile-column: (root.drag-target-slice-index - self.tile-row) / root.rows-per-column;
+                    private property <int> tile-index: root.virtual-start-row + root.drag-target-slice-index;
+                    private property <int> tile-row: self.tile-index.mod(root.rows-per-column);
+                    private property <int> tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;
 
                     x: self.tile-column * root.column-width;
                     y: root.preview-padding + self.tile-row * root.row-height;
@@ -366,8 +369,9 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for item[index] in root.entries: Image {
-                    private property <int> tile-row: index.mod(root.rows-per-column);
-                    private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
+                    private property <int> tile-index: root.virtual-start-row + index;
+                    private property <int> tile-row: self.tile-index.mod(root.rows-per-column);
+                    private property <int> tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;
 
                     x: self.tile-column * root.column-width + root.media-x;
                     y: root.preview-padding + self.tile-row * root.row-height + root.media-y;
@@ -378,8 +382,9 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for item[index] in root.entries: Text {
-                    private property <int> tile-row: index.mod(root.rows-per-column);
-                    private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
+                    private property <int> tile-index: root.virtual-start-row + index;
+                    private property <int> tile-row: self.tile-index.mod(root.rows-per-column);
+                    private property <int> tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;
 
                     x: self.tile-column * root.column-width + root.text-x;
                     y: root.preview-padding + self.tile-row * root.row-height + root.title-y;
@@ -394,8 +399,9 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for metadata[index] in root.metadata: Text {
-                    private property <int> tile-row: metadata.slice_index.mod(root.rows-per-column);
-                    private property <int> tile-column: (metadata.slice_index - self.tile-row) / root.rows-per-column;
+                    private property <int> tile-index: root.virtual-start-row + metadata.slice_index;
+                    private property <int> tile-row: self.tile-index.mod(root.rows-per-column);
+                    private property <int> tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;
 
                     x: self.tile-column * root.column-width + metadata.text_x * 1px;
                     y: root.preview-padding + self.tile-row * root.row-height + metadata.y * 1px;

@@ -178,7 +178,6 @@ pub(crate) fn update_item_view_entries_model(
 pub(crate) fn update_pane_item_view_entries_model(
     view: &mut PaneView,
     start_index: usize,
-    start_column: usize,
     entries: Vec<ItemViewEntry>,
     metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
@@ -198,13 +197,11 @@ pub(crate) fn update_pane_item_view_entries_model(
     }
     update_item_view_highlight_model(view);
     view.virtual_start_index = start_index;
-    view.virtual_start_column = start_column;
 }
 
 pub(crate) fn relayout_pane_item_view_entries_model(
     view: &mut PaneView,
     range: Range<usize>,
-    start_column: usize,
 ) -> bool {
     let Some(model) = view
         .virtual_entries
@@ -242,7 +239,6 @@ pub(crate) fn relayout_pane_item_view_entries_model(
 
     let _ = update_item_view_highlight_model(view);
     view.virtual_start_index = range.start;
-    view.virtual_start_column = start_column;
     true
 }
 
@@ -414,7 +410,6 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut left,
             0,
-            0,
             (0..3).map(entry).collect(),
             Vec::new(),
             &[],
@@ -422,16 +417,13 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut right,
             20,
-            4,
             (20..23).map(entry).collect(),
             Vec::new(),
             &[],
         );
 
         assert_eq!(left.virtual_start_index, 0);
-        assert_eq!(left.virtual_start_column, 0);
         assert_eq!(right.virtual_start_index, 20);
-        assert_eq!(right.virtual_start_column, 4);
         assert_eq!(
             rows(&left.virtual_entries),
             (0..3)
@@ -448,7 +440,6 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut right,
             22,
-            5,
             (22..25).map(entry).collect(),
             Vec::new(),
             &[],
@@ -461,7 +452,6 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(right.virtual_start_index, 22);
-        assert_eq!(right.virtual_start_column, 5);
     }
 
     #[test]
@@ -639,7 +629,6 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut view,
             0,
-            0,
             entries_with_tile_metrics(4),
             Vec::new(),
             &[],
@@ -676,7 +665,6 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut view,
             0,
-            0,
             entries_with_tile_metrics(4),
             Vec::new(),
             &[],
@@ -703,18 +691,16 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut view,
             10,
-            5,
             entries_with_tile_metrics(4),
             Vec::new(),
             &["/tmp/item-2".to_string()],
         );
         let original = view.virtual_entries.clone();
 
-        assert!(relayout_pane_item_view_entries_model(&mut view, 11..13, 5,));
+        assert!(relayout_pane_item_view_entries_model(&mut view, 11..13,));
 
         assert_eq!(view.virtual_entries, original);
         assert_eq!(view.virtual_start_index, 11);
-        assert_eq!(view.virtual_start_column, 5);
         assert_eq!(
             rows(&view.virtual_entries),
             vec!["/tmp/item-1".to_string(), "/tmp/item-2".to_string()]

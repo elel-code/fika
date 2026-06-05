@@ -99,6 +99,7 @@ component FilePane inherits Rectangle {
     in property <[ItemViewHighlightEntry]> highlights;
     in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
+    in property <int> virtual-start-row;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
     in property <float> item-view-cell-width: 1;
@@ -309,6 +310,7 @@ component FilePane inherits Rectangle {
                 highlights: root.highlights;
                 metadata: root.metadata;
                 virtual-start-column: root.virtual-start-column;
+                virtual-start-row: root.virtual-start-row;
                 viewport-x <=> root.viewport-x;
                 item-view-rows-per-column: root.item-view-rows-per-column;
                 item-view-cell-width: root.item-view-cell-width;
@@ -577,6 +579,7 @@ component PaneSlotSurface inherits Rectangle {
         highlights: root.highlights;
         metadata: root.metadata;
         virtual-start-column: root.view.virtual_start_column;
+        virtual-start-row: root.view.virtual_start_row;
         viewport-x <=> root.live-viewport-x;
         item-view-rows-per-column: root.view.item_view_rows_per_column;
         item-view-cell-width: root.view.item_view_cell_width;

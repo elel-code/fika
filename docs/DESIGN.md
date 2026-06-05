@@ -56,7 +56,7 @@ The non-main-pane chrome is intentionally allowed to track COSMIC Files more clo
 - `virtual_entries` 只包含当前可见列附近的 `ItemViewEntry` row，额外保留少量左右 overscan 列；Slint 不再持有完整业务 `FileEntry` 模型。
 - Rust 侧维护轻量可见索引缓存：无搜索/过滤时使用隐式 identity fast path，有搜索/过滤时只保存匹配条目的 `usize` 索引。
 - 滚动同步时 Rust 直接通过可见索引缓存克隆当前虚拟范围的条目；不会为了更新可视窗口构造完整过滤结果模型，也不会在每次滚动事件中重复扫描完整目录。
-- Slint 侧把虚拟 tile 放进以 `virtual_start_column` 为锚点的局部 layer；tile local x/y 由 `for item[index]` 下标和 pane row metrics 计算，避免超大目录产生很大的每项坐标，也避免虚拟窗口滑动时把局部坐标变化写进重叠 `ItemViewEntry` row。
+- Slint 侧把虚拟 tile 放进以 `virtual_start_column + virtual_start_row` 为锚点的局部 layer；tile local x/y 由 `virtual_start_row + slice_index` 和 pane row metrics 计算，避免超大目录产生很大的每项坐标，也允许未按当前 `rows_per_column` 对齐的缓存窗口在 zoom 后继续复用。
 - Rust 缓存虚拟范围、行数、列宽和缩略图尺寸；滚动仍落在同一虚拟范围时不重置 Slint model。
 - 参考 Dolphin `KItemListView::setScrollOffset()` 的同步布局路径，横向滚动位置变化会立即在 UI 线程夹紧 viewport 并重建当前 visible slice，不再把当前视口内容等待后台 virtual prepare 补齐。
 - Rust 侧的 `VirtualItemViewPlan` 统一计算 clamped viewport、scroll max、可见范围、overscan 范围和 Slint 锚点列，防止滚动条、缩略图调度和模型切片各用一套边界规则。

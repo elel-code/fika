@@ -152,9 +152,14 @@ impl CompactItemViewLayout {
         }
     }
 
-    pub(crate) fn virtual_slice_width(self, virtual_slice_count: usize) -> f32 {
+    pub(crate) fn virtual_slice_width_from_start_row(
+        self,
+        virtual_slice_count: usize,
+        start_row: usize,
+    ) -> f32 {
         compact_item_view_virtual_slice_width(
             virtual_slice_count,
+            start_row,
             self.rows_per_column,
             self.column_width,
             self.column_offset,
@@ -268,13 +273,17 @@ pub(crate) fn compact_item_view_layout(
 
 pub(crate) fn compact_item_view_virtual_slice_width(
     virtual_slice_count: usize,
+    start_row: usize,
     rows_per_column: usize,
     column_width: f32,
     column_offset: f32,
     cell_width: f32,
 ) -> f32 {
     let rows_per_column = rows_per_column.max(1);
-    let column_count = virtual_slice_count.div_ceil(rows_per_column).max(1);
+    let start_row = start_row.min(rows_per_column.saturating_sub(1));
+    let column_count = (start_row + virtual_slice_count)
+        .div_ceil(rows_per_column)
+        .max(1);
     (column_offset.max(0.0)
         + (column_count.saturating_sub(1)) as f32 * column_width.max(1.0)
         + cell_width.max(1.0))
@@ -2627,12 +2636,15 @@ mod tests {
         assert!(
             split_pane.contains("for item[index] in root.entries: Image")
                 && split_pane.contains("for item[index] in root.entries: Text")
-                && base_image_loop.contains("tile-row: index.mod(root.rows-per-column);")
+                && split_pane.contains("in property <int> virtual-start-row;")
+                && base_image_loop.contains("tile-index: root.virtual-start-row + index;")
+                && base_image_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && base_image_loop
-                    .contains("tile-column: (index - self.tile-row) / root.rows-per-column;")
-                && base_text_loop.contains("tile-row: index.mod(root.rows-per-column);")
+                    .contains("tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;")
+                && base_text_loop.contains("tile-index: root.virtual-start-row + index;")
+                && base_text_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && base_text_loop
-                    .contains("tile-column: (index - self.tile-row) / root.rows-per-column;")
+                    .contains("tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;")
                 && split_pane.contains(
                     "x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;"
                 )
@@ -2704,19 +2716,22 @@ mod tests {
             "SplitPaneView should inline Dolphin-style horizontal column-first tile primitives without a FileTile or FolderGlyph component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
         );
         assert!(
-            highlight_loop.contains("tile-row: highlight.slice_index.mod(root.rows-per-column);")
+            highlight_loop.contains("tile-index: root.virtual-start-row + highlight.slice_index;")
+                && highlight_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && highlight_loop.contains(
-                    "tile-column: (highlight.slice_index - self.tile-row) / root.rows-per-column;"
+                    "tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;"
                 )
                 && highlight_loop.contains("x: self.tile-column * root.column-width;")
-                && highlight_loop.contains("y: root.preview-padding + self.tile-row * root.row-height;")
+                && highlight_loop
+                    .contains("y: root.preview-padding + self.tile-row * root.row-height;")
                 && highlight_loop.contains("width: root.cell-width;")
                 && highlight_loop.contains("height: root.row-height;")
+                && drop_target_loop
+                    .contains("tile-index: root.virtual-start-row + root.drag-target-slice-index;")
+                && drop_target_loop
+                    .contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && drop_target_loop.contains(
-                    "tile-row: root.drag-target-slice-index.mod(root.rows-per-column);"
-                )
-                && drop_target_loop.contains(
-                    "tile-column: (root.drag-target-slice-index - self.tile-row) / root.rows-per-column;"
+                    "tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;"
                 )
                 && drop_target_loop.contains("width: root.cell-width;")
                 && drop_target_loop.contains("height: root.row-height;")
@@ -2816,9 +2831,11 @@ mod tests {
             split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
                 && split_pane.contains("for metadata[index] in root.metadata: Text")
                 && metadata_tile_loop
-                    .contains("tile-row: metadata.slice_index.mod(root.rows-per-column);")
+                    .contains("tile-index: root.virtual-start-row + metadata.slice_index;")
+                && metadata_tile_loop
+                    .contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && metadata_tile_loop.contains(
-                    "tile-column: (metadata.slice_index - self.tile-row) / root.rows-per-column;"
+                    "tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;"
                 )
                 && metadata_tile_loop
                     .contains("x: self.tile-column * root.column-width + metadata.text_x * 1px;")
@@ -2899,10 +2916,13 @@ mod tests {
                 )
                 && split_pane.contains("width: root.virtual-slice-width;")
                 && split_pane.contains(
-                    "private property <int> tile-row: index.mod(root.rows-per-column);"
+                    "private property <int> tile-index: root.virtual-start-row + index;"
                 )
                 && split_pane.contains(
-                    "private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;"
+                    "private property <int> tile-row: self.tile-index.mod(root.rows-per-column);"
+                )
+                && split_pane.contains(
+                    "private property <int> tile-column: (self.tile-index - self.tile-row) / root.rows-per-column;"
                 )
                 && split_pane.contains(
                     "x: self.tile-column * root.column-width;"

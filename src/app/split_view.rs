@@ -367,7 +367,8 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
     PaneViewData {
         slot,
         entry_count: item_view_metrics.entry_count,
-        virtual_start_column: pane_slot_virtual_start_column(state, slot),
+        virtual_start_column: item_view_metrics.virtual_start_column,
+        virtual_start_row: item_view_metrics.virtual_start_row,
         viewport_x: pane_slot_viewport_x(slot, state),
         item_view_rows_per_column: item_view_metrics.rows_per_column,
         item_view_cell_width: item_view_metrics.cell_width,
@@ -434,6 +435,8 @@ fn pane_slot_item_view_render_geometry(
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ItemViewSlotMetrics {
     entry_count: i32,
+    virtual_start_column: i32,
+    virtual_start_row: i32,
     rows_per_column: i32,
     cell_width: f32,
     column_width: f32,
@@ -463,21 +466,28 @@ fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> I
         search_panel_visible,
         text_line_count,
     );
-    let (entry_count, virtual_slice_count) = state
+    let (entry_count, virtual_slice_count, virtual_start_index) = state
         .panes
         .pane_for_slot(slot)
         .map(|pane| {
             (
                 pane.view.virtual_view.entry_count,
                 pane.view.virtual_entries.row_count(),
+                pane.view.virtual_start_index,
             )
         })
-        .unwrap_or((0, 0));
+        .unwrap_or((0, 0, 0));
     let compact_item_view = layout.compact_item_view(entry_count);
-    let virtual_slice_width = compact_item_view.virtual_slice_width(virtual_slice_count);
+    let rows_per_column = compact_item_view.rows_per_column.max(1);
+    let virtual_start_column = virtual_start_index / rows_per_column;
+    let virtual_start_row = virtual_start_index % rows_per_column;
+    let virtual_slice_width = compact_item_view
+        .virtual_slice_width_from_start_row(virtual_slice_count, virtual_start_row);
 
     ItemViewSlotMetrics {
         entry_count: entry_count as i32,
+        virtual_start_column: virtual_start_column as i32,
+        virtual_start_row: virtual_start_row as i32,
         rows_per_column: compact_item_view.rows_per_column as i32,
         cell_width: compact_item_view.cell_width,
         column_width: compact_item_view.column_width,
@@ -567,14 +577,6 @@ fn pane_slot_metadata(slot: i32, state: &AppState) -> ModelRc<ItemViewMetadataEn
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_metadata_entries.clone())
         .unwrap_or_default()
-}
-
-fn pane_slot_virtual_start_column(state: &AppState, slot: i32) -> i32 {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_start_column as i32)
-        .unwrap_or(0)
 }
 
 fn pane_slot_viewport_x(slot: i32, state: &AppState) -> f32 {

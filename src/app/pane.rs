@@ -79,7 +79,6 @@ impl PaneState {
         pane.view.fallback_media_caches = self.view.fallback_media_caches.clone();
         pane.view.active_fallback_media_cache = self.view.active_fallback_media_cache.clone();
         pane.view.virtual_start_index = self.view.virtual_start_index;
-        pane.view.virtual_start_column = self.view.virtual_start_column;
         pane
     }
 
@@ -110,7 +109,6 @@ impl PaneState {
         self.view.virtual_highlight_entries = ModelRc::default();
         self.view.virtual_metadata_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
-        self.view.virtual_start_column = 0;
         self.view.invalidate_virtual_view();
     }
 
@@ -516,7 +514,6 @@ pub(crate) struct PaneView {
     fallback_media_caches: Vec<Rc<ItemViewMediaCache>>,
     active_fallback_media_cache: Option<Rc<ItemViewMediaCache>>,
     pub(crate) virtual_start_index: usize,
-    pub(crate) virtual_start_column: usize,
     virtual_prepare_in_flight: Option<u64>,
     virtual_prepare_pending: Option<VirtualViewPrepareRequest>,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
@@ -1285,7 +1282,6 @@ mod tests {
         panes.focused_mut().view.viewport_x = 128.0;
         panes.focused_mut().view.virtual_view = cache_for_layout(4..12, 24, 80);
         panes.focused_mut().view.virtual_start_index = 4;
-        panes.focused_mut().view.virtual_start_column = 1;
         let fallback_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
         let warmed_fallback = panes
             .focused_mut()
@@ -1300,7 +1296,6 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut panes.focused_mut().view,
             4,
-            1,
             virtual_entries,
             Vec::new(),
             &["/tmp/active/one.txt".to_string()],
@@ -1342,7 +1337,6 @@ mod tests {
         assert_eq!(inactive.view.virtual_view.row_height, 90.0);
         assert_eq!(inactive.view.virtual_view.thumbnail_size_px, 80);
         assert_eq!(inactive.view.virtual_start_index, 4);
-        assert_eq!(inactive.view.virtual_start_column, 1);
         assert_eq!(inactive.view.virtual_entries.row_count(), 2);
         assert_eq!(inactive.view.virtual_entry_tokens.len(), 2);
         assert!(
@@ -1484,7 +1478,6 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut view,
             0,
-            0,
             vec![snapshot.to_item_view_entry()],
             Vec::new(),
             &[],
@@ -1494,7 +1487,7 @@ mod tests {
 
         let mut rendered = snapshot.to_item_view_entry();
         rendered.name = "one.txt".into();
-        update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered], Vec::new(), &[]);
+        update_pane_item_view_entries_model(&mut view, 0, vec![rendered], Vec::new(), &[]);
 
         assert!(view.has_renderable_virtual_entries());
 
