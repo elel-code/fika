@@ -1,4 +1,6 @@
-use crate::app::geometry::{CompactItemViewLayout, MainItemViewLayout, VirtualItemViewPlan};
+use crate::app::geometry::{
+    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, MainItemViewLayout, VirtualItemViewPlan,
+};
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
 use std::ops::Range;
 use std::sync::Arc;
@@ -20,6 +22,7 @@ pub(crate) struct VirtualViewSnapshotUpdate {
 pub(crate) struct VirtualViewSnapshotInput {
     pub(crate) layout: MainItemViewLayout,
     pub(crate) requested_viewport_x: f32,
+    pub(crate) range_hint: Option<Range<usize>>,
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
     pub(crate) visible_count_override: Option<usize>,
@@ -42,7 +45,15 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
     let compact_item_view = input.layout.compact_item_view(visible_count);
-    let plan = compact_item_view.virtual_plan(input.requested_viewport_x, 2);
+    let plan =
+        compact_item_view.virtual_plan(input.requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
+    let range = expanded_snapshot_range(
+        plan.range.clone(),
+        input.range_hint.as_ref(),
+        visible_count,
+        compact_item_view.rows_per_column,
+    );
+    let start_column = range.start / compact_item_view.rows_per_column.max(1);
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
     let rebuild_model = !input.schedule_thumbnails
         || should_rebuild_virtual_cache(
@@ -66,20 +77,43 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         };
     }
 
-    let mut entries = snapshot_entries_range(&input, plan.range.clone());
-    annotate_snapshot_location_groups(&input, plan.range.start, &mut entries);
+    let mut entries = snapshot_entries_range(&input, range.clone());
+    annotate_snapshot_location_groups(&input, range.start, &mut entries);
 
     VirtualViewSnapshotUpdate {
         entry_count: visible_count,
         layout: compact_item_view,
         viewport_x: plan.viewport_x,
         viewport_clamped,
-        range: plan.range,
+        range,
         visible_range: plan.visible_range,
-        start_column: plan.start_column,
+        start_column,
         entries,
         rebuild_model: true,
     }
+}
+
+fn expanded_snapshot_range(
+    plan_range: Range<usize>,
+    range_hint: Option<&Range<usize>>,
+    entry_count: usize,
+    rows_per_column: usize,
+) -> Range<usize> {
+    let mut range = plan_range;
+    let Some(hint) = range_hint.filter(|hint| !hint.is_empty()) else {
+        return range;
+    };
+
+    let rows_per_column = rows_per_column.max(1);
+    let hint_start = hint.start.min(entry_count);
+    let hint_end = hint.end.min(entry_count).max(hint_start);
+    let aligned_start = (hint_start / rows_per_column) * rows_per_column;
+    let aligned_end = hint_end.div_ceil(rows_per_column) * rows_per_column;
+
+    range.start = range.start.min(aligned_start).min(entry_count);
+    range.end = range.end.max(aligned_end).min(entry_count);
+    range.end = range.end.max(range.start);
+    range
 }
 
 fn should_rebuild_virtual_cache(
@@ -340,7 +374,8 @@ fn snapshot_glob_matches_bytes(pattern: &[u8], text: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::app::item_view_renderer::{
-        ItemViewRenderMetrics, ItemViewRenderPlanInput, decorate_render_plan,
+        ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
+        decorate_render_plan,
     };
     use std::sync::Arc;
 
@@ -386,6 +421,7 @@ mod tests {
         VirtualViewSnapshotInput {
             layout: layout(),
             requested_viewport_x,
+            range_hint: None,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
             visible_count_override: None,
@@ -464,6 +500,21 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_update_expands_rebuild_range_with_aligned_zoom_hint() {
+        let entries = snapshot_entries(100);
+        let mut input = snapshot_input(entries, 0.0, VirtualViewCache::default());
+        input.range_hint = Some(0..35);
+
+        let update = prepare_virtual_view_snapshot_update(input);
+
+        assert!(update.rebuild_model);
+        assert_eq!(update.visible_range, 0..12);
+        assert_eq!(update.range, 0..36);
+        assert_eq!(update.start_column, 0);
+        assert_eq!(update.entries.len(), 36);
+    }
+
+    #[test]
     fn snapshot_update_clamps_out_of_bounds_viewport() {
         let update = prepare_virtual_view_snapshot_update(snapshot_input(
             snapshot_entries(10),
@@ -490,21 +541,19 @@ mod tests {
             .iter()
             .map(PaneEntrySnapshot::to_item_view_entry)
             .collect::<Vec<_>>();
-        decorate_render_plan(
-            &mut entries,
-            ItemViewRenderPlanInput {
-                cell_width: update.layout.cell_width,
-                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
-                show_location: false,
-            },
-        );
+        let input = ItemViewRenderPlanInput {
+            cell_width: update.layout.cell_width,
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
+            show_location: false,
+        };
+        decorate_render_plan(&mut entries, input);
+        let geometry = ItemViewRenderGeometry::from_plan_input(input);
 
         assert!(entries.iter().all(|entry| !entry.name.is_empty()));
-        assert!(entries.iter().all(|entry| entry.tile_width > 0.0));
-        assert!(entries.iter().all(|entry| entry.text_width > 0.0));
-        assert!(entries.iter().all(|entry| entry.title_y >= 0.0));
-        assert!(entries.iter().all(|entry| entry.title_line_height > 0.0));
-        assert!(entries.iter().all(|entry| entry.title_font_size > 0.0));
+        assert!(geometry.text_width > 0.0);
+        assert!(geometry.title_y >= 0.0);
+        assert!(geometry.title_line_height > 0.0);
+        assert!(geometry.title_font_size > 0.0);
     }
 
     #[test]
@@ -528,6 +577,7 @@ mod tests {
         let update = prepare_virtual_view_snapshot_update(VirtualViewSnapshotInput {
             layout: layout(),
             requested_viewport_x: 360.0,
+            range_hint: None,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
             visible_count_override: None,

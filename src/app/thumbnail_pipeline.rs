@@ -318,17 +318,6 @@ mod tests {
             thumbnail_state: 0,
             media: Image::default(),
             media_token: 0,
-            tile_width: 0.0,
-            tile_height: 0.0,
-            media_x: 0.0,
-            media_y: 0.0,
-            text_x: 0.0,
-            text_width: 0.0,
-            title_y: 0.0,
-            title_line_height: 0.0,
-            media_width: 0.0,
-            media_height: 0.0,
-            title_font_size: 0.0,
         }
     }
 

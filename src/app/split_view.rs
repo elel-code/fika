@@ -1,5 +1,8 @@
 use crate::app::async_bridge::AsyncBridge;
 use crate::app::geometry::{MainItemViewLayout, active_main_pane_width, inactive_main_pane_width};
+use crate::app::item_view_renderer::{
+    ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
+};
 use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
@@ -353,6 +356,13 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         .map(|pane| pane.search.clone())
         .unwrap_or_default();
     let item_view_metrics = pane_slot_item_view_metrics(ui, slot, state);
+    let item_view_render_geometry =
+        pane_slot_item_view_render_geometry(ui, slot, state, item_view_metrics.cell_width);
+    let (item_view_folder_media, item_view_file_media) = state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.view.fallback_media_images())
+        .unwrap_or_default();
 
     PaneViewData {
         slot,
@@ -368,6 +378,17 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         item_view_content_width: item_view_metrics.content_width,
         item_view_virtual_slice_width: item_view_metrics.virtual_slice_width,
         item_view_scroll_max_x: item_view_metrics.scroll_max_x,
+        item_view_media_x: item_view_render_geometry.media_x,
+        item_view_media_y: item_view_render_geometry.media_y,
+        item_view_media_width: item_view_render_geometry.media_width,
+        item_view_media_height: item_view_render_geometry.media_height,
+        item_view_text_x: item_view_render_geometry.text_x,
+        item_view_text_width: item_view_render_geometry.text_width,
+        item_view_title_y: item_view_render_geometry.title_y,
+        item_view_title_line_height: item_view_render_geometry.title_line_height,
+        item_view_title_font_size: item_view_render_geometry.title_font_size,
+        item_view_folder_media,
+        item_view_file_media,
         show_location: pane_slot_show_location(state, slot),
         content_interactive: if is_focused {
             !ui.get_directory_loading()
@@ -387,6 +408,27 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         empty_title: empty_title_for_search(&search),
         empty_subtitle: empty_subtitle_for_search(&search),
     }
+}
+
+fn pane_slot_item_view_render_geometry(
+    ui: &AppWindow,
+    slot: i32,
+    state: &AppState,
+    cell_width: f32,
+) -> ItemViewRenderGeometry {
+    let (show_location, text_line_count) = state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| (pane.show_item_locations(), pane.item_view_text_line_count()))
+        .unwrap_or((false, 1));
+    ItemViewRenderGeometry::from_plan_input(ItemViewRenderPlanInput {
+        cell_width,
+        render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(
+            ui.get_icon_zoom_level(),
+            text_line_count,
+        ),
+        show_location,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

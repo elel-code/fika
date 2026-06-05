@@ -12,6 +12,9 @@ const SPLIT_DIVIDER_WIDTH: f32 = 1.0;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
 const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
 const SEARCH_PANEL_NARROW_WIDTH: f32 = 760.0;
+pub(crate) const ITEM_VIEW_OVERSCAN_COLUMNS: usize = 2;
+pub(crate) const MIN_ICON_ZOOM_LEVEL: i32 = 0;
+pub(crate) const MAX_ICON_ZOOM_LEVEL: i32 = 4;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MainItemViewLayout {
@@ -63,8 +66,24 @@ impl MainItemViewLayout {
         search_panel_visible: bool,
         text_line_count: usize,
     ) -> Self {
-        let cell_width = compact_cell_width(ui.get_icon_zoom_level());
-        let row_height = compact_row_height(ui.get_icon_zoom_level(), text_line_count);
+        Self::from_ui_for_pane_width_with_zoom_and_text_lines(
+            ui,
+            pane_width,
+            search_panel_visible,
+            ui.get_icon_zoom_level(),
+            text_line_count,
+        )
+    }
+
+    pub(crate) fn from_ui_for_pane_width_with_zoom_and_text_lines(
+        ui: &AppWindow,
+        pane_width: f32,
+        search_panel_visible: bool,
+        zoom_level: i32,
+        text_line_count: usize,
+    ) -> Self {
+        let cell_width = compact_cell_width(zoom_level);
+        let row_height = compact_row_height(zoom_level, text_line_count);
         let padding = COMPACT_COLUMN_MARGIN_WIDTH;
         let window_size = ui.window().size().to_logical(ui.window().scale_factor());
         let pane = main_pane_bounds(
@@ -2559,6 +2578,11 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
             .map(|(body, _)| body)
             .expect("models.slint should define ItemViewEntry before ItemViewMetadataEntry");
+        let pane_view_data = models
+            .split_once("export struct PaneViewData")
+            .and_then(|(_, rest)| rest.split_once("export struct PaneSlotData"))
+            .map(|(body, _)| body)
+            .expect("models.slint should define PaneViewData before PaneSlotData");
         let metadata_entry = models
             .split_once("export struct ItemViewMetadataEntry")
             .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
@@ -2613,20 +2637,22 @@ mod tests {
                     "x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;"
                 )
                 && base_image_loop
-                    .contains("x: self.tile-column * root.column-width + item.media_x * 1px;")
+                    .contains("x: self.tile-column * root.column-width + root.media-x;")
                 && base_image_loop.contains(
-                    "y: root.preview-padding + self.tile-row * root.row-height + item.media_y * 1px;"
+                    "y: root.preview-padding + self.tile-row * root.row-height + root.media-y;"
                 )
-                && base_image_loop.contains("width: item.media_width * 1px;")
-                && base_image_loop.contains("height: item.media_height * 1px;")
-                && base_image_loop.contains("source: item.media;")
+                && base_image_loop.contains("width: root.media-width;")
+                && base_image_loop.contains("height: root.media-height;")
+                && base_image_loop.contains("source: item.thumbnail_state == 2 ? item.media")
+                && base_image_loop.contains("root.item-view-folder-media")
+                && base_image_loop.contains("root.item-view-file-media")
                 && base_text_loop
-                    .contains("x: self.tile-column * root.column-width + item.text_x * 1px;")
+                    .contains("x: self.tile-column * root.column-width + root.text-x;")
                 && base_text_loop.contains(
-                    "y: root.preview-padding + self.tile-row * root.row-height + item.title_y * 1px;"
+                    "y: root.preview-padding + self.tile-row * root.row-height + root.title-y;"
                 )
-                && base_text_loop.contains("width: item.text_width * 1px;")
-                && base_text_loop.contains("height: item.title_line_height * 1px;")
+                && base_text_loop.contains("width: root.text-width;")
+                && base_text_loop.contains("height: root.title-line-height;")
                 && base_text_loop.contains("text: item.name;")
                 && !base_image_loop.contains("metadata_line_height")
                 && !base_text_loop.contains("metadata_line_height")
@@ -2639,8 +2665,7 @@ mod tests {
                 && !base_text_loop.contains("text: item.group")
                 && !base_text_loop.contains("text: item.location")
                 && !base_text_loop.contains("item.selected")
-                && !split_pane.contains("item.thumbnail")
-                && !base_image_loop.contains("thumbnail_state")
+                && base_image_loop.contains("thumbnail_state")
                 && !base_text_loop.contains("thumbnail_state")
                 && !widgets.contains("export component FolderGlyph")
                 && !split_pane.contains("entry: item;")
@@ -2652,12 +2677,18 @@ mod tests {
                 && item_view_entry.contains("thumbnail_state: int")
                 && item_view_entry.contains("media: image")
                 && item_view_entry.contains("media_token: int")
-                && item_view_entry.contains("tile_width: float")
-                && item_view_entry.contains("tile_height: float")
-                && item_view_entry.contains("media_x: float")
-                && item_view_entry.contains("media_width: float")
-                && item_view_entry.contains("text_x: float")
-                && item_view_entry.contains("title_line_height: float")
+                && !item_view_entry.contains("tile_width: float")
+                && !item_view_entry.contains("tile_height: float")
+                && !item_view_entry.contains("media_x: float")
+                && !item_view_entry.contains("media_width: float")
+                && !item_view_entry.contains("text_x: float")
+                && !item_view_entry.contains("title_line_height: float")
+                && pane_view_data.contains("item_view_media_x: float")
+                && pane_view_data.contains("item_view_media_width: float")
+                && pane_view_data.contains("item_view_text_x: float")
+                && pane_view_data.contains("item_view_title_line_height: float")
+                && pane_view_data.contains("item_view_folder_media: image")
+                && pane_view_data.contains("item_view_file_media: image")
                 && metadata_entry.contains("slice_index: int")
                 && metadata_entry.contains("text: string")
                 && metadata_entry.contains("text_x: float")
@@ -2679,8 +2710,8 @@ mod tests {
                 )
                 && highlight_loop.contains("x: self.tile-column * root.column-width;")
                 && highlight_loop.contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && highlight_loop.contains("width: highlight.tile_width * 1px;")
-                && highlight_loop.contains("height: highlight.tile_height * 1px;")
+                && highlight_loop.contains("width: root.cell-width;")
+                && highlight_loop.contains("height: root.row-height;")
                 && drop_target_loop.contains(
                     "tile-row: root.drag-target-slice-index.mod(root.rows-per-column);"
                 )
@@ -2697,19 +2728,18 @@ mod tests {
         assert!(
             !split_pane.contains("private property <length> tile-height:")
                 && !split_pane.contains("private property <length> thumbnail-width:")
-                && !split_pane.contains("private property <length> title-font-size:")
                 && !split_pane.contains("tile-height: root.tile-height;")
                 && !split_pane.contains("zoom-level: root.zoom-level;")
                 && split_pane.contains(
                     "color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;"
                 )
-                && base_image_loop.contains("width: item.media_width * 1px;")
-                && base_image_loop.contains("height: item.media_height * 1px;")
-                && base_text_loop.contains("font-size: item.title_font_size * 1px;")
-                && base_text_loop.contains("item.text_x * 1px")
-                && base_text_loop.contains("item.title_y * 1px")
-                && base_text_loop.contains("width: item.text_width * 1px;")
-                && base_text_loop.contains("height: item.title_line_height * 1px;")
+                && base_image_loop.contains("width: root.media-width;")
+                && base_image_loop.contains("height: root.media-height;")
+                && base_text_loop.contains("font-size: root.title-font-size;")
+                && base_text_loop.contains("root.text-x")
+                && base_text_loop.contains("root.title-y")
+                && base_text_loop.contains("width: root.text-width;")
+                && base_text_loop.contains("height: root.title-line-height;")
                 && base_text_loop.contains("text: item.name;")
                 && base_text_loop.contains("horizontal-alignment: left;")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
@@ -2878,7 +2908,7 @@ mod tests {
                     "x: self.tile-column * root.column-width;"
                 )
                 && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && base_text_loop.contains("height: item.title_line_height * 1px;")
+                && base_text_loop.contains("height: root.title-line-height;")
                 && !split_pane.contains("item.tile_x")
                 && !split_pane.contains("item.tile_y")
                 && !split_pane.contains("property <int> global-index:"),

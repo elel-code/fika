@@ -17,6 +17,17 @@ export component SplitPaneView inherits Rectangle {
     in property <float> item-view-content-width: 1;
     in property <float> item-view-virtual-slice-width: 1;
     in property <float> item-view-scroll-max-x: 0;
+    in property <float> item-view-media-x: 0;
+    in property <float> item-view-media-y: 0;
+    in property <float> item-view-media-width: 1;
+    in property <float> item-view-media-height: 1;
+    in property <float> item-view-text-x: 0;
+    in property <float> item-view-text-width: 1;
+    in property <float> item-view-title-y: 0;
+    in property <float> item-view-title-line-height: 1;
+    in property <float> item-view-title-font-size: 15;
+    in property <image> item-view-folder-media;
+    in property <image> item-view-file-media;
     in property <bool> interactive: true;
     in property <bool> empty-message-visible: true;
     in property <string> empty-title: "This folder is empty";
@@ -48,6 +59,15 @@ export component SplitPaneView inherits Rectangle {
     private property <length> column-width: max(1, root.item-view-column-width) * 1px;
     private property <length> column-offset: max(0, root.item-view-column-offset) * 1px;
     private property <length> row-height: max(1, root.item-view-row-height) * 1px;
+    private property <length> media-x: max(0, root.item-view-media-x) * 1px;
+    private property <length> media-y: max(0, root.item-view-media-y) * 1px;
+    private property <length> media-width: max(1, root.item-view-media-width) * 1px;
+    private property <length> media-height: max(1, root.item-view-media-height) * 1px;
+    private property <length> text-x: max(0, root.item-view-text-x) * 1px;
+    private property <length> text-width: max(1, root.item-view-text-width) * 1px;
+    private property <length> title-y: max(0, root.item-view-title-y) * 1px;
+    private property <length> title-line-height: max(1, root.item-view-title-line-height) * 1px;
+    private property <length> title-font-size: max(1, root.item-view-title-font-size) * 1px;
     private property <color> selection-border-color: root.dark ? #51a9d4 : #2b86b7;
     private property <color> drop-border-color: root.dark ? #f59e0b : #d97706;
     private property <color> drop-background-color: root.dark ? #3a2a12 : #fff7dd;
@@ -323,8 +343,8 @@ export component SplitPaneView inherits Rectangle {
 
                     x: self.tile-column * root.column-width;
                     y: root.preview-padding + self.tile-row * root.row-height;
-                    width: highlight.tile_width * 1px;
-                    height: highlight.tile_height * 1px;
+                    width: root.cell-width;
+                    height: root.row-height;
                     border-radius: 7px;
                     border-width: 1px;
                     border-color: root.selection-border-color;
@@ -349,11 +369,11 @@ export component SplitPaneView inherits Rectangle {
                     private property <int> tile-row: index.mod(root.rows-per-column);
                     private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
 
-                    x: self.tile-column * root.column-width + item.media_x * 1px;
-                    y: root.preview-padding + self.tile-row * root.row-height + item.media_y * 1px;
-                    width: item.media_width * 1px;
-                    height: item.media_height * 1px;
-                    source: item.media;
+                    x: self.tile-column * root.column-width + root.media-x;
+                    y: root.preview-padding + self.tile-row * root.row-height + root.media-y;
+                    width: root.media-width;
+                    height: root.media-height;
+                    source: item.thumbnail_state == 2 ? item.media : (item.is_dir ? root.item-view-folder-media : root.item-view-file-media);
                     image-fit: contain;
                 }
 
@@ -361,13 +381,13 @@ export component SplitPaneView inherits Rectangle {
                     private property <int> tile-row: index.mod(root.rows-per-column);
                     private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
 
-                    x: self.tile-column * root.column-width + item.text_x * 1px;
-                    y: root.preview-padding + self.tile-row * root.row-height + item.title_y * 1px;
-                    width: item.text_width * 1px;
-                    height: item.title_line_height * 1px;
+                    x: self.tile-column * root.column-width + root.text-x;
+                    y: root.preview-padding + self.tile-row * root.row-height + root.title-y;
+                    width: root.text-width;
+                    height: root.title-line-height;
                     text: item.name;
                     color: root.title-color;
-                    font-size: item.title_font_size * 1px;
+                    font-size: root.title-font-size;
                     overflow: elide;
                     horizontal-alignment: left;
                     vertical-alignment: center;

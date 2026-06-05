@@ -7,7 +7,7 @@ use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use crate::{FileEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry};
-use slint::{Model, ModelRc, VecModel};
+use slint::{Image, Model, ModelRc, VecModel};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -238,17 +238,6 @@ impl PaneEntrySnapshot {
             thumbnail_state: 0,
             media: Default::default(),
             media_token: 0,
-            tile_width: 0.0,
-            tile_height: 0.0,
-            media_x: 0.0,
-            media_y: 0.0,
-            text_x: 0.0,
-            text_width: 0.0,
-            title_y: 0.0,
-            title_line_height: 0.0,
-            media_width: 0.0,
-            media_height: 0.0,
-            title_font_size: 0.0,
         }
     }
 }
@@ -589,6 +578,13 @@ impl PaneView {
             .clone()
     }
 
+    pub(crate) fn fallback_media_images(&self) -> (Image, Image) {
+        self.fallback_media_cache
+            .as_ref()
+            .map(|cache| (cache.folder_image(), cache.file_image()))
+            .unwrap_or_else(|| (Image::default(), Image::default()))
+    }
+
     pub(crate) fn has_renderable_virtual_entries(&self) -> bool {
         let row_count = self.virtual_entries.row_count();
         if row_count == 0 {
@@ -877,6 +873,7 @@ mod tests {
                     padding: 10.0,
                 },
                 requested_viewport_x,
+                range_hint: None,
                 thumbnail_size_px: 64,
                 schedule_thumbnails: true,
                 visible_count_override: None,
@@ -1441,8 +1438,9 @@ mod tests {
     }
 
     #[test]
-    fn pane_view_rejects_cached_rows_without_renderable_titles() {
-        let snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
+    fn pane_view_rejects_cached_rows_without_renderable_names() {
+        let mut snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
+        snapshot.name = String::new();
         let mut view = PaneView {
             virtual_view: cache_for_layout(0..1, 1, 64),
             ..PaneView::default()
@@ -1460,15 +1458,7 @@ mod tests {
         assert!(!view.has_renderable_virtual_entries());
 
         let mut rendered = snapshot.to_item_view_entry();
-        rendered.tile_width = 100.0;
-        rendered.tile_height = 50.0;
-        rendered.media_width = 46.0;
-        rendered.media_height = 46.0;
-        rendered.text_x = 52.0;
-        rendered.text_width = 46.0;
-        rendered.title_y = 14.5;
-        rendered.title_line_height = 21.0;
-        rendered.title_font_size = 15.0;
+        rendered.name = "one.txt".into();
         update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered], Vec::new(), &[]);
 
         assert!(view.has_renderable_virtual_entries());

@@ -49,8 +49,9 @@ use app::file_clipboard::{
     refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    CompactItemViewLayout, MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio,
-    inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
+    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, MAX_ICON_ZOOM_LEVEL, MIN_ICON_ZOOM_LEVEL,
+    MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
+    place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
     ItemViewInputMetrics, ItemViewReleaseAction, SelectionRect, entry_at_pane_point,
@@ -58,7 +59,7 @@ use app::item_view::{
 };
 use app::item_view_renderer::{
     ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
-    decorate_fallback_media, decorate_render_plan_with_metadata,
+    decorate_render_plan_with_metadata,
 };
 use app::model_update::{
     relayout_pane_item_view_entries_model, update_pane_item_view_entries_model,
@@ -3689,6 +3690,23 @@ fn sync_virtual_entries_for_slot_with_count(
         } else {
             let generation = pane.view.virtual_generation.next();
             let query = pane.search.query.to_ascii_lowercase();
+            let range_hint = if pane.show_item_locations() {
+                None
+            } else {
+                zoom_range_visible_count(pane, visible_count_override, &chooser_patterns).and_then(
+                    |visible_count| {
+                        icon_zoom_range_hint(
+                            ui,
+                            viewport_width,
+                            search_panel_visible,
+                            text_line_count,
+                            zoom_level,
+                            requested_viewport_x,
+                            visible_count,
+                        )
+                    },
+                )
+            };
             let request = VirtualViewPrepareRequest {
                 pane_id: pane.id,
                 generation,
@@ -3699,6 +3717,7 @@ fn sync_virtual_entries_for_slot_with_count(
                 input: Box::new(VirtualViewSnapshotInput {
                     layout,
                     requested_viewport_x,
+                    range_hint,
                     thumbnail_size_px: size_px,
                     schedule_thumbnails,
                     visible_count_override,
@@ -3845,7 +3864,7 @@ fn cached_virtual_viewport_sync(
     };
 
     let compact_item_view = layout.compact_item_view(visible_count);
-    let plan = compact_item_view.virtual_plan(requested_viewport_x, 2);
+    let plan = compact_item_view.virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
     if !pane
         .view
         .virtual_view
@@ -3860,6 +3879,116 @@ fn cached_virtual_viewport_sync(
         plan.viewport_x,
         (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON,
     ))
+}
+
+fn zoom_range_visible_count(
+    pane: &PaneState,
+    visible_count_override: Option<usize>,
+    chooser_patterns: &[String],
+) -> Option<usize> {
+    if let Some(visible_count) = visible_count_override {
+        return Some(visible_count);
+    }
+
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
+        return Some(indices.len());
+    }
+
+    (pane.search.query.is_empty()
+        && pane.search.kind_filter == 0
+        && pane.search.modified_filter == 0
+        && pane.search.size_filter == 0
+        && chooser_patterns.is_empty())
+    .then_some(pane.entries.len())
+}
+
+fn icon_zoom_range_hint(
+    ui: &AppWindow,
+    viewport_width: f32,
+    search_panel_visible: bool,
+    text_line_count: usize,
+    current_zoom_level: i32,
+    requested_viewport_x: f32,
+    visible_count: usize,
+) -> Option<Range<usize>> {
+    if visible_count == 0 {
+        return None;
+    }
+
+    let mut range_hint = None;
+    for zoom_level in MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL {
+        let layout = MainItemViewLayout::from_ui_for_pane_width_with_zoom_and_text_lines(
+            ui,
+            viewport_width,
+            search_panel_visible,
+            zoom_level,
+            text_line_count,
+        );
+        let plan = layout.compact_item_view(visible_count).virtual_plan(
+            requested_viewport_x,
+            if zoom_level == current_zoom_level {
+                ITEM_VIEW_OVERSCAN_COLUMNS
+            } else {
+                0
+            },
+        );
+        let candidate = if zoom_level == current_zoom_level {
+            plan.range
+        } else {
+            plan.visible_range
+        };
+        if candidate.is_empty() {
+            continue;
+        }
+        range_hint = Some(merge_ranges(range_hint, candidate));
+    }
+    range_hint
+}
+
+fn merge_ranges(current: Option<Range<usize>>, next: Range<usize>) -> Range<usize> {
+    current
+        .map(|current| current.start.min(next.start)..current.end.max(next.end))
+        .unwrap_or(next)
+}
+
+fn cached_zoom_relayout_range(
+    cached_range: &Range<usize>,
+    preferred_range: &Range<usize>,
+    visible_range: &Range<usize>,
+    rows_per_column: usize,
+    entry_count: usize,
+) -> Option<Range<usize>> {
+    if visible_range.is_empty()
+        || !virtual_cache_covers_visible_range(cached_range, visible_range)
+        || cached_range.start >= cached_range.end
+    {
+        return None;
+    }
+
+    let rows_per_column = rows_per_column.max(1);
+    let desired_start = preferred_range
+        .start
+        .min(visible_range.start)
+        .min(entry_count);
+    let desired_end = preferred_range.end.max(visible_range.end).min(entry_count);
+    let aligned_desired_start = (desired_start / rows_per_column) * rows_per_column;
+    let earliest_cached_start = cached_range
+        .start
+        .min(entry_count)
+        .div_ceil(rows_per_column)
+        * rows_per_column;
+    let start = aligned_desired_start.max(earliest_cached_start);
+    if start > visible_range.start || start < cached_range.start {
+        return None;
+    }
+
+    let aligned_desired_end = desired_end.div_ceil(rows_per_column) * rows_per_column;
+    let end = aligned_desired_end.min(cached_range.end).min(entry_count);
+    if end < visible_range.end || end <= start {
+        return None;
+    }
+
+    Some(start..end)
 }
 
 fn virtual_cache_covers_visible_range(
@@ -3957,7 +4086,7 @@ fn apply_virtual_view_result(
         },
         &metadata_sources,
     );
-    let (selected_paths, media_cache) = {
+    let selected_paths = {
         let mut state_ref = state.borrow_mut();
         let selected_paths = state_ref
             .panes
@@ -3973,13 +4102,10 @@ fn apply_virtual_view_result(
         let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
             return;
         };
-        (
-            selected_paths,
-            pane.view
-                .fallback_media_cache(result.render_metrics, ui.get_dark_mode()),
-        )
+        pane.view
+            .fallback_media_cache(result.render_metrics, ui.get_dark_mode());
+        selected_paths
     };
-    decorate_fallback_media(&mut entries, media_cache.as_ref());
 
     if result.schedule_thumbnails {
         let thumbnail_entries =
@@ -4720,28 +4846,42 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         let requested_viewport_x = pane.view.viewport_x;
         layout.viewport_x = requested_viewport_x;
         let compact_item_view = layout.compact_item_view(entry_count);
-        let plan = compact_item_view.virtual_plan(requested_viewport_x, 2);
+        let plan = compact_item_view.virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
+        let preferred_range = icon_zoom_range_hint(
+            ui,
+            viewport_width,
+            search_panel_visible,
+            text_line_count,
+            zoom_level,
+            requested_viewport_x,
+            entry_count,
+        )
+        .unwrap_or_else(|| plan.range.clone());
         let current_range = pane.view.virtual_view.range.clone();
-        if !virtual_cache_covers_visible_range(&current_range, &plan.range) {
+        let Some(relayout_range) = cached_zoom_relayout_range(
+            &current_range,
+            &preferred_range,
+            &plan.visible_range,
+            compact_item_view.rows_per_column,
+            entry_count,
+        ) else {
             return false;
-        }
+        };
+        let start_column = relayout_range.start / compact_item_view.rows_per_column.max(1);
 
-        let media_cache = pane.view.fallback_media_cache(render_metrics, dark);
         if !relayout_pane_item_view_entries_model(
             &mut pane.view,
-            plan.range.clone(),
-            plan.start_column,
-            plan.cell_width,
-            render_metrics,
-            media_cache.as_ref(),
+            relayout_range.clone(),
+            start_column,
         ) {
             return false;
         }
+        pane.view.fallback_media_cache(render_metrics, dark);
 
         pane.view.cancel_virtual_prepare_queue();
         pane.view.virtual_generation.next();
         pane.view.viewport_x = plan.viewport_x;
-        pane.view.virtual_view.range = plan.range;
+        pane.view.virtual_view.range = relayout_range;
         pane.view
             .virtual_view
             .update_layout_signature(compact_item_view, size_px);
@@ -5476,6 +5616,30 @@ mod tests {
         selection_range_paths, selection_range_paths_filtered, selection_rect_paths,
         selection_rect_paths_filtered,
     };
+
+    #[test]
+    fn cached_zoom_relayout_range_only_requires_visible_range() {
+        assert_eq!(
+            cached_zoom_relayout_range(&(0..20), &(0..28), &(8..20), 4, 100),
+            Some(0..20)
+        );
+        assert_eq!(
+            cached_zoom_relayout_range(&(4..24), &(0..32), &(12..24), 4, 100),
+            Some(4..24)
+        );
+    }
+
+    #[test]
+    fn cached_zoom_relayout_range_aligns_start_to_new_rows() {
+        assert_eq!(
+            cached_zoom_relayout_range(&(5..30), &(0..40), &(12..24), 4, 100),
+            Some(8..30)
+        );
+        assert_eq!(
+            cached_zoom_relayout_range(&(5..30), &(0..40), &(6..24), 4, 100),
+            None
+        );
+    }
 
     #[test]
     fn drops_selection_paths_that_are_no_longer_visible() {
@@ -6683,10 +6847,12 @@ mod tests {
                     "sync_pane_layout_for_slot_with_thumbnail_scheduling(ui, state, bridge, slot, false);"
                 )
                 && fast_path_body.contains("relayout_pane_item_view_entries_model(")
-                && fast_path_body.contains("virtual_cache_covers_visible_range(&current_range, &plan.range)")
+                && fast_path_body.contains("let preferred_range = icon_zoom_range_hint(")
+                && fast_path_body.contains("cached_zoom_relayout_range(")
+                && fast_path_body.contains("&plan.visible_range")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
                 && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);"),
-            "icon zoom should reuse the current virtual slice when it covers the new Dolphin-style range, and only fall back to snapshot rebuild when needed"
+            "icon zoom should reuse the current virtual slice when it covers the new Dolphin-style visible range, and only fall back to snapshot rebuild when needed"
         );
     }
 

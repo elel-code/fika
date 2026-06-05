@@ -35,7 +35,7 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 - `ui/models.slint` 定义 Slint-facing 的 `ItemViewEntry` / `PlaceEntry` / `DesktopApp` 等 UI row；Rust-native `FileEntry` 是业务条目，保留在 Rust 侧。
 - `ui/widgets.slint` 包含通用按钮、菜单项、popup surface 和 Places 行。
 - `ui/top_bar.slint` 导出两个 chrome 组件：`TopBar` 负责窗口顶栏里的 COSMIC-style 搜索入口、Split 状态入口和主题切换；`PathBar` 负责主栏内容顶部的 Back/Forward 导航组和路径输入。`AppWindow` 只保留动作 callback、输入状态和持久化转发。
-- `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile primitive 渲染；选择、命中、右键、激活、DnD payload 语义以及可见 tile 的 size/media/text rect 由 Rust item-view controller/render plan 决定，tile local x/y 由可复用 loop index 计算，避免写入每个 `ItemViewEntry` row。
+- `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile primitive 渲染；选择、命中、右键、激活、DnD payload 语义由 Rust item-view controller 决定，可见 tile 的 size/media/text rect 和 folder/file fallback image 由 pane-level render plan/cache 下发，tile local x/y 由可复用 loop index 计算，避免写入每个 `ItemViewEntry` row。
 - `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
 
 Shell surface layering now follows the COSMIC direction outside the main file arrangement: `AppWindow` owns one shared base surface with a separate window-wide shell/header row. That shell/header row hosts global search, split, and theme controls through `TopBar`, and it intentionally does not draw a horizontal divider above the main content. Below it, the left sidebar panel and right main pane share one equal-height content row. The main pane starts with `PathBar` for Back/Forward and address editing, followed by the search filter strip, horizontal column-first file view, and status bar; these rows render transparent backgrounds and keep only necessary internal separators. Sidebar rows are inset inside the rounded panel, and the sidebar border is intentionally a little stronger than the flat shell separators.
@@ -63,7 +63,7 @@ The non-main-pane chrome is intentionally allowed to track COSMIC Files more clo
 - 过滤、搜索、缩放或窗口尺寸变化导致内容变窄时，Rust 会按同一套列宽规则夹紧横向滚动位置，避免旧 viewport 落在新内容之外造成空白主栏。
 - tile 的真实全局索引由 Rust item-view layout/hit-test 根据 viewport、rows-per-column 和可见索引缓存解析，因此选择范围、拖拽命中和右键语义仍然基于完整模型，而不是 Slint row index。
 - 横向滚动、缩放和窗口尺寸变化会重新切片 `virtual_entries`，避免大目录一次性实例化所有可见 tile primitive。
-- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为 `ItemViewEntry`。`ItemViewEntry` 在进入 Slint 前已经带有 Rust item-view render plan：tile size、media rect、text rect、group/title/location y 坐标、line height、字体和图标尺寸都已预计算；普通 item 使用 Dolphin 横向列模式的 compact 布局，图标在左、文件名在右侧居中显示；带 group/location 的递归搜索结果沿用同一横向 media + text 布局并展开多行信息。缩略图或 fallback 文件/目录图标也由 Rust item-view media renderer 投影为单个 `media` image。`SplitPaneView` 的可见 item loop 只按这些字段和 loop index 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成 fallback glyph。
+- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为瘦身后的 `ItemViewEntry`。`ItemViewEntry` 只携带 name/path/is_dir、thumbnail 状态、成功 thumbnail image 和 media token；普通 item 使用 Dolphin 横向列模式的 compact 布局，图标在左、文件名在右侧居中显示。tile size、media rect、text rect、标题 y/line height、字体和通用 folder/file fallback image 由 pane-level `PaneViewData` / `PaneView` cache 下发；带 group/location 的递归搜索结果再通过稀疏 `ItemViewMetadataEntry` 模型展开多行信息。`SplitPaneView` 的可见 item loop 只按 pane-level 几何、稀疏 metadata 和 loop index 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成 fallback glyph。
 - 框选仍按完整可见顺序返回路径，但候选项会先裁剪到选择矩形横向覆盖的列范围；搜索/过滤状态下通过可见索引缓存解析真实条目。
 - 缩略图调度按“当前可见列优先，overscan 后置”排序，减少大目录图片预览队列对当前屏幕反馈的拖慢。
 - 离屏缩略图完成时只更新 Rust 缓存，不重置 Slint 模型；缩略图所属路径落在当前虚拟切片内时才刷新 `virtual_entries`。
@@ -318,13 +318,13 @@ Places 分为内置项和用户项：
 
 切换 `Search subfolders` 时，如果已有查询，会立即按新模式重新提交搜索。
 
-Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为 `ItemViewEntry`，额外携带 selection、thumbnail 状态、Rust render-plan 字段和 Rust 侧选好的 `media` image，因此主视图只消费预计算后的绘制坐标和图像；普通文件名和递归搜索元数据都使用同一套 Rust 侧横向 text rect。
+Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为瘦身后的 `ItemViewEntry`，只携带业务身份、目录标记、thumbnail 状态、成功 thumbnail image 和 media token；selection 存在 pane-local sidecar/highlight model，render-plan 几何和通用 fallback image 存在 pane-level view data/cache，因此主视图只消费预计算后的 pane-level 绘制坐标和图像；普通文件名和递归搜索元数据都使用同一套 Rust 侧横向 text rect。
 
 ### Thumbnails
 
 缩略图流水线当前覆盖 PNG/JPEG/WebP：
 
-- `ItemViewEntry` 包含 `thumbnail_state` 和最终 `media` image；缩略图成功时使用缩略图，否则使用 Rust item-view media renderer 生成的通用文件/目录图标。
+- `ItemViewEntry` 包含 `thumbnail_state` 和成功 thumbnail 的 `media` image；缩略图未成功时，`SplitPaneView` 使用 pane-level Rust item-view media renderer cache 生成的通用文件/目录图标。
 - 当前可见顺序的前若干项会先被调度，符合列优先图标视图的首屏优先策略。
 - 后台任务用 `image` crate 解码并缩放到当前 zoom 对应尺寸，回传 RGBA 像素给 UI 线程构造 Slint `Image`。
 - 缓存 key 为路径、mtime 和目标尺寸；重复访问或刷新同一目录时可复用。

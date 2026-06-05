@@ -5,23 +5,10 @@ export struct ItemViewEntry {
     thumbnail_state: int,
     media: image,
     media_token: int,
-    tile_width: float,
-    tile_height: float,
-    media_x: float,
-    media_y: float,
-    text_x: float,
-    text_width: float,
-    title_y: float,
-    title_line_height: float,
-    media_width: float,
-    media_height: float,
-    title_font_size: float,
 }
 
 export struct ItemViewHighlightEntry {
     slice_index: int,
-    tile_width: float,
-    tile_height: float,
 }
 
 export struct ItemViewMetadataEntry {
@@ -106,6 +93,17 @@ export struct PaneViewData {
     item_view_content_width: float,
     item_view_virtual_slice_width: float,
     item_view_scroll_max_x: float,
+    item_view_media_x: float,
+    item_view_media_y: float,
+    item_view_media_width: float,
+    item_view_media_height: float,
+    item_view_text_x: float,
+    item_view_text_width: float,
+    item_view_title_y: float,
+    item_view_title_line_height: float,
+    item_view_title_font_size: float,
+    item_view_folder_media: image,
+    item_view_file_media: image,
     show_location: bool,
     content_interactive: bool,
     drop_ready: bool,

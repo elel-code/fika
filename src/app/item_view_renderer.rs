@@ -23,6 +23,19 @@ pub(crate) struct ItemViewRenderPlanInput {
     pub(crate) show_location: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewRenderGeometry {
+    pub(crate) media_x: f32,
+    pub(crate) media_y: f32,
+    pub(crate) media_width: f32,
+    pub(crate) media_height: f32,
+    pub(crate) text_x: f32,
+    pub(crate) text_width: f32,
+    pub(crate) title_y: f32,
+    pub(crate) title_line_height: f32,
+    pub(crate) title_font_size: f32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ItemViewMetadataSource {
     pub(crate) group: SharedString,
@@ -62,6 +75,33 @@ impl ItemViewRenderMetrics {
 
     pub(crate) fn renderer_key(self, dark: bool) -> ItemViewRendererKey {
         ItemViewRendererKey::new(self, dark)
+    }
+}
+
+impl ItemViewRenderGeometry {
+    pub(crate) fn from_plan_input(input: ItemViewRenderPlanInput) -> Self {
+        let render_metrics = input.render_metrics;
+        let cell_width = input
+            .cell_width
+            .max(compact_min_cell_width(render_metrics))
+            .max(1.0);
+        let text_x = render_metrics.media_padding_x
+            + render_metrics.media_width
+            + render_metrics.media_text_gap;
+        let text_plan =
+            ItemTextRenderPlan::new(render_metrics, input.show_location, input.show_location);
+
+        Self {
+            media_x: render_metrics.media_padding_x,
+            media_y: ((render_metrics.tile_height - render_metrics.media_height) / 2.0).max(0.0),
+            media_width: render_metrics.media_width,
+            media_height: render_metrics.media_height,
+            text_x,
+            text_width: (cell_width - text_x - render_metrics.media_padding_x).max(1.0),
+            title_y: text_plan.title_y,
+            title_line_height: text_plan.title_line_height,
+            title_font_size: render_metrics.title_font_size,
+        }
     }
 }
 
@@ -105,8 +145,6 @@ pub(crate) struct ItemViewMediaCache {
     key: ItemViewRendererKey,
     folder: Image,
     file: Image,
-    folder_token: i32,
-    file_token: i32,
 }
 
 impl ItemViewMediaCache {
@@ -116,8 +154,6 @@ impl ItemViewMediaCache {
             key,
             folder: fallback_media_image(true, key.dark, key.media_width, key.media_height),
             file: fallback_media_image(false, key.dark, key.media_width, key.media_height),
-            folder_token: fallback_media_token(true, key.dark, key.media_width, key.media_height),
-            file_token: fallback_media_token(false, key.dark, key.media_width, key.media_height),
         }
     }
 
@@ -125,20 +161,12 @@ impl ItemViewMediaCache {
         self.key == metrics.renderer_key(dark)
     }
 
-    fn image_for(&self, is_dir: bool) -> Image {
-        if is_dir {
-            self.folder.clone()
-        } else {
-            self.file.clone()
-        }
+    pub(crate) fn folder_image(&self) -> Image {
+        self.folder.clone()
     }
 
-    fn token_for(&self, is_dir: bool) -> i32 {
-        if is_dir {
-            self.folder_token
-        } else {
-            self.file_token
-        }
+    pub(crate) fn file_image(&self) -> Image {
+        self.file.clone()
     }
 }
 
@@ -146,8 +174,6 @@ impl std::fmt::Debug for ItemViewMediaCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ItemViewMediaCache")
             .field("key", &self.key)
-            .field("folder_token", &self.folder_token)
-            .field("file_token", &self.file_token)
             .finish()
     }
 }
@@ -163,11 +189,9 @@ pub(crate) fn decorate_render_plan_with_metadata(
     metadata_sources: &[ItemViewMetadataSource],
 ) -> Vec<ItemViewMetadataEntry> {
     let render_metrics = input.render_metrics;
-    let cell_width = input
-        .cell_width
-        .max(compact_min_cell_width(render_metrics))
-        .max(1.0);
-    let tile_width = cell_width;
+    let geometry = ItemViewRenderGeometry::from_plan_input(input);
+    let text_plan =
+        ItemTextRenderPlan::new(render_metrics, input.show_location, input.show_location);
     let mut metadata_entries = Vec::new();
 
     for (row, entry) in entries.iter_mut().enumerate() {
@@ -177,29 +201,14 @@ pub(crate) fn decorate_render_plan_with_metadata(
             input.show_location && metadata.is_some_and(|metadata| !metadata.group.is_empty());
         let has_location =
             input.show_location && metadata.is_some_and(|metadata| !metadata.location.is_empty());
-        entry.tile_width = tile_width;
-        entry.tile_height = render_metrics.tile_height;
-        entry.media_width = render_metrics.media_width;
-        entry.media_height = render_metrics.media_height;
-        entry.title_font_size = render_metrics.title_font_size;
-        entry.media_x = render_metrics.media_padding_x;
-        entry.media_y = ((render_metrics.tile_height - render_metrics.media_height) / 2.0).max(0.0);
-        entry.text_x = render_metrics.media_padding_x
-            + render_metrics.media_width
-            + render_metrics.media_text_gap;
-        entry.text_width = (tile_width - entry.text_x - render_metrics.media_padding_x).max(1.0);
-
-        let text_plan = ItemTextRenderPlan::new(render_metrics, has_group, has_location);
-        entry.title_y = text_plan.title_y;
-        entry.title_line_height = text_plan.title_line_height;
 
         if let Some(metadata) = metadata.filter(|_| input.show_location) {
             if has_group {
                 metadata_entries.push(ItemViewMetadataEntry {
                     slice_index: row as i32,
                     text: metadata.group.clone(),
-                    text_x: entry.text_x,
-                    text_width: entry.text_width,
+                    text_x: geometry.text_x,
+                    text_width: geometry.text_width,
                     y: text_plan.group_y,
                     line_height: text_plan.metadata_line_height,
                     font_size: render_metrics.metadata_font_size,
@@ -210,8 +219,8 @@ pub(crate) fn decorate_render_plan_with_metadata(
                 metadata_entries.push(ItemViewMetadataEntry {
                     slice_index: row as i32,
                     text: metadata.location.clone(),
-                    text_x: entry.text_x,
-                    text_width: entry.text_width,
+                    text_x: geometry.text_x,
+                    text_width: geometry.text_width,
                     y: text_plan.location_y,
                     line_height: text_plan.metadata_line_height,
                     font_size: render_metrics.metadata_font_size,
@@ -240,15 +249,6 @@ fn ensure_renderable_entry_name(entry: &mut ItemViewEntry) {
         .map(str::to_owned)
         .unwrap_or_else(|| entry.path.to_string());
     entry.name = fallback.into();
-}
-
-pub(crate) fn decorate_fallback_media(entries: &mut [ItemViewEntry], cache: &ItemViewMediaCache) {
-    for entry in entries.iter_mut() {
-        if entry.is_dir || entry.thumbnail_state != 2 {
-            entry.media = cache.image_for(entry.is_dir);
-            entry.media_token = cache.token_for(entry.is_dir);
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -344,14 +344,6 @@ fn fallback_media_image(is_dir: bool, dark: bool, width: u32, height: u32) -> Im
     Image::from_rgba8(buffer)
 }
 
-fn fallback_media_token(is_dir: bool, dark: bool, width: u32, height: u32) -> i32 {
-    let kind = if is_dir { 1 } else { 2 };
-    let theme = if dark { 1 } else { 0 };
-    let width = width.min(0xfff);
-    let height = height.min(0xfff);
-    0x1000_0000 | (kind << 25) | (theme << 24) | ((width as i32) << 12) | height as i32
-}
-
 fn draw_folder_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
     let tab = if dark {
         GlyphColor::rgba(59, 102, 139, 255)
@@ -440,87 +432,38 @@ mod tests {
             thumbnail_state: 0,
             media: Image::default(),
             media_token: 0,
-            tile_width: 0.0,
-            tile_height: 0.0,
-            media_x: 0.0,
-            media_y: 0.0,
-            text_x: 0.0,
-            text_width: 0.0,
-            title_y: 0.0,
-            title_line_height: 0.0,
-            media_width: 0.0,
-            media_height: 0.0,
-            title_font_size: 0.0,
         }
     }
 
-    fn has_renderable_title(entry: &ItemViewEntry) -> bool {
-        !entry.name.as_str().trim().is_empty()
-            && entry.tile_width > 1.0
-            && entry.tile_height > 1.0
-            && entry.media_width > 1.0
-            && entry.media_height > 1.0
-            && entry.text_x >= 0.0
-            && entry.text_width > 1.0
-            && entry.title_y >= 0.0
-            && entry.title_line_height > 1.0
-            && entry.title_font_size > 1.0
-    }
-
     #[test]
-    fn render_plan_keeps_compact_item_view_entry_geometry_tokens_stable() {
+    fn render_geometry_keeps_compact_pane_tokens_stable() {
         let mut entries = (4..9).map(test_entry).collect::<Vec<_>>();
+        let input = ItemViewRenderPlanInput {
+            cell_width: 129.0,
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
+            show_location: false,
+        };
 
-        decorate_render_plan(
-            &mut entries,
-            ItemViewRenderPlanInput {
-                cell_width: 129.0,
-                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
-                show_location: false,
-            },
-        );
+        decorate_render_plan(&mut entries, input);
 
-        let geometry = entries
-            .iter()
-            .map(|entry| entry.tile_width)
-            .collect::<Vec<_>>();
-        assert_eq!(geometry, vec![129.0, 129.0, 129.0, 129.0, 129.0]);
-        let render_tokens = entries
-            .iter()
-            .map(|entry| {
-                (
-                    entry.tile_height,
-                    entry.media_x,
-                    entry.media_y,
-                    entry.text_x,
-                    entry.text_width,
-                    entry.title_y,
-                    entry.title_line_height,
-                    entry.media_width,
-                    entry.media_height,
-                    entry.title_font_size,
-                )
-            })
-            .collect::<Vec<_>>();
+        let geometry = ItemViewRenderGeometry::from_plan_input(input);
         assert_eq!(
-            render_tokens,
-            vec![
-                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
-                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
-                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
-                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
-                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
-            ]
+            geometry,
+            ItemViewRenderGeometry {
+                media_x: 2.0,
+                media_y: 2.0,
+                media_width: 46.0,
+                media_height: 46.0,
+                text_x: 52.0,
+                text_width: 75.0,
+                title_y: 0.0,
+                title_line_height: 50.0,
+                title_font_size: 15.0,
+            }
         );
         assert!(
-            entries.iter().all(|entry| entry.text_width >= 75.0),
-            "compact horizontal titles must keep enough width to remain visible"
-        );
-        assert!(
-            entries.iter().all(|entry| !entry.name.is_empty()
-                && entry.title_y >= 0.0
-                && entry.title_y + entry.title_line_height <= entry.tile_height),
-            "visible icon rows must carry a title and title geometry"
+            entries.iter().all(|entry| !entry.name.is_empty()),
+            "visible icon rows must keep a title while geometry lives at pane level"
         );
     }
 
@@ -549,23 +492,21 @@ mod tests {
             "/home/user/Documents",
         )];
 
-        let metadata_entries = decorate_render_plan_with_metadata(
-            &mut entries,
-            ItemViewRenderPlanInput {
-                cell_width: 129.0,
-                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
-                show_location: true,
-            },
-            &metadata,
-        );
+        let input = ItemViewRenderPlanInput {
+            cell_width: 129.0,
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
+            show_location: true,
+        };
 
-        let entry = &entries[0];
-        assert_eq!(entry.media_x, 2.0);
-        assert_eq!(entry.media_y, 5.5);
-        assert_eq!(entry.text_x, 52.0);
-        assert_eq!(entry.text_width, 75.0);
-        assert_eq!(entry.title_line_height, 21.0);
-        assert_eq!(entry.title_y, 18.0);
+        let metadata_entries = decorate_render_plan_with_metadata(&mut entries, input, &metadata);
+
+        let geometry = ItemViewRenderGeometry::from_plan_input(input);
+        assert_eq!(geometry.media_x, 2.0);
+        assert_eq!(geometry.media_y, 5.5);
+        assert_eq!(geometry.text_x, 52.0);
+        assert_eq!(geometry.text_width, 75.0);
+        assert_eq!(geometry.title_line_height, 21.0);
+        assert_eq!(geometry.title_y, 18.0);
         assert_eq!(
             metadata_entries,
             vec![
@@ -594,24 +535,23 @@ mod tests {
     }
 
     #[test]
-    fn render_plan_keeps_plain_titles_visible_when_location_mode_has_no_metadata() {
+    fn render_geometry_reserves_location_title_frame_at_pane_level() {
         let mut entries = vec![test_entry(0)];
+        let input = ItemViewRenderPlanInput {
+            cell_width: 129.0,
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
+            show_location: true,
+        };
 
-        decorate_render_plan(
-            &mut entries,
-            ItemViewRenderPlanInput {
-                cell_width: 129.0,
-                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
-                show_location: true,
-            },
-        );
+        decorate_render_plan(&mut entries, input);
 
-        let entry = &entries[0];
-        assert_eq!(entry.media_x, 2.0);
-        assert_eq!(entry.text_x, 52.0);
-        assert_eq!(entry.text_width, 75.0);
-        assert_eq!(entry.title_y, 0.0);
-        assert_eq!(entry.title_line_height, 57.0);
+        let geometry = ItemViewRenderGeometry::from_plan_input(input);
+        assert_eq!(geometry.media_x, 2.0);
+        assert_eq!(geometry.text_x, 52.0);
+        assert_eq!(geometry.text_width, 75.0);
+        assert_eq!(geometry.title_y, 18.0);
+        assert_eq!(geometry.title_line_height, 21.0);
+        assert!(entries.iter().all(|entry| !entry.name.is_empty()));
     }
 
     #[test]
@@ -633,10 +573,13 @@ mod tests {
 
         let entry = &entries[0];
         assert_eq!(entry.name, "visible-name.txt");
-        assert_eq!(entry.tile_width, 129.0);
-        assert_eq!(entry.text_x, 52.0);
-        assert_eq!(entry.text_width, 75.0);
-        assert!(has_renderable_title(entry));
+        let geometry = ItemViewRenderGeometry::from_plan_input(ItemViewRenderPlanInput {
+            cell_width: 0.0,
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
+            show_location: false,
+        });
+        assert_eq!(geometry.text_x, 52.0);
+        assert_eq!(geometry.text_width, 75.0);
     }
 
     #[test]
@@ -652,21 +595,22 @@ mod tests {
             },
         );
 
-        let entry = &entries[0];
-        assert_eq!(entry.tile_width, 155.0);
-        assert_eq!(entry.tile_height, 76.0);
-        assert_eq!(entry.media_width, 72.0);
-        assert_eq!(entry.media_height, 72.0);
-        assert_eq!(entry.text_x, 78.0);
-        assert_eq!(entry.text_width, 75.0);
-        assert_eq!(entry.title_y, 0.0);
-        assert_eq!(entry.title_line_height, 76.0);
-        assert!(entry.title_y + entry.title_line_height <= entry.tile_height);
-        assert!(has_renderable_title(entry));
+        let geometry = ItemViewRenderGeometry::from_plan_input(ItemViewRenderPlanInput {
+            cell_width: 0.0,
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1),
+            show_location: false,
+        });
+        assert_eq!(geometry.media_width, 72.0);
+        assert_eq!(geometry.media_height, 72.0);
+        assert_eq!(geometry.text_x, 78.0);
+        assert_eq!(geometry.text_width, 75.0);
+        assert_eq!(geometry.title_y, 0.0);
+        assert_eq!(geometry.title_line_height, 76.0);
+        assert!(entries.iter().all(|entry| !entry.name.is_empty()));
     }
 
     #[test]
-    fn fallback_media_renderer_supplies_icons_without_replacing_loaded_thumbnails() {
+    fn fallback_media_renderer_supplies_pane_level_icons() {
         let metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(1, 1);
         let cache = ItemViewMediaCache::new(metrics, false);
         let mut thumbnail_buffer = SharedPixelBuffer::<Rgba8Pixel>::new(2, 2);
@@ -674,28 +618,30 @@ mod tests {
             .make_mut_slice()
             .fill(Rgba8Pixel::new(255, 0, 0, 255));
         let thumbnail = Image::from_rgba8(thumbnail_buffer);
-        let mut entries = vec![
-            ItemViewEntry {
-                is_dir: true,
-                ..test_entry(0)
-            },
-            ItemViewEntry {
-                thumbnail_state: 2,
-                media: thumbnail,
-                ..test_entry(1)
-            },
-        ];
+        let thumbnail_entry = ItemViewEntry {
+            thumbnail_state: 2,
+            media: thumbnail,
+            ..test_entry(1)
+        };
 
-        decorate_fallback_media(&mut entries, &cache);
-
-        let folder_media = entries[0].media.to_rgba8().expect("folder fallback media");
+        let folder_media = cache
+            .folder_image()
+            .to_rgba8()
+            .expect("folder fallback media");
         assert!(
             folder_media
                 .as_slice()
                 .iter()
                 .any(|pixel| pixel.a != 0 && (pixel.r != 0 || pixel.g != 0 || pixel.b != 0))
         );
-        let thumbnail_media = entries[1].media.to_rgba8().expect("thumbnail media");
+        let file_media = cache.file_image().to_rgba8().expect("file fallback media");
+        assert!(
+            file_media
+                .as_slice()
+                .iter()
+                .any(|pixel| pixel.a != 0 && (pixel.r != 0 || pixel.g != 0 || pixel.b != 0))
+        );
+        let thumbnail_media = thumbnail_entry.media.to_rgba8().expect("thumbnail media");
         assert!(
             thumbnail_media
                 .as_slice()

@@ -411,7 +411,7 @@ mod tests {
         let renderer = include_str!("item_view_renderer.rs");
         let render_metrics = concat!("struct ", "ItemViewRenderMetrics");
         let render_plan = concat!("decorate_", "render_plan_with_metadata");
-        let fallback_media = concat!("decorate_", "fallback_media");
+        let fallback_media = concat!("struct ", "ItemViewMediaCache");
         let row_token = concat!("struct ", "ItemViewRowToken");
 
         assert!(

@@ -1,7 +1,3 @@
-use crate::app::item_view_renderer::{
-    ItemViewMediaCache, ItemViewRenderMetrics, ItemViewRenderPlanInput, decorate_fallback_media,
-    decorate_render_plan_with_metadata,
-};
 use crate::app::pane::PaneView;
 use crate::{ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry};
 use slint::{Model, ModelRc, SharedString, VecModel};
@@ -16,17 +12,6 @@ pub(crate) struct ItemViewRowToken {
     selected: bool,
     thumbnail_state: i32,
     media_token: i32,
-    tile_width: f32,
-    tile_height: f32,
-    media_x: f32,
-    media_y: f32,
-    text_x: f32,
-    text_width: f32,
-    title_y: f32,
-    title_line_height: f32,
-    media_width: f32,
-    media_height: f32,
-    title_font_size: f32,
 }
 
 impl ItemViewRowToken {
@@ -38,17 +23,6 @@ impl ItemViewRowToken {
             selected: false,
             thumbnail_state: entry.thumbnail_state,
             media_token: entry.media_token,
-            tile_width: entry.tile_width,
-            tile_height: entry.tile_height,
-            media_x: entry.media_x,
-            media_y: entry.media_y,
-            text_x: entry.text_x,
-            text_width: entry.text_width,
-            title_y: entry.title_y,
-            title_line_height: entry.title_line_height,
-            media_width: entry.media_width,
-            media_height: entry.media_height,
-            title_font_size: entry.title_font_size,
         }
     }
 
@@ -58,14 +32,6 @@ impl ItemViewRowToken {
 
     pub(crate) fn selected(&self) -> bool {
         self.selected
-    }
-
-    pub(crate) fn tile_width(&self) -> f32 {
-        self.tile_width
-    }
-
-    pub(crate) fn tile_height(&self) -> f32 {
-        self.tile_height
     }
 
     pub(crate) fn set_selected(&mut self, selected: bool) {
@@ -82,15 +48,6 @@ impl ItemViewRowToken {
 
     pub(crate) fn has_renderable_title(&self) -> bool {
         !self.name.as_str().trim().is_empty()
-            && self.tile_width > 1.0
-            && self.tile_height > 1.0
-            && self.media_width > 1.0
-            && self.media_height > 1.0
-            && self.text_x >= 0.0
-            && self.text_width > 1.0
-            && self.title_y >= 0.0
-            && self.title_line_height > 1.0
-            && self.title_font_size > 1.0
     }
 }
 
@@ -115,8 +72,6 @@ fn item_view_highlight_entries(tokens: &[ItemViewRowToken]) -> Vec<ItemViewHighl
         .filter_map(|(row, token)| {
             token.selected().then_some(ItemViewHighlightEntry {
                 slice_index: row as i32,
-                tile_width: token.tile_width(),
-                tile_height: token.tile_height(),
             })
         })
         .collect()
@@ -234,9 +189,6 @@ pub(crate) fn relayout_pane_item_view_entries_model(
     view: &mut PaneView,
     range: Range<usize>,
     start_column: usize,
-    cell_width: f32,
-    render_metrics: ItemViewRenderMetrics,
-    media_cache: &ItemViewMediaCache,
 ) -> bool {
     let Some(model) = view
         .virtual_entries
@@ -272,39 +224,10 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         return false;
     }
 
-    let Some(mut entries) = (0..target_len)
-        .map(|row| model.row_data(row))
-        .collect::<Option<Vec<_>>>()
-    else {
-        return false;
-    };
-    decorate_render_plan_with_metadata(
-        &mut entries,
-        ItemViewRenderPlanInput {
-            cell_width,
-            render_metrics,
-            show_location: false,
-        },
-        &[],
-    );
-    decorate_fallback_media(&mut entries, media_cache);
-
-    let mut next_tokens = Vec::with_capacity(entries.len());
-    let mut rows_changed = false;
-    for (row, entry) in entries.iter().enumerate() {
-        let mut next = ItemViewRowToken::from_entry(entry);
-        next.set_selected(view.virtual_entry_tokens[row].selected());
-        if !view.virtual_entry_tokens[row].row_equals_ignoring_selection(&next) {
-            model.set_row_data(row, entry.clone());
-            rows_changed = true;
-        }
-        next_tokens.push(next);
-    }
-    view.virtual_entry_tokens = next_tokens;
-    let highlights_changed = update_item_view_highlight_model(view);
+    let _ = update_item_view_highlight_model(view);
     view.virtual_start_index = range.start;
     view.virtual_start_column = start_column;
-    rows_changed || highlights_changed
+    true
 }
 
 pub(crate) fn update_pane_item_view_selection_model(
@@ -433,17 +356,6 @@ mod tests {
             thumbnail_state: 0,
             media: Image::default(),
             media_token: 0,
-            tile_width: 0.0,
-            tile_height: 0.0,
-            media_x: 0.0,
-            media_y: 0.0,
-            text_x: 0.0,
-            text_width: 0.0,
-            title_y: 0.0,
-            title_line_height: 0.0,
-            media_width: 0.0,
-            media_height: 0.0,
-            title_font_size: 0.0,
         }
     }
 
@@ -454,22 +366,15 @@ mod tests {
             .collect()
     }
 
-    fn highlight_rows(model: &ModelRc<ItemViewHighlightEntry>) -> Vec<(i32, f32, f32)> {
+    fn highlight_rows(model: &ModelRc<ItemViewHighlightEntry>) -> Vec<i32> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.slice_index, entry.tile_width, entry.tile_height))
+            .map(|entry| entry.slice_index)
             .collect()
     }
 
     fn entries_with_tile_metrics(count: usize) -> Vec<ItemViewEntry> {
-        (0..count)
-            .map(|index| {
-                let mut row = entry(index);
-                row.tile_width = 129.0;
-                row.tile_height = 50.0;
-                row
-            })
-            .collect()
+        (0..count).map(entry).collect()
     }
 
     fn colored_image(pixel: Rgba8Pixel) -> Image {
@@ -658,34 +563,20 @@ mod tests {
     }
 
     #[test]
-    fn item_view_entry_model_repairs_empty_title_geometry_for_same_row() {
-        let mut empty_title = entry(0);
-        empty_title.text_width = 0.0;
-        empty_title.title_y = 0.0;
-        empty_title.title_line_height = 0.0;
-        empty_title.title_font_size = 0.0;
-        let mut tokens = item_view_row_tokens(&[empty_title.clone()], &[]);
-        let model = new_item_view_entries_model(vec![empty_title]);
+    fn item_view_entry_model_ignores_pane_level_layout_for_same_row() {
+        let initial = entry(0);
+        let mut tokens = item_view_row_tokens(&[initial.clone()], &[]);
+        let model = new_item_view_entries_model(vec![initial]);
         let original = model.clone();
 
-        let mut rendered_title = entry(0);
-        rendered_title.text_x = 52.0;
-        rendered_title.text_width = 75.0;
-        rendered_title.title_y = 14.5;
-        rendered_title.title_line_height = 21.0;
-        rendered_title.title_font_size = 15.0;
         assert!(
-            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![rendered_title], &[])
+            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![entry(0)], &[])
                 .is_none()
         );
 
         assert_eq!(model, original);
         let updated = model.row_data(0).expect("row should remain present");
         assert_eq!(updated.name, "item-0");
-        assert_eq!(updated.text_width, 75.0);
-        assert_eq!(updated.title_y, 14.5);
-        assert_eq!(updated.title_line_height, 21.0);
-        assert_eq!(updated.title_font_size, 15.0);
     }
 
     #[test]
@@ -748,10 +639,7 @@ mod tests {
             selected_token_rows(&view.virtual_entry_tokens),
             vec!["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         );
-        assert_eq!(
-            highlight_rows(&view.virtual_highlight_entries),
-            vec![(1, 129.0, 50.0), (3, 129.0, 50.0)]
-        );
+        assert_eq!(highlight_rows(&view.virtual_highlight_entries), vec![1, 3]);
 
         let selected_highlights = view.virtual_highlight_entries.clone();
         assert!(!update_pane_item_view_selection_model(
@@ -790,10 +678,7 @@ mod tests {
         ));
 
         assert_eq!(view.virtual_highlight_entries, original_highlights);
-        assert_eq!(
-            highlight_rows(&view.virtual_highlight_entries),
-            vec![(2, 129.0, 50.0)]
-        );
+        assert_eq!(highlight_rows(&view.virtual_highlight_entries), vec![2]);
     }
 
     #[test]
@@ -808,17 +693,8 @@ mod tests {
             &["/tmp/item-2".to_string()],
         );
         let original = view.virtual_entries.clone();
-        let metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
-        let media_cache = ItemViewMediaCache::new(metrics, false);
 
-        assert!(relayout_pane_item_view_entries_model(
-            &mut view,
-            11..13,
-            5,
-            155.0,
-            metrics,
-            &media_cache,
-        ));
+        assert!(relayout_pane_item_view_entries_model(&mut view, 11..13, 5,));
 
         assert_eq!(view.virtual_entries, original);
         assert_eq!(view.virtual_start_index, 11);
@@ -827,18 +703,11 @@ mod tests {
             rows(&view.virtual_entries),
             vec!["/tmp/item-1".to_string(), "/tmp/item-2".to_string()]
         );
-        let first = view.virtual_entries.row_data(0).expect("row should exist");
-        assert_eq!(first.tile_width, 155.0);
-        assert_eq!(first.media_width, 72.0);
-        assert_eq!(first.title_font_size, 15.0);
         assert_eq!(
             selected_token_rows(&view.virtual_entry_tokens),
             vec!["/tmp/item-2".to_string()]
         );
-        assert_eq!(
-            highlight_rows(&view.virtual_highlight_entries),
-            vec![(1, 155.0, metrics.tile_height)]
-        );
+        assert_eq!(highlight_rows(&view.virtual_highlight_entries), vec![1]);
     }
 
     #[test]
