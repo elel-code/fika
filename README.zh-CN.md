@@ -1,0 +1,237 @@
+# Fika
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://blog.rust-lang.org/2024/02/08/Rust-1.76.0.html)
+
+一个面向现代 Wayland 桌面的轻量文件管理器原型，使用 Rust + [Slint](https://slint.dev) 构建。
+
+**当前状态：** 原型阶段，聚焦于小而可用的核心功能集。部分高级特性仍在开发中（见 [docs/TODO.md](docs/TODO.md)）。
+
+> [English version](README.md)
+
+## 功能
+
+### 文件浏览
+
+- 浏览本地目录，支持面包屑导航和路径直接输入
+- 目录历史：前进/后退，鼠标侧键导航
+- 左侧 Places 侧栏（内置项 + 用户自定义，支持拖拽排序、重命名、新窗口打开）
+- Devices 侧栏：通过 UDisks2 发现存储设备，支持挂载/卸载/弹出
+- 防抖动目录监控（inotify），自动刷新
+- 轻量虚拟化主视图：横向列优先、Dolphin 风格的 compact 布局，大目录下保持低资源占用
+- Split View 分屏：同时预览两个目录，可交换焦点
+
+### 文件操作
+
+- 异步文件操作队列：复制、移动、链接、回收站、重命名
+- 冲突处理与一步撤销
+- 内部拖放传输菜单（移动/复制/链接）
+- 框选与多选
+- 剪贴板集成（Ctrl+C/X/V）
+
+### UI / UX
+
+- 明暗主题切换
+- 可调整大小的侧栏和分屏比例
+- 受保护最小窗口尺寸，防止内容溢出
+- COSMIC 风格的 shell 表面分层，Dolphin 风格的 compact 主栏文件视图
+- Ctrl+滚轮缩放图标
+- 右键上下文菜单（含用户安装的服务菜单 `.desktop` 项）
+
+### 桌面集成
+
+- 内置 MIME 类型推断和默认应用程序启动（不依赖 `xdg-open`）
+- Open With 菜单，从已安装 `.desktop` 文件解析
+- 终端集成：通过 `FIKA_TERMINAL` 或 `TERMINAL` 环境变量指定终端
+
+### 缩略图
+
+- 异步缩略图生成：内置支持 PNG / JPEG / WebP
+- 内存 LRU 缓存 + 磁盘缓存（符合 [freedesktop.org Thumbnail Managing Standard](https://specifications.freedesktop.org/thumbnail-spec/)）
+- 外部 thumbnailer 支持：自动发现 XDG `.thumbnailer` 条目，处理 PDF / SVG / AVIF 等格式
+- 失败缓存：避免坏图或非支持格式重复排队解码
+
+### 文件选择器 / Portal
+
+- 轻量文件选择器模式 (`--chooser`)，可作为 `xdg-desktop-portal` FileChooser 后端
+- `fika-xdp-filechooser` 二进制：暴露 `org.freedesktop.impl.portal.FileChooser` D-Bus 接口
+- 独立于 GNOME/KDE/COSMIC/GTK portal 后端
+
+### 安全
+
+- GUI 进程意图非特权化
+- 受保护操作通过独立的系统总线 D-Bus helper (`fika-privileged-helper`) 执行
+- 按方法进行 Polkit 鉴权
+- 外部编辑器受保护文件编辑：临时副本 + 自动写回
+
+## 前置条件
+
+- Rust 1.76+（2024 edition）
+- Linux 系统（Wayland）
+- Slint 编译依赖：CMake、pkg-config、fontconfig、libxkbcommon
+
+Arch Linux:
+
+```sh
+sudo pacman -S cmake pkgconf fontconfig libxkbcommon
+```
+
+## 快速开始
+
+```sh
+# 构建
+cargo build --release
+
+# 以文件管理器模式运行
+cargo run
+
+# 以文件选择器模式运行
+cargo run -- --chooser ~/Downloads
+
+# 诊断设备发现（不启动 GUI）
+cargo run -- --diagnose-devices
+
+# 查看完整 CLI 帮助
+cargo run -- --help
+```
+
+## CLI 参考
+
+```
+fika [选项] [起始目录]
+```
+
+### 模式
+
+| 选项 | 模式 | 说明 |
+|------|------|------|
+| *(默认)* | 管理器 | 标准文件管理器窗口 |
+| `--chooser` | 选择器 | 文件选择器模式，选中的路径打印到 stdout |
+| `--diagnose-devices` | 诊断 | 打印设备发现信息，不启动 GUI |
+
+### 选择器模式选项
+
+| 选项 | 说明 |
+|------|------|
+| `--chooser-directory` | 仅选择目录 |
+| `--chooser-multiple` | 允许多选 |
+| `--chooser-save <name>` | 保存文件对话框模式 |
+| `--chooser-save-files <names>` | 保存文件 + 预设文件名（换行分隔） |
+| `--chooser-title <text>` | 自定义窗口标题 |
+| `--chooser-accept-label <text>` | 自定义确认按钮文本 |
+| `--chooser-filters <filters>` | 文件过滤器（换行分隔，格式：`名称\n模式` 交替） |
+| `--chooser-filter-index <n>` | 默认选中的过滤器索引 |
+| `--chooser-return-filter` | 输出选中的过滤器索引 |
+| `--chooser-choices <choices>` | 附加选择控件（换行分隔，格式：`id\nlabel\nvalue` 三元组） |
+| `--chooser-return-choices` | 输出选择控件状态 |
+| `--chooser-parent-window <handle>` | 父窗口句柄（用于 portal 嵌入） |
+
+选择器模式下，选中文件后按 Choose 将路径打印到 stdout 并退出。如果使用了 `--chooser-return-filter` 或 `--chooser-return-choices`，额外元数据会以 `FIKA_CHOOSER_FILTER\t` 和 `FIKA_CHOOSER_CHOICE\t` 前缀输出。
+
+## 键盘快捷键
+
+| 快捷键 | 操作 |
+|--------|------|
+| `Ctrl + C` | 复制选中文件到剪贴板 |
+| `Ctrl + X` | 剪切选中文件到剪贴板 |
+| `Ctrl + V` | 粘贴文件到当前目录 |
+| `Ctrl + A` | 全选可见文件 |
+| `Ctrl + F` | 打开搜索 |
+| `Ctrl + Z` | 撤销上次文件操作 |
+| `Delete` | 将选中文件移至回收站 |
+| `F5` | 刷新当前目录 |
+| `Escape` | 清除选择 / 关闭弹窗 / 退出搜索 |
+| `Ctrl + 滚轮` | 缩放图标大小 |
+| `鼠标后退键` | 后退到上一目录 |
+
+文件操作快捷键（Ctrl+C/X/V/Z/Delete）在搜索框、保存文件名输入框或弹窗打开时会被阻止，防止误操作。
+
+## 桌面集成安装
+
+打包安装会将 D-Bus 服务文件、Polkit 策略和 portal 元数据部署到系统目录。
+
+### 安装数据文件
+
+```sh
+sudo PREFIX=/usr BINDIR=/usr/lib/fika scripts/install-data.sh
+```
+
+### 分阶段测试（无需 root）
+
+```sh
+DESTDIR=/tmp/fika-root PREFIX=/usr BINDIR=/usr/lib/fika scripts/install-data.sh
+DESTDIR=/tmp/fika-root PREFIX=/usr BINDIR=/usr/lib/fika \
+  scripts/check-runtime-integration.sh --metadata-only
+```
+
+### 验证运行时集成
+
+安装后运行：
+
+```sh
+scripts/check-runtime-integration.sh
+```
+
+该脚本验证系统总线 helper、Polkit 策略和 portal 后端元数据是否正确安装，并打印运行时环境摘要（发行版、桌面环境、`portals.conf` 位置）。添加 `--activate-system-helper` 可确认 D-Bus 激活：
+
+```sh
+scripts/check-runtime-integration.sh --activate-system-helper
+```
+
+### Portal 后端配置
+
+安装 `fika.portal` 仅注册后端，不会使 Fika 成为激活的 FileChooser。要试用 Fika 后端，需在 `portals.conf` 中显式配置。参考 `docs/examples/fika-portals.conf` 中的示例，将其放入对应的用户或系统 `portals.conf` 文件中。
+
+## 环境变量
+
+### 自定义
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `FIKA_TERMINAL` | 指定终端模拟器（优先于 `TERMINAL`） | `FIKA_TERMINAL="wezterm start --always-new-process"` |
+| `FIKA_ICON_THEME` | 覆盖图标主题 | `FIKA_ICON_THEME=Papirus` |
+| `FIKA_GUI` | 覆盖 portal 后端前端可执行文件路径 | 调试用 |
+| `FIKA_PRIVILEGED_HELPER` | 覆盖特权 helper 可执行文件路径 | 调试用 |
+
+### 调试
+
+| 变量 | 说明 |
+|------|------|
+| `FIKA_DEBUG_DEVICES=1` | 打印设备发现和监控诊断信息 |
+| `FIKA_DEBUG_DND=1` | 打印拖放调试信息 |
+| `FIKA_DEBUG_PORTAL=1` | 打印 portal 调试信息 |
+| `FIKA_DEBUG_NAV=1` | 打印导航调试信息 |
+| `FIKA_DEBUG_PRIVILEGE=1` | 打印特权操作调试信息 |
+
+## 架构
+
+```
+src/
+├── main.rs          入口点，Slint UI 回调实现
+├── lib.rs           库根
+├── config/          CLI 参数解析、路径、设置持久化、服务菜单策略
+├── app/             UI 线程共享状态、异步事件桥接、目录加载、DnD、
+│                    Places、主视图虚拟化、选择、缩略图流水线、分屏
+├── desktop/         内置 MIME/默认应用解析、Open With、终端启动、
+│                    Wayland 剪贴板、图标查找
+├── fs/              文件条目、文件操作、设备发现、Places 后端、
+│                    搜索、缩略图、特权操作
+├── support/         选择器输出、世代计数器
+└── bin/
+    ├── fika-privileged-helper.rs   系统总线 D-Bus 特权 helper
+    └── fika-xdp-filechooser.rs     XDG Desktop Portal FileChooser 后端
+```
+
+GUI 进程故意非特权化。受保护的文件操作通过系统总线 D-Bus helper 执行，按方法进行 Polkit 鉴权。
+
+详细设计文档见：
+- [docs/DESIGN.md](docs/DESIGN.md) — 架构与子系统设计
+- [docs/TODO.md](docs/TODO.md) — 实现路线图与验收标准
+- [docs/REFERENCE.md](docs/REFERENCE.md) — 中英文详细参考文档
+- [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) — 性能优化方向
+- [docs/COSMIC_REFERENCE.md](docs/COSMIC_REFERENCE.md) — COSMIC Files 参考
+- [docs/DOLPHIN_REFERENCE.md](docs/DOLPHIN_REFERENCE.md) — Dolphin 参考
+
+## 许可证
+
+[MIT](LICENSE)
