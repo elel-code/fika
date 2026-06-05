@@ -13,18 +13,21 @@
 - [x] Slint 1.16.1 pinned in `Cargo.toml`.
 - [x] Slint master experimental layout gate enabled for scoped FlexboxLayout use.
   - Current: `build.rs` enables Slint's experimental compiler registry so Fika can use `FlexboxLayout` from the master branch without requiring users to export `SLINT_ENABLE_EXPERIMENTAL_FEATURES` manually.
-  - Current: FlexboxLayout is limited to local responsive control rows; the main file view keeps its deterministic column-first virtual layout.
+  - Current: FlexboxLayout is limited to local responsive control rows; the main file view keeps its deterministic Dolphin compact horizontal item-view layout.
 - [x] UI entry lives in `ui/app.slint` and is compiled through `build.rs`; shared models/widgets/file tiles are split into focused `.slint` files.
-- [x] Dolphin-like shell: toolbar, Places sidebar, main icon area, status bar.
+- [x] Dolphin-like shell: toolbar, Places sidebar, main file area, status bar.
 - [x] COSMIC-style shell surface layering outside the main file arrangement.
   - Current: `AppWindow` owns one shared base surface with a separate window-wide shell/header row.
   - Current: `TopBar`, `PathBar`, `SearchPanel`, and `StatusBar` render transparent backgrounds, so they read as one layer with the main pane.
   - Current: `TopBar` lives in the shell/header row, owns global search/split/theme controls, and deliberately does not draw a bottom separator between the shell tool area and main content.
   - Current: below the shell/header row, the rounded sidebar panel and right main pane share one equal-height content row; the navigation/address `PathBar` is the first row inside that right main pane.
-  - Current: the main-pane item arrangement intentionally remains Fika's existing Dolphin-like column-first horizontal layout.
+  - Current: the main-pane item arrangement intentionally remains Dolphin compact style: horizontal scrolling, column-first order, icon/media on the left, and filename text on the right.
 - [x] Dark mode.
 - [x] Resizable sidebar.
-- [x] Column-first icon layout.
+- [x] Dolphin compact horizontal item-view layout.
+  - Current: the physical scroll axis is X. Items fill `index % rows_per_column` down the current column, then advance with `index / rows_per_column` to the next column.
+  - Current: compact item metrics follow Dolphin's compact formula: `itemWidth = padding * 4 + iconSize + fontHeight * 5`, `itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`, with an 8px column margin.
+  - Current: ordinary directories use one visible title line; Trash and recursive search use pane-local three-line group/title/location rows without introducing a global or focused-pane-only layout mode.
 - [x] Main-view tile virtualization.
   - Current: Slint receives only `entry_count` and the visible `virtual_entries` slice, not the full filtered file model.
   - Current: filtering/search rebuilds a lightweight visible-index cache once; normal unfiltered directories use an implicit identity fast path.
@@ -39,7 +42,7 @@
   - Current: recursive-search location group annotation is keyed by pane-local visible-result state, so ordinary large-directory scrolling does not rescan every entry just to decide whether the virtual slice needs group labels.
   - Current: background virtual snapshot preparation receives the pane-local `visible_location_groups` cache and annotates slices by visible index, so recursive-search scrolling avoids per-slice location-boundary recomputation off the UI thread too.
   - Current: ordinary wheel scrolling requests pane focus only once per event path before panning, while Ctrl+wheel still focuses before zooming.
-  - Current: Rust uses a tested `VirtualGridPlan` to calculate clamped viewport position, scroll extent, visible range, overscan range, and Slint anchor column from one source of truth.
+  - Current: Rust uses one tested compact horizontal virtual plan to calculate clamped viewport position, scroll extent, visible range, overscan range, and Slint anchor column from one source of truth.
   - Current: ordinary rows use the Rust render plan for Dolphin-style compact horizontal tiles: icon on the left, filename on the right, and the same item height as the column-first row layout, so cached/old rows cannot collapse names to zero; recursive-search rows with group/location metadata keep the same horizontal media + text layout with extra lines.
   - Current: `PaneViewData` carries Rust-projected item-view layout metrics (`rows_per_column`, cell size, padding, content width, virtual slice width, and scroll max), viewport, selection revision, and empty state; pane-local `ItemViewEntry` models are exposed as separate top-level slot models so visible item rows are not nested inside pane row data.
   - Current: offscreen thumbnail completions update the cache without resetting the Slint model; visible completions still refresh the current virtual slice.
@@ -581,12 +584,12 @@ Acceptance for all:
 - [x] Add split view / dual-pane browsing.
   - Reference: `cosmic-files/src/app.rs` tab model wiring and `cosmic-files/src/tab.rs` location/view state separation; keep Dolphin as the behavioral reference for exact side-by-side split-pane UX.
   - Acceptance: each pane has independent current directory, selection, search/filter state, viewport position, history stacks, and focused-pane ownership for shortcuts, menus, DnD targets, and status updates.
-  - Acceptance: the existing column-first, horizontal-scroll, virtualized main-pane item layout remains unchanged inside each pane.
+  - Acceptance: the existing Dolphin compact horizontal virtual item-view remains unchanged inside each pane.
   - Acceptance: Places, Devices, Open Terminal Here, Open With, Trash, and privileged operations act on the focused pane unless an operation explicitly targets the other pane.
   - Current: `PanesState` owns a slot-indexed pane list with a focused slot and stable pane ids. Opening Split clones the focused pane into a new pane slot, including directory entries, search/filter state, virtual-view metadata, and viewport position, while intentionally not copying selection or history.
   - Current: split panes render through the same `PaneSlotSurface -> PaneSlot -> FilePane -> SplitPaneView` component path. Each physical pane owns its own address bar, search/filter controls, virtualized file surface, status bar, external-edit controls, and chooser footer state through one reusable binding surface.
   - Current: pane geometry is slot-driven rather than hand-coded per side. `pane-slot-x()` / `pane-slot-width()` derive physical pane bounds from slot index, visible pane count, main-pane width, and divider width.
-  - Current: the existing column-first virtual grid runs inside every pane. Virtual slicing, viewport clamping, thumbnail decoration, virtual-start metadata, and model-reuse decisions live in `src/app/virtual_view.rs` and are applied per pane slot.
+  - Current: the existing Dolphin compact horizontal virtual item-view runs inside every pane. Virtual slicing, viewport clamping, thumbnail decoration, virtual-start metadata, and model-reuse decisions live in `src/app/virtual_view.rs` and are applied per pane slot.
   - Current: every pane keeps its own horizontal viewport, virtual range cache, thumbnail pending map, per-directory viewport restore cache, selection, history, search query, filters, recursive-search generation/progress/cancel state, and async load/open/thumbnail generations.
   - Current: mouse side buttons, blank-area clicks, double-click activation, selection, rectangle selection, DnD/drop targets, context menus, path submission, Back/Forward, status updates, chooser controls, external-edit Save/Discard, and Ctrl+wheel zoom route through one slot-aware `PaneRouting` surface instead of side-specific bindings.
   - Current: Places and Devices highlight follow the Rust-synced focused pane path immediately, and sidebar navigation targets the focused pane.
@@ -599,7 +602,7 @@ Acceptance for all:
   - Current: asynchronous FileAction completion status now writes back to the status bar for the pane whose directory was affected, so completion messages do not jump to the other pane after focus changes.
   - Current: Undo, privileged operation completion, file open/open-with launch status, and protected external-edit save-back also refresh or report through pane-id routing; Undo start/completion/failure, privileged completion, file-open success/failure, and admin write-back save/discard/failure status now write to the same affected/requesting panes.
   - Current: protected external-edit pending state is pane-local: each split pane owns its own admin write-back marker and Save/Discard controls route through the clicked pane id instead of a global focused-pane flag. The status bar also shows a fixed `ADMIN` badge beside pending write-back status so privileged scratch/write-back state is visually distinct from ordinary status text.
-  - Current: split pane scrolling now uses the dominant wheel axis instead of adding vertical and horizontal deltas together, pane viewport refreshes go through one shared clamp-aware writeback helper, and wheel input that clamps to the current viewport no longer triggers a virtual-grid refresh.
+  - Current: split pane scrolling now uses the dominant wheel axis instead of adding vertical and horizontal deltas together, pane viewport refreshes go through one shared clamp-aware writeback helper, and wheel input that clamps to the current viewport no longer triggers a virtual item-view refresh.
   - Current: `PanesState` now exposes `PaneTarget::{Active, Focused, Slot, Id}` lookup helpers, giving shortcuts, menus, DnD, and async operation code a tested route away from hard-coded `active` access toward focused-pane or explicit-pane routing.
   - Current: stable `pane_slots` model rows are updated in place when slot shape is unchanged, so focusing an already visible pane or refreshing a pane does not rebuild its Slint surface and break gestures.
   - Current: pure pane focus changes update global focused-pane fields and then refresh only the old and new pane slot rows, avoiding a full pane-slot model pass while still downgrading/activating focus-derived pane UI.

@@ -226,9 +226,9 @@ changed viewport-x => {
 **实际实现**（✅ 已完成）：
 1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `ItemViewEntry` 字段，避免每个 tile 独立计算
 2. 删除独立 tile 组件边界，把可见 tile primitive 内联到 `SplitPaneView` 的 slice layer，避免继续维护旧 path-based item 组件
-3. 将 icon/media rect、text rect、group/title/location y 坐标和 line height 继续迁到 Rust render plan，`SplitPaneView` 的可见 item loop 不再为每项使用 `HorizontalLayout` / `VerticalLayout`
-4. 普通 icon-view 的 tile height 与 row height 同源，标题 rect 由 Rust render plan 给出，Slint 不再用 `parent.height - ...` 兜底推导标题区域
-5. pane-level 颜色 token 仍由 `SplitPaneView` 下发；后续若切换到自绘 renderer，再把颜色/字体/icon cache 一并纳入 renderer state
+3. 将 media/icon rect、text rect、group/title/location y 坐标和 line height 继续迁到 Rust render plan，`SplitPaneView` 的可见 item loop 不再为每项使用 `HorizontalLayout` / `VerticalLayout`
+4. 普通 compact item-view 的 tile height 与 row height 同源，标题 rect 由 Rust render plan 给出，Slint 不再用 `parent.height - ...` 兜底推导标题区域
+5. pane-level 颜色 token 仍由 `SplitPaneView` 下发；后续若切换到自绘 renderer，再把颜色/字体/media icon cache 一并纳入 renderer state
 
 **收益**：减少大量 tile 时的属性绑定评估开销。
 
@@ -269,7 +269,7 @@ Slint: Rectangle viewport + input/DnD overlays
 ```
 
 **验收标准**：
-- 主文件网格核心不再依赖 `ScrollView` / `Flickable` 的 viewport 状态作为 source of truth
+- 主文件 item-view 核心不再依赖 `ScrollView` / `Flickable` 的 viewport 状态作为 source of truth
 - 滚动位置、可见范围、item rect、hit-test、selection、drop target 都由 Rust 自管并可测试
 - 不再以完整 per-item Slint 组件树作为核心渲染路径；第一版可以保留少量可见 primitive，最终目标是自绘 frame 或可复用 item layer
 - DnD 仍使用 Slint 原生 `DragArea` / `DropArea` 和 `data-transfer`，但目标解析完全走 Rust hit-test
@@ -487,9 +487,9 @@ fn sync_focus_navigation_ui(ui, state, previous_slot) {
 
 ---
 
-## 虚拟网格内部优化
+## 虚拟 Item-View 内部优化
 
-以下优化针对虚拟网格计算链路本身（`virtual_view.rs`、`geometry.rs`、`selection.rs`），聚焦单次计算内部的微优化，与 Phase 1-4（控制何时重建模型）互补。
+以下优化针对 Dolphin compact 横向 item-view 的虚拟切片计算链路本身（`virtual_view.rs`、`geometry.rs`、`selection.rs`），聚焦单次计算内部的微优化，与 Phase 1-4（控制何时重建模型）互补。
 
 ---
 
@@ -534,10 +534,10 @@ let visible_range = virtual_entry_range(..., 0);           // 第二次
 两次调用重复计算相同的 column math。带 overscan 的范围天然包含不带 overscan 的范围。
 
 **涉及代码**：
-- `src/app/geometry.rs:169-215` — `virtual_grid_plan`
-- `src/app/geometry.rs` — `virtual_grid_plan` / `virtual_entry_ranges`
+- `src/app/geometry.rs` — `CompactGridLayout::virtual_plan`
+- `src/app/geometry.rs` — `virtual_entry_ranges`
 
-**实际实现**（✅ 已完成）：`virtual_grid_plan` 现在调用内部 `virtual_entry_ranges`，一次计算 `first_visible_column` / `visible_end_column`，同时返回 overscan range 和 visible range。旧的单 range 包装函数已删除，避免非测试构建保留死代码。
+**实际实现**（✅ 已完成）：`CompactGridLayout::virtual_plan` 现在调用内部 `virtual_entry_ranges`，一次计算 `first_visible_column` / `visible_end_column`，同时返回 overscan range 和 visible range。旧的单 range 包装函数已删除，避免非测试构建保留死代码。
 
 ```rust
 fn virtual_entry_ranges(..., overscan_columns) -> (Range<usize>, Range<usize>) {
@@ -549,9 +549,9 @@ fn virtual_entry_ranges(..., overscan_columns) -> (Range<usize>, Range<usize>) {
 }
 ```
 
-**收益**：每次 `virtual_grid_plan` 省一次除法/floor/ceil 链。
+**收益**：每次 `virtual_plan` 省一次除法/floor/ceil 链。
 
-**难度**：已完成。现有 `virtual_grid_plan` 测试覆盖边界、overscan 和 viewport clamp 行为。
+**难度**：已完成。现有 compact layout / virtual view 测试覆盖边界、overscan 和 viewport clamp 行为。
 
 ---
 
@@ -739,7 +739,7 @@ private property <bool> file-operation-shortcuts-blocked:
 
 ### 自管 scrollbar 几何
 
-`viewport-content-width`、`virtual-slice-width` 和 `scroll-max-x` 现在由 Rust `pane_slot_item_view_metrics()` 通过同一套 `MainGridLayout` / `main_scroll_max_x()` 计算，并随 `PaneViewData` 下发给 `SplitPaneView`。Slint 只消费这些 metrics 做 scrollbar、viewport clamp 和切片偏移，不再自己根据 `entry-count` / `rows-per-column` / `zoom-level` 重算主视图 layouter。
+`viewport-content-width`、`virtual-slice-width` 和 `scroll-max-x` 现在由 Rust `pane_slot_item_view_metrics()` 通过同一套 `MainGridLayout` / `compact_grid_layout()` 计算，并随 `PaneViewData` 下发给 `SplitPaneView`。Slint 只消费这些 metrics 做 scrollbar、viewport clamp 和切片偏移，不再自己根据 `entry-count` / `rows-per-column` / `zoom-level` 重算主视图 layouter。
 
 已处理的布局恢复问题：`SplitPaneView` 现在在 pane-local `width` 或 `rows-per-column` 变化时主动夹紧 `viewport-x` 并请求虚拟切片刷新。这样全屏/布局变化发生在大目录末尾时，不再依赖后续手动拖动滚动条来触发旧切片重建。
 
@@ -805,7 +805,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 - **F1**: `pan-horizontal` 和 `changed viewport-x` 中的 `focus_requested()` 已移除；`handle-scroll` 中 Ctrl+滚轮的调用保留
 - **F2**: 新增 `sync_focus_navigation_ui` — 与 `sync_navigation_ui` 相比跳过左栏 8 setter 和 `set_split_view_open`，只读取 focused pane 数据并写入 `sync_focused_ui`；旧 pane 和新 focused pane 的 row data 通过 `sync_pane_slot_ui` 增量刷新，不再执行完整 `sync_pane_slots_ui`
 
-### 虚拟网格内部优化
+### 虚拟 Item-View 内部优化
 
 | 阶段 | 改进 | 预计工作量 | 状态 |
 |------|------|-----------|------|
