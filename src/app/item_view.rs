@@ -464,6 +464,16 @@ impl ItemTextRenderPlan {
         let title_line_height = title_line_height(metrics.title_font_size);
         let has_group = show_location && !entry.group.is_empty();
         let has_location = show_location && !entry.location.is_empty();
+        if !has_group && !has_location {
+            return Self {
+                group_y: 0.0,
+                title_y: 0.0,
+                location_y: metrics.tile_height,
+                metadata_line_height,
+                title_line_height: metrics.tile_height,
+            };
+        }
+
         let spacing = 2.0;
         let mut line_count = 1;
         if has_group {
@@ -932,19 +942,19 @@ mod tests {
             render_tokens,
             vec![
                 (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
                 ),
             ]
         );
@@ -953,9 +963,9 @@ mod tests {
             "compact horizontal titles must keep enough width to remain visible"
         );
         assert!(
-            entries
-                .iter()
-                .all(|entry| !entry.name.is_empty() && entry.title_y > 0.0),
+            entries.iter().all(|entry| !entry.name.is_empty()
+                && entry.title_y >= 0.0
+                && entry.title_line_height == entry.tile_height),
             "visible icon rows must carry a title and title geometry"
         );
     }
@@ -1006,7 +1016,8 @@ mod tests {
         assert_eq!(entry.media_x, 2.0);
         assert_eq!(entry.text_x, 52.0);
         assert_eq!(entry.text_width, 75.0);
-        assert_eq!(entry.title_y, 18.0);
+        assert_eq!(entry.title_y, 0.0);
+        assert_eq!(entry.title_line_height, 57.0);
     }
 
     #[test]
@@ -1054,8 +1065,8 @@ mod tests {
         assert_eq!(entry.media_height, 72.0);
         assert_eq!(entry.text_x, 78.0);
         assert_eq!(entry.text_width, 90.0);
-        assert_eq!(entry.title_y, 26.0);
-        assert_eq!(entry.title_line_height, 24.0);
+        assert_eq!(entry.title_y, 0.0);
+        assert_eq!(entry.title_line_height, 76.0);
         assert!(entry.title_y + entry.title_line_height <= entry.tile_height);
         assert!(ItemViewRowToken::from_entry(entry).has_renderable_title());
     }

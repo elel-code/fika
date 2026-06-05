@@ -521,22 +521,7 @@ fn pane_slot_highlights(slot: i32, state: &AppState) -> ModelRc<ItemViewHighligh
     state
         .panes
         .pane_for_slot(slot)
-        .map(|pane| {
-            let highlights = pane
-                .view
-                .virtual_entry_tokens
-                .iter()
-                .enumerate()
-                .filter_map(|(row, token)| {
-                    token.selected().then_some(ItemViewHighlightEntry {
-                        slice_index: row as i32,
-                        tile_width: token.tile_width(),
-                        tile_height: token.tile_height(),
-                    })
-                })
-                .collect::<Vec<_>>();
-            ModelRc::new(Rc::new(VecModel::from(highlights)))
-        })
+        .map(|pane| pane.view.virtual_highlight_entries.clone())
         .unwrap_or_default()
 }
 

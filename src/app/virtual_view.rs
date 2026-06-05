@@ -502,7 +502,7 @@ mod tests {
         assert!(entries.iter().all(|entry| !entry.name.is_empty()));
         assert!(entries.iter().all(|entry| entry.tile_width > 0.0));
         assert!(entries.iter().all(|entry| entry.text_width > 0.0));
-        assert!(entries.iter().all(|entry| entry.title_y > 0.0));
+        assert!(entries.iter().all(|entry| entry.title_y >= 0.0));
         assert!(entries.iter().all(|entry| entry.title_line_height > 0.0));
         assert!(entries.iter().all(|entry| entry.title_font_size > 0.0));
     }

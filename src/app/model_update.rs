@@ -1,6 +1,6 @@
 use crate::app::item_view::ItemViewRowToken;
 use crate::app::pane::PaneView;
-use crate::{ItemViewEntry, ItemViewMetadataEntry};
+use crate::{ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry};
 use slint::{Model, ModelRc, VecModel};
 use std::rc::Rc;
 
@@ -49,6 +49,59 @@ pub(crate) fn new_item_view_metadata_model(
     } else {
         ModelRc::new(Rc::new(VecModel::from(metadata)))
     }
+}
+
+fn item_view_highlight_entries(tokens: &[ItemViewRowToken]) -> Vec<ItemViewHighlightEntry> {
+    tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(row, token)| {
+            token.selected().then_some(ItemViewHighlightEntry {
+                slice_index: row as i32,
+                tile_width: token.tile_width(),
+                tile_height: token.tile_height(),
+            })
+        })
+        .collect()
+}
+
+fn update_item_view_highlight_entries_model(
+    current: &mut ModelRc<ItemViewHighlightEntry>,
+    highlights: Vec<ItemViewHighlightEntry>,
+) -> bool {
+    let Some(model) = current
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewHighlightEntry>>()
+    else {
+        if highlights.is_empty() {
+            if current.row_count() == 0 {
+                return false;
+            }
+            *current = ModelRc::default();
+        } else {
+            *current = ModelRc::new(Rc::new(VecModel::from(highlights)));
+        }
+        return true;
+    };
+
+    let unchanged = model.row_count() == highlights.len()
+        && highlights
+            .iter()
+            .enumerate()
+            .all(|(row, next)| model.row_data(row).as_ref() == Some(next));
+    if unchanged {
+        return false;
+    }
+
+    model.set_vec(highlights);
+    true
+}
+
+pub(crate) fn update_item_view_highlight_model(view: &mut PaneView) -> bool {
+    update_item_view_highlight_entries_model(
+        &mut view.virtual_highlight_entries,
+        item_view_highlight_entries(&view.virtual_entry_tokens),
+    )
 }
 
 fn item_view_row_tokens(
@@ -115,8 +168,20 @@ pub(crate) fn update_pane_item_view_entries_model(
     ) {
         view.virtual_entries = model;
     }
+    update_item_view_highlight_model(view);
     view.virtual_start_index = start_index;
     view.virtual_start_column = start_column;
+}
+
+pub(crate) fn update_pane_item_view_selection_model(
+    view: &mut PaneView,
+    selected_paths: &[String],
+) -> bool {
+    let changed = update_item_view_selection_tokens(&mut view.virtual_entry_tokens, selected_paths);
+    if changed {
+        update_item_view_highlight_model(view);
+    }
+    changed
 }
 
 pub(crate) fn update_item_view_selection_tokens(
@@ -258,6 +323,24 @@ mod tests {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| entry.path.to_string())
+            .collect()
+    }
+
+    fn highlight_rows(model: &ModelRc<ItemViewHighlightEntry>) -> Vec<(i32, f32, f32)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| (entry.slice_index, entry.tile_width, entry.tile_height))
+            .collect()
+    }
+
+    fn entries_with_tile_metrics(count: usize) -> Vec<ItemViewEntry> {
+        (0..count)
+            .map(|index| {
+                let mut row = entry(index);
+                row.tile_width = 129.0;
+                row.tile_height = 50.0;
+                row
+            })
             .collect()
     }
 
@@ -522,14 +605,14 @@ mod tests {
             &mut view,
             0,
             0,
-            (0..4).map(entry).collect(),
+            entries_with_tile_metrics(4),
             false,
             &[],
         );
         let original = view.virtual_entries.clone();
 
-        assert!(update_item_view_selection_tokens(
-            &mut view.virtual_entry_tokens,
+        assert!(update_pane_item_view_selection_model(
+            &mut view,
             &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         ));
         assert_eq!(view.virtual_entries, original);
@@ -537,17 +620,52 @@ mod tests {
             selected_token_rows(&view.virtual_entry_tokens),
             vec!["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         );
+        assert_eq!(
+            highlight_rows(&view.virtual_highlight_entries),
+            vec![(1, 129.0, 50.0), (3, 129.0, 50.0)]
+        );
 
-        assert!(!update_item_view_selection_tokens(
-            &mut view.virtual_entry_tokens,
+        let selected_highlights = view.virtual_highlight_entries.clone();
+        assert!(!update_pane_item_view_selection_model(
+            &mut view,
             &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         ));
+        assert_eq!(view.virtual_highlight_entries, selected_highlights);
 
-        assert!(update_item_view_selection_tokens(
-            &mut view.virtual_entry_tokens,
-            &[]
-        ));
+        assert!(update_pane_item_view_selection_model(&mut view, &[]));
         assert!(selected_token_rows(&view.virtual_entry_tokens).is_empty());
+        assert_eq!(view.virtual_highlight_entries, selected_highlights);
+        assert!(highlight_rows(&view.virtual_highlight_entries).is_empty());
+    }
+
+    #[test]
+    fn pane_item_view_highlight_model_reuses_vec_model_when_selection_shape_changes() {
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            0,
+            entries_with_tile_metrics(4),
+            false,
+            &[],
+        );
+
+        assert!(update_pane_item_view_selection_model(
+            &mut view,
+            &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
+        ));
+        let original_highlights = view.virtual_highlight_entries.clone();
+
+        assert!(update_pane_item_view_selection_model(
+            &mut view,
+            &["/tmp/item-2".to_string()]
+        ));
+
+        assert_eq!(view.virtual_highlight_entries, original_highlights);
+        assert_eq!(
+            highlight_rows(&view.virtual_highlight_entries),
+            vec![(2, 129.0, 50.0)]
+        );
     }
 
     #[test]

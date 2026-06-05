@@ -56,7 +56,9 @@ use app::item_view::{
     ItemViewRenderPlanInput, SelectionRect, decorate_fallback_media, decorate_render_plan,
     entry_at_pane_point, item_index_at_pane_point,
 };
-use app::model_update::{update_item_view_selection_tokens, update_pane_item_view_entries_model};
+use app::model_update::{
+    update_pane_item_view_entries_model, update_pane_item_view_selection_model,
+};
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
     affected_directory_pane_ids, cleanup_file_undo_backup,
@@ -4415,9 +4417,10 @@ fn update_virtual_selection_for_slot(
 ) {
     let Some(_) = ({
         let mut state_ref = state.borrow_mut();
-        state_ref.panes.pane_mut_for_slot(slot).map(|pane| {
-            update_item_view_selection_tokens(&mut pane.view.virtual_entry_tokens, selected_paths)
-        })
+        state_ref
+            .panes
+            .pane_mut_for_slot(slot)
+            .map(|pane| update_pane_item_view_selection_model(&mut pane.view, selected_paths))
     }) else {
         return;
     };

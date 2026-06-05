@@ -4,7 +4,7 @@ use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
-use crate::{FileEntry, ItemViewEntry, ItemViewMetadataEntry};
+use crate::{FileEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry};
 use slint::{Model, ModelRc, VecModel};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -69,7 +69,9 @@ impl PaneState {
         pane.view.viewport_x = self.view.viewport_x;
         pane.view.virtual_view = self.view.virtual_view.clone();
         pane.view.virtual_entries = clone_item_view_entries_model(&self.view.virtual_entries);
-        pane.view.virtual_entry_tokens = self.view.virtual_entry_tokens.clone();
+        pane.view.virtual_entry_tokens =
+            clone_item_view_row_tokens_without_selection(&self.view.virtual_entry_tokens);
+        pane.view.virtual_highlight_entries = ModelRc::default();
         pane.view.virtual_metadata_entries =
             clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
         pane.view.virtual_start_index = self.view.virtual_start_index;
@@ -101,6 +103,7 @@ impl PaneState {
         self.search.visible_location_groups = None;
         self.view.virtual_entries = ModelRc::default();
         self.view.virtual_entry_tokens.clear();
+        self.view.virtual_highlight_entries = ModelRc::default();
         self.view.virtual_metadata_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
         self.view.virtual_start_column = 0;
@@ -150,6 +153,19 @@ fn clone_item_view_metadata_model(
     } else {
         ModelRc::new(Rc::new(VecModel::from(entries)))
     }
+}
+
+fn clone_item_view_row_tokens_without_selection(
+    tokens: &[ItemViewRowToken],
+) -> Vec<ItemViewRowToken> {
+    tokens
+        .iter()
+        .cloned()
+        .map(|mut token| {
+            token.set_selected(false);
+            token
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -490,6 +506,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_generation: GenerationCounter,
     pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
+    pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     pub(crate) virtual_start_index: usize,
     pub(crate) virtual_start_column: usize,
@@ -1231,7 +1248,7 @@ mod tests {
             1,
             virtual_entries,
             true,
-            &[],
+            &["/tmp/active/one.txt".to_string()],
         );
 
         assert!(panes.open_peer_from_focused());
@@ -1263,6 +1280,14 @@ mod tests {
         assert_eq!(inactive.view.virtual_start_column, 1);
         assert_eq!(inactive.view.virtual_entries.row_count(), 2);
         assert_eq!(inactive.view.virtual_entry_tokens.len(), 2);
+        assert!(
+            inactive
+                .view
+                .virtual_entry_tokens
+                .iter()
+                .all(|token| !token.selected())
+        );
+        assert_eq!(inactive.view.virtual_highlight_entries.row_count(), 0);
         assert_eq!(
             inactive
                 .view
