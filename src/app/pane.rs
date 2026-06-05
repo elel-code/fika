@@ -1409,11 +1409,17 @@ mod tests {
         let dark_again = view.fallback_media_cache(metrics, true);
         assert!(Rc::ptr_eq(&dark, &dark_again));
 
+        let location = view.fallback_media_cache(
+            ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
+            true,
+        );
+        assert!(!Rc::ptr_eq(&dark, &location));
+
         let zoomed = view.fallback_media_cache(
             ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1),
             true,
         );
-        assert!(!Rc::ptr_eq(&dark, &zoomed));
+        assert!(!Rc::ptr_eq(&location, &zoomed));
     }
 
     #[test]

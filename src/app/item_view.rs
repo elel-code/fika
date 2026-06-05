@@ -151,18 +151,50 @@ impl ItemViewRenderMetrics {
             title_line_height: compact.title_line_height,
         }
     }
+
+    pub(crate) fn renderer_key(self, dark: bool) -> ItemViewRendererKey {
+        ItemViewRendererKey::new(self, dark)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ItemViewMediaCacheKey {
+pub(crate) struct ItemViewRendererKey {
     dark: bool,
-    width: u32,
-    height: u32,
+    tile_height: u32,
+    media_padding_x: u32,
+    media_text_gap: u32,
+    media_width: u32,
+    media_height: u32,
+    metadata_font_size: u32,
+    metadata_line_height: u32,
+    title_font_size: u32,
+    title_line_height: u32,
+}
+
+impl ItemViewRendererKey {
+    fn new(metrics: ItemViewRenderMetrics, dark: bool) -> Self {
+        Self {
+            dark,
+            tile_height: renderer_metric_px(metrics.tile_height),
+            media_padding_x: renderer_metric_px(metrics.media_padding_x),
+            media_text_gap: renderer_metric_px(metrics.media_text_gap),
+            media_width: renderer_metric_px(metrics.media_width),
+            media_height: renderer_metric_px(metrics.media_height),
+            metadata_font_size: renderer_metric_px(metrics.metadata_font_size),
+            metadata_line_height: renderer_metric_px(metrics.metadata_line_height),
+            title_font_size: renderer_metric_px(metrics.title_font_size),
+            title_line_height: renderer_metric_px(metrics.title_line_height),
+        }
+    }
+}
+
+fn renderer_metric_px(value: f32) -> u32 {
+    value.round().max(0.0) as u32
 }
 
 #[derive(Clone)]
 pub(crate) struct ItemViewMediaCache {
-    key: ItemViewMediaCacheKey,
+    key: ItemViewRendererKey,
     folder: Image,
     file: Image,
     folder_token: i32,
@@ -171,26 +203,18 @@ pub(crate) struct ItemViewMediaCache {
 
 impl ItemViewMediaCache {
     pub(crate) fn new(metrics: ItemViewRenderMetrics, dark: bool) -> Self {
-        let key = Self::key(metrics, dark);
+        let key = metrics.renderer_key(dark);
         Self {
             key,
-            folder: fallback_media_image(true, key.dark, key.width, key.height),
-            file: fallback_media_image(false, key.dark, key.width, key.height),
-            folder_token: fallback_media_token(true, key.dark, key.width, key.height),
-            file_token: fallback_media_token(false, key.dark, key.width, key.height),
+            folder: fallback_media_image(true, key.dark, key.media_width, key.media_height),
+            file: fallback_media_image(false, key.dark, key.media_width, key.media_height),
+            folder_token: fallback_media_token(true, key.dark, key.media_width, key.media_height),
+            file_token: fallback_media_token(false, key.dark, key.media_width, key.media_height),
         }
     }
 
     pub(crate) fn matches(&self, metrics: ItemViewRenderMetrics, dark: bool) -> bool {
-        self.key == Self::key(metrics, dark)
-    }
-
-    fn key(metrics: ItemViewRenderMetrics, dark: bool) -> ItemViewMediaCacheKey {
-        ItemViewMediaCacheKey {
-            dark,
-            width: metrics.media_width.round().max(1.0) as u32,
-            height: metrics.media_height.round().max(1.0) as u32,
-        }
+        self.key == metrics.renderer_key(dark)
     }
 
     fn image_for(&self, is_dir: bool) -> Image {
@@ -962,6 +986,23 @@ mod tests {
                 && entry.title_y + entry.title_line_height <= entry.tile_height),
             "visible icon rows must carry a title and title geometry"
         );
+    }
+
+    #[test]
+    fn renderer_key_tracks_full_compact_render_state() {
+        let plain = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
+        let same_plain = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
+        let location = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3);
+        let zoomed = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
+
+        assert_eq!(plain.renderer_key(false), same_plain.renderer_key(false));
+        assert_ne!(plain.renderer_key(false), plain.renderer_key(true));
+        assert_ne!(
+            plain.renderer_key(false),
+            location.renderer_key(false),
+            "text line count changes tile/text metrics even when media size is unchanged"
+        );
+        assert_ne!(plain.renderer_key(false), zoomed.renderer_key(false));
     }
 
     #[test]
