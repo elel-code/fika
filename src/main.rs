@@ -56,10 +56,7 @@ use app::item_view::{
     ItemViewRenderPlanInput, SelectionRect, decorate_fallback_media, decorate_render_plan,
     entry_at_pane_point, item_index_at_pane_point,
 };
-use app::model_update::{
-    apply_item_view_entry_selection_updates, update_item_view_entry_selection_tokens,
-    update_pane_item_view_entries_model,
-};
+use app::model_update::{update_item_view_selection_tokens, update_pane_item_view_entries_model};
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
     affected_directory_pane_ids, cleanup_file_undo_backup,
@@ -79,9 +76,9 @@ use app::search_ui::{
     set_search_filters,
 };
 use app::selection::{
-    annotate_selection_state, append_unique_paths, filtered_entry_count,
-    filtered_entry_paths_for_slot, rebuild_visible_entry_index, retained_visible_paths,
-    selection_range_paths_filtered_for_slot, selection_rect_paths_filtered_for_slot,
+    append_unique_paths, filtered_entry_count, filtered_entry_paths_for_slot,
+    rebuild_visible_entry_index, retained_visible_paths, selection_range_paths_filtered_for_slot,
+    selection_rect_paths_filtered_for_slot,
 };
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui, sync_focus_navigation_ui,
@@ -3666,18 +3663,21 @@ fn apply_virtual_view_result(
             show_location,
         },
     );
-    {
+    let selected_paths = {
         let state_ref = state.borrow();
-        if let Some(pane) = state_ref.panes.pane_by_id(result.pane_id) {
-            annotate_selection_state(&mut entries, &pane.selection.paths);
-        }
+        let selected_paths = state_ref
+            .panes
+            .pane_by_id(result.pane_id)
+            .map(|pane| pane.selection.paths.clone())
+            .unwrap_or_default();
         decorate_entries_with_cached_thumbnails_for_pane(
             &state_ref,
             result.pane_id,
             &mut entries,
             result.thumbnail_size_px,
         );
-    }
+        selected_paths
+    };
     let media_cache = ItemViewMediaCache::new(result.render_metrics, ui.get_dark_mode());
     decorate_fallback_media(&mut entries, &media_cache);
 
@@ -3701,6 +3701,7 @@ fn apply_virtual_view_result(
         update.start_column,
         entries,
         show_location,
+        &selected_paths,
     );
     if target_is_focused {
         ui.set_entry_count(update.entry_count as i32);
@@ -3736,6 +3737,7 @@ fn set_pane_virtual_entries(
     start_column: usize,
     entries: Vec<ItemViewEntry>,
     show_location: bool,
+    selected_paths: &[String],
 ) {
     if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
         update_pane_item_view_entries_model(
@@ -3744,6 +3746,7 @@ fn set_pane_virtual_entries(
             start_column,
             entries,
             show_location,
+            selected_paths,
         );
     }
 }
@@ -4410,21 +4413,14 @@ fn update_virtual_selection_for_slot(
     slot: i32,
     selected_paths: &[String],
 ) {
-    let Some((model, updates)) = ({
+    let Some(_) = ({
         let mut state_ref = state.borrow_mut();
         state_ref.panes.pane_mut_for_slot(slot).map(|pane| {
-            let updates = update_item_view_entry_selection_tokens(
-                &mut pane.view.virtual_entry_tokens,
-                selected_paths,
-            );
-            (pane.view.virtual_entries.clone(), updates)
+            update_item_view_selection_tokens(&mut pane.view.virtual_entry_tokens, selected_paths)
         })
     }) else {
         return;
     };
-    if !updates.is_empty() {
-        apply_item_view_entry_selection_updates(&model, &updates);
-    }
 }
 
 fn navigate_pane_to_slot(

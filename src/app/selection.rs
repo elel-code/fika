@@ -1,8 +1,7 @@
+use crate::FileEntry;
 use crate::app::item_view::SelectionRect;
 use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneState};
 use crate::app::state::AppState;
-use crate::{FileEntry, ItemViewEntry};
-use std::collections::HashSet;
 use std::ops::Range;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -23,23 +22,6 @@ pub(crate) fn retained_visible_paths(
         .filter(|selected| visible_paths.iter().any(|visible| visible == *selected))
         .cloned()
         .collect()
-}
-
-pub(crate) fn annotate_selection_state(entries: &mut [ItemViewEntry], selected_paths: &[String]) {
-    if selected_paths.is_empty() {
-        for entry in entries {
-            entry.selected = false;
-        }
-        return;
-    }
-
-    let selected_paths = selected_paths
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
-    for entry in entries {
-        entry.selected = selected_paths.contains(entry.path.as_str());
-    }
 }
 
 pub(crate) fn filtered_entry_paths_for_slot(state: &AppState, slot: i32) -> Vec<String> {

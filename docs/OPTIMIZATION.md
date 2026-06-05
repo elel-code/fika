@@ -46,14 +46,14 @@ Rectangle viewport shell (clip: true)
   │    ├─ for item[index] in entries: Image primitive
   │    │    └─ local tile column/row 来自 reusable loop index
   │    ├─ for item[index] in entries: Text primitive
-  │    │    └─ 普通 compact 标题使用 Dolphin-style full-tile text frame；metadata 行才使用 title_y/title_line_height
+  │    │    └─ 普通 compact 标题使用 Rust-projected title_y/title_line_height 固定 line rect
   │    └─ optional metadata overlay (show-location only)
   │         └─ for metadata[index] in metadata: Text primitive；pane-local 稀疏模型只包含非空 group/location
   ├─ selection rectangle overlay
   └─ self-managed horizontal scrollbar
 ```
 
-主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。Dolphin 对照点是 `KStandardItemListView::setItemLayout()` 在 CompactLayout 下设置 `Qt::Horizontal`，`KItemListViewLayouter` 通过转置逻辑把纵向流映射成物理横向滚动，`KStandardItemListWidget::updateCompactLayoutTextCache()` 使用整个 widget 高度作为 compact 文本 frame。Fika 普通 `item.name` 也使用整块 tile 高度做文本框并垂直居中，避免大 zoom 下 tight line rect 裁掉标题；只有带 group/location 的 metadata 行继续使用 Rust 预计算的 `title_y/title_line_height` 多行位置。
+主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。Dolphin 对照点是 `KStandardItemListView::setItemLayout()` 在 CompactLayout 下设置 `Qt::Horizontal`，`KItemListViewLayouter` 通过转置逻辑把纵向流映射成物理横向滚动，`KStandardItemListWidget::updateCompactLayoutTextCache()` 预先计算 compact 文本位置和最大宽度。Fika 同样在 Rust render plan 中投影非零 `title_y/title_line_height/text_width`，Slint 只绘制固定 title line rect，避免大 zoom 下标题矩形退化导致 name 消失；group/location 则通过 pane-local sparse metadata overlay 绘制。
 
 ### 现有优化
 
@@ -172,11 +172,11 @@ changed viewport-x => {
 - 重叠行：比较 Rust sidecar `ItemViewRowToken`，只有 token 不同才 `set_row_data`
 - 尾部长度差：`remove` / `extend`
 
-`ItemViewRowToken` 覆盖 name/path/selection/media token/tile rect/text rect/font token 等轻量字段，避免为了比较复用而从 Slint `VecModel` 读取并克隆包含 `Image` 的整条 row。split pane snapshot 会复制到独立 `VecModel` 和 sidecar，避免两个 pane 共享同一个可见 row model。选中态从 token 投影成 pane-local `ItemViewHighlightEntry` 稀疏 model，由 Slint 单独绘制 highlight overlay；基础 `Image` / `Text` loop 不再携带 per-item selected background。
+`ItemViewRowToken` 覆盖 name/path/selection/media token/tile rect/text rect/font token 等轻量字段，避免为了比较复用而从 Slint `VecModel` 读取并克隆包含 `Image` 的整条 row。split pane snapshot 会复制到独立 `VecModel` 和 sidecar，避免两个 pane 共享同一个可见 row model。选中态只保存在 token sidecar 中，并投影成 pane-local `ItemViewHighlightEntry` 稀疏 model，由 Slint 单独绘制 highlight overlay；基础 `Image` / `Text` loop 和 `ItemViewEntry` row data 不再携带 per-item selected 状态。
 
-**收益**：连续滚动时重叠 virtual rows 不再因为 slice-local 坐标变化或 `Image` 对象差异被重发；selection、thumbnail、fallback icon、render rect 变化仍能按 row 精准更新。
+**收益**：连续滚动时重叠 virtual rows 不再因为 slice-local 坐标变化或 `Image` 对象差异被重发；selection 变化只刷新 token sidecar/sparse highlight，thumbnail、fallback icon、render rect 变化仍能按 row 精准更新。
 
-**验证**：`app::model_update` 测试覆盖前滑、后滑、无重叠、sidecar 修复、media token 比较和 selection row 更新；源码守卫测试防止重叠 row reuse 重新读取 `VecModel::row_data()`。
+**验证**：`app::model_update` 测试覆盖前滑、后滑、无重叠、sidecar 修复、media token 比较和 selection sidecar 更新；源码守卫测试防止重叠 row reuse 重新读取 `VecModel::row_data()`，并防止 `ItemViewEntry.selected` 回归。
 
 ---
 
@@ -233,7 +233,7 @@ changed viewport-x => {
 1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `ItemViewEntry` 字段，避免每个 tile 独立计算
 2. 删除独立 tile 组件边界，把可见 tile primitive 内联到 `SplitPaneView` 的 slice layer，避免继续维护旧 path-based item 组件
 3. 将 media/icon rect、text rect、group/title/location y 坐标和 line height 继续迁到 Rust render plan，`SplitPaneView` 的可见 item loop 不再为每项使用 `HorizontalLayout` / `VerticalLayout`
-4. 普通 compact item-view 的 tile height 与 row height 同源；普通标题按 Dolphin 的 compact text frame 使用整块 tile 高度并垂直居中，带 group/location 的 metadata 行才使用 Rust render plan 给出的 `title_y/title_line_height`
+4. 普通 compact item-view 的 tile height 与 row height 同源；普通标题按 Dolphin compact text cache 的分层方式使用 Rust render plan 给出的 `title_y/title_line_height/text_width` 固定 line rect，带 group/location 的 metadata 行复用同一 text rect 并通过 sparse overlay 绘制额外文本
 5. 基础 compact loop 无条件绘制 icon/media 和 `item.name`，避免普通目录标题依赖 metadata 绘制路径
 6. `show-location` metadata overlay 已改成 pane-local `ItemViewMetadataEntry` 稀疏模型，只下发非空 group/location 行；`SplitPaneView` 不再对普通空 metadata item 实例化隐藏 `Text`
 7. pane-level 颜色 token 仍由 `SplitPaneView` 下发；后续若切换到自绘 renderer，再把颜色/字体/media icon cache 一并纳入 renderer state
@@ -291,9 +291,9 @@ Slint: Rectangle viewport + input/DnD overlays
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD、selection、activation 与 context menu 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
 4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；可见 tile primitive 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
-5. 虚拟切片仍输出 `virtual_entries`，但主视图热字段已通过 `PaneViewData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）以及 viewport、selection revision 和空状态；可见 entries、highlights、metadata 都作为 pane-local 顶层 slot model 下发，避免 nested model in row；`PaneSlotData` 只保留 pane chrome/status/search/chooser 冷数据。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；普通 item 使用 Dolphin-style compact 横向布局，图标在左、名字在右，标题 Text 使用 full-tile frame 垂直居中；基础 compact loop 无条件绘制 `item.name`，带 group/location 的递归搜索结果才使用 `title_y/title_line_height` 并通过 sparse metadata overlay 叠加 group/location 文本。local `x/y` 改由 `for item[index]` 下标和 pane view metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
+5. 虚拟切片仍输出 `virtual_entries`，但主视图热字段已通过 `PaneViewData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）以及 viewport、selection revision 和空状态；可见 entries、highlights、metadata 都作为 pane-local 顶层 slot model 下发，避免 nested model in row；`PaneSlotData` 只保留 pane chrome/status/search/chooser 冷数据。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；普通 item 使用 Dolphin-style compact 横向布局，图标在左、名字在右，标题 Text 使用 Rust-projected fixed title line rect；基础 compact loop 无条件绘制 `item.name`，带 group/location 的递归搜索结果通过 sparse metadata overlay 叠加 group/location 文本。local `x/y` 改由 `for item[index]` 下标和 pane view metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
-7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。普通 item 标题绘制已按 Dolphin compact text cache 改为整 tile frame，解决最大 zoom 下 tight title rect 造成的 name 消失；递归搜索带位置元数据的 item 继续使用 Rust 提供的 `group_y/title_y/location_y` 多行 token，并在同一横向 text rect 额外显示 group/location。
+7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。普通 item 标题绘制已按 Dolphin compact text cache 的分层方式改为 Rust-projected fixed title line rect，解决最大 zoom 下 title geometry 退化造成的 name 消失；递归搜索带位置元数据的 item 继续使用 Rust 提供的 `group_y/title_y/location_y` 多行 token，并在同一横向 text rect 额外显示 group/location。
 8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 Rust item-view media renderer：虚拟切片进入 Slint 前会把成功缩略图或 fallback 文件/目录图标统一投影为 `ItemViewEntry.media`，主视图 loop 只保留一个 media `Image` primitive。
 9. `ItemViewEntry.media_token` 作为 Rust-side media 更新令牌进入可见 row；`model_update` 同时维护 pane-local `ItemViewRowToken` sidecar。虚拟切片滑动的重叠 row 先比较 sidecar token，token 相同就不读取 `VecModel::row_data()`，因此不会为了判断复用而克隆包含 `Image` 的整条 `ItemViewEntry`。split pane 快照也会复制到独立 `VecModel`，避免两个 pane 共享同一个可见 row 模型。
 10. show-location metadata overlay 已从 per-item 透明 `Rectangle` wrapper 和 `visible:` 过滤，收敛成 pane-local `ItemViewMetadataEntry` 稀疏模型；普通空 metadata row 不再进入 Slint overlay loop，split snapshot 也会复制独立 metadata model，保持 pane 独立。
@@ -503,7 +503,7 @@ fn sync_focus_navigation_ui(ui, state, previous_slot) {
 
 ---
 
-### V0 — `is_selected` 每 tile 一次 FFI 预计算
+### V0 — `is_selected` FFI 移出可见 tile loop
 
 **问题**（`ui/split_pane.slint:253`）：
 
@@ -518,17 +518,17 @@ selected: root.selection-revision >= 0 && root.is_selected(item.path);
 - `PaneRouting.is-selected` — 全局回调注册
 - `src/app/selection.rs` — `PaneSelection` 查找逻辑
 
-**实际实现**（✅ 已完成）：`ItemViewEntry` 带有 `selected: bool` 字段，`SplitPaneView` tile 直接读 model 字段：
+**实际实现**（✅ 已完成）：`ItemViewEntry` 不再带 `selected` 字段。Rust 侧把当前 pane 的 selection 只写入 pane-local `ItemViewRowToken` sidecar，再由 `split_view.rs` 投影成稀疏 `ItemViewHighlightEntry` model：
 
 ```slint
-selected: item.selected;
+for highlight[index] in root.highlights: Rectangle { ... }
 ```
 
-选择变化时，Rust 侧先更新当前 pane 的 `ItemViewRowToken` sidecar 并得到脏 row 列表，释放 `AppState` borrow 后再对当前 pane 的虚拟 `VecModel<ItemViewEntry>` 做逐行 `set_row_data` 更新；后台虚拟视图结果应用时也会用当前 pane 的 selection 调用 `annotate_selection_state`，防止旧异步结果覆盖当前高亮。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
+选择变化时只更新 token sidecar 和 sparse highlight model，不再对 `VecModel<ItemViewEntry>` 做 row-data 写回；后台虚拟视图结果应用时会用当前 pane selection 初始化 token sidecar，旧异步结果不会把高亮写进基础 row。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
 
-**收益**：每次选择变化（点击、框选、Ctrl+A）省 80-120 次 FFI 调用。
+**收益**：每次选择变化（点击、框选、Ctrl+A）省 80-120 次 FFI 调用，并避免 selection 变化重写可见 `ItemViewEntry` rows。
 
-**难度**：已完成。源码守卫测试覆盖 `selected: item.selected`，并防止恢复 tile 级 `is_selected` 回调。
+**难度**：已完成。源码守卫测试覆盖 sparse highlight overlay，并防止恢复 tile 级 `is_selected` 回调、`selected: item.selected` 或 `ItemViewEntry.selected`。
 
 ---
 
@@ -819,7 +819,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 
 | 阶段 | 改进 | 预计工作量 | 状态 |
 |------|------|-----------|------|
-| **Phase V0** | `is_selected` FFI 预计算到 ItemViewEntry | 1h | ✅ 已完成 |
+| **Phase V0** | `is_selected` FFI 移到 token sidecar / sparse highlight | 1h | ✅ 已完成 |
 | **Phase V1** | `virtual_entry_range` 双重计算融合 | 15min | ✅ 已完成 |
 | **Phase V2** | `filtered_entries_range` filter_map→map | 5min | ✅ 已完成 |
 | **Phase V3** | 旧 preview 路径删除 | 5min | ✅ 已完成/不适用 |

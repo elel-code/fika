@@ -314,7 +314,6 @@ mod tests {
             group: String::new().into(),
             location: String::new().into(),
             is_dir: false,
-            selected: false,
             thumbnail_state: 0,
             media: Image::default(),
             media_token: 0,

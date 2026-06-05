@@ -219,7 +219,6 @@ impl PaneEntrySnapshot {
             group: self.group.as_str().into(),
             location: self.location.as_str().into(),
             is_dir: self.is_dir,
-            selected: false,
             thumbnail_state: 0,
             media: Default::default(),
             media_token: 0,
@@ -1232,6 +1231,7 @@ mod tests {
             1,
             virtual_entries,
             true,
+            &[],
         );
 
         assert!(panes.open_peer_from_focused());
@@ -1363,6 +1363,7 @@ mod tests {
             0,
             vec![snapshot.to_item_view_entry()],
             false,
+            &[],
         );
 
         assert!(!view.has_renderable_virtual_entries());
@@ -1377,7 +1378,7 @@ mod tests {
         rendered.title_y = 14.5;
         rendered.title_line_height = 21.0;
         rendered.title_font_size = 15.0;
-        update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered], false);
+        update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered], false, &[]);
 
         assert!(view.has_renderable_virtual_entries());
 

@@ -66,7 +66,7 @@ impl ItemViewRowToken {
             group: entry.group.clone(),
             location: entry.location.clone(),
             is_dir: entry.is_dir,
-            selected: entry.selected,
+            selected: false,
             thumbnail_state: entry.thumbnail_state,
             media_token: entry.media_token,
             tile_width: entry.tile_width,
@@ -105,6 +105,14 @@ impl ItemViewRowToken {
 
     pub(crate) fn set_selected(&mut self, selected: bool) {
         self.selected = selected;
+    }
+
+    pub(crate) fn row_equals_ignoring_selection(&self, other: &Self) -> bool {
+        let mut current = self.clone();
+        let mut next = other.clone();
+        current.selected = false;
+        next.selected = false;
+        current == next
     }
 
     pub(crate) fn has_renderable_title(&self) -> bool {
@@ -842,7 +850,6 @@ mod tests {
             group: String::new().into(),
             location: String::new().into(),
             is_dir: false,
-            selected: false,
             thumbnail_state: 0,
             media: Image::default(),
             media_token: 0,
@@ -1024,6 +1031,32 @@ mod tests {
         assert_eq!(entry.tile_width, 129.0);
         assert_eq!(entry.text_x, 52.0);
         assert_eq!(entry.text_width, 75.0);
+        assert!(ItemViewRowToken::from_entry(entry).has_renderable_title());
+    }
+
+    #[test]
+    fn render_plan_keeps_titles_renderable_at_max_zoom() {
+        let mut entries = vec![test_entry(0)];
+
+        decorate_render_plan(
+            &mut entries,
+            ItemViewRenderPlanInput {
+                cell_width: 0.0,
+                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1),
+                show_location: false,
+            },
+        );
+
+        let entry = &entries[0];
+        assert_eq!(entry.tile_width, 170.0);
+        assert_eq!(entry.tile_height, 76.0);
+        assert_eq!(entry.media_width, 72.0);
+        assert_eq!(entry.media_height, 72.0);
+        assert_eq!(entry.text_x, 78.0);
+        assert_eq!(entry.text_width, 90.0);
+        assert_eq!(entry.title_y, 26.0);
+        assert_eq!(entry.title_line_height, 24.0);
+        assert!(entry.title_y + entry.title_line_height <= entry.tile_height);
         assert!(ItemViewRowToken::from_entry(entry).has_renderable_title());
     }
 

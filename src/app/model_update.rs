@@ -2,7 +2,6 @@ use crate::app::item_view::ItemViewRowToken;
 use crate::app::pane::PaneView;
 use crate::{ItemViewEntry, ItemViewMetadataEntry};
 use slint::{Model, ModelRc, VecModel};
-use std::collections::HashSet;
 use std::rc::Rc;
 
 pub(crate) fn new_item_view_entries_model(entries: Vec<ItemViewEntry>) -> ModelRc<ItemViewEntry> {
@@ -52,8 +51,22 @@ pub(crate) fn new_item_view_metadata_model(
     }
 }
 
-fn item_view_row_tokens(entries: &[ItemViewEntry]) -> Vec<ItemViewRowToken> {
-    entries.iter().map(ItemViewRowToken::from_entry).collect()
+fn item_view_row_tokens(
+    entries: &[ItemViewEntry],
+    selected_paths: &[String],
+) -> Vec<ItemViewRowToken> {
+    let selected = selected_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    entries
+        .iter()
+        .map(|entry| {
+            let mut token = ItemViewRowToken::from_entry(entry);
+            token.set_selected(selected.contains(entry.path.as_str()));
+            token
+        })
+        .collect()
 }
 
 pub(crate) fn update_item_view_entries_model(
@@ -62,8 +75,9 @@ pub(crate) fn update_item_view_entries_model(
     new_start: usize,
     current_tokens: &mut Vec<ItemViewRowToken>,
     entries: Vec<ItemViewEntry>,
+    selected_paths: &[String],
 ) -> Option<ModelRc<ItemViewEntry>> {
-    let mut next_tokens = item_view_row_tokens(&entries);
+    let mut next_tokens = item_view_row_tokens(&entries, selected_paths);
     let Some(model) = current.as_any().downcast_ref::<VecModel<ItemViewEntry>>() else {
         *current_tokens = next_tokens;
         return Some(new_item_view_entries_model(entries));
@@ -86,6 +100,7 @@ pub(crate) fn update_pane_item_view_entries_model(
     start_column: usize,
     entries: Vec<ItemViewEntry>,
     show_location: bool,
+    selected_paths: &[String],
 ) {
     view.virtual_metadata_entries = new_item_view_metadata_model(&entries, show_location);
     let current = view.virtual_entries.clone();
@@ -96,6 +111,7 @@ pub(crate) fn update_pane_item_view_entries_model(
         start_index,
         &mut view.virtual_entry_tokens,
         entries,
+        selected_paths,
     ) {
         view.virtual_entries = model;
     }
@@ -103,62 +119,43 @@ pub(crate) fn update_pane_item_view_entries_model(
     view.virtual_start_column = start_column;
 }
 
-pub(crate) fn update_item_view_entry_selection_tokens(
+pub(crate) fn update_item_view_selection_tokens(
     current_tokens: &mut [ItemViewRowToken],
     selected_paths: &[String],
-) -> Vec<(usize, bool)> {
+) -> bool {
+    if selected_paths.is_empty() {
+        let mut changed = false;
+        for token in current_tokens {
+            if token.selected() {
+                token.set_selected(false);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
     let selected = selected_paths
         .iter()
         .map(String::as_str)
-        .collect::<HashSet<_>>();
-    let mut updates = Vec::new();
-    for (row, token) in current_tokens.iter_mut().enumerate() {
+        .collect::<std::collections::HashSet<_>>();
+    let mut changed = false;
+    for token in current_tokens.iter_mut() {
         let selected = selected.contains(token.path());
         if token.selected() != selected {
             token.set_selected(selected);
-            updates.push((row, selected));
+            changed = true;
         }
-    }
-    updates
-}
-
-pub(crate) fn apply_item_view_entry_selection_updates(
-    current: &ModelRc<ItemViewEntry>,
-    updates: &[(usize, bool)],
-) -> bool {
-    let Some(model) = current.as_any().downcast_ref::<VecModel<ItemViewEntry>>() else {
-        return false;
-    };
-    let mut changed = false;
-    for &(row, selected) in updates {
-        let Some(mut entry) = model.row_data(row) else {
-            continue;
-        };
-        if entry.selected == selected {
-            continue;
-        }
-        entry.selected = selected;
-        model.set_row_data(row, entry);
-        changed = true;
     }
     changed
 }
 
 #[cfg(test)]
-fn update_item_view_entries_model_selection(
-    current: &ModelRc<ItemViewEntry>,
-    current_tokens: &mut [ItemViewRowToken],
-    selected_paths: &[String],
-) -> bool {
-    if current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewEntry>>()
-        .is_none()
-    {
-        return false;
-    }
-    let updates = update_item_view_entry_selection_tokens(current_tokens, selected_paths);
-    apply_item_view_entry_selection_updates(current, &updates)
+fn selected_token_rows(current_tokens: &[ItemViewRowToken]) -> Vec<String> {
+    current_tokens
+        .iter()
+        .filter(|token| token.selected())
+        .map(|token| token.path().to_string())
+        .collect()
 }
 
 fn update_vec_model(
@@ -203,7 +200,11 @@ fn update_vec_model(
 
     let overlap_rows = overlap_start - new_start..overlap_end - new_start;
     for row in overlap_rows {
-        if current_tokens.get(row) != next_tokens.get(row) {
+        let rows_differ = current_tokens
+            .get(row)
+            .zip(next_tokens.get(row))
+            .is_none_or(|(current, next)| !current.row_equals_ignoring_selection(next));
+        if rows_differ {
             model.set_row_data(row, entries[row].clone());
         }
     }
@@ -232,7 +233,6 @@ mod tests {
             group: String::new().into(),
             location: String::new().into(),
             is_dir: false,
-            selected: false,
             thumbnail_state: 0,
             media: Image::default(),
             media_token: 0,
@@ -261,14 +261,6 @@ mod tests {
             .collect()
     }
 
-    fn selected_rows(model: &ModelRc<ItemViewEntry>) -> Vec<String> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .filter(|entry| entry.selected)
-            .map(|entry| entry.path.to_string())
-            .collect()
-    }
-
     fn colored_image(pixel: Rgba8Pixel) -> Image {
         let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
         buffer.make_mut_slice()[0] = pixel;
@@ -287,13 +279,21 @@ mod tests {
         let mut left = PaneView::default();
         let mut right = PaneView::default();
 
-        update_pane_item_view_entries_model(&mut left, 0, 0, (0..3).map(entry).collect(), false);
+        update_pane_item_view_entries_model(
+            &mut left,
+            0,
+            0,
+            (0..3).map(entry).collect(),
+            false,
+            &[],
+        );
         update_pane_item_view_entries_model(
             &mut right,
             20,
             4,
             (20..23).map(entry).collect(),
             false,
+            &[],
         );
 
         assert_eq!(left.virtual_start_index, 0);
@@ -319,6 +319,7 @@ mod tests {
             5,
             (22..25).map(entry).collect(),
             false,
+            &[],
         );
 
         assert_eq!(
@@ -334,13 +335,20 @@ mod tests {
     #[test]
     fn item_view_entry_model_reuses_vec_model_when_range_slides_forward() {
         let initial_entries = (0..6).map(entry).collect::<Vec<_>>();
-        let mut tokens = item_view_row_tokens(&initial_entries);
+        let mut tokens = item_view_row_tokens(&initial_entries, &[]);
         let model = new_item_view_entries_model(initial_entries);
         let original = model.clone();
 
         assert!(
-            update_item_view_entries_model(&model, 0, 2, &mut tokens, (2..8).map(entry).collect())
-                .is_none()
+            update_item_view_entries_model(
+                &model,
+                0,
+                2,
+                &mut tokens,
+                (2..8).map(entry).collect(),
+                &[]
+            )
+            .is_none()
         );
 
         assert_eq!(model, original);
@@ -356,13 +364,20 @@ mod tests {
     #[test]
     fn item_view_entry_model_reuses_vec_model_when_range_slides_backward() {
         let initial_entries = (4..10).map(entry).collect::<Vec<_>>();
-        let mut tokens = item_view_row_tokens(&initial_entries);
+        let mut tokens = item_view_row_tokens(&initial_entries, &[]);
         let model = new_item_view_entries_model(initial_entries);
         let original = model.clone();
 
         assert!(
-            update_item_view_entries_model(&model, 4, 2, &mut tokens, (2..8).map(entry).collect())
-                .is_none()
+            update_item_view_entries_model(
+                &model,
+                4,
+                2,
+                &mut tokens,
+                (2..8).map(entry).collect(),
+                &[]
+            )
+            .is_none()
         );
 
         assert_eq!(model, original);
@@ -378,7 +393,7 @@ mod tests {
     #[test]
     fn item_view_entry_model_resets_same_vec_model_without_overlap() {
         let initial_entries = (0..3).map(entry).collect::<Vec<_>>();
-        let mut tokens = item_view_row_tokens(&initial_entries);
+        let mut tokens = item_view_row_tokens(&initial_entries, &[]);
         let model = new_item_view_entries_model(initial_entries);
         let original = model.clone();
 
@@ -388,7 +403,8 @@ mod tests {
                 0,
                 20,
                 &mut tokens,
-                (20..23).map(entry).collect()
+                (20..23).map(entry).collect(),
+                &[]
             )
             .is_none()
         );
@@ -410,8 +426,15 @@ mod tests {
         let model = new_item_view_entries_model(initial_entries);
 
         assert!(
-            update_item_view_entries_model(&model, 0, 2, &mut tokens, (2..8).map(entry).collect())
-                .is_none()
+            update_item_view_entries_model(
+                &model,
+                0,
+                2,
+                &mut tokens,
+                (2..8).map(entry).collect(),
+                &[]
+            )
+            .is_none()
         );
 
         assert_eq!(tokens.len(), 6);
@@ -430,7 +453,7 @@ mod tests {
         empty_title.title_y = 0.0;
         empty_title.title_line_height = 0.0;
         empty_title.title_font_size = 0.0;
-        let mut tokens = item_view_row_tokens(&[empty_title.clone()]);
+        let mut tokens = item_view_row_tokens(&[empty_title.clone()], &[]);
         let model = new_item_view_entries_model(vec![empty_title]);
         let original = model.clone();
 
@@ -441,7 +464,7 @@ mod tests {
         rendered_title.title_line_height = 21.0;
         rendered_title.title_font_size = 15.0;
         assert!(
-            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![rendered_title])
+            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![rendered_title], &[])
                 .is_none()
         );
 
@@ -460,7 +483,7 @@ mod tests {
         old_entry.media = colored_image(Rgba8Pixel::new(255, 0, 0, 255));
         old_entry.media_token = 42;
         let initial_entries = vec![old_entry];
-        let mut tokens = item_view_row_tokens(&initial_entries);
+        let mut tokens = item_view_row_tokens(&initial_entries, &[]);
         let model = new_item_view_entries_model(initial_entries);
         let original = model.clone();
 
@@ -468,7 +491,7 @@ mod tests {
         same_token_entry.media = colored_image(Rgba8Pixel::new(0, 0, 255, 255));
         same_token_entry.media_token = 42;
         assert!(
-            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![same_token_entry])
+            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![same_token_entry], &[])
                 .is_none()
         );
 
@@ -483,7 +506,7 @@ mod tests {
         new_token_entry.media = colored_image(Rgba8Pixel::new(0, 0, 255, 255));
         new_token_entry.media_token = 43;
         assert!(
-            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![new_token_entry])
+            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![new_token_entry], &[])
                 .is_none()
         );
 
@@ -493,34 +516,64 @@ mod tests {
     }
 
     #[test]
-    fn pane_item_view_entry_model_updates_selection_without_replacing_entries() {
+    fn pane_item_view_entry_model_updates_selection_sidecar_without_replacing_entries() {
         let mut view = PaneView::default();
-        update_pane_item_view_entries_model(&mut view, 0, 0, (0..4).map(entry).collect(), false);
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            0,
+            (0..4).map(entry).collect(),
+            false,
+            &[],
+        );
         let original = view.virtual_entries.clone();
 
-        assert!(update_item_view_entries_model_selection(
-            &view.virtual_entries,
+        assert!(update_item_view_selection_tokens(
             &mut view.virtual_entry_tokens,
             &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         ));
         assert_eq!(view.virtual_entries, original);
         assert_eq!(
-            selected_rows(&view.virtual_entries),
+            selected_token_rows(&view.virtual_entry_tokens),
             vec!["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         );
 
-        assert!(!update_item_view_entries_model_selection(
-            &view.virtual_entries,
+        assert!(!update_item_view_selection_tokens(
             &mut view.virtual_entry_tokens,
             &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         ));
 
-        assert!(update_item_view_entries_model_selection(
-            &view.virtual_entries,
+        assert!(update_item_view_selection_tokens(
             &mut view.virtual_entry_tokens,
             &[]
         ));
-        assert!(selected_rows(&view.virtual_entries).is_empty());
+        assert!(selected_token_rows(&view.virtual_entry_tokens).is_empty());
+    }
+
+    #[test]
+    fn virtual_row_reuse_ignores_selection_sidecar_changes() {
+        let initial_entries = (0..3).map(entry).collect::<Vec<_>>();
+        let mut tokens = item_view_row_tokens(&initial_entries, &["/tmp/item-1".to_string()]);
+        let model = new_item_view_entries_model(initial_entries);
+        let original = model.clone();
+
+        assert!(
+            update_item_view_entries_model(
+                &model,
+                0,
+                0,
+                &mut tokens,
+                (0..3).map(entry).collect(),
+                &["/tmp/item-2".to_string()]
+            )
+            .is_none()
+        );
+
+        assert_eq!(model, original);
+        assert_eq!(
+            selected_token_rows(&tokens),
+            vec!["/tmp/item-2".to_string()]
+        );
     }
 
     #[test]
@@ -538,7 +591,7 @@ mod tests {
             .expect("overlap loop should be present");
 
         assert!(
-            overlap_body.contains("current_tokens.get(row) != next_tokens.get(row)")
+            overlap_body.contains("!current.row_equals_ignoring_selection(next)")
                 && overlap_body.contains("model.set_row_data(row, entries[row].clone());")
                 && !overlap_body.contains(".row_data("),
             "overlap row reuse should compare the Rust sidecar token instead of cloning current ItemViewEntry rows from Slint"

@@ -351,12 +351,11 @@ export component SplitPaneView inherits Rectangle {
                 for item[index] in root.entries: Text {
                     private property <int> tile-row: index.mod(root.rows-per-column);
                     private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
-                    private property <bool> metadata-title: root.show-location && (item.group != "" || item.location != "");
 
                     x: self.tile-column * root.column-width + item.text_x * 1px;
-                    y: root.preview-padding + self.tile-row * root.row-height + (self.metadata-title ? item.title_y * 1px : 0px);
+                    y: root.preview-padding + self.tile-row * root.row-height + item.title_y * 1px;
                     width: item.text_width * 1px;
-                    height: self.metadata-title ? item.title_line_height * 1px : item.tile_height * 1px;
+                    height: item.title_line_height * 1px;
                     text: item.name;
                     color: root.title-color;
                     font-size: item.title_font_size * 1px;
