@@ -4,97 +4,11 @@ use crate::app::geometry::{
 };
 use crate::app::selection::{filtered_entry_at_for_slot, filtered_entry_count_for_slot};
 use crate::app::state::AppState;
-use crate::{AppWindow, FileEntry, ItemViewEntry};
-use slint::{ComponentHandle, SharedString};
+use crate::{AppWindow, FileEntry};
+use slint::ComponentHandle;
 use std::ops::Range;
 
 const SELECTION_DRAG_THRESHOLD: f32 = 5.0;
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ItemViewRowToken {
-    name: SharedString,
-    path: SharedString,
-    is_dir: bool,
-    selected: bool,
-    thumbnail_state: i32,
-    media_token: i32,
-    tile_width: f32,
-    tile_height: f32,
-    media_x: f32,
-    media_y: f32,
-    text_x: f32,
-    text_width: f32,
-    title_y: f32,
-    title_line_height: f32,
-    media_width: f32,
-    media_height: f32,
-    title_font_size: f32,
-}
-
-impl ItemViewRowToken {
-    pub(crate) fn from_entry(entry: &ItemViewEntry) -> Self {
-        Self {
-            name: entry.name.clone(),
-            path: entry.path.clone(),
-            is_dir: entry.is_dir,
-            selected: false,
-            thumbnail_state: entry.thumbnail_state,
-            media_token: entry.media_token,
-            tile_width: entry.tile_width,
-            tile_height: entry.tile_height,
-            media_x: entry.media_x,
-            media_y: entry.media_y,
-            text_x: entry.text_x,
-            text_width: entry.text_width,
-            title_y: entry.title_y,
-            title_line_height: entry.title_line_height,
-            media_width: entry.media_width,
-            media_height: entry.media_height,
-            title_font_size: entry.title_font_size,
-        }
-    }
-
-    pub(crate) fn path(&self) -> &str {
-        self.path.as_str()
-    }
-
-    pub(crate) fn selected(&self) -> bool {
-        self.selected
-    }
-
-    pub(crate) fn tile_width(&self) -> f32 {
-        self.tile_width
-    }
-
-    pub(crate) fn tile_height(&self) -> f32 {
-        self.tile_height
-    }
-
-    pub(crate) fn set_selected(&mut self, selected: bool) {
-        self.selected = selected;
-    }
-
-    pub(crate) fn row_equals_ignoring_selection(&self, other: &Self) -> bool {
-        let mut current = self.clone();
-        let mut next = other.clone();
-        current.selected = false;
-        next.selected = false;
-        current == next
-    }
-
-    pub(crate) fn has_renderable_title(&self) -> bool {
-        !self.name.as_str().trim().is_empty()
-            && self.tile_width > 1.0
-            && self.tile_height > 1.0
-            && self.media_width > 1.0
-            && self.media_height > 1.0
-            && self.text_x >= 0.0
-            && self.text_width > 1.0
-            && self.title_y >= 0.0
-            && self.title_line_height > 1.0
-            && self.title_font_size > 1.0
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewLayout {
@@ -503,19 +417,23 @@ mod tests {
     #[test]
     fn item_view_controller_does_not_own_renderer_pipeline() {
         let item_view = include_str!("item_view.rs");
+        let model_update = include_str!("model_update.rs");
         let renderer = include_str!("item_view_renderer.rs");
         let render_metrics = concat!("struct ", "ItemViewRenderMetrics");
         let render_plan = concat!("decorate_", "render_plan_with_metadata");
         let fallback_media = concat!("decorate_", "fallback_media");
+        let row_token = concat!("struct ", "ItemViewRowToken");
 
         assert!(
             !item_view.contains(render_metrics)
                 && !item_view.contains(render_plan)
                 && !item_view.contains(fallback_media)
+                && !item_view.contains(row_token)
+                && model_update.contains(row_token)
                 && renderer.contains(render_metrics)
                 && renderer.contains(render_plan)
                 && renderer.contains(fallback_media),
-            "item_view.rs should stay focused on controller/input/hit-test; renderer projection and fallback media belong in item_view_renderer.rs"
+            "item_view.rs should stay focused on controller/input/hit-test; renderer projection belongs in item_view_renderer.rs and row reuse sidecars belong in model_update.rs"
         );
     }
 

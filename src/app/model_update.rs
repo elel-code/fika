@@ -1,8 +1,93 @@
-use crate::app::item_view::ItemViewRowToken;
 use crate::app::pane::PaneView;
 use crate::{ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry};
-use slint::{Model, ModelRc, VecModel};
+use slint::{Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewRowToken {
+    name: SharedString,
+    path: SharedString,
+    is_dir: bool,
+    selected: bool,
+    thumbnail_state: i32,
+    media_token: i32,
+    tile_width: f32,
+    tile_height: f32,
+    media_x: f32,
+    media_y: f32,
+    text_x: f32,
+    text_width: f32,
+    title_y: f32,
+    title_line_height: f32,
+    media_width: f32,
+    media_height: f32,
+    title_font_size: f32,
+}
+
+impl ItemViewRowToken {
+    pub(crate) fn from_entry(entry: &ItemViewEntry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            path: entry.path.clone(),
+            is_dir: entry.is_dir,
+            selected: false,
+            thumbnail_state: entry.thumbnail_state,
+            media_token: entry.media_token,
+            tile_width: entry.tile_width,
+            tile_height: entry.tile_height,
+            media_x: entry.media_x,
+            media_y: entry.media_y,
+            text_x: entry.text_x,
+            text_width: entry.text_width,
+            title_y: entry.title_y,
+            title_line_height: entry.title_line_height,
+            media_width: entry.media_width,
+            media_height: entry.media_height,
+            title_font_size: entry.title_font_size,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &str {
+        self.path.as_str()
+    }
+
+    pub(crate) fn selected(&self) -> bool {
+        self.selected
+    }
+
+    pub(crate) fn tile_width(&self) -> f32 {
+        self.tile_width
+    }
+
+    pub(crate) fn tile_height(&self) -> f32 {
+        self.tile_height
+    }
+
+    pub(crate) fn set_selected(&mut self, selected: bool) {
+        self.selected = selected;
+    }
+
+    pub(crate) fn row_equals_ignoring_selection(&self, other: &Self) -> bool {
+        let mut current = self.clone();
+        let mut next = other.clone();
+        current.selected = false;
+        next.selected = false;
+        current == next
+    }
+
+    pub(crate) fn has_renderable_title(&self) -> bool {
+        !self.name.as_str().trim().is_empty()
+            && self.tile_width > 1.0
+            && self.tile_height > 1.0
+            && self.media_width > 1.0
+            && self.media_height > 1.0
+            && self.text_x >= 0.0
+            && self.text_width > 1.0
+            && self.title_y >= 0.0
+            && self.title_line_height > 1.0
+            && self.title_font_size > 1.0
+    }
+}
 
 pub(crate) fn new_item_view_entries_model(entries: Vec<ItemViewEntry>) -> ModelRc<ItemViewEntry> {
     ModelRc::new(Rc::new(VecModel::from(entries)))
