@@ -98,8 +98,9 @@ use app::split_view::{
 use app::state::PaneExternalEdit;
 use app::state::{AppState, DeviceAction};
 use app::thumbnail_pipeline::{
-    apply_thumbnail_load_to_state_for_pane, decorate_entries_with_cached_thumbnails_for_pane,
-    prioritize_thumbnail_entries, thumbnail_schedule_batch_for_pane,
+    ThumbnailScheduleEntry, ThumbnailScheduleRow, apply_thumbnail_load_to_state_for_pane,
+    decorate_entries_with_cached_thumbnails_for_pane, prioritize_thumbnail_entries,
+    thumbnail_schedule_batch_for_pane,
 };
 use app::transfer::{
     cancel_queued_operations, pane_drop_allowed, pane_drop_target_path, place_drop_allowed,
@@ -3947,12 +3948,33 @@ fn icon_zoom_range_hint(
         } else {
             plan.visible_range
         };
+        let candidate = align_zoom_range_for_rows(candidate, layout.rows_per_column, visible_count);
         if candidate.is_empty() {
             continue;
         }
         range_hint = Some(merge_ranges(range_hint, candidate));
     }
     range_hint
+}
+
+fn align_zoom_range_for_rows(
+    range: Range<usize>,
+    rows_per_column: usize,
+    entry_count: usize,
+) -> Range<usize> {
+    if range.is_empty() || entry_count == 0 {
+        return range.start.min(entry_count)..range.start.min(entry_count);
+    }
+
+    let rows_per_column = rows_per_column.max(1);
+    let start = (range.start.min(entry_count) / rows_per_column) * rows_per_column;
+    let end = range
+        .end
+        .min(entry_count)
+        .max(start)
+        .div_ceil(rows_per_column)
+        * rows_per_column;
+    start..end.min(entry_count).max(start)
 }
 
 fn merge_ranges(current: Option<Range<usize>>, next: Range<usize>) -> Range<usize> {
@@ -4549,12 +4571,12 @@ fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     clear_selection_for_slot(ui, state, slot);
 }
 
-fn schedule_visible_thumbnails(
+fn schedule_visible_thumbnails<T: ThumbnailScheduleRow + ?Sized>(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     pane_id: u64,
-    entries: &[&ItemViewEntry],
+    entries: &[&T],
     size_px: u32,
     announce: bool,
 ) {
@@ -4685,8 +4707,11 @@ fn schedule_visible_thumbnails_for_slot(
         let Some(pane) = state_ref.panes.pane_for_slot(slot) else {
             return;
         };
-        let entries = (0..pane.view.virtual_entries.row_count())
-            .filter_map(|row| pane.view.virtual_entries.row_data(row))
+        let entries = pane
+            .view
+            .virtual_entry_tokens
+            .iter()
+            .map(ThumbnailScheduleEntry::from_row_token)
             .collect::<Vec<_>>();
         if entries.is_empty() {
             return;
@@ -4834,7 +4859,16 @@ fn sync_pane_icon_zoom_layout_for_slot(
     if try_relayout_cached_pane_icon_zoom_layout(ui, state, slot) {
         return;
     }
-    sync_pane_layout_for_slot_with_thumbnail_scheduling(ui, state, bridge, slot, false);
+    prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);
+}
+
+fn prepare_pane_icon_zoom_layout_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);
 }
 
 fn try_relayout_cached_pane_icon_zoom_layout(
@@ -5705,6 +5739,13 @@ mod tests {
             cached_zoom_relayout_range(&(5..30), &(0..40), &(6..24), 4, 100),
             None
         );
+    }
+
+    #[test]
+    fn icon_zoom_range_hint_aligns_each_candidate_to_target_rows() {
+        assert_eq!(align_zoom_range_for_rows(13..21, 4, 100), 12..24);
+        assert_eq!(align_zoom_range_for_rows(98..100, 8, 100), 96..100);
+        assert_eq!(align_zoom_range_for_rows(13..13, 4, 100), 13..13);
     }
 
     #[test]
@@ -6870,6 +6911,11 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn try_relayout_cached_pane_icon_zoom_layout("))
             .map(|(body, _)| body)
             .expect("icon zoom layout body should be present");
+        let prepare_body = source
+            .split_once("fn prepare_pane_icon_zoom_layout_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn try_relayout_cached_pane_icon_zoom_layout("))
+            .map(|(body, _)| body)
+            .expect("icon zoom background prepare body should be present");
         let fast_path_body = source
             .split_once("fn try_relayout_cached_pane_icon_zoom_layout(")
             .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
@@ -6909,8 +6955,10 @@ mod tests {
         );
         assert!(
             icon_zoom_body.contains("try_relayout_cached_pane_icon_zoom_layout(ui, state, slot)")
-                && icon_zoom_body.contains(
-                    "sync_pane_layout_for_slot_with_thumbnail_scheduling(ui, state, bridge, slot, false);"
+                && icon_zoom_body.contains("prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);")
+                && !icon_zoom_body.contains("sync_pane_layout_for_slot_with_thumbnail_scheduling")
+                && prepare_body.contains(
+                    "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);"
                 )
                 && fast_path_body.contains("relayout_pane_item_view_entries_model(")
                 && fast_path_body.contains("let preferred_range = icon_zoom_range_hint(")
@@ -6919,7 +6967,7 @@ mod tests {
                 && fast_path_body.contains("prewarm_pane_fallback_media(pane, zoom_level, dark);")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
                 && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);"),
-            "icon zoom should reuse the current virtual slice when it covers the new Dolphin-style visible range, and only fall back to snapshot rebuild when needed"
+            "icon zoom should reuse the current virtual slice synchronously when it covers the new Dolphin-style visible range, and move cache-miss snapshot rebuilds off the input event"
         );
     }
 
@@ -7061,6 +7109,25 @@ mod tests {
                     .contains("sync_virtual_entries_for_slot(ui, state, bridge, slot, false);")
                 && !flush_body.contains("sync_virtual_entries(ui, state, bridge, false);"),
             "thumbnail flush should apply pending loads and refresh each affected pane slot once"
+        );
+    }
+
+    #[test]
+    fn delayed_thumbnail_scheduling_uses_row_tokens_without_slint_image_clones() {
+        let source = include_str!("main.rs");
+        let schedule_body = source
+            .split_once("fn schedule_visible_thumbnails_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn current_pane_visible_range("))
+            .map(|(body, _)| body)
+            .expect("visible thumbnail scheduling body should be present");
+
+        assert!(
+            schedule_body.contains(".virtual_entry_tokens")
+                && schedule_body.contains(".map(ThumbnailScheduleEntry::from_row_token)")
+                && schedule_body.contains("prioritize_thumbnail_entries(&entries")
+                && !schedule_body.contains(".virtual_entries")
+                && !schedule_body.contains("row_data("),
+            "coalesced zoom thumbnail scheduling should use Rust row tokens instead of cloning Slint ItemViewEntry rows that carry Image data"
         );
     }
 

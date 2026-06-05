@@ -30,6 +30,22 @@ impl ItemViewRowToken {
         self.path.as_str()
     }
 
+    pub(crate) fn path_shared(&self) -> SharedString {
+        self.path.clone()
+    }
+
+    pub(crate) fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    pub(crate) fn thumbnail_state(&self) -> i32 {
+        self.thumbnail_state
+    }
+
+    pub(crate) fn media_token(&self) -> i32 {
+        self.media_token
+    }
+
     pub(crate) fn selected(&self) -> bool {
         self.selected
     }

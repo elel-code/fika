@@ -1,13 +1,94 @@
 use crate::ItemViewEntry;
+use crate::app::model_update::ItemViewRowToken;
 use crate::app::state::AppState;
 use crate::fs::thumbnails;
-use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 pub(crate) const MAX_THUMBNAIL_CACHE_ENTRIES: usize = 512;
 pub(crate) const MAX_THUMBNAIL_FAILURE_ENTRIES: usize = 512;
 pub(crate) const MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC: usize = 96;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ThumbnailScheduleEntry {
+    path: SharedString,
+    is_dir: bool,
+    thumbnail_state: i32,
+    media_token: i32,
+}
+
+impl ThumbnailScheduleEntry {
+    pub(crate) fn from_row_token(token: &ItemViewRowToken) -> Self {
+        Self {
+            path: token.path_shared(),
+            is_dir: token.is_dir(),
+            thumbnail_state: token.thumbnail_state(),
+            media_token: token.media_token(),
+        }
+    }
+}
+
+pub(crate) trait ThumbnailScheduleRow {
+    fn path(&self) -> &str;
+    fn is_dir(&self) -> bool;
+    fn thumbnail_state(&self) -> i32;
+    fn media_token(&self) -> i32;
+}
+
+impl ThumbnailScheduleRow for ItemViewEntry {
+    fn path(&self) -> &str {
+        self.path.as_str()
+    }
+
+    fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    fn thumbnail_state(&self) -> i32 {
+        self.thumbnail_state
+    }
+
+    fn media_token(&self) -> i32 {
+        self.media_token
+    }
+}
+
+impl ThumbnailScheduleRow for ItemViewRowToken {
+    fn path(&self) -> &str {
+        self.path()
+    }
+
+    fn is_dir(&self) -> bool {
+        self.is_dir()
+    }
+
+    fn thumbnail_state(&self) -> i32 {
+        self.thumbnail_state()
+    }
+
+    fn media_token(&self) -> i32 {
+        self.media_token()
+    }
+}
+
+impl ThumbnailScheduleRow for ThumbnailScheduleEntry {
+    fn path(&self) -> &str {
+        self.path.as_str()
+    }
+
+    fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    fn thumbnail_state(&self) -> i32 {
+        self.thumbnail_state
+    }
+
+    fn media_token(&self) -> i32 {
+        self.media_token
+    }
+}
 
 pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
     state: &AppState,
@@ -38,11 +119,11 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
     }
 }
 
-pub(crate) fn prioritize_thumbnail_entries(
-    entries: &[ItemViewEntry],
+pub(crate) fn prioritize_thumbnail_entries<T: ThumbnailScheduleRow>(
+    entries: &[T],
     virtual_start_index: usize,
     visible_range: Range<usize>,
-) -> Vec<&ItemViewEntry> {
+) -> Vec<&T> {
     let visible_start = visible_range
         .start
         .saturating_sub(virtual_start_index)
@@ -110,17 +191,17 @@ pub(crate) fn thumbnail_schedule_candidate(
     thumbnail_schedule_candidate_for_pane(state, state.panes.focused().id, entry, size_px)
 }
 
-pub(crate) fn thumbnail_schedule_candidate_for_pane(
+pub(crate) fn thumbnail_schedule_candidate_for_pane<T: ThumbnailScheduleRow + ?Sized>(
     state: &AppState,
     pane_id: u64,
-    entry: &ItemViewEntry,
+    entry: &T,
     size_px: u32,
 ) -> Option<(PathBuf, thumbnails::ThumbnailKey)> {
-    if entry.is_dir {
+    if entry.is_dir() {
         return None;
     }
 
-    let path = PathBuf::from(entry.path.as_str());
+    let path = PathBuf::from(entry.path());
     if !thumbnails::is_thumbnail_candidate(&path) {
         return None;
     }
@@ -128,14 +209,14 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane(
     let Ok(key) = thumbnails::key_for(&path, size_px) else {
         return None;
     };
-    if entry.thumbnail_state == 2 && entry.media_token == key.item_view_media_token() {
+    if entry.thumbnail_state() == 2 && entry.media_token() == key.item_view_media_token() {
         return None;
     }
     if state.thumbnail_cache.contains_key(&key) || state.thumbnail_failures.contains_key(&key) {
         return None;
     }
     let pane = state.panes.pane_by_id(pane_id)?;
-    if pane.view.thumbnail_pending_key(entry.path.as_str()) == Some(&key) {
+    if pane.view.thumbnail_pending_key(entry.path()) == Some(&key) {
         return None;
     }
 
@@ -143,18 +224,18 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane(
 }
 
 #[cfg(test)]
-pub(crate) fn thumbnail_schedule_batch(
+pub(crate) fn thumbnail_schedule_batch<T: ThumbnailScheduleRow + ?Sized>(
     state: &mut AppState,
-    entries: &[&ItemViewEntry],
+    entries: &[&T],
     size_px: u32,
 ) -> Vec<PathBuf> {
     thumbnail_schedule_batch_for_pane(state, state.panes.focused().id, entries, size_px)
 }
 
-pub(crate) fn thumbnail_schedule_batch_for_pane(
+pub(crate) fn thumbnail_schedule_batch_for_pane<T: ThumbnailScheduleRow + ?Sized>(
     state: &mut AppState,
     pane_id: u64,
-    entries: &[&ItemViewEntry],
+    entries: &[&T],
     size_px: u32,
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -163,6 +244,7 @@ pub(crate) fn thumbnail_schedule_batch_for_pane(
             break;
         }
 
+        let entry = *entry;
         let Some((path, key)) =
             thumbnail_schedule_candidate_for_pane(state, pane_id, entry, size_px)
         else {
@@ -172,7 +254,7 @@ pub(crate) fn thumbnail_schedule_batch_for_pane(
             continue;
         };
         pane.view
-            .insert_thumbnail_pending(entry.path.to_string(), key);
+            .insert_thumbnail_pending(entry.path().to_string(), key);
         paths.push(path);
     }
     paths
@@ -652,6 +734,54 @@ mod tests {
                 "item-19.png".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn thumbnail_schedule_entries_can_derive_from_row_tokens_without_images() {
+        let temp_dir = temp_test_dir("row-token-schedule");
+        let entries = (0..6)
+            .map(|index| {
+                let path = temp_dir.join(format!("item-{index}.png"));
+                std::fs::write(&path, b"not a real image").unwrap();
+                test_entry(&format!("item-{index}.png"), path.to_str().unwrap())
+            })
+            .collect::<Vec<_>>();
+        let tokens = entries
+            .iter()
+            .map(ItemViewRowToken::from_entry)
+            .map(|token| ThumbnailScheduleEntry::from_row_token(&token))
+            .collect::<Vec<_>>();
+
+        let prioritized = prioritize_thumbnail_entries(&tokens, 0, 2..4);
+        let prioritized_paths = prioritized
+            .iter()
+            .map(|entry| entry.path().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            prioritized_paths,
+            vec![
+                temp_dir.join("item-2.png").to_string_lossy().to_string(),
+                temp_dir.join("item-3.png").to_string_lossy().to_string(),
+                temp_dir.join("item-0.png").to_string_lossy().to_string(),
+                temp_dir.join("item-1.png").to_string_lossy().to_string(),
+                temp_dir.join("item-4.png").to_string_lossy().to_string(),
+                temp_dir.join("item-5.png").to_string_lossy().to_string(),
+            ]
+        );
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let paths = thumbnail_schedule_batch(&mut state, &prioritized, 64);
+        assert_eq!(paths[0], temp_dir.join("item-2.png"));
+        assert_eq!(paths[1], temp_dir.join("item-3.png"));
+        assert!(
+            state
+                .panes
+                .focused()
+                .view
+                .has_thumbnail_pending(temp_dir.join("item-2.png").to_str().unwrap())
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

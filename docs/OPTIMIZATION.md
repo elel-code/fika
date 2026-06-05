@@ -197,18 +197,18 @@ changed viewport-x => {
 - `src/app/virtual_view.rs` — `VirtualViewSnapshotInput.range_hint`
 
 **实际实现**（✅ 已完成）：`icon_zoom_level` 不再调用普通 `pane_layout_changed()`：
-- 目录/滚动重建时，`icon_zoom_range_hint()` 计算 `MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL` 每个档位的真实可见 range，并把 union 作为 `VirtualViewSnapshotInput.range_hint` 传给后台 snapshot。`prepare_virtual_view_snapshot_update()` 会把当前 zoom 的 overscan range 和 hint 合并，并按当前 `rows_per_column` 对齐，保证 Slint slice-local column-first index 映射不变。
+- 目录/滚动重建时，`icon_zoom_range_hint()` 计算 `MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL` 每个档位的真实可见 range，并把 union 作为 `VirtualViewSnapshotInput.range_hint` 传给后台 snapshot。每个候选 range 会先按对应 zoom 档的 `rows_per_column` 对齐，再由 `prepare_virtual_view_snapshot_update()` 与当前 zoom 的 overscan range 合并，降低新目录第一次 zoom 因目标行数对齐失败掉出热窗口的概率。
 - `icon_zoom_layout_changed()` 立即调用 `sync_visible_pane_icon_zoom_layouts()`；`try_relayout_cached_pane_icon_zoom_layout()` 只要求当前 virtual slice 覆盖新 zoom 的真实可见 range。`cached_zoom_relayout_range()` 会优先保留已按新 `rows_per_column` 对齐的完整预热窗口，只有旧 slice 起点无法对齐时才裁剪到“当前 cache ∩ zoom hint”的可复用窗口，保留 selection/highlight sidecar，不重新 snapshot 当前目录。
-- fast path 覆盖不了新真实可见 range、起点无法按新 `rows_per_column` 对齐，或 show-location metadata 仍在热路径里时，才回退到完整 `sync_pane_layout_for_slot_with_thumbnail_scheduling(..., false)`，所以 zoom-out、边界变化和递归搜索/Trash 多行布局仍保留正确性。
+- fast path 覆盖不了新真实可见 range、起点无法按新 `rows_per_column` 对齐，或 show-location metadata 仍在热路径里时，不再在 Ctrl+wheel/input 事件里同步 snapshot rebuild；`prepare_pane_icon_zoom_layout_for_slot()` 只发起后台 virtual prepare，并在结果返回后更新当前 pane。这样 cache miss 仍保留正确性，但不把过滤、clone、render-plan 装饰压进 zoom 输入路径。
 - `CompactItemVisualMetrics` 只让 media/icon size 随 zoom 改变，title/metadata font metrics 保持稳定，贴近 Dolphin 的 `styleOption.fontMetrics` 用法，减少 Slint 首次 zoom 时的 Text 字体冷启动。
 - `PaneView` 的 fallback file/folder media cache 从单槽改成按 `ItemViewRendererKey` 多槽复用；目录/滚动 snapshot 和 zoom fast path 会预热当前 pane 的所有 icon zoom 档，并把 active cache 切回当前 zoom，避免每个目录第一次 zoom 同步生成 fallback `Image`。
-- `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 300ms 合并连续 zoom 后的缩略图调度；timer flush 时从当前可见 virtual slice 调用 `schedule_visible_thumbnails_for_visible_panes()`。
+- `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 300ms 合并连续 zoom 后的缩略图调度；timer flush 时从当前可见 virtual slice 调用 `schedule_visible_thumbnails_for_visible_panes()`。该路径从 pane-local `ItemViewRowToken` sidecar 派生轻量 `ThumbnailScheduleEntry`，不再从 Slint `VecModel<ItemViewEntry>` 读取 row，也就不会为了延迟调度克隆包含 `Image` 的整条可见 row；临时 path 使用 `SharedString`，只有真正入队的缩略图任务才转成 owned `PathBuf`。
 - thumbnail 调度按当前 size 的 media token 判断已加载状态；旧 zoom size 的 thumbnail 不会阻塞新 size 的延迟任务。
 - 普通 `pane_layout_changed()` 仍调用 `sync_now()`，会停止 pending zoom thumbnail timer 并立即刷新；窗口大小、sidebar、split ratio、pane 宽度变化不等待 timer。
 
-**收益**：连续 zoom 时保留即时视觉反馈，避免每个 zoom step 都启动缩略图解码/预览更新；普通目录第一次 zoom 更容易直接命中预热热窗口，已对齐时只做 pane-level layout 更新和 active fallback cache 切换，不再裁剪 `VecModel`；稳定字体减少新 zoom 档位的 Text layout 冷启动；同时保留 resize/fullscreen/末尾 viewport 修复的即时路径。
+**收益**：连续 zoom 时保留即时视觉反馈，避免每个 zoom step 都启动缩略图解码/预览更新；普通目录第一次 zoom 更容易直接命中预热热窗口，已对齐时只做 pane-level layout 更新和 active fallback cache 切换，不再裁剪 `VecModel`；cache miss 也不会同步 clone/装饰虚拟切片；稳定字体减少新 zoom 档位的 Text layout 冷启动；同时保留 resize/fullscreen/末尾 viewport 修复的即时路径。
 
-**验证**：源码守卫测试确认 `PaneViewSyncScheduler` 的滚动路径仍无 timer，`icon_zoom_layout_changed` 同步刷新 layout，优先尝试 cached relayout，缩略图调度才走独立 coalesced timer。`virtual_view` 测试覆盖 `range_hint` 的对齐扩展；`main` 测试覆盖 cached zoom relayout 只要求真实可见 range、已对齐热窗口不裁剪、起点不对齐时按新 rows 对齐裁剪；`pane` 测试覆盖 fallback media 多槽复用和 split snapshot 继承热 cache；`model_update` 测试覆盖 cached relayout 复用 `VecModel`、保留 selection/highlight；`thumbnail_pipeline` 测试覆盖旧 size thumbnail 不阻塞新 size 调度。
+**验证**：源码守卫测试确认 `PaneViewSyncScheduler` 的滚动路径仍无 timer，`icon_zoom_layout_changed` 同步刷新 layout，优先尝试 cached relayout，cache miss 进入后台 prepare，缩略图调度才走独立 coalesced timer。`virtual_view` 测试覆盖 `range_hint` 的对齐扩展；`main` 测试覆盖 cached zoom relayout 只要求真实可见 range、已对齐热窗口不裁剪、起点不对齐时按新 rows 对齐裁剪，以及 zoom hint 按目标 rows 对齐；`pane` 测试覆盖 fallback media 多槽复用和 split snapshot 继承热 cache；`model_update` 测试覆盖 cached relayout 复用 `VecModel`、保留 selection/highlight；`thumbnail_pipeline` 测试覆盖旧 size thumbnail 不阻塞新 size 调度和 row-token 调度不克隆 `Image`。
 
 ---
 
