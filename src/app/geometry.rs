@@ -2678,17 +2678,22 @@ mod tests {
                 && base_text_loop
                     .contains("x: self.tile-column * root.column-width + item.text_x * 1px;")
                 && base_text_loop.contains(
-                    "y: root.preview-padding + self.tile-row * root.row-height + item.title_y * 1px;"
+                    "private property <bool> metadata-title: root.show-location && (item.group != \"\" || item.location != \"\");"
+                )
+                && base_text_loop.contains(
+                    "y: root.preview-padding + self.tile-row * root.row-height + (self.metadata-title ? item.title_y * 1px : 0px);"
                 )
                 && base_text_loop.contains("width: item.text_width * 1px;")
-                && base_text_loop.contains("height: item.title_line_height * 1px;")
+                && base_text_loop.contains(
+                    "height: self.metadata-title ? item.title_line_height * 1px : item.tile_height * 1px;"
+                )
                 && base_text_loop.contains("text: item.name;")
                 && !base_image_loop.contains("metadata_line_height")
                 && !base_text_loop.contains("metadata_line_height")
                 && !base_text_loop.contains("metadata-group-color")
                 && !base_text_loop.contains("metadata-location-color")
-                && !base_text_loop.contains("item.group")
-                && !base_text_loop.contains("item.location")
+                && !base_text_loop.contains("text: item.group")
+                && !base_text_loop.contains("text: item.location")
                 && !split_pane.contains("item.thumbnail")
                 && !base_image_loop.contains("thumbnail_state")
                 && !base_text_loop.contains("thumbnail_state")
@@ -2742,14 +2747,15 @@ mod tests {
                 && !split_pane.contains("tile-height: root.tile-height;")
                 && !split_pane.contains("zoom-level: root.zoom-level;")
                 && split_pane.contains("color: root.metadata-group-color;")
-                && split_pane.contains("height: item.tile_height * 1px;")
                 && base_image_loop.contains("width: item.media_width * 1px;")
                 && base_image_loop.contains("height: item.media_height * 1px;")
                 && base_text_loop.contains("font-size: item.title_font_size * 1px;")
                 && base_text_loop.contains("item.text_x * 1px")
                 && base_text_loop.contains("item.title_y * 1px")
                 && base_text_loop.contains("width: item.text_width * 1px;")
-                && base_text_loop.contains("height: item.title_line_height * 1px;")
+                && base_text_loop.contains(
+                    "height: self.metadata-title ? item.title_line_height * 1px : item.tile_height * 1px;"
+                )
                 && base_text_loop.contains("text: item.name;")
                 && base_text_loop.contains("horizontal-alignment: left;")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
@@ -2818,9 +2824,9 @@ mod tests {
         );
         assert!(
             split_pane.contains("if (root.show-location): Rectangle")
-                && metadata_tile_loop.contains("if (item.group != \"\"): Text")
+                && metadata_tile_loop.contains("visible: item.group != \"\";")
                 && metadata_tile_loop.contains("text: item.group;")
-                && metadata_tile_loop.contains("if (item.location != \"\"): Text")
+                && metadata_tile_loop.contains("visible: item.location != \"\";")
                 && metadata_tile_loop.contains("text: item.location;")
                 && metadata_tile_loop.contains("height: item.metadata_line_height * 1px;")
                 && metadata_tile_loop.contains("color: root.metadata-group-color;")
@@ -2898,7 +2904,9 @@ mod tests {
                     "x: self.tile-column * root.column-width;"
                 )
                 && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && split_pane.contains("width: item.tile_width * 1px;")
+                && base_text_loop.contains(
+                    "height: self.metadata-title ? item.title_line_height * 1px : item.tile_height * 1px;"
+                )
                 && !split_pane.contains("item.tile_x")
                 && !split_pane.contains("item.tile_y")
                 && !split_pane.contains("property <int> global-index:"),

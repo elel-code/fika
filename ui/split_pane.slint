@@ -350,11 +350,12 @@ export component SplitPaneView inherits Rectangle {
                 for item[index] in root.entries: Text {
                     private property <int> tile-row: index.mod(root.rows-per-column);
                     private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
+                    private property <bool> metadata-title: root.show-location && (item.group != "" || item.location != "");
 
                     x: self.tile-column * root.column-width + item.text_x * 1px;
-                    y: root.preview-padding + self.tile-row * root.row-height + item.title_y * 1px;
+                    y: root.preview-padding + self.tile-row * root.row-height + (self.metadata-title ? item.title_y * 1px : 0px);
                     width: item.text_width * 1px;
-                    height: item.title_line_height * 1px;
+                    height: self.metadata-title ? item.title_line_height * 1px : item.tile_height * 1px;
                     text: item.name;
                     color: root.title-color;
                     font-size: item.title_font_size * 1px;
@@ -368,40 +369,37 @@ export component SplitPaneView inherits Rectangle {
                     height: parent.height;
                     background: transparent;
 
-                    for item[index] in root.entries: Rectangle {
+                    for item[index] in root.entries: Text {
                         private property <int> tile-row: index.mod(root.rows-per-column);
                         private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
 
-                        x: self.tile-column * root.column-width;
-                        y: root.preview-padding + self.tile-row * root.row-height;
-                        width: item.tile_width * 1px;
-                        height: item.tile_height * 1px;
-                        background: transparent;
+                        visible: item.group != "";
+                        x: self.tile-column * root.column-width + item.text_x * 1px;
+                        y: root.preview-padding + self.tile-row * root.row-height + item.group_y * 1px;
+                        width: item.text_width * 1px;
+                        height: item.metadata_line_height * 1px;
+                        text: item.group;
+                        color: root.metadata-group-color;
+                        font-size: item.metadata_font_size * 1px;
+                        font-weight: 700;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
 
-                        if (item.group != ""): Text {
-                            x: item.text_x * 1px;
-                            y: item.group_y * 1px;
-                            width: item.text_width * 1px;
-                            height: item.metadata_line_height * 1px;
-                            text: item.group;
-                            color: root.metadata-group-color;
-                            font-size: item.metadata_font_size * 1px;
-                            font-weight: 700;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
+                    for item[index] in root.entries: Text {
+                        private property <int> tile-row: index.mod(root.rows-per-column);
+                        private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
 
-                        if (item.location != ""): Text {
-                            x: item.text_x * 1px;
-                            y: item.location_y * 1px;
-                            width: item.text_width * 1px;
-                            height: item.metadata_line_height * 1px;
-                            text: item.location;
-                            color: root.metadata-location-color;
-                            font-size: item.metadata_font_size * 1px;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
+                        visible: item.location != "";
+                        x: self.tile-column * root.column-width + item.text_x * 1px;
+                        y: root.preview-padding + self.tile-row * root.row-height + item.location_y * 1px;
+                        width: item.text_width * 1px;
+                        height: item.metadata_line_height * 1px;
+                        text: item.location;
+                        color: root.metadata-location-color;
+                        font-size: item.metadata_font_size * 1px;
+                        overflow: elide;
+                        vertical-alignment: center;
                     }
                 }
             }
