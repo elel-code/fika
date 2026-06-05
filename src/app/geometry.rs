@@ -2602,9 +2602,14 @@ mod tests {
             .expect("models.slint should define ItemViewEntry before PlaceEntry");
         let visible_tile_loop = split_pane
             .split_once("for item[index] in root.entries: Rectangle")
+            .and_then(|(_, rest)| rest.split_once("if (root.show-location): Rectangle"))
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should have an unconditional visible item primitive loop");
+        let metadata_tile_loop = split_pane
+            .split_once("if (root.show-location): Rectangle")
             .and_then(|(_, rest)| rest.split_once("if (root.selection-rect-active): Rectangle"))
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have a visible item primitive loop");
+            .expect("SplitPaneView should have a metadata overlay loop");
         assert!(
             split_pane.contains("for item[index] in root.entries: Rectangle")
                 && split_pane.contains("tile-row: index.mod(root.rows-per-column);")
@@ -2624,6 +2629,13 @@ mod tests {
                 && split_pane.contains("width: item.text_width * 1px;")
                 && split_pane.contains("height: item.title_line_height * 1px;")
                 && split_pane.contains("text: item.name;")
+                && visible_tile_loop.contains("source: item.media;")
+                && visible_tile_loop.contains("text: item.name;")
+                && !visible_tile_loop.contains("metadata_line_height")
+                && !visible_tile_loop.contains("metadata-group-color")
+                && !visible_tile_loop.contains("metadata-location-color")
+                && !visible_tile_loop.contains("item.group")
+                && !visible_tile_loop.contains("item.location")
                 && !split_pane.contains("item.thumbnail")
                 && !visible_tile_loop.contains("thumbnail_state")
                 && !widgets.contains("export component FolderGlyph")
@@ -2722,8 +2734,19 @@ mod tests {
                 && !split_pane.contains("request_context_menu(path"),
             "SplitPaneView should use one pane-level input controller with Rust coordinate hit-test instead of per-tile handlers"
         );
-        assert!(split_pane.contains("if (root.show-location && item.group != \"\"): Text"));
-        assert!(split_pane.contains("if (root.show-location && item.location != \"\"): Text"));
+        assert!(
+            split_pane.contains("if (root.show-location): Rectangle")
+                && metadata_tile_loop.contains("if (item.group != \"\"): Text")
+                && metadata_tile_loop.contains("text: item.group;")
+                && metadata_tile_loop.contains("if (item.location != \"\"): Text")
+                && metadata_tile_loop.contains("text: item.location;")
+                && metadata_tile_loop.contains("height: item.metadata_line_height * 1px;")
+                && metadata_tile_loop.contains("color: root.metadata-group-color;")
+                && metadata_tile_loop.contains("color: root.metadata-location-color;")
+                && !metadata_tile_loop.contains("source: item.media;")
+                && !metadata_tile_loop.contains("text: item.name;"),
+            "ordinary compact items should always render icon/name in the base loop, while group/location metadata is an overlay used only for location mode"
+        );
         assert!(split_pane.contains(
             "root.drag-active && !root.drag-rejected && root.drag-target-path == item.path"
         ));
