@@ -1,3 +1,6 @@
+use crate::app::item_view_metrics::{
+    COMPACT_COLUMN_MARGIN_WIDTH, compact_cell_width, compact_row_height,
+};
 use crate::{AppWindow, MenuGeometry};
 use slint::ComponentHandle;
 use std::ops::Range;
@@ -9,8 +12,6 @@ const SPLIT_DIVIDER_WIDTH: f32 = 1.0;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
 const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
 const SEARCH_PANEL_NARROW_WIDTH: f32 = 760.0;
-const COMPACT_ITEM_PADDING: f32 = 2.0;
-const COMPACT_COLUMN_MARGIN_WIDTH: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MainItemViewLayout {
@@ -214,12 +215,6 @@ pub(crate) fn main_pane_bounds(
     }
 }
 
-pub(crate) fn compact_cell_width(zoom_level: i32) -> f32 {
-    let icon_size = compact_media_size(zoom_level);
-    let font_height = compact_title_font_height(zoom_level);
-    COMPACT_ITEM_PADDING * 4.0 + icon_size + font_height * 5.0
-}
-
 pub(crate) fn compact_item_view_layout(
     viewport_width: f32,
     entry_count: usize,
@@ -290,58 +285,6 @@ fn compact_item_view_content_width(
         + (column_count.saturating_sub(1)) as f32 * column_width.max(1.0)
         + cell_width.max(1.0))
     .max(1.0)
-}
-
-pub(crate) fn compact_row_height(zoom_level: i32, text_line_count: usize) -> f32 {
-    let icon_size = compact_media_size(zoom_level);
-    let text_block_height = compact_text_block_height(zoom_level, text_line_count);
-    COMPACT_ITEM_PADDING * 2.0 + icon_size.max(text_block_height)
-}
-
-fn compact_media_size(zoom_level: i32) -> f32 {
-    match zoom_level {
-        0 => 28.0,
-        1 => 36.0,
-        2 => 46.0,
-        3 => 58.0,
-        _ => 72.0,
-    }
-}
-
-fn compact_title_line_height(zoom_level: i32) -> f32 {
-    match zoom_level {
-        0 => 18.0,
-        1 => 19.0,
-        2 => 21.0,
-        3 => 22.0,
-        _ => 24.0,
-    }
-}
-
-fn compact_title_font_height(zoom_level: i32) -> f32 {
-    match zoom_level {
-        0 => 12.0,
-        1 => 13.0,
-        2 => 15.0,
-        3 => 16.0,
-        _ => 18.0,
-    }
-}
-
-fn compact_metadata_line_height(zoom_level: i32) -> f32 {
-    if zoom_level < 2 { 13.0 } else { 14.0 }
-}
-
-fn compact_text_block_height(zoom_level: i32, text_line_count: usize) -> f32 {
-    let text_line_count = text_line_count.max(1);
-    let title_line_height = compact_title_line_height(zoom_level);
-    if text_line_count == 1 {
-        return title_line_height;
-    }
-
-    let metadata_lines = text_line_count.saturating_sub(1) as f32;
-    let spacing = 2.0 * text_line_count.saturating_sub(1) as f32;
-    title_line_height + metadata_lines * compact_metadata_line_height(zoom_level) + spacing
 }
 
 pub(crate) fn search_panel_height(

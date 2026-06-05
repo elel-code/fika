@@ -230,7 +230,7 @@ changed viewport-x => {
 - `ui/split_pane.slint` — tile primitive 循环
 
 **实际实现**（✅ 已完成）：
-1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `ItemViewEntry` 字段，避免每个 tile 独立计算
+1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `ItemViewEntry` 字段，避免每个 tile 独立计算；Dolphin compact visual metrics 的 media/font/line/cell/row 公式现在由 `src/app/item_view_metrics.rs` 单点持有，layout 和 render plan 都只消费同一组 metrics
 2. 删除独立 tile 组件边界，把可见 tile primitive 内联到 `SplitPaneView` 的 slice layer，避免继续维护旧 path-based item 组件
 3. 将 media/icon rect、text rect、group/title/location y 坐标和 line height 继续迁到 Rust render plan，`SplitPaneView` 的可见 item loop 不再为每项使用 `HorizontalLayout` / `VerticalLayout`
 4. 普通 compact item-view 的 tile height 与 row height 同源；普通标题按 Dolphin compact text cache 的分层方式使用 Rust render plan 给出的居中单行 title rect，带 group/location 的 metadata 行复用同一 text rect 并通过 sparse overlay 绘制额外文本
@@ -297,7 +297,8 @@ Slint: Rectangle viewport + input/DnD overlays
 8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 Rust item-view media renderer：虚拟切片进入 Slint 前会把成功缩略图或 fallback 文件/目录图标统一投影为 `ItemViewEntry.media`，主视图 loop 只保留一个 media `Image` primitive。fallback file/folder media cache 现在挂在 pane-local `PaneView` 上，同 zoom/theme 的虚拟切片结果复用同一组 `SharedPixelBuffer`/`Image`，为后续 renderer state 继续收敛到 Rust 侧铺路。
 9. `ItemViewEntry.media_token` 作为 Rust-side media 更新令牌进入可见 row；`model_update` 同时维护 pane-local `ItemViewRowToken` sidecar。虚拟切片滑动的重叠 row 先比较 sidecar token，token 相同就不读取 `VecModel::row_data()`，因此不会为了判断复用而克隆包含 `Image` 的整条 `ItemViewEntry`。split pane 快照也会复制到独立 `VecModel`，避免两个 pane 共享同一个可见 row 模型。
 10. show-location metadata overlay 已从 per-item 透明 `Rectangle` wrapper 和 `visible:` 过滤，收敛成 pane-local `ItemViewMetadataEntry` 稀疏模型；普通空 metadata row 不再进入 Slint overlay loop，split snapshot 也会复制独立 metadata model，保持 pane 独立。
-11. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
+11. Dolphin compact visual metrics 已收敛到 `src/app/item_view_metrics.rs`：`geometry.rs` 负责 viewport/visible range/layout，`item_view.rs` 负责 hit-test/render plan，但二者不再分别维护 zoom/media/font/line/cell/row 公式，为后续 renderer cache 或 tile-frame 自绘提供单一 renderer key 来源。
+12. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
 
 ---
 

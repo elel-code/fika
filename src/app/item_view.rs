@@ -2,6 +2,7 @@ use crate::app::geometry::{
     MainItemViewLayout, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width,
     inactive_main_pane_width, main_pane_bounds, search_panel_height,
 };
+use crate::app::item_view_metrics::CompactItemVisualMetrics;
 use crate::app::selection::{filtered_entry_at_for_slot, filtered_entry_count_for_slot};
 use crate::app::state::AppState;
 use crate::{AppWindow, FileEntry, ItemViewEntry};
@@ -9,8 +10,6 @@ use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString}
 use std::ops::Range;
 use std::path::Path;
 
-const COMPACT_ITEM_PADDING: f32 = 2.0;
-const COMPACT_MEDIA_TEXT_GAP: f32 = COMPACT_ITEM_PADDING * 2.0;
 const SELECTION_DRAG_THRESHOLD: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,7 +20,9 @@ pub(crate) struct ItemViewRenderMetrics {
     pub(crate) media_width: f32,
     pub(crate) media_height: f32,
     pub(crate) metadata_font_size: f32,
+    pub(crate) metadata_line_height: f32,
     pub(crate) title_font_size: f32,
+    pub(crate) title_line_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -134,14 +135,20 @@ impl ItemViewRenderMetrics {
         zoom_level: i32,
         text_line_count: usize,
     ) -> Self {
+        let compact = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(
+            zoom_level,
+            text_line_count,
+        );
         Self {
-            tile_height: compact_tile_height(zoom_level, text_line_count),
-            media_padding_x: COMPACT_ITEM_PADDING,
-            media_text_gap: COMPACT_MEDIA_TEXT_GAP,
-            media_width: compact_media_width(zoom_level),
-            media_height: compact_media_height(zoom_level),
-            metadata_font_size: if zoom_level < 2 { 10.0 } else { 11.0 },
-            title_font_size: compact_title_font_size(zoom_level),
+            tile_height: compact.row_height,
+            media_padding_x: compact.item_padding,
+            media_text_gap: compact.media_text_gap,
+            media_width: compact.media_size,
+            media_height: compact.media_size,
+            metadata_font_size: compact.metadata_font_size,
+            metadata_line_height: compact.metadata_line_height,
+            title_font_size: compact.title_font_size,
+            title_line_height: compact.title_line_height,
         }
     }
 }
@@ -490,8 +497,8 @@ struct ItemTextRenderPlan {
 
 impl ItemTextRenderPlan {
     fn new(entry: &ItemViewEntry, metrics: ItemViewRenderMetrics, show_location: bool) -> Self {
-        let metadata_line_height = metrics.metadata_font_size + 3.0;
-        let title_line_height = title_line_height(metrics.title_font_size);
+        let metadata_line_height = metrics.metadata_line_height;
+        let title_line_height = metrics.title_line_height;
         let has_group = show_location && !entry.group.is_empty();
         let has_location = show_location && !entry.location.is_empty();
         if !has_group && !has_location {
@@ -544,54 +551,6 @@ impl ItemTextRenderPlan {
             title_line_height,
         }
     }
-}
-
-fn compact_tile_height(zoom_level: i32, text_line_count: usize) -> f32 {
-    let icon_size = compact_media_width(zoom_level);
-    let text_block_height = compact_text_block_height(zoom_level, text_line_count);
-    COMPACT_ITEM_PADDING * 2.0 + icon_size.max(text_block_height)
-}
-
-fn compact_media_width(zoom_level: i32) -> f32 {
-    match zoom_level {
-        0 => 28.0,
-        1 => 36.0,
-        2 => 46.0,
-        3 => 58.0,
-        _ => 72.0,
-    }
-}
-
-fn compact_media_height(zoom_level: i32) -> f32 {
-    compact_media_width(zoom_level)
-}
-
-fn compact_title_font_size(zoom_level: i32) -> f32 {
-    match zoom_level {
-        0 => 12.0,
-        1 => 13.0,
-        2 => 15.0,
-        3 => 16.0,
-        _ => 18.0,
-    }
-}
-
-fn title_line_height(font_size: f32) -> f32 {
-    font_size + 6.0
-}
-
-fn compact_text_block_height(zoom_level: i32, text_line_count: usize) -> f32 {
-    let text_line_count = text_line_count.max(1);
-    let title_line_height = title_line_height(compact_title_font_size(zoom_level));
-    if text_line_count == 1 {
-        return title_line_height;
-    }
-
-    let metadata_font_size = if zoom_level < 2 { 10.0 } else { 11.0 };
-    let metadata_line_height = metadata_font_size + 3.0;
-    let metadata_lines = text_line_count.saturating_sub(1) as f32;
-    let spacing = 2.0 * text_line_count.saturating_sub(1) as f32;
-    title_line_height + metadata_lines * metadata_line_height + spacing
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
