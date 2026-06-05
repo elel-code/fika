@@ -76,6 +76,8 @@ impl PaneState {
         pane.view.virtual_highlight_entries = ModelRc::default();
         pane.view.virtual_metadata_entries =
             clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
+        pane.view.fallback_media_caches = self.view.fallback_media_caches.clone();
+        pane.view.active_fallback_media_cache = self.view.active_fallback_media_cache.clone();
         pane.view.virtual_start_index = self.view.virtual_start_index;
         pane.view.virtual_start_column = self.view.virtual_start_column;
         pane
@@ -511,7 +513,8 @@ pub(crate) struct PaneView {
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
     pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
-    fallback_media_cache: Option<Rc<ItemViewMediaCache>>,
+    fallback_media_caches: Vec<Rc<ItemViewMediaCache>>,
+    active_fallback_media_cache: Option<Rc<ItemViewMediaCache>>,
     pub(crate) virtual_start_index: usize,
     pub(crate) virtual_start_column: usize,
     virtual_prepare_in_flight: Option<u64>,
@@ -565,21 +568,32 @@ impl PaneView {
         metrics: ItemViewRenderMetrics,
         dark: bool,
     ) -> Rc<ItemViewMediaCache> {
-        if self
-            .fallback_media_cache
+        if let Some(cache) = self
+            .active_fallback_media_cache
             .as_ref()
-            .is_none_or(|cache| !cache.matches(metrics, dark))
+            .filter(|cache| cache.matches(metrics, dark))
         {
-            self.fallback_media_cache = Some(Rc::new(ItemViewMediaCache::new(metrics, dark)));
+            return cache.clone();
         }
-        self.fallback_media_cache
-            .as_ref()
-            .expect("fallback media cache should be initialized")
-            .clone()
+
+        if let Some(cache) = self
+            .fallback_media_caches
+            .iter()
+            .find(|cache| cache.matches(metrics, dark))
+            .cloned()
+        {
+            self.active_fallback_media_cache = Some(cache.clone());
+            return cache;
+        }
+
+        let cache = Rc::new(ItemViewMediaCache::new(metrics, dark));
+        self.fallback_media_caches.push(cache.clone());
+        self.active_fallback_media_cache = Some(cache.clone());
+        cache
     }
 
     pub(crate) fn fallback_media_images(&self) -> (Image, Image) {
-        self.fallback_media_cache
+        self.active_fallback_media_cache
             .as_ref()
             .map(|cache| (cache.folder_image(), cache.file_image()))
             .unwrap_or_else(|| (Image::default(), Image::default()))
@@ -1272,6 +1286,11 @@ mod tests {
         panes.focused_mut().view.virtual_view = cache_for_layout(4..12, 24, 80);
         panes.focused_mut().view.virtual_start_index = 4;
         panes.focused_mut().view.virtual_start_column = 1;
+        let fallback_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
+        let warmed_fallback = panes
+            .focused_mut()
+            .view
+            .fallback_media_cache(fallback_metrics, false);
         let virtual_entries = panes
             .focused()
             .entries
@@ -1289,6 +1308,16 @@ mod tests {
 
         assert!(panes.open_peer_from_focused());
         assert!(panes.open_peer_from_focused());
+
+        let inactive_fallback = panes
+            .pane_mut_for_slot(1)
+            .expect("inactive pane")
+            .view
+            .fallback_media_cache(fallback_metrics, false);
+        assert!(
+            Rc::ptr_eq(&warmed_fallback, &inactive_fallback),
+            "split panes should inherit warmed pane-level fallback media caches"
+        );
 
         let inactive = panes.pane_for_slot(1).expect("inactive pane");
         assert_ne!(inactive.id, active_id);
@@ -1435,6 +1464,12 @@ mod tests {
             true,
         );
         assert!(!Rc::ptr_eq(&location, &zoomed));
+
+        let first_again = view.fallback_media_cache(metrics, false);
+        assert!(
+            Rc::ptr_eq(&first, &first_again),
+            "fallback media caches should keep previously used zoom/theme images warm"
+        );
     }
 
     #[test]

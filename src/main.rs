@@ -3655,14 +3655,14 @@ fn sync_virtual_entries_for_slot_with_count(
             })
             .unwrap_or((false, 1))
     };
-    let render_metrics =
-        ItemViewRenderMetrics::from_zoom_level_with_text_line_count(zoom_level, text_line_count);
     let mut layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
         ui,
         viewport_width,
         search_panel_visible,
         text_line_count,
     );
+    let render_metrics =
+        ItemViewRenderMetrics::from_zoom_level_with_text_line_count(zoom_level, text_line_count);
     let Some(request) = ({
         let mut state_ref = state.borrow_mut();
         let chooser_patterns = state_ref
@@ -3976,6 +3976,10 @@ fn cached_zoom_relayout_range(
     }
 
     let rows_per_column = rows_per_column.max(1);
+    if cached_range.start % rows_per_column == 0 && cached_range.end <= entry_count {
+        return Some(cached_range.clone());
+    }
+
     let desired_start = preferred_range
         .start
         .min(visible_range.start)
@@ -4112,8 +4116,7 @@ fn apply_virtual_view_result(
         let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
             return;
         };
-        pane.view
-            .fallback_media_cache(result.render_metrics, ui.get_dark_mode());
+        prewarm_pane_fallback_media(pane, ui.get_icon_zoom_level(), ui.get_dark_mode());
         selected_paths
     };
 
@@ -4752,11 +4755,7 @@ fn refresh_pane_fallback_media_for_slot(ui: &AppWindow, state: &Rc<RefCell<AppSt
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             return;
         };
-        let render_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(
-            zoom_level,
-            pane.item_view_text_line_count(),
-        );
-        pane.view.fallback_media_cache(render_metrics, dark);
+        prewarm_pane_fallback_media(pane, zoom_level, dark);
         true
     };
 
@@ -4862,8 +4861,6 @@ fn try_relayout_cached_pane_icon_zoom_layout(
             })
             .unwrap_or((false, 1))
     };
-    let render_metrics =
-        ItemViewRenderMetrics::from_zoom_level_with_text_line_count(zoom_level, text_line_count);
     let mut layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
         ui,
         viewport_width,
@@ -4921,7 +4918,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         ) {
             return false;
         }
-        pane.view.fallback_media_cache(render_metrics, dark);
+        prewarm_pane_fallback_media(pane, zoom_level, dark);
 
         pane.view.cancel_virtual_prepare_queue();
         pane.view.virtual_generation.next();
@@ -4947,6 +4944,22 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         sync_pane_view_ui(ui, state, slot);
     }
     applied
+}
+
+fn prewarm_pane_fallback_media(pane: &mut PaneState, active_zoom_level: i32, dark: bool) {
+    let text_line_count = pane.item_view_text_line_count();
+    for zoom_level in MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL {
+        let render_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(
+            zoom_level,
+            text_line_count,
+        );
+        pane.view.fallback_media_cache(render_metrics, dark);
+    }
+    let active_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(
+        active_zoom_level,
+        text_line_count,
+    );
+    pane.view.fallback_media_cache(active_metrics, dark);
 }
 
 fn sync_pane_viewport_for_slot(
@@ -5671,6 +5684,14 @@ mod tests {
         assert_eq!(
             cached_zoom_relayout_range(&(4..24), &(0..32), &(12..24), 4, 100),
             Some(4..24)
+        );
+    }
+
+    #[test]
+    fn cached_zoom_relayout_range_keeps_aligned_prewarmed_window() {
+        assert_eq!(
+            cached_zoom_relayout_range(&(8..44), &(16..32), &(20..28), 4, 100),
+            Some(8..44)
         );
     }
 
@@ -6895,6 +6916,7 @@ mod tests {
                 && fast_path_body.contains("let preferred_range = icon_zoom_range_hint(")
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
+                && fast_path_body.contains("prewarm_pane_fallback_media(pane, zoom_level, dark);")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
                 && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);"),
             "icon zoom should reuse the current virtual slice when it covers the new Dolphin-style visible range, and only fall back to snapshot rebuild when needed"
@@ -6943,6 +6965,11 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn selection_status_text("))
             .map(|(body, _)| body)
             .expect("fallback media refresh body should be present");
+        let prewarm_body = source
+            .split_once("fn prewarm_pane_fallback_media(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
+            .map(|(body, _)| body)
+            .expect("fallback media prewarm body should be present");
 
         assert!(
             app.contains("callback dark_mode_changed();")
@@ -6953,7 +6980,10 @@ mod tests {
         );
         assert!(
             dark_handler_body.contains("refresh_visible_pane_fallback_media(&ui, &state);")
-                && refresh_body.contains("fallback_media_cache(render_metrics, dark)")
+                && refresh_body.contains("prewarm_pane_fallback_media(pane, zoom_level, dark);")
+                && prewarm_body.contains("MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL")
+                && prewarm_body.contains("fallback_media_cache(render_metrics, dark)")
+                && prewarm_body.contains("fallback_media_cache(active_metrics, dark)")
                 && refresh_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && !refresh_body.contains("sync_pane_layout_for_slot")
                 && !refresh_body.contains("sync_virtual_entries_for_slot"),
