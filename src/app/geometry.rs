@@ -9,14 +9,30 @@ const SPLIT_DIVIDER_WIDTH: f32 = 1.0;
 const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
 const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
 const SEARCH_PANEL_NARROW_WIDTH: f32 = 760.0;
+const ICON_ITEM_MARGIN_WIDTH: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MainGridLayout {
     pub(crate) viewport_x: f32,
+    pub(crate) viewport_width: f32,
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
     pub(crate) row_height: f32,
     pub(crate) padding: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct IconGridLayout {
+    pub(crate) entry_count: usize,
+    pub(crate) rows_per_column: usize,
+    pub(crate) viewport_width: f32,
+    pub(crate) cell_width: f32,
+    pub(crate) column_width: f32,
+    pub(crate) column_offset: f32,
+    pub(crate) row_height: f32,
+    pub(crate) padding: f32,
+    pub(crate) content_width: f32,
+    pub(crate) scroll_max_x: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,22 +81,74 @@ impl MainGridLayout {
         } else {
             0.0
         };
-        let available_grid_height = (pane.bottom
+        let viewport_height = (pane.bottom
             - pane.top
             - PATH_BAR_HEIGHT
             - STATUS_BAR_HEIGHT
             - search_panel_height
             - 2.0 * padding)
             .max(row_height);
-        let rows_per_column = (available_grid_height / row_height).floor().max(1.0) as usize;
-
+        let rows_per_column = (viewport_height / row_height).floor().max(1.0) as usize;
         Self {
             viewport_x: 0.0,
+            viewport_width: pane_width.max(1.0),
             rows_per_column,
             cell_width,
             row_height,
             padding,
         }
+    }
+
+    pub(crate) fn icon_grid(self, entry_count: usize) -> IconGridLayout {
+        icon_grid_layout(
+            self.viewport_width,
+            entry_count,
+            self.rows_per_column,
+            self.cell_width,
+            self.row_height,
+            self.padding,
+        )
+    }
+}
+
+impl IconGridLayout {
+    pub(crate) fn virtual_plan(
+        self,
+        requested_viewport_x: f32,
+        overscan_columns: usize,
+    ) -> VirtualGridPlan {
+        let viewport_x = requested_viewport_x.clamp(0.0, self.scroll_max_x);
+        let (range, visible_range) = virtual_entry_ranges(
+            self.entry_count,
+            self.rows_per_column,
+            viewport_x,
+            self.viewport_width,
+            self.column_width,
+            self.column_offset,
+            self.padding,
+            overscan_columns,
+        );
+        let start_column = range.start / self.rows_per_column.max(1);
+
+        VirtualGridPlan {
+            viewport_x,
+            scroll_max_x: self.scroll_max_x,
+            range,
+            visible_range,
+            start_column,
+            rows_per_column: self.rows_per_column,
+            cell_width: self.cell_width,
+        }
+    }
+
+    pub(crate) fn virtual_slice_width(self, virtual_slice_count: usize) -> f32 {
+        icon_grid_virtual_slice_width(
+            virtual_slice_count,
+            self.rows_per_column,
+            self.column_width,
+            self.column_offset,
+            self.cell_width,
+        )
     }
 }
 
@@ -144,45 +212,6 @@ pub(crate) fn main_pane_bounds(
     }
 }
 
-pub(crate) fn virtual_grid_plan(
-    entry_count: usize,
-    rows_per_column: usize,
-    requested_viewport_x: f32,
-    viewport_width: f32,
-    cell_width: f32,
-    padding: f32,
-    overscan_columns: usize,
-) -> VirtualGridPlan {
-    let scroll_max_x = main_scroll_max_x(
-        entry_count,
-        rows_per_column,
-        viewport_width,
-        cell_width,
-        padding,
-    );
-    let viewport_x = requested_viewport_x.clamp(0.0, scroll_max_x);
-    let (range, visible_range) = virtual_entry_ranges(
-        entry_count,
-        rows_per_column,
-        viewport_x,
-        viewport_width,
-        cell_width,
-        padding,
-        overscan_columns,
-    );
-    let start_column = range.start / rows_per_column.max(1);
-
-    VirtualGridPlan {
-        viewport_x,
-        scroll_max_x,
-        range,
-        visible_range,
-        start_column,
-        rows_per_column,
-        cell_width,
-    }
-}
-
 pub(crate) fn icon_cell_width(zoom_level: i32) -> f32 {
     match zoom_level {
         0 => 80.0,
@@ -191,6 +220,79 @@ pub(crate) fn icon_cell_width(zoom_level: i32) -> f32 {
         3 => 132.0,
         _ => 156.0,
     }
+}
+
+pub(crate) fn icon_grid_layout(
+    viewport_width: f32,
+    entry_count: usize,
+    rows_per_column: usize,
+    cell_width: f32,
+    row_height: f32,
+    padding: f32,
+) -> IconGridLayout {
+    let viewport_width = viewport_width.max(1.0);
+    let rows_per_column = rows_per_column.max(1);
+    let cell_width = cell_width.max(1.0);
+    let row_height = row_height.max(1.0);
+    let padding = padding.max(0.0);
+
+    // Mirrors Dolphin's KItemListViewLayouter for IconsLayout: item size stays
+    // fixed while the column stride carries the item margin. This is separate
+    // from item padding, which is consumed by text/media layout inside the tile.
+    let item_margin = ICON_ITEM_MARGIN_WIDTH;
+    let column_width = (cell_width + item_margin).max(1.0);
+    let column_offset = item_margin;
+    let column_count = entry_count.div_ceil(rows_per_column).max(1);
+    let content_width = icon_grid_content_width(
+        column_count,
+        column_width,
+        column_offset,
+        cell_width,
+        padding,
+    );
+    let scroll_max_x = (content_width - viewport_width).max(0.0);
+
+    IconGridLayout {
+        entry_count,
+        rows_per_column,
+        viewport_width,
+        cell_width,
+        column_width,
+        column_offset,
+        row_height,
+        padding,
+        content_width,
+        scroll_max_x,
+    }
+}
+
+pub(crate) fn icon_grid_virtual_slice_width(
+    virtual_slice_count: usize,
+    rows_per_column: usize,
+    column_width: f32,
+    column_offset: f32,
+    cell_width: f32,
+) -> f32 {
+    let rows_per_column = rows_per_column.max(1);
+    let column_count = virtual_slice_count.div_ceil(rows_per_column).max(1);
+    (column_offset.max(0.0)
+        + (column_count.saturating_sub(1)) as f32 * column_width.max(1.0)
+        + cell_width.max(1.0))
+    .max(1.0)
+}
+
+fn icon_grid_content_width(
+    column_count: usize,
+    column_width: f32,
+    column_offset: f32,
+    cell_width: f32,
+    padding: f32,
+) -> f32 {
+    (2.0 * padding.max(0.0)
+        + column_offset.max(0.0)
+        + (column_count.saturating_sub(1)) as f32 * column_width.max(1.0)
+        + cell_width.max(1.0))
+    .max(1.0)
 }
 
 pub(crate) fn icon_row_height(zoom_level: i32) -> f32 {
@@ -229,7 +331,8 @@ fn virtual_entry_ranges(
     rows_per_column: usize,
     viewport_x: f32,
     viewport_width: f32,
-    cell_width: f32,
+    column_width: f32,
+    column_offset: f32,
     padding: f32,
     overscan_columns: usize,
 ) -> (Range<usize>, Range<usize>) {
@@ -238,13 +341,14 @@ fn virtual_entry_ranges(
     }
 
     let rows_per_column = rows_per_column.max(1);
-    let cell_width = cell_width.max(1.0);
+    let column_width = column_width.max(1.0);
     let viewport_x = viewport_x.max(0.0);
     let viewport_width = viewport_width.max(1.0);
-    let content_x = (viewport_x - padding.max(0.0)).max(0.0);
-    let content_end_x = (viewport_x + viewport_width - padding.max(0.0)).max(content_x + 1.0);
-    let first_visible_column = (content_x / cell_width).floor() as usize;
-    let visible_end_column = (content_end_x / cell_width)
+    let content_x = (viewport_x - padding.max(0.0) - column_offset.max(0.0)).max(0.0);
+    let content_end_x = (viewport_x + viewport_width - padding.max(0.0) - column_offset.max(0.0))
+        .max(content_x + 1.0);
+    let first_visible_column = (content_x / column_width).floor() as usize;
+    let visible_end_column = (content_end_x / column_width)
         .ceil()
         .max(first_visible_column as f32 + 1.0) as usize;
     let start_column = first_visible_column.saturating_sub(overscan_columns);
@@ -270,20 +374,6 @@ fn entry_range_for_columns(
     let start = (start_column * rows_per_column).min(entry_count);
     let end = (end_column * rows_per_column).min(entry_count);
     start..end.max(start)
-}
-
-pub(crate) fn main_scroll_max_x(
-    entry_count: usize,
-    rows_per_column: usize,
-    viewport_width: f32,
-    cell_width: f32,
-    padding: f32,
-) -> f32 {
-    let rows_per_column = rows_per_column.max(1);
-    let cell_width = cell_width.max(1.0);
-    let column_count = entry_count.div_ceil(rows_per_column).max(1);
-    let content_width = 2.0 * padding.max(0.0) + column_count as f32 * cell_width;
-    (content_width - viewport_width.max(1.0)).max(0.0)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1155,8 +1245,8 @@ mod tests {
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
         PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, active_main_pane_width,
-        context_menu_metrics, inactive_main_pane_width, main_pane_bounds, main_scroll_max_x,
-        place_drop_geometry, search_panel_height, virtual_grid_plan,
+        context_menu_metrics, icon_grid_layout, inactive_main_pane_width, main_pane_bounds,
+        place_drop_geometry, search_panel_height,
     };
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
@@ -2014,7 +2104,7 @@ mod tests {
                     "callback item-view-item-context-menu(int, float, float, length, length) -> bool;"
                 )
                 && pane_routing.contains(
-                    "callback item-view-blank-pressed(int, float, float, int, float, float, float, bool);"
+                    "callback item-view-blank-pressed(int, float, float, int, float, float, float, float, float, bool);"
                 )
                 && pane_routing.contains("callback item-view-blank-moved(int, float, float) -> bool;")
                 && pane_routing.contains("callback item-view-blank-released(int, float, float);")
@@ -2146,7 +2236,7 @@ mod tests {
             "item_view_item_pressed(slot, x, y, toggle, range) => {\n        PaneRouting.item-view-item-pressed(slot, x, y, toggle, range)\n    }",
             "item_view_item_activated(slot, x, y) => {\n        PaneRouting.item-view-item-activated(slot, x, y);\n    }",
             "item_view_item_context_menu(slot, x, y, abs-x, abs-y) => {\n        PaneRouting.item-view-item-context-menu(slot, x, y, abs-x, abs-y)\n    }",
-            "item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle) => {\n        PaneRouting.item-view-blank-pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);\n    }",
+            "item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle) => {\n        PaneRouting.item-view-blank-pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle);\n    }",
             "item_view_blank_moved(slot, x, y) => {\n        PaneRouting.item-view-blank-moved(slot, x, y)\n    }",
             "item_view_blank_released(slot, x, y) => {\n        PaneRouting.item-view-blank-released(slot, x, y);\n    }",
             "item_view_blank_cancelled(slot) => {\n        PaneRouting.item-view-blank-cancelled(slot);\n    }",
@@ -2325,7 +2415,7 @@ mod tests {
                     "public function route-pane-item-view-blank-pressed(slot: int,"
                 )
                 && route_functions.contains(
-                    "root.pane_item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, row-height, padding, toggle);"
+                    "root.pane_item_view_blank_pressed(slot, x, y, rows-per-column, cell-width, column-width, column-offset, row-height, padding, toggle);"
                 )
                 && route_functions.contains(
                     "public function route-pane-item-view-blank-moved(slot: int, x: float, y: float) -> bool"
@@ -2483,7 +2573,7 @@ mod tests {
                 && split_pane.contains("source: item.media;")
                 && split_pane.contains("x: item.media_x * 1px;")
                 && split_pane.contains("x: item.text_x * 1px;")
-                && split_pane.contains("height: max(16px, item.title_line_height * 1px);")
+                && split_pane.contains("height: item.title_line_height * 1px;")
                 && split_pane.contains("text: item.name;")
                 && !split_pane.contains("item.thumbnail")
                 && !visible_tile_loop.contains("thumbnail_state")
@@ -2516,7 +2606,7 @@ mod tests {
                 && split_pane.contains("color: root.metadata-group-color;")
                 && split_pane.contains("height: item.tile_height * 1px;")
                 && split_pane.contains("width: item.media_width * 1px;")
-                && split_pane.contains("font-size: max(12px, item.title_font_size * 1px);")
+                && split_pane.contains("font-size: item.title_font_size * 1px;")
                 && split_pane.contains("x: item.text_x * 1px;")
                 && split_pane.contains("y: item.title_y * 1px;")
                 && split_pane.contains("width: item.text_width * 1px;")
@@ -2593,7 +2683,7 @@ mod tests {
         assert!(
             split_pane.contains("slice-layer := Rectangle")
                 && split_pane.contains(
-                    "x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;"
+                    "x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;"
                 )
                 && split_pane.contains("private property <bool> scrollbar-visible:")
                 && split_pane.contains("scrollbar-track := Rectangle")
@@ -2645,7 +2735,7 @@ mod tests {
         assert!(
             split_pane.contains("slice-layer := Rectangle")
                 && split_pane.contains(
-                    "x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;"
+                    "x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;"
                 )
                 && split_pane.contains("width: root.virtual-slice-width;")
                 && split_pane.contains(
@@ -2654,7 +2744,9 @@ mod tests {
                 && split_pane.contains(
                     "private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;"
                 )
-                && split_pane.contains("x: self.tile-column * root.cell-width;")
+                && split_pane.contains(
+                    "x: self.tile-column * root.column-width;"
+                )
                 && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
                 && split_pane.contains("width: item.tile_width * 1px;")
                 && !split_pane.contains("item.tile_x")
@@ -2844,26 +2936,39 @@ mod tests {
     }
 
     #[test]
-    fn virtual_grid_plan_keeps_visible_columns_with_overscan() {
-        let at_start = virtual_grid_plan(100, 4, 0.0, 250.0, 100.0, 10.0, 1);
+    fn icon_grid_layout_keeps_visible_columns_with_overscan() {
+        let grid = icon_grid_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let at_start = grid.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
 
-        let middle = virtual_grid_plan(100, 4, 350.0, 250.0, 100.0, 10.0, 1);
+        let middle = grid.virtual_plan(350.0, 1);
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
-        let clamped = virtual_grid_plan(10, 4, 800.0, 250.0, 100.0, 10.0, 1);
+        let clamped = icon_grid_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
         assert_eq!(clamped.range, 0..10);
         assert_eq!(clamped.visible_range, 0..10);
     }
 
     #[test]
-    fn main_scroll_max_x_matches_column_content_width() {
-        assert_eq!(main_scroll_max_x(0, 4, 300.0, 100.0, 10.0), 0.0);
-        assert_eq!(main_scroll_max_x(8, 4, 300.0, 100.0, 10.0), 0.0);
-        assert_eq!(main_scroll_max_x(12, 4, 300.0, 100.0, 10.0), 20.0);
-        assert_eq!(main_scroll_max_x(13, 4, 300.0, 100.0, 10.0), 120.0);
+    fn icon_grid_layout_reports_scroll_extent_from_column_content_width() {
+        assert_eq!(
+            icon_grid_layout(300.0, 0, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            0.0
+        );
+        assert_eq!(
+            icon_grid_layout(300.0, 8, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            0.0
+        );
+        assert_eq!(
+            icon_grid_layout(300.0, 12, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            32.0
+        );
+        assert_eq!(
+            icon_grid_layout(300.0, 13, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            136.0
+        );
     }
 
     #[test]
@@ -3312,17 +3417,18 @@ mod tests {
     }
 
     #[test]
-    fn virtual_grid_plan_clamps_viewport_and_reports_anchor_column() {
-        let plan = virtual_grid_plan(100, 4, 350.0, 250.0, 100.0, 10.0, 2);
+    fn icon_grid_layout_clamps_viewport_and_reports_anchor_column() {
+        let grid = icon_grid_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let plan = grid.virtual_plan(350.0, 2);
         assert_eq!(plan.viewport_x, 350.0);
-        assert_eq!(plan.scroll_max_x, 2270.0);
+        assert_eq!(plan.scroll_max_x, 2370.0);
         assert_eq!(plan.visible_range, 12..24);
         assert_eq!(plan.range, 4..32);
         assert_eq!(plan.start_column, 1);
 
-        let clamped = virtual_grid_plan(10, 4, 800.0, 250.0, 100.0, 10.0, 2);
-        assert_eq!(clamped.viewport_x, 70.0);
-        assert_eq!(clamped.scroll_max_x, 70.0);
+        let clamped = icon_grid_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 2);
+        assert_eq!(clamped.viewport_x, 82.0);
+        assert_eq!(clamped.scroll_max_x, 82.0);
         assert_eq!(clamped.visible_range, 0..10);
         assert_eq!(clamped.range, 0..10);
         assert_eq!(clamped.start_column, 0);

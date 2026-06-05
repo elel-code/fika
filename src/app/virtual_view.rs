@@ -1,4 +1,4 @@
-use crate::app::geometry::{MainGridLayout, VirtualGridPlan, virtual_grid_plan};
+use crate::app::geometry::{IconGridLayout, MainGridLayout, VirtualGridPlan};
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
 use std::ops::Range;
 use std::sync::Arc;
@@ -6,6 +6,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VirtualViewSnapshotUpdate {
     pub(crate) entry_count: usize,
+    pub(crate) layout: IconGridLayout,
     pub(crate) viewport_x: f32,
     pub(crate) viewport_clamped: bool,
     pub(crate) range: Range<usize>,
@@ -19,7 +20,6 @@ pub(crate) struct VirtualViewSnapshotUpdate {
 pub(crate) struct VirtualViewSnapshotInput {
     pub(crate) layout: MainGridLayout,
     pub(crate) requested_viewport_x: f32,
-    pub(crate) viewport_width: f32,
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
     pub(crate) visible_count_override: Option<usize>,
@@ -41,28 +41,16 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     let visible_count = input
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-    let plan = virtual_grid_plan(
-        visible_count,
-        input.layout.rows_per_column,
-        input.requested_viewport_x,
-        input.viewport_width,
-        input.layout.cell_width,
-        input.layout.padding,
-        2,
-    );
+    let icon_grid = input.layout.icon_grid(visible_count);
+    let plan = icon_grid.virtual_plan(input.requested_viewport_x, 2);
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
     let rebuild_model = !input.schedule_thumbnails
-        || should_rebuild_virtual_cache(
-            &input.cache,
-            &plan,
-            visible_count,
-            input.layout.row_height,
-            input.thumbnail_size_px,
-        );
+        || should_rebuild_virtual_cache(&input.cache, &plan, &icon_grid, input.thumbnail_size_px);
 
     if !rebuild_model {
         return VirtualViewSnapshotUpdate {
             entry_count: visible_count,
+            layout: icon_grid,
             viewport_x: plan.viewport_x,
             viewport_clamped,
             range: plan.range,
@@ -78,6 +66,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 
     VirtualViewSnapshotUpdate {
         entry_count: visible_count,
+        layout: icon_grid,
         viewport_x: plan.viewport_x,
         viewport_clamped,
         range: plan.range,
@@ -91,15 +80,10 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 fn should_rebuild_virtual_cache(
     cache: &VirtualViewCache,
     plan: &VirtualGridPlan,
-    entry_count: usize,
-    row_height: f32,
+    layout: &IconGridLayout,
     thumbnail_size_px: u32,
 ) -> bool {
-    cache.entry_count != entry_count
-        || cache.rows_per_column != plan.rows_per_column
-        || cache.cell_width != plan.cell_width
-        || cache.row_height != row_height
-        || cache.thumbnail_size_px != thumbnail_size_px
+    !cache.matches_layout(layout, thumbnail_size_px)
         || !cached_range_covers_visible_range(cache, &plan.visible_range)
 }
 
@@ -350,11 +334,15 @@ fn snapshot_glob_matches_bytes(pattern: &[u8], text: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::item_view::{
+        ItemViewRenderMetrics, ItemViewRenderPlanInput, decorate_render_plan,
+    };
     use std::sync::Arc;
 
     fn layout() -> MainGridLayout {
         MainGridLayout {
             viewport_x: 0.0,
+            viewport_width: 250.0,
             rows_per_column: 4,
             cell_width: 100.0,
             row_height: 90.0,
@@ -393,7 +381,6 @@ mod tests {
         VirtualViewSnapshotInput {
             layout: layout(),
             requested_viewport_x,
-            viewport_width: 250.0,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
             visible_count_override: None,
@@ -408,6 +395,19 @@ mod tests {
             size_filter: 0,
             chooser_patterns: Vec::new(),
         }
+    }
+
+    fn cache_for_layout(
+        range: Range<usize>,
+        entry_count: usize,
+        thumbnail_size_px: u32,
+    ) -> VirtualViewCache {
+        let mut cache = VirtualViewCache {
+            range,
+            ..VirtualViewCache::default()
+        };
+        cache.update_layout_signature(layout().icon_grid(entry_count), thumbnail_size_px);
+        cache
     }
 
     #[test]
@@ -427,14 +427,7 @@ mod tests {
         let second = prepare_virtual_view_snapshot_update(snapshot_input(
             entries,
             40.0,
-            VirtualViewCache {
-                range: first.range.clone(),
-                entry_count: first.entry_count,
-                rows_per_column: layout().rows_per_column,
-                cell_width: layout().cell_width,
-                row_height: layout().row_height,
-                thumbnail_size_px: 64,
-            },
+            cache_for_layout(first.range.clone(), first.entry_count, 64),
         ));
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
@@ -457,16 +450,9 @@ mod tests {
         let second = prepare_virtual_view_snapshot_update(snapshot_input(
             entries,
             115.0,
-            VirtualViewCache {
-                range: first.range.clone(),
-                entry_count: first.entry_count,
-                rows_per_column: layout().rows_per_column,
-                cell_width: layout().cell_width,
-                row_height: layout().row_height,
-                thumbnail_size_px: 64,
-            },
+            cache_for_layout(first.range.clone(), first.entry_count, 64),
         ));
-        assert_eq!(second.visible_range, 4..16);
+        assert_eq!(second.visible_range, 0..16);
         assert_eq!(second.range, 0..24);
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
@@ -481,8 +467,39 @@ mod tests {
         ));
 
         assert!(update.viewport_clamped);
-        assert_eq!(update.viewport_x, 70.0);
+        assert_eq!(update.viewport_x, 82.0);
         assert_eq!(update.range, 0..10);
+    }
+
+    #[test]
+    fn virtual_snapshot_entries_keep_names_and_renderable_title_geometry() {
+        let update = prepare_virtual_view_snapshot_update(snapshot_input(
+            snapshot_entries(24),
+            115.0,
+            VirtualViewCache::default(),
+        ));
+        assert!(update.rebuild_model);
+
+        let mut entries = update
+            .entries
+            .iter()
+            .map(PaneEntrySnapshot::to_item_view_entry)
+            .collect::<Vec<_>>();
+        decorate_render_plan(
+            &mut entries,
+            ItemViewRenderPlanInput {
+                cell_width: update.layout.cell_width,
+                render_metrics: ItemViewRenderMetrics::from_zoom_level(2),
+                show_location: false,
+            },
+        );
+
+        assert!(entries.iter().all(|entry| !entry.name.is_empty()));
+        assert!(entries.iter().all(|entry| entry.tile_width > 0.0));
+        assert!(entries.iter().all(|entry| entry.text_width > 0.0));
+        assert!(entries.iter().all(|entry| entry.title_y > 0.0));
+        assert!(entries.iter().all(|entry| entry.title_line_height > 0.0));
+        assert!(entries.iter().all(|entry| entry.title_font_size > 0.0));
     }
 
     #[test]
@@ -505,8 +522,7 @@ mod tests {
 
         let update = prepare_virtual_view_snapshot_update(VirtualViewSnapshotInput {
             layout: layout(),
-            requested_viewport_x: 315.0,
-            viewport_width: 250.0,
+            requested_viewport_x: 330.0,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
             visible_count_override: None,

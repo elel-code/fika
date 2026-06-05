@@ -1,7 +1,5 @@
 use crate::app::async_bridge::AsyncBridge;
-use crate::app::geometry::{
-    MainGridLayout, active_main_pane_width, inactive_main_pane_width, main_scroll_max_x,
-};
+use crate::app::geometry::{MainGridLayout, active_main_pane_width, inactive_main_pane_width};
 use crate::app::pane::{PaneEntrySnapshot, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
@@ -294,6 +292,8 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         viewport_x: pane_slot_viewport_x(slot, state),
         item_view_rows_per_column: item_view_metrics.rows_per_column,
         item_view_cell_width: item_view_metrics.cell_width,
+        item_view_column_width: item_view_metrics.column_width,
+        item_view_column_offset: item_view_metrics.column_offset,
         item_view_row_height: item_view_metrics.row_height,
         item_view_padding: item_view_metrics.padding,
         item_view_content_width: item_view_metrics.content_width,
@@ -334,6 +334,8 @@ struct ItemViewSlotMetrics {
     entry_count: i32,
     rows_per_column: i32,
     cell_width: f32,
+    column_width: f32,
+    column_offset: f32,
     row_height: f32,
     padding: f32,
     content_width: f32,
@@ -345,7 +347,6 @@ fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> I
     let viewport_width = pane_slot_width(ui, slot);
     let search_panel_visible = state.panes.focused_slot() == slot;
     let layout = MainGridLayout::from_ui_for_pane_width(ui, viewport_width, search_panel_visible);
-    let rows_per_column = layout.rows_per_column.max(1);
     let (entry_count, virtual_slice_count) = state
         .panes
         .pane_for_slot(slot)
@@ -356,27 +357,20 @@ fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> I
             )
         })
         .unwrap_or((0, 0));
-    let column_count = entry_count.div_ceil(rows_per_column).max(1);
-    let virtual_slice_column_count = virtual_slice_count.div_ceil(rows_per_column).max(1);
-    let content_width = (2.0 * layout.padding + column_count as f32 * layout.cell_width).max(1.0);
-    let virtual_slice_width = (virtual_slice_column_count as f32 * layout.cell_width).max(1.0);
-    let scroll_max_x = main_scroll_max_x(
-        entry_count,
-        rows_per_column,
-        viewport_width,
-        layout.cell_width,
-        layout.padding,
-    );
+    let icon_grid = layout.icon_grid(entry_count);
+    let virtual_slice_width = icon_grid.virtual_slice_width(virtual_slice_count);
 
     ItemViewSlotMetrics {
         entry_count: entry_count as i32,
-        rows_per_column: rows_per_column as i32,
-        cell_width: layout.cell_width,
-        row_height: layout.row_height,
-        padding: layout.padding,
-        content_width,
+        rows_per_column: icon_grid.rows_per_column as i32,
+        cell_width: icon_grid.cell_width,
+        column_width: icon_grid.column_width,
+        column_offset: icon_grid.column_offset,
+        row_height: icon_grid.row_height,
+        padding: icon_grid.padding,
+        content_width: icon_grid.content_width,
         virtual_slice_width,
-        scroll_max_x,
+        scroll_max_x: icon_grid.scroll_max_x,
     }
 }
 

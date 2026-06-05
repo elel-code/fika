@@ -1,15 +1,13 @@
 use crate::app::geometry::{
-    PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width, icon_cell_width, icon_row_height,
+    MainGridLayout, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width,
     inactive_main_pane_width, main_pane_bounds, search_panel_height,
 };
-use crate::app::selection::filtered_entry_at_for_slot;
+use crate::app::selection::{filtered_entry_at_for_slot, filtered_entry_count_for_slot};
 use crate::app::state::AppState;
 use crate::{AppWindow, FileEntry, ItemViewEntry};
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::ops::Range;
 
-const ITEM_VIEW_PADDING: f32 = 14.0;
-const TILE_TRAILING_GAP: f32 = 12.0;
 const TITLE_MEDIA_GAP: f32 = 5.0;
 const TITLE_PADDING_X: f32 = 6.0;
 const SELECTION_DRAG_THRESHOLD: f32 = 5.0;
@@ -161,6 +159,8 @@ pub(crate) struct ItemViewLayout {
     pub(crate) viewport_x: f32,
     pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
+    pub(crate) column_width: f32,
+    pub(crate) column_offset: f32,
     pub(crate) row_height: f32,
     pub(crate) padding: f32,
 }
@@ -173,6 +173,8 @@ pub(crate) struct SelectionRect {
     pub(crate) y2: f32,
     pub(crate) rows_per_column: i32,
     pub(crate) cell_width: f32,
+    pub(crate) column_width: f32,
+    pub(crate) column_offset: f32,
     pub(crate) row_height: f32,
     pub(crate) padding: f32,
 }
@@ -185,12 +187,15 @@ impl SelectionRect {
 
         let rows_per_column = self.rows_per_column.max(1) as usize;
         let cell_width = self.cell_width.max(1.0);
-        let tile_width = (cell_width - TILE_TRAILING_GAP).max(1.0);
+        let column_width = self.column_width.max(1.0);
+        let column_offset = self.column_offset.max(0.0);
 
-        let first_column = ((self.x1 - self.padding - tile_width) / cell_width)
+        let first_column = ((self.x1 - self.padding - column_offset - cell_width) / column_width)
             .floor()
             .max(0.0) as usize;
-        let last_column = ((self.x2 - self.padding) / cell_width).floor().max(0.0) as usize;
+        let last_column = ((self.x2 - self.padding - column_offset) / column_width)
+            .floor()
+            .max(0.0) as usize;
 
         let start = first_column
             .saturating_mul(rows_per_column)
@@ -203,9 +208,10 @@ impl SelectionRect {
         let rows_per_column = self.rows_per_column.max(1) as usize;
         let column = index / rows_per_column;
         let row = index % rows_per_column;
-        let tile_x1 = self.padding + column as f32 * self.cell_width;
+        let tile_x1 =
+            self.padding + self.column_offset.max(0.0) + column as f32 * self.column_width.max(1.0);
         let tile_y1 = self.padding + row as f32 * self.row_height;
-        let tile_x2 = tile_x1 + (self.cell_width - TILE_TRAILING_GAP).max(1.0);
+        let tile_x2 = tile_x1 + self.cell_width.max(1.0);
         let tile_y2 = tile_y1 + self.row_height.max(1.0);
 
         RectBounds::new(self.x1, self.y1, self.x2, self.y2)
@@ -217,6 +223,8 @@ impl SelectionRect {
 pub(crate) struct ItemViewInputMetrics {
     pub(crate) rows_per_column: i32,
     pub(crate) cell_width: f32,
+    pub(crate) column_width: f32,
+    pub(crate) column_offset: f32,
     pub(crate) row_height: f32,
     pub(crate) padding: f32,
 }
@@ -225,12 +233,16 @@ impl ItemViewInputMetrics {
     pub(crate) fn new(
         rows_per_column: i32,
         cell_width: f32,
+        column_width: f32,
+        column_offset: f32,
         row_height: f32,
         padding: f32,
     ) -> Self {
         Self {
             rows_per_column: rows_per_column.max(1),
             cell_width: cell_width.max(1.0),
+            column_width: column_width.max(1.0),
+            column_offset: column_offset.max(0.0),
             row_height: row_height.max(1.0),
             padding: padding.max(0.0),
         }
@@ -246,6 +258,8 @@ impl ItemViewInputMetrics {
             y2,
             rows_per_column: self.rows_per_column,
             cell_width: self.cell_width,
+            column_width: self.column_width,
+            column_offset: self.column_offset,
             row_height: self.row_height,
             padding: self.padding,
         }
@@ -344,7 +358,7 @@ fn ordered_pair(a: f32, b: f32) -> (f32, f32) {
 pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemViewRenderPlanInput) {
     let cell_width = input.cell_width.max(1.0);
     let render_metrics = input.render_metrics;
-    let tile_width = (cell_width - TILE_TRAILING_GAP).max(1.0);
+    let tile_width = cell_width;
 
     for entry in entries.iter_mut() {
         let metadata_mode =
@@ -633,6 +647,8 @@ impl ItemViewLayout {
         viewport_x: f32,
         rows_per_column: usize,
         cell_width: f32,
+        column_width: f32,
+        column_offset: f32,
         row_height: f32,
         padding: f32,
     ) -> Self {
@@ -644,6 +660,8 @@ impl ItemViewLayout {
             viewport_x: viewport_x.max(0.0),
             rows_per_column: rows_per_column.max(1),
             cell_width: cell_width.max(1.0),
+            column_width: column_width.max(1.0),
+            column_offset: column_offset.max(0.0),
             row_height: row_height.max(1.0),
             padding: padding.max(0.0),
         }
@@ -681,12 +699,11 @@ impl ItemViewLayout {
         } else {
             0.0
         };
-        let cell_width = icon_cell_width(ui.get_icon_zoom_level());
-        let row_height = icon_row_height(ui.get_icon_zoom_level());
         let height =
             (pane.bottom - pane.top - PATH_BAR_HEIGHT - STATUS_BAR_HEIGHT - search_height).max(1.0);
-        let available_grid_height = (height - 2.0 * ITEM_VIEW_PADDING).max(row_height);
-        let rows_per_column = (available_grid_height / row_height).floor().max(1.0) as usize;
+        let layout =
+            MainGridLayout::from_ui_for_pane_width(ui, width, state.panes.focused_slot() == slot);
+        let icon_grid = layout.icon_grid(filtered_entry_count_for_slot(state, slot));
 
         Some(Self::new(
             x,
@@ -694,10 +711,12 @@ impl ItemViewLayout {
             width,
             height,
             pane_state.view.viewport_x,
-            rows_per_column,
-            cell_width,
-            row_height,
-            ITEM_VIEW_PADDING,
+            icon_grid.rows_per_column,
+            icon_grid.cell_width,
+            icon_grid.column_width,
+            icon_grid.column_offset,
+            icon_grid.row_height,
+            icon_grid.padding,
         ))
     }
 
@@ -706,20 +725,20 @@ impl ItemViewLayout {
             return None;
         }
 
-        let local_x = x - self.x - self.padding + self.viewport_x;
+        let local_x = x - self.x - self.padding - self.column_offset + self.viewport_x;
         let local_y = y - self.y - self.padding;
         if local_x < 0.0 || local_y < 0.0 {
             return None;
         }
 
-        let column = (local_x / self.cell_width).floor() as usize;
+        let column = (local_x / self.column_width).floor() as usize;
         let row = (local_y / self.row_height).floor() as usize;
         if row >= self.rows_per_column {
             return None;
         }
 
-        let inside_tile_x = local_x - column as f32 * self.cell_width;
-        if inside_tile_x > (self.cell_width - TILE_TRAILING_GAP).max(1.0) {
+        let inside_tile_x = local_x - column as f32 * self.column_width;
+        if inside_tile_x > self.cell_width.max(1.0) {
             return None;
         }
 
@@ -795,19 +814,23 @@ mod tests {
 
     #[test]
     fn item_view_layout_hit_test_uses_column_first_order_and_viewport() {
-        let layout = ItemViewLayout::new(100.0, 50.0, 250.0, 220.0, 300.0, 2, 100.0, 100.0, 10.0);
+        let layout = ItemViewLayout::new(
+            100.0, 50.0, 250.0, 220.0, 300.0, 2, 100.0, 112.0, 10.0, 100.0, 10.0,
+        );
 
-        assert_eq!(layout.index_at_point(115.0, 65.0), Some(6));
-        assert_eq!(layout.index_at_point(115.0, 165.0), Some(7));
+        assert_eq!(layout.index_at_point(115.0, 65.0), Some(4));
+        assert_eq!(layout.index_at_point(115.0, 165.0), Some(5));
     }
 
     #[test]
     fn item_view_layout_hit_test_rejects_padding_and_cell_gap() {
-        let layout = ItemViewLayout::new(100.0, 50.0, 250.0, 220.0, 0.0, 2, 100.0, 100.0, 10.0);
+        let layout = ItemViewLayout::new(
+            100.0, 50.0, 250.0, 220.0, 0.0, 2, 100.0, 112.0, 10.0, 100.0, 10.0,
+        );
 
         assert_eq!(layout.index_at_point(105.0, 65.0), None);
-        assert_eq!(layout.index_at_point(199.0, 65.0), None);
-        assert_eq!(layout.index_at_point(115.0, 265.0), None);
+        assert_eq!(layout.index_at_point(221.0, 65.0), None);
+        assert_eq!(layout.index_at_point(115.0, 271.0), None);
     }
 
     #[test]
@@ -827,7 +850,7 @@ mod tests {
             .iter()
             .map(|entry| entry.tile_width)
             .collect::<Vec<_>>();
-        assert_eq!(geometry, vec![88.0, 88.0, 88.0, 88.0, 88.0]);
+        assert_eq!(geometry, vec![100.0, 100.0, 100.0, 100.0, 100.0]);
         let render_tokens = entries
             .iter()
             .map(|entry| {
@@ -850,25 +873,31 @@ mod tests {
             render_tokens,
             vec![
                 (
-                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
                 (
-                    104.0, 4.0, 5.0, 6.0, 76.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
                 ),
             ]
         );
         assert!(
             entries.iter().all(|entry| entry.text_width >= 48.0),
             "ordinary icon-view titles must keep enough width to remain visible"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !entry.name.is_empty() && entry.title_y > 0.0),
+            "visible icon rows must carry a title and title geometry"
         );
     }
 
@@ -893,7 +922,7 @@ mod tests {
         assert_eq!(entry.media_x, 16.0);
         assert_eq!(entry.media_y, 17.0);
         assert_eq!(entry.text_x, 108.0);
-        assert_eq!(entry.text_width, 112.0);
+        assert_eq!(entry.text_width, 124.0);
         assert_eq!(entry.metadata_line_height, 14.0);
         assert_eq!(entry.title_line_height, 19.0);
         assert_eq!(entry.group_y, 26.5);
@@ -915,9 +944,9 @@ mod tests {
         );
 
         let entry = &entries[0];
-        assert_eq!(entry.media_x, 4.0);
+        assert_eq!(entry.media_x, 10.0);
         assert_eq!(entry.text_x, 6.0);
-        assert_eq!(entry.text_width, 76.0);
+        assert_eq!(entry.text_width, 88.0);
         assert_eq!(entry.title_y, 80.0);
     }
 
@@ -986,6 +1015,8 @@ mod tests {
             y2: 205.0,
             rows_per_column: 2,
             cell_width: 100.0,
+            column_width: 112.0,
+            column_offset: 10.0,
             row_height: 100.0,
             padding: 10.0,
         };
@@ -999,12 +1030,14 @@ mod tests {
     #[test]
     fn selection_rect_candidate_range_limits_intersecting_columns() {
         let rect = SelectionRect {
-            x1: 210.0,
+            x1: 244.0,
             y1: 0.0,
-            x2: 309.0,
+            x2: 343.0,
             y2: 205.0,
             rows_per_column: 2,
             cell_width: 100.0,
+            column_width: 112.0,
+            column_offset: 10.0,
             row_height: 100.0,
             padding: 10.0,
         };
@@ -1022,7 +1055,7 @@ mod tests {
         input.press_blank(
             10.0,
             20.0,
-            ItemViewInputMetrics::new(3, 100.0, 50.0, 14.0),
+            ItemViewInputMetrics::new(3, 100.0, 112.0, 14.0, 50.0, 14.0),
             false,
         );
 
@@ -1039,7 +1072,7 @@ mod tests {
         input.press_blank(
             120.0,
             80.0,
-            ItemViewInputMetrics::new(3, 100.0, 50.0, 14.0),
+            ItemViewInputMetrics::new(3, 100.0, 112.0, 14.0, 50.0, 14.0),
             true,
         );
 
@@ -1054,6 +1087,8 @@ mod tests {
                     y2: 140.0,
                     rows_per_column: 3,
                     cell_width: 100.0,
+                    column_width: 112.0,
+                    column_offset: 14.0,
                     row_height: 50.0,
                     padding: 14.0,
                 },
@@ -1068,7 +1103,7 @@ mod tests {
         input.press_blank(
             10.0,
             20.0,
-            ItemViewInputMetrics::new(3, 100.0, 50.0, 14.0),
+            ItemViewInputMetrics::new(3, 100.0, 112.0, 14.0, 50.0, 14.0),
             false,
         );
 

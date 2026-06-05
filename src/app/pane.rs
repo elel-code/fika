@@ -1,3 +1,4 @@
+use crate::app::geometry::IconGridLayout;
 use crate::app::item_view::{ItemViewInputState, ItemViewRenderMetrics, ItemViewRowToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
@@ -480,9 +481,7 @@ pub(crate) struct VirtualViewPrepareRequest {
     pub(crate) generation: u64,
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
-    pub(crate) rows_per_column: usize,
     pub(crate) cell_width: f32,
-    pub(crate) row_height: f32,
     pub(crate) render_metrics: ItemViewRenderMetrics,
     pub(crate) input: Box<VirtualViewSnapshotInput>,
 }
@@ -620,8 +619,14 @@ pub(crate) struct VirtualViewCache {
     pub(crate) range: Range<usize>,
     pub(crate) entry_count: usize,
     pub(crate) rows_per_column: usize,
+    pub(crate) viewport_width: f32,
     pub(crate) cell_width: f32,
+    pub(crate) column_width: f32,
+    pub(crate) column_offset: f32,
     pub(crate) row_height: f32,
+    pub(crate) padding: f32,
+    pub(crate) content_width: f32,
+    pub(crate) scroll_max_x: f32,
     pub(crate) thumbnail_size_px: u32,
 }
 
@@ -631,8 +636,14 @@ impl Default for VirtualViewCache {
             range: 0..0,
             entry_count: 0,
             rows_per_column: 0,
+            viewport_width: 0.0,
             cell_width: 0.0,
+            column_width: 0.0,
+            column_offset: 0.0,
             row_height: 0.0,
+            padding: 0.0,
+            content_width: 0.0,
+            scroll_max_x: 0.0,
             thumbnail_size_px: 0,
         }
     }
@@ -642,6 +653,42 @@ impl VirtualViewCache {
     pub(crate) fn invalidate(&mut self) {
         self.range = 0..0;
     }
+
+    pub(crate) fn matches_layout(&self, layout: &IconGridLayout, thumbnail_size_px: u32) -> bool {
+        self.entry_count == layout.entry_count
+            && self.rows_per_column == layout.rows_per_column
+            && same_layout_metric(self.viewport_width, layout.viewport_width)
+            && same_layout_metric(self.cell_width, layout.cell_width)
+            && same_layout_metric(self.column_width, layout.column_width)
+            && same_layout_metric(self.column_offset, layout.column_offset)
+            && same_layout_metric(self.row_height, layout.row_height)
+            && same_layout_metric(self.padding, layout.padding)
+            && same_layout_metric(self.content_width, layout.content_width)
+            && same_layout_metric(self.scroll_max_x, layout.scroll_max_x)
+            && self.thumbnail_size_px == thumbnail_size_px
+    }
+
+    pub(crate) fn update_layout_signature(
+        &mut self,
+        layout: IconGridLayout,
+        thumbnail_size_px: u32,
+    ) {
+        self.entry_count = layout.entry_count;
+        self.rows_per_column = layout.rows_per_column;
+        self.viewport_width = layout.viewport_width;
+        self.cell_width = layout.cell_width;
+        self.column_width = layout.column_width;
+        self.column_offset = layout.column_offset;
+        self.row_height = layout.row_height;
+        self.padding = layout.padding;
+        self.content_width = layout.content_width;
+        self.scroll_max_x = layout.scroll_max_x;
+        self.thumbnail_size_px = thumbnail_size_px;
+    }
+}
+
+fn same_layout_metric(a: f32, b: f32) -> bool {
+    (a - b).abs() <= 0.01
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -705,7 +752,7 @@ impl PaneHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::MainGridLayout;
+    use crate::app::geometry::{MainGridLayout, icon_grid_layout};
     use crate::app::model_update::update_pane_item_view_entries_model;
     use slint::Model;
 
@@ -718,20 +765,18 @@ mod tests {
             generation,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
-            rows_per_column: 4,
             cell_width: 100.0,
-            row_height: 90.0,
             render_metrics: ItemViewRenderMetrics::from_zoom_level(1),
             input: Box::new(VirtualViewSnapshotInput {
                 layout: MainGridLayout {
                     viewport_x: requested_viewport_x,
+                    viewport_width: 250.0,
                     rows_per_column: 4,
                     cell_width: 100.0,
                     row_height: 90.0,
                     padding: 10.0,
                 },
                 requested_viewport_x,
-                viewport_width: 250.0,
                 thumbnail_size_px: 64,
                 schedule_thumbnails: true,
                 visible_count_override: None,
@@ -758,6 +803,22 @@ mod tests {
                 chooser_patterns: Vec::new(),
             }),
         }
+    }
+
+    fn cache_for_layout(
+        range: Range<usize>,
+        entry_count: usize,
+        thumbnail_size_px: u32,
+    ) -> VirtualViewCache {
+        let mut cache = VirtualViewCache {
+            range,
+            ..VirtualViewCache::default()
+        };
+        cache.update_layout_signature(
+            icon_grid_layout(250.0, entry_count, 4, 100.0, 90.0, 10.0),
+            thumbnail_size_px,
+        );
+        cache
     }
 
     #[test]
@@ -1105,14 +1166,7 @@ mod tests {
             vec![PathBuf::from("/tmp/forward")],
         );
         panes.focused_mut().view.viewport_x = 128.0;
-        panes.focused_mut().view.virtual_view = VirtualViewCache {
-            range: 4..12,
-            entry_count: 24,
-            rows_per_column: 4,
-            cell_width: 208.0,
-            row_height: 90.0,
-            thumbnail_size_px: 80,
-        };
+        panes.focused_mut().view.virtual_view = cache_for_layout(4..12, 24, 80);
         panes.focused_mut().view.virtual_start_index = 4;
         panes.focused_mut().view.virtual_start_column = 1;
         let virtual_entries = panes
@@ -1145,7 +1199,7 @@ mod tests {
         assert_eq!(inactive.view.virtual_view.range, 4..12);
         assert_eq!(inactive.view.virtual_view.entry_count, 24);
         assert_eq!(inactive.view.virtual_view.rows_per_column, 4);
-        assert_eq!(inactive.view.virtual_view.cell_width, 208.0);
+        assert_eq!(inactive.view.virtual_view.cell_width, 100.0);
         assert_eq!(inactive.view.virtual_view.row_height, 90.0);
         assert_eq!(inactive.view.virtual_view.thumbnail_size_px, 80);
         assert_eq!(inactive.view.virtual_start_index, 4);
@@ -1224,14 +1278,7 @@ mod tests {
     #[test]
     fn pane_view_virtual_cache_invalidate_keeps_metrics_but_clears_range() {
         let mut view = PaneView {
-            virtual_view: VirtualViewCache {
-                range: 4..12,
-                entry_count: 64,
-                rows_per_column: 8,
-                cell_width: 96.0,
-                row_height: 78.0,
-                thumbnail_size_px: 128,
-            },
+            virtual_view: cache_for_layout(4..12, 64, 128),
             ..PaneView::default()
         };
 
@@ -1239,9 +1286,9 @@ mod tests {
 
         assert!(view.virtual_view.range.is_empty());
         assert_eq!(view.virtual_view.entry_count, 64);
-        assert_eq!(view.virtual_view.rows_per_column, 8);
-        assert_eq!(view.virtual_view.cell_width, 96.0);
-        assert_eq!(view.virtual_view.row_height, 78.0);
+        assert_eq!(view.virtual_view.rows_per_column, 4);
+        assert_eq!(view.virtual_view.cell_width, 100.0);
+        assert_eq!(view.virtual_view.row_height, 90.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
     }
 
@@ -1271,14 +1318,7 @@ mod tests {
     #[test]
     fn pane_view_virtual_invalidation_clears_prepare_queue() {
         let mut view = PaneView {
-            virtual_view: VirtualViewCache {
-                range: 4..12,
-                entry_count: 64,
-                rows_per_column: 8,
-                cell_width: 96.0,
-                row_height: 78.0,
-                thumbnail_size_px: 128,
-            },
+            virtual_view: cache_for_layout(4..12, 64, 128),
             ..PaneView::default()
         };
         let old_generation = view.virtual_generation.current();

@@ -8,6 +8,8 @@ export component SplitPaneView inherits Rectangle {
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
     in property <float> item-view-cell-width: 1;
+    in property <float> item-view-column-width: 1;
+    in property <float> item-view-column-offset: 0;
     in property <float> item-view-row-height: 1;
     in property <float> item-view-padding: 14;
     in property <float> item-view-content-width: 1;
@@ -27,7 +29,7 @@ export component SplitPaneView inherits Rectangle {
     callback item_pressed(float, float, bool, bool) -> bool;
     callback item_activated(float, float);
     callback item_context_menu(float, float, length, length) -> bool;
-    callback blank_pressed(float, float, int, float, float, float, bool);
+    callback blank_pressed(float, float, int, float, float, float, float, float, bool);
     callback blank_moved(float, float) -> bool;
     callback blank_released(float, float);
     callback blank_cancelled();
@@ -42,6 +44,8 @@ export component SplitPaneView inherits Rectangle {
 
     private property <length> preview-padding: max(0, root.item-view-padding) * 1px;
     private property <length> cell-width: max(1, root.item-view-cell-width) * 1px;
+    private property <length> column-width: max(1, root.item-view-column-width) * 1px;
+    private property <length> column-offset: max(0, root.item-view-column-offset) * 1px;
     private property <length> row-height: max(1, root.item-view-row-height) * 1px;
     private property <color> selection-border-color: root.dark ? #51a9d4 : #2b86b7;
     private property <color> drop-border-color: root.dark ? #f59e0b : #d97706;
@@ -134,6 +138,8 @@ export component SplitPaneView inherits Rectangle {
             root.selection-rect-start-y / 1px,
             root.rows-per-column,
             root.cell-width / 1px,
+            root.column-width / 1px,
+            root.column-offset / 1px,
             root.row-height / 1px,
             root.preview-padding / 1px,
             root.selection-rect-toggle
@@ -179,7 +185,7 @@ export component SplitPaneView inherits Rectangle {
                     root.selection-rect-start-y = self.mouse-y;
                     root.selection-rect-current-x = self.mouse-x;
                     root.selection-rect-current-y = self.mouse-y;
-                    root.blank_pressed(self.mouse-x / 1px, self.mouse-y / 1px, 1, 1, 1, 0, false);
+                    root.blank_pressed(self.mouse-x / 1px, self.mouse-y / 1px, 1, 1, 1, 0, 1, 0, false);
                 } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
                     root.blank_released(self.mouse-x / 1px, self.mouse-y / 1px);
                 } else if (root.interactive && event.kind == PointerEventKind.cancel) {
@@ -295,7 +301,7 @@ export component SplitPaneView inherits Rectangle {
             }
 
             slice-layer := Rectangle {
-                x: root.preview-padding + root.virtual-start-column * root.cell-width - root.viewport-x * 1px;
+                x: root.preview-padding + root.column-offset + root.virtual-start-column * root.column-width - root.viewport-x * 1px;
                 y: 0px;
                 width: root.virtual-slice-width;
                 height: parent.height;
@@ -304,7 +310,7 @@ export component SplitPaneView inherits Rectangle {
                     private property <int> tile-row: index.mod(root.rows-per-column);
                     private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
 
-                    x: self.tile-column * root.cell-width;
+                    x: self.tile-column * root.column-width;
                     y: root.preview-padding + self.tile-row * root.row-height;
                     width: item.tile_width * 1px;
                     height: item.tile_height * 1px;
@@ -339,10 +345,10 @@ export component SplitPaneView inherits Rectangle {
                         x: item.text_x * 1px;
                         y: item.title_y * 1px;
                         width: item.text_width * 1px;
-                        height: max(16px, item.title_line_height * 1px);
+                        height: item.title_line_height * 1px;
                         text: item.name;
                         color: root.title-color;
-                        font-size: max(12px, item.title_font_size * 1px);
+                        font-size: item.title_font_size * 1px;
                         overflow: elide;
                         horizontal-alignment: root.show-location && (item.group != "" || item.location != "") ? left : center;
                         vertical-alignment: center;

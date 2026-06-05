@@ -49,7 +49,7 @@ use app::file_clipboard::{
 };
 use app::geometry::{
     MainGridLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
-    place_drop_geometry, register_menu_geometry_callbacks, virtual_grid_plan,
+    place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
     ItemViewInputMetrics, ItemViewMediaCache, ItemViewReleaseAction, ItemViewRenderMetrics,
@@ -176,6 +176,7 @@ enum VirtualViewSyncRequest {
     Cached {
         viewport_x: f32,
         publish_viewport: bool,
+        publish_layout: bool,
     },
     Deferred,
     Prepare(VirtualViewPrepareRequest),
@@ -929,14 +930,30 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         ui.on_pane_item_view_blank_pressed(
-            move |slot, x, y, rows_per_column, cell_width, row_height, padding, toggle| {
+            move |slot,
+                  x,
+                  y,
+                  rows_per_column,
+                  cell_width,
+                  column_width,
+                  column_offset,
+                  row_height,
+                  padding,
+                  toggle| {
                 if let Some(_ui) = ui_weak.upgrade() {
                     press_item_view_blank_for_slot(
                         &state,
                         slot,
                         x,
                         y,
-                        ItemViewInputMetrics::new(rows_per_column, cell_width, row_height, padding),
+                        ItemViewInputMetrics::new(
+                            rows_per_column,
+                            cell_width,
+                            column_width,
+                            column_offset,
+                            row_height,
+                            padding,
+                        ),
                         toggle,
                     );
                 }
@@ -1518,7 +1535,16 @@ fn register_pane_routing_callbacks(
     {
         let ui_weak = ui.as_weak();
         routing.on_item_view_blank_pressed(
-            move |slot, x, y, rows_per_column, cell_width, row_height, padding, toggle| {
+            move |slot,
+                  x,
+                  y,
+                  rows_per_column,
+                  cell_width,
+                  column_width,
+                  column_offset,
+                  row_height,
+                  padding,
+                  toggle| {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.invoke_route_pane_item_view_blank_pressed(
                         slot,
@@ -1526,6 +1552,8 @@ fn register_pane_routing_callbacks(
                         y,
                         rows_per_column,
                         cell_width,
+                        column_width,
+                        column_offset,
                         row_height,
                         padding,
                         toggle,
@@ -3245,6 +3273,7 @@ pub(crate) fn sync_virtual_entries_for_slot(
         schedule_thumbnails,
         None,
         false,
+        false,
     );
 }
 
@@ -3275,6 +3304,7 @@ fn sync_virtual_entries_with_count(
         schedule_thumbnails,
         visible_count_override,
         false,
+        false,
     );
 }
 
@@ -3286,6 +3316,7 @@ fn sync_virtual_entries_for_slot_with_count(
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
     immediate: bool,
+    publish_layout_on_cache: bool,
 ) {
     let size_px = thumbnail_size_px(ui);
     let render_metrics = ItemViewRenderMetrics::from_zoom_level(ui.get_icon_zoom_level());
@@ -3314,7 +3345,6 @@ fn sync_virtual_entries_for_slot_with_count(
             pane,
             &layout,
             requested_viewport_x,
-            viewport_width,
             size_px,
             schedule_thumbnails,
             visible_count_override,
@@ -3325,6 +3355,7 @@ fn sync_virtual_entries_for_slot_with_count(
             Some(VirtualViewSyncRequest::Cached {
                 viewport_x,
                 publish_viewport,
+                publish_layout: publish_layout_on_cache,
             })
         } else {
             let generation = pane.view.virtual_generation.next();
@@ -3334,14 +3365,11 @@ fn sync_virtual_entries_for_slot_with_count(
                 generation,
                 thumbnail_size_px: size_px,
                 schedule_thumbnails,
-                rows_per_column: layout.rows_per_column,
                 cell_width: layout.cell_width,
-                row_height: layout.row_height,
                 render_metrics,
                 input: Box::new(VirtualViewSnapshotInput {
                     layout,
                     requested_viewport_x,
-                    viewport_width,
                     thumbnail_size_px: size_px,
                     schedule_thumbnails,
                     visible_count_override,
@@ -3375,8 +3403,11 @@ fn sync_virtual_entries_for_slot_with_count(
         VirtualViewSyncRequest::Cached {
             viewport_x,
             publish_viewport,
+            publish_layout,
         } => {
-            if publish_viewport {
+            if publish_layout {
+                sync_pane_view_ui(ui, state, slot);
+            } else if publish_viewport {
                 set_pane_viewport_ui(ui, slot, viewport_x, state);
             }
             return;
@@ -3391,9 +3422,7 @@ fn sync_virtual_entries_for_slot_with_count(
             generation,
             thumbnail_size_px,
             schedule_thumbnails,
-            rows_per_column,
             cell_width,
-            row_height,
             render_metrics,
             input,
         } = request;
@@ -3407,9 +3436,7 @@ fn sync_virtual_entries_for_slot_with_count(
                 generation,
                 thumbnail_size_px,
                 schedule_thumbnails,
-                rows_per_column,
                 cell_width,
-                row_height,
                 render_metrics,
                 update,
             },
@@ -3426,9 +3453,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
         generation,
         thumbnail_size_px,
         schedule_thumbnails,
-        rows_per_column,
         cell_width,
-        row_height,
         render_metrics,
         input,
     } = request;
@@ -3446,9 +3471,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
                     generation,
                     thumbnail_size_px,
                     schedule_thumbnails,
-                    rows_per_column,
                     cell_width,
-                    row_height,
                     render_metrics,
                     update,
                 }),
@@ -3470,7 +3493,6 @@ fn cached_virtual_viewport_sync(
     pane: &mut PaneState,
     layout: &MainGridLayout,
     requested_viewport_x: f32,
-    viewport_width: f32,
     thumbnail_size_px: u32,
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
@@ -3493,20 +3515,12 @@ fn cached_virtual_viewport_sync(
         return None;
     };
 
-    let plan = virtual_grid_plan(
-        visible_count,
-        layout.rows_per_column,
-        requested_viewport_x,
-        viewport_width,
-        layout.cell_width,
-        layout.padding,
-        2,
-    );
-    if pane.view.virtual_view.entry_count != visible_count
-        || pane.view.virtual_view.rows_per_column != plan.rows_per_column
-        || pane.view.virtual_view.cell_width != plan.cell_width
-        || pane.view.virtual_view.row_height != layout.row_height
-        || pane.view.virtual_view.thumbnail_size_px != thumbnail_size_px
+    let icon_grid = layout.icon_grid(visible_count);
+    let plan = icon_grid.virtual_plan(requested_viewport_x, 2);
+    if !pane
+        .view
+        .virtual_view
+        .matches_layout(&icon_grid, thumbnail_size_px)
         || !virtual_cache_covers_visible_range(&pane.view.virtual_view.range, &plan.visible_range)
     {
         return None;
@@ -3555,11 +3569,9 @@ fn apply_virtual_view_result(
             pane.view.viewport_x = update.viewport_x;
             if update.rebuild_model {
                 pane.view.virtual_view.range = update.range.clone();
-                pane.view.virtual_view.entry_count = update.entry_count;
-                pane.view.virtual_view.rows_per_column = result.rows_per_column;
-                pane.view.virtual_view.cell_width = result.cell_width;
-                pane.view.virtual_view.row_height = result.row_height;
-                pane.view.virtual_view.thumbnail_size_px = result.thumbnail_size_px;
+                pane.view
+                    .virtual_view
+                    .update_layout_signature(update.layout, result.thumbnail_size_px);
             }
         }
     }
@@ -4207,7 +4219,7 @@ fn sync_pane_viewport_for_slot(
     bridge: &AsyncBridge,
     slot: i32,
 ) {
-    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true);
+    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true, false);
 }
 
 fn sync_pane_layout_for_slot(
@@ -4216,7 +4228,7 @@ fn sync_pane_layout_for_slot(
     bridge: &AsyncBridge,
     slot: i32,
 ) {
-    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true);
+    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true, true);
 }
 
 fn sync_pane_view_for_slot(
@@ -4877,7 +4889,7 @@ fn dnd_debug_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{place_drop_geometry, virtual_grid_plan};
+    use crate::app::geometry::{icon_grid_layout, place_drop_geometry};
     use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
         filtered_entries_range, filtered_entry_at, filtered_entry_paths, filtered_entry_summary,
@@ -5208,16 +5220,17 @@ mod tests {
     }
 
     #[test]
-    fn virtual_grid_plan_keeps_visible_columns_with_overscan() {
-        let at_start = virtual_grid_plan(100, 4, 0.0, 250.0, 100.0, 10.0, 1);
+    fn icon_grid_layout_keeps_visible_columns_with_overscan() {
+        let grid = icon_grid_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let at_start = grid.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
 
-        let middle = virtual_grid_plan(100, 4, 350.0, 250.0, 100.0, 10.0, 1);
+        let middle = grid.virtual_plan(350.0, 1);
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
-        let clamped = virtual_grid_plan(10, 4, 800.0, 250.0, 100.0, 10.0, 1);
+        let clamped = icon_grid_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
         assert_eq!(clamped.range, 0..10);
         assert_eq!(clamped.visible_range, 0..10);
     }
@@ -5301,6 +5314,8 @@ mod tests {
                 y2: 205.0,
                 rows_per_column: 2,
                 cell_width: 100.0,
+                column_width: 112.0,
+                column_offset: 10.0,
                 row_height: 100.0,
                 padding: 10.0,
             },
@@ -5329,6 +5344,8 @@ mod tests {
                 y2: 205.0,
                 rows_per_column: 2,
                 cell_width: 100.0,
+                column_width: 112.0,
+                column_offset: 10.0,
                 row_height: 100.0,
                 padding: 10.0,
             },
@@ -5352,12 +5369,14 @@ mod tests {
         let selected = selection_rect_paths_filtered(
             &state,
             SelectionRect {
-                x1: 210.0,
+                x1: 244.0,
                 y1: 0.0,
-                x2: 309.0,
+                x2: 343.0,
                 y2: 205.0,
                 rows_per_column: 2,
                 cell_width: 100.0,
+                column_width: 112.0,
+                column_offset: 10.0,
                 row_height: 100.0,
                 padding: 10.0,
             },
@@ -5952,7 +5971,7 @@ mod tests {
         );
         assert!(
             viewport_body.contains(
-                "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true);"
+                "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true, false);"
             )
                 && !viewport_body.contains("sync_pane_slot_preview")
                 && !viewport_body.contains("sync_virtual_entries(ui, state, bridge, true);")
@@ -5962,7 +5981,7 @@ mod tests {
         );
         assert!(
             layout_body.contains(
-                "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true);"
+                "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true, true);"
             ),
             "layout changes must synchronously clamp/rebuild the visible slice before Slint reuses old virtual coordinates"
         );
