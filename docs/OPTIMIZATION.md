@@ -17,11 +17,11 @@ Slint SplitPaneView 自管 viewport-x
        └─ root.view_changed() → PaneRouting.view-changed(slot)
             └─ Rust: PaneViewSyncScheduler 同步重建当前 visible slice
                  └─ sync_virtual_entries_for_slot()  [src/main.rs]
-                      ├─ MainGridLayout::from_ui_for_pane_width()
-                      │    └─ 只对 focused slot 扣搜索栏高度
+                      ├─ MainGridLayout::from_ui_for_pane_width_with_text_lines()
+                      │    └─ 只对 focused slot 扣搜索栏高度，并使用 pane-local 文本行数
                       ├─ VirtualViewSnapshotInput               [virtual_view.rs]
                       ├─ prepare_virtual_view_snapshot_update()  [virtual_view.rs, 后台线程]
-                      │    ├─ icon_grid_layout() / virtual_plan() [geometry.rs]
+                      │    ├─ compact_grid_layout() / virtual_plan() [geometry.rs]
                       │    ├─ should_rebuild_virtual_cache()
                       │    ├─ snapshot_entries_range()
                       │    └─ annotate_snapshot_location_groups()
@@ -46,6 +46,8 @@ Rectangle viewport shell (clip: true)
   ├─ selection rectangle overlay
   └─ self-managed horizontal scrollbar
 ```
+
+主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。
 
 ### 现有优化
 

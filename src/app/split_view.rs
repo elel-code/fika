@@ -300,7 +300,7 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         item_view_virtual_slice_width: item_view_metrics.virtual_slice_width,
         item_view_scroll_max_x: item_view_metrics.scroll_max_x,
         selection_revision: ui.get_selection_revision(),
-        show_location: pane_slot_show_location(state, slot, is_focused),
+        show_location: pane_slot_show_location(state, slot),
         content_interactive: if is_focused {
             !ui.get_directory_loading()
         } else {
@@ -346,7 +346,17 @@ struct ItemViewSlotMetrics {
 fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> ItemViewSlotMetrics {
     let viewport_width = pane_slot_width(ui, slot);
     let search_panel_visible = state.panes.focused_slot() == slot;
-    let layout = MainGridLayout::from_ui_for_pane_width(ui, viewport_width, search_panel_visible);
+    let text_line_count = state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.item_view_text_line_count())
+        .unwrap_or(1);
+    let layout = MainGridLayout::from_ui_for_pane_width_with_text_lines(
+        ui,
+        viewport_width,
+        search_panel_visible,
+        text_line_count,
+    );
     let (entry_count, virtual_slice_count) = state
         .panes
         .pane_for_slot(slot)
@@ -357,20 +367,20 @@ fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> I
             )
         })
         .unwrap_or((0, 0));
-    let icon_grid = layout.icon_grid(entry_count);
-    let virtual_slice_width = icon_grid.virtual_slice_width(virtual_slice_count);
+    let compact_grid = layout.compact_grid(entry_count);
+    let virtual_slice_width = compact_grid.virtual_slice_width(virtual_slice_count);
 
     ItemViewSlotMetrics {
         entry_count: entry_count as i32,
-        rows_per_column: icon_grid.rows_per_column as i32,
-        cell_width: icon_grid.cell_width,
-        column_width: icon_grid.column_width,
-        column_offset: icon_grid.column_offset,
-        row_height: icon_grid.row_height,
-        padding: icon_grid.padding,
-        content_width: icon_grid.content_width,
+        rows_per_column: compact_grid.rows_per_column as i32,
+        cell_width: compact_grid.cell_width,
+        column_width: compact_grid.column_width,
+        column_offset: compact_grid.column_offset,
+        row_height: compact_grid.row_height,
+        padding: compact_grid.padding,
+        content_width: compact_grid.content_width,
         virtual_slice_width,
-        scroll_max_x: icon_grid.scroll_max_x,
+        scroll_max_x: compact_grid.scroll_max_x,
     }
 }
 
@@ -460,11 +470,11 @@ fn pane_slot_recursive_search(state: &AppState, slot: i32) -> bool {
         .is_some_and(|pane| pane.search.recursive)
 }
 
-fn pane_slot_show_location(state: &AppState, slot: i32, is_focused: bool) -> bool {
-    state.panes.pane_for_slot(slot).is_some_and(|pane| {
-        crate::fs::file_ops::is_trash_files_dir(&pane.current_dir)
-            || (is_focused && pane.search.recursive && !pane.search.query.is_empty())
-    })
+fn pane_slot_show_location(state: &AppState, slot: i32) -> bool {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .is_some_and(|pane| pane.show_item_locations())
 }
 
 fn pane_slot_status(state: &AppState, slot: i32) -> SharedString {

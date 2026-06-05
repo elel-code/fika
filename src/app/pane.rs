@@ -1,8 +1,8 @@
-use crate::app::geometry::IconGridLayout;
+use crate::app::geometry::CompactGridLayout;
 use crate::app::item_view::{ItemViewInputState, ItemViewRenderMetrics, ItemViewRowToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
-use crate::fs::{search, thumbnails};
+use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use crate::{FileEntry, ItemViewEntry};
 use slint::{Model, ModelRc, VecModel};
@@ -106,6 +106,15 @@ impl PaneState {
 
     pub(crate) fn entry_snapshot(&self) -> Arc<[PaneEntrySnapshot]> {
         Arc::clone(&self.entries)
+    }
+
+    pub(crate) fn show_item_locations(&self) -> bool {
+        file_ops::is_trash_files_dir(&self.current_dir)
+            || (self.search.recursive && !self.search.query.is_empty())
+    }
+
+    pub(crate) fn item_view_text_line_count(&self) -> usize {
+        if self.show_item_locations() { 3 } else { 1 }
     }
 
     #[cfg(test)]
@@ -654,7 +663,11 @@ impl VirtualViewCache {
         self.range = 0..0;
     }
 
-    pub(crate) fn matches_layout(&self, layout: &IconGridLayout, thumbnail_size_px: u32) -> bool {
+    pub(crate) fn matches_layout(
+        &self,
+        layout: &CompactGridLayout,
+        thumbnail_size_px: u32,
+    ) -> bool {
         self.entry_count == layout.entry_count
             && self.rows_per_column == layout.rows_per_column
             && same_layout_metric(self.viewport_width, layout.viewport_width)
@@ -670,7 +683,7 @@ impl VirtualViewCache {
 
     pub(crate) fn update_layout_signature(
         &mut self,
-        layout: IconGridLayout,
+        layout: CompactGridLayout,
         thumbnail_size_px: u32,
     ) {
         self.entry_count = layout.entry_count;
@@ -752,7 +765,7 @@ impl PaneHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{MainGridLayout, icon_grid_layout};
+    use crate::app::geometry::{MainGridLayout, compact_grid_layout};
     use crate::app::model_update::update_pane_item_view_entries_model;
     use slint::Model;
 
@@ -766,7 +779,7 @@ mod tests {
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
             cell_width: 100.0,
-            render_metrics: ItemViewRenderMetrics::from_zoom_level(1),
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(1, 1),
             input: Box::new(VirtualViewSnapshotInput {
                 layout: MainGridLayout {
                     viewport_x: requested_viewport_x,
@@ -815,7 +828,7 @@ mod tests {
             ..VirtualViewCache::default()
         };
         cache.update_layout_signature(
-            icon_grid_layout(250.0, entry_count, 4, 100.0, 90.0, 10.0),
+            compact_grid_layout(250.0, entry_count, 4, 100.0, 90.0, 10.0),
             thumbnail_size_px,
         );
         cache

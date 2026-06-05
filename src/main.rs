@@ -3319,13 +3319,29 @@ fn sync_virtual_entries_for_slot_with_count(
     publish_layout_on_cache: bool,
 ) {
     let size_px = thumbnail_size_px(ui);
-    let render_metrics = ItemViewRenderMetrics::from_zoom_level(ui.get_icon_zoom_level());
+    let zoom_level = ui.get_icon_zoom_level();
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
     let viewport_width = pane_slot_width(ui, main_width, slot);
-    let search_panel_visible = state.borrow().panes.focused_slot() == slot;
-    let mut layout =
-        MainGridLayout::from_ui_for_pane_width(ui, viewport_width, search_panel_visible);
+    let (search_panel_visible, text_line_count) = {
+        let state_ref = state.borrow();
+        (
+            state_ref.panes.focused_slot() == slot,
+            state_ref
+                .panes
+                .pane_for_slot(slot)
+                .map(|pane| pane.item_view_text_line_count())
+                .unwrap_or(1),
+        )
+    };
+    let render_metrics =
+        ItemViewRenderMetrics::from_zoom_level_with_text_line_count(zoom_level, text_line_count);
+    let mut layout = MainGridLayout::from_ui_for_pane_width_with_text_lines(
+        ui,
+        viewport_width,
+        search_panel_visible,
+        text_line_count,
+    );
     let Some(request) = ({
         let mut state_ref = state.borrow_mut();
         let chooser_patterns = state_ref
@@ -3515,12 +3531,12 @@ fn cached_virtual_viewport_sync(
         return None;
     };
 
-    let icon_grid = layout.icon_grid(visible_count);
-    let plan = icon_grid.virtual_plan(requested_viewport_x, 2);
+    let compact_grid = layout.compact_grid(visible_count);
+    let plan = compact_grid.virtual_plan(requested_viewport_x, 2);
     if !pane
         .view
         .virtual_view
-        .matches_layout(&icon_grid, thumbnail_size_px)
+        .matches_layout(&compact_grid, thumbnail_size_px)
         || !virtual_cache_covers_visible_range(&pane.view.virtual_view.range, &plan.visible_range)
     {
         return None;
@@ -3609,10 +3625,7 @@ fn apply_virtual_view_result(
         state_ref
             .panes
             .pane_by_id(result.pane_id)
-            .is_some_and(|pane| {
-                fs::file_ops::is_trash_files_dir(&pane.current_dir)
-                    || (pane.search.recursive && !pane.search.query.is_empty())
-            })
+            .is_some_and(|pane| pane.show_item_locations())
     };
     decorate_render_plan(
         &mut entries,
@@ -4889,7 +4902,7 @@ fn dnd_debug_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{icon_grid_layout, place_drop_geometry};
+    use crate::app::geometry::{compact_grid_layout, place_drop_geometry};
     use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
         filtered_entries_range, filtered_entry_at, filtered_entry_paths, filtered_entry_summary,
@@ -5220,8 +5233,8 @@ mod tests {
     }
 
     #[test]
-    fn icon_grid_layout_keeps_visible_columns_with_overscan() {
-        let grid = icon_grid_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+    fn compact_grid_layout_keeps_visible_columns_with_overscan() {
+        let grid = compact_grid_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
         let at_start = grid.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
@@ -5230,7 +5243,7 @@ mod tests {
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
-        let clamped = icon_grid_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
+        let clamped = compact_grid_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
         assert_eq!(clamped.range, 0..10);
         assert_eq!(clamped.visible_range, 0..10);
     }

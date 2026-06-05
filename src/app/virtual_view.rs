@@ -1,4 +1,4 @@
-use crate::app::geometry::{IconGridLayout, MainGridLayout, VirtualGridPlan};
+use crate::app::geometry::{CompactGridLayout, MainGridLayout, VirtualGridPlan};
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
 use std::ops::Range;
 use std::sync::Arc;
@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VirtualViewSnapshotUpdate {
     pub(crate) entry_count: usize,
-    pub(crate) layout: IconGridLayout,
+    pub(crate) layout: CompactGridLayout,
     pub(crate) viewport_x: f32,
     pub(crate) viewport_clamped: bool,
     pub(crate) range: Range<usize>,
@@ -41,16 +41,21 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     let visible_count = input
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-    let icon_grid = input.layout.icon_grid(visible_count);
-    let plan = icon_grid.virtual_plan(input.requested_viewport_x, 2);
+    let compact_grid = input.layout.compact_grid(visible_count);
+    let plan = compact_grid.virtual_plan(input.requested_viewport_x, 2);
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
     let rebuild_model = !input.schedule_thumbnails
-        || should_rebuild_virtual_cache(&input.cache, &plan, &icon_grid, input.thumbnail_size_px);
+        || should_rebuild_virtual_cache(
+            &input.cache,
+            &plan,
+            &compact_grid,
+            input.thumbnail_size_px,
+        );
 
     if !rebuild_model {
         return VirtualViewSnapshotUpdate {
             entry_count: visible_count,
-            layout: icon_grid,
+            layout: compact_grid,
             viewport_x: plan.viewport_x,
             viewport_clamped,
             range: plan.range,
@@ -66,7 +71,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 
     VirtualViewSnapshotUpdate {
         entry_count: visible_count,
-        layout: icon_grid,
+        layout: compact_grid,
         viewport_x: plan.viewport_x,
         viewport_clamped,
         range: plan.range,
@@ -80,7 +85,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 fn should_rebuild_virtual_cache(
     cache: &VirtualViewCache,
     plan: &VirtualGridPlan,
-    layout: &IconGridLayout,
+    layout: &CompactGridLayout,
     thumbnail_size_px: u32,
 ) -> bool {
     !cache.matches_layout(layout, thumbnail_size_px)
@@ -406,7 +411,7 @@ mod tests {
             range,
             ..VirtualViewCache::default()
         };
-        cache.update_layout_signature(layout().icon_grid(entry_count), thumbnail_size_px);
+        cache.update_layout_signature(layout().compact_grid(entry_count), thumbnail_size_px);
         cache
     }
 
@@ -467,7 +472,7 @@ mod tests {
         ));
 
         assert!(update.viewport_clamped);
-        assert_eq!(update.viewport_x, 82.0);
+        assert_eq!(update.viewport_x, 86.0);
         assert_eq!(update.range, 0..10);
     }
 
@@ -489,7 +494,7 @@ mod tests {
             &mut entries,
             ItemViewRenderPlanInput {
                 cell_width: update.layout.cell_width,
-                render_metrics: ItemViewRenderMetrics::from_zoom_level(2),
+                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
                 show_location: false,
             },
         );
@@ -522,7 +527,7 @@ mod tests {
 
         let update = prepare_virtual_view_snapshot_update(VirtualViewSnapshotInput {
             layout: layout(),
-            requested_viewport_x: 330.0,
+            requested_viewport_x: 360.0,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
             visible_count_override: None,

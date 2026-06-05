@@ -367,6 +367,37 @@ mod tests {
     }
 
     #[test]
+    fn item_view_entry_model_repairs_empty_title_geometry_for_same_row() {
+        let mut empty_title = entry(0);
+        empty_title.text_width = 0.0;
+        empty_title.title_y = 0.0;
+        empty_title.title_line_height = 0.0;
+        empty_title.title_font_size = 0.0;
+        let mut tokens = item_view_row_tokens(&[empty_title.clone()]);
+        let model = new_item_view_entries_model(vec![empty_title]);
+        let original = model.clone();
+
+        let mut rendered_title = entry(0);
+        rendered_title.text_x = 52.0;
+        rendered_title.text_width = 105.0;
+        rendered_title.title_y = 14.5;
+        rendered_title.title_line_height = 21.0;
+        rendered_title.title_font_size = 15.0;
+        assert!(
+            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![rendered_title])
+                .is_none()
+        );
+
+        assert_eq!(model, original);
+        let updated = model.row_data(0).expect("row should remain present");
+        assert_eq!(updated.name, "item-0");
+        assert_eq!(updated.text_width, 105.0);
+        assert_eq!(updated.title_y, 14.5);
+        assert_eq!(updated.title_line_height, 21.0);
+        assert_eq!(updated.title_font_size, 15.0);
+    }
+
+    #[test]
     fn item_view_entry_model_uses_media_token_instead_of_image_comparison_for_overlap() {
         let mut old_entry = entry(0);
         old_entry.media = colored_image(Rgba8Pixel::new(255, 0, 0, 255));
