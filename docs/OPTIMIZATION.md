@@ -53,7 +53,7 @@ Rectangle viewport shell (clip: true)
   └─ self-managed horizontal scrollbar
 ```
 
-主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。Dolphin 对照点是 `KStandardItemListView::setItemLayout()` 在 CompactLayout 下设置 `Qt::Horizontal`，`KItemListViewLayouter` 通过转置逻辑把纵向流映射成物理横向滚动，`KStandardItemListWidget::updateCompactLayoutTextCache()` 预先计算 compact 文本位置和最大宽度，并把 compact text frame 关联到整个 item 高度；文字本身使用居中的 line position。Fika 同样在 Rust render plan 中投影非零 `title_y/title_line_height/text_width`；普通标题的 Rust-projected `Text` frame 覆盖整 tile 高度并由 Slint vertical alignment 居中，避免大 zoom 下单行 frame 被裁剪导致 name 消失；带 group/location 的标题行继续使用 Rust 投影的 line frame，额外 group/location 行通过 pane-local sparse metadata overlay 绘制。`SplitPaneView` 只消费投影后的 `title_y/title_line_height`，不再在可见 title loop 内按 `group/location` 做 per-item 判断。
+主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。Dolphin 对照点是 `KStandardItemListView::setItemLayout()` 在 CompactLayout 下设置 `Qt::Horizontal`，`KItemListViewLayouter` 通过转置逻辑把纵向流映射成物理横向滚动，`KStandardItemListWidget::updateCompactLayoutTextCache()` 预先计算 compact 文本位置和最大宽度，并把 compact text frame 关联到整个 item 高度；文字本身使用居中的 line position。Fika 同样在 Rust render plan 中投影非零 `title_y/title_line_height/text_width`；普通标题的 Rust-projected `Text` frame 覆盖整 tile 高度并由 Slint vertical alignment 居中，避免大 zoom 下单行 frame 被裁剪导致 name 消失；带 group/location 的标题行继续使用 Rust 投影的 line frame，额外 group/location 行通过 pane-local sparse metadata overlay 绘制。基础 `ItemViewEntry` 热 row 只携带 media/title primitive 需要的数据，不再携带 `group`、`location` 或 metadata line geometry；metadata 由 Rust render plan 直接投影成 `ItemViewMetadataEntry` 稀疏 rows。`SplitPaneView` 只消费投影后的 `title_y/title_line_height`，不再在可见 title loop 内按 `group/location` 做 per-item 判断。
 
 ### 现有优化
 
@@ -68,6 +68,7 @@ Rectangle viewport shell (clip: true)
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
 | Rust item-view hit-test | `item_view.rs` | click/activation/context/DnD/drop target 命中不再散落在 Slint tile 或 transfer 几何代码中 |
 | Rust item-view render plan | `item_view.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 width/height、media/text rect、尺寸/字体 token 不再由 Slint 每项公式或 layout 容器计算；local x/y 由 `for item[index]` 复用层计算，避免进入 `ItemViewEntry` row data |
+| Sparse metadata overlay | `item_view.rs` / `model_update.rs` / `models.slint` | 基础 `ItemViewEntry` 不再携带 group/location 字符串和 metadata 几何；show-location 只发布 Rust 预投影的非空 `ItemViewMetadataEntry` rows |
 
 ---
 
@@ -172,7 +173,7 @@ changed viewport-x => {
 - 重叠行：比较 Rust sidecar `ItemViewRowToken`，只有 token 不同才 `set_row_data`
 - 尾部长度差：`remove` / `extend`
 
-`ItemViewRowToken` 覆盖 name/path/selection/media token/tile rect/text rect/font token 等轻量字段，避免为了比较复用而从 Slint `VecModel` 读取并克隆包含 `Image` 的整条 row。split pane snapshot 会复制到独立 `VecModel` 和 sidecar，避免两个 pane 共享同一个可见 row model。选中态只保存在 token sidecar 中，并投影成 pane-local cached `ItemViewHighlightEntry` 稀疏 model，由 Slint 单独绘制 highlight overlay；selection 或 virtual row 变化时复用同一个 highlight `VecModel` 做 `set_vec`，不再由 `split_view` 每次同步临时 collect 新 model。基础 `Image` / `Text` loop 和 `ItemViewEntry` row data 不再携带 per-item selected 状态。
+`ItemViewRowToken` 覆盖 name/path/selection/media token/tile rect/text rect/font token 等轻量字段，避免为了比较复用而从 Slint `VecModel` 读取并克隆包含 `Image` 的整条 row。split pane snapshot 会复制到独立 `VecModel` 和 sidecar，避免两个 pane 共享同一个可见 row model。选中态只保存在 token sidecar 中，并投影成 pane-local cached `ItemViewHighlightEntry` 稀疏 model，由 Slint 单独绘制 highlight overlay；selection 或 virtual row 变化时复用同一个 highlight `VecModel` 做 `set_vec`，不再由 `split_view` 每次同步临时 collect 新 model。基础 `Image` / `Text` loop 和 `ItemViewEntry` row data 不再携带 per-item selected 状态，也不携带 group/location metadata；show-location metadata 从 `FileEntry` snapshot 经 Rust render plan 投影成独立的 pane-local sparse `ItemViewMetadataEntry` model。
 
 **收益**：连续滚动时重叠 virtual rows 不再因为 slice-local 坐标变化或 `Image` 对象差异被重发；selection 变化只刷新 token sidecar/sparse highlight，thumbnail、fallback icon、render rect 变化仍能按 row 精准更新。
 

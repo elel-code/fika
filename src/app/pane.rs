@@ -234,8 +234,6 @@ impl PaneEntrySnapshot {
         ItemViewEntry {
             name: self.name.as_str().into(),
             path: self.path.as_str().into(),
-            group: self.group.as_str().into(),
-            location: self.location.as_str().into(),
             is_dir: self.is_dir,
             thumbnail_state: 0,
             media: Default::default(),
@@ -246,14 +244,10 @@ impl PaneEntrySnapshot {
             media_y: 0.0,
             text_x: 0.0,
             text_width: 0.0,
-            group_y: 0.0,
             title_y: 0.0,
-            location_y: 0.0,
-            metadata_line_height: 0.0,
             title_line_height: 0.0,
             media_width: 0.0,
             media_height: 0.0,
-            metadata_font_size: 0.0,
             title_font_size: 0.0,
         }
     }
@@ -1268,7 +1262,7 @@ mod tests {
             4,
             1,
             virtual_entries,
-            true,
+            Vec::new(),
             &["/tmp/active/one.txt".to_string()],
         );
 
@@ -1435,7 +1429,7 @@ mod tests {
             0,
             0,
             vec![snapshot.to_item_view_entry()],
-            false,
+            Vec::new(),
             &[],
         );
 
@@ -1451,7 +1445,7 @@ mod tests {
         rendered.title_y = 14.5;
         rendered.title_line_height = 21.0;
         rendered.title_font_size = 15.0;
-        update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered], false, &[]);
+        update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered], Vec::new(), &[]);
 
         assert!(view.has_renderable_virtual_entries());
 

@@ -52,9 +52,9 @@ use app::geometry::{
     place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
-    ItemViewInputMetrics, ItemViewReleaseAction, ItemViewRenderMetrics, ItemViewRenderPlanInput,
-    SelectionRect, decorate_fallback_media, decorate_render_plan, entry_at_pane_point,
-    item_index_at_pane_point,
+    ItemViewInputMetrics, ItemViewMetadataSource, ItemViewReleaseAction, ItemViewRenderMetrics,
+    ItemViewRenderPlanInput, SelectionRect, decorate_fallback_media,
+    decorate_render_plan_with_metadata, entry_at_pane_point, item_index_at_pane_point,
 };
 use app::model_update::{
     update_pane_item_view_entries_model, update_pane_item_view_selection_model,
@@ -3645,11 +3645,6 @@ fn apply_virtual_view_result(
         return;
     }
 
-    let mut entries = update
-        .entries
-        .into_iter()
-        .map(|entry| entry.to_item_view_entry())
-        .collect::<Vec<_>>();
     let show_location = {
         let state_ref = state.borrow();
         state_ref
@@ -3657,13 +3652,27 @@ fn apply_virtual_view_result(
             .pane_by_id(result.pane_id)
             .is_some_and(|pane| pane.show_item_locations())
     };
-    decorate_render_plan(
+    let snapshots = update.entries;
+    let metadata_sources = if show_location {
+        snapshots
+            .iter()
+            .map(|entry| ItemViewMetadataSource::new(entry.group.as_str(), entry.location.as_str()))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mut entries = snapshots
+        .into_iter()
+        .map(|entry| entry.to_item_view_entry())
+        .collect::<Vec<_>>();
+    let metadata_entries = decorate_render_plan_with_metadata(
         &mut entries,
         ItemViewRenderPlanInput {
             cell_width: result.cell_width,
             render_metrics: result.render_metrics,
             show_location,
         },
+        &metadata_sources,
     );
     let (selected_paths, media_cache) = {
         let mut state_ref = state.borrow_mut();
@@ -3708,7 +3717,7 @@ fn apply_virtual_view_result(
         update.range.start,
         update.start_column,
         entries,
-        show_location,
+        metadata_entries,
         &selected_paths,
     );
     if target_is_focused {
@@ -3744,7 +3753,7 @@ fn set_pane_virtual_entries(
     start_index: usize,
     start_column: usize,
     entries: Vec<ItemViewEntry>,
-    show_location: bool,
+    metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
 ) {
     if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
@@ -3753,7 +3762,7 @@ fn set_pane_virtual_entries(
             start_index,
             start_column,
             entries,
-            show_location,
+            metadata_entries,
             selected_paths,
         );
     }
@@ -3808,8 +3817,9 @@ fn retain_visible_selection(
     state: &Rc<RefCell<AppState>>,
     visible_paths: &[String],
 ) {
-    let selected_paths = {
+    let (slot, selected_paths) = {
         let mut state = state.borrow_mut();
+        let slot = state.panes.focused_slot();
         let pane = state.panes.focused_mut();
         pane.selection.paths = retained_visible_paths(&pane.selection.paths, visible_paths);
         if pane
@@ -3820,14 +3830,9 @@ fn retain_visible_selection(
         {
             pane.selection.anchor = pane.selection.paths.last().cloned();
         }
-        pane.selection.paths.clone()
+        (slot, pane.selection.paths.clone())
     };
-    update_selection_ui_for_slot(
-        ui,
-        state,
-        state.borrow().panes.focused_slot(),
-        &selected_paths,
-    );
+    update_selection_ui_for_slot(ui, state, slot, &selected_paths);
 }
 
 fn select_path_for_slot(
@@ -4108,9 +4113,10 @@ fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 fn clear_active_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let mut state_mut = state.borrow_mut();
+    let slot = state_mut.panes.focused_slot();
     state_mut.panes.focused_mut().selection.clear();
     drop(state_mut);
-    update_selection_ui_for_slot(ui, state, state.borrow().panes.focused_slot(), &[]);
+    update_selection_ui_for_slot(ui, state, slot, &[]);
 }
 
 fn schedule_visible_thumbnails(
@@ -5706,6 +5712,20 @@ mod tests {
                 && body.contains("refresh_pane_by_id(ui, state, bridge, *pane_id);")
                 && !body.contains("state.borrow().panes.slot_for_id(*pane_id)"),
             "refresh_panes should dispatch by pane id without holding a slot lookup borrow"
+        );
+    }
+
+    #[test]
+    fn selection_ui_update_does_not_keep_slot_lookup_borrow_alive() {
+        let source = include_str!("main.rs");
+        let nested_slot_lookup = concat!(
+            "update_selection_ui_for_slot(ui, state, ",
+            "state.borrow().panes.focused_slot()"
+        );
+
+        assert!(
+            !source.contains(nested_slot_lookup),
+            "focused slot lookup must be stored before update_selection_ui_for_slot so the RefCell borrow ends before selection sync mutably borrows state"
         );
     }
 

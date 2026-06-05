@@ -5,7 +5,7 @@ use crate::app::geometry::{
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
 use crate::app::selection::{filtered_entry_at_for_slot, filtered_entry_count_for_slot};
 use crate::app::state::AppState;
-use crate::{AppWindow, FileEntry, ItemViewEntry};
+use crate::{AppWindow, FileEntry, ItemViewEntry, ItemViewMetadataEntry};
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::ops::Range;
 use std::path::Path;
@@ -32,12 +32,25 @@ pub(crate) struct ItemViewRenderPlanInput {
     pub(crate) show_location: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ItemViewMetadataSource {
+    pub(crate) group: SharedString,
+    pub(crate) location: SharedString,
+}
+
+impl ItemViewMetadataSource {
+    pub(crate) fn new(group: impl Into<SharedString>, location: impl Into<SharedString>) -> Self {
+        Self {
+            group: group.into(),
+            location: location.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewRowToken {
     name: SharedString,
     path: SharedString,
-    group: SharedString,
-    location: SharedString,
     is_dir: bool,
     selected: bool,
     thumbnail_state: i32,
@@ -48,14 +61,10 @@ pub(crate) struct ItemViewRowToken {
     media_y: f32,
     text_x: f32,
     text_width: f32,
-    group_y: f32,
     title_y: f32,
-    location_y: f32,
-    metadata_line_height: f32,
     title_line_height: f32,
     media_width: f32,
     media_height: f32,
-    metadata_font_size: f32,
     title_font_size: f32,
 }
 
@@ -64,8 +73,6 @@ impl ItemViewRowToken {
         Self {
             name: entry.name.clone(),
             path: entry.path.clone(),
-            group: entry.group.clone(),
-            location: entry.location.clone(),
             is_dir: entry.is_dir,
             selected: false,
             thumbnail_state: entry.thumbnail_state,
@@ -76,14 +83,10 @@ impl ItemViewRowToken {
             media_y: entry.media_y,
             text_x: entry.text_x,
             text_width: entry.text_width,
-            group_y: entry.group_y,
             title_y: entry.title_y,
-            location_y: entry.location_y,
-            metadata_line_height: entry.metadata_line_height,
             title_line_height: entry.title_line_height,
             media_width: entry.media_width,
             media_height: entry.media_height,
-            metadata_font_size: entry.metadata_font_size,
             title_font_size: entry.title_font_size,
         }
     }
@@ -449,23 +452,35 @@ fn ordered_pair(a: f32, b: f32) -> (f32, f32) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
+#[cfg(test)]
 pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemViewRenderPlanInput) {
+    let _ = decorate_render_plan_with_metadata(entries, input, &[]);
+}
+
+pub(crate) fn decorate_render_plan_with_metadata(
+    entries: &mut [ItemViewEntry],
+    input: ItemViewRenderPlanInput,
+    metadata_sources: &[ItemViewMetadataSource],
+) -> Vec<ItemViewMetadataEntry> {
     let render_metrics = input.render_metrics;
     let cell_width = input
         .cell_width
         .max(compact_min_cell_width(render_metrics))
         .max(1.0);
     let tile_width = cell_width;
+    let mut metadata_entries = Vec::new();
 
-    for entry in entries.iter_mut() {
+    for (row, entry) in entries.iter_mut().enumerate() {
         ensure_renderable_entry_name(entry);
-        let metadata_mode =
-            input.show_location && (!entry.group.is_empty() || !entry.location.is_empty());
+        let metadata = metadata_sources.get(row);
+        let has_group =
+            input.show_location && metadata.is_some_and(|metadata| !metadata.group.is_empty());
+        let has_location =
+            input.show_location && metadata.is_some_and(|metadata| !metadata.location.is_empty());
         entry.tile_width = tile_width;
         entry.tile_height = render_metrics.tile_height;
         entry.media_width = render_metrics.media_width;
         entry.media_height = render_metrics.media_height;
-        entry.metadata_font_size = render_metrics.metadata_font_size;
         entry.title_font_size = render_metrics.title_font_size;
         entry.media_x = render_metrics.media_padding_x;
         entry.media_y = ((render_metrics.tile_height - render_metrics.media_height) / 2.0).max(0.0);
@@ -474,13 +489,39 @@ pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemVie
             + render_metrics.media_text_gap;
         entry.text_width = (tile_width - entry.text_x - render_metrics.media_padding_x).max(1.0);
 
-        let text_plan = ItemTextRenderPlan::new(entry, render_metrics, metadata_mode);
-        entry.group_y = text_plan.group_y;
+        let text_plan = ItemTextRenderPlan::new(render_metrics, has_group, has_location);
         entry.title_y = text_plan.title_y;
-        entry.location_y = text_plan.location_y;
-        entry.metadata_line_height = text_plan.metadata_line_height;
         entry.title_line_height = text_plan.title_line_height;
+
+        if let Some(metadata) = metadata.filter(|_| input.show_location) {
+            if has_group {
+                metadata_entries.push(ItemViewMetadataEntry {
+                    slice_index: row as i32,
+                    text: metadata.group.clone(),
+                    text_x: entry.text_x,
+                    text_width: entry.text_width,
+                    y: text_plan.group_y,
+                    line_height: text_plan.metadata_line_height,
+                    font_size: render_metrics.metadata_font_size,
+                    is_group: true,
+                });
+            }
+            if has_location {
+                metadata_entries.push(ItemViewMetadataEntry {
+                    slice_index: row as i32,
+                    text: metadata.location.clone(),
+                    text_x: entry.text_x,
+                    text_width: entry.text_width,
+                    y: text_plan.location_y,
+                    line_height: text_plan.metadata_line_height,
+                    font_size: render_metrics.metadata_font_size,
+                    is_group: false,
+                });
+            }
+        }
     }
+
+    metadata_entries
 }
 
 fn compact_min_cell_width(metrics: ItemViewRenderMetrics) -> f32 {
@@ -520,11 +561,9 @@ struct ItemTextRenderPlan {
 }
 
 impl ItemTextRenderPlan {
-    fn new(entry: &ItemViewEntry, metrics: ItemViewRenderMetrics, show_location: bool) -> Self {
+    fn new(metrics: ItemViewRenderMetrics, has_group: bool, has_location: bool) -> Self {
         let metadata_line_height = metrics.metadata_line_height;
         let title_line_height = metrics.title_line_height;
-        let has_group = show_location && !entry.group.is_empty();
-        let has_location = show_location && !entry.location.is_empty();
         if !has_group && !has_location {
             return Self {
                 group_y: 0.0,
@@ -872,8 +911,6 @@ mod tests {
         ItemViewEntry {
             name: format!("item-{index}").into(),
             path: format!("/tmp/item-{index}").into(),
-            group: String::new().into(),
-            location: String::new().into(),
             is_dir: false,
             thumbnail_state: 0,
             media: Image::default(),
@@ -884,14 +921,10 @@ mod tests {
             media_y: 0.0,
             text_x: 0.0,
             text_width: 0.0,
-            group_y: 0.0,
             title_y: 0.0,
-            location_y: 0.0,
-            metadata_line_height: 0.0,
             title_line_height: 0.0,
             media_width: 0.0,
             media_height: 0.0,
-            metadata_font_size: 0.0,
             title_font_size: 0.0,
         }
     }
@@ -948,7 +981,6 @@ mod tests {
                     entry.title_line_height,
                     entry.media_width,
                     entry.media_height,
-                    entry.metadata_font_size,
                     entry.title_font_size,
                 )
             })
@@ -956,21 +988,11 @@ mod tests {
         assert_eq!(
             render_tokens,
             vec![
-                (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
-                ),
-                (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
-                ),
-                (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
-                ),
-                (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
-                ),
-                (
-                    50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 11.0, 15.0
-                ),
+                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
+                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
+                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
+                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
+                (50.0, 2.0, 2.0, 52.0, 75.0, 0.0, 50.0, 46.0, 46.0, 15.0),
             ]
         );
         assert!(
@@ -1004,19 +1026,20 @@ mod tests {
 
     #[test]
     fn render_plan_precomputes_location_text_lines() {
-        let mut entries = vec![ItemViewEntry {
-            group: "Documents".into(),
-            location: "/home/user/Documents".into(),
-            ..test_entry(0)
-        }];
+        let mut entries = vec![test_entry(0)];
+        let metadata = vec![ItemViewMetadataSource::new(
+            "Documents",
+            "/home/user/Documents",
+        )];
 
-        decorate_render_plan(
+        let metadata_entries = decorate_render_plan_with_metadata(
             &mut entries,
             ItemViewRenderPlanInput {
                 cell_width: 129.0,
                 render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
                 show_location: true,
             },
+            &metadata,
         );
 
         let entry = &entries[0];
@@ -1024,11 +1047,33 @@ mod tests {
         assert_eq!(entry.media_y, 5.5);
         assert_eq!(entry.text_x, 52.0);
         assert_eq!(entry.text_width, 75.0);
-        assert_eq!(entry.metadata_line_height, 14.0);
         assert_eq!(entry.title_line_height, 21.0);
-        assert_eq!(entry.group_y, 2.0);
         assert_eq!(entry.title_y, 18.0);
-        assert_eq!(entry.location_y, 41.0);
+        assert_eq!(
+            metadata_entries,
+            vec![
+                ItemViewMetadataEntry {
+                    slice_index: 0,
+                    text: "Documents".into(),
+                    text_x: 52.0,
+                    text_width: 75.0,
+                    y: 2.0,
+                    line_height: 14.0,
+                    font_size: 11.0,
+                    is_group: true,
+                },
+                ItemViewMetadataEntry {
+                    slice_index: 0,
+                    text: "/home/user/Documents".into(),
+                    text_x: 52.0,
+                    text_width: 75.0,
+                    y: 41.0,
+                    line_height: 14.0,
+                    font_size: 11.0,
+                    is_group: false,
+                },
+            ]
+        );
     }
 
     #[test]

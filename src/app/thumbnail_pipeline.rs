@@ -311,8 +311,6 @@ mod tests {
         ItemViewEntry {
             name: name.into(),
             path: path.into(),
-            group: String::new().into(),
-            location: String::new().into(),
             is_dir: false,
             thumbnail_state: 0,
             media: Image::default(),
@@ -323,14 +321,10 @@ mod tests {
             media_y: 0.0,
             text_x: 0.0,
             text_width: 0.0,
-            group_y: 0.0,
             title_y: 0.0,
-            location_y: 0.0,
-            metadata_line_height: 0.0,
             title_line_height: 0.0,
             media_width: 0.0,
             media_height: 0.0,
-            metadata_font_size: 0.0,
             title_font_size: 0.0,
         }
     }

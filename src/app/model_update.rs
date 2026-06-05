@@ -9,46 +9,13 @@ pub(crate) fn new_item_view_entries_model(entries: Vec<ItemViewEntry>) -> ModelR
 }
 
 pub(crate) fn new_item_view_metadata_model(
-    entries: &[ItemViewEntry],
-    show_location: bool,
+    metadata: Vec<ItemViewMetadataEntry>,
 ) -> ModelRc<ItemViewMetadataEntry> {
-    if !show_location {
+    if metadata.is_empty() {
         return ModelRc::default();
     }
 
-    let mut metadata = Vec::new();
-    for (row, entry) in entries.iter().enumerate() {
-        if !entry.group.is_empty() {
-            metadata.push(ItemViewMetadataEntry {
-                slice_index: row as i32,
-                text: entry.group.clone(),
-                text_x: entry.text_x,
-                text_width: entry.text_width,
-                y: entry.group_y,
-                line_height: entry.metadata_line_height,
-                font_size: entry.metadata_font_size,
-                is_group: true,
-            });
-        }
-        if !entry.location.is_empty() {
-            metadata.push(ItemViewMetadataEntry {
-                slice_index: row as i32,
-                text: entry.location.clone(),
-                text_x: entry.text_x,
-                text_width: entry.text_width,
-                y: entry.location_y,
-                line_height: entry.metadata_line_height,
-                font_size: entry.metadata_font_size,
-                is_group: false,
-            });
-        }
-    }
-
-    if metadata.is_empty() {
-        ModelRc::default()
-    } else {
-        ModelRc::new(Rc::new(VecModel::from(metadata)))
-    }
+    ModelRc::new(Rc::new(VecModel::from(metadata)))
 }
 
 fn item_view_highlight_entries(tokens: &[ItemViewRowToken]) -> Vec<ItemViewHighlightEntry> {
@@ -152,10 +119,10 @@ pub(crate) fn update_pane_item_view_entries_model(
     start_index: usize,
     start_column: usize,
     entries: Vec<ItemViewEntry>,
-    show_location: bool,
+    metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
 ) {
-    view.virtual_metadata_entries = new_item_view_metadata_model(&entries, show_location);
+    view.virtual_metadata_entries = new_item_view_metadata_model(metadata_entries);
     let current = view.virtual_entries.clone();
     let old_start = view.virtual_start_index;
     if let Some(model) = update_item_view_entries_model(
@@ -295,8 +262,6 @@ mod tests {
         ItemViewEntry {
             name: format!("item-{index}").into(),
             path: format!("/tmp/item-{index}").into(),
-            group: String::new().into(),
-            location: String::new().into(),
             is_dir: false,
             thumbnail_state: 0,
             media: Image::default(),
@@ -307,14 +272,10 @@ mod tests {
             media_y: 0.0,
             text_x: 0.0,
             text_width: 0.0,
-            group_y: 0.0,
             title_y: 0.0,
-            location_y: 0.0,
-            metadata_line_height: 0.0,
             title_line_height: 0.0,
             media_width: 0.0,
             media_height: 0.0,
-            metadata_font_size: 0.0,
             title_font_size: 0.0,
         }
     }
@@ -367,7 +328,7 @@ mod tests {
             0,
             0,
             (0..3).map(entry).collect(),
-            false,
+            Vec::new(),
             &[],
         );
         update_pane_item_view_entries_model(
@@ -375,7 +336,7 @@ mod tests {
             20,
             4,
             (20..23).map(entry).collect(),
-            false,
+            Vec::new(),
             &[],
         );
 
@@ -401,7 +362,7 @@ mod tests {
             22,
             5,
             (22..25).map(entry).collect(),
-            false,
+            Vec::new(),
             &[],
         );
 
@@ -606,7 +567,7 @@ mod tests {
             0,
             0,
             entries_with_tile_metrics(4),
-            false,
+            Vec::new(),
             &[],
         );
         let original = view.virtual_entries.clone();
@@ -646,7 +607,7 @@ mod tests {
             0,
             0,
             entries_with_tile_metrics(4),
-            false,
+            Vec::new(),
             &[],
         );
 
@@ -717,33 +678,34 @@ mod tests {
     }
 
     #[test]
-    fn metadata_model_contains_only_renderable_location_rows() {
-        let mut plain = entry(0);
-        plain.group = "ignored".into();
-        plain.location = "/tmp/ignored".into();
-        plain.text_x = 52.0;
-        plain.text_width = 75.0;
-        plain.group_y = 2.0;
-        plain.location_y = 41.0;
-        plain.metadata_line_height = 14.0;
-        plain.metadata_font_size = 11.0;
-
-        let hidden = new_item_view_metadata_model(&[plain.clone()], false);
+    fn metadata_model_uses_preprojected_sparse_rows() {
+        let hidden = new_item_view_metadata_model(Vec::new());
         assert_eq!(hidden.row_count(), 0);
 
-        let mut location = entry(1);
-        location.group = "Documents".into();
-        location.location = "/home/user/Documents".into();
-        location.text_x = 52.0;
-        location.text_width = 75.0;
-        location.group_y = 2.0;
-        location.location_y = 41.0;
-        location.metadata_line_height = 14.0;
-        location.metadata_font_size = 11.0;
+        let model = new_item_view_metadata_model(vec![
+            ItemViewMetadataEntry {
+                slice_index: 0,
+                text: "Documents".into(),
+                text_x: 52.0,
+                text_width: 75.0,
+                y: 2.0,
+                line_height: 14.0,
+                font_size: 11.0,
+                is_group: true,
+            },
+            ItemViewMetadataEntry {
+                slice_index: 0,
+                text: "/home/user/Documents".into(),
+                text_x: 52.0,
+                text_width: 75.0,
+                y: 41.0,
+                line_height: 14.0,
+                font_size: 11.0,
+                is_group: false,
+            },
+        ]);
 
-        let model = new_item_view_metadata_model(&[plain, entry(2), location], true);
-
-        assert_eq!(model.row_count(), 4);
+        assert_eq!(model.row_count(), 2);
         let rows = (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| {
@@ -760,11 +722,9 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                (0, "ignored".to_string(), 2.0, 14.0, 11.0, true),
-                (0, "/tmp/ignored".to_string(), 41.0, 14.0, 11.0, false),
-                (2, "Documents".to_string(), 2.0, 14.0, 11.0, true),
+                (0, "Documents".to_string(), 2.0, 14.0, 11.0, true),
                 (
-                    2,
+                    0,
                     "/home/user/Documents".to_string(),
                     41.0,
                     14.0,
