@@ -1455,11 +1455,9 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
-        let bridge = bridge.clone();
         ui.on_persist_ui_state(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 save_current_settings(&ui, &state);
-                refresh_visible_item_view_after_ui_persist(&ui, &state, &bridge);
             }
         });
     }
@@ -4452,36 +4450,6 @@ fn sync_visible_pane_layouts(ui: &AppWindow, state: &Rc<RefCell<AppState>>, brid
     }
 }
 
-fn refresh_visible_item_view_after_ui_persist(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-) {
-    let slots = visible_ui_pane_slots(ui);
-    {
-        let mut state_ref = state.borrow_mut();
-        for slot in &slots {
-            if let Some(pane) = state_ref.panes.pane_mut_for_slot(*slot) {
-                pane.view.invalidate_virtual_view();
-            }
-        }
-    }
-    for slot in slots {
-        sync_pane_layout_for_slot(ui, state, bridge, slot);
-    }
-}
-
-fn visible_ui_pane_slots(ui: &AppWindow) -> Vec<i32> {
-    let slots = ui.get_pane_slots();
-    if slots.row_count() == 0 {
-        return vec![0];
-    }
-
-    (0..slots.row_count())
-        .filter_map(|row| slots.row_data(row).map(|pane| pane.slot))
-        .collect()
-}
-
 fn sync_pane_viewport_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -6300,6 +6268,27 @@ mod tests {
                 "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true, true);"
             ),
             "layout changes must synchronously clamp/rebuild the visible slice before Slint reuses old virtual coordinates"
+        );
+    }
+
+    #[test]
+    fn persist_ui_state_does_not_rebuild_virtual_views() {
+        let source = include_str!("main.rs");
+        let persist_body = source
+            .split_once("ui.on_persist_ui_state(move ||")
+            .and_then(|(_, rest)| {
+                rest.split_once("let chooser_mode = matches!(args.mode, Mode::Chooser);")
+            })
+            .map(|(body, _)| body)
+            .expect("persist ui callback body should be present");
+
+        assert!(
+            persist_body.contains("save_current_settings(&ui, &state);")
+                && !persist_body.contains("sync_visible_pane_layouts")
+                && !persist_body.contains("sync_pane_layout_for_slot")
+                && !persist_body.contains("invalidate_virtual_view")
+                && !persist_body.contains("bridge"),
+            "persisting settings should not rebuild virtual views; layout changes already refresh zoom geometry"
         );
     }
 
