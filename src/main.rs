@@ -1549,6 +1549,16 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_dark_mode_changed(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                refresh_visible_pane_fallback_media(&ui, &state);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         let settings_save = Rc::clone(&settings_save);
         let chooser_mode = matches!(args.mode, Mode::Chooser);
         ui.window().on_close_requested(move || {
@@ -4720,6 +4730,41 @@ fn current_pane_visible_range(pane: &PaneState) -> Range<usize> {
     .visible_range
 }
 
+fn refresh_visible_pane_fallback_media(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let slots = ui.get_pane_slots();
+    if slots.row_count() == 0 {
+        refresh_pane_fallback_media_for_slot(ui, state, 0);
+        return;
+    }
+
+    for row in 0..slots.row_count() {
+        if let Some(pane) = slots.row_data(row) {
+            refresh_pane_fallback_media_for_slot(ui, state, pane.slot);
+        }
+    }
+}
+
+fn refresh_pane_fallback_media_for_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    let dark = ui.get_dark_mode();
+    let zoom_level = ui.get_icon_zoom_level();
+    let refreshed = {
+        let mut state_ref = state.borrow_mut();
+        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
+        let render_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(
+            zoom_level,
+            pane.item_view_text_line_count(),
+        );
+        pane.view.fallback_media_cache(render_metrics, dark);
+        true
+    };
+
+    if refreshed {
+        sync_pane_view_ui(ui, state, slot);
+    }
+}
+
 fn selection_status_text(selected_paths: &[String]) -> SharedString {
     match selected_paths {
         [] => SharedString::new(),
@@ -6876,6 +6921,43 @@ mod tests {
                 && !persist_body.contains("invalidate_virtual_view")
                 && !persist_body.contains("bridge"),
             "interactive settings persistence should schedule a coalesced save instead of blocking zoom/layout on virtual refresh or disk writes"
+        );
+    }
+
+    #[test]
+    fn dark_mode_toggle_refreshes_pane_level_fallback_media() {
+        let source = include_str!("main.rs");
+        let app = include_str!("../ui/app.slint");
+        let dark_toggle_body = app
+            .split_once("dark_toggled => {")
+            .and_then(|(_, rest)| rest.split_once("}"))
+            .map(|(body, _)| body)
+            .expect("TopBar dark_toggled handler should be present");
+        let dark_handler_body = source
+            .split_once("ui.on_dark_mode_changed(move ||")
+            .and_then(|(_, rest)| rest.split_once("ui.window().on_close_requested"))
+            .map(|(body, _)| body)
+            .expect("dark mode changed handler should be present");
+        let refresh_body = source
+            .split_once("fn refresh_pane_fallback_media_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn selection_status_text("))
+            .map(|(body, _)| body)
+            .expect("fallback media refresh body should be present");
+
+        assert!(
+            app.contains("callback dark_mode_changed();")
+                && dark_toggle_body.contains("root.dark_mode = !root.dark_mode;")
+                && dark_toggle_body.contains("root.dark_mode_changed();")
+                && dark_toggle_body.contains("root.persist_ui_state();"),
+            "theme toggles should notify Rust before saving settings so pane-level fallback icons can match the new theme"
+        );
+        assert!(
+            dark_handler_body.contains("refresh_visible_pane_fallback_media(&ui, &state);")
+                && refresh_body.contains("fallback_media_cache(render_metrics, dark)")
+                && refresh_body.contains("sync_pane_view_ui(ui, state, slot);")
+                && !refresh_body.contains("sync_pane_layout_for_slot")
+                && !refresh_body.contains("sync_virtual_entries_for_slot"),
+            "dark-mode fallback refresh should rebuild pane-level fallback images without rebuilding the directory snapshot"
         );
     }
 

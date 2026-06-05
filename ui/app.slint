@@ -932,6 +932,7 @@ export component AppWindow inherits Window {
     callback undo_last_operation();
     callback cancel_queued_operations();
     callback persist_ui_state();
+    callback dark_mode_changed();
     callback async_results_ready();
     pure callback is_place(string) -> bool;
 
@@ -1404,6 +1405,7 @@ export component AppWindow inherits Window {
                     toggle_split_view => { root.toggle_split_view(); }
                     dark_toggled => {
                         root.dark_mode = !root.dark_mode;
+                        root.dark_mode_changed();
                         root.persist_ui_state();
                     }
                 }
