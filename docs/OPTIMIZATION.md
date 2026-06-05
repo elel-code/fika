@@ -46,14 +46,14 @@ Rectangle viewport shell (clip: true)
   │    ├─ for item[index] in entries: Image primitive
   │    │    └─ local tile column/row 来自 reusable loop index
   │    ├─ for item[index] in entries: Text primitive
-  │    │    └─ 基础 compact layer 永远绘制 `item.name`
+  │    │    └─ 普通 compact 标题使用 Dolphin-style full-tile text frame；metadata 行才使用 title_y/title_line_height
   │    └─ optional metadata overlay (show-location only)
-  │         └─ 只绘制 group/location，不参与普通目录 item
+  │         └─ 两条扁平 Text loop 绘制 group/location，不再包一层 per-item 透明 Rectangle
   ├─ selection rectangle overlay
   └─ self-managed horizontal scrollbar
 ```
 
-主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。
+主文件视图使用 Dolphin compact 模式语义：物理滚动轴固定为 X，条目按 `index % rows_per_column` 先填满一列，再按 `index / rows_per_column` 进入下一列。compact item 尺寸沿用 Dolphin 的公式：`itemWidth = padding * 4 + iconSize + fontHeight * 5`，`itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，列间 margin 为 `8px`。普通目录使用 1 行标题，Trash 和递归搜索使用 pane-local 的 3 行 group/title/location 布局；每个 pane 独立计算自身行数、可见范围和 viewport。Dolphin 对照点是 `KStandardItemListView::setItemLayout()` 在 CompactLayout 下设置 `Qt::Horizontal`，`KItemListViewLayouter` 通过转置逻辑把纵向流映射成物理横向滚动，`KStandardItemListWidget::updateCompactLayoutTextCache()` 使用整个 widget 高度作为 compact 文本 frame。Fika 普通 `item.name` 也使用整块 tile 高度做文本框并垂直居中，避免大 zoom 下 tight line rect 裁掉标题；只有带 group/location 的 metadata 行继续使用 Rust 预计算的 `title_y/title_line_height` 多行位置。
 
 ### 现有优化
 
@@ -233,13 +233,13 @@ changed viewport-x => {
 1. 将 zoom 派生的展示 token（tile 高度、padding、spacing、缩略图大小、字体大小）迁到 Rust `ItemViewRenderMetrics`，随虚拟切片装饰为 `ItemViewEntry` 字段，避免每个 tile 独立计算
 2. 删除独立 tile 组件边界，把可见 tile primitive 内联到 `SplitPaneView` 的 slice layer，避免继续维护旧 path-based item 组件
 3. 将 media/icon rect、text rect、group/title/location y 坐标和 line height 继续迁到 Rust render plan，`SplitPaneView` 的可见 item loop 不再为每项使用 `HorizontalLayout` / `VerticalLayout`
-4. 普通 compact item-view 的 tile height 与 row height 同源，标题 rect 由 Rust render plan 给出，Slint 不再用 `parent.height - ...` 兜底推导标题区域
-5. 基础 compact loop 无条件绘制 icon/media 和 `item.name`，避免普通目录标题依赖 metadata 条件分支；`show-location` 只启用一个轻量 overlay loop 绘制 group/location
+4. 普通 compact item-view 的 tile height 与 row height 同源；普通标题按 Dolphin 的 compact text frame 使用整块 tile 高度并垂直居中，带 group/location 的 metadata 行才使用 Rust render plan 给出的 `title_y/title_line_height`
+5. 基础 compact loop 无条件绘制 icon/media 和 `item.name`，避免普通目录标题依赖 metadata 绘制路径；`show-location` 现在用两条扁平 Text loop 绘制 group/location，不再为每个 item 包一层透明 Rectangle
 6. pane-level 颜色 token 仍由 `SplitPaneView` 下发；后续若切换到自绘 renderer，再把颜色/字体/media icon cache 一并纳入 renderer state
 
 **收益**：减少大量 tile 时的属性绑定评估开销。
 
-**下一步**：剩余成本主要是可见 tile primitive loop 本身。下一轮应做 Dolphin-style renderer/reuse spike：先验证 text/tile frame 缓存或 `SharedPixelBuffer`/`Image` 自绘 tile frame，再决定是否替换当前可见 primitive loop。
+**下一步**：剩余成本主要是可见 tile primitive loop 本身。短期可先把 show-location metadata overlay 改成真正 pane-local 稀疏 metadata model，避免对没有 group/location 的行实例化隐藏 Text；随后做 Dolphin-style renderer/reuse spike，验证 text/tile frame 缓存或 `SharedPixelBuffer`/`Image` 自绘 tile frame，再决定是否替换当前可见 primitive loop。
 
 ### P0-next — Dolphin-style 自管主视图
 
@@ -248,9 +248,10 @@ changed viewport-x => {
 **Dolphin 对照**：
 - `dolphin/src/kitemviews/kfileitemmodel.*` — 文件模型
 - `dolphin/src/kitemviews/private/kitemlistviewlayouter.*` — visible index / item rect 布局
+- `dolphin/src/kitemviews/kstandarditemlistview.*` — CompactLayout 选择横向滚动
 - `dolphin/src/kitemviews/kitemlistview.*` — viewport、可见 widget 管理、drop indicator
 - `dolphin/src/kitemviews/kitemlistcontroller.*` — selection、activation、drag 控制
-- `dolphin/src/kitemviews/kstandarditemlistwidget.*` — item 绘制与复用
+- `dolphin/src/kitemviews/kstandarditemlistwidget.*` — item 绘制与复用，compact text frame 覆盖整个 widget 高度
 
 Dolphin 的关键不是某个滚动控件，而是 model、layouter、view/controller、item rendering/reuse 分层。Fika 要接近 Dolphin 的滚动上限，已经先移除通用 `ScrollView` 作为 viewport 底座，并删除独立 tile 组件边界；下一步要把主视图核心继续转成 Rust 自管 item view / renderer。
 
@@ -289,12 +290,13 @@ Slint: Rectangle viewport + input/DnD overlays
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD、selection、activation 与 context menu 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
 4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；可见 tile primitive 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
-5. 虚拟切片仍输出 `virtual_entries`，但主视图热字段已通过 `PaneViewData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）以及 viewport、selection revision 和空状态；可见 entries 单独作为 pane-local 顶层 slot model 下发，避免 nested model in row；`PaneSlotData` 只保留 pane chrome/status/search/chooser 冷数据。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；普通 item 使用 Dolphin-style compact 横向布局，图标在左、名字在右；基础 compact loop 无条件绘制 `item.name`，带 group/location 的递归搜索结果只额外叠加 metadata 文本。local `x/y` 改由 `for item[index]` 下标和 pane view metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
+5. 虚拟切片仍输出 `virtual_entries`，但主视图热字段已通过 `PaneViewData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）以及 viewport、selection revision 和空状态；可见 entries 单独作为 pane-local 顶层 slot model 下发，避免 nested model in row；`PaneSlotData` 只保留 pane chrome/status/search/chooser 冷数据。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；普通 item 使用 Dolphin-style compact 横向布局，图标在左、名字在右，标题 Text 使用 full-tile frame 垂直居中；基础 compact loop 无条件绘制 `item.name`，带 group/location 的递归搜索结果才使用 `title_y/title_line_height` 并额外叠加 metadata 文本。local `x/y` 改由 `for item[index]` 下标和 pane view metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
-7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。普通 item 的标题区域由 Rust 提供 `text_x/text_width/title_y/title_line_height/font` token，tile height 与 row height 同源，Slint 绘制层只消费这些 rect；递归搜索带位置元数据的 item 复用基础 title 绘制，并在同一横向 text rect 额外显示 group/location。
+7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。普通 item 标题绘制已按 Dolphin compact text cache 改为整 tile frame，解决最大 zoom 下 tight title rect 造成的 name 消失；递归搜索带位置元数据的 item 继续使用 Rust 提供的 `group_y/title_y/location_y` 多行 token，并在同一横向 text rect 额外显示 group/location。
 8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 Rust item-view media renderer：虚拟切片进入 Slint 前会把成功缩略图或 fallback 文件/目录图标统一投影为 `ItemViewEntry.media`，主视图 loop 只保留一个 media `Image` primitive。
 9. `ItemViewEntry.media_token` 作为 Rust-side media 更新令牌进入可见 row；`model_update` 同时维护 pane-local `ItemViewRowToken` sidecar。虚拟切片滑动的重叠 row 先比较 sidecar token，token 相同就不读取 `VecModel::row_data()`，因此不会为了判断复用而克隆包含 `Image` 的整条 `ItemViewEntry`。split pane 快照也会复制到独立 `VecModel`，避免两个 pane 共享同一个可见 row 模型。
-10. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
+10. show-location metadata overlay 已从 per-item 透明 `Rectangle` wrapper 扁平化为两条直接 `Text` loop；剩余问题是 `visible:` 仍可能为普通空 metadata row 实例化隐藏 Text，下一步改为 pane-local 稀疏 metadata model。
+11. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
 
 ---
 
