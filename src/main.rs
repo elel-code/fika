@@ -52,9 +52,12 @@ use app::geometry::{
     place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
-    ItemViewInputMetrics, ItemViewMetadataSource, ItemViewReleaseAction, ItemViewRenderMetrics,
-    ItemViewRenderPlanInput, SelectionRect, decorate_fallback_media,
-    decorate_render_plan_with_metadata, entry_at_pane_point, item_index_at_pane_point,
+    ItemViewInputMetrics, ItemViewReleaseAction, SelectionRect, entry_at_pane_point,
+    item_index_at_pane_point,
+};
+use app::item_view_renderer::{
+    ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
+    decorate_fallback_media, decorate_render_plan_with_metadata,
 };
 use app::model_update::{
     update_pane_item_view_entries_model, update_pane_item_view_selection_model,

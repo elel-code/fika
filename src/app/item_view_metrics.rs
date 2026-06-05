@@ -130,9 +130,12 @@ mod tests {
     #[test]
     fn compact_visual_metrics_are_the_only_zoom_formula_owner() {
         let geometry = include_str!("geometry.rs");
-        let item_view = include_str!("item_view.rs");
+        let item_view_renderer = include_str!("item_view_renderer.rs");
 
-        for (name, source) in [("geometry", geometry), ("item_view", item_view)] {
+        for (name, source) in [
+            ("geometry", geometry),
+            ("item_view_renderer", item_view_renderer),
+        ] {
             assert!(
                 !source.contains("fn compact_media_size")
                     && !source.contains("fn compact_title_font_size")
@@ -146,7 +149,7 @@ mod tests {
         assert!(
             geometry.contains("compact_cell_width")
                 && geometry.contains("compact_row_height")
-                && item_view
+                && item_view_renderer
                     .contains("CompactItemVisualMetrics::from_zoom_level_with_text_line_count"),
             "layout and render plan should both consume the shared compact visual metrics"
         );

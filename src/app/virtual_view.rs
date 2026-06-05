@@ -339,7 +339,7 @@ fn snapshot_glob_matches_bytes(pattern: &[u8], text: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::item_view::{
+    use crate::app::item_view_renderer::{
         ItemViewRenderMetrics, ItemViewRenderPlanInput, decorate_render_plan,
     };
     use std::sync::Arc;

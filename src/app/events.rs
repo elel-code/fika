@@ -1,5 +1,5 @@
 use crate::DeviceEntry;
-use crate::app::item_view::ItemViewRenderMetrics;
+use crate::app::item_view_renderer::ItemViewRenderMetrics;
 use crate::app::pane::PreparedDirectoryEntries;
 use crate::app::virtual_view::VirtualViewSnapshotUpdate;
 use crate::desktop::{clipboard, open_with, service_menu, systemd_launch};
