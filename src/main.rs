@@ -10,6 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::mpsc;
@@ -133,6 +134,10 @@ pub(crate) struct FileEntry {
 }
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
+const SETTINGS_SAVE_COALESCE: Duration = Duration::from_millis(120);
+
+static SETTINGS_SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SETTINGS_SAVE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 struct PaneViewSyncScheduler {
     ui: slint::Weak<AppWindow>,
@@ -169,6 +174,11 @@ impl PaneViewSyncScheduler {
 struct ThumbnailFlushScheduler {
     timer: Timer,
     pending: ThumbnailPendingQueue,
+}
+
+struct SettingsSaveScheduler {
+    timer: Timer,
+    pending: Rc<RefCell<Option<(u64, AppSettings)>>>,
 }
 
 type ThumbnailPendingLoad = (u64, u64, thumbnails::ThumbnailLoad);
@@ -210,6 +220,36 @@ impl ThumbnailFlushScheduler {
             .borrow_mut()
             .push_back((pane_id, generation, load));
         self.timer.restart();
+    }
+}
+
+impl SettingsSaveScheduler {
+    fn new(async_handle: tokio::runtime::Handle) -> Self {
+        let timer = Timer::default();
+        let pending = Rc::new(RefCell::new(None));
+        let timer_pending = Rc::clone(&pending);
+
+        timer.start(TimerMode::SingleShot, SETTINGS_SAVE_COALESCE, move || {
+            let Some((generation, settings)) = timer_pending.borrow_mut().take() else {
+                return;
+            };
+            spawn_settings_save(async_handle.clone(), generation, settings);
+        });
+        timer.stop();
+
+        Self { timer, pending }
+    }
+
+    fn schedule(&self, settings: AppSettings) {
+        let generation = SETTINGS_SAVE_GENERATION.fetch_add(1, AtomicOrdering::AcqRel) + 1;
+        *self.pending.borrow_mut() = Some((generation, settings));
+        self.timer.restart();
+    }
+
+    fn save_now(&self, settings: AppSettings) {
+        self.timer.stop();
+        self.pending.borrow_mut().take();
+        save_settings_latest(settings);
     }
 }
 
@@ -405,6 +445,7 @@ fn main() -> Result<(), slint::PlatformError> {
         Rc::clone(&state),
         bridge.clone(),
     ));
+    let settings_save = Rc::new(SettingsSaveScheduler::new(async_handle.clone()));
 
     let async_rx = Rc::new(RefCell::new(async_rx));
     {
@@ -1455,9 +1496,10 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let settings_save = Rc::clone(&settings_save);
         ui.on_persist_ui_state(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                save_current_settings(&ui, &state);
+                settings_save.schedule(current_settings(&ui, &state));
             }
         });
     }
@@ -1465,10 +1507,11 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let settings_save = Rc::clone(&settings_save);
         let chooser_mode = matches!(args.mode, Mode::Chooser);
         ui.window().on_close_requested(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                save_current_settings(&ui, &state);
+                settings_save.save_now(current_settings(&ui, &state));
             }
             if chooser_mode {
                 std::process::exit(support::chooser::CHOOSER_CANCEL_EXIT_CODE);
@@ -1882,9 +1925,13 @@ fn start_privileged_operation(
 }
 
 fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    save_settings_latest(current_settings(ui, state));
+}
+
+fn current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) -> AppSettings {
     let current_dir = state.borrow().panes.focused().current_dir.clone();
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-    save_settings(&AppSettings {
+    AppSettings {
         dark_mode: Some(ui.get_dark_mode()),
         sidebar_width_px: Some(ui.get_sidebar_width_px()),
         split_pane_ratio: Some(clamped_split_pane_ratio(ui.get_split_pane_ratio())),
@@ -1892,7 +1939,34 @@ fn save_current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         window_width_px: Some(window_size.width),
         window_height_px: Some(window_size.height),
         last_dir: Some(current_dir),
+    }
+}
+
+fn save_settings_latest(settings: AppSettings) {
+    let generation = SETTINGS_SAVE_GENERATION.fetch_add(1, AtomicOrdering::AcqRel) + 1;
+    save_settings_if_latest(generation, settings);
+}
+
+fn spawn_settings_save(
+    async_handle: tokio::runtime::Handle,
+    generation: u64,
+    settings: AppSettings,
+) {
+    async_handle.spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || save_settings_if_latest(generation, settings))
+            .await;
     });
+}
+
+fn save_settings_if_latest(generation: u64, settings: AppSettings) {
+    let lock = SETTINGS_SAVE_LOCK.get_or_init(|| Mutex::new(()));
+    let Ok(_guard) = lock.lock() else {
+        return;
+    };
+    if SETTINGS_SAVE_GENERATION.load(AtomicOrdering::Acquire) != generation {
+        return;
+    }
+    save_settings(&settings);
 }
 
 pub(crate) fn remember_pane_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
@@ -6283,12 +6357,43 @@ mod tests {
             .expect("persist ui callback body should be present");
 
         assert!(
-            persist_body.contains("save_current_settings(&ui, &state);")
+            persist_body.contains("settings_save.schedule(current_settings(&ui, &state));")
+                && !persist_body.contains("save_current_settings")
+                && !persist_body.contains("save_settings")
                 && !persist_body.contains("sync_visible_pane_layouts")
                 && !persist_body.contains("sync_pane_layout_for_slot")
                 && !persist_body.contains("invalidate_virtual_view")
                 && !persist_body.contains("bridge"),
-            "persisting settings should not rebuild virtual views; layout changes already refresh zoom geometry"
+            "interactive settings persistence should schedule a coalesced save instead of blocking zoom/layout on virtual refresh or disk writes"
+        );
+    }
+
+    #[test]
+    fn interactive_settings_saves_are_coalesced_off_the_ui_thread() {
+        let source = include_str!("main.rs");
+        let scheduler_body = source
+            .split_once("struct SettingsSaveScheduler")
+            .and_then(|(_, rest)| rest.split_once("fn main()"))
+            .map(|(body, _)| body)
+            .expect("settings save scheduler body should be present");
+        let close_body = source
+            .split_once("ui.window().on_close_requested(move ||")
+            .and_then(|(_, rest)| rest.split_once("CloseRequestResponse::HideWindow"))
+            .map(|(body, _)| body)
+            .expect("close callback body should be present");
+
+        assert!(
+            source.contains("const SETTINGS_SAVE_COALESCE: Duration = Duration::from_millis(120);")
+                && scheduler_body.contains("TimerMode::SingleShot")
+                && scheduler_body.contains(
+                    "*self.pending.borrow_mut() = Some((generation, settings));"
+                )
+                && scheduler_body.contains("self.timer.restart();")
+                && scheduler_body.contains("spawn_settings_save(async_handle.clone(), generation, settings);")
+                && scheduler_body.contains("save_settings_latest(settings);")
+                && source.contains("tokio::task::spawn_blocking(move || save_settings_if_latest(generation, settings))")
+                && close_body.contains("settings_save.save_now(current_settings(&ui, &state));"),
+            "zoom/sidebar persistence should coalesce latest settings and write them in the background, while close keeps a synchronous final save"
         );
     }
 

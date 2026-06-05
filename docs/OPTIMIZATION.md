@@ -69,6 +69,7 @@ Rectangle viewport shell (clip: true)
 | Rust item-view hit-test | `item_view.rs` | click/activation/context/DnD/drop target 命中不再散落在 Slint tile 或 transfer 几何代码中 |
 | Rust item-view render plan | `item_view_renderer.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 width/height、media/text rect、尺寸/字体 token 不再由 Slint 每项公式或 layout 容器计算；local x/y 由 `for item[index]` 复用层计算，避免进入 `ItemViewEntry` row data |
 | Sparse metadata overlay | `item_view.rs` / `model_update.rs` / `models.slint` | 基础 `ItemViewEntry` 不再携带 group/location 字符串和 metadata 几何；show-location 只发布 Rust 预投影的非空 `ItemViewMetadataEntry` rows |
+| Coalesced settings save | `main.rs` / `settings.rs` | zoom/sidebar/split ratio 等交互触发的 `persist_ui_state()` 只抓取最新设置快照并延迟后台写入；窗口关闭和目录导航保留同步 latest 保存，避免连续 zoom 时 UI 线程同步写配置文件 |
 
 ---
 
@@ -178,6 +179,27 @@ changed viewport-x => {
 **收益**：连续滚动时重叠 virtual rows 不再因为 slice-local 坐标变化或 `Image` 对象差异被重发；selection 变化只刷新 token sidecar/sparse highlight，thumbnail、fallback icon、render rect 变化仍能按 row 精准更新。
 
 **验证**：`app::model_update` 测试覆盖前滑、后滑、无重叠、sidecar 修复、media token 比较和 selection sidecar 更新；源码守卫测试防止重叠 row reuse 重新读取 `VecModel::row_data()`，并防止 `ItemViewEntry.selected` 回归。
+
+---
+
+### P2 — 交互设置保存合并
+
+**问题**：`zoom-main-in/out()` 修改 `icon_zoom_level` 后已经通过 `changed icon_zoom_level => pane_layout_changed()` 同步重建当前 visible slice。旧 `persist_ui_state()` 路径虽然不再重复刷新虚拟网格，但仍在 UI 线程同步执行 `save_settings()`，连续 Ctrl+wheel zoom 或快速拖动 split/sidebar 时会把文件系统写入叠到布局刷新路径上。
+
+**涉及代码**：
+- `ui/app.slint` — `zoom-main-in/out()`、split/sidebar 拖动结束时调用 `persist_ui_state()`
+- `src/main.rs` — `ui.on_persist_ui_state(...)`
+- `src/config/settings.rs` — `save_settings()`
+
+**实际实现**（✅ 已完成）：交互触发的 `persist_ui_state()` 改为 `SettingsSaveScheduler`：
+- UI 线程只读取当前 `AppSettings` 快照并放入 latest-only pending slot。
+- `TimerMode::SingleShot` 以 120ms 合并多次请求；flush 后通过 `tokio::spawn_blocking` 写 `settings.tsv`。
+- 全局 generation 防止旧后台写覆盖新的状态。
+- 窗口关闭和目录导航仍走同步 latest 保存，确保最终状态落盘。
+
+**收益**：连续 zoom 时少掉一次 UI 线程同步文件写入；布局变化仍立即重建当前可见内容，持久化变成低优先级后台工作。
+
+**验证**：源码守卫测试确认 `persist_ui_state` 不调用 `save_current_settings()` / `save_settings()`，而是调度 coalesced scheduler；关闭窗口路径仍执行同步 final save。
 
 ---
 
