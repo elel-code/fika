@@ -3080,9 +3080,9 @@ mod tests {
 
     #[test]
     fn compact_item_view_metrics_follow_dolphin_compact_formula() {
-        assert_eq!(compact_cell_width(0), 96.0);
+        assert_eq!(compact_cell_width(0), 111.0);
         assert_eq!(compact_cell_width(2), 129.0);
-        assert_eq!(compact_cell_width(4), 170.0);
+        assert_eq!(compact_cell_width(4), 155.0);
         assert_eq!(compact_row_height(2, 1), 50.0);
         assert_eq!(compact_row_height(2, 3), 57.0);
         assert_eq!(compact_row_height(4, 1), 76.0);

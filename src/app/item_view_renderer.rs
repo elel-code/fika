@@ -653,12 +653,12 @@ mod tests {
         );
 
         let entry = &entries[0];
-        assert_eq!(entry.tile_width, 170.0);
+        assert_eq!(entry.tile_width, 155.0);
         assert_eq!(entry.tile_height, 76.0);
         assert_eq!(entry.media_width, 72.0);
         assert_eq!(entry.media_height, 72.0);
         assert_eq!(entry.text_x, 78.0);
-        assert_eq!(entry.text_width, 90.0);
+        assert_eq!(entry.text_width, 75.0);
         assert_eq!(entry.title_y, 0.0);
         assert_eq!(entry.title_line_height, 76.0);
         assert!(entry.title_y + entry.title_line_height <= entry.tile_height);

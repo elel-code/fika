@@ -67,22 +67,16 @@ fn compact_media_size(zoom_level: i32) -> f32 {
     }
 }
 
-fn compact_title_font_size(zoom_level: i32) -> f32 {
-    match zoom_level {
-        0 => 12.0,
-        1 => 13.0,
-        2 => 15.0,
-        3 => 16.0,
-        _ => 18.0,
-    }
+fn compact_title_font_size(_zoom_level: i32) -> f32 {
+    15.0
 }
 
 fn compact_title_line_height(title_font_size: f32) -> f32 {
     title_font_size + 6.0
 }
 
-fn compact_metadata_font_size(zoom_level: i32) -> f32 {
-    if zoom_level < 2 { 10.0 } else { 11.0 }
+fn compact_metadata_font_size(_zoom_level: i32) -> f32 {
+    11.0
 }
 
 fn compact_metadata_line_height(metadata_font_size: f32) -> f32 {
@@ -120,11 +114,23 @@ mod tests {
         assert_eq!(mid.metadata_line_height, 14.0);
 
         let max = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(4, 1);
-        assert_eq!(max.cell_width, 170.0);
+        assert_eq!(max.cell_width, 155.0);
         assert_eq!(max.row_height, 76.0);
         assert_eq!(max.media_size, 72.0);
-        assert_eq!(max.title_font_size, 18.0);
-        assert_eq!(max.title_line_height, 24.0);
+        assert_eq!(max.title_font_size, 15.0);
+        assert_eq!(max.title_line_height, 21.0);
+    }
+
+    #[test]
+    fn compact_text_metrics_stay_stable_across_icon_zoom() {
+        let small = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(0, 1);
+        let large = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(4, 1);
+
+        assert_ne!(small.media_size, large.media_size);
+        assert_eq!(small.title_font_size, large.title_font_size);
+        assert_eq!(small.title_line_height, large.title_line_height);
+        assert_eq!(small.metadata_font_size, large.metadata_font_size);
+        assert_eq!(small.metadata_line_height, large.metadata_line_height);
     }
 
     #[test]

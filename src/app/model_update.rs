@@ -1,6 +1,11 @@
+use crate::app::item_view_renderer::{
+    ItemViewMediaCache, ItemViewRenderMetrics, ItemViewRenderPlanInput, decorate_fallback_media,
+    decorate_render_plan_with_metadata,
+};
 use crate::app::pane::PaneView;
 use crate::{ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry};
 use slint::{Model, ModelRc, SharedString, VecModel};
+use std::ops::Range;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -223,6 +228,83 @@ pub(crate) fn update_pane_item_view_entries_model(
     update_item_view_highlight_model(view);
     view.virtual_start_index = start_index;
     view.virtual_start_column = start_column;
+}
+
+pub(crate) fn relayout_pane_item_view_entries_model(
+    view: &mut PaneView,
+    range: Range<usize>,
+    start_column: usize,
+    cell_width: f32,
+    render_metrics: ItemViewRenderMetrics,
+    media_cache: &ItemViewMediaCache,
+) -> bool {
+    let Some(model) = view
+        .virtual_entries
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewEntry>>()
+    else {
+        return false;
+    };
+    let row_count = model.row_count();
+    if row_count != view.virtual_entry_tokens.len() {
+        return false;
+    }
+    let old_start = view.virtual_start_index;
+    let old_end = old_start.saturating_add(row_count);
+    if range.is_empty() || range.start < old_start || range.end > old_end || range.end < range.start
+    {
+        return false;
+    }
+
+    let remove_front = range.start - old_start;
+    for _ in 0..remove_front {
+        model.remove(0);
+    }
+    view.virtual_entry_tokens
+        .drain(0..remove_front.min(view.virtual_entry_tokens.len()));
+
+    let target_len = range.end - range.start;
+    while model.row_count() > target_len {
+        model.remove(model.row_count() - 1);
+        view.virtual_entry_tokens.pop();
+    }
+    if model.row_count() != target_len || view.virtual_entry_tokens.len() != target_len {
+        return false;
+    }
+
+    let Some(mut entries) = (0..target_len)
+        .map(|row| model.row_data(row))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    decorate_render_plan_with_metadata(
+        &mut entries,
+        ItemViewRenderPlanInput {
+            cell_width,
+            render_metrics,
+            show_location: false,
+        },
+        &[],
+    );
+    decorate_fallback_media(&mut entries, media_cache);
+
+    let mut next_tokens = Vec::with_capacity(entries.len());
+    let mut rows_changed = false;
+    for (row, entry) in entries.iter().enumerate() {
+        let mut next = ItemViewRowToken::from_entry(entry);
+        next.set_selected(view.virtual_entry_tokens[row].selected());
+        if !view.virtual_entry_tokens[row].row_equals_ignoring_selection(&next) {
+            model.set_row_data(row, entry.clone());
+            rows_changed = true;
+        }
+        next_tokens.push(next);
+    }
+    view.virtual_entry_tokens = next_tokens;
+    let highlights_changed = update_item_view_highlight_model(view);
+    view.virtual_start_index = range.start;
+    view.virtual_start_column = start_column;
+    rows_changed || highlights_changed
 }
 
 pub(crate) fn update_pane_item_view_selection_model(
@@ -711,6 +793,51 @@ mod tests {
         assert_eq!(
             highlight_rows(&view.virtual_highlight_entries),
             vec![(2, 129.0, 50.0)]
+        );
+    }
+
+    #[test]
+    fn pane_item_view_cached_relayout_reuses_vec_model_and_selection() {
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            10,
+            5,
+            entries_with_tile_metrics(4),
+            Vec::new(),
+            &["/tmp/item-2".to_string()],
+        );
+        let original = view.virtual_entries.clone();
+        let metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
+        let media_cache = ItemViewMediaCache::new(metrics, false);
+
+        assert!(relayout_pane_item_view_entries_model(
+            &mut view,
+            11..13,
+            5,
+            155.0,
+            metrics,
+            &media_cache,
+        ));
+
+        assert_eq!(view.virtual_entries, original);
+        assert_eq!(view.virtual_start_index, 11);
+        assert_eq!(view.virtual_start_column, 5);
+        assert_eq!(
+            rows(&view.virtual_entries),
+            vec!["/tmp/item-1".to_string(), "/tmp/item-2".to_string()]
+        );
+        let first = view.virtual_entries.row_data(0).expect("row should exist");
+        assert_eq!(first.tile_width, 155.0);
+        assert_eq!(first.media_width, 72.0);
+        assert_eq!(first.title_font_size, 15.0);
+        assert_eq!(
+            selected_token_rows(&view.virtual_entry_tokens),
+            vec!["/tmp/item-2".to_string()]
+        );
+        assert_eq!(
+            highlight_rows(&view.virtual_highlight_entries),
+            vec![(1, 155.0, metrics.tile_height)]
         );
     }
 

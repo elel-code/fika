@@ -72,6 +72,7 @@ Rectangle viewport shell (clip: true)
 | Sparse metadata overlay | `item_view.rs` / `model_update.rs` / `models.slint` | 基础 `ItemViewEntry` 不再携带 group/location 字符串和 metadata 几何；show-location 只发布 Rust 预投影的非空 `ItemViewMetadataEntry` rows |
 | Coalesced settings save | `settings_save.rs` / `settings.rs` | zoom/sidebar/split ratio 等交互触发的 `persist_ui_state()` 只抓取最新设置快照并延迟后台写入；窗口关闭和目录导航保留同步 latest 保存，避免连续 zoom 时 UI 线程同步写配置文件 |
 | Coalesced icon zoom thumbnails | `app.slint` / `main.rs` | `icon_zoom_level` 变化立即刷新可见 pane layout，但不立刻调度缩略图；300ms 后按当前可见切片 latest-only 调度预览，贴近 Dolphin 的 icon-size updater 分层 |
+| Cached icon zoom relayout | `item_view_metrics.rs` / `model_update.rs` / `main.rs` | zoom 后的新 range 被当前虚拟 slice 覆盖时，不重建目录 snapshot；直接裁剪并 relayout 现有 `VecModel` rows。compact 文本字号保持 Dolphin-style 稳定，只让 icon/media size 参与 zoom，避免每个目录第一次 zoom 时触发新 font size 冷启动 |
 
 ---
 
@@ -186,22 +187,25 @@ changed viewport-x => {
 
 ### P2 — Dolphin-style zoom thumbnail 合并
 
-**问题**：`zoom-main-in/out()` 修改 `icon_zoom_level` 后，旧路径通过 `changed icon_zoom_level => pane_layout_changed()` 立即重建所有可见 pane 的 virtual slice，并在同一路径里调度缩略图。连续 Ctrl+wheel zoom 会把多次 layout、fallback media、thumbnail scheduling 和 Slint model 更新叠在同一段交互里。
+**问题**：`zoom-main-in/out()` 修改 `icon_zoom_level` 后，旧路径通过 `changed icon_zoom_level => pane_layout_changed()` 立即重建所有可见 pane 的 virtual slice，并在同一路径里调度缩略图。连续 Ctrl+wheel zoom 会把多次 layout、fallback media、thumbnail scheduling 和 Slint model 更新叠在同一段交互里。即使缩略图调度已延迟，每个目录第一次 zoom 仍可能因为同步 snapshot rebuild 和新字号 Text layout 冷启动而卡顿。
 
-**Dolphin 对照**：Dolphin 的 `KItemListView::setStyleOption()` 会立即更新可见 widget 的 style、size hint cache 和 layouter；`KFileItemListView::triggerIconSizeUpdate()` 只对 icon-size 引发的昂贵 role/preview 更新使用 `LongInterval` timer 合并。Fika 采用同样的分层：滚动/resize/zoom layout 不延迟，只把 zoom 后的缩略图调度延后。
+**Dolphin 对照**：Dolphin 的 `KItemListView::setStyleOption()` 会立即更新可见 widget 的 style、size hint cache 和 layouter；`KFileItemListView::triggerIconSizeUpdate()` 只对 icon-size 引发的昂贵 role/preview 更新使用 `LongInterval` timer 合并。Compact layout 的 item hints 使用 `styleOption.fontMetrics`，icon zoom 改 `iconSize`，文本字体本身不随每档 icon zoom 改变。Fika 采用同样的分层：滚动/resize/zoom layout 不延迟，只把 zoom 后的缩略图调度延后，并让 compact 文本字号保持稳定。
 
 **涉及代码**：
 - `ui/app.slint` — `changed icon_zoom_level => icon_zoom_layout_changed()`
 - `src/main.rs` — `PaneLayoutSyncScheduler`
 
 **实际实现**（✅ 已完成）：`icon_zoom_level` 不再调用普通 `pane_layout_changed()`：
-- `icon_zoom_layout_changed()` 立即调用 `sync_visible_pane_layouts_with_thumbnail_scheduling(..., false)`，同步刷新 tile 尺寸、文字和 fallback media，但不启动缩略图任务。
+- `icon_zoom_layout_changed()` 立即调用 `sync_visible_pane_icon_zoom_layouts()`；当新 Dolphin-style range 被当前 virtual slice 覆盖时，`try_relayout_cached_pane_icon_zoom_layout()` 直接裁剪并 relayout 现有 `VecModel` rows，保留 selection/highlight sidecar，不重新 snapshot 当前目录。
+- fast path 覆盖不了新 range 时才回退到完整 `sync_pane_layout_for_slot_with_thumbnail_scheduling(..., false)`，所以 zoom-out 或边界变化仍保留正确性。
+- `CompactItemVisualMetrics` 只让 media/icon size 随 zoom 改变，title/metadata font metrics 保持稳定，贴近 Dolphin 的 `styleOption.fontMetrics` 用法，减少 Slint 首次 zoom 时的 Text 字体冷启动。
 - `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 300ms 合并连续 zoom 后的缩略图调度；timer flush 时从当前可见 virtual slice 调用 `schedule_visible_thumbnails_for_visible_panes()`。
+- thumbnail 调度按当前 size 的 media token 判断已加载状态；旧 zoom size 的 thumbnail 不会阻塞新 size 的延迟任务。
 - 普通 `pane_layout_changed()` 仍调用 `sync_now()`，会停止 pending zoom thumbnail timer 并立即刷新；窗口大小、sidebar、split ratio、pane 宽度变化不等待 timer。
 
-**收益**：连续 zoom 时保留即时视觉反馈，避免每个 zoom step 都启动缩略图解码/预览更新；同时保留 resize/fullscreen/末尾 viewport 修复的即时路径。
+**收益**：连续 zoom 时保留即时视觉反馈，避免每个 zoom step 都启动缩略图解码/预览更新；当前 slice 覆盖新 range 时避免每个目录第一次 zoom 都重建目录 snapshot；稳定字体减少新 zoom 档位的 Text layout 冷启动；同时保留 resize/fullscreen/末尾 viewport 修复的即时路径。
 
-**验证**：源码守卫测试确认 `PaneViewSyncScheduler` 的滚动路径仍无 timer，`icon_zoom_layout_changed` 同步刷新 layout 但使用 `schedule_thumbnails=false`，缩略图调度才走独立 coalesced timer。
+**验证**：源码守卫测试确认 `PaneViewSyncScheduler` 的滚动路径仍无 timer，`icon_zoom_layout_changed` 同步刷新 layout，优先尝试 cached relayout，缩略图调度才走独立 coalesced timer。`model_update` 测试覆盖 cached relayout 复用 `VecModel`、保留 selection/highlight；`thumbnail_pipeline` 测试覆盖旧 size thumbnail 不阻塞新 size 调度。
 
 ---
 

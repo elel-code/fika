@@ -116,7 +116,7 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane(
     entry: &ItemViewEntry,
     size_px: u32,
 ) -> Option<(PathBuf, thumbnails::ThumbnailKey)> {
-    if entry.is_dir || entry.thumbnail_state == 2 {
+    if entry.is_dir {
         return None;
     }
 
@@ -128,6 +128,9 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane(
     let Ok(key) = thumbnails::key_for(&path, size_px) else {
         return None;
     };
+    if entry.thumbnail_state == 2 && entry.media_token == key.item_view_media_token() {
+        return None;
+    }
     if state.thumbnail_cache.contains_key(&key) || state.thumbnail_failures.contains_key(&key) {
         return None;
     }
@@ -783,6 +786,30 @@ mod tests {
                 .focused()
                 .view
                 .has_thumbnail_pending(dir_path.to_str().unwrap())
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn thumbnail_schedule_retries_loaded_entry_when_zoom_size_changes() {
+        let temp_dir = temp_test_dir("zoom-size-token");
+        let image_path = temp_dir.join("photo.png");
+        std::fs::write(&image_path, b"not a real image").unwrap();
+
+        let state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let old_key = thumbnails::key_for(&image_path, 64).unwrap();
+        let mut entry = test_entry("photo.png", image_path.to_str().unwrap());
+        entry.thumbnail_state = 2;
+        entry.media_token = old_key.item_view_media_token();
+
+        assert!(
+            thumbnail_schedule_candidate(&state, &entry, 64).is_none(),
+            "the exact already-loaded thumbnail size should not be rescheduled"
+        );
+        assert!(
+            thumbnail_schedule_candidate(&state, &entry, 128).is_some(),
+            "a loaded thumbnail from the previous zoom size must not block the new size"
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);

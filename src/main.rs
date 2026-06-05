@@ -61,7 +61,8 @@ use app::item_view_renderer::{
     decorate_fallback_media, decorate_render_plan_with_metadata,
 };
 use app::model_update::{
-    update_pane_item_view_entries_model, update_pane_item_view_selection_model,
+    relayout_pane_item_view_entries_model, update_pane_item_view_entries_model,
+    update_pane_item_view_selection_model,
 };
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
@@ -233,7 +234,7 @@ impl PaneLayoutSyncScheduler {
             return;
         };
         self.pane_view_sync.flush_all();
-        sync_visible_pane_layouts_with_thumbnail_scheduling(&ui, &self.state, &self.bridge, false);
+        sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);
         self.pending_icon_zoom_thumbnails.set(true);
         self.timer.restart();
     }
@@ -4636,6 +4637,133 @@ fn sync_visible_pane_layouts_with_thumbnail_scheduling(
     }
 }
 
+fn sync_visible_pane_icon_zoom_layouts(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+) {
+    let slots = ui.get_pane_slots();
+    if slots.row_count() == 0 {
+        sync_pane_icon_zoom_layout_for_slot(ui, state, bridge, 0);
+        return;
+    }
+
+    for row in 0..slots.row_count() {
+        if let Some(pane) = slots.row_data(row) {
+            sync_pane_icon_zoom_layout_for_slot(ui, state, bridge, pane.slot);
+        }
+    }
+}
+
+fn sync_pane_icon_zoom_layout_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    if try_relayout_cached_pane_icon_zoom_layout(ui, state, slot) {
+        return;
+    }
+    sync_pane_layout_for_slot_with_thumbnail_scheduling(ui, state, bridge, slot, false);
+}
+
+fn try_relayout_cached_pane_icon_zoom_layout(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+) -> bool {
+    let size_px = thumbnail_size_px(ui);
+    let zoom_level = ui.get_icon_zoom_level();
+    let dark = ui.get_dark_mode();
+    let window_size = ui.window().size().to_logical(ui.window().scale_factor());
+    let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
+    let viewport_width = pane_slot_width(ui, main_width, slot);
+    let (search_panel_visible, text_line_count) = {
+        let state_ref = state.borrow();
+        state_ref
+            .panes
+            .pane_for_slot(slot)
+            .map(|pane| {
+                (
+                    pane.search.panel_visible(),
+                    pane.item_view_text_line_count(),
+                )
+            })
+            .unwrap_or((false, 1))
+    };
+    let render_metrics =
+        ItemViewRenderMetrics::from_zoom_level_with_text_line_count(zoom_level, text_line_count);
+    let mut layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
+        ui,
+        viewport_width,
+        search_panel_visible,
+        text_line_count,
+    );
+
+    let applied = {
+        let mut state_ref = state.borrow_mut();
+        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
+            return false;
+        };
+        if pane.show_item_locations()
+            || pane.view.virtual_metadata_entries.row_count() != 0
+            || !pane.view.has_renderable_virtual_entries()
+        {
+            return false;
+        }
+
+        let entry_count = pane.view.virtual_view.entry_count;
+        if entry_count == 0 {
+            return false;
+        }
+
+        let requested_viewport_x = pane.view.viewport_x;
+        layout.viewport_x = requested_viewport_x;
+        let compact_item_view = layout.compact_item_view(entry_count);
+        let plan = compact_item_view.virtual_plan(requested_viewport_x, 2);
+        let current_range = pane.view.virtual_view.range.clone();
+        if !virtual_cache_covers_visible_range(&current_range, &plan.range) {
+            return false;
+        }
+
+        let media_cache = pane.view.fallback_media_cache(render_metrics, dark);
+        if !relayout_pane_item_view_entries_model(
+            &mut pane.view,
+            plan.range.clone(),
+            plan.start_column,
+            plan.cell_width,
+            render_metrics,
+            media_cache.as_ref(),
+        ) {
+            return false;
+        }
+
+        pane.view.cancel_virtual_prepare_queue();
+        pane.view.virtual_generation.next();
+        pane.view.viewport_x = plan.viewport_x;
+        pane.view.virtual_view.range = plan.range;
+        pane.view
+            .virtual_view
+            .update_layout_signature(compact_item_view, size_px);
+        true
+    };
+
+    if applied {
+        let target_is_focused = state.borrow().panes.focused_slot() == slot;
+        if target_is_focused {
+            let entry_count = state
+                .borrow()
+                .panes
+                .pane_for_slot(slot)
+                .map(|pane| pane.view.virtual_view.entry_count)
+                .unwrap_or_default();
+            ui.set_entry_count(entry_count as i32);
+        }
+        sync_pane_view_ui(ui, state, slot);
+    }
+    applied
+}
+
 fn sync_pane_viewport_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -6507,6 +6635,16 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("struct ThumbnailFlushScheduler"))
             .map(|(body, _)| body)
             .expect("pane layout scheduler body should be present");
+        let icon_zoom_body = source
+            .split_once("fn sync_pane_icon_zoom_layout_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn try_relayout_cached_pane_icon_zoom_layout("))
+            .map(|(body, _)| body)
+            .expect("icon zoom layout body should be present");
+        let fast_path_body = source
+            .split_once("fn try_relayout_cached_pane_icon_zoom_layout(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
+            .map(|(body, _)| body)
+            .expect("icon zoom cached relayout body should be present");
 
         assert!(
             source.contains(
@@ -6529,9 +6667,8 @@ mod tests {
             scheduler_body.contains("TimerMode::SingleShot")
                 && scheduler_body.contains("ICON_ZOOM_THUMBNAIL_COALESCE")
                 && scheduler_body.contains("fn sync_icon_zoom_now(&self)")
-                && scheduler_body.contains(
-                    "sync_visible_pane_layouts_with_thumbnail_scheduling(&ui, &self.state, &self.bridge, false);"
-                )
+                && scheduler_body
+                    .contains("sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);")
                 && scheduler_body.contains("pending_icon_zoom_thumbnails")
                 && scheduler_body.contains("self.timer.restart();")
                 && scheduler_body.contains("fn sync_now(&self)")
@@ -6539,6 +6676,17 @@ mod tests {
                 && scheduler_body
                     .contains("schedule_visible_thumbnails_for_visible_panes(&ui, &timer_state, &timer_bridge);"),
             "continuous zoom should refresh item layout immediately while coalescing thumbnail work like Dolphin's icon-size updater"
+        );
+        assert!(
+            icon_zoom_body.contains("try_relayout_cached_pane_icon_zoom_layout(ui, state, slot)")
+                && icon_zoom_body.contains(
+                    "sync_pane_layout_for_slot_with_thumbnail_scheduling(ui, state, bridge, slot, false);"
+                )
+                && fast_path_body.contains("relayout_pane_item_view_entries_model(")
+                && fast_path_body.contains("virtual_cache_covers_visible_range(&current_range, &plan.range)")
+                && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
+                && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);"),
+            "icon zoom should reuse the current virtual slice when it covers the new Dolphin-style range, and only fall back to snapshot rebuild when needed"
         );
     }
 
