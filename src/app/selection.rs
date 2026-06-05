@@ -106,10 +106,6 @@ pub(crate) fn filtered_entry_count_for_pane(state: &AppState, pane: &PaneState) 
         .count()
 }
 
-pub(crate) fn filtered_entry_count(state: &AppState) -> usize {
-    filtered_entry_count_for_slot(state, 0)
-}
-
 pub(crate) fn filtered_entry_at_for_slot(
     state: &AppState,
     slot: i32,
@@ -148,13 +144,6 @@ pub(crate) fn filtered_entry_at_for_pane(
 
 pub(crate) fn filtered_entry_at(state: &AppState, index: usize) -> Option<FileEntry> {
     filtered_entry_at_for_slot(state, 0, index)
-}
-
-pub(crate) fn rebuild_visible_entry_index(
-    state: &mut AppState,
-    collect_paths: bool,
-) -> FilteredEntrySummary {
-    rebuild_visible_entry_index_for_slot(state, 0, collect_paths)
 }
 
 pub(crate) fn rebuild_visible_entry_index_for_slot(

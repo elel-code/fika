@@ -1,6 +1,6 @@
 use crate::app::async_bridge::AsyncBridge;
 use crate::app::geometry::{MainItemViewLayout, active_main_pane_width, inactive_main_pane_width};
-use crate::app::pane::{PaneEntrySnapshot, PaneTarget};
+use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
@@ -290,13 +290,11 @@ fn set_pane_metadata_ui(ui: &AppWindow, slot: i32, metadata: ModelRc<ItemViewMet
 }
 
 fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
-    let is_focused = slot == state.panes.focused_slot();
-    let search_query = ui.get_search_query();
-    let search_filters_active = ui.get_search_kind_filter() != 0
-        || ui.get_search_modified_filter() != 0
-        || ui.get_search_size_filter() != 0;
-    let search_panel_visible =
-        ui.get_search_bar_open() || !search_query.is_empty() || search_filters_active;
+    let search = state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.search.clone())
+        .unwrap_or_default();
     let chooser_choices = ui.get_chooser_choices();
     let undo_available = ui.get_undo_available();
     let undo_label = ui.get_undo_label();
@@ -315,22 +313,19 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         path_focused: pane_slot_path_focused(state, slot),
         can_go_back: pane_slot_can_go_back(state, slot),
         can_go_forward: pane_slot_can_go_forward(state, slot),
-        search_panel_visible: is_focused && search_panel_visible,
+        search_panel_visible: search.panel_visible(),
         search_panel_height_px: 0.0,
-        search_query: if is_focused {
-            search_query.clone()
-        } else {
-            SharedString::new()
-        },
-        recursive_search: is_focused && pane_slot_recursive_search(state, slot),
-        search_kind_filter: ui.get_search_kind_filter(),
-        search_modified_filter: ui.get_search_modified_filter(),
-        search_size_filter: ui.get_search_size_filter(),
-        search_loading: is_focused && ui.get_search_loading(),
-        search_filters_active: is_focused && search_filters_active,
-        search_kind_label: active_search_kind_label(ui),
-        search_modified_label: active_search_modified_label(ui),
-        search_size_label: active_search_size_label(ui),
+        search_query: search.query.as_str().into(),
+        recursive_search: search.recursive,
+        search_kind_filter: search.kind_filter,
+        search_modified_filter: search.modified_filter,
+        search_size_filter: search.size_filter,
+        search_loading: search.loading,
+        search_filters_active: search.filters_active(),
+        search_focus_request: search.focus_request,
+        search_kind_label: search_kind_label(search.kind_filter),
+        search_modified_label: search_modified_label(search.modified_filter),
+        search_size_label: search_size_label(search.size_filter),
         drop_trace_prefix: format!("pane-{slot}-").into(),
         status: pane_slot_status(state, slot),
         selected_count: pane_slot_selected_count(state, slot),
@@ -352,7 +347,11 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
 
 fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
     let is_focused = slot == state.panes.focused_slot();
-    let search_query = ui.get_search_query();
+    let search = state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.search.clone())
+        .unwrap_or_default();
     let item_view_metrics = pane_slot_item_view_metrics(ui, slot, state);
 
     PaneViewData {
@@ -385,16 +384,8 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         } else {
             true
         },
-        empty_title: if is_focused {
-            active_empty_title(ui, &search_query)
-        } else {
-            "This folder is empty".into()
-        },
-        empty_subtitle: if is_focused {
-            active_empty_subtitle(ui, &search_query)
-        } else {
-            SharedString::new()
-        },
+        empty_title: empty_title_for_search(&search),
+        empty_subtitle: empty_subtitle_for_search(&search),
     }
 }
 
@@ -414,12 +405,16 @@ struct ItemViewSlotMetrics {
 
 fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> ItemViewSlotMetrics {
     let viewport_width = pane_slot_width(ui, slot);
-    let search_panel_visible = state.panes.focused_slot() == slot;
-    let text_line_count = state
+    let (search_panel_visible, text_line_count) = state
         .panes
         .pane_for_slot(slot)
-        .map(|pane| pane.item_view_text_line_count())
-        .unwrap_or(1);
+        .map(|pane| {
+            (
+                pane.search.panel_visible(),
+                pane.item_view_text_line_count(),
+            )
+        })
+        .unwrap_or((false, 1));
     let layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
         ui,
         viewport_width,
@@ -548,13 +543,6 @@ fn pane_slot_viewport_x(slot: i32, state: &AppState) -> f32 {
         .unwrap_or_default()
 }
 
-fn pane_slot_recursive_search(state: &AppState, slot: i32) -> bool {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .is_some_and(|pane| pane.search.recursive)
-}
-
 fn pane_slot_show_location(state: &AppState, slot: i32) -> bool {
     state
         .panes
@@ -626,8 +614,8 @@ fn pane_slot_external_edit_status(state: &AppState, slot: i32) -> SharedString {
     }
 }
 
-fn active_search_kind_label(ui: &AppWindow) -> SharedString {
-    match ui.get_search_kind_filter() {
+fn search_kind_label(filter: i32) -> SharedString {
+    match filter {
         1 => "Type: Folders",
         2 => "Type: Files",
         3 => "Type: Images",
@@ -636,8 +624,8 @@ fn active_search_kind_label(ui: &AppWindow) -> SharedString {
     .into()
 }
 
-fn active_search_modified_label(ui: &AppWindow) -> SharedString {
-    match ui.get_search_modified_filter() {
+fn search_modified_label(filter: i32) -> SharedString {
+    match filter {
         1 => "Modified: Today",
         2 => "Modified: 7 days",
         3 => "Modified: 30 days",
@@ -646,8 +634,8 @@ fn active_search_modified_label(ui: &AppWindow) -> SharedString {
     .into()
 }
 
-fn active_search_size_label(ui: &AppWindow) -> SharedString {
-    match ui.get_search_size_filter() {
+fn search_size_label(filter: i32) -> SharedString {
+    match filter {
         1 => "Size: < 1 MB",
         2 => "Size: 1-100 MB",
         3 => "Size: > 100 MB",
@@ -656,20 +644,20 @@ fn active_search_size_label(ui: &AppWindow) -> SharedString {
     .into()
 }
 
-fn active_empty_title(ui: &AppWindow, search_query: &SharedString) -> SharedString {
-    if ui.get_search_loading() {
+fn empty_title_for_search(search: &PaneSearch) -> SharedString {
+    if search.loading {
         "Searching...".into()
-    } else if search_query.is_empty() {
+    } else if search.query.is_empty() && !search.filters_active() {
         "This folder is empty".into()
     } else {
         "No matching items".into()
     }
 }
 
-fn active_empty_subtitle(ui: &AppWindow, search_query: &SharedString) -> SharedString {
-    if ui.get_search_loading() {
+fn empty_subtitle_for_search(search: &PaneSearch) -> SharedString {
+    if search.loading {
         "Scanning subfolders.".into()
-    } else if search_query.is_empty() {
+    } else if search.query.is_empty() && !search.filters_active() {
         "This directory has no visible files.".into()
     } else {
         "Try another search term.".into()

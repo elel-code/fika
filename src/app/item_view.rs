@@ -283,24 +283,14 @@ impl ItemViewLayout {
             ui.get_split_pane_ratio(),
             slot,
         )?;
-        let search_height = if state.panes.focused_slot() == slot {
-            search_panel_height(
-                ui.get_search_bar_open(),
-                ui.get_search_query().as_str(),
-                ui.get_search_kind_filter(),
-                ui.get_search_modified_filter(),
-                ui.get_search_size_filter(),
-                width,
-            )
-        } else {
-            0.0
-        };
+        let search_panel_visible = pane_state.search.panel_visible();
+        let search_height = search_panel_height(search_panel_visible, width);
         let height =
             (pane.bottom - pane.top - PATH_BAR_HEIGHT - STATUS_BAR_HEIGHT - search_height).max(1.0);
         let layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
             ui,
             width,
-            state.panes.focused_slot() == slot,
+            search_panel_visible,
             pane_state.item_view_text_line_count(),
         );
         let compact_item_view =

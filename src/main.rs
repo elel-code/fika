@@ -76,14 +76,14 @@ use app::places::{
     rename_place, reorder_place_path, restore_default_places, sync_places,
 };
 use app::search_ui::{
-    cancel_active_search, recursive_search_cancelled_status, recursive_search_finished_status,
-    recursive_search_progress_status, recursive_search_status, search_filters_active,
-    set_search_filters,
+    cancel_active_search_for_slot, recursive_search_cancelled_status,
+    recursive_search_finished_status, recursive_search_progress_status, recursive_search_status,
+    set_search_filters_for_slot,
 };
 use app::selection::{
-    append_unique_paths, filtered_entry_count, filtered_entry_paths_for_slot,
-    rebuild_visible_entry_index, retained_visible_paths, selection_range_paths_filtered_for_slot,
-    selection_rect_paths_filtered_for_slot,
+    append_unique_paths, filtered_entry_count_for_slot, filtered_entry_paths_for_slot,
+    rebuild_visible_entry_index_for_slot, retained_visible_paths,
+    selection_range_paths_filtered_for_slot, selection_rect_paths_filtered_for_slot,
 };
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui, sync_focus_navigation_ui,
@@ -659,9 +659,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_search_submitted(move |query| {
+        ui.on_open_search(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                submit_search(&ui, &state, &bridge, query.as_str());
+                open_search(&ui, &state, &bridge);
             }
         });
     }
@@ -670,9 +670,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_cancel_search(move || {
+        ui.on_open_search_for_slot(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                cancel_recursive_search(&ui, &state, &bridge);
+                open_search_for_slot(&ui, &state, &bridge, slot);
             }
         });
     }
@@ -681,9 +681,53 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
         let bridge = bridge.clone();
-        ui.on_search_filters_changed(move |kind, modified, size| {
+        ui.on_clear_focused_search(move || {
+            ui_weak
+                .upgrade()
+                .is_some_and(|ui| clear_focused_search(&ui, &state, &bridge))
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_search_submitted(move |slot, query, recursive| {
             if let Some(ui) = ui_weak.upgrade() {
-                update_search_filters(&ui, &state, &bridge, kind, modified, size);
+                submit_search_for_slot(&ui, &state, &bridge, slot, query.as_str(), recursive);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_cancel_search(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                cancel_recursive_search_for_slot(&ui, &state, &bridge, slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_search_filters_changed(move |slot, kind, modified, size| {
+            if let Some(ui) = ui_weak.upgrade() {
+                update_search_filters_for_slot(&ui, &state, &bridge, slot, kind, modified, size);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
+        let bridge = bridge.clone();
+        ui.on_search_close_requested(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                close_search_for_slot(&ui, &state, &bridge, slot);
             }
         });
     }
@@ -1483,36 +1527,54 @@ fn register_pane_routing_callbacks(
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_search_submitted(move |query| {
+        routing.on_search_open(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_search_submitted(query);
+                ui.invoke_route_pane_search_open(slot);
             }
         });
     }
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_cancel_search(move || {
+        routing.on_search_submitted(move |slot, query, recursive| {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_cancel_search();
+                ui.invoke_route_pane_search_submitted(slot, query, recursive);
             }
         });
     }
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_search_filters_changed(move |kind, modified, size| {
+        routing.on_cancel_search(move |slot| {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_search_filters_changed(kind, modified, size);
+                ui.invoke_route_pane_cancel_search(slot);
             }
         });
     }
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_search_close_requested(move || {
+        routing.on_search_filters_changed(move |slot, kind, modified, size| {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_search_bar_open(false);
+                ui.invoke_route_pane_search_filters_changed(slot, kind, modified, size);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_search_close_requested(move |slot| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_search_close_requested(slot);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_search_focus_changed(move |slot, focused| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_search_focus_changed(slot, focused);
             }
         });
     }
@@ -1868,14 +1930,6 @@ fn set_current_location_ui(ui: &AppWindow, path: &Path) {
     ui.set_current_in_trash(in_trash);
 }
 
-fn reset_search_controls(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    ui.set_search_query(SharedString::new());
-    ui.set_search_kind_filter(0);
-    ui.set_search_modified_filter(0);
-    ui.set_search_size_filter(0);
-    sync_pane_slots_ui(ui, state);
-}
-
 fn load_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     load_directory_with_preservation(ui, state, bridge, false);
 }
@@ -1954,7 +2008,6 @@ fn load_prepared_pane_directory(
     let target_is_focused = ui.get_focused_pane() == slot;
     if target_is_focused {
         set_current_location_ui(ui, &current_dir);
-        ui.set_search_loading(false);
     }
     if !preserve_view && !defer_view_restore {
         restore_pane_view_state(ui, state, slot, &current_dir);
@@ -1970,10 +2023,10 @@ fn load_prepared_pane_directory(
             }
         }
         if target_is_focused {
-            reset_search_controls(ui, state);
             ui.set_items_path(current_dir.display().to_string().into());
             ui.set_directory_loading(false);
         }
+        sync_pane_slot_ui(ui, state, slot);
         set_pane_status(ui, state, slot, "Refreshing cached folder...");
     } else if !preserve_view {
         {
@@ -1985,9 +2038,9 @@ fn load_prepared_pane_directory(
         }
         if target_is_focused {
             ui.set_directory_loading(true);
-            reset_search_controls(ui, state);
             update_selection_ui_for_slot(ui, state, slot, &[]);
         }
+        sync_pane_slot_ui(ui, state, slot);
         set_pane_status(ui, state, slot, "Loading folder...");
     } else {
         if target_is_focused {
@@ -2497,9 +2550,6 @@ fn apply_pane_directory_result(
                 ));
             }
             if target_is_focused {
-                if !result.preserve_view {
-                    reset_search_controls(ui, state);
-                }
                 ui.set_items_path(result.path.display().to_string().into());
                 ui.set_directory_loading(false);
             }
@@ -2654,58 +2704,188 @@ async fn open_default_with_privilege_fallback(path: PathBuf) -> Result<FileOpenS
     }
 }
 
-fn submit_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge, query: &str) {
-    let query = query.trim().to_string();
+fn open_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
+    let slot = focus_current_ui_pane_slot(ui, state);
+    open_search_for_slot(ui, state, bridge, slot);
+}
+
+fn open_search_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
     {
         let mut state = state.borrow_mut();
-        cancel_active_search(&mut state);
-        let pane = state.panes.focused_mut();
-        pane.search.query = query.clone();
-        pane.search.recursive = ui.get_recursive_search() && !query.is_empty();
-        pane.search_generation.next();
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
+        pane.search.bar_open = true;
+        pane.search.request_focus();
+        pane.view.invalidate_virtual_view();
     }
+    sync_pane_slot_ui(ui, state, slot);
+    sync_pane_view_for_slot(ui, state, bridge, slot);
+}
 
-    if query.is_empty() {
-        ui.set_search_loading(false);
-        refresh_directory(ui, state, bridge);
-        return;
-    }
+fn clear_focused_search(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+) -> bool {
+    let slot = { state.borrow().panes.focused_slot() };
+    clear_search_for_slot(ui, state, bridge, slot, true)
+}
 
-    if ui.get_recursive_search() {
-        start_recursive_search(ui, state, bridge, query);
-    } else {
-        ui.set_search_loading(false);
-        apply_filter(ui, state, bridge, false);
+fn close_search_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    let updated = {
+        let mut state = state.borrow_mut();
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
+        let updated = pane.search.bar_open;
+        pane.search.bar_open = false;
+        pane.view.invalidate_virtual_view();
+        updated
+    };
+    if updated {
+        sync_pane_slot_ui(ui, state, slot);
+        sync_pane_view_for_slot(ui, state, bridge, slot);
     }
 }
 
-fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
-    let (query, progress) = {
+fn submit_search_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+    query: &str,
+    recursive: bool,
+) {
+    let query = query.trim().to_string();
+    let restore_entries = {
         let mut state = state.borrow_mut();
-        cancel_active_search(&mut state);
-        state.panes.focused_mut().search_generation.next();
-        let query = state.panes.focused().search.query.clone();
-        let progress = state.panes.focused().search_progress;
-        let current_dir = state.panes.focused().current_dir.clone();
-        state.panes.focused_mut().search.recursive = false;
-        if let Some(entries) = state.cached_directory_entries(&current_dir) {
-            let pane = state.panes.focused_mut();
-            pane.set_entries_with_location_state(
-                Arc::clone(&entries.entries),
-                entries.has_locations,
-            );
-        }
-        (query, progress)
+        cancel_active_search_for_slot(&mut state, slot);
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
+        let restore_entries = query.is_empty()
+            && (pane.search.recursive || pane.search.visible_entries_have_locations);
+        pane.search.query = query.clone();
+        pane.search.recursive = recursive && !query.is_empty();
+        pane.search.loading = false;
+        pane.search.bar_open = true;
+        pane.search_generation.next();
+        pane.view.invalidate_virtual_view();
+        restore_entries.then(|| pane.current_dir.clone())
     };
 
-    ui.set_search_loading(false);
-    apply_filter(ui, state, bridge, true);
+    if let Some(current_dir) = restore_entries {
+        if !restore_cached_directory_entries_for_slot(state, slot, &current_dir) {
+            load_current_directory_for_slot(ui, state, bridge, slot, true);
+            return;
+        }
+    }
+
     if query.is_empty() {
-        set_status(ui, state, "Recursive search cancelled");
+        apply_filter_for_slot(ui, state, bridge, slot, true);
+    } else if recursive {
+        start_recursive_search_for_slot(ui, state, bridge, slot, query);
     } else {
-        set_status(
+        apply_filter_for_slot(ui, state, bridge, slot, false);
+    }
+}
+
+fn clear_search_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+    close_bar: bool,
+) -> bool {
+    let (was_visible, restore_entries, current_dir) = {
+        let mut state = state.borrow_mut();
+        cancel_active_search_for_slot(&mut state, slot);
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return false;
+        };
+        let was_visible = pane.search.panel_visible();
+        if !was_visible {
+            return false;
+        }
+        let restore_entries = pane.search.recursive || pane.search.visible_entries_have_locations;
+        let current_dir = pane.current_dir.clone();
+        pane.search.reset_all();
+        if !close_bar {
+            pane.search.bar_open = true;
+        }
+        pane.search_generation.next();
+        pane.view.invalidate_virtual_view();
+        (was_visible, restore_entries, current_dir)
+    };
+
+    if restore_entries && !restore_cached_directory_entries_for_slot(state, slot, &current_dir) {
+        load_current_directory_for_slot(ui, state, bridge, slot, true);
+        return was_visible;
+    }
+
+    apply_filter_for_slot(ui, state, bridge, slot, true);
+    was_visible
+}
+
+fn restore_cached_directory_entries_for_slot(
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    current_dir: &Path,
+) -> bool {
+    let Some(entries) = ({ state.borrow_mut().cached_directory_entries(current_dir) }) else {
+        return false;
+    };
+    let mut state = state.borrow_mut();
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return false;
+    };
+    pane.set_entries_with_location_state(Arc::clone(&entries.entries), entries.has_locations);
+    true
+}
+
+fn cancel_recursive_search_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    let (query, progress, current_dir) = {
+        let mut state = state.borrow_mut();
+        cancel_active_search_for_slot(&mut state, slot);
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
+        pane.search_generation.next();
+        pane.search.loading = false;
+        pane.search.recursive = false;
+        pane.view.invalidate_virtual_view();
+        (
+            pane.search.query.clone(),
+            pane.search_progress,
+            pane.current_dir.clone(),
+        )
+    };
+
+    restore_cached_directory_entries_for_slot(state, slot, &current_dir);
+    apply_filter_for_slot(ui, state, bridge, slot, true);
+    if query.is_empty() {
+        set_pane_status(ui, state, slot, "Recursive search cancelled");
+    } else {
+        set_pane_status(
             ui,
             state,
+            slot,
             &recursive_search_cancelled_status(
                 &query,
                 progress.directories_scanned,
@@ -2715,57 +2895,67 @@ fn cancel_recursive_search(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge
     }
 }
 
-fn update_search_filters(
+fn update_search_filters_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
+    slot: i32,
     kind: i32,
     modified: i32,
     size: i32,
 ) {
     {
         let mut state = state.borrow_mut();
-        set_search_filters(&mut state, kind, modified, size);
+        set_search_filters_for_slot(&mut state, slot, kind, modified, size);
+        if let Some(pane) = state.panes.pane_mut_for_slot(slot) {
+            pane.search.bar_open = true;
+        }
     }
 
-    apply_filter(ui, state, bridge, true);
-    if ui.get_search_loading() {
-        let query = state.borrow().panes.focused().search.query.clone();
-        set_status(ui, state, &recursive_search_status(&query));
+    apply_filter_for_slot(ui, state, bridge, slot, true);
+    let loading_query = {
+        let state = state.borrow();
+        state
+            .panes
+            .pane_for_slot(slot)
+            .filter(|pane| pane.search.loading)
+            .map(|pane| pane.search.query.clone())
+    };
+    if let Some(query) = loading_query {
+        set_pane_status(ui, state, slot, &recursive_search_status(&query));
     }
 }
 
-fn start_recursive_search(
+fn start_recursive_search_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
+    slot: i32,
     query: String,
 ) {
-    let (root, generation, cancel) = {
+    let (pane_id, root, generation, cancel) = {
         let mut state = state.borrow_mut();
-        cancel_active_search(&mut state);
-        let generation = state.panes.focused_mut().search_generation.next();
+        cancel_active_search_for_slot(&mut state, slot);
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
+        let generation = pane.search_generation.next();
         let cancel = Arc::new(AtomicBool::new(false));
-        let pane = state.panes.focused_mut();
         pane.search_cancel = Some(cancel.clone());
         pane.search_progress = search::SearchProgress::default();
-        (
-            state.panes.focused().current_dir.clone(),
-            generation,
-            cancel,
-        )
+        pane.search.loading = true;
+        pane.search.recursive = true;
+        pane.search.visible_entry_indices = Some(Vec::new());
+        pane.search.visible_entries_have_locations = false;
+        pane.search.visible_location_groups = None;
+        pane.selection.clear();
+        pane.view.invalidate_virtual_view();
+        (pane.id, pane.current_dir.clone(), generation, cancel)
     };
 
-    ui.set_search_loading(true);
-    set_status(ui, state, &recursive_search_status(&query));
-    {
-        let mut state = state.borrow_mut();
-        let pane = state.panes.focused_mut();
-        pane.search.visible_entry_indices = None;
-        pane.view.invalidate_virtual_view();
-    }
-    ui.set_entry_count(0);
-    update_selection_ui(ui, state, &[]);
+    set_pane_status(ui, state, slot, &recursive_search_status(&query));
+    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, Some(0), true, true);
+    update_selection_ui_for_slot(ui, state, slot, &[]);
 
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
@@ -2780,6 +2970,7 @@ fn start_recursive_search(
                     progress_tx.clone(),
                     progress_ui.clone(),
                     AsyncEvent::RecursiveSearchProgress(RecursiveSearchProgress {
+                        pane_id,
                         generation,
                         query: progress_query.clone(),
                         root: progress_root.clone(),
@@ -2793,6 +2984,7 @@ fn start_recursive_search(
             async_tx,
             notify_ui,
             AsyncEvent::RecursiveSearchFinished(RecursiveSearchResult {
+                pane_id,
                 generation,
                 query,
                 root,
@@ -2807,25 +2999,29 @@ fn apply_recursive_search_progress(
     state: &Rc<RefCell<AppState>>,
     progress: RecursiveSearchProgress,
 ) {
-    {
-        let state = state.borrow();
-        let stale = !state
-            .panes
-            .focused()
-            .search_generation
-            .is_current(progress.generation)
-            || state.panes.focused().current_dir != progress.root
-            || state.panes.focused().search.query != progress.query
-            || !ui.get_search_loading();
+    let slot = {
+        let mut state = state.borrow_mut();
+        let Some(slot) = state.panes.slot_for_id(progress.pane_id) else {
+            return;
+        };
+        let Some(pane) = state.panes.pane_mut_by_id(progress.pane_id) else {
+            return;
+        };
+        let stale = !pane.search_generation.is_current(progress.generation)
+            || pane.current_dir != progress.root
+            || pane.search.query != progress.query
+            || !pane.search.loading;
         if stale {
             return;
         }
-    }
-    state.borrow_mut().panes.focused_mut().search_progress = progress.progress;
+        pane.search_progress = progress.progress;
+        slot
+    };
 
-    set_status(
+    set_pane_status(
         ui,
         state,
+        slot,
         &recursive_search_progress_status(
             &progress.query,
             progress.progress.directories_scanned,
@@ -2840,45 +3036,61 @@ fn apply_recursive_search_result(
     bridge: &AsyncBridge,
     result: RecursiveSearchResult,
 ) {
-    {
+    let Some(slot) = ({
         let mut state = state.borrow_mut();
-        let stale = !state
-            .panes
-            .focused()
-            .search_generation
-            .is_current(result.generation)
-            || state.panes.focused().current_dir != result.root
-            || state.panes.focused().search.query != result.query;
+        let Some(slot) = state.panes.slot_for_id(result.pane_id) else {
+            return;
+        };
+        let Some(pane) = state.panes.pane_mut_by_id(result.pane_id) else {
+            return;
+        };
+        let stale = !pane.search_generation.is_current(result.generation)
+            || pane.current_dir != result.root
+            || pane.search.query != result.query;
         if stale {
             return;
         }
-        state.panes.focused_mut().search_cancel = None;
-    }
-    ui.set_search_loading(false);
+        pane.search_cancel = None;
+        pane.search.loading = false;
+        pane.view.invalidate_virtual_view();
+        Some(slot)
+    }) else {
+        return;
+    };
 
     match result.result {
         Ok(entries) => {
             let total = entries.len();
             {
                 let mut state = state.borrow_mut();
-                let pane = state.panes.focused_mut();
+                let Some(pane) = state.panes.pane_mut_by_id(result.pane_id) else {
+                    return;
+                };
                 pane.set_entries_with_location_state(
                     Arc::clone(&entries.entries),
                     entries.has_locations,
                 );
             }
-            apply_filter(ui, state, bridge, true);
-            let visible = filtered_entry_count(&state.borrow());
-            set_status(ui, state, &recursive_search_finished_status(visible, total));
-        }
-        Err(err) if err.kind() == io::ErrorKind::Interrupted => {
-            set_status(
+            apply_filter_for_slot(ui, state, bridge, slot, true);
+            let visible = filtered_entry_count_for_slot(&state.borrow(), slot);
+            set_pane_status(
                 ui,
                 state,
+                slot,
+                &recursive_search_finished_status(visible, total),
+            );
+        }
+        Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+            set_pane_status(
+                ui,
+                state,
+                slot,
                 &format!("Recursive search for '{}' cancelled", result.query),
             );
         }
-        Err(err) => set_status(ui, state, &format!("Recursive search failed: {err}")),
+        Err(err) => {
+            set_pane_status(ui, state, slot, &format!("Recursive search failed: {err}"));
+        }
     }
 }
 
@@ -3318,26 +3530,6 @@ fn pane_slot_width(ui: &AppWindow, main_width: f32, slot: i32) -> f32 {
     inactive_main_pane_width(main_width, true, ui.get_split_pane_ratio())
 }
 
-fn sync_virtual_entries_with_count(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    schedule_thumbnails: bool,
-    visible_count_override: Option<usize>,
-) {
-    let slot = state.borrow().panes.focused_slot();
-    sync_virtual_entries_for_slot_with_count(
-        ui,
-        state,
-        bridge,
-        slot,
-        schedule_thumbnails,
-        visible_count_override,
-        false,
-        false,
-    );
-}
-
 fn sync_virtual_entries_for_slot_with_count(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -3355,14 +3547,16 @@ fn sync_virtual_entries_for_slot_with_count(
     let viewport_width = pane_slot_width(ui, main_width, slot);
     let (search_panel_visible, text_line_count) = {
         let state_ref = state.borrow();
-        (
-            state_ref.panes.focused_slot() == slot,
-            state_ref
-                .panes
-                .pane_for_slot(slot)
-                .map(|pane| pane.item_view_text_line_count())
-                .unwrap_or(1),
-        )
+        state_ref
+            .panes
+            .pane_for_slot(slot)
+            .map(|pane| {
+                (
+                    pane.search.panel_visible(),
+                    pane.item_view_text_line_count(),
+                )
+            })
+            .unwrap_or((false, 1))
     };
     let render_metrics =
         ItemViewRenderMetrics::from_zoom_level_with_text_line_count(zoom_level, text_line_count);
@@ -3771,42 +3965,56 @@ fn set_pane_virtual_entries(
     }
 }
 
-fn apply_filter(
+fn apply_filter_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
+    slot: i32,
     preserve_selection: bool,
 ) {
     let (query, filters_active, total, summary) = {
         let mut state_ref = state.borrow_mut();
-        let summary = rebuild_visible_entry_index(&mut state_ref, preserve_selection);
-        state_ref.panes.focused_mut().view.invalidate_virtual_view();
-        (
-            state_ref.panes.focused().search.query.to_ascii_lowercase(),
-            search_filters_active(&state_ref),
-            state_ref.panes.focused().entries.len(),
-            summary,
-        )
+        let summary =
+            rebuild_visible_entry_index_for_slot(&mut state_ref, slot, preserve_selection);
+        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
+        pane.view.invalidate_virtual_view();
+        let query = pane.search.query.to_ascii_lowercase();
+        let filters_active = pane.search.filters_active();
+        let total = pane.entries.len();
+        (query, filters_active, total, summary)
     };
-    sync_virtual_entries_with_count(ui, state, bridge, true, Some(summary.count));
+    sync_virtual_entries_for_slot_with_count(
+        ui,
+        state,
+        bridge,
+        slot,
+        true,
+        Some(summary.count),
+        false,
+        false,
+    );
     if preserve_selection {
         let empty_paths = Vec::new();
         let visible_paths = summary.visible_paths.as_ref().unwrap_or(&empty_paths);
-        retain_visible_selection(ui, state, visible_paths);
+        retain_visible_selection_for_slot(ui, state, slot, visible_paths);
     } else {
-        clear_active_selection(ui, state);
+        clear_selection_for_slot(ui, state, slot);
     }
 
     if query.is_empty() && !filters_active {
-        set_focused_pane_status(
+        set_pane_status(
             ui,
             state,
+            slot,
             &format!("{} folders, {} files", summary.folders, summary.files),
         );
     } else {
-        set_focused_pane_status(
+        set_pane_status(
             ui,
             state,
+            slot,
             &format!(
                 "{} of {total} items ({} folders, {} files)",
                 summary.count, summary.folders, summary.files
@@ -3815,15 +4023,17 @@ fn apply_filter(
     }
 }
 
-fn retain_visible_selection(
+fn retain_visible_selection_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
+    slot: i32,
     visible_paths: &[String],
 ) {
-    let (slot, selected_paths) = {
+    let selected_paths = {
         let mut state = state.borrow_mut();
-        let slot = state.panes.focused_slot();
-        let pane = state.panes.focused_mut();
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return;
+        };
         pane.selection.paths = retained_visible_paths(&pane.selection.paths, visible_paths);
         if pane
             .selection
@@ -3833,7 +4043,7 @@ fn retain_visible_selection(
         {
             pane.selection.anchor = pane.selection.paths.last().cloned();
         }
-        (slot, pane.selection.paths.clone())
+        pane.selection.paths.clone()
     };
     update_selection_ui_for_slot(ui, state, slot, &selected_paths);
 }
@@ -4114,14 +4324,6 @@ fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     clear_selection_for_slot(ui, state, slot);
 }
 
-fn clear_active_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let mut state_mut = state.borrow_mut();
-    let slot = state_mut.panes.focused_slot();
-    state_mut.panes.focused_mut().selection.clear();
-    drop(state_mut);
-    update_selection_ui_for_slot(ui, state, slot, &[]);
-}
-
 fn schedule_visible_thumbnails(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -4226,11 +4428,6 @@ fn thumbnail_size_px(ui: &AppWindow) -> u32 {
         3 => 128,
         _ => 160,
     }
-}
-
-fn update_selection_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, selected_paths: &[String]) {
-    let slot = state.borrow().panes.focused_slot();
-    update_selection_ui_for_slot(ui, state, slot, selected_paths);
 }
 
 fn selection_status_text(selected_paths: &[String]) -> SharedString {
@@ -4821,7 +5018,8 @@ fn select_chooser_filter(
         state_ref.chooser_filter_index = filter_index;
     }
     sync_chooser_filter_ui(ui, state);
-    apply_filter(ui, state, bridge, true);
+    let slot = { state.borrow().panes.focused_slot() };
+    apply_filter_for_slot(ui, state, bridge, slot, true);
 }
 
 fn select_chooser_choice(
@@ -4853,11 +5051,6 @@ fn output_chooser_paths_and_exit(paths: Vec<PathBuf>, metadata: ChooserOutputMet
         }
     }
     std::process::exit(0);
-}
-
-fn set_focused_pane_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, message: &str) {
-    let slot = { state.borrow().panes.focused_slot() };
-    set_pane_status(ui, state, slot, message);
 }
 
 fn set_pane_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32, message: &str) {
@@ -4988,8 +5181,8 @@ mod tests {
     use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
         filtered_entries_range, filtered_entry_at, filtered_entry_paths, filtered_entry_summary,
-        rebuild_visible_entry_index, selection_range_paths, selection_range_paths_filtered,
-        selection_rect_paths, selection_rect_paths_filtered,
+        selection_range_paths, selection_range_paths_filtered, selection_rect_paths,
+        selection_rect_paths_filtered,
     };
 
     #[test]
@@ -5084,7 +5277,7 @@ mod tests {
         );
         state.panes.focused_mut().search.query = "item".to_string();
 
-        assert_eq!(filtered_entry_count(&state), 8);
+        assert_eq!(filtered_entry_count_for_slot(&state, 0), 8);
         assert_eq!(
             filtered_entries_range(&state, 2..5)
                 .into_iter()
@@ -5151,7 +5344,7 @@ mod tests {
             test_entry("beta", "/tmp/beta"),
         ]);
 
-        let summary = rebuild_visible_entry_index(&mut state, true);
+        let summary = rebuild_visible_entry_index_for_slot(&mut state, 0, true);
 
         assert_eq!(summary.count, 2);
         assert!(state.panes.focused().search.visible_entry_indices.is_none());
@@ -5175,7 +5368,7 @@ mod tests {
         ]);
         state.panes.focused_mut().search.query = ".txt".to_string();
 
-        let summary = rebuild_visible_entry_index(&mut state, false);
+        let summary = rebuild_visible_entry_index_for_slot(&mut state, 0, false);
 
         assert_eq!(summary.count, 3);
         assert_eq!(
@@ -5187,7 +5380,7 @@ mod tests {
                 .as_deref(),
             Some(&[0, 2, 3][..])
         );
-        assert_eq!(filtered_entry_count(&state), 3);
+        assert_eq!(filtered_entry_count_for_slot(&state, 0), 3);
         assert_eq!(
             filtered_entry_at(&state, 1)
                 .map(|entry| entry.path.to_string())
@@ -5215,7 +5408,7 @@ mod tests {
             .set_file_entries(vec![hidden, visible]);
         state.panes.focused_mut().search.query = ".txt".to_string();
 
-        let summary = rebuild_visible_entry_index(&mut state, false);
+        let summary = rebuild_visible_entry_index_for_slot(&mut state, 0, false);
 
         assert_eq!(summary.count, 1);
         assert!(!summary.has_locations);
@@ -5244,7 +5437,7 @@ mod tests {
             .set_file_entries(vec![old_file, visible_file]);
         state.panes.focused_mut().search.modified_filter = 1;
 
-        let summary = rebuild_visible_entry_index(&mut state, false);
+        let summary = rebuild_visible_entry_index_for_slot(&mut state, 0, false);
 
         assert_eq!(summary.count, 1);
         assert_eq!(
@@ -5269,7 +5462,7 @@ mod tests {
             .panes
             .focused_mut()
             .set_file_entries(vec![first, second, third]);
-        rebuild_visible_entry_index(&mut state, false);
+        rebuild_visible_entry_index_for_slot(&mut state, 0, false);
 
         assert_eq!(
             filtered_entries_range(&state, 1..3)

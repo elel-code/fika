@@ -471,6 +471,9 @@ impl PaneSelection {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PaneSearch {
+    pub(crate) bar_open: bool,
+    pub(crate) loading: bool,
+    pub(crate) focus_request: i32,
     pub(crate) query: String,
     pub(crate) recursive: bool,
     pub(crate) kind_filter: i32,
@@ -482,7 +485,22 @@ pub(crate) struct PaneSearch {
 }
 
 impl PaneSearch {
+    pub(crate) fn filters_active(&self) -> bool {
+        self.kind_filter != 0 || self.modified_filter != 0 || self.size_filter != 0
+    }
+
+    pub(crate) fn panel_visible(&self) -> bool {
+        self.bar_open || self.loading || !self.query.is_empty() || self.filters_active()
+    }
+
+    pub(crate) fn request_focus(&mut self) {
+        self.focus_request = self.focus_request.saturating_add(1);
+    }
+
     pub(crate) fn reset_all(&mut self) {
+        self.bar_open = false;
+        self.loading = false;
+        self.focus_request = 0;
         self.query.clear();
         self.recursive = false;
         self.kind_filter = 0;
@@ -969,6 +987,9 @@ mod tests {
     #[test]
     fn pane_search_reset_all_clears_query_filters_and_visible_indices() {
         let mut search = PaneSearch {
+            bar_open: true,
+            loading: true,
+            focus_request: 3,
             query: "report".to_string(),
             recursive: false,
             kind_filter: 1,
@@ -981,6 +1002,8 @@ mod tests {
 
         search.reset_all();
 
+        assert!(!search.bar_open);
+        assert!(!search.loading);
         assert_eq!(search.query, "");
         assert_eq!(search.kind_filter, 0);
         assert_eq!(search.modified_filter, 0);
@@ -1240,6 +1263,7 @@ mod tests {
             visible_entry_indices: Some(vec![0]),
             visible_entries_have_locations: true,
             visible_location_groups: None,
+            ..Default::default()
         };
         panes.focused_mut().selection.paths = vec!["/tmp/active/one.txt".to_string()];
         panes.focused_mut().selection.anchor = Some("/tmp/active/one.txt".to_string());

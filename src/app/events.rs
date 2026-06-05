@@ -46,6 +46,7 @@ pub(crate) struct ExternalEditResult {
 
 #[derive(Debug)]
 pub(crate) struct RecursiveSearchResult {
+    pub(crate) pane_id: u64,
     pub(crate) generation: u64,
     pub(crate) query: String,
     pub(crate) root: PathBuf,
@@ -54,6 +55,7 @@ pub(crate) struct RecursiveSearchResult {
 
 #[derive(Debug)]
 pub(crate) struct RecursiveSearchProgress {
+    pub(crate) pane_id: u64,
     pub(crate) generation: u64,
     pub(crate) query: String,
     pub(crate) root: PathBuf,

@@ -1,30 +1,37 @@
 use crate::app::state::AppState;
 use std::sync::atomic::Ordering;
 
-pub(crate) fn cancel_active_search(state: &mut AppState) {
-    if let Some(cancel) = state.panes.focused_mut().search_cancel.take() {
+pub(crate) fn cancel_active_search_for_slot(state: &mut AppState, slot: i32) {
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return;
+    };
+    if let Some(cancel) = pane.search_cancel.take() {
         cancel.store(true, Ordering::Relaxed);
     }
 }
 
 #[cfg(test)]
-pub(crate) fn reset_search_state(state: &mut AppState) {
-    let pane = state.panes.focused_mut();
+pub(crate) fn reset_search_state_for_slot(state: &mut AppState, slot: i32) {
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return;
+    };
     pane.search.reset_all();
     pane.view.invalidate_virtual_view();
 }
 
-pub(crate) fn set_search_filters(state: &mut AppState, kind: i32, modified: i32, size: i32) {
-    let pane = state.panes.focused_mut();
+pub(crate) fn set_search_filters_for_slot(
+    state: &mut AppState,
+    slot: i32,
+    kind: i32,
+    modified: i32,
+    size: i32,
+) {
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return;
+    };
     pane.search.kind_filter = kind.clamp(0, 3);
     pane.search.modified_filter = modified.clamp(0, 3);
     pane.search.size_filter = size.clamp(0, 3);
-}
-
-pub(crate) fn search_filters_active(state: &AppState) -> bool {
-    state.panes.focused().search.kind_filter != 0
-        || state.panes.focused().search.modified_filter != 0
-        || state.panes.focused().search.size_filter != 0
 }
 
 pub(crate) fn recursive_search_status(query: &str) -> String {
@@ -79,30 +86,30 @@ mod tests {
     fn search_filters_are_clamped_and_reset() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
 
-        set_search_filters(&mut state, -1, 2, 99);
+        set_search_filters_for_slot(&mut state, 0, -1, 2, 99);
 
         assert_eq!(state.panes.focused().search.kind_filter, 0);
         assert_eq!(state.panes.focused().search.modified_filter, 2);
         assert_eq!(state.panes.focused().search.size_filter, 3);
-        assert!(search_filters_active(&state));
+        assert!(state.panes.focused().search.filters_active());
 
-        set_search_filters(&mut state, 0, 0, 0);
+        set_search_filters_for_slot(&mut state, 0, 0, 0, 0);
 
         assert_eq!(state.panes.focused().search.kind_filter, 0);
         assert_eq!(state.panes.focused().search.modified_filter, 0);
         assert_eq!(state.panes.focused().search.size_filter, 0);
-        assert!(!search_filters_active(&state));
+        assert!(!state.panes.focused().search.filters_active());
     }
 
     #[test]
     fn reset_search_state_clears_query_and_filters() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         state.panes.focused_mut().search.query = "report".to_string();
-        set_search_filters(&mut state, 1, 2, 3);
+        set_search_filters_for_slot(&mut state, 0, 1, 2, 3);
         state.panes.focused_mut().search.visible_entry_indices = Some(vec![0, 2, 4]);
         state.panes.focused_mut().view.virtual_view.range = 1..3;
 
-        reset_search_state(&mut state);
+        reset_search_state_for_slot(&mut state, 0);
 
         assert_eq!(state.panes.focused().search.query, "");
         assert_eq!(state.panes.focused().search.kind_filter, 0);
@@ -118,7 +125,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         state.panes.focused_mut().search_cancel = Some(cancel.clone());
 
-        cancel_active_search(&mut state);
+        cancel_active_search_for_slot(&mut state, 0);
 
         assert!(cancel.load(Ordering::Relaxed));
         assert!(state.panes.focused().search_cancel.is_none());

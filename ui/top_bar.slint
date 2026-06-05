@@ -2,27 +2,13 @@ import { ToolButton } from "widgets.slint";
 
 export component TopBar inherits Rectangle {
     in property <bool> dark;
-    in property <bool> search-active;
     in property <bool> split-view-open;
-    in-out property <string> search-query;
-    in-out property <bool> search-focused;
-    callback search_requested();
-    callback search_submitted(string);
-    callback search_close_requested();
     callback toggle_split_view();
     callback dark_toggled();
 
     height: 56px;
     background: transparent;
     border-width: 0px;
-
-    private property <color> field-background: root.dark ? #151b20 : #ffffff;
-    private property <color> field-focus-background: root.dark ? #12181d : #ffffff;
-    private property <color> field-border: root.dark ? #2f3841 : #d8e1ea;
-    private property <color> field-focus-border: root.dark ? #58b4d8 : #2f8dbc;
-    private property <color> field-text-color: root.dark ? #eef3f7 : #24303b;
-    private property <color> muted-text-color: root.dark ? #8b97a3 : #667381;
-    private property <color> close-hover-color: root.dark ? #20272e : #edf1f4;
 
     HorizontalLayout {
         padding-left: 14px;
@@ -35,94 +21,11 @@ export component TopBar inherits Rectangle {
             horizontal-stretch: 1;
         }
 
-        if (!root.search-active): ToolButton {
+        ToolButton {
             label: "||";
             dark: root.dark;
             selected: root.split-view-open;
             clicked => { root.toggle_split_view(); }
-        }
-
-        if (!root.search-active): ToolButton {
-            label: "S";
-            dark: root.dark;
-            clicked => { root.search_requested(); }
-        }
-
-        if (root.search-active): Rectangle {
-            min-width: 180px;
-            preferred-width: 320px;
-            max-width: 420px;
-            height: 32px;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: root.search-focused ? root.field-focus-border : root.field-border;
-            background: root.search-focused ? root.field-focus-background : root.field-background;
-
-            Text {
-                x: 11px;
-                width: 18px;
-                height: parent.height;
-                text: "S";
-                color: root.muted-text-color;
-                font-size: 13px;
-                font-weight: 800;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            Text {
-                visible: root.search-query == "";
-                x: 36px;
-                width: max(1px, parent.width - 70px);
-                height: parent.height;
-                text: "Search";
-                color: root.muted-text-color;
-                font-size: 14px;
-                overflow: elide;
-                vertical-alignment: center;
-            }
-
-            TextInput {
-                x: 36px;
-                width: max(1px, parent.width - 70px);
-                height: parent.height;
-                text <=> root.search-query;
-                single-line: true;
-                font-size: 14px;
-                vertical-alignment: center;
-                color: root.field-text-color;
-                selection-background-color: root.dark ? #58b4d8 : #2f8dbc;
-                selection-foreground-color: root.dark ? #0f172a : #ffffff;
-                accepted => { root.search_submitted(self.text); }
-                changed has-focus => {
-                    root.search-focused = self.has-focus;
-                }
-            }
-
-            close-search-touch := TouchArea {
-                x: parent.width - 28px;
-                width: 28px;
-                height: parent.height;
-                clicked => { root.search_close_requested(); }
-            }
-
-            Rectangle {
-                x: parent.width - 25px;
-                y: (parent.height - self.height) / 2;
-                width: 21px;
-                height: 21px;
-                border-radius: 6px;
-                background: close-search-touch.has-hover ? root.close-hover-color : transparent;
-
-                Text {
-                    text: "X";
-                    color: root.dark ? #dce3ea : #526071;
-                    font-size: 12px;
-                    font-weight: 800;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
         }
 
         ToolButton {
@@ -144,6 +47,7 @@ export component PathBar inherits Rectangle {
     callback focus_requested();
     callback go_back();
     callback go_forward();
+    callback search_requested();
     callback path_submitted(string);
     callback path_text_changed(string);
     callback path_focus_changed(bool);
@@ -243,6 +147,21 @@ export component PathBar inherits Rectangle {
                         root.editor-text = root.current-path;
                         root.path_text_changed(root.current-path);
                     }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 0px;
+            spacing: 0px;
+
+            ToolButton {
+                label: "S";
+                dark: root.dark;
+                clicked => {
+                    root.focus_requested();
+                    root.search_requested();
                 }
             }
         }

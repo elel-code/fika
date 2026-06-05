@@ -72,18 +72,7 @@ impl MainItemViewLayout {
             window_size.width,
             window_size.height,
         );
-        let search_panel_height = if search_panel_visible {
-            search_panel_height(
-                ui.get_search_bar_open(),
-                ui.get_search_query().as_str(),
-                ui.get_search_kind_filter(),
-                ui.get_search_modified_filter(),
-                ui.get_search_size_filter(),
-                pane_width,
-            )
-        } else {
-            0.0
-        };
+        let search_panel_height = search_panel_height(search_panel_visible, pane_width);
         let viewport_height = (pane.bottom
             - pane.top
             - PATH_BAR_HEIGHT
@@ -287,17 +276,8 @@ fn compact_item_view_content_width(
     .max(1.0)
 }
 
-pub(crate) fn search_panel_height(
-    search_bar_open: bool,
-    search_query: &str,
-    search_kind_filter: i32,
-    search_modified_filter: i32,
-    search_size_filter: i32,
-    main_pane_width: f32,
-) -> f32 {
-    let filters_active =
-        search_kind_filter != 0 || search_modified_filter != 0 || search_size_filter != 0;
-    if search_bar_open || !search_query.is_empty() || filters_active {
+pub(crate) fn search_panel_height(search_panel_visible: bool, main_pane_width: f32) -> f32 {
+    if search_panel_visible {
         if main_pane_width < SEARCH_PANEL_NARROW_WIDTH {
             SEARCH_PANEL_NARROW_HEIGHT
         } else {
@@ -1756,7 +1736,7 @@ mod tests {
                 && content_row_index < main_pane_index
                 && main_pane_index < pane_shells_index
                 && app.contains("main-pane := Rectangle {\n            horizontal-stretch: 1;"),
-            "global search/tools should live in the shell header while address/navigation stay inside the right main pane"
+            "global tools should live in the shell header while address/search/navigation stay inside each pane"
         );
         assert!(
             !app.contains("SidebarSection { label: \"Remote\""),
@@ -1801,7 +1781,7 @@ mod tests {
             "pane content height should subtract the pane-local path bar, search filters, and status bar inside the reusable file pane"
         );
         assert!(
-            app.contains("private property <length> search-panel-height: root.search-panel-visible ? (root.pane-slot-0-width < 760px ? 78px : 44px) : 0px;"),
+            app.contains("search-panel-height: root.pane.search_panel_visible ? (root.width < 760px ? 78px : 44px) : 0px;"),
             "search filters should size against the rendered pane slot width instead of squeezing another split pane"
         );
         assert!(
@@ -1882,8 +1862,8 @@ mod tests {
             "TopBar and PathBar input text should remain readable in light theme"
         );
         assert!(
-            bars.matches("height: 32px;").count() >= 2,
-            "TopBar search and PathBar address inputs should keep the lighter COSMIC-style 32px height"
+            path_bar_component.contains("height: 32px;") && search_panel.contains("height: 32px;"),
+            "PathBar address input and SearchPanel search input should keep the lighter COSMIC-style 32px height"
         );
         assert!(
             bars.contains("min-width: 96px;"),
@@ -1902,18 +1882,26 @@ mod tests {
             "PathBar TextInput focus should mark pane-local path focus without stealing keyboard focus from the address editor"
         );
         assert!(
-            bars.contains("min-width: 180px;")
-                && bars.contains("preferred-width: 320px;")
-                && bars.contains("max-width: 420px;"),
-            "TopBar active search field should live in the global toolbar with bounded flexible width"
+            path_bar_component.contains("callback search_requested();")
+                && path_bar_component.contains("label: \"S\";")
+                && path_bar_component.contains("root.search_requested();"),
+            "PathBar should expose a pane-local search button next to the address field"
         );
         assert!(
-            bars.contains("width: max(1px, parent.width - 70px);"),
-            "TopBar search input text should clamp narrow available widths instead of overflowing"
+            search_panel.contains("min-width: 190px;")
+                && search_panel.contains("preferred-width: 280px;")
+                && search_panel.contains("max-width: 420px;"),
+            "SearchPanel input should keep bounded flexible width inside each pane"
         );
         assert!(
-            !bars.contains("\n                width: 240px;"),
-            "TopBar active search field must not return to a fixed width that can squeeze the main pane"
+            search_panel.contains("width: max(1px, parent.width - 48px);"),
+            "SearchPanel input text should clamp narrow available widths instead of overflowing"
+        );
+        assert!(
+            !top_bar_component.contains("search_requested")
+                && !top_bar_component.contains("SearchPanel")
+                && !top_bar_component.contains("search-input"),
+            "TopBar should not own search controls after pane-local search moved into FilePane"
         );
         assert!(
             !bars.contains("root.width - root.sidebar-width-px"),
@@ -2190,6 +2178,8 @@ mod tests {
                 && file_pane.contains("go_back => { root.go_back(root.pane-slot); }")
                 && file_pane.contains("go_forward => { root.go_forward(root.pane-slot); }")
                 && file_pane
+                    .contains("search_requested => { root.search_requested(root.pane-slot); }")
+                && file_pane
                     .contains("path_submitted(path) => { root.path_submitted(root.pane-slot, path); }")
                 && file_pane.contains("make_drag_data_at(x, y) => {\n                    root.make_drag_data_at(root.pane-slot, x, y)\n                }")
                 && file_pane.contains("item_pressed(x, y, toggle, range) => {\n                    root.item_view_item_pressed(root.pane-slot, x, y, toggle, range)\n                }")
@@ -2212,9 +2202,10 @@ mod tests {
             "path_submitted(slot, path) => { PaneRouting.path-submitted(slot, path); }",
             "go_back(slot) => { PaneRouting.go-back(slot); }",
             "go_forward(slot) => { PaneRouting.go-forward(slot); }",
-            "search_submitted(query) => { PaneRouting.search-submitted(query); }",
-            "cancel_search => { PaneRouting.cancel-search(); }",
-            "search_close_requested => { PaneRouting.search-close-requested(); }",
+            "search_requested(slot) => { PaneRouting.search-open(slot); }",
+            "search_submitted(slot, query, recursive) => { PaneRouting.search-submitted(slot, query, recursive); }",
+            "cancel_search(slot) => { PaneRouting.cancel-search(slot); }",
+            "search_close_requested(slot) => { PaneRouting.search-close-requested(slot); }",
             "view_changed(slot) => { PaneRouting.view-changed(slot); }",
             "item_view_item_pressed(slot, x, y, toggle, range) => {\n        PaneRouting.item-view-item-pressed(slot, x, y, toggle, range)\n    }",
             "item_view_item_activated(slot, x, y) => {\n        PaneRouting.item-view-item-activated(slot, x, y);\n    }",
@@ -3037,13 +3028,9 @@ mod tests {
 
     #[test]
     fn search_panel_height_matches_slint_visibility_rules() {
-        assert_eq!(search_panel_height(false, "", 0, 0, 0, 900.0), 0.0);
-        assert_eq!(search_panel_height(true, "", 0, 0, 0, 900.0), 44.0);
-        assert_eq!(search_panel_height(true, "", 0, 0, 0, 700.0), 78.0);
-        assert_eq!(search_panel_height(false, "png", 0, 0, 0, 900.0), 44.0);
-        assert_eq!(search_panel_height(false, "", 1, 0, 0, 900.0), 44.0);
-        assert_eq!(search_panel_height(false, "", 0, 2, 0, 900.0), 44.0);
-        assert_eq!(search_panel_height(false, "", 0, 0, 3, 900.0), 44.0);
+        assert_eq!(search_panel_height(false, 900.0), 0.0);
+        assert_eq!(search_panel_height(true, 900.0), 44.0);
+        assert_eq!(search_panel_height(true, 700.0), 78.0);
     }
 
     #[test]
