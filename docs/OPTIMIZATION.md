@@ -71,7 +71,7 @@ Rectangle viewport shell (clip: true)
 | Rust item-view render plan | `item_view_renderer.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 width/height、media/text rect、尺寸/字体 token 不再由 Slint 每项公式或 layout 容器计算；local x/y 由 `for item[index]` 复用层计算，避免进入 `ItemViewEntry` row data |
 | Sparse metadata overlay | `item_view.rs` / `model_update.rs` / `models.slint` | 基础 `ItemViewEntry` 不再携带 group/location 字符串和 metadata 几何；show-location 只发布 Rust 预投影的非空 `ItemViewMetadataEntry` rows |
 | Coalesced settings save | `settings_save.rs` / `settings.rs` | zoom/sidebar/split ratio 等交互触发的 `persist_ui_state()` 只抓取最新设置快照并延迟后台写入；窗口关闭和目录导航保留同步 latest 保存，避免连续 zoom 时 UI 线程同步写配置文件 |
-| Coalesced icon zoom layout | `app.slint` / `main.rs` | `icon_zoom_level` 变化走专用 latest-only timer 合并可见 pane layout 刷新；窗口、split、sidebar 等普通 layout 变化仍即时同步，避免末尾空白回归 |
+| Coalesced icon zoom thumbnails | `app.slint` / `main.rs` | `icon_zoom_level` 变化立即刷新可见 pane layout，但不立刻调度缩略图；300ms 后按当前可见切片 latest-only 调度预览，贴近 Dolphin 的 icon-size updater 分层 |
 
 ---
 
@@ -184,24 +184,24 @@ changed viewport-x => {
 
 ---
 
-### P2 — Dolphin-style zoom layout 合并
+### P2 — Dolphin-style zoom thumbnail 合并
 
-**问题**：`zoom-main-in/out()` 修改 `icon_zoom_level` 后，旧路径通过 `changed icon_zoom_level => pane_layout_changed()` 立即重建所有可见 pane 的 virtual slice。连续 Ctrl+wheel zoom 会把多次 layout、fallback media、thumbnail scheduling 和 Slint model 更新叠在同一段交互里。
+**问题**：`zoom-main-in/out()` 修改 `icon_zoom_level` 后，旧路径通过 `changed icon_zoom_level => pane_layout_changed()` 立即重建所有可见 pane 的 virtual slice，并在同一路径里调度缩略图。连续 Ctrl+wheel zoom 会把多次 layout、fallback media、thumbnail scheduling 和 Slint model 更新叠在同一段交互里。
 
-**Dolphin 对照**：Dolphin 的 `KItemListViewLayouter::updateVisibleIndexes()` 对滚动可见首尾 index 走二分查找并保持滚动路径即时；`KFileItemListView::triggerIconSizeUpdate()` 则对 icon-size 引发的昂贵 role/preview 更新使用 `LongInterval` timer 合并。Fika 采用同样的分层：滚动/resize 不延迟，zoom 的可见 layout 刷新单独合并。
+**Dolphin 对照**：Dolphin 的 `KItemListView::setStyleOption()` 会立即更新可见 widget 的 style、size hint cache 和 layouter；`KFileItemListView::triggerIconSizeUpdate()` 只对 icon-size 引发的昂贵 role/preview 更新使用 `LongInterval` timer 合并。Fika 采用同样的分层：滚动/resize/zoom layout 不延迟，只把 zoom 后的缩略图调度延后。
 
 **涉及代码**：
 - `ui/app.slint` — `changed icon_zoom_level => icon_zoom_layout_changed()`
 - `src/main.rs` — `PaneLayoutSyncScheduler`
 
 **实际实现**（✅ 已完成）：`icon_zoom_level` 不再调用普通 `pane_layout_changed()`：
-- `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 80ms 合并连续 zoom 请求。
-- timer flush 时按当前 UI zoom/state 执行 `sync_visible_pane_layouts()`，因此只应用最新 zoom level。
-- 普通 `pane_layout_changed()` 仍调用 `sync_now()`，会停止 pending zoom timer 并立即刷新；窗口大小、sidebar、split ratio、pane 宽度变化不等待 timer。
+- `icon_zoom_layout_changed()` 立即调用 `sync_visible_pane_layouts_with_thumbnail_scheduling(..., false)`，同步刷新 tile 尺寸、文字和 fallback media，但不启动缩略图任务。
+- `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 300ms 合并连续 zoom 后的缩略图调度；timer flush 时从当前可见 virtual slice 调用 `schedule_visible_thumbnails_for_visible_panes()`。
+- 普通 `pane_layout_changed()` 仍调用 `sync_now()`，会停止 pending zoom thumbnail timer 并立即刷新；窗口大小、sidebar、split ratio、pane 宽度变化不等待 timer。
 
-**收益**：连续 zoom 时避免每个 zoom step 都同步重建可见 slice；同时保留 resize/fullscreen/末尾 viewport 修复的即时路径。
+**收益**：连续 zoom 时保留即时视觉反馈，避免每个 zoom step 都启动缩略图解码/预览更新；同时保留 resize/fullscreen/末尾 viewport 修复的即时路径。
 
-**验证**：源码守卫测试确认 `PaneViewSyncScheduler` 的滚动路径仍无 timer，`icon_zoom_layout_changed` 走独立 coalesced scheduler，且普通 layout 变化会 flush pending zoom 并同步刷新。
+**验证**：源码守卫测试确认 `PaneViewSyncScheduler` 的滚动路径仍无 timer，`icon_zoom_layout_changed` 同步刷新 layout 但使用 `schedule_thumbnails=false`，缩略图调度才走独立 coalesced timer。
 
 ---
 
