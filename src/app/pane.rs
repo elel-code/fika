@@ -560,30 +560,26 @@ impl PaneView {
         self.virtual_prepare_pending = None;
     }
 
-    pub(crate) fn fallback_media_cache(
-        &mut self,
-        metrics: ItemViewRenderMetrics,
-        dark: bool,
-    ) -> Rc<ItemViewMediaCache> {
-        if let Some(cache) = self
-            .active_fallback_media_cache
+    fn fallback_media_cache_for_theme(&self, dark: bool) -> Option<Rc<ItemViewMediaCache>> {
+        self.active_fallback_media_cache
             .as_ref()
-            .filter(|cache| cache.matches(metrics, dark))
-        {
-            return cache.clone();
-        }
-
-        if let Some(cache) = self
-            .fallback_media_caches
-            .iter()
-            .find(|cache| cache.matches(metrics, dark))
+            .filter(|cache| cache.dark() == dark)
             .cloned()
-        {
+            .or_else(|| {
+                self.fallback_media_caches
+                    .iter()
+                    .find(|cache| cache.dark() == dark)
+                    .cloned()
+            })
+    }
+
+    pub(crate) fn prewarm_fallback_media_cache(&mut self, dark: bool) -> Rc<ItemViewMediaCache> {
+        if let Some(cache) = self.fallback_media_cache_for_theme(dark) {
             self.active_fallback_media_cache = Some(cache.clone());
             return cache;
         }
 
-        let cache = Rc::new(ItemViewMediaCache::new(metrics, dark));
+        let cache = Rc::new(ItemViewMediaCache::new(dark));
         self.fallback_media_caches.push(cache.clone());
         self.active_fallback_media_cache = Some(cache.clone());
         cache
@@ -1282,11 +1278,7 @@ mod tests {
         panes.focused_mut().view.viewport_x = 128.0;
         panes.focused_mut().view.virtual_view = cache_for_layout(4..12, 24, 80);
         panes.focused_mut().view.virtual_start_index = 4;
-        let fallback_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
-        let warmed_fallback = panes
-            .focused_mut()
-            .view
-            .fallback_media_cache(fallback_metrics, false);
+        let warmed_fallback = panes.focused_mut().view.prewarm_fallback_media_cache(false);
         let virtual_entries = panes
             .focused()
             .entries
@@ -1308,7 +1300,7 @@ mod tests {
             .pane_mut_for_slot(1)
             .expect("inactive pane")
             .view
-            .fallback_media_cache(fallback_metrics, false);
+            .prewarm_fallback_media_cache(false);
         assert!(
             Rc::ptr_eq(&warmed_fallback, &inactive_fallback),
             "split panes should inherit warmed pane-level fallback media caches"
@@ -1434,35 +1426,25 @@ mod tests {
     }
 
     #[test]
-    fn pane_view_reuses_fallback_media_cache_until_renderer_key_changes() {
+    fn pane_view_reuses_fallback_media_cache_across_zoom_until_theme_changes() {
         let mut view = PaneView::default();
-        let metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
+        let mid = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
+        let zoomed = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
+        assert_ne!(mid.media_width, zoomed.media_width);
 
-        let first = view.fallback_media_cache(metrics, false);
-        let same = view.fallback_media_cache(metrics, false);
-        assert!(Rc::ptr_eq(&first, &same));
+        let first = view.prewarm_fallback_media_cache(false);
+        let same_zoom = view.prewarm_fallback_media_cache(false);
+        assert!(Rc::ptr_eq(&first, &same_zoom));
 
-        let dark = view.fallback_media_cache(metrics, true);
+        let dark = view.prewarm_fallback_media_cache(true);
         assert!(!Rc::ptr_eq(&first, &dark));
-        let dark_again = view.fallback_media_cache(metrics, true);
+        let dark_again = view.prewarm_fallback_media_cache(true);
         assert!(Rc::ptr_eq(&dark, &dark_again));
 
-        let location = view.fallback_media_cache(
-            ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
-            true,
-        );
-        assert!(!Rc::ptr_eq(&dark, &location));
-
-        let zoomed = view.fallback_media_cache(
-            ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1),
-            true,
-        );
-        assert!(!Rc::ptr_eq(&location, &zoomed));
-
-        let first_again = view.fallback_media_cache(metrics, false);
+        let first_again = view.prewarm_fallback_media_cache(false);
         assert!(
             Rc::ptr_eq(&first, &first_again),
-            "fallback media caches should keep previously used zoom/theme images warm"
+            "fallback media caches should keep theme images warm while zoom changes only target geometry"
         );
     }
 

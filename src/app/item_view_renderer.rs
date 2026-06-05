@@ -72,10 +72,6 @@ impl ItemViewRenderMetrics {
             title_line_height: compact.title_line_height,
         }
     }
-
-    pub(crate) fn renderer_key(self, dark: bool) -> ItemViewRendererKey {
-        ItemViewRendererKey::new(self, dark)
-    }
 }
 
 impl ItemViewRenderGeometry {
@@ -105,60 +101,36 @@ impl ItemViewRenderGeometry {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ItemViewRendererKey {
-    dark: bool,
-    tile_height: u32,
-    media_padding_x: u32,
-    media_text_gap: u32,
-    media_width: u32,
-    media_height: u32,
-    metadata_font_size: u32,
-    metadata_line_height: u32,
-    title_font_size: u32,
-    title_line_height: u32,
-}
-
-impl ItemViewRendererKey {
-    fn new(metrics: ItemViewRenderMetrics, dark: bool) -> Self {
-        Self {
-            dark,
-            tile_height: renderer_metric_px(metrics.tile_height),
-            media_padding_x: renderer_metric_px(metrics.media_padding_x),
-            media_text_gap: renderer_metric_px(metrics.media_text_gap),
-            media_width: renderer_metric_px(metrics.media_width),
-            media_height: renderer_metric_px(metrics.media_height),
-            metadata_font_size: renderer_metric_px(metrics.metadata_font_size),
-            metadata_line_height: renderer_metric_px(metrics.metadata_line_height),
-            title_font_size: renderer_metric_px(metrics.title_font_size),
-            title_line_height: renderer_metric_px(metrics.title_line_height),
-        }
-    }
-}
-
-fn renderer_metric_px(value: f32) -> u32 {
-    value.round().max(0.0) as u32
-}
+const FALLBACK_MEDIA_SOURCE_SIZE_PX: u32 = 72;
 
 #[derive(Clone)]
 pub(crate) struct ItemViewMediaCache {
-    key: ItemViewRendererKey,
+    dark: bool,
     folder: Image,
     file: Image,
 }
 
 impl ItemViewMediaCache {
-    pub(crate) fn new(metrics: ItemViewRenderMetrics, dark: bool) -> Self {
-        let key = metrics.renderer_key(dark);
+    pub(crate) fn new(dark: bool) -> Self {
         Self {
-            key,
-            folder: fallback_media_image(true, key.dark, key.media_width, key.media_height),
-            file: fallback_media_image(false, key.dark, key.media_width, key.media_height),
+            dark,
+            folder: fallback_media_image(
+                true,
+                dark,
+                FALLBACK_MEDIA_SOURCE_SIZE_PX,
+                FALLBACK_MEDIA_SOURCE_SIZE_PX,
+            ),
+            file: fallback_media_image(
+                false,
+                dark,
+                FALLBACK_MEDIA_SOURCE_SIZE_PX,
+                FALLBACK_MEDIA_SOURCE_SIZE_PX,
+            ),
         }
     }
 
-    pub(crate) fn matches(&self, metrics: ItemViewRenderMetrics, dark: bool) -> bool {
-        self.key == metrics.renderer_key(dark)
+    pub(crate) fn dark(&self) -> bool {
+        self.dark
     }
 
     pub(crate) fn folder_image(&self) -> Image {
@@ -173,7 +145,8 @@ impl ItemViewMediaCache {
 impl std::fmt::Debug for ItemViewMediaCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ItemViewMediaCache")
-            .field("key", &self.key)
+            .field("dark", &self.dark)
+            .field("source_size_px", &FALLBACK_MEDIA_SOURCE_SIZE_PX)
             .finish()
     }
 }
@@ -468,20 +441,12 @@ mod tests {
     }
 
     #[test]
-    fn renderer_key_tracks_full_compact_render_state() {
-        let plain = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
-        let same_plain = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
-        let location = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3);
-        let zoomed = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
+    fn fallback_media_source_is_stable_across_zoom_metrics() {
+        let small = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(0, 1);
+        let large = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
 
-        assert_eq!(plain.renderer_key(false), same_plain.renderer_key(false));
-        assert_ne!(plain.renderer_key(false), plain.renderer_key(true));
-        assert_ne!(
-            plain.renderer_key(false),
-            location.renderer_key(false),
-            "text line count changes tile/text metrics even when media size is unchanged"
-        );
-        assert_ne!(plain.renderer_key(false), zoomed.renderer_key(false));
+        assert_ne!(small.media_width, large.media_width);
+        assert_eq!(FALLBACK_MEDIA_SOURCE_SIZE_PX as f32, large.media_width);
     }
 
     #[test]
@@ -611,8 +576,7 @@ mod tests {
 
     #[test]
     fn fallback_media_renderer_supplies_pane_level_icons() {
-        let metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(1, 1);
-        let cache = ItemViewMediaCache::new(metrics, false);
+        let cache = ItemViewMediaCache::new(false);
         let mut thumbnail_buffer = SharedPixelBuffer::<Rgba8Pixel>::new(2, 2);
         thumbnail_buffer
             .make_mut_slice()
@@ -628,6 +592,8 @@ mod tests {
             .folder_image()
             .to_rgba8()
             .expect("folder fallback media");
+        assert_eq!(folder_media.width(), FALLBACK_MEDIA_SOURCE_SIZE_PX);
+        assert_eq!(folder_media.height(), FALLBACK_MEDIA_SOURCE_SIZE_PX);
         assert!(
             folder_media
                 .as_slice()

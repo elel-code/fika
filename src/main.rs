@@ -4110,7 +4110,7 @@ fn apply_virtual_view_result(
         let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
             return;
         };
-        prewarm_pane_fallback_media(pane, ui.get_icon_zoom_level(), ui.get_dark_mode());
+        prewarm_pane_fallback_media(pane, ui.get_dark_mode());
         selected_paths
     };
 
@@ -4743,13 +4743,12 @@ fn refresh_visible_pane_fallback_media(ui: &AppWindow, state: &Rc<RefCell<AppSta
 
 fn refresh_pane_fallback_media_for_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
     let dark = ui.get_dark_mode();
-    let zoom_level = ui.get_icon_zoom_level();
     let refreshed = {
         let mut state_ref = state.borrow_mut();
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             return;
         };
-        prewarm_pane_fallback_media(pane, zoom_level, dark);
+        prewarm_pane_fallback_media(pane, dark);
         true
     };
 
@@ -4846,7 +4845,6 @@ fn try_relayout_cached_pane_icon_zoom_layout(
     slot: i32,
 ) -> bool {
     let size_px = thumbnail_size_px(ui);
-    let zoom_level = ui.get_icon_zoom_level();
     let dark = ui.get_dark_mode();
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
@@ -4902,7 +4900,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         if !relayout_pane_item_view_entries_model(&mut pane.view, relayout_range.clone()) {
             return false;
         }
-        prewarm_pane_fallback_media(pane, zoom_level, dark);
+        prewarm_pane_fallback_media(pane, dark);
 
         pane.view.cancel_virtual_prepare_queue();
         pane.view.virtual_generation.next();
@@ -4930,20 +4928,8 @@ fn try_relayout_cached_pane_icon_zoom_layout(
     applied
 }
 
-fn prewarm_pane_fallback_media(pane: &mut PaneState, active_zoom_level: i32, dark: bool) {
-    let text_line_count = pane.item_view_text_line_count();
-    for zoom_level in MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL {
-        let render_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(
-            zoom_level,
-            text_line_count,
-        );
-        pane.view.fallback_media_cache(render_metrics, dark);
-    }
-    let active_metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(
-        active_zoom_level,
-        text_line_count,
-    );
-    pane.view.fallback_media_cache(active_metrics, dark);
+fn prewarm_pane_fallback_media(pane: &mut PaneState, dark: bool) {
+    pane.view.prewarm_fallback_media_cache(dark);
 }
 
 fn sync_pane_viewport_for_slot(
@@ -6917,7 +6903,7 @@ mod tests {
                 && !fast_path_body.contains("let preferred_range = icon_zoom_range_hint(")
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
-                && fast_path_body.contains("prewarm_pane_fallback_media(pane, zoom_level, dark);")
+                && fast_path_body.contains("prewarm_pane_fallback_media(pane, dark);")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
                 && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);"),
             "icon zoom should reuse the current virtual slice synchronously when it covers the new Dolphin-style visible range, and move cache-miss snapshot rebuilds off the input event"
@@ -6981,10 +6967,10 @@ mod tests {
         );
         assert!(
             dark_handler_body.contains("refresh_visible_pane_fallback_media(&ui, &state);")
-                && refresh_body.contains("prewarm_pane_fallback_media(pane, zoom_level, dark);")
-                && prewarm_body.contains("MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL")
-                && prewarm_body.contains("fallback_media_cache(render_metrics, dark)")
-                && prewarm_body.contains("fallback_media_cache(active_metrics, dark)")
+                && refresh_body.contains("prewarm_pane_fallback_media(pane, dark);")
+                && prewarm_body.contains("prewarm_fallback_media_cache(dark)")
+                && !prewarm_body.contains("MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL")
+                && !prewarm_body.contains("ui.get_icon_zoom_level()")
                 && refresh_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && !refresh_body.contains("sync_pane_layout_for_slot")
                 && !refresh_body.contains("sync_virtual_entries_for_slot"),
