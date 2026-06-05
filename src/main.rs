@@ -52,9 +52,9 @@ use app::geometry::{
     place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
-    ItemViewInputMetrics, ItemViewMediaCache, ItemViewReleaseAction, ItemViewRenderMetrics,
-    ItemViewRenderPlanInput, SelectionRect, decorate_fallback_media, decorate_render_plan,
-    entry_at_pane_point, item_index_at_pane_point,
+    ItemViewInputMetrics, ItemViewReleaseAction, ItemViewRenderMetrics, ItemViewRenderPlanInput,
+    SelectionRect, decorate_fallback_media, decorate_render_plan, entry_at_pane_point,
+    item_index_at_pane_point,
 };
 use app::model_update::{
     update_pane_item_view_entries_model, update_pane_item_view_selection_model,
@@ -3665,8 +3665,8 @@ fn apply_virtual_view_result(
             show_location,
         },
     );
-    let selected_paths = {
-        let state_ref = state.borrow();
+    let (selected_paths, media_cache) = {
+        let mut state_ref = state.borrow_mut();
         let selected_paths = state_ref
             .panes
             .pane_by_id(result.pane_id)
@@ -3678,10 +3678,16 @@ fn apply_virtual_view_result(
             &mut entries,
             result.thumbnail_size_px,
         );
-        selected_paths
+        let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
+            return;
+        };
+        (
+            selected_paths,
+            pane.view
+                .fallback_media_cache(result.render_metrics, ui.get_dark_mode()),
+        )
     };
-    let media_cache = ItemViewMediaCache::new(result.render_metrics, ui.get_dark_mode());
-    decorate_fallback_media(&mut entries, &media_cache);
+    decorate_fallback_media(&mut entries, media_cache.as_ref());
 
     if result.schedule_thumbnails {
         let thumbnail_entries =

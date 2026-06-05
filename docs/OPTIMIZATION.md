@@ -137,7 +137,7 @@ changed viewport-x => {
 
 ### P1 — `sync_pane_slots_ui` 去重
 
-**问题**：`pane_slot_data()` 曾把 pane chrome、viewport、entries、layout metrics 和空状态混在一行 `PaneSlotData` 里。虚拟切片、selection revision 或 viewport 变化都会让 pane chrome row 跟着重建，且 `entries` 嵌套在 pane row struct 里会让 Slint delegate 刷新语义变得不稳定。
+**问题**：`pane_slot_data()` 曾把 pane chrome、viewport、entries、layout metrics 和空状态混在一行 `PaneSlotData` 里。虚拟切片、selection 或 viewport 变化都会让 pane chrome row 跟着重建，且 `entries` 嵌套在 pane row struct 里会让 Slint delegate 刷新语义变得不稳定。
 
 **涉及代码**：
 - `src/app/split_view.rs:41-62` — `sync_pane_slots_ui`
@@ -145,12 +145,12 @@ changed viewport-x => {
 
 **实际实现**（✅ 已完成）：
 - `PaneSlotData` 只保留地址栏、搜索、状态栏、chooser、external edit 等 pane chrome 冷数据。
-- `PaneViewData` 承载 viewport、entry count、layout metrics、selection revision、空状态、drop/content interactive 等主视图热数据。
+- `PaneViewData` 承载 viewport、entry count、layout metrics、空状态、drop/content interactive 等主视图热数据；selection 只通过 pane-local cached highlight model 发布。
 - 可见 `ItemViewEntry` 切片作为 `pane_slot_0_entries` / `pane_slot_1_entries` 顶层 model 单独下发，不再嵌套在 `PaneViewData` row 内。
 - `sync_pane_slots_ui()` 先 snapshot visible slots，然后分别同步 `pane_slots`、`pane_views` 和 pane-local entries；slot shape 未变时使用 row-level `set_row_data`。
 - `set_pane_viewport_ui()` 只写 `AppState.pane.view.viewport_x`，再通过 `sync_pane_view_viewport_ui()` patch 当前 `PaneViewData.viewport_x` 字段；view row 缺失时才回退到 `sync_pane_view_ui()`。
 
-**收益**：虚拟切片、viewport clamp、目录 view-state 恢复、selection revision 更新不再重建 pane chrome row；item model 刷新从 nested model in row 变成直接顶层 model 更新，更接近 Dolphin 的 model/view 分层。
+**收益**：虚拟切片、viewport clamp、目录 view-state 恢复、selection 更新不再重建 pane chrome row；item model 刷新从 nested model in row 变成直接顶层 model 更新，更接近 Dolphin 的 model/view 分层。
 
 **验证**：源码守卫测试确认 `PaneViewData` 不含 `entries: [ItemViewEntry]`，`PaneSlotSurface` 单独接收 `entries`，并且 `sync_pane_entries_ui()` 写 `pane_slot_0_entries` / `pane_slot_1_entries`。
 
@@ -291,10 +291,10 @@ Slint: Rectangle viewport + input/DnD overlays
 2. `src/app/item_view.rs` 已开始承载 pane-local layout、drop hit-test、矩形选择候选范围和 tile 命中几何，transfer/DnD、selection、activation 与 context menu 不再私有持有主视图几何。
 3. Pane-local `ItemViewInputState` 已接管空白区 press/move/release/cancel 决策；Slint 只负责报告事件和绘制选择框 overlay，不再直接提交 `select_rect` 路由。
 4. Item press、double-click activation、item context menu 与主视图内部 drag source 已迁到 `SplitPaneView` 的 pane-level input controller；可见 tile primitive 不再拥有 `TouchArea`、`DragArea`、滚轮、双击、右键或 path-based DnD 数据源。
-5. 虚拟切片仍输出 `virtual_entries`，但主视图热字段已通过 `PaneViewData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）以及 viewport、selection revision 和空状态；可见 entries、highlights、metadata 都作为 pane-local 顶层 slot model 下发，避免 nested model in row；`PaneSlotData` 只保留 pane chrome/status/search/chooser 冷数据。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；普通 item 使用 Dolphin-style compact 横向布局，图标在左、名字在右，标题 Text 使用 Rust-projected full-height title rect；基础 compact loop 无条件绘制 `item.name`，带 group/location 的递归搜索结果通过 sparse metadata overlay 叠加 group/location 文本。local `x/y` 改由 `for item[index]` 下标和 pane view metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
+5. 虚拟切片仍输出 `virtual_entries`，但主视图热字段已通过 `PaneViewData` 接收 Rust item-view layouter metrics（`rows_per_column`、cell size、padding、content width、virtual slice width、scroll max）以及 viewport 和空状态；可见 entries、highlights、metadata 都作为 pane-local 顶层 slot model 下发，避免 nested model in row；`PaneSlotData` 只保留 pane chrome/status/search/chooser 冷数据。可见 tile primitive 的 width/height、media/text rect 和展示尺寸/字体 token 由 Rust item-view render plan 投影；普通 item 使用 Dolphin-style compact 横向布局，图标在左、名字在右，标题 Text 使用 Rust-projected full-height title rect；基础 compact loop 无条件绘制 `item.name`，带 group/location 的递归搜索结果通过 sparse metadata overlay 叠加 group/location 文本。local `x/y` 改由 `for item[index]` 下标和 pane view metrics 计算，不再写入 `ItemViewEntry` row data。Slint 不再在主视图内计算 content width、scroll extent 或 zoom 派生公式。
 6. 独立 tile 组件文件已删除，可见 tile primitive 内联在 `SplitPaneView` 的 slice layer 中，减少一层 Slint 组件边界，并把后续 renderer/reuse 替换点集中到一个主视图文件。
 7. 可见 tile 内部的 media/text 布局也已转为 Rust render plan 输出；`SplitPaneView` 只绘制 `Image` / `Text` primitive，不再对每个文件项运行 Slint layout 容器。普通 item 标题绘制已按 Dolphin compact text cache 的分层方式改为 Rust-projected full-height title rect，解决最大 zoom 下 title geometry 退化造成的 name 消失；递归搜索带位置元数据的 item 继续使用 Rust 提供的 `group_y/title_y/location_y` 多行 token，并在同一横向 text rect 额外显示 group/location。
-8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 Rust item-view media renderer：虚拟切片进入 Slint 前会把成功缩略图或 fallback 文件/目录图标统一投影为 `ItemViewEntry.media`，主视图 loop 只保留一个 media `Image` primitive。
+8. 文件/目录 fallback media 已从 Slint `FolderGlyph` 组件迁到 Rust item-view media renderer：虚拟切片进入 Slint 前会把成功缩略图或 fallback 文件/目录图标统一投影为 `ItemViewEntry.media`，主视图 loop 只保留一个 media `Image` primitive。fallback file/folder media cache 现在挂在 pane-local `PaneView` 上，同 zoom/theme 的虚拟切片结果复用同一组 `SharedPixelBuffer`/`Image`，为后续 renderer state 继续收敛到 Rust 侧铺路。
 9. `ItemViewEntry.media_token` 作为 Rust-side media 更新令牌进入可见 row；`model_update` 同时维护 pane-local `ItemViewRowToken` sidecar。虚拟切片滑动的重叠 row 先比较 sidecar token，token 相同就不读取 `VecModel::row_data()`，因此不会为了判断复用而克隆包含 `Image` 的整条 `ItemViewEntry`。split pane 快照也会复制到独立 `VecModel`，避免两个 pane 共享同一个可见 row 模型。
 10. show-location metadata overlay 已从 per-item 透明 `Rectangle` wrapper 和 `visible:` 过滤，收敛成 pane-local `ItemViewMetadataEntry` 稀疏模型；普通空 metadata row 不再进入 Slint overlay loop，split snapshot 也会复制独立 metadata model，保持 pane 独立。
 11. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。

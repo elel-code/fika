@@ -146,8 +146,16 @@ impl ItemViewRenderMetrics {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ItemViewMediaCacheKey {
+    dark: bool,
+    width: u32,
+    height: u32,
+}
+
 #[derive(Clone)]
 pub(crate) struct ItemViewMediaCache {
+    key: ItemViewMediaCacheKey,
     folder: Image,
     file: Image,
     folder_token: i32,
@@ -156,13 +164,25 @@ pub(crate) struct ItemViewMediaCache {
 
 impl ItemViewMediaCache {
     pub(crate) fn new(metrics: ItemViewRenderMetrics, dark: bool) -> Self {
-        let width = metrics.media_width.round().max(1.0) as u32;
-        let height = metrics.media_height.round().max(1.0) as u32;
+        let key = Self::key(metrics, dark);
         Self {
-            folder: fallback_media_image(true, dark, width, height),
-            file: fallback_media_image(false, dark, width, height),
-            folder_token: fallback_media_token(true, dark, width, height),
-            file_token: fallback_media_token(false, dark, width, height),
+            key,
+            folder: fallback_media_image(true, key.dark, key.width, key.height),
+            file: fallback_media_image(false, key.dark, key.width, key.height),
+            folder_token: fallback_media_token(true, key.dark, key.width, key.height),
+            file_token: fallback_media_token(false, key.dark, key.width, key.height),
+        }
+    }
+
+    pub(crate) fn matches(&self, metrics: ItemViewRenderMetrics, dark: bool) -> bool {
+        self.key == Self::key(metrics, dark)
+    }
+
+    fn key(metrics: ItemViewRenderMetrics, dark: bool) -> ItemViewMediaCacheKey {
+        ItemViewMediaCacheKey {
+            dark,
+            width: metrics.media_width.round().max(1.0) as u32,
+            height: metrics.media_height.round().max(1.0) as u32,
         }
     }
 
@@ -180,6 +200,16 @@ impl ItemViewMediaCache {
         } else {
             self.file_token
         }
+    }
+}
+
+impl std::fmt::Debug for ItemViewMediaCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ItemViewMediaCache")
+            .field("key", &self.key)
+            .field("folder_token", &self.folder_token)
+            .field("file_token", &self.file_token)
+            .finish()
     }
 }
 

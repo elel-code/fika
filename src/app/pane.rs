@@ -1,5 +1,7 @@
 use crate::app::geometry::CompactItemViewLayout;
-use crate::app::item_view::{ItemViewInputState, ItemViewRenderMetrics, ItemViewRowToken};
+use crate::app::item_view::{
+    ItemViewInputState, ItemViewMediaCache, ItemViewRenderMetrics, ItemViewRowToken,
+};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
@@ -508,6 +510,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
     pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
+    fallback_media_cache: Option<Rc<ItemViewMediaCache>>,
     pub(crate) virtual_start_index: usize,
     pub(crate) virtual_start_column: usize,
     virtual_prepare_in_flight: Option<u64>,
@@ -554,6 +557,24 @@ impl PaneView {
     pub(crate) fn cancel_virtual_prepare_queue(&mut self) {
         self.virtual_prepare_in_flight = None;
         self.virtual_prepare_pending = None;
+    }
+
+    pub(crate) fn fallback_media_cache(
+        &mut self,
+        metrics: ItemViewRenderMetrics,
+        dark: bool,
+    ) -> Rc<ItemViewMediaCache> {
+        if self
+            .fallback_media_cache
+            .as_ref()
+            .is_none_or(|cache| !cache.matches(metrics, dark))
+        {
+            self.fallback_media_cache = Some(Rc::new(ItemViewMediaCache::new(metrics, dark)));
+        }
+        self.fallback_media_cache
+            .as_ref()
+            .expect("fallback media cache should be initialized")
+            .clone()
     }
 
     pub(crate) fn has_renderable_virtual_entries(&self) -> bool {
@@ -1372,6 +1393,27 @@ mod tests {
         assert_eq!(view.virtual_view.cell_width, 100.0);
         assert_eq!(view.virtual_view.row_height, 90.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
+    }
+
+    #[test]
+    fn pane_view_reuses_fallback_media_cache_until_renderer_key_changes() {
+        let mut view = PaneView::default();
+        let metrics = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
+
+        let first = view.fallback_media_cache(metrics, false);
+        let same = view.fallback_media_cache(metrics, false);
+        assert!(Rc::ptr_eq(&first, &same));
+
+        let dark = view.fallback_media_cache(metrics, true);
+        assert!(!Rc::ptr_eq(&first, &dark));
+        let dark_again = view.fallback_media_cache(metrics, true);
+        assert!(Rc::ptr_eq(&dark, &dark_again));
+
+        let zoomed = view.fallback_media_cache(
+            ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1),
+            true,
+        );
+        assert!(!Rc::ptr_eq(&dark, &zoomed));
     }
 
     #[test]
