@@ -106,7 +106,6 @@ component FilePane inherits Rectangle {
     in property <float> item-view-content-width: 1;
     in property <float> item-view-virtual-slice-width: 1;
     in property <float> item-view-scroll-max-x: 0;
-    in property <int> selection-revision;
     in property <bool> show-location: false;
     in-out property <bool> drag-active;
     in-out property <bool> drag-rejected;
@@ -301,7 +300,6 @@ component FilePane inherits Rectangle {
                 item-view-content-width: root.item-view-content-width;
                 item-view-virtual-slice-width: root.item-view-virtual-slice-width;
                 item-view-scroll-max-x: root.item-view-scroll-max-x;
-                selection-revision: root.selection-revision;
                 interactive: root.content-interactive;
                 empty-message-visible: root.empty-message-visible;
                 empty-title: root.empty-title;
@@ -546,7 +544,6 @@ component PaneSlotSurface inherits Rectangle {
         item-view-content-width: root.view.item_view_content_width;
         item-view-virtual-slice-width: root.view.item_view_virtual_slice_width;
         item-view-scroll-max-x: root.view.item_view_scroll_max_x;
-        selection-revision: root.view.selection_revision;
         show-location: root.view.show_location;
         drag-active <=> root.live-drag-active;
         drag-rejected <=> root.live-drag-rejected;
@@ -612,7 +609,6 @@ export component AppWindow inherits Window {
     in-out property <string> chooser_save_name;
     in-out property <bool> undo_available: false;
     in-out property <string> undo_label;
-    in-out property <int> selection_revision;
     in-out property <string> search_query;
     in-out property <bool> dark_mode;
     in-out property <bool> recursive_search: false;

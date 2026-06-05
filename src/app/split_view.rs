@@ -369,7 +369,6 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         item_view_content_width: item_view_metrics.content_width,
         item_view_virtual_slice_width: item_view_metrics.virtual_slice_width,
         item_view_scroll_max_x: item_view_metrics.scroll_max_x,
-        selection_revision: ui.get_selection_revision(),
         show_location: pane_slot_show_location(state, slot),
         content_interactive: if is_focused {
             !ui.get_directory_loading()
@@ -836,7 +835,6 @@ fn sync_focused_ui(
     );
     ui.set_selected_count(selected_paths.len() as i32);
     ui.set_selected_status(selection_status_text(selected_paths));
-    ui.set_selection_revision(ui.get_selection_revision() + 1);
 }
 
 pub(crate) fn directory_status_text<'a>(

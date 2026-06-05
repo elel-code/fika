@@ -2604,6 +2604,7 @@ mod tests {
                 && split_pane.contains("background: root.selected-background-color;")
                 && !split_pane.contains("pure callback is_selected")
                 && !split_pane.contains("root.is_selected(item.path)")
+                && !split_pane.contains("selection-revision")
                 && !split_pane
                     .contains("item.selected ? root.selected-background-color : transparent"),
             "SplitPaneView should draw selection from a sparse pane-local highlight model instead of per-item selected backgrounds"
@@ -2704,6 +2705,7 @@ mod tests {
                 && !split_pane.contains("selected: item.selected;")
                 && !split_pane.contains("drag-data-source:")
                 && !models.contains("export struct FileEntry")
+                && !models.contains("selection_revision")
                 && !item_view_entry.contains("selected: bool")
                 && item_view_entry.contains("thumbnail_state: int")
                 && item_view_entry.contains("media: image")

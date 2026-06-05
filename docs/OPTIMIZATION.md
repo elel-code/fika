@@ -524,11 +524,11 @@ selected: root.selection-revision >= 0 && root.is_selected(item.path);
 for highlight[index] in root.highlights: Rectangle { ... }
 ```
 
-选择变化时只更新 token sidecar 和 pane-local cached sparse highlight model，不再对 `VecModel<ItemViewEntry>` 做 row-data 写回，也不再由 `split_view` 每次 UI 同步临时构造 highlight model；后台虚拟视图结果应用时会用当前 pane selection 初始化 token sidecar，旧异步结果不会把高亮写进基础 row。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
+选择变化时只更新 token sidecar 和 pane-local cached sparse highlight model，不再对 `VecModel<ItemViewEntry>` 做 row-data 写回，也不再由 `split_view` 每次 UI 同步临时构造 highlight model。旧的 `selection_revision` 全局属性和 `PaneViewData.selection_revision` 热字段已删除，选择变化不再为了触发 tile 绑定而污染 pane view row；后台虚拟视图结果应用时会用当前 pane selection 初始化 token sidecar，旧异步结果不会把高亮写进基础 row。渲染路径上的 `PaneRouting.is-selected` / `FilePane.is_selected` 回调已删除；item 右键命中后是否需要先选中由 Rust 坐标 helper 按 pane selection 状态直接判断。
 
 **收益**：每次选择变化（点击、框选、Ctrl+A）省 80-120 次 FFI 调用，并避免 selection 变化重写可见 `ItemViewEntry` rows。
 
-**难度**：已完成。源码守卫测试覆盖 sparse highlight overlay，并防止恢复 tile 级 `is_selected` 回调、`selected: item.selected` 或 `ItemViewEntry.selected`。
+**难度**：已完成。源码守卫测试覆盖 sparse highlight overlay，并防止恢复 tile 级 `is_selected` 回调、`selection-revision`、`selected: item.selected` 或 `ItemViewEntry.selected`。
 
 ---
 

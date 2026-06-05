@@ -4406,7 +4406,6 @@ fn update_selection_ui_for_slot(
         ui.set_selected_count(selected_count);
         ui.set_selected_status(selected_status);
     }
-    ui.set_selection_revision(ui.get_selection_revision() + 1);
     sync_pane_view_ui(ui, state, slot);
 }
 
