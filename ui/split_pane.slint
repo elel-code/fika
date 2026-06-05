@@ -77,8 +77,8 @@ export component SplitPaneView inherits Rectangle {
     private property <length> selection-rect-start-y: 0px;
     private property <length> selection-rect-current-x: 0px;
     private property <length> selection-rect-current-y: 0px;
-    private property <length> item-pointer-abs-x: -1px;
-    private property <length> item-pointer-abs-y: -1px;
+    private property <length> drag-source-abs-x: -1px;
+    private property <length> drag-source-abs-y: -1px;
 
     function set-viewport-x(raw: float) {
         root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(raw);
@@ -116,14 +116,14 @@ export component SplitPaneView inherits Rectangle {
         }
     }
 
-    function set-item-pointer-abs(x: length, y: length) {
-        root.item-pointer-abs-x = x;
-        root.item-pointer-abs-y = y;
+    function set-drag-source-abs(x: length, y: length) {
+        root.drag-source-abs-x = x;
+        root.drag-source-abs-y = y;
     }
 
-    function clear-item-pointer-abs() {
-        root.item-pointer-abs-x = -1px;
-        root.item-pointer-abs-y = -1px;
+    function clear-drag-source-abs() {
+        root.drag-source-abs-x = -1px;
+        root.drag-source-abs-y = -1px;
     }
 
     function begin-blank-press(mouse-x: length, mouse-y: length, toggle: bool) {
@@ -227,32 +227,37 @@ export component SplitPaneView inherits Rectangle {
             width: parent.width;
             height: parent.height;
             enabled: root.interactive;
-            data: root.make_drag_data_at(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px);
+            data: root.make_drag_data_at(root.drag-source-abs-x / 1px, root.drag-source-abs-y / 1px);
 
             input-touch := TouchArea {
                 width: parent.width;
                 height: parent.height;
 
                 changed has-hover => {
-                    if (!self.has-hover) {
-                        root.clear-item-pointer-abs();
+                    if (!self.has-hover && !self.pressed) {
+                        root.clear-drag-source-abs();
                     }
                 }
 
                 pointer-event(event) => {
-                    root.set-item-pointer-abs(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    let abs-x = self.absolute-position.x + self.mouse-x;
+                    let abs-y = self.absolute-position.y + self.mouse-y;
                     if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
+                        root.clear-drag-source-abs();
                         root.focus_requested();
                         root.navigate_back();
                     } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
+                        root.clear-drag-source-abs();
                         root.focus_requested();
                         root.navigate_forward();
                     } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                         root.focus_requested();
-                        if (root.item_pressed(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px, event.modifiers.control, event.modifiers.shift)) {
+                        if (root.item_pressed(abs-x / 1px, abs-y / 1px, event.modifiers.control, event.modifiers.shift)) {
+                            root.set-drag-source-abs(abs-x, abs-y);
                             root.selection-rect-active = false;
                             root.selection-rect-pending = false;
                         } else {
+                            root.clear-drag-source-abs();
                             root.begin-blank-press(self.mouse-x, self.mouse-y, event.modifiers.control);
                         }
                     } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
@@ -263,29 +268,34 @@ export component SplitPaneView inherits Rectangle {
                         }
                         root.selection-rect-active = false;
                         root.selection-rect-pending = false;
+                        root.clear-drag-source-abs();
                     } else if (root.interactive && event.kind == PointerEventKind.cancel) {
                         if (root.selection-rect-pending) {
                             root.blank_cancelled();
                         }
                         root.selection-rect-active = false;
                         root.selection-rect-pending = false;
+                        root.clear-drag-source-abs();
                     } else if (root.interactive && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                        root.clear-drag-source-abs();
                         root.focus_requested();
-                        if (!root.item_context_menu(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px, root.item-pointer-abs-x, root.item-pointer-abs-y)) {
-                            root.request_blank_context_menu(root.item-pointer-abs-x, root.item-pointer-abs-y);
+                        if (!root.item_context_menu(abs-x / 1px, abs-y / 1px, abs-x, abs-y)) {
+                            root.request_blank_context_menu(abs-x, abs-y);
                         }
                     }
                 }
 
                 double-clicked => {
                     if (root.interactive) {
+                        let abs-x = self.absolute-position.x + self.mouse-x;
+                        let abs-y = self.absolute-position.y + self.mouse-y;
+                        root.clear-drag-source-abs();
                         root.focus_requested();
-                        root.item_activated(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px);
+                        root.item_activated(abs-x / 1px, abs-y / 1px);
                     }
                 }
 
                 moved => {
-                    root.set-item-pointer-abs(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                     if (root.interactive && self.pressed && root.selection-rect-pending) {
                         root.selection-rect-current-x = self.mouse-x + root.viewport-x * 1px;
                         root.selection-rect-current-y = self.mouse-y;

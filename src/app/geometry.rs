@@ -2595,6 +2595,11 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("if (root.selection-rect-active): Rectangle"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have a sparse metadata overlay loop");
+        let main_touch_moved_body = split_pane
+            .split_once("moved => {")
+            .and_then(|(_, rest)| rest.split_once("scroll-event(event)"))
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should handle pointer move inside the main touch area");
         assert!(
             split_pane.contains("for item[index] in root.entries: Image")
                 && split_pane.contains("for item[index] in root.entries: Text")
@@ -2754,23 +2759,28 @@ mod tests {
         assert!(split_pane.contains("for item[index] in root.entries: Text"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")
-                && split_pane.contains("data: root.make_drag_data_at(")
+                && split_pane.contains(
+                    "data: root.make_drag_data_at(root.drag-source-abs-x / 1px, root.drag-source-abs-y / 1px);"
+                )
                 && split_pane.contains("input-touch := TouchArea")
+                && split_pane.contains("private property <length> drag-source-abs-x: -1px;")
+                && split_pane.contains("root.set-drag-source-abs(abs-x, abs-y);")
                 && split_pane.contains(
-                    "root.item_pressed(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px, event.modifiers.control, event.modifiers.shift)"
+                    "root.item_pressed(abs-x / 1px, abs-y / 1px, event.modifiers.control, event.modifiers.shift)"
                 )
                 && split_pane.contains(
-                    "root.item_context_menu(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px, root.item-pointer-abs-x, root.item-pointer-abs-y)"
+                    "root.item_context_menu(abs-x / 1px, abs-y / 1px, abs-x, abs-y)"
                 )
-                && split_pane.contains(
-                    "root.item_activated(root.item-pointer-abs-x / 1px, root.item-pointer-abs-y / 1px);"
-                )
+                && split_pane.contains("root.item_activated(abs-x / 1px, abs-y / 1px);")
                 && split_pane.contains("root.begin-blank-press(")
+                && !split_pane.contains("item-pointer-abs")
+                && !main_touch_moved_body.contains("set-drag-source-abs")
+                && !main_touch_moved_body.contains("make_drag_data_at")
                 && !split_pane.contains("drag-data-source:")
                 && !split_pane.contains("activated(path) =>")
                 && !split_pane.contains("request_select(path")
                 && !split_pane.contains("request_context_menu(path"),
-            "SplitPaneView should use one pane-level input controller with Rust coordinate hit-test instead of per-tile handlers"
+            "SplitPaneView should use one pane-level input controller while keeping DragArea.data pinned to the press target instead of hover/move coordinates"
         );
         assert!(
             split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
