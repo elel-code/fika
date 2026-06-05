@@ -236,7 +236,7 @@ ui/
 - `y = mod(index, rows-per-column) * icon-row-height`
 - 普通 item 是左图标、右文件名的横向 tile；内容宽度向右增长，主栏只做横向滚动
 - Slint 端只接收 `entry_count`（用于空状态和滚动条宽度）和当前可见 `virtual_entries` 切片
-- Rust 端通过 `VirtualGridPlan` 统一计算 clamped viewport、scroll max、可见范围和 overscan 范围
+- Rust 端通过 `VirtualItemViewPlan` 统一计算 clamped viewport、scroll max、可见范围和 overscan 范围
 - 横向滚动只克隆需要的虚拟范围条目，避免大目录的性能问题
 - 缩放和窗口尺寸变化会 clamp 横向滚动位置，避免旧 viewport 落在新内容之外
 
@@ -247,7 +247,7 @@ ui/
 - `y = mod(index, rows-per-column) * icon-row-height`
 - Ordinary items use horizontal tiles with the icon on the left and filename on the right; content grows to the right and the main pane scrolls horizontally only
 - Slint side receives only `entry_count` (for empty state and scrollbar) and visible `virtual_entries` slice
-- Rust side uses `VirtualGridPlan` for unified clamped viewport, scroll max, visible range, and overscan
+- Rust side uses `VirtualItemViewPlan` for unified clamped viewport, scroll max, visible range, and overscan
 - Horizontal scrolling only clones needed virtual range entries, avoiding large-directory performance issues
 - Zoom and resize clamp horizontal scroll position, preventing old viewport from landing outside new content
 
@@ -811,14 +811,14 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 
 **中文**：
 
-- `VirtualGridPlan` 结构体：统一计算 clamped viewport、scroll max、visible range、overscan range、Slint anchor column
+- `VirtualItemViewPlan` 结构体：统一计算 clamped viewport、scroll max、visible range、overscan range、Slint anchor column
 - `prepare_virtual_view_snapshot_update()`：用 `VirtualViewSnapshotInput` 在后台纯函数路径计算新虚拟切片，包括 viewport 夹紧、overscan 范围扩展、过滤切片和 location group 标注
 - 可见列优先 + overscan 后置的缩略图调度策略
 - 虚拟范围不变时跳过 Slint model 重置
 
 **English**:
 
-- `VirtualGridPlan` struct: unified clamped viewport, scroll max, visible/overscan range, Slint anchor column
+- `VirtualItemViewPlan` struct: unified clamped viewport, scroll max, visible/overscan range, Slint anchor column
 - `prepare_virtual_view_snapshot_update()`: computes the new virtual slice from `VirtualViewSnapshotInput` on the background pure-function path, including viewport clamping, overscan expansion, filtered slicing, and location-group annotation
 - Visible-column-first + overscan-deferred thumbnail scheduling
 - Skips Slint model reset when virtual range unchanged
@@ -861,7 +861,7 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 
 **中文**：
 
-- `MainGridLayout`：主栏网格布局参数
+- `MainItemViewLayout`：主栏 item-view 布局参数
 - `register_menu_geometry_callbacks()`：注册菜单几何纯函数回调
 - `SelectionRect`：选择矩形
 - `active_main_pane_width()`：计算活跃主栏宽度
@@ -869,7 +869,7 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 
 **English**:
 
-- `MainGridLayout`: main grid layout parameters
+- `MainItemViewLayout`: main item-view layout parameters
 - `register_menu_geometry_callbacks()`: register menu geometry pure callbacks
 - `SelectionRect`: selection rectangle
 - `active_main_pane_width()`: compute active main pane width

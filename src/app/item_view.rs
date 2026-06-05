@@ -1,5 +1,5 @@
 use crate::app::geometry::{
-    MainGridLayout, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width,
+    MainItemViewLayout, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width,
     inactive_main_pane_width, main_pane_bounds, search_panel_height,
 };
 use crate::app::selection::{filtered_entry_at_for_slot, filtered_entry_count_for_slot};
@@ -96,6 +96,16 @@ impl ItemViewRowToken {
 
     pub(crate) fn set_selected(&mut self, selected: bool) {
         self.selected = selected;
+    }
+
+    pub(crate) fn has_renderable_title(&self) -> bool {
+        !self.name.is_empty()
+            && self.tile_width > 1.0
+            && self.tile_height > 1.0
+            && self.text_x >= 0.0
+            && self.text_width > 1.0
+            && self.title_line_height > 1.0
+            && self.title_font_size > 1.0
     }
 }
 
@@ -694,13 +704,14 @@ impl ItemViewLayout {
         };
         let height =
             (pane.bottom - pane.top - PATH_BAR_HEIGHT - STATUS_BAR_HEIGHT - search_height).max(1.0);
-        let layout = MainGridLayout::from_ui_for_pane_width_with_text_lines(
+        let layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
             ui,
             width,
             state.panes.focused_slot() == slot,
             pane_state.item_view_text_line_count(),
         );
-        let compact_grid = layout.compact_grid(filtered_entry_count_for_slot(state, slot));
+        let compact_item_view =
+            layout.compact_item_view(filtered_entry_count_for_slot(state, slot));
 
         Some(Self::new(
             x,
@@ -708,12 +719,12 @@ impl ItemViewLayout {
             width,
             height,
             pane_state.view.viewport_x,
-            compact_grid.rows_per_column,
-            compact_grid.cell_width,
-            compact_grid.column_width,
-            compact_grid.column_offset,
-            compact_grid.row_height,
-            compact_grid.padding,
+            compact_item_view.rows_per_column,
+            compact_item_view.cell_width,
+            compact_item_view.column_width,
+            compact_item_view.column_offset,
+            compact_item_view.row_height,
+            compact_item_view.padding,
         ))
     }
 

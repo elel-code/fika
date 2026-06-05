@@ -48,7 +48,7 @@ use app::file_clipboard::{
     refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    MainGridLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
+    MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
     place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
@@ -3336,7 +3336,7 @@ fn sync_virtual_entries_for_slot_with_count(
     };
     let render_metrics =
         ItemViewRenderMetrics::from_zoom_level_with_text_line_count(zoom_level, text_line_count);
-    let mut layout = MainGridLayout::from_ui_for_pane_width_with_text_lines(
+    let mut layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
         ui,
         viewport_width,
         search_panel_visible,
@@ -3354,6 +3354,9 @@ fn sync_virtual_entries_for_slot_with_count(
         };
         let requested_viewport_x = pane.view.viewport_x;
         layout.viewport_x = requested_viewport_x;
+        if !pane.view.has_renderable_virtual_entries() {
+            pane.view.virtual_view.invalidate();
+        }
         if immediate {
             pane.view.cancel_virtual_prepare_queue();
         }
@@ -3507,7 +3510,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
 #[allow(clippy::too_many_arguments)]
 fn cached_virtual_viewport_sync(
     pane: &mut PaneState,
-    layout: &MainGridLayout,
+    layout: &MainItemViewLayout,
     requested_viewport_x: f32,
     thumbnail_size_px: u32,
     schedule_thumbnails: bool,
@@ -3531,12 +3534,12 @@ fn cached_virtual_viewport_sync(
         return None;
     };
 
-    let compact_grid = layout.compact_grid(visible_count);
-    let plan = compact_grid.virtual_plan(requested_viewport_x, 2);
+    let compact_item_view = layout.compact_item_view(visible_count);
+    let plan = compact_item_view.virtual_plan(requested_viewport_x, 2);
     if !pane
         .view
         .virtual_view
-        .matches_layout(&compact_grid, thumbnail_size_px)
+        .matches_layout(&compact_item_view, thumbnail_size_px)
         || !virtual_cache_covers_visible_range(&pane.view.virtual_view.range, &plan.visible_range)
     {
         return None;
@@ -4902,7 +4905,7 @@ fn dnd_debug_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{compact_grid_layout, place_drop_geometry};
+    use crate::app::geometry::{compact_item_view_layout, place_drop_geometry};
     use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
         filtered_entries_range, filtered_entry_at, filtered_entry_paths, filtered_entry_summary,
@@ -5233,8 +5236,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_grid_layout_keeps_visible_columns_with_overscan() {
-        let grid = compact_grid_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+    fn compact_item_view_layout_keeps_visible_columns_with_overscan() {
+        let grid = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
         let at_start = grid.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
@@ -5243,7 +5246,8 @@ mod tests {
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
-        let clamped = compact_grid_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
+        let clamped =
+            compact_item_view_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
         assert_eq!(clamped.range, 0..10);
         assert_eq!(clamped.visible_range, 0..10);
     }

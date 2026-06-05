@@ -1,4 +1,4 @@
-use crate::app::geometry::CompactGridLayout;
+use crate::app::geometry::CompactItemViewLayout;
 use crate::app::item_view::{ItemViewInputState, ItemViewRenderMetrics, ItemViewRowToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
@@ -523,6 +523,27 @@ impl PaneView {
         self.virtual_prepare_pending = None;
     }
 
+    pub(crate) fn has_renderable_virtual_entries(&self) -> bool {
+        let row_count = self.virtual_entries.row_count();
+        if row_count == 0 {
+            return self.virtual_view.range.is_empty() && self.virtual_entry_tokens.is_empty();
+        }
+        let range_len = self
+            .virtual_view
+            .range
+            .end
+            .saturating_sub(self.virtual_view.range.start);
+        if range_len > 0 && row_count != range_len {
+            return false;
+        }
+
+        self.virtual_entry_tokens.len() == row_count
+            && self
+                .virtual_entry_tokens
+                .iter()
+                .all(ItemViewRowToken::has_renderable_title)
+    }
+
     pub(crate) fn finish_virtual_prepare(
         &mut self,
         generation: u64,
@@ -665,7 +686,7 @@ impl VirtualViewCache {
 
     pub(crate) fn matches_layout(
         &self,
-        layout: &CompactGridLayout,
+        layout: &CompactItemViewLayout,
         thumbnail_size_px: u32,
     ) -> bool {
         self.entry_count == layout.entry_count
@@ -683,7 +704,7 @@ impl VirtualViewCache {
 
     pub(crate) fn update_layout_signature(
         &mut self,
-        layout: CompactGridLayout,
+        layout: CompactItemViewLayout,
         thumbnail_size_px: u32,
     ) {
         self.entry_count = layout.entry_count;
@@ -765,7 +786,7 @@ impl PaneHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{MainGridLayout, compact_grid_layout};
+    use crate::app::geometry::{MainItemViewLayout, compact_item_view_layout};
     use crate::app::model_update::update_pane_item_view_entries_model;
     use slint::Model;
 
@@ -781,7 +802,7 @@ mod tests {
             cell_width: 100.0,
             render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(1, 1),
             input: Box::new(VirtualViewSnapshotInput {
-                layout: MainGridLayout {
+                layout: MainItemViewLayout {
                     viewport_x: requested_viewport_x,
                     viewport_width: 250.0,
                     rows_per_column: 4,
@@ -828,7 +849,7 @@ mod tests {
             ..VirtualViewCache::default()
         };
         cache.update_layout_signature(
-            compact_grid_layout(250.0, entry_count, 4, 100.0, 90.0, 10.0),
+            compact_item_view_layout(250.0, entry_count, 4, 100.0, 90.0, 10.0),
             thumbnail_size_px,
         );
         cache
@@ -1303,6 +1324,35 @@ mod tests {
         assert_eq!(view.virtual_view.cell_width, 100.0);
         assert_eq!(view.virtual_view.row_height, 90.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
+    }
+
+    #[test]
+    fn pane_view_rejects_cached_rows_without_renderable_titles() {
+        let snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
+        let mut view = PaneView {
+            virtual_view: cache_for_layout(0..1, 1, 64),
+            ..PaneView::default()
+        };
+
+        update_pane_item_view_entries_model(&mut view, 0, 0, vec![snapshot.to_item_view_entry()]);
+
+        assert!(!view.has_renderable_virtual_entries());
+
+        let mut rendered = snapshot.to_item_view_entry();
+        rendered.tile_width = 100.0;
+        rendered.tile_height = 50.0;
+        rendered.text_x = 52.0;
+        rendered.text_width = 46.0;
+        rendered.title_y = 14.5;
+        rendered.title_line_height = 21.0;
+        rendered.title_font_size = 15.0;
+        update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered]);
+
+        assert!(view.has_renderable_virtual_entries());
+
+        view.virtual_view.range = 0..2;
+
+        assert!(!view.has_renderable_virtual_entries());
     }
 
     #[test]

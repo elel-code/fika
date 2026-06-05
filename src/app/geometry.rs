@@ -13,7 +13,7 @@ const COMPACT_ITEM_PADDING: f32 = 2.0;
 const COMPACT_COLUMN_MARGIN_WIDTH: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct MainGridLayout {
+pub(crate) struct MainItemViewLayout {
     pub(crate) viewport_x: f32,
     pub(crate) viewport_width: f32,
     pub(crate) rows_per_column: usize,
@@ -23,7 +23,7 @@ pub(crate) struct MainGridLayout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct CompactGridLayout {
+pub(crate) struct CompactItemViewLayout {
     pub(crate) entry_count: usize,
     pub(crate) rows_per_column: usize,
     pub(crate) viewport_width: f32,
@@ -37,7 +37,7 @@ pub(crate) struct CompactGridLayout {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct VirtualGridPlan {
+pub(crate) struct VirtualItemViewPlan {
     pub(crate) viewport_x: f32,
     pub(crate) scroll_max_x: f32,
     pub(crate) range: Range<usize>,
@@ -55,7 +55,7 @@ pub(crate) struct MainPaneBounds {
     pub(crate) bottom: f32,
 }
 
-impl MainGridLayout {
+impl MainItemViewLayout {
     pub(crate) fn from_ui_for_pane_width_with_text_lines(
         ui: &AppWindow,
         pane_width: f32,
@@ -101,8 +101,8 @@ impl MainGridLayout {
         }
     }
 
-    pub(crate) fn compact_grid(self, entry_count: usize) -> CompactGridLayout {
-        compact_grid_layout(
+    pub(crate) fn compact_item_view(self, entry_count: usize) -> CompactItemViewLayout {
+        compact_item_view_layout(
             self.viewport_width,
             entry_count,
             self.rows_per_column,
@@ -113,12 +113,12 @@ impl MainGridLayout {
     }
 }
 
-impl CompactGridLayout {
+impl CompactItemViewLayout {
     pub(crate) fn virtual_plan(
         self,
         requested_viewport_x: f32,
         overscan_columns: usize,
-    ) -> VirtualGridPlan {
+    ) -> VirtualItemViewPlan {
         let viewport_x = requested_viewport_x.clamp(0.0, self.scroll_max_x);
         let (range, visible_range) = virtual_entry_ranges(
             self.entry_count,
@@ -132,7 +132,7 @@ impl CompactGridLayout {
         );
         let start_column = range.start / self.rows_per_column.max(1);
 
-        VirtualGridPlan {
+        VirtualItemViewPlan {
             viewport_x,
             scroll_max_x: self.scroll_max_x,
             range,
@@ -144,7 +144,7 @@ impl CompactGridLayout {
     }
 
     pub(crate) fn virtual_slice_width(self, virtual_slice_count: usize) -> f32 {
-        compact_grid_virtual_slice_width(
+        compact_item_view_virtual_slice_width(
             virtual_slice_count,
             self.rows_per_column,
             self.column_width,
@@ -220,14 +220,14 @@ pub(crate) fn compact_cell_width(zoom_level: i32) -> f32 {
     COMPACT_ITEM_PADDING * 4.0 + icon_size + line_height * 5.0
 }
 
-pub(crate) fn compact_grid_layout(
+pub(crate) fn compact_item_view_layout(
     viewport_width: f32,
     entry_count: usize,
     rows_per_column: usize,
     cell_width: f32,
     row_height: f32,
     padding: f32,
-) -> CompactGridLayout {
+) -> CompactItemViewLayout {
     let viewport_width = viewport_width.max(1.0);
     let rows_per_column = rows_per_column.max(1);
     let cell_width = cell_width.max(1.0);
@@ -240,7 +240,7 @@ pub(crate) fn compact_grid_layout(
     let column_width = (cell_width + item_margin).max(1.0);
     let column_offset = 0.0;
     let column_count = entry_count.div_ceil(rows_per_column).max(1);
-    let content_width = compact_grid_content_width(
+    let content_width = compact_item_view_content_width(
         column_count,
         column_width,
         column_offset,
@@ -249,7 +249,7 @@ pub(crate) fn compact_grid_layout(
     );
     let scroll_max_x = (content_width - viewport_width).max(0.0);
 
-    CompactGridLayout {
+    CompactItemViewLayout {
         entry_count,
         rows_per_column,
         viewport_width,
@@ -263,7 +263,7 @@ pub(crate) fn compact_grid_layout(
     }
 }
 
-pub(crate) fn compact_grid_virtual_slice_width(
+pub(crate) fn compact_item_view_virtual_slice_width(
     virtual_slice_count: usize,
     rows_per_column: usize,
     column_width: f32,
@@ -278,7 +278,7 @@ pub(crate) fn compact_grid_virtual_slice_width(
     .max(1.0)
 }
 
-fn compact_grid_content_width(
+fn compact_item_view_content_width(
     column_count: usize,
     column_width: f32,
     column_offset: f32,
@@ -1274,7 +1274,7 @@ mod tests {
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
         PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, active_main_pane_width,
-        compact_cell_width, compact_grid_layout, compact_row_height, context_menu_metrics,
+        compact_cell_width, compact_item_view_layout, compact_row_height, context_menu_metrics,
         inactive_main_pane_width, main_pane_bounds, place_drop_geometry, search_panel_height,
     };
 
@@ -2606,11 +2606,13 @@ mod tests {
                 )
                 && split_pane.contains("x: self.tile-column * root.column-width;")
                 && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && split_pane.contains("height: item.tile_height * 1px;")
+                && split_pane.contains("private property <float> safe-tile-width:")
+                && split_pane.contains("private property <float> safe-tile-height:")
+                && split_pane.contains("height: self.safe-tile-height * 1px;")
                 && split_pane.contains("source: item.media;")
                 && split_pane.contains("x: item.media_x * 1px;")
-                && split_pane.contains("x: item.text_x * 1px;")
-                && split_pane.contains("height: item.title_line_height * 1px;")
+                && split_pane.contains("private property <float> safe-text-x:")
+                && split_pane.contains("height: parent.safe-title-line-height * 1px;")
                 && split_pane.contains("text: item.name;")
                 && !split_pane.contains("item.thumbnail")
                 && !visible_tile_loop.contains("thumbnail_state")
@@ -2642,12 +2644,12 @@ mod tests {
                 && !split_pane.contains("tile-height: root.tile-height;")
                 && !split_pane.contains("zoom-level: root.zoom-level;")
                 && split_pane.contains("color: root.metadata-group-color;")
-                && split_pane.contains("height: item.tile_height * 1px;")
+                && split_pane.contains("height: self.safe-tile-height * 1px;")
                 && split_pane.contains("width: item.media_width * 1px;")
-                && split_pane.contains("font-size: item.title_font_size * 1px;")
-                && split_pane.contains("x: item.text_x * 1px;")
-                && split_pane.contains("y: item.title_y * 1px;")
-                && split_pane.contains("width: item.text_width * 1px;")
+                && split_pane.contains("font-size: parent.safe-title-font-size * 1px;")
+                && split_pane.contains("x: parent.safe-text-x * 1px;")
+                && split_pane.contains("y: parent.safe-title-y * 1px;")
+                && split_pane.contains("width: parent.safe-text-width * 1px;")
                 && split_pane.contains("horizontal-alignment: left;")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
                 && !split_pane.contains("parent.width - 12px")
@@ -2660,7 +2662,7 @@ mod tests {
                 && !visible_tile_loop.contains("VerticalLayout")
                 && !split_pane.contains("height: root.zoom-level ==")
                 && !split_pane.contains("font-size: root.zoom-level =="),
-            "visible tile primitives should consume media and render tokens projected by Rust item-view instead of recalculating zoom bindings or fallback glyphs in Slint"
+            "visible tile primitives should consume media and render tokens projected by Rust item-view, with only pane-metric guards for invalid zero title geometry"
         );
         assert!(
             split_pane.contains(
@@ -2784,7 +2786,7 @@ mod tests {
                     "x: self.tile-column * root.column-width;"
                 )
                 && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && split_pane.contains("width: item.tile_width * 1px;")
+                && split_pane.contains("width: self.safe-tile-width * 1px;")
                 && !split_pane.contains("item.tile_x")
                 && !split_pane.contains("item.tile_y")
                 && !split_pane.contains("property <int> global-index:"),
@@ -2972,8 +2974,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_grid_layout_keeps_visible_columns_with_overscan() {
-        let grid = compact_grid_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+    fn compact_item_view_layout_keeps_visible_columns_with_overscan() {
+        let grid = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
         let at_start = grid.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
@@ -2982,13 +2984,14 @@ mod tests {
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
-        let clamped = compact_grid_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
+        let clamped =
+            compact_item_view_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 1);
         assert_eq!(clamped.range, 0..10);
         assert_eq!(clamped.visible_range, 0..10);
     }
 
     #[test]
-    fn compact_grid_metrics_follow_dolphin_compact_formula() {
+    fn compact_item_view_metrics_follow_dolphin_compact_formula() {
         assert_eq!(compact_cell_width(0), 126.0);
         assert_eq!(compact_cell_width(2), 159.0);
         assert_eq!(compact_row_height(2, 1), 50.0);
@@ -2996,21 +2999,21 @@ mod tests {
     }
 
     #[test]
-    fn compact_grid_layout_reports_scroll_extent_from_column_content_width() {
+    fn compact_item_view_layout_reports_scroll_extent_from_column_content_width() {
         assert_eq!(
-            compact_grid_layout(300.0, 0, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            compact_item_view_layout(300.0, 0, 4, 100.0, 100.0, 10.0).scroll_max_x,
             0.0
         );
         assert_eq!(
-            compact_grid_layout(300.0, 8, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            compact_item_view_layout(300.0, 8, 4, 100.0, 100.0, 10.0).scroll_max_x,
             0.0
         );
         assert_eq!(
-            compact_grid_layout(300.0, 12, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            compact_item_view_layout(300.0, 12, 4, 100.0, 100.0, 10.0).scroll_max_x,
             36.0
         );
         assert_eq!(
-            compact_grid_layout(300.0, 13, 4, 100.0, 100.0, 10.0).scroll_max_x,
+            compact_item_view_layout(300.0, 13, 4, 100.0, 100.0, 10.0).scroll_max_x,
             144.0
         );
     }
@@ -3461,8 +3464,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_grid_layout_clamps_viewport_and_reports_anchor_column() {
-        let grid = compact_grid_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+    fn compact_item_view_layout_clamps_viewport_and_reports_anchor_column() {
+        let grid = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
         let plan = grid.virtual_plan(350.0, 2);
         assert_eq!(plan.viewport_x, 350.0);
         assert_eq!(plan.scroll_max_x, 2462.0);
@@ -3470,7 +3473,8 @@ mod tests {
         assert_eq!(plan.range, 4..32);
         assert_eq!(plan.start_column, 1);
 
-        let clamped = compact_grid_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 2);
+        let clamped =
+            compact_item_view_layout(250.0, 10, 4, 100.0, 100.0, 10.0).virtual_plan(800.0, 2);
         assert_eq!(clamped.viewport_x, 86.0);
         assert_eq!(clamped.scroll_max_x, 86.0);
         assert_eq!(clamped.visible_range, 0..10);

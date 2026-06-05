@@ -17,11 +17,11 @@ Slint SplitPaneView 自管 viewport-x
        └─ root.view_changed() → PaneRouting.view-changed(slot)
             └─ Rust: PaneViewSyncScheduler 同步重建当前 visible slice
                  └─ sync_virtual_entries_for_slot()  [src/main.rs]
-                      ├─ MainGridLayout::from_ui_for_pane_width_with_text_lines()
+                      ├─ MainItemViewLayout::from_ui_for_pane_width_with_text_lines()
                       │    └─ 只对 focused slot 扣搜索栏高度，并使用 pane-local 文本行数
                       ├─ VirtualViewSnapshotInput               [virtual_view.rs]
                       ├─ prepare_virtual_view_snapshot_update()  [virtual_view.rs, 后台线程]
-                      │    ├─ compact_grid_layout() / virtual_plan() [geometry.rs]
+                      │    ├─ compact_item_view_layout() / virtual_plan() [geometry.rs]
                       │    ├─ should_rebuild_virtual_cache()
                       │    ├─ snapshot_entries_range()
                       │    └─ annotate_snapshot_location_groups()
@@ -534,10 +534,10 @@ let visible_range = virtual_entry_range(..., 0);           // 第二次
 两次调用重复计算相同的 column math。带 overscan 的范围天然包含不带 overscan 的范围。
 
 **涉及代码**：
-- `src/app/geometry.rs` — `CompactGridLayout::virtual_plan`
+- `src/app/geometry.rs` — `CompactItemViewLayout::virtual_plan`
 - `src/app/geometry.rs` — `virtual_entry_ranges`
 
-**实际实现**（✅ 已完成）：`CompactGridLayout::virtual_plan` 现在调用内部 `virtual_entry_ranges`，一次计算 `first_visible_column` / `visible_end_column`，同时返回 overscan range 和 visible range。旧的单 range 包装函数已删除，避免非测试构建保留死代码。
+**实际实现**（✅ 已完成）：`CompactItemViewLayout::virtual_plan` 现在调用内部 `virtual_entry_ranges`，一次计算 `first_visible_column` / `visible_end_column`，同时返回 overscan range 和 visible range。旧的单 range 包装函数已删除，避免非测试构建保留死代码。
 
 ```rust
 fn virtual_entry_ranges(..., overscan_columns) -> (Range<usize>, Range<usize>) {
@@ -739,7 +739,7 @@ private property <bool> file-operation-shortcuts-blocked:
 
 ### 自管 scrollbar 几何
 
-`viewport-content-width`、`virtual-slice-width` 和 `scroll-max-x` 现在由 Rust `pane_slot_item_view_metrics()` 通过同一套 `MainGridLayout` / `compact_grid_layout()` 计算，并随 `PaneViewData` 下发给 `SplitPaneView`。Slint 只消费这些 metrics 做 scrollbar、viewport clamp 和切片偏移，不再自己根据 `entry-count` / `rows-per-column` / `zoom-level` 重算主视图 layouter。
+`viewport-content-width`、`virtual-slice-width` 和 `scroll-max-x` 现在由 Rust `pane_slot_item_view_metrics()` 通过同一套 `MainItemViewLayout` / `compact_item_view_layout()` 计算，并随 `PaneViewData` 下发给 `SplitPaneView`。Slint 只消费这些 metrics 做 scrollbar、viewport clamp 和切片偏移，不再自己根据 `entry-count` / `rows-per-column` / `zoom-level` 重算主视图 layouter。
 
 已处理的布局恢复问题：`SplitPaneView` 现在在 pane-local `width` 或 `rows-per-column` 变化时主动夹紧 `viewport-x` 并请求虚拟切片刷新。这样全屏/布局变化发生在大目录末尾时，不再依赖后续手动拖动滚动条来触发旧切片重建。
 

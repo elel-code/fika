@@ -59,7 +59,7 @@ The non-main-pane chrome is intentionally allowed to track COSMIC Files more clo
 - Slint 侧把虚拟 tile 放进以 `virtual_start_column` 为锚点的局部 layer；tile local x/y 由 `for item[index]` 下标和 pane row metrics 计算，避免超大目录产生很大的每项坐标，也避免虚拟窗口滑动时把局部坐标变化写进重叠 `ItemViewEntry` row。
 - Rust 缓存虚拟范围、行数、列宽和缩略图尺寸；滚动仍落在同一虚拟范围时不重置 Slint model。
 - 参考 Dolphin `KItemListView::setScrollOffset()` 的同步布局路径，横向滚动位置变化会立即在 UI 线程夹紧 viewport 并重建当前 visible slice，不再把当前视口内容等待后台 virtual prepare 补齐。
-- Rust 侧的 `VirtualGridPlan` 统一计算 clamped viewport、scroll max、可见范围、overscan 范围和 Slint 锚点列，防止滚动条、缩略图调度和模型切片各用一套边界规则。
+- Rust 侧的 `VirtualItemViewPlan` 统一计算 clamped viewport、scroll max、可见范围、overscan 范围和 Slint 锚点列，防止滚动条、缩略图调度和模型切片各用一套边界规则。
 - 过滤、搜索、缩放或窗口尺寸变化导致内容变窄时，Rust 会按同一套列宽规则夹紧横向滚动位置，避免旧 viewport 落在新内容之外造成空白主栏。
 - tile 的真实全局索引由 Rust item-view layout/hit-test 根据 viewport、rows-per-column 和可见索引缓存解析，因此选择范围、拖拽命中和右键语义仍然基于完整模型，而不是 Slint row index。
 - 横向滚动、缩放和窗口尺寸变化会重新切片 `virtual_entries`，避免大目录一次性实例化所有可见 tile primitive。

@@ -1,5 +1,5 @@
 use crate::app::async_bridge::AsyncBridge;
-use crate::app::geometry::{MainGridLayout, active_main_pane_width, inactive_main_pane_width};
+use crate::app::geometry::{MainItemViewLayout, active_main_pane_width, inactive_main_pane_width};
 use crate::app::pane::{PaneEntrySnapshot, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
@@ -351,7 +351,7 @@ fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> I
         .pane_for_slot(slot)
         .map(|pane| pane.item_view_text_line_count())
         .unwrap_or(1);
-    let layout = MainGridLayout::from_ui_for_pane_width_with_text_lines(
+    let layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
         ui,
         viewport_width,
         search_panel_visible,
@@ -367,20 +367,20 @@ fn pane_slot_item_view_metrics(ui: &AppWindow, slot: i32, state: &AppState) -> I
             )
         })
         .unwrap_or((0, 0));
-    let compact_grid = layout.compact_grid(entry_count);
-    let virtual_slice_width = compact_grid.virtual_slice_width(virtual_slice_count);
+    let compact_item_view = layout.compact_item_view(entry_count);
+    let virtual_slice_width = compact_item_view.virtual_slice_width(virtual_slice_count);
 
     ItemViewSlotMetrics {
         entry_count: entry_count as i32,
-        rows_per_column: compact_grid.rows_per_column as i32,
-        cell_width: compact_grid.cell_width,
-        column_width: compact_grid.column_width,
-        column_offset: compact_grid.column_offset,
-        row_height: compact_grid.row_height,
-        padding: compact_grid.padding,
-        content_width: compact_grid.content_width,
+        rows_per_column: compact_item_view.rows_per_column as i32,
+        cell_width: compact_item_view.cell_width,
+        column_width: compact_item_view.column_width,
+        column_offset: compact_item_view.column_offset,
+        row_height: compact_item_view.row_height,
+        padding: compact_item_view.padding,
+        content_width: compact_item_view.content_width,
         virtual_slice_width,
-        scroll_max_x: compact_grid.scroll_max_x,
+        scroll_max_x: compact_item_view.scroll_max_x,
     }
 }
 

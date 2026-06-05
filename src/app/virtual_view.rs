@@ -1,4 +1,4 @@
-use crate::app::geometry::{CompactGridLayout, MainGridLayout, VirtualGridPlan};
+use crate::app::geometry::{CompactItemViewLayout, MainItemViewLayout, VirtualItemViewPlan};
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
 use std::ops::Range;
 use std::sync::Arc;
@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VirtualViewSnapshotUpdate {
     pub(crate) entry_count: usize,
-    pub(crate) layout: CompactGridLayout,
+    pub(crate) layout: CompactItemViewLayout,
     pub(crate) viewport_x: f32,
     pub(crate) viewport_clamped: bool,
     pub(crate) range: Range<usize>,
@@ -18,7 +18,7 @@ pub(crate) struct VirtualViewSnapshotUpdate {
 
 #[derive(Clone, Debug)]
 pub(crate) struct VirtualViewSnapshotInput {
-    pub(crate) layout: MainGridLayout,
+    pub(crate) layout: MainItemViewLayout,
     pub(crate) requested_viewport_x: f32,
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
@@ -41,21 +41,21 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     let visible_count = input
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-    let compact_grid = input.layout.compact_grid(visible_count);
-    let plan = compact_grid.virtual_plan(input.requested_viewport_x, 2);
+    let compact_item_view = input.layout.compact_item_view(visible_count);
+    let plan = compact_item_view.virtual_plan(input.requested_viewport_x, 2);
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
     let rebuild_model = !input.schedule_thumbnails
         || should_rebuild_virtual_cache(
             &input.cache,
             &plan,
-            &compact_grid,
+            &compact_item_view,
             input.thumbnail_size_px,
         );
 
     if !rebuild_model {
         return VirtualViewSnapshotUpdate {
             entry_count: visible_count,
-            layout: compact_grid,
+            layout: compact_item_view,
             viewport_x: plan.viewport_x,
             viewport_clamped,
             range: plan.range,
@@ -71,7 +71,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 
     VirtualViewSnapshotUpdate {
         entry_count: visible_count,
-        layout: compact_grid,
+        layout: compact_item_view,
         viewport_x: plan.viewport_x,
         viewport_clamped,
         range: plan.range,
@@ -84,8 +84,8 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 
 fn should_rebuild_virtual_cache(
     cache: &VirtualViewCache,
-    plan: &VirtualGridPlan,
-    layout: &CompactGridLayout,
+    plan: &VirtualItemViewPlan,
+    layout: &CompactItemViewLayout,
     thumbnail_size_px: u32,
 ) -> bool {
     !cache.matches_layout(layout, thumbnail_size_px)
@@ -344,8 +344,8 @@ mod tests {
     };
     use std::sync::Arc;
 
-    fn layout() -> MainGridLayout {
-        MainGridLayout {
+    fn layout() -> MainItemViewLayout {
+        MainItemViewLayout {
             viewport_x: 0.0,
             viewport_width: 250.0,
             rows_per_column: 4,
@@ -411,7 +411,7 @@ mod tests {
             range,
             ..VirtualViewCache::default()
         };
-        cache.update_layout_signature(layout().compact_grid(entry_count), thumbnail_size_px);
+        cache.update_layout_signature(layout().compact_item_view(entry_count), thumbnail_size_px);
         cache
     }
 
