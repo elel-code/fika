@@ -3700,6 +3700,7 @@ fn apply_virtual_view_result(
         update.range.start,
         update.start_column,
         entries,
+        show_location,
     );
     if target_is_focused {
         ui.set_entry_count(update.entry_count as i32);
@@ -3734,9 +3735,16 @@ fn set_pane_virtual_entries(
     start_index: usize,
     start_column: usize,
     entries: Vec<ItemViewEntry>,
+    show_location: bool,
 ) {
     if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
-        update_pane_item_view_entries_model(&mut pane.view, start_index, start_column, entries);
+        update_pane_item_view_entries_model(
+            &mut pane.view,
+            start_index,
+            start_column,
+            entries,
+            show_location,
+        );
     }
 }
 
@@ -5762,9 +5770,11 @@ mod tests {
                 && body.contains(".map(|slot| pane_slot_data(ui, slot, &state_ref))")
                 && body.contains(".map(|slot| pane_view_data(ui, slot, &state_ref))")
                 && body.contains(".map(|slot| (slot, pane_slot_entries(slot, &state_ref)))")
+                && body.contains(".map(|slot| (slot, pane_slot_metadata(slot, &state_ref)))")
                 && body.contains("sync_pane_views_model(ui, views);")
                 && body.contains("sync_pane_slots_model(ui, slots);")
                 && body.contains("sync_pane_entries_ui(ui, entries);")
+                && body.contains("sync_pane_metadata_ui(ui, metadata);")
                 && slots_model_body.contains("let current = ui.get_pane_slots();")
                 && slots_model_body.contains("let same_slots = current.row_count() == slots.len()")
                 && slots_model_body.contains(".is_some_and(|current| current.slot == slot.slot)")
@@ -5808,17 +5818,28 @@ mod tests {
 
         assert!(
             !pane_view_data.contains("entries: [ItemViewEntry]")
+                && !pane_view_data.contains("metadata: [ItemViewMetadataEntry]")
                 && app.contains("in property <[ItemViewEntry]> pane_slot_0_entries;")
                 && app.contains("in property <[ItemViewEntry]> pane_slot_1_entries;")
+                && app.contains("in property <[ItemViewMetadataEntry]> pane_slot_0_metadata;")
+                && app.contains("in property <[ItemViewMetadataEntry]> pane_slot_1_metadata;")
                 && surface_body.contains("in property <[ItemViewEntry]> entries;")
+                && surface_body.contains("in property <[ItemViewMetadataEntry]> metadata;")
                 && surface_body.contains("entries: root.entries;")
+                && surface_body.contains("metadata: root.metadata;")
                 && app.contains(
                     "entries: slot == 0 ? root.pane_slot_0_entries : root.pane_slot_1_entries;"
                 )
+                && app.contains(
+                    "metadata: slot == 0 ? root.pane_slot_0_metadata : root.pane_slot_1_metadata;"
+                )
                 && entries_sync_body.contains("set_pane_entries_ui(ui, slot, model);")
                 && entries_sync_body.contains("ui.set_pane_slot_0_entries(entries);")
-                && entries_sync_body.contains("ui.set_pane_slot_1_entries(entries);"),
-            "visible item models should stay as pane-local top-level models instead of being nested in PaneViewData rows"
+                && entries_sync_body.contains("ui.set_pane_slot_1_entries(entries);")
+                && entries_sync_body.contains("set_pane_metadata_ui(ui, slot, model);")
+                && entries_sync_body.contains("ui.set_pane_slot_0_metadata(metadata);")
+                && entries_sync_body.contains("ui.set_pane_slot_1_metadata(metadata);"),
+            "visible item and metadata models should stay as pane-local top-level models instead of being nested in PaneViewData rows"
         );
     }
 

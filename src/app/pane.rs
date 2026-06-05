@@ -4,7 +4,7 @@ use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
-use crate::{FileEntry, ItemViewEntry};
+use crate::{FileEntry, ItemViewEntry, ItemViewMetadataEntry};
 use slint::{Model, ModelRc, VecModel};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -70,6 +70,8 @@ impl PaneState {
         pane.view.virtual_view = self.view.virtual_view.clone();
         pane.view.virtual_entries = clone_item_view_entries_model(&self.view.virtual_entries);
         pane.view.virtual_entry_tokens = self.view.virtual_entry_tokens.clone();
+        pane.view.virtual_metadata_entries =
+            clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
         pane.view.virtual_start_index = self.view.virtual_start_index;
         pane.view.virtual_start_column = self.view.virtual_start_column;
         pane
@@ -99,6 +101,7 @@ impl PaneState {
         self.search.visible_location_groups = None;
         self.view.virtual_entries = ModelRc::default();
         self.view.virtual_entry_tokens.clear();
+        self.view.virtual_metadata_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
         self.view.virtual_start_column = 0;
         self.view.invalidate_virtual_view();
@@ -134,6 +137,19 @@ fn clone_item_view_entries_model(model: &ModelRc<ItemViewEntry>) -> ModelRc<Item
         .filter_map(|row| model.row_data(row))
         .collect::<Vec<_>>();
     ModelRc::new(Rc::new(VecModel::from(entries)))
+}
+
+fn clone_item_view_metadata_model(
+    model: &ModelRc<ItemViewMetadataEntry>,
+) -> ModelRc<ItemViewMetadataEntry> {
+    let entries = (0..model.row_count())
+        .filter_map(|row| model.row_data(row))
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        ModelRc::default()
+    } else {
+        ModelRc::new(Rc::new(VecModel::from(entries)))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -475,6 +491,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_generation: GenerationCounter,
     pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
+    pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     pub(crate) virtual_start_index: usize,
     pub(crate) virtual_start_column: usize,
     virtual_prepare_in_flight: Option<u64>,
@@ -1209,7 +1226,13 @@ mod tests {
             .iter()
             .map(PaneEntrySnapshot::to_item_view_entry)
             .collect();
-        update_pane_item_view_entries_model(&mut panes.focused_mut().view, 4, 1, virtual_entries);
+        update_pane_item_view_entries_model(
+            &mut panes.focused_mut().view,
+            4,
+            1,
+            virtual_entries,
+            true,
+        );
 
         assert!(panes.open_peer_from_focused());
         assert!(panes.open_peer_from_focused());
@@ -1334,7 +1357,13 @@ mod tests {
             ..PaneView::default()
         };
 
-        update_pane_item_view_entries_model(&mut view, 0, 0, vec![snapshot.to_item_view_entry()]);
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            0,
+            vec![snapshot.to_item_view_entry()],
+            false,
+        );
 
         assert!(!view.has_renderable_virtual_entries());
 
@@ -1348,7 +1377,7 @@ mod tests {
         rendered.title_y = 14.5;
         rendered.title_line_height = 21.0;
         rendered.title_font_size = 15.0;
-        update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered]);
+        update_pane_item_view_entries_model(&mut view, 0, 0, vec![rendered], false);
 
         assert!(view.has_renderable_virtual_entries());
 

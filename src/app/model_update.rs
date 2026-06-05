@@ -1,12 +1,55 @@
-use crate::ItemViewEntry;
 use crate::app::item_view::ItemViewRowToken;
 use crate::app::pane::PaneView;
+use crate::{ItemViewEntry, ItemViewMetadataEntry};
 use slint::{Model, ModelRc, VecModel};
 use std::collections::HashSet;
 use std::rc::Rc;
 
 pub(crate) fn new_item_view_entries_model(entries: Vec<ItemViewEntry>) -> ModelRc<ItemViewEntry> {
     ModelRc::new(Rc::new(VecModel::from(entries)))
+}
+
+pub(crate) fn new_item_view_metadata_model(
+    entries: &[ItemViewEntry],
+    show_location: bool,
+) -> ModelRc<ItemViewMetadataEntry> {
+    if !show_location {
+        return ModelRc::default();
+    }
+
+    let mut metadata = Vec::new();
+    for (row, entry) in entries.iter().enumerate() {
+        if !entry.group.is_empty() {
+            metadata.push(ItemViewMetadataEntry {
+                slice_index: row as i32,
+                text: entry.group.clone(),
+                text_x: entry.text_x,
+                text_width: entry.text_width,
+                y: entry.group_y,
+                line_height: entry.metadata_line_height,
+                font_size: entry.metadata_font_size,
+                is_group: true,
+            });
+        }
+        if !entry.location.is_empty() {
+            metadata.push(ItemViewMetadataEntry {
+                slice_index: row as i32,
+                text: entry.location.clone(),
+                text_x: entry.text_x,
+                text_width: entry.text_width,
+                y: entry.location_y,
+                line_height: entry.metadata_line_height,
+                font_size: entry.metadata_font_size,
+                is_group: false,
+            });
+        }
+    }
+
+    if metadata.is_empty() {
+        ModelRc::default()
+    } else {
+        ModelRc::new(Rc::new(VecModel::from(metadata)))
+    }
 }
 
 fn item_view_row_tokens(entries: &[ItemViewEntry]) -> Vec<ItemViewRowToken> {
@@ -42,7 +85,9 @@ pub(crate) fn update_pane_item_view_entries_model(
     start_index: usize,
     start_column: usize,
     entries: Vec<ItemViewEntry>,
+    show_location: bool,
 ) {
+    view.virtual_metadata_entries = new_item_view_metadata_model(&entries, show_location);
     let current = view.virtual_entries.clone();
     let old_start = view.virtual_start_index;
     if let Some(model) = update_item_view_entries_model(
@@ -242,8 +287,14 @@ mod tests {
         let mut left = PaneView::default();
         let mut right = PaneView::default();
 
-        update_pane_item_view_entries_model(&mut left, 0, 0, (0..3).map(entry).collect());
-        update_pane_item_view_entries_model(&mut right, 20, 4, (20..23).map(entry).collect());
+        update_pane_item_view_entries_model(&mut left, 0, 0, (0..3).map(entry).collect(), false);
+        update_pane_item_view_entries_model(
+            &mut right,
+            20,
+            4,
+            (20..23).map(entry).collect(),
+            false,
+        );
 
         assert_eq!(left.virtual_start_index, 0);
         assert_eq!(left.virtual_start_column, 0);
@@ -262,7 +313,13 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        update_pane_item_view_entries_model(&mut right, 22, 5, (22..25).map(entry).collect());
+        update_pane_item_view_entries_model(
+            &mut right,
+            22,
+            5,
+            (22..25).map(entry).collect(),
+            false,
+        );
 
         assert_eq!(
             rows(&left.virtual_entries),
@@ -438,7 +495,7 @@ mod tests {
     #[test]
     fn pane_item_view_entry_model_updates_selection_without_replacing_entries() {
         let mut view = PaneView::default();
-        update_pane_item_view_entries_model(&mut view, 0, 0, (0..4).map(entry).collect());
+        update_pane_item_view_entries_model(&mut view, 0, 0, (0..4).map(entry).collect(), false);
         let original = view.virtual_entries.clone();
 
         assert!(update_item_view_entries_model_selection(
@@ -485,6 +542,65 @@ mod tests {
                 && overlap_body.contains("model.set_row_data(row, entries[row].clone());")
                 && !overlap_body.contains(".row_data("),
             "overlap row reuse should compare the Rust sidecar token instead of cloning current ItemViewEntry rows from Slint"
+        );
+    }
+
+    #[test]
+    fn metadata_model_contains_only_renderable_location_rows() {
+        let mut plain = entry(0);
+        plain.group = "ignored".into();
+        plain.location = "/tmp/ignored".into();
+        plain.text_x = 52.0;
+        plain.text_width = 75.0;
+        plain.group_y = 2.0;
+        plain.location_y = 41.0;
+        plain.metadata_line_height = 14.0;
+        plain.metadata_font_size = 11.0;
+
+        let hidden = new_item_view_metadata_model(&[plain.clone()], false);
+        assert_eq!(hidden.row_count(), 0);
+
+        let mut location = entry(1);
+        location.group = "Documents".into();
+        location.location = "/home/user/Documents".into();
+        location.text_x = 52.0;
+        location.text_width = 75.0;
+        location.group_y = 2.0;
+        location.location_y = 41.0;
+        location.metadata_line_height = 14.0;
+        location.metadata_font_size = 11.0;
+
+        let model = new_item_view_metadata_model(&[plain, entry(2), location], true);
+
+        assert_eq!(model.row_count(), 4);
+        let rows = (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| {
+                (
+                    entry.slice_index,
+                    entry.text.to_string(),
+                    entry.y,
+                    entry.line_height,
+                    entry.font_size,
+                    entry.is_group,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (0, "ignored".to_string(), 2.0, 14.0, 11.0, true),
+                (0, "/tmp/ignored".to_string(), 41.0, 14.0, 11.0, false),
+                (2, "Documents".to_string(), 2.0, 14.0, 11.0, true),
+                (
+                    2,
+                    "/home/user/Documents".to_string(),
+                    41.0,
+                    14.0,
+                    11.0,
+                    false,
+                ),
+            ]
         );
     }
 }

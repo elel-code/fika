@@ -2621,9 +2621,14 @@ mod tests {
         let models = include_str!("../../ui/models.slint");
         let item_view_entry = models
             .split_once("export struct ItemViewEntry")
+            .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
+            .map(|(body, _)| body)
+            .expect("models.slint should define ItemViewEntry before ItemViewMetadataEntry");
+        let metadata_entry = models
+            .split_once("export struct ItemViewMetadataEntry")
             .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
             .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewEntry before PlaceEntry");
+            .expect("models.slint should define ItemViewMetadataEntry before PlaceEntry");
         let highlight_loop = split_pane
             .split_once("for highlight[index] in root.highlights: Rectangle")
             .and_then(|(_, rest)| {
@@ -2647,14 +2652,14 @@ mod tests {
             .expect("SplitPaneView should have an unconditional base image primitive loop");
         let base_text_loop = split_pane
             .split_once("for item[index] in root.entries: Text")
-            .and_then(|(_, rest)| rest.split_once("if (root.show-location): Rectangle"))
+            .and_then(|(_, rest)| rest.split_once("for metadata[index] in root.metadata: Text"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have an unconditional base text primitive loop");
         let metadata_tile_loop = split_pane
-            .split_once("if (root.show-location): Rectangle")
+            .split_once("for metadata[index] in root.metadata: Text")
             .and_then(|(_, rest)| rest.split_once("if (root.selection-rect-active): Rectangle"))
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have a metadata overlay loop");
+            .expect("SplitPaneView should have a sparse metadata overlay loop");
         assert!(
             split_pane.contains("for item[index] in root.entries: Image")
                 && split_pane.contains("for item[index] in root.entries: Text")
@@ -2711,6 +2716,13 @@ mod tests {
                 && item_view_entry.contains("media_width: float")
                 && item_view_entry.contains("text_x: float")
                 && item_view_entry.contains("title_line_height: float")
+                && metadata_entry.contains("slice_index: int")
+                && metadata_entry.contains("text: string")
+                && metadata_entry.contains("text_x: float")
+                && metadata_entry.contains("text_width: float")
+                && metadata_entry.contains("line_height: float")
+                && metadata_entry.contains("font_size: float")
+                && metadata_entry.contains("is_group: bool")
                 && !item_view_entry.contains("thumbnail: image")
                 && !item_view_entry.contains("glyph_doc_font_size")
                 && !item_view_entry.contains("tile_x")
@@ -2746,7 +2758,9 @@ mod tests {
                 && !split_pane.contains("private property <length> title-font-size:")
                 && !split_pane.contains("tile-height: root.tile-height;")
                 && !split_pane.contains("zoom-level: root.zoom-level;")
-                && split_pane.contains("color: root.metadata-group-color;")
+                && split_pane.contains(
+                    "color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;"
+                )
                 && base_image_loop.contains("width: item.media_width * 1px;")
                 && base_image_loop.contains("height: item.media_height * 1px;")
                 && base_text_loop.contains("font-size: item.title_font_size * 1px;")
@@ -2760,7 +2774,7 @@ mod tests {
                 && base_text_loop.contains("horizontal-alignment: left;")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
                 && !split_pane.contains("parent.width - 12px")
-                && split_pane.contains("height: item.metadata_line_height * 1px;")
+                && split_pane.contains("height: metadata.line_height * 1px;")
                 && !split_pane.contains("item.thumbnail_width")
                 && !split_pane.contains("doc-font-size:")
                 && !split_pane.contains("item.tile_padding_x")
@@ -2823,17 +2837,31 @@ mod tests {
             "SplitPaneView should use one pane-level input controller with Rust coordinate hit-test instead of per-tile handlers"
         );
         assert!(
-            split_pane.contains("if (root.show-location): Rectangle")
-                && metadata_tile_loop.contains("visible: item.group != \"\";")
-                && metadata_tile_loop.contains("text: item.group;")
-                && metadata_tile_loop.contains("visible: item.location != \"\";")
-                && metadata_tile_loop.contains("text: item.location;")
-                && metadata_tile_loop.contains("height: item.metadata_line_height * 1px;")
-                && metadata_tile_loop.contains("color: root.metadata-group-color;")
-                && metadata_tile_loop.contains("color: root.metadata-location-color;")
+            split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
+                && split_pane.contains("for metadata[index] in root.metadata: Text")
+                && metadata_tile_loop
+                    .contains("tile-row: metadata.slice_index.mod(root.rows-per-column);")
+                && metadata_tile_loop.contains(
+                    "tile-column: (metadata.slice_index - self.tile-row) / root.rows-per-column;"
+                )
+                && metadata_tile_loop
+                    .contains("x: self.tile-column * root.column-width + metadata.text_x * 1px;")
+                && metadata_tile_loop.contains(
+                    "y: root.preview-padding + self.tile-row * root.row-height + metadata.y * 1px;"
+                )
+                && metadata_tile_loop.contains("height: metadata.line_height * 1px;")
+                && metadata_tile_loop.contains("text: metadata.text;")
+                && metadata_tile_loop.contains(
+                    "color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;"
+                )
+                && metadata_tile_loop.contains("font-size: metadata.font_size * 1px;")
+                && metadata_tile_loop.contains("font-weight: metadata.is_group ? 700 : 400;")
+                && !metadata_tile_loop.contains("visible:")
+                && !metadata_tile_loop.contains("item.group")
+                && !metadata_tile_loop.contains("item.location")
                 && !metadata_tile_loop.contains("source: item.media;")
                 && !metadata_tile_loop.contains("text: item.name;"),
-            "ordinary compact items should always render icon/name in the base loop, while group/location metadata is an overlay used only for location mode"
+            "ordinary compact items should always render icon/name in the base loop, while group/location metadata comes from a pane-local sparse overlay model"
         );
         assert!(!split_pane.contains("root.request_context_menu("));
         assert!(

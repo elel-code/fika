@@ -31,6 +31,17 @@ export struct ItemViewHighlightEntry {
     tile_height: float,
 }
 
+export struct ItemViewMetadataEntry {
+    slice_index: int,
+    text: string,
+    text_x: float,
+    text_width: float,
+    y: float,
+    line_height: float,
+    font_size: float,
+    is_group: bool,
+}
+
 export struct PlaceEntry {
     label: string,
     path: string,

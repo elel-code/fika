@@ -5,8 +5,8 @@ use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewEntry, ItemViewHighlightEntry, PaneSlotData, PaneViewData, set_status,
-    sync_virtual_entries_for_slot,
+    AppWindow, ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry, PaneSlotData,
+    PaneViewData, set_status, sync_virtual_entries_for_slot,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -101,6 +101,14 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
             .map(|slot| (slot, pane_slot_highlights(slot, &state_ref)))
             .collect::<Vec<_>>()
     };
+    let metadata = {
+        let state_ref = state.borrow();
+        visible_slots
+            .iter()
+            .copied()
+            .map(|slot| (slot, pane_slot_metadata(slot, &state_ref)))
+            .collect::<Vec<_>>()
+    };
 
     if ui.get_pane_slots().row_count() > slots.len() {
         sync_pane_slots_model(ui, slots);
@@ -111,6 +119,7 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
     }
     sync_pane_entries_ui(ui, entries);
     sync_pane_highlights_ui(ui, highlights);
+    sync_pane_metadata_ui(ui, metadata);
 }
 
 fn sync_pane_slots_model(ui: &AppWindow, slots: Vec<PaneSlotData>) {
@@ -140,12 +149,13 @@ pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
             continue;
         };
         if current_view.slot == slot {
-            let (next, entries, highlights) = {
+            let (next, entries, highlights, metadata) = {
                 let state_ref = state.borrow();
                 (
                     pane_view_data(ui, slot, &state_ref),
                     pane_slot_entries(slot, &state_ref),
                     pane_slot_highlights(slot, &state_ref),
+                    pane_slot_metadata(slot, &state_ref),
                 )
             };
             if current_view != next {
@@ -153,6 +163,7 @@ pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
             }
             set_pane_entries_ui(ui, slot, entries);
             set_pane_highlights_ui(ui, slot, highlights);
+            set_pane_metadata_ui(ui, slot, metadata);
             return;
         }
     }
@@ -250,6 +261,28 @@ fn set_pane_highlights_ui(ui: &AppWindow, slot: i32, highlights: ModelRc<ItemVie
         1 => {
             if ui.get_pane_slot_1_highlights() != highlights {
                 ui.set_pane_slot_1_highlights(highlights);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sync_pane_metadata_ui(ui: &AppWindow, metadata: Vec<(i32, ModelRc<ItemViewMetadataEntry>)>) {
+    for (slot, model) in metadata {
+        set_pane_metadata_ui(ui, slot, model);
+    }
+}
+
+fn set_pane_metadata_ui(ui: &AppWindow, slot: i32, metadata: ModelRc<ItemViewMetadataEntry>) {
+    match slot {
+        0 => {
+            if ui.get_pane_slot_0_metadata() != metadata {
+                ui.set_pane_slot_0_metadata(metadata);
+            }
+        }
+        1 => {
+            if ui.get_pane_slot_1_metadata() != metadata {
+                ui.set_pane_slot_1_metadata(metadata);
             }
         }
         _ => {}
@@ -504,6 +537,14 @@ fn pane_slot_highlights(slot: i32, state: &AppState) -> ModelRc<ItemViewHighligh
                 .collect::<Vec<_>>();
             ModelRc::new(Rc::new(VecModel::from(highlights)))
         })
+        .unwrap_or_default()
+}
+
+fn pane_slot_metadata(slot: i32, state: &AppState) -> ModelRc<ItemViewMetadataEntry> {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.view.virtual_metadata_entries.clone())
         .unwrap_or_default()
 }
 

@@ -1,10 +1,11 @@
-import { ItemViewEntry, ItemViewHighlightEntry } from "models.slint";
+import { ItemViewEntry, ItemViewHighlightEntry, ItemViewMetadataEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
     in property <[ItemViewEntry]> entries;
     in property <[ItemViewHighlightEntry]> highlights;
+    in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
     in-out property <float> viewport-x;
     in property <int> item-view-rows-per-column: 1;
@@ -364,43 +365,20 @@ export component SplitPaneView inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                if (root.show-location): Rectangle {
-                    width: parent.width;
-                    height: parent.height;
-                    background: transparent;
+                for metadata[index] in root.metadata: Text {
+                    private property <int> tile-row: metadata.slice_index.mod(root.rows-per-column);
+                    private property <int> tile-column: (metadata.slice_index - self.tile-row) / root.rows-per-column;
 
-                    for item[index] in root.entries: Text {
-                        private property <int> tile-row: index.mod(root.rows-per-column);
-                        private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
-
-                        visible: item.group != "";
-                        x: self.tile-column * root.column-width + item.text_x * 1px;
-                        y: root.preview-padding + self.tile-row * root.row-height + item.group_y * 1px;
-                        width: item.text_width * 1px;
-                        height: item.metadata_line_height * 1px;
-                        text: item.group;
-                        color: root.metadata-group-color;
-                        font-size: item.metadata_font_size * 1px;
-                        font-weight: 700;
-                        overflow: elide;
-                        vertical-alignment: center;
-                    }
-
-                    for item[index] in root.entries: Text {
-                        private property <int> tile-row: index.mod(root.rows-per-column);
-                        private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
-
-                        visible: item.location != "";
-                        x: self.tile-column * root.column-width + item.text_x * 1px;
-                        y: root.preview-padding + self.tile-row * root.row-height + item.location_y * 1px;
-                        width: item.text_width * 1px;
-                        height: item.metadata_line_height * 1px;
-                        text: item.location;
-                        color: root.metadata-location-color;
-                        font-size: item.metadata_font_size * 1px;
-                        overflow: elide;
-                        vertical-alignment: center;
-                    }
+                    x: self.tile-column * root.column-width + metadata.text_x * 1px;
+                    y: root.preview-padding + self.tile-row * root.row-height + metadata.y * 1px;
+                    width: metadata.text_width * 1px;
+                    height: metadata.line_height * 1px;
+                    text: metadata.text;
+                    color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;
+                    font-size: metadata.font_size * 1px;
+                    font-weight: metadata.is_group ? 700 : 400;
+                    overflow: elide;
+                    vertical-alignment: center;
                 }
             }
 
