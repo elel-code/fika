@@ -9,7 +9,8 @@ use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
     AppWindow, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry, PaneSlotData, PaneViewData, set_status, sync_virtual_entries_for_slot,
+    ItemViewMetadataEntry, PaneSlotData, PaneSurfaceData, PaneViewData, set_status,
+    sync_virtual_entries_for_slot,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -63,6 +64,7 @@ fn sync_pane_view_viewport_ui(
                 current_view.viewport_x = viewport_x;
                 current.set_row_data(row, current_view);
             }
+            sync_pane_surface_ui(ui, state, slot);
             return;
         }
     }
@@ -72,28 +74,32 @@ fn sync_pane_view_viewport_ui(
 
 pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let visible_slots = visible_pane_slots(ui);
-    let slots = {
+    let (slots, views, surfaces) = {
         let state_ref = state.borrow();
-        visible_slots
-            .iter()
-            .copied()
-            .map(|slot| pane_slot_data(ui, slot, &state_ref))
-            .collect::<Vec<_>>()
-    };
-    let views = {
-        let state_ref = state.borrow();
-        visible_slots
-            .iter()
-            .copied()
-            .map(|slot| pane_view_data(ui, slot, &state_ref))
-            .collect::<Vec<_>>()
+        let mut slots = Vec::with_capacity(visible_slots.len());
+        let mut views = Vec::with_capacity(visible_slots.len());
+        let mut surfaces = Vec::with_capacity(visible_slots.len());
+        for slot in visible_slots.iter().copied() {
+            let pane = pane_slot_data(ui, slot, &state_ref);
+            let view = pane_view_data(ui, slot, &state_ref);
+            surfaces.push(PaneSurfaceData {
+                slot,
+                pane: pane.clone(),
+                view: view.clone(),
+            });
+            slots.push(pane);
+            views.push(view);
+        }
+        (slots, views, surfaces)
     };
     if ui.get_pane_slots().row_count() > slots.len() {
         sync_pane_slots_model(ui, slots);
         sync_pane_views_model(ui, views);
+        sync_pane_surfaces_model(ui, surfaces);
     } else {
         sync_pane_views_model(ui, views);
         sync_pane_slots_model(ui, slots);
+        sync_pane_surfaces_model(ui, surfaces);
     }
 }
 
@@ -131,6 +137,7 @@ pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
             if current_view != next {
                 current.set_row_data(row, next);
             }
+            sync_pane_surface_ui(ui, state, slot);
             return;
         }
     }
@@ -152,6 +159,7 @@ pub(crate) fn sync_pane_slot_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
             if current_slot != next {
                 current.set_row_data(row, next);
             }
+            sync_pane_surface_ui(ui, state, slot);
             return;
         }
     }
@@ -185,6 +193,51 @@ fn sync_pane_views_model(ui: &AppWindow, views: Vec<PaneViewData>) {
     }
 
     ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));
+}
+
+fn sync_pane_surfaces_model(ui: &AppWindow, surfaces: Vec<PaneSurfaceData>) {
+    let current = ui.get_pane_surfaces();
+    let same_slots = current.row_count() == surfaces.len()
+        && surfaces.iter().enumerate().all(|(row, surface)| {
+            current
+                .row_data(row)
+                .is_some_and(|current| current.slot == surface.slot)
+        });
+    if same_slots {
+        for (row, surface) in surfaces.into_iter().enumerate() {
+            if current.row_data(row).as_ref() != Some(&surface) {
+                current.set_row_data(row, surface);
+            }
+        }
+        return;
+    }
+
+    ui.set_pane_surfaces(ModelRc::new(Rc::new(VecModel::from(surfaces))));
+}
+
+fn sync_pane_surface_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    let current = ui.get_pane_surfaces();
+    for row in 0..current.row_count() {
+        let Some(current_surface) = current.row_data(row) else {
+            continue;
+        };
+        if current_surface.slot == slot {
+            let next = {
+                let state_ref = state.borrow();
+                PaneSurfaceData {
+                    slot,
+                    pane: pane_slot_data(ui, slot, &state_ref),
+                    view: pane_view_data(ui, slot, &state_ref),
+                }
+            };
+            if current_surface != next {
+                current.set_row_data(row, next);
+            }
+            return;
+        }
+    }
+
+    sync_pane_slots_ui(ui, state);
 }
 
 fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {

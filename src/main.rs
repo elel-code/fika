@@ -6468,22 +6468,33 @@ mod tests {
             .expect("sync_pane_slots_model body should be present");
         let views_model_body = body
             .split_once("fn sync_pane_views_model(")
-            .and_then(|(_, rest)| rest.split_once("fn pane_slot_data("))
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surfaces_model("))
             .map(|(body, _)| body)
             .unwrap_or_else(|| {
                 source
                     .split_once("fn sync_pane_views_model(")
-                    .and_then(|(_, rest)| rest.split_once("fn pane_slot_data("))
+                    .and_then(|(_, rest)| rest.split_once("fn sync_pane_surfaces_model("))
                     .map(|(body, _)| body)
                     .expect("sync_pane_views_model body should be present")
             });
+        let surfaces_model_body = source
+            .split_once("fn sync_pane_surfaces_model(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surface_ui("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_surfaces_model body should be present");
 
         assert!(
             body.contains("let visible_slots = visible_pane_slots(ui);")
-                && body.contains(".map(|slot| pane_slot_data(ui, slot, &state_ref))")
-                && body.contains(".map(|slot| pane_view_data(ui, slot, &state_ref))")
+                && body.contains("let mut slots = Vec::with_capacity(visible_slots.len());")
+                && body.contains("let mut views = Vec::with_capacity(visible_slots.len());")
+                && body.contains("let mut surfaces = Vec::with_capacity(visible_slots.len());")
+                && body.contains("for slot in visible_slots.iter().copied()")
+                && body.contains("let pane = pane_slot_data(ui, slot, &state_ref);")
+                && body.contains("let view = pane_view_data(ui, slot, &state_ref);")
+                && body.contains("PaneSurfaceData {\n                slot,\n                pane: pane.clone(),\n                view: view.clone(),\n            }")
                 && body.contains("sync_pane_views_model(ui, views);")
                 && body.contains("sync_pane_slots_model(ui, slots);")
+                && body.contains("sync_pane_surfaces_model(ui, surfaces);")
                 && !body.contains("sync_pane_entries_ui(ui, entries);")
                 && !body.contains("sync_pane_media_ui(ui, media);")
                 && !body.contains("sync_pane_metadata_ui(ui, metadata);")
@@ -6502,7 +6513,19 @@ mod tests {
                 && views_model_body.contains("current.set_row_data(row, view);")
                 && views_model_body
                     .contains("ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));")
-                && !views_model_body.contains("state.borrow()"),
+                && !views_model_body.contains("state.borrow()")
+                && surfaces_model_body.contains("let current = ui.get_pane_surfaces();")
+                && surfaces_model_body
+                    .contains("let same_slots = current.row_count() == surfaces.len()")
+                && surfaces_model_body
+                    .contains(".is_some_and(|current| current.slot == surface.slot)")
+                && surfaces_model_body
+                    .contains("if current.row_data(row).as_ref() != Some(&surface)")
+                && surfaces_model_body.contains("current.set_row_data(row, surface);")
+                && surfaces_model_body.contains(
+                    "ui.set_pane_surfaces(ModelRc::new(Rc::new(VecModel::from(surfaces))));"
+                )
+                && !surfaces_model_body.contains("state.borrow()"),
             "pane chrome and hot view data refresh should snapshot state before updating Slint models"
         );
     }
@@ -6650,9 +6673,14 @@ mod tests {
             .expect("sync_pane_slots_model body should be present");
         let views_model_body = source
             .split_once("fn sync_pane_views_model(")
-            .and_then(|(_, rest)| rest.split_once("fn pane_slot_data("))
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surfaces_model("))
             .map(|(body, _)| body)
             .expect("sync_pane_views_model body should be present");
+        let surfaces_model_body = source
+            .split_once("fn sync_pane_surfaces_model(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surface_ui("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_surfaces_model body should be present");
         let slot_body = source
             .split_once("pub(crate) fn sync_pane_slot_ui(")
             .and_then(|(_, rest)| rest.split_once("fn visible_pane_slots("))
@@ -6670,7 +6698,12 @@ mod tests {
                 && !views_model_body.contains("state.borrow()")
                 && views_model_body.contains("current.set_row_data(row, view);")
                 && views_model_body
-                    .contains("ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));"),
+                    .contains("ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));")
+                && !surfaces_model_body.contains("state.borrow()")
+                && surfaces_model_body.contains("current.set_row_data(row, surface);")
+                && surfaces_model_body.contains(
+                    "ui.set_pane_surfaces(ModelRc::new(Rc::new(VecModel::from(surfaces))));"
+                ),
             "full pane sync must release AppState borrow before Slint model setters"
         );
         assert!(

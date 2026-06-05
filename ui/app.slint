@@ -58,7 +58,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, PaneSlotData, PaneViewData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -652,6 +652,7 @@ export component AppWindow inherits Window {
     in property <[ChooserChoice]> chooser_choices;
     in property <[PaneSlotData]> pane_slots;
     in property <[PaneViewData]> pane_views;
+    in property <[PaneSurfaceData]> pane_surfaces;
     in-out property <int> entry_count: 0;
     in property <[PlaceEntry]> places;
     in property <[DeviceEntry]> devices;
@@ -690,7 +691,7 @@ export component AppWindow inherits Window {
     private property <length> pane-slot-0-width: root.split_view_open ? max(root.split-pane-min-width, min(root.split-content-width - root.split-pane-min-width, root.split-ratio-pane-width)) : root.main-pane-width;
     private property <length> pane-slot-1-x: root.pane-slot-0-width + root.split-divider-width;
     private property <length> pane-slot-1-width: root.split_view_open ? max(1px, root.main-pane-width - root.pane-slot-1-x) : 0px;
-    private property <int> visible-pane-count: max(1, root.pane_slots.length);
+    private property <int> visible-pane-count: max(1, root.pane_surfaces.length);
     private property <length> main-content-height: max(1px, root.height - root.shell-header-height);
     private property <color> shell-base-color: root.dark_mode ? #101418 : #f6f8fa;
     private property <color> sidebar-surface-color: root.dark_mode ? #181e24 : #ffffff;
@@ -1632,13 +1633,13 @@ export component AppWindow inherits Window {
                     height: parent.height;
                     clip: true;
 
-                    for pane[index] in root.pane_slots : PaneSlotSurface {
-                        private property <int> slot: pane.slot;
+                    for surface in root.pane_surfaces : PaneSlotSurface {
+                        private property <int> slot: surface.slot;
                         x: root.pane-slot-x(slot);
                         width: root.pane-slot-width(slot);
                         height: parent.height;
-                        pane: pane;
-                        view: root.pane_views[index];
+                        pane: surface.pane;
+                        view: surface.view;
                         focused: root.focused_pane == slot;
                         dark-mode: root.dark_mode;
                         pane-shell-base-color: root.shell-base-color;

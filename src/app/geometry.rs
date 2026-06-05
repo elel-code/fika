@@ -2142,7 +2142,8 @@ mod tests {
                 && app.contains("pane-content := Rectangle")
                 && app.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));")
                 && app.contains("in property <[PaneSlotData]> pane_slots;")
-                && app.contains("for pane[index] in root.pane_slots : PaneSlotSurface")
+                && app.contains("in property <[PaneSurfaceData]> pane_surfaces;")
+                && app.contains("for surface in root.pane_surfaces : PaneSlotSurface")
                 && app.contains("current-path: root.pane.current_path;")
                 && app.contains("if (root.search-panel-visible) : SearchPanel")
                 && app.contains("SplitPaneView {"),
@@ -2364,14 +2365,16 @@ mod tests {
         assert!(app.contains("component PaneSlotSurface inherits Rectangle"));
         assert!(app.contains("private property <length> pane-slot-0-width"));
         assert!(app.contains("in property <[PaneSlotData]> pane_slots;"));
+        assert!(app.contains("in property <[PaneSurfaceData]> pane_surfaces;"));
         assert!(app.contains(
-            "private property <int> visible-pane-count: max(1, root.pane_slots.length);"
+            "private property <int> visible-pane-count: max(1, root.pane_surfaces.length);"
         ));
-        assert!(app.contains("for pane[index] in root.pane_slots : PaneSlotSurface"));
-        assert!(app.contains("private property <int> slot: pane.slot;"));
+        assert!(app.contains("for surface in root.pane_surfaces : PaneSlotSurface"));
+        assert!(app.contains("private property <int> slot: surface.slot;"));
         assert!(app.contains("x: root.pane-slot-x(slot);"));
         assert!(app.contains("width: root.pane-slot-width(slot);"));
-        assert!(app.contains("pane: pane;"));
+        assert!(app.contains("pane: surface.pane;"));
+        assert!(app.contains("view: surface.view;"));
         assert!(app.contains("focused: root.focused_pane == slot;"));
         assert!(app.contains(
             "private property <length> pane-slot-1-x: root.pane-slot-0-width + root.split-divider-width;"
@@ -2676,9 +2679,10 @@ mod tests {
             "split pane row should give each physical pane its own full-height chrome"
         );
         assert!(
-            app.contains("for pane[index] in root.pane_slots : PaneSlotSurface {\n                        private property <int> slot: pane.slot;\n                        x: root.pane-slot-x(slot);\n                        width: root.pane-slot-width(slot);\n                        height: parent.height;")
-                && app.contains("pane: pane;")
-                && app.contains("view: root.pane_views[index];")
+            app.contains("for surface in root.pane_surfaces : PaneSlotSurface {\n                        private property <int> slot: surface.slot;\n                        x: root.pane-slot-x(slot);\n                        width: root.pane-slot-width(slot);\n                        height: parent.height;")
+                && app.contains("pane: surface.pane;")
+                && app.contains("view: surface.view;")
+                && !app.contains("view: root.pane_views[index];")
                 && !app.contains("pane_slot_0_entries")
                 && !app.contains("pane_slot_1_entries")
                 && app.contains("focused: root.focused_pane == slot;"),
@@ -2711,7 +2715,7 @@ mod tests {
             1,
             "split view must render physical panes through one reusable PaneSlotSurface repeater"
         );
-        assert!(pane_shells.contains("for pane[index] in root.pane_slots : PaneSlotSurface"));
+        assert!(pane_shells.contains("for surface in root.pane_surfaces : PaneSlotSurface"));
         assert_eq!(
             pane_shells.matches("PaneSlot {").count(),
             0,
@@ -3327,8 +3331,8 @@ mod tests {
         assert!(
             app.contains("pane-row := Rectangle")
                 && app.contains("height: parent.height;")
-                && app.contains("for pane[index] in root.pane_slots : PaneSlotSurface")
-                && app.contains("private property <int> slot: pane.slot;")
+                && app.contains("for surface in root.pane_surfaces : PaneSlotSurface")
+                && app.contains("private property <int> slot: surface.slot;")
                 && app.contains("x: root.pane-slot-x(slot);")
                 && app.contains("width: root.pane-slot-width(slot);")
                 && app.contains("height: parent.height;"),

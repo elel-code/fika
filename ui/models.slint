@@ -164,3 +164,9 @@ export struct PaneSlotData {
     chooser_filter_label: string,
     chooser_choices: [ChooserChoice],
 }
+
+export struct PaneSurfaceData {
+    slot: int,
+    pane: PaneSlotData,
+    view: PaneViewData,
+}
