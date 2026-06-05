@@ -7,6 +7,7 @@ use crate::app::state::AppState;
 use crate::{AppWindow, FileEntry, ItemViewEntry};
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::ops::Range;
+use std::path::Path;
 
 const COMPACT_ITEM_PADDING: f32 = 2.0;
 const COMPACT_MEDIA_TEXT_GAP: f32 = COMPACT_ITEM_PADDING * 2.0;
@@ -99,11 +100,14 @@ impl ItemViewRowToken {
     }
 
     pub(crate) fn has_renderable_title(&self) -> bool {
-        !self.name.is_empty()
+        !self.name.as_str().trim().is_empty()
             && self.tile_width > 1.0
             && self.tile_height > 1.0
+            && self.media_width > 1.0
+            && self.media_height > 1.0
             && self.text_x >= 0.0
             && self.text_width > 1.0
+            && self.title_y >= 0.0
             && self.title_line_height > 1.0
             && self.title_font_size > 1.0
     }
@@ -369,11 +373,15 @@ fn ordered_pair(a: f32, b: f32) -> (f32, f32) {
 }
 
 pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemViewRenderPlanInput) {
-    let cell_width = input.cell_width.max(1.0);
     let render_metrics = input.render_metrics;
+    let cell_width = input
+        .cell_width
+        .max(compact_min_cell_width(render_metrics))
+        .max(1.0);
     let tile_width = cell_width;
 
     for entry in entries.iter_mut() {
+        ensure_renderable_entry_name(entry);
         let metadata_mode =
             input.show_location && (!entry.group.is_empty() || !entry.location.is_empty());
         entry.tile_width = tile_width;
@@ -396,6 +404,24 @@ pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemVie
         entry.metadata_line_height = text_plan.metadata_line_height;
         entry.title_line_height = text_plan.title_line_height;
     }
+}
+
+fn compact_min_cell_width(metrics: ItemViewRenderMetrics) -> f32 {
+    metrics.media_padding_x * 4.0 + metrics.media_width + metrics.title_font_size * 5.0
+}
+
+fn ensure_renderable_entry_name(entry: &mut ItemViewEntry) {
+    if !entry.name.trim().is_empty() {
+        return;
+    }
+
+    let fallback = Path::new(entry.path.as_str())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| entry.path.to_string());
+    entry.name = fallback.into();
 }
 
 pub(crate) fn decorate_fallback_media(entries: &mut [ItemViewEntry], cache: &ItemViewMediaCache) {
@@ -848,7 +874,7 @@ mod tests {
         decorate_render_plan(
             &mut entries,
             ItemViewRenderPlanInput {
-                cell_width: 159.0,
+                cell_width: 129.0,
                 render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
                 show_location: false,
             },
@@ -858,7 +884,7 @@ mod tests {
             .iter()
             .map(|entry| entry.tile_width)
             .collect::<Vec<_>>();
-        assert_eq!(geometry, vec![159.0, 159.0, 159.0, 159.0, 159.0]);
+        assert_eq!(geometry, vec![129.0, 129.0, 129.0, 129.0, 129.0]);
         let render_tokens = entries
             .iter()
             .map(|entry| {
@@ -881,24 +907,24 @@ mod tests {
             render_tokens,
             vec![
                 (
-                    50.0, 2.0, 2.0, 52.0, 105.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    50.0, 2.0, 2.0, 52.0, 105.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    50.0, 2.0, 2.0, 52.0, 105.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    50.0, 2.0, 2.0, 52.0, 105.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    50.0, 2.0, 2.0, 52.0, 105.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
+                    50.0, 2.0, 2.0, 52.0, 75.0, 14.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
             ]
         );
         assert!(
-            entries.iter().all(|entry| entry.text_width >= 105.0),
+            entries.iter().all(|entry| entry.text_width >= 75.0),
             "compact horizontal titles must keep enough width to remain visible"
         );
         assert!(
@@ -920,7 +946,7 @@ mod tests {
         decorate_render_plan(
             &mut entries,
             ItemViewRenderPlanInput {
-                cell_width: 159.0,
+                cell_width: 129.0,
                 render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
                 show_location: true,
             },
@@ -930,7 +956,7 @@ mod tests {
         assert_eq!(entry.media_x, 2.0);
         assert_eq!(entry.media_y, 5.5);
         assert_eq!(entry.text_x, 52.0);
-        assert_eq!(entry.text_width, 105.0);
+        assert_eq!(entry.text_width, 75.0);
         assert_eq!(entry.metadata_line_height, 14.0);
         assert_eq!(entry.title_line_height, 21.0);
         assert_eq!(entry.group_y, 2.0);
@@ -945,7 +971,7 @@ mod tests {
         decorate_render_plan(
             &mut entries,
             ItemViewRenderPlanInput {
-                cell_width: 159.0,
+                cell_width: 129.0,
                 render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
                 show_location: true,
             },
@@ -954,8 +980,33 @@ mod tests {
         let entry = &entries[0];
         assert_eq!(entry.media_x, 2.0);
         assert_eq!(entry.text_x, 52.0);
-        assert_eq!(entry.text_width, 105.0);
+        assert_eq!(entry.text_width, 75.0);
         assert_eq!(entry.title_y, 18.0);
+    }
+
+    #[test]
+    fn render_plan_supplies_name_fallback_before_slint_paints_text() {
+        let mut entries = vec![ItemViewEntry {
+            name: SharedString::new(),
+            path: "/tmp/visible-name.txt".into(),
+            ..test_entry(0)
+        }];
+
+        decorate_render_plan(
+            &mut entries,
+            ItemViewRenderPlanInput {
+                cell_width: 0.0,
+                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
+                show_location: false,
+            },
+        );
+
+        let entry = &entries[0];
+        assert_eq!(entry.name, "visible-name.txt");
+        assert_eq!(entry.tile_width, 129.0);
+        assert_eq!(entry.text_x, 52.0);
+        assert_eq!(entry.text_width, 75.0);
+        assert!(ItemViewRowToken::from_entry(entry).has_renderable_title());
     }
 
     #[test]

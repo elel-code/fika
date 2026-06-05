@@ -86,7 +86,7 @@ Reference files:
 
 Useful interaction rules:
 
-- Dolphin's horizontal column-first file arrangement is the compact item layout path: `KStandardItemListView::setItemLayout()` sets horizontal scroll orientation for `CompactLayout`, while the layouter transposes the logical grid and `itemRect()` rotates it back into physical horizontal coordinates.
+- Dolphin's horizontal column-first file arrangement is the compact item layout path: `KStandardItemListView::setItemLayout()` sets horizontal scroll orientation for `CompactLayout`, while the layouter transposes the logical layout and `itemRect()` rotates it back into physical horizontal coordinates.
 - Compact rows show the icon and file name in one horizontal item, not an icon-centered tile with the name underneath.
 - View state and selection should be preserved across non-navigational refreshes.
 - Menus and hover submenus should be contextual, not global: the submenu anchor is the parent item, not the root menu.
@@ -121,5 +121,5 @@ Useful interaction rules:
 Current Fika mapping:
 
 - Fika already opens a Dolphin-like search strip from the top bar and supports recursive search.
-- Recursive search results are grouped by parent location without inserting separate rows, so the current column-first virtualized grid remains stable.
+- Recursive search results are grouped by parent location without inserting separate rows, so the current column-first virtualized item-view remains stable.
 - Further work should add deeper filter UI parity only when the filtering backend exists.

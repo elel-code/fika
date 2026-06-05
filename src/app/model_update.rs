@@ -379,7 +379,7 @@ mod tests {
 
         let mut rendered_title = entry(0);
         rendered_title.text_x = 52.0;
-        rendered_title.text_width = 105.0;
+        rendered_title.text_width = 75.0;
         rendered_title.title_y = 14.5;
         rendered_title.title_line_height = 21.0;
         rendered_title.title_font_size = 15.0;
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(model, original);
         let updated = model.row_data(0).expect("row should remain present");
         assert_eq!(updated.name, "item-0");
-        assert_eq!(updated.text_width, 105.0);
+        assert_eq!(updated.text_width, 75.0);
         assert_eq!(updated.title_y, 14.5);
         assert_eq!(updated.title_line_height, 21.0);
         assert_eq!(updated.title_font_size, 15.0);

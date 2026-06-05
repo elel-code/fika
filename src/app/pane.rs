@@ -1341,6 +1341,8 @@ mod tests {
         let mut rendered = snapshot.to_item_view_entry();
         rendered.tile_width = 100.0;
         rendered.tile_height = 50.0;
+        rendered.media_width = 46.0;
+        rendered.media_height = 46.0;
         rendered.text_x = 52.0;
         rendered.text_width = 46.0;
         rendered.title_y = 14.5;

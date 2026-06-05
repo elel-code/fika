@@ -216,8 +216,8 @@ pub(crate) fn main_pane_bounds(
 
 pub(crate) fn compact_cell_width(zoom_level: i32) -> f32 {
     let icon_size = compact_media_size(zoom_level);
-    let line_height = compact_title_line_height(zoom_level);
-    COMPACT_ITEM_PADDING * 4.0 + icon_size + line_height * 5.0
+    let font_height = compact_title_font_height(zoom_level);
+    COMPACT_ITEM_PADDING * 4.0 + icon_size + font_height * 5.0
 }
 
 pub(crate) fn compact_item_view_layout(
@@ -315,6 +315,16 @@ fn compact_title_line_height(zoom_level: i32) -> f32 {
         2 => 21.0,
         3 => 22.0,
         _ => 24.0,
+    }
+}
+
+fn compact_title_font_height(zoom_level: i32) -> f32 {
+    match zoom_level {
+        0 => 12.0,
+        1 => 13.0,
+        2 => 15.0,
+        3 => 16.0,
+        _ => 18.0,
     }
 }
 
@@ -2106,7 +2116,6 @@ mod tests {
             !app.contains("callback inactive_pane_drop_allowed(float, float, string) -> bool;")
         );
         assert!(!app.contains("right-pane-content := Rectangle"));
-        assert!(!app.contains("active-grid-clip := Rectangle"));
         assert!(!app.contains("active-pane-clip := Rectangle"));
         assert!(!app.contains("split-pane-clip := Rectangle"));
         assert!(!app.contains("split-pane-content := Rectangle"));
@@ -2606,13 +2615,14 @@ mod tests {
                 )
                 && split_pane.contains("x: self.tile-column * root.column-width;")
                 && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && split_pane.contains("private property <float> safe-tile-width:")
-                && split_pane.contains("private property <float> safe-tile-height:")
-                && split_pane.contains("height: self.safe-tile-height * 1px;")
+                && split_pane.contains("width: item.tile_width * 1px;")
+                && split_pane.contains("height: item.tile_height * 1px;")
                 && split_pane.contains("source: item.media;")
                 && split_pane.contains("x: item.media_x * 1px;")
-                && split_pane.contains("private property <float> safe-text-x:")
-                && split_pane.contains("height: parent.safe-title-line-height * 1px;")
+                && split_pane.contains("x: item.text_x * 1px;")
+                && split_pane.contains("y: item.title_y * 1px;")
+                && split_pane.contains("width: item.text_width * 1px;")
+                && split_pane.contains("height: item.title_line_height * 1px;")
                 && split_pane.contains("text: item.name;")
                 && !split_pane.contains("item.thumbnail")
                 && !visible_tile_loop.contains("thumbnail_state")
@@ -2644,12 +2654,12 @@ mod tests {
                 && !split_pane.contains("tile-height: root.tile-height;")
                 && !split_pane.contains("zoom-level: root.zoom-level;")
                 && split_pane.contains("color: root.metadata-group-color;")
-                && split_pane.contains("height: self.safe-tile-height * 1px;")
+                && split_pane.contains("height: item.tile_height * 1px;")
                 && split_pane.contains("width: item.media_width * 1px;")
-                && split_pane.contains("font-size: parent.safe-title-font-size * 1px;")
-                && split_pane.contains("x: parent.safe-text-x * 1px;")
-                && split_pane.contains("y: parent.safe-title-y * 1px;")
-                && split_pane.contains("width: parent.safe-text-width * 1px;")
+                && split_pane.contains("font-size: item.title_font_size * 1px;")
+                && split_pane.contains("x: item.text_x * 1px;")
+                && split_pane.contains("y: item.title_y * 1px;")
+                && split_pane.contains("width: item.text_width * 1px;")
                 && split_pane.contains("horizontal-alignment: left;")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
                 && !split_pane.contains("parent.width - 12px")
@@ -2786,7 +2796,7 @@ mod tests {
                     "x: self.tile-column * root.column-width;"
                 )
                 && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
-                && split_pane.contains("width: self.safe-tile-width * 1px;")
+                && split_pane.contains("width: item.tile_width * 1px;")
                 && !split_pane.contains("item.tile_x")
                 && !split_pane.contains("item.tile_y")
                 && !split_pane.contains("property <int> global-index:"),
@@ -2975,12 +2985,12 @@ mod tests {
 
     #[test]
     fn compact_item_view_layout_keeps_visible_columns_with_overscan() {
-        let grid = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
-        let at_start = grid.virtual_plan(0.0, 1);
+        let compact_layout = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let at_start = compact_layout.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
 
-        let middle = grid.virtual_plan(350.0, 1);
+        let middle = compact_layout.virtual_plan(350.0, 1);
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
@@ -2992,8 +3002,8 @@ mod tests {
 
     #[test]
     fn compact_item_view_metrics_follow_dolphin_compact_formula() {
-        assert_eq!(compact_cell_width(0), 126.0);
-        assert_eq!(compact_cell_width(2), 159.0);
+        assert_eq!(compact_cell_width(0), 96.0);
+        assert_eq!(compact_cell_width(2), 129.0);
         assert_eq!(compact_row_height(2, 1), 50.0);
         assert_eq!(compact_row_height(2, 3), 57.0);
     }
@@ -3465,8 +3475,8 @@ mod tests {
 
     #[test]
     fn compact_item_view_layout_clamps_viewport_and_reports_anchor_column() {
-        let grid = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
-        let plan = grid.virtual_plan(350.0, 2);
+        let compact_layout = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let plan = compact_layout.virtual_plan(350.0, 2);
         assert_eq!(plan.viewport_x, 350.0);
         assert_eq!(plan.scroll_max_x, 2462.0);
         assert_eq!(plan.visible_range, 12..24);

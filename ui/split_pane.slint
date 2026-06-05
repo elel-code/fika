@@ -309,18 +309,11 @@ export component SplitPaneView inherits Rectangle {
                 for item[index] in root.entries: Rectangle {
                     private property <int> tile-row: index.mod(root.rows-per-column);
                     private property <int> tile-column: (index - self.tile-row) / root.rows-per-column;
-                    private property <float> safe-tile-width: max(root.item-view-cell-width, item.tile_width);
-                    private property <float> safe-tile-height: max(root.item-view-row-height, item.tile_height);
-                    private property <float> safe-title-font-size: max(11, item.title_font_size);
-                    private property <float> safe-title-line-height: max(self.safe-title-font-size + 4, item.title_line_height);
-                    private property <float> safe-text-x: item.text_x > 0 ? item.text_x : min(max(24, root.item-view-row-height), max(24, self.safe-tile-width - 24));
-                    private property <float> safe-text-width: max(1, item.text_width > 1 ? item.text_width : self.safe-tile-width - self.safe-text-x - max(1, root.item-view-padding));
-                    private property <float> safe-title-y: item.title_line_height > 1 ? item.title_y : max(0, (self.safe-tile-height - self.safe-title-line-height) / 2);
 
                     x: self.tile-column * root.column-width;
                     y: root.preview-padding + self.tile-row * root.row-height;
-                    width: self.safe-tile-width * 1px;
-                    height: self.safe-tile-height * 1px;
+                    width: item.tile_width * 1px;
+                    height: item.tile_height * 1px;
                     border-radius: 7px;
                     border-width: item.selected || (root.drag-active && !root.drag-rejected && root.drag-target-path == item.path) ? 1px : 0px;
                     border-color: root.drag-active && !root.drag-rejected && root.drag-target-path == item.path ? root.drop-border-color : root.selection-border-color;
@@ -349,13 +342,13 @@ export component SplitPaneView inherits Rectangle {
                     }
 
                     Text {
-                        x: parent.safe-text-x * 1px;
-                        y: parent.safe-title-y * 1px;
-                        width: parent.safe-text-width * 1px;
-                        height: parent.safe-title-line-height * 1px;
+                        x: item.text_x * 1px;
+                        y: item.title_y * 1px;
+                        width: item.text_width * 1px;
+                        height: item.title_line_height * 1px;
                         text: item.name;
                         color: root.title-color;
-                        font-size: parent.safe-title-font-size * 1px;
+                        font-size: item.title_font_size * 1px;
                         overflow: elide;
                         horizontal-alignment: left;
                         vertical-alignment: center;

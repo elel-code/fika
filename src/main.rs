@@ -5237,12 +5237,12 @@ mod tests {
 
     #[test]
     fn compact_item_view_layout_keeps_visible_columns_with_overscan() {
-        let grid = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
-        let at_start = grid.virtual_plan(0.0, 1);
+        let compact_layout = compact_item_view_layout(250.0, 100, 4, 100.0, 100.0, 10.0);
+        let at_start = compact_layout.virtual_plan(0.0, 1);
         assert_eq!(at_start.range, 0..16);
         assert_eq!(at_start.visible_range, 0..12);
 
-        let middle = grid.virtual_plan(350.0, 1);
+        let middle = compact_layout.virtual_plan(350.0, 1);
         assert_eq!(middle.range, 8..28);
         assert_eq!(middle.visible_range, 12..24);
 
