@@ -79,18 +79,22 @@ Current Fika mapping:
 
 Reference files:
 
+- `dolphin/src/kitemviews/kstandarditemlistview.cpp`
 - `dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp`
 - `dolphin/src/kitemviews/private/kitemlistsmoothscroller.cpp`
 - `dolphin/src/views/dolphinitemlistview.cpp`
 
 Useful interaction rules:
 
+- Dolphin's horizontal column-first file arrangement is the compact item layout path: `KStandardItemListView::setItemLayout()` sets horizontal scroll orientation for `CompactLayout`, while the layouter transposes the logical grid and `itemRect()` rotates it back into physical horizontal coordinates.
+- Compact rows show the icon and file name in one horizontal item, not an icon-centered tile with the name underneath.
 - View state and selection should be preserved across non-navigational refreshes.
 - Menus and hover submenus should be contextual, not global: the submenu anchor is the parent item, not the root menu.
 - Smoothness comes from preserving old visible state until new data is ready, then replacing atomically.
 
 Current Fika mapping:
 
+- The main pane follows the horizontal compact direction: `rows_per_column` comes from visible height, entry index maps to `column = index / rows_per_column` and `row = index % rows_per_column`, and ordinary item render tokens place media on the left with the file name on the right.
 - Fika already preserves old view during uncached navigation, caches directory entries, and remembers per-directory horizontal scroll.
 - Top/header layout is split between `TopBar` for global search/split/theme controls and `PathBar` for main-pane Back/Forward plus path editing, keeping chrome layout details out of `AppWindow`.
 - Status bar and chooser footer controls now live in `StatusBar`, keeping bottom-row actions out of `AppWindow`.

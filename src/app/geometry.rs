@@ -214,11 +214,11 @@ pub(crate) fn main_pane_bounds(
 
 pub(crate) fn icon_cell_width(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 80.0,
-        1 => 96.0,
-        2 => 112.0,
-        3 => 132.0,
-        _ => 156.0,
+        0 => 152.0,
+        1 => 176.0,
+        2 => 208.0,
+        3 => 244.0,
+        _ => 284.0,
     }
 }
 
@@ -297,11 +297,11 @@ fn icon_grid_content_width(
 
 pub(crate) fn icon_row_height(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 78.0,
-        1 => 90.0,
-        2 => 104.0,
-        3 => 124.0,
-        _ => 146.0,
+        0 => 44.0,
+        1 => 52.0,
+        2 => 62.0,
+        3 => 76.0,
+        _ => 90.0,
     }
 }
 
@@ -2610,9 +2610,7 @@ mod tests {
                 && split_pane.contains("x: item.text_x * 1px;")
                 && split_pane.contains("y: item.title_y * 1px;")
                 && split_pane.contains("width: item.text_width * 1px;")
-                && split_pane.contains(
-                    "horizontal-alignment: root.show-location && (item.group != \"\" || item.location != \"\") ? left : center;"
-                )
+                && split_pane.contains("horizontal-alignment: left;")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
                 && !split_pane.contains("parent.width - 12px")
                 && split_pane.contains("height: item.metadata_line_height * 1px;")

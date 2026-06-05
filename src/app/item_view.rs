@@ -8,8 +8,8 @@ use crate::{AppWindow, FileEntry, ItemViewEntry};
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::ops::Range;
 
-const TITLE_MEDIA_GAP: f32 = 5.0;
-const TITLE_PADDING_X: f32 = 6.0;
+const COMPACT_MEDIA_PADDING_X: f32 = 12.0;
+const COMPACT_MEDIA_TEXT_GAP: f32 = 10.0;
 const SELECTION_DRAG_THRESHOLD: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,8 +103,16 @@ impl ItemViewRenderMetrics {
     pub(crate) fn from_zoom_level(zoom_level: i32) -> Self {
         Self {
             tile_height: icon_tile_height(zoom_level),
-            media_padding_x: if zoom_level < 2 { 12.0 } else { 16.0 },
-            media_text_gap: if zoom_level < 2 { 10.0 } else { 12.0 },
+            media_padding_x: if zoom_level < 2 {
+                COMPACT_MEDIA_PADDING_X - 2.0
+            } else {
+                COMPACT_MEDIA_PADDING_X
+            },
+            media_text_gap: if zoom_level < 2 {
+                COMPACT_MEDIA_TEXT_GAP - 2.0
+            } else {
+                COMPACT_MEDIA_TEXT_GAP
+            },
             media_width: icon_media_width(zoom_level),
             media_height: icon_media_height(zoom_level),
             metadata_font_size: if zoom_level < 2 { 10.0 } else { 11.0 },
@@ -369,37 +377,19 @@ pub(crate) fn decorate_render_plan(entries: &mut [ItemViewEntry], input: ItemVie
         entry.media_height = render_metrics.media_height;
         entry.metadata_font_size = render_metrics.metadata_font_size;
         entry.title_font_size = render_metrics.title_font_size;
-        entry.metadata_line_height = render_metrics.metadata_font_size + 3.0;
-        entry.title_line_height = render_metrics.title_font_size + 4.0;
+        entry.media_x = render_metrics.media_padding_x;
+        entry.media_y = ((render_metrics.tile_height - render_metrics.media_height) / 2.0).max(0.0);
+        entry.text_x = render_metrics.media_padding_x
+            + render_metrics.media_width
+            + render_metrics.media_text_gap;
+        entry.text_width = (tile_width - entry.text_x - render_metrics.media_padding_x).max(1.0);
 
-        if metadata_mode {
-            entry.media_x = render_metrics.media_padding_x;
-            entry.media_y =
-                ((render_metrics.tile_height - render_metrics.media_height) / 2.0).max(0.0);
-            entry.text_x = render_metrics.media_padding_x
-                + render_metrics.media_width
-                + render_metrics.media_text_gap;
-            entry.text_width =
-                (tile_width - entry.text_x - render_metrics.media_padding_x).max(1.0);
-            let text_plan = ItemTextRenderPlan::new(entry, render_metrics, true);
-            entry.group_y = text_plan.group_y;
-            entry.title_y = text_plan.title_y;
-            entry.location_y = text_plan.location_y;
-            entry.metadata_line_height = text_plan.metadata_line_height;
-            entry.title_line_height = text_plan.title_line_height;
-        } else {
-            let text_padding_x = TITLE_PADDING_X.min(tile_width / 4.0);
-            entry.media_x = ((tile_width - render_metrics.media_width) / 2.0).max(0.0);
-            let title_block_height = render_metrics.media_height
-                + TITLE_MEDIA_GAP
-                + (render_metrics.title_font_size + 4.0);
-            entry.media_y = ((render_metrics.tile_height - title_block_height) / 2.0).max(0.0);
-            entry.text_x = text_padding_x;
-            entry.text_width = (tile_width - 2.0 * text_padding_x).max(1.0);
-            entry.group_y = 0.0;
-            entry.title_y = entry.media_y + render_metrics.media_height + TITLE_MEDIA_GAP;
-            entry.location_y = 0.0;
-        }
+        let text_plan = ItemTextRenderPlan::new(entry, render_metrics, metadata_mode);
+        entry.group_y = text_plan.group_y;
+        entry.title_y = text_plan.title_y;
+        entry.location_y = text_plan.location_y;
+        entry.metadata_line_height = text_plan.metadata_line_height;
+        entry.title_line_height = text_plan.title_line_height;
     }
 }
 
@@ -424,7 +414,7 @@ struct ItemTextRenderPlan {
 impl ItemTextRenderPlan {
     fn new(entry: &ItemViewEntry, metrics: ItemViewRenderMetrics, show_location: bool) -> Self {
         let metadata_line_height = metrics.metadata_font_size + 3.0;
-        let title_line_height = metrics.title_font_size + 4.0;
+        let title_line_height = title_line_height(metrics.title_font_size);
         let has_group = show_location && !entry.group.is_empty();
         let has_location = show_location && !entry.location.is_empty();
         let spacing = 2.0;
@@ -466,31 +456,31 @@ impl ItemTextRenderPlan {
 
 fn icon_tile_height(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 78.0,
-        1 => 90.0,
-        2 => 104.0,
-        3 => 124.0,
-        _ => 146.0,
+        0 => 44.0,
+        1 => 52.0,
+        2 => 62.0,
+        3 => 76.0,
+        _ => 90.0,
     }
 }
 
 fn icon_media_width(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 52.0,
-        1 => 64.0,
-        2 => 80.0,
-        3 => 96.0,
-        _ => 112.0,
+        0 => 28.0,
+        1 => 36.0,
+        2 => 46.0,
+        3 => 58.0,
+        _ => 72.0,
     }
 }
 
 fn icon_media_height(zoom_level: i32) -> f32 {
     match zoom_level {
-        0 => 46.0,
-        1 => 58.0,
-        2 => 70.0,
-        3 => 84.0,
-        _ => 98.0,
+        0 => 28.0,
+        1 => 36.0,
+        2 => 46.0,
+        3 => 58.0,
+        _ => 72.0,
     }
 }
 
@@ -502,6 +492,10 @@ fn icon_title_font_size(zoom_level: i32) -> f32 {
         3 => 16.0,
         _ => 18.0,
     }
+}
+
+fn title_line_height(font_size: f32) -> f32 {
+    font_size + 6.0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -834,13 +828,13 @@ mod tests {
     }
 
     #[test]
-    fn render_plan_keeps_item_view_entry_geometry_tokens_stable() {
+    fn render_plan_keeps_compact_item_view_entry_geometry_tokens_stable() {
         let mut entries = (4..9).map(test_entry).collect::<Vec<_>>();
 
         decorate_render_plan(
             &mut entries,
             ItemViewRenderPlanInput {
-                cell_width: 100.0,
+                cell_width: 208.0,
                 render_metrics: ItemViewRenderMetrics::from_zoom_level(2),
                 show_location: false,
             },
@@ -850,7 +844,7 @@ mod tests {
             .iter()
             .map(|entry| entry.tile_width)
             .collect::<Vec<_>>();
-        assert_eq!(geometry, vec![100.0, 100.0, 100.0, 100.0, 100.0]);
+        assert_eq!(geometry, vec![208.0, 208.0, 208.0, 208.0, 208.0]);
         let render_tokens = entries
             .iter()
             .map(|entry| {
@@ -873,25 +867,25 @@ mod tests {
             render_tokens,
             vec![
                 (
-                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    62.0, 12.0, 8.0, 68.0, 128.0, 20.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    62.0, 12.0, 8.0, 68.0, 128.0, 20.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    62.0, 12.0, 8.0, 68.0, 128.0, 20.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    62.0, 12.0, 8.0, 68.0, 128.0, 20.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
                 (
-                    104.0, 10.0, 5.0, 6.0, 88.0, 80.0, 19.0, 80.0, 70.0, 11.0, 15.0
+                    62.0, 12.0, 8.0, 68.0, 128.0, 20.5, 21.0, 46.0, 46.0, 11.0, 15.0
                 ),
             ]
         );
         assert!(
-            entries.iter().all(|entry| entry.text_width >= 48.0),
-            "ordinary icon-view titles must keep enough width to remain visible"
+            entries.iter().all(|entry| entry.text_width >= 96.0),
+            "compact horizontal titles must keep enough width to remain visible"
         );
         assert!(
             entries
@@ -919,15 +913,15 @@ mod tests {
         );
 
         let entry = &entries[0];
-        assert_eq!(entry.media_x, 16.0);
-        assert_eq!(entry.media_y, 17.0);
-        assert_eq!(entry.text_x, 108.0);
-        assert_eq!(entry.text_width, 124.0);
+        assert_eq!(entry.media_x, 12.0);
+        assert_eq!(entry.media_y, 8.0);
+        assert_eq!(entry.text_x, 68.0);
+        assert_eq!(entry.text_width, 168.0);
         assert_eq!(entry.metadata_line_height, 14.0);
-        assert_eq!(entry.title_line_height, 19.0);
-        assert_eq!(entry.group_y, 26.5);
-        assert_eq!(entry.title_y, 42.5);
-        assert_eq!(entry.location_y, 63.5);
+        assert_eq!(entry.title_line_height, 21.0);
+        assert_eq!(entry.group_y, 4.5);
+        assert_eq!(entry.title_y, 20.5);
+        assert_eq!(entry.location_y, 43.5);
     }
 
     #[test]
@@ -937,17 +931,17 @@ mod tests {
         decorate_render_plan(
             &mut entries,
             ItemViewRenderPlanInput {
-                cell_width: 100.0,
+                cell_width: 208.0,
                 render_metrics: ItemViewRenderMetrics::from_zoom_level(2),
                 show_location: true,
             },
         );
 
         let entry = &entries[0];
-        assert_eq!(entry.media_x, 10.0);
-        assert_eq!(entry.text_x, 6.0);
-        assert_eq!(entry.text_width, 88.0);
-        assert_eq!(entry.title_y, 80.0);
+        assert_eq!(entry.media_x, 12.0);
+        assert_eq!(entry.text_x, 68.0);
+        assert_eq!(entry.text_width, 128.0);
+        assert_eq!(entry.title_y, 20.5);
     }
 
     #[test]
