@@ -442,7 +442,7 @@ Acceptance for all:
 - [~] Continue focused Rust and Slint decomposition while feature work proceeds.
   - Acceptance: new behavior should opportunistically move related Rust state/controller logic and reusable Slint rows/layers/components into focused files instead of growing `main.rs` or `ui/app.slint`.
   - Current direction: split both `.rs` and `.slint` incrementally alongside real feature/performance work, keeping each extraction tied to tested behavior rather than preserving historical compatibility paths.
-  - Current: service-menu context action snapshotting, Slint model synchronization, shell-free launch dispatch, and source-pane status updates now live in `src/app/context_service_menu.rs`; `main.rs` only routes pane/menu callbacks and async events.
+  - Current: service-menu context action snapshotting, Slint model synchronization, shell-free launch dispatch, and source-pane status updates now live in `src/app/context_service_menu.rs`; coalesced interactive settings persistence lives in `src/app/settings_save.rs`; `main.rs` only routes pane/menu callbacks, captures UI snapshots, and dispatches async events.
 
 - [~] Spike Dolphin-style self-managed main viewport.
   - Acceptance: main file view scroll offset is no longer sourced from `ScrollView` / `Flickable`; Rust owns the first item-view layout/hit-test layer through `src/app/item_view.rs`.

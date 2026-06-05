@@ -10,7 +10,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::mpsc;
@@ -86,6 +85,7 @@ use app::selection::{
     rebuild_visible_entry_index_for_slot, retained_visible_paths,
     selection_range_paths_filtered_for_slot, selection_rect_paths_filtered_for_slot,
 };
+use app::settings_save::{SettingsSaveScheduler, save_settings_latest};
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui, sync_focus_navigation_ui,
     sync_navigation_ui, sync_pane_slot_ui, sync_pane_slots_ui, sync_pane_view_ui,
@@ -108,7 +108,7 @@ use app::virtual_view::{VirtualViewSnapshotInput, prepare_virtual_view_snapshot_
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::service_menu_policy::load_service_menu_policy;
-use config::settings::{AppSettings, load_settings, save_settings};
+use config::settings::{AppSettings, load_settings};
 use desktop::{mime_open, open_with, terminal};
 use fs::devices::{
     device_diagnostics_report, eject_device, mount_device, mounted_devices, unmount_device,
@@ -134,10 +134,6 @@ pub(crate) struct FileEntry {
 }
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
-const SETTINGS_SAVE_COALESCE: Duration = Duration::from_millis(120);
-
-static SETTINGS_SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
-static SETTINGS_SAVE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 struct PaneViewSyncScheduler {
     ui: slint::Weak<AppWindow>,
@@ -174,11 +170,6 @@ impl PaneViewSyncScheduler {
 struct ThumbnailFlushScheduler {
     timer: Timer,
     pending: ThumbnailPendingQueue,
-}
-
-struct SettingsSaveScheduler {
-    timer: Timer,
-    pending: Rc<RefCell<Option<(u64, AppSettings)>>>,
 }
 
 type ThumbnailPendingLoad = (u64, u64, thumbnails::ThumbnailLoad);
@@ -220,36 +211,6 @@ impl ThumbnailFlushScheduler {
             .borrow_mut()
             .push_back((pane_id, generation, load));
         self.timer.restart();
-    }
-}
-
-impl SettingsSaveScheduler {
-    fn new(async_handle: tokio::runtime::Handle) -> Self {
-        let timer = Timer::default();
-        let pending = Rc::new(RefCell::new(None));
-        let timer_pending = Rc::clone(&pending);
-
-        timer.start(TimerMode::SingleShot, SETTINGS_SAVE_COALESCE, move || {
-            let Some((generation, settings)) = timer_pending.borrow_mut().take() else {
-                return;
-            };
-            spawn_settings_save(async_handle.clone(), generation, settings);
-        });
-        timer.stop();
-
-        Self { timer, pending }
-    }
-
-    fn schedule(&self, settings: AppSettings) {
-        let generation = SETTINGS_SAVE_GENERATION.fetch_add(1, AtomicOrdering::AcqRel) + 1;
-        *self.pending.borrow_mut() = Some((generation, settings));
-        self.timer.restart();
-    }
-
-    fn save_now(&self, settings: AppSettings) {
-        self.timer.stop();
-        self.pending.borrow_mut().take();
-        save_settings_latest(settings);
     }
 }
 
@@ -1940,33 +1901,6 @@ fn current_settings(ui: &AppWindow, state: &Rc<RefCell<AppState>>) -> AppSetting
         window_height_px: Some(window_size.height),
         last_dir: Some(current_dir),
     }
-}
-
-fn save_settings_latest(settings: AppSettings) {
-    let generation = SETTINGS_SAVE_GENERATION.fetch_add(1, AtomicOrdering::AcqRel) + 1;
-    save_settings_if_latest(generation, settings);
-}
-
-fn spawn_settings_save(
-    async_handle: tokio::runtime::Handle,
-    generation: u64,
-    settings: AppSettings,
-) {
-    async_handle.spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || save_settings_if_latest(generation, settings))
-            .await;
-    });
-}
-
-fn save_settings_if_latest(generation: u64, settings: AppSettings) {
-    let lock = SETTINGS_SAVE_LOCK.get_or_init(|| Mutex::new(()));
-    let Ok(_guard) = lock.lock() else {
-        return;
-    };
-    if SETTINGS_SAVE_GENERATION.load(AtomicOrdering::Acquire) != generation {
-        return;
-    }
-    save_settings(&settings);
 }
 
 pub(crate) fn remember_pane_view_state(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
@@ -6370,20 +6304,30 @@ mod tests {
 
     #[test]
     fn interactive_settings_saves_are_coalesced_off_the_ui_thread() {
-        let source = include_str!("main.rs");
-        let scheduler_body = source
-            .split_once("struct SettingsSaveScheduler")
-            .and_then(|(_, rest)| rest.split_once("fn main()"))
+        let main_source = include_str!("main.rs");
+        let production_main_source = main_source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(body, _)| body)
+            .expect("main.rs should contain tests after production code");
+        let scheduler_source = include_str!("app/settings_save.rs");
+        let scheduler_body = scheduler_source
+            .split_once("pub(crate) struct SettingsSaveScheduler")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn save_settings_latest"))
             .map(|(body, _)| body)
             .expect("settings save scheduler body should be present");
-        let close_body = source
+        let close_body = main_source
             .split_once("ui.window().on_close_requested(move ||")
             .and_then(|(_, rest)| rest.split_once("CloseRequestResponse::HideWindow"))
             .map(|(body, _)| body)
             .expect("close callback body should be present");
 
         assert!(
-            source.contains("const SETTINGS_SAVE_COALESCE: Duration = Duration::from_millis(120);")
+            production_main_source
+                .contains("use app::settings_save::{SettingsSaveScheduler, save_settings_latest};")
+                && !production_main_source.contains("const SETTINGS_SAVE_COALESCE")
+                && scheduler_source.contains(
+                    "const SETTINGS_SAVE_COALESCE: Duration = Duration::from_millis(120);"
+                )
                 && scheduler_body.contains("TimerMode::SingleShot")
                 && scheduler_body.contains(
                     "*self.pending.borrow_mut() = Some((generation, settings));"
@@ -6391,7 +6335,7 @@ mod tests {
                 && scheduler_body.contains("self.timer.restart();")
                 && scheduler_body.contains("spawn_settings_save(async_handle.clone(), generation, settings);")
                 && scheduler_body.contains("save_settings_latest(settings);")
-                && source.contains("tokio::task::spawn_blocking(move || save_settings_if_latest(generation, settings))")
+                && scheduler_source.contains("tokio::task::spawn_blocking(move || save_settings_if_latest(generation, settings))")
                 && close_body.contains("settings_save.save_now(current_settings(&ui, &state));"),
             "zoom/sidebar persistence should coalesce latest settings and write them in the background, while close keeps a synchronous final save"
         );

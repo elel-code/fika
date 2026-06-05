@@ -70,7 +70,7 @@ Rectangle viewport shell (clip: true)
 | Press-pinned drag source | `split_pane.slint` / `item_view.rs` | 主视图 `DragArea.data` 只绑定 left-down 命中的 drag source 坐标；hover/move 不再更新 data-transfer 绑定，也不再反复触发 Rust hit-test |
 | Rust item-view render plan | `item_view_renderer.rs` / `split_view.rs` / `split_pane.slint` | 主视图行列/滚动 metrics、可见 tile 的 width/height、media/text rect、尺寸/字体 token 不再由 Slint 每项公式或 layout 容器计算；local x/y 由 `for item[index]` 复用层计算，避免进入 `ItemViewEntry` row data |
 | Sparse metadata overlay | `item_view.rs` / `model_update.rs` / `models.slint` | 基础 `ItemViewEntry` 不再携带 group/location 字符串和 metadata 几何；show-location 只发布 Rust 预投影的非空 `ItemViewMetadataEntry` rows |
-| Coalesced settings save | `main.rs` / `settings.rs` | zoom/sidebar/split ratio 等交互触发的 `persist_ui_state()` 只抓取最新设置快照并延迟后台写入；窗口关闭和目录导航保留同步 latest 保存，避免连续 zoom 时 UI 线程同步写配置文件 |
+| Coalesced settings save | `settings_save.rs` / `settings.rs` | zoom/sidebar/split ratio 等交互触发的 `persist_ui_state()` 只抓取最新设置快照并延迟后台写入；窗口关闭和目录导航保留同步 latest 保存，避免连续 zoom 时 UI 线程同步写配置文件 |
 
 ---
 
@@ -190,6 +190,7 @@ changed viewport-x => {
 **涉及代码**：
 - `ui/app.slint` — `zoom-main-in/out()`、split/sidebar 拖动结束时调用 `persist_ui_state()`
 - `src/main.rs` — `ui.on_persist_ui_state(...)`
+- `src/app/settings_save.rs` — latest-only coalesced save scheduler
 - `src/config/settings.rs` — `save_settings()`
 
 **实际实现**（✅ 已完成）：交互触发的 `persist_ui_state()` 改为 `SettingsSaveScheduler`：

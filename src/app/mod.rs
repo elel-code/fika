@@ -16,6 +16,7 @@ pub(crate) mod pane;
 pub(crate) mod places;
 pub(crate) mod search_ui;
 pub(crate) mod selection;
+pub(crate) mod settings_save;
 pub(crate) mod split_view;
 pub(crate) mod state;
 pub(crate) mod thumbnail_pipeline;
