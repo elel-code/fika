@@ -54,9 +54,9 @@ use app::geometry::{
     inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
-    ItemViewControllerAction, SelectionRect, cancel_blank_for_slot, entry_at_pane_point,
-    item_index_at_pane_point, move_blank_for_slot, press_blank_for_slot, press_entry_at_pane_point,
-    release_blank_for_slot,
+    ItemViewControllerAction, SelectionRect, activate_entry_at_pane_point, cancel_blank_for_slot,
+    entry_at_pane_point, item_index_at_pane_point, move_blank_for_slot, press_blank_for_slot,
+    press_entry_at_pane_point, release_blank_for_slot,
 };
 use app::item_view_renderer::{
     ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
@@ -1044,9 +1044,12 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_pane_item_view_item_pressed(move |slot, x, y, toggle, range| {
             ui_weak.upgrade().is_some_and(|ui| {
-                press_item_view_entry_at_point_for_slot(&ui, &state, slot, x, y, toggle, range)
+                press_item_view_entry_at_point_for_slot(
+                    &ui, &state, &bridge, slot, x, y, toggle, range,
+                )
             })
         });
     }
@@ -1101,9 +1104,10 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        let bridge = bridge.clone();
         ui.on_pane_item_view_blank_released(move |slot, x, y| {
             if let Some(ui) = ui_weak.upgrade() {
-                release_item_view_blank_for_slot(&ui, &state, slot, x, y);
+                release_item_view_blank_for_slot(&ui, &state, &bridge, slot, x, y);
             }
         });
     }
@@ -4430,6 +4434,7 @@ fn item_view_entry_at_point_for_slot(
 fn press_item_view_entry_at_point_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
     slot: i32,
     x: f32,
     y: f32,
@@ -4444,7 +4449,7 @@ fn press_item_view_entry_at_point_for_slot(
         };
         action
     };
-    apply_item_view_controller_action(ui, state, slot, action);
+    apply_item_view_controller_action(ui, state, bridge, slot, action);
     true
 }
 
@@ -4456,10 +4461,14 @@ fn activate_item_view_entry_at_point_for_slot(
     y: f32,
     bridge: &AsyncBridge,
 ) {
-    let Some(entry) = item_view_entry_at_point_for_slot(ui, state, slot, x, y) else {
-        return;
+    let action = {
+        let state_ref = state.borrow();
+        let Some(action) = activate_entry_at_pane_point(ui, &state_ref, slot, x, y) else {
+            return;
+        };
+        action
     };
-    open_path_for_slot(ui, state, slot, entry.path.as_str(), bridge);
+    apply_item_view_controller_action(ui, state, bridge, slot, action);
 }
 
 #[derive(Clone, Copy)]
@@ -4579,6 +4588,7 @@ fn move_item_view_blank_for_slot(state: &Rc<RefCell<AppState>>, slot: i32, x: f3
 fn release_item_view_blank_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
     slot: i32,
     x: f32,
     y: f32,
@@ -4591,17 +4601,21 @@ fn release_item_view_blank_for_slot(
         action
     };
 
-    apply_item_view_controller_action(ui, state, slot, action);
+    apply_item_view_controller_action(ui, state, bridge, slot, action);
 }
 
 fn apply_item_view_controller_action(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
     slot: i32,
     action: ItemViewControllerAction,
 ) {
     match action {
         ItemViewControllerAction::None => {}
+        ItemViewControllerAction::ActivatePath { path } => {
+            open_path_for_slot(ui, state, slot, path.as_str(), bridge);
+        }
         ItemViewControllerAction::ClearSelection => clear_selection_for_slot(ui, state, slot),
         ItemViewControllerAction::SelectPath {
             path,
@@ -6643,7 +6657,7 @@ mod tests {
             .find("press_entry_at_pane_point(ui, &mut state_ref, slot, x, y, toggle, range)")
             .expect("item press hit-test and input update should route through the pane-local item-view controller");
         let action_execution = press_body
-            .find("apply_item_view_controller_action(ui, state, slot, action);")
+            .find("apply_item_view_controller_action(ui, state, bridge, slot, action);")
             .expect("item press should execute the controller action after recording press state");
 
         assert!(dnd_block.contains("Pending(i32)"));
@@ -6665,6 +6679,29 @@ mod tests {
         assert!(
             !press_body.contains(".set_drag_source("),
             "main.rs should execute item-view controller actions instead of mutating the input state internals directly"
+        );
+    }
+
+    #[test]
+    fn item_activation_routes_through_controller_action() {
+        let source = include_str!("main.rs");
+        let body = source
+            .split_once("fn activate_item_view_entry_at_point_for_slot(")
+            .and_then(|(_, rest)| {
+                rest.split_once("#[derive(Clone, Copy)]\nstruct ItemViewContextMenuRequest")
+            })
+            .map(|(body, _)| body)
+            .expect("item activation handler should be present");
+
+        assert!(
+            body.contains("activate_entry_at_pane_point(ui, &state_ref, slot, x, y)")
+                && body.contains(
+                    "apply_item_view_controller_action(ui, state, bridge, slot, action);"
+                )
+                && !body.contains("item_view_entry_at_point_for_slot(ui, state, slot, x, y)")
+                && !body
+                    .contains("open_path_for_slot(ui, state, slot, entry.path.as_str(), bridge);"),
+            "item activation should route hit-test through item_view.rs and leave main.rs to execute the returned controller action"
         );
     }
 

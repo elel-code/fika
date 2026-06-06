@@ -172,6 +172,9 @@ struct SelectionRectGesture {
 pub(crate) enum ItemViewControllerAction {
     None,
     ClearSelection,
+    ActivatePath {
+        path: String,
+    },
     SelectPath {
         path: String,
         toggle: bool,
@@ -310,6 +313,19 @@ pub(crate) fn press_entry_at_pane_point(
             .input
             .press_entry(entry.path.to_string(), entry.is_dir, toggle, range),
     )
+}
+
+pub(crate) fn activate_entry_at_pane_point(
+    ui: &AppWindow,
+    state: &AppState,
+    slot: i32,
+    x: f32,
+    y: f32,
+) -> Option<ItemViewControllerAction> {
+    let entry = entry_at_pane_point(ui, state, slot, x, y)?;
+    Some(ItemViewControllerAction::ActivatePath {
+        path: entry.path.to_string(),
+    })
 }
 
 pub(crate) fn press_blank_for_slot(
