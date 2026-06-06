@@ -453,24 +453,23 @@ fn pane_slot_item_view_metrics(
             )
         })
         .unwrap_or_else(|| (CompactItemViewLayout::empty(), 0, 0));
-    let rows_per_column = compact_item_view.rows_per_column.max(1);
-    let virtual_start_column = virtual_start_index / rows_per_column;
-    let virtual_start_row = virtual_start_index % rows_per_column;
+    let layout_metrics = compact_item_view.layout_metrics();
+    let virtual_anchor = compact_item_view.range_anchor(virtual_start_index);
     let virtual_slice_geometry =
         compact_item_view.virtual_slice_geometry(virtual_start_index, virtual_slice_count);
 
     ItemViewSlotMetrics {
-        entry_count: compact_item_view.entry_count as i32,
-        virtual_start_column: virtual_start_column as i32,
-        virtual_start_row: virtual_start_row as i32,
-        rows_per_column: compact_item_view.rows_per_column as i32,
-        cell_width: compact_item_view.cell_width,
-        row_height: compact_item_view.row_height,
-        padding: compact_item_view.padding,
-        content_width: compact_item_view.content_width,
+        entry_count: layout_metrics.entry_count as i32,
+        virtual_start_column: virtual_anchor.start_column as i32,
+        virtual_start_row: virtual_anchor.start_row as i32,
+        rows_per_column: layout_metrics.rows_per_column as i32,
+        cell_width: layout_metrics.cell_width,
+        row_height: layout_metrics.row_height,
+        padding: layout_metrics.padding,
+        content_width: layout_metrics.content_width,
         virtual_slice_start_x: virtual_slice_geometry.start_x,
         virtual_slice_width: virtual_slice_geometry.width,
-        scroll_max_x: compact_item_view.scroll_max_x,
+        scroll_max_x: layout_metrics.scroll_max_x,
     }
 }
 

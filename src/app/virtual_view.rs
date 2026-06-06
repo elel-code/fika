@@ -52,7 +52,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         compact_item_view.virtual_plan(input.requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
     let range = compact_item_view
         .expand_virtual_range_to_hint(plan.range.clone(), input.range_hint.as_ref());
-    let start_column = compact_item_view.start_column_for_range_start(range.start);
+    let start_column = compact_item_view.range_anchor(range.start).start_column;
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
     let rebuild_model = !input.schedule_thumbnails
         || should_rebuild_virtual_cache(

@@ -44,6 +44,23 @@ pub(crate) struct CompactItemViewLayout {
     pub(crate) column_offsets: Vec<f32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CompactItemViewLayoutMetrics {
+    pub(crate) entry_count: usize,
+    pub(crate) rows_per_column: usize,
+    pub(crate) cell_width: f32,
+    pub(crate) row_height: f32,
+    pub(crate) padding: f32,
+    pub(crate) content_width: f32,
+    pub(crate) scroll_max_x: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct VirtualRangeAnchor {
+    pub(crate) start_column: usize,
+    pub(crate) start_row: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VirtualItemViewPlan {
     pub(crate) viewport_x: f32,
@@ -207,6 +224,18 @@ impl CompactItemViewLayout {
             && same_layout_vec(&self.column_offsets, &other.column_offsets)
     }
 
+    pub(crate) fn layout_metrics(&self) -> CompactItemViewLayoutMetrics {
+        CompactItemViewLayoutMetrics {
+            entry_count: self.entry_count,
+            rows_per_column: self.rows_per_column,
+            cell_width: self.cell_width,
+            row_height: self.row_height,
+            padding: self.padding,
+            content_width: self.content_width,
+            scroll_max_x: self.scroll_max_x,
+        }
+    }
+
     pub(crate) fn virtual_plan(
         &self,
         requested_viewport_x: f32,
@@ -283,8 +312,12 @@ impl CompactItemViewLayout {
         range
     }
 
-    pub(crate) fn start_column_for_range_start(&self, range_start: usize) -> usize {
-        range_start / self.rows_per_column.max(1)
+    pub(crate) fn range_anchor(&self, range_start: usize) -> VirtualRangeAnchor {
+        let rows_per_column = self.rows_per_column.max(1);
+        VirtualRangeAnchor {
+            start_column: range_start / rows_per_column,
+            start_row: range_start % rows_per_column,
+        }
     }
 
     pub(crate) fn bounds_for_range(
@@ -1632,7 +1665,7 @@ mod tests {
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         CompactItemViewLayout, HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry,
         PopupPlacement, PopupPoint, PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT,
-        VirtualSliceGeometry, active_main_pane_width, compact_item_view_layout,
+        VirtualRangeAnchor, VirtualSliceGeometry, active_main_pane_width, compact_item_view_layout,
         context_menu_metrics, inactive_main_pane_width, main_pane_bounds, place_drop_geometry,
         search_panel_height,
     };
@@ -3833,7 +3866,27 @@ mod tests {
             8..18
         );
         assert_eq!(layout.expand_virtual_range_to_hint(8..12, None), 8..12);
-        assert_eq!(layout.start_column_for_range_start(12), 3);
+        assert_eq!(
+            layout.range_anchor(13),
+            VirtualRangeAnchor {
+                start_column: 3,
+                start_row: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn compact_item_view_layout_projects_slint_metrics() {
+        let layout = compact_test_layout(300.0, 18, 4, 100.0, 100.0, 10.0);
+        let metrics = layout.layout_metrics();
+
+        assert_eq!(metrics.entry_count, 18);
+        assert_eq!(metrics.rows_per_column, 4);
+        assert_eq!(metrics.cell_width, 100.0);
+        assert_eq!(metrics.row_height, 100.0);
+        assert_eq!(metrics.padding, 10.0);
+        assert_eq!(metrics.content_width, layout.content_width);
+        assert_eq!(metrics.scroll_max_x, layout.scroll_max_x);
     }
 
     #[test]
