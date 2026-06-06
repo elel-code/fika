@@ -2057,6 +2057,13 @@ mod tests {
             .split_once("places-folder-drop := DropArea {")
             .expect("sidebar list should be before the places drop area")
             .0;
+        let places_drop = app
+            .split_once("places-folder-drop := DropArea {")
+            .expect("places drop area should be present")
+            .1
+            .split_once("resize-touch := TouchArea {")
+            .expect("places drop area should end before the sidebar resize handle")
+            .0;
         assert!(
             sidebar_content.contains("width: parent.width;")
                 && sidebar_content
@@ -2070,6 +2077,12 @@ mod tests {
                     "viewport-height: max(parent.height, 480px + (root.places.length + root.devices.length) * 38px);"
                 ),
             "sidebar panel should leave a visible bottom gap and avoid stretching the list to fill the window"
+        );
+        assert!(
+            places_drop.contains("root.place_drag_rejected = root.folder_drag_over_place_item && !root.place_drop_allowed")
+                && places_drop.contains("} else if (!root.place_drag_rejected) {")
+                && places_drop.contains("root.prepare_place_transfer("),
+            "places DnD should not prepare a transfer menu after can-drop has rejected the target"
         );
         assert!(
             !app.contains("changed viewport_x => { root.main_view_changed(); }"),
@@ -2943,14 +2956,9 @@ mod tests {
             .expect("models.slint should define ItemViewEntry before ItemViewHighlightEntry");
         let highlight_entry = models
             .split_once("export struct ItemViewHighlightEntry")
-            .and_then(|(_, rest)| rest.split_once("export struct ItemViewBoundsEntry"))
+            .and_then(|(_, rest)| rest.split_once("export struct ItemViewPaintEntry"))
             .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewHighlightEntry before ItemViewBoundsEntry");
-        let item_view_bounds_entry = models
-            .split_once("export struct ItemViewBoundsEntry")
-            .and_then(|(_, rest)| rest.split_once("export struct ItemViewMediaEntry"))
-            .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewBoundsEntry before ItemViewMediaEntry");
+            .expect("models.slint should define ItemViewHighlightEntry before ItemViewPaintEntry");
         let media_entry = models
             .split_once("export struct ItemViewMediaEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
@@ -3011,7 +3019,8 @@ mod tests {
             split_pane.contains("for paint[index] in root.paint: Image")
                 && split_pane.contains("for paint[index] in root.paint: Text")
                 && split_pane.contains("in property <int> virtual-start-row;")
-                && !split_pane.contains("in property <[ItemViewBoundsEntry]> bounds;")
+                && !split_pane.contains("bounds;")
+                && !split_pane.contains("ItemViewBounds")
                 && base_image_loop
                     .contains("x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.media-x;")
                 && base_image_loop.contains(
@@ -3041,7 +3050,6 @@ mod tests {
                 && base_text_loop.contains("width: max(1px, paint.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
                 && base_text_loop.contains("text: paint.name;")
-                && item_view_bounds_entry.contains("y: float")
                 && !base_image_loop.contains("metadata_line_height")
                 && !base_image_loop.contains("tile-index:")
                 && !base_image_loop.contains("tile-row:")
@@ -3068,6 +3076,7 @@ mod tests {
                 && !split_pane.contains("selected: item.selected;")
                 && !split_pane.contains("drag-data-source:")
                 && !models.contains("export struct FileEntry")
+                && !models.contains("export struct ItemViewBounds")
                 && !models.contains("selection_revision")
                 && !item_view_entry.contains("selected: bool")
                 && item_view_entry.contains("thumbnail_state: int")
@@ -3086,7 +3095,7 @@ mod tests {
                 && !item_view_entry.contains("media_width: float")
                 && !item_view_entry.contains("text_x: float")
                 && !item_view_entry.contains("title_line_height: float")
-                && !pane_view_data.contains("bounds: [ItemViewBoundsEntry]")
+                && !pane_view_data.contains("bounds:")
                 && pane_view_data.contains("paint: [ItemViewPaintEntry]")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")

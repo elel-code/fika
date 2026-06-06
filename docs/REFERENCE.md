@@ -233,7 +233,7 @@ ui/
 
 - `rows-per-column` 由可见高度和 `icon-row-height` 计算
 - `column = floor(index / rows-per-column)`，每列宽度由该列 item 的最大 bounds 决定
-- `x` 来自 Rust 投影的 `ItemViewBoundsEntry.x` / column offset，`y = mod(index, rows-per-column) * row-height`
+- `x` 来自 Rust 投影的 `ItemViewItemBounds.x` / column offset，`y = mod(index, rows-per-column) * row-height`
 - 普通 item 是左图标、右文件名的横向 tile；文件名不由 Slint 省略，内容宽度向右增长，主栏只做横向滚动
 - Slint 端接收 `PaneViewData` 内的 `entries`、`bounds`、`highlights`、`media`、`metadata` 和滚动/layout metrics
 - Rust 端通过 compact layout / virtual view 统一计算 clamped viewport、scroll max、可见范围和 overscan 范围
@@ -244,7 +244,7 @@ ui/
 
 - `rows-per-column` computed from visible height and `icon-row-height`
 - `column = floor(index / rows-per-column)`, with each column width derived from the widest item bounds in that column
-- `x` comes from Rust-projected `ItemViewBoundsEntry.x` / column offset, and `y = mod(index, rows-per-column) * row-height`
+- `x` comes from Rust-projected `ItemViewItemBounds.x` / column offset, and `y = mod(index, rows-per-column) * row-height`
 - Ordinary items use horizontal tiles with the icon on the left and filename on the right; filenames are not elided by Slint, content grows to the right, and the main pane scrolls horizontally only
 - Slint side receives `entries`, `bounds`, `highlights`, `media`, `metadata`, and scroll/layout metrics through `PaneViewData`
 - Rust side uses compact layout / virtual view logic for unified clamped viewport, scroll max, visible range, and overscan

@@ -1,4 +1,4 @@
-use crate::app::geometry::CompactItemViewLayout;
+use crate::app::geometry::{CompactItemViewLayout, ItemViewItemBounds};
 use crate::app::item_view::ItemViewInputState;
 use crate::app::item_view_renderer::{ItemViewMediaCache, ItemViewRenderMetrics};
 use crate::app::model_update::{ItemViewMediaToken, ItemViewRowToken};
@@ -7,8 +7,8 @@ use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use crate::{
-    FileEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry, ItemViewPaintEntry,
+    FileEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry,
+    ItemViewPaintEntry,
 };
 use slint::{Image, Model, ModelRc, VecModel};
 use std::collections::{HashMap, VecDeque};
@@ -159,8 +159,8 @@ fn clone_item_view_entries_model(model: &ModelRc<ItemViewEntry>) -> ModelRc<Item
 }
 
 fn clone_item_view_bounds_model(
-    model: &ModelRc<ItemViewBoundsEntry>,
-) -> ModelRc<ItemViewBoundsEntry> {
+    model: &ModelRc<ItemViewItemBounds>,
+) -> ModelRc<ItemViewItemBounds> {
     let entries = (0..model.row_count())
         .filter_map(|row| model.row_data(row))
         .collect::<Vec<_>>();
@@ -556,7 +556,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_view: VirtualViewCache,
     pub(crate) virtual_generation: GenerationCounter,
     pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
-    pub(crate) virtual_bounds_entries: ModelRc<ItemViewBoundsEntry>,
+    pub(crate) virtual_bounds_entries: ModelRc<ItemViewItemBounds>,
     pub(crate) virtual_paint_entries: ModelRc<ItemViewPaintEntry>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
     pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,

@@ -49,9 +49,9 @@ use app::file_clipboard::{
     refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, MAX_ICON_ZOOM_LEVEL, MIN_ICON_ZOOM_LEVEL,
-    MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
-    place_drop_geometry, register_menu_geometry_callbacks,
+    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, MAX_ICON_ZOOM_LEVEL,
+    MIN_ICON_ZOOM_LEVEL, MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio,
+    inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
     ItemViewReleaseAction, SelectionRect, entry_at_pane_point, item_index_at_pane_point,
@@ -4182,7 +4182,7 @@ fn set_pane_virtual_entries(
     slot: i32,
     start_index: usize,
     entries: Vec<ItemViewEntry>,
-    bounds_entries: Vec<ItemViewBoundsEntry>,
+    bounds_entries: Vec<ItemViewItemBounds>,
     media_entries: Vec<ItemViewMediaEntry>,
     metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
@@ -4204,18 +4204,8 @@ fn item_view_bounds_entries(
     layout: &CompactItemViewLayout,
     start_index: usize,
     count: usize,
-) -> Vec<ItemViewBoundsEntry> {
-    layout
-        .bounds_for_range(start_index, count)
-        .into_iter()
-        .map(|bounds| ItemViewBoundsEntry {
-            slice_index: bounds.slice_index as i32,
-            x: bounds.x,
-            y: bounds.y,
-            width: bounds.width,
-            text_width: bounds.text_width,
-        })
-        .collect()
+) -> Vec<ItemViewItemBounds> {
+    layout.bounds_for_range(start_index, count)
 }
 
 fn apply_filter_for_slot(
@@ -5569,7 +5559,10 @@ fn output_chooser_paths_and_exit(paths: Vec<PathBuf>, metadata: ChooserOutputMet
 
 fn set_pane_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32, message: &str) {
     let Some(target_is_focused) = ({
-        let mut state = state.borrow_mut();
+        let Ok(mut state) = state.try_borrow_mut() else {
+            ui.set_status(SharedString::from(message));
+            return;
+        };
         set_pane_status_state(&mut state, slot, message)
     }) else {
         return;
@@ -5613,7 +5606,10 @@ fn set_status_for_panes(
     message: &str,
 ) {
     let target_slots = {
-        let state = state.borrow();
+        let Ok(state) = state.try_borrow() else {
+            ui.set_status(SharedString::from(message));
+            return;
+        };
         pane_status_target_slots(&state, pane_ids)
     };
 
@@ -5640,7 +5636,10 @@ fn pane_status_target_slots(state: &AppState, pane_ids: &[u64]) -> Vec<i32> {
 
 fn set_status(ui: &AppWindow, state: &Rc<RefCell<AppState>>, message: &str) {
     let slot = {
-        let mut state = state.borrow_mut();
+        let Ok(mut state) = state.try_borrow_mut() else {
+            ui.set_status(SharedString::from(message));
+            return;
+        };
         set_focused_status_state(&mut state, message)
     };
 
@@ -6747,12 +6746,13 @@ mod tests {
 
         assert!(
             !pane_view_data.contains("entries: [ItemViewEntry]")
-                && !pane_view_data.contains("bounds: [ItemViewBoundsEntry]")
+                && !pane_view_data.contains("bounds:")
                 && pane_view_data.contains("paint: [ItemViewPaintEntry]")
                 && pane_view_data.contains("highlights: [ItemViewHighlightEntry]")
                 && pane_view_data.contains("media: [ItemViewMediaEntry]")
                 && pane_view_data.contains("metadata: [ItemViewMetadataEntry]")
-                && app.contains("export { ItemViewBoundsEntry } from \"models.slint\";")
+                && !app.contains("ItemViewBounds")
+                && !models.contains("ItemViewBounds")
                 && !app.contains("pane_slot_0_entries")
                 && !app.contains("pane_slot_1_entries")
                 && !app.contains("pane_slot_0_bounds")
@@ -6928,13 +6928,17 @@ mod tests {
             .expect("set_status body should be present");
 
         assert!(
-            pane_status_body.contains("set_pane_status_state(&mut state, slot, message)")
+            pane_status_body.contains("state.try_borrow_mut()")
+                && pane_status_body.contains("ui.set_status(SharedString::from(message));")
+                && pane_status_body.contains("set_pane_status_state(&mut state, slot, message)")
                 && pane_status_body.contains("sync_pane_slot_ui(ui, state, slot);")
                 && !pane_status_body.contains("sync_pane_slots_ui(ui, state);")
+                && focused_status_body.contains("state.try_borrow_mut()")
+                && focused_status_body.contains("ui.set_status(SharedString::from(message));")
                 && focused_status_body.contains("set_focused_status_state(&mut state, message)")
                 && focused_status_body.contains("sync_pane_slot_ui(ui, state, slot);")
                 && !focused_status_body.contains("sync_pane_slots_ui(ui, state);"),
-            "status updates should mutate pane-local state first and refresh only the affected pane row"
+            "status updates should avoid RefCell panics, mutate pane-local state first, and refresh only the affected pane row"
         );
     }
 

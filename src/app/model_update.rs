@@ -1,7 +1,8 @@
+use crate::app::geometry::ItemViewItemBounds;
 use crate::app::pane::PaneView;
 use crate::{
-    ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry, ItemViewPaintEntry,
+    ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry,
+    ItemViewPaintEntry,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::ops::Range;
@@ -85,8 +86,8 @@ pub(crate) fn new_item_view_entries_model(entries: Vec<ItemViewEntry>) -> ModelR
 }
 
 pub(crate) fn new_item_view_bounds_model(
-    bounds_entries: Vec<ItemViewBoundsEntry>,
-) -> ModelRc<ItemViewBoundsEntry> {
+    bounds_entries: Vec<ItemViewItemBounds>,
+) -> ModelRc<ItemViewItemBounds> {
     if bounds_entries.is_empty() {
         return ModelRc::default();
     }
@@ -95,10 +96,10 @@ pub(crate) fn new_item_view_bounds_model(
 }
 
 fn update_item_view_bounds_entries_model(
-    current: &mut ModelRc<ItemViewBoundsEntry>,
+    current: &mut ModelRc<ItemViewItemBounds>,
     old_start: usize,
     new_start: usize,
-    bounds_entries: Vec<ItemViewBoundsEntry>,
+    bounds_entries: Vec<ItemViewItemBounds>,
 ) -> bool {
     if bounds_entries.is_empty() {
         if current.row_count() == 0 {
@@ -110,7 +111,7 @@ fn update_item_view_bounds_entries_model(
 
     let Some(model) = current
         .as_any()
-        .downcast_ref::<VecModel<ItemViewBoundsEntry>>()
+        .downcast_ref::<VecModel<ItemViewItemBounds>>()
     else {
         *current = new_item_view_bounds_model(bounds_entries);
         return true;
@@ -131,14 +132,14 @@ pub(crate) fn new_item_view_paint_model(
 
 fn item_view_paint_entries(
     entries: &[ItemViewEntry],
-    bounds_entries: &[ItemViewBoundsEntry],
+    bounds_entries: &[ItemViewItemBounds],
 ) -> Vec<ItemViewPaintEntry> {
     bounds_entries
         .iter()
         .filter_map(|bounds| {
-            let entry = entries.get(usize::try_from(bounds.slice_index).ok()?)?;
+            let entry = entries.get(bounds.slice_index)?;
             Some(ItemViewPaintEntry {
-                slice_index: bounds.slice_index,
+                slice_index: bounds.slice_index as i32,
                 name: entry.name.clone(),
                 is_dir: entry.is_dir,
                 x: bounds.x,
@@ -152,14 +153,14 @@ fn item_view_paint_entries(
 
 fn item_view_paint_entries_from_tokens(
     tokens: &[ItemViewRowToken],
-    bounds_entries: &[ItemViewBoundsEntry],
+    bounds_entries: &[ItemViewItemBounds],
 ) -> Vec<ItemViewPaintEntry> {
     bounds_entries
         .iter()
         .filter_map(|bounds| {
-            let token = tokens.get(usize::try_from(bounds.slice_index).ok()?)?;
+            let token = tokens.get(bounds.slice_index)?;
             Some(ItemViewPaintEntry {
-                slice_index: bounds.slice_index,
+                slice_index: bounds.slice_index as i32,
                 name: token.name_shared(),
                 is_dir: token.is_dir(),
                 x: bounds.x,
@@ -230,11 +231,12 @@ fn update_item_view_metadata_entries_model(
 }
 
 fn bounds_for_slice_index(
-    bounds_entries: &[ItemViewBoundsEntry],
+    bounds_entries: &[ItemViewItemBounds],
     slice_index: i32,
-) -> Option<&ItemViewBoundsEntry> {
+) -> Option<&ItemViewItemBounds> {
+    let slice_index = usize::try_from(slice_index).ok()?;
     bounds_entries
-        .get(usize::try_from(slice_index).ok()?)
+        .get(slice_index)
         .filter(|bounds| bounds.slice_index == slice_index)
         .or_else(|| {
             bounds_entries
@@ -245,7 +247,7 @@ fn bounds_for_slice_index(
 
 fn project_metadata_entries_with_bounds(
     metadata: Vec<ItemViewMetadataEntry>,
-    bounds_entries: &[ItemViewBoundsEntry],
+    bounds_entries: &[ItemViewItemBounds],
 ) -> Vec<ItemViewMetadataEntry> {
     metadata
         .into_iter()
@@ -271,7 +273,7 @@ pub(crate) fn new_item_view_media_model(
 
 fn project_media_entries_with_bounds(
     media_entries: Vec<ItemViewMediaEntry>,
-    bounds_entries: &[ItemViewBoundsEntry],
+    bounds_entries: &[ItemViewItemBounds],
 ) -> Vec<ItemViewMediaEntry> {
     media_entries
         .into_iter()
@@ -336,7 +338,7 @@ fn update_item_view_media_entries_model(
 
 fn item_view_highlight_entries(
     tokens: &[ItemViewRowToken],
-    bounds_entries: &[ItemViewBoundsEntry],
+    bounds_entries: &[ItemViewItemBounds],
 ) -> Vec<ItemViewHighlightEntry> {
     tokens
         .iter()
@@ -353,7 +355,7 @@ fn item_view_highlight_entries(
         .collect()
 }
 
-fn current_item_view_bounds_entries(view: &PaneView) -> Vec<ItemViewBoundsEntry> {
+fn current_item_view_bounds_entries(view: &PaneView) -> Vec<ItemViewItemBounds> {
     (0..view.virtual_bounds_entries.row_count())
         .filter_map(|row| view.virtual_bounds_entries.row_data(row))
         .collect()
@@ -446,7 +448,7 @@ pub(crate) fn update_pane_item_view_entries_model(
     view: &mut PaneView,
     start_index: usize,
     entries: Vec<ItemViewEntry>,
-    bounds_entries: Vec<ItemViewBoundsEntry>,
+    bounds_entries: Vec<ItemViewItemBounds>,
     media_entries: Vec<ItemViewMediaEntry>,
     metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
@@ -493,7 +495,7 @@ pub(crate) fn update_pane_item_view_entries_model(
 pub(crate) fn relayout_pane_item_view_entries_model(
     view: &mut PaneView,
     range: Range<usize>,
-    bounds_entries: Vec<ItemViewBoundsEntry>,
+    bounds_entries: Vec<ItemViewItemBounds>,
 ) -> bool {
     let Some(model) = view
         .virtual_entries
@@ -565,7 +567,7 @@ fn trim_item_view_media_entries_model(
     current_tokens: &mut Vec<ItemViewMediaToken>,
     remove_front: usize,
     target_len: usize,
-    bounds_entries: &[ItemViewBoundsEntry],
+    bounds_entries: &[ItemViewItemBounds],
 ) {
     let retained = (0..current.row_count())
         .filter_map(|row| {
@@ -907,7 +909,7 @@ mod tests {
             .collect()
     }
 
-    fn bounds_row_x(model: &ModelRc<ItemViewBoundsEntry>) -> Vec<f32> {
+    fn bounds_row_x(model: &ModelRc<ItemViewItemBounds>) -> Vec<f32> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| entry.x)
@@ -929,12 +931,12 @@ mod tests {
             .collect()
     }
 
-    fn bounds_entries(start: usize, count: usize) -> Vec<ItemViewBoundsEntry> {
+    fn bounds_entries(start: usize, count: usize) -> Vec<ItemViewItemBounds> {
         (0..count)
             .map(|row| {
                 let index = start + row;
-                ItemViewBoundsEntry {
-                    slice_index: row as i32,
+                ItemViewItemBounds {
+                    slice_index: row,
                     x: index as f32 * 10.0,
                     y: row as f32 * 2.0,
                     width: 90.0 + index as f32,

@@ -2,7 +2,6 @@
 // `include_modules!()` generates Rust types for `ui.global::<...>()`.
 export { MenuGeometry } from "menu_geometry.slint";
 export { MenuLifecycle } from "menu_lifecycle.slint";
-export { ItemViewBoundsEntry } from "models.slint";
 export { ItemViewEntry } from "models.slint";
 
 export global DndApi {
@@ -1577,7 +1576,7 @@ export component AppWindow inherits Window {
                                 } else if (DndApi.event-kind(event) == DragKind.folder) {
                                     root.add_place_at_slot(DndApi.event-path(event), root.folder_drag_slot);
                                 }
-                            } else {
+                            } else if (!root.place_drag_rejected) {
                                 if (root.prepare_place_transfer(DndApi.event-path(event), root.folder_drag_place_target, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px)) {
                                     root.transfer-menu-open = true;
                                 }
