@@ -1655,11 +1655,21 @@ fn register_pane_routing_callbacks(
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_search_filter_menu_requested(move |slot, x, y, kind, modified, size| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_search_filter_menu_requested(slot, x, y, kind, modified, size);
-            }
-        });
+        routing.on_search_filter_menu_requested(
+            move |slot, x, y, kind, modified, size, target_filter| {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.invoke_route_pane_search_filter_menu_requested(
+                        slot,
+                        x,
+                        y,
+                        kind,
+                        modified,
+                        size,
+                        target_filter,
+                    );
+                }
+            },
+        );
     }
 
     {

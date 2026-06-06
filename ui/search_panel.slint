@@ -1,47 +1,65 @@
 import { FilterButton, SidebarAction, ToolButton } from "widgets.slint";
 
-component SearchOptionButton inherits Rectangle {
+component SearchPopupOptionRow inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     in property <bool> dark;
     callback clicked();
 
-    height: 26px;
+    height: 30px;
     border-radius: 5px;
-    border-width: root.selected ? 1px : 0px;
-    border-color: root.selected ? (root.dark ? #58b4d8 : #2f8dbc) : transparent;
-    background: root.selected ? (root.dark ? #12303d : #e4f3fa) : (touch.has-hover ? (root.dark ? #1f262d : #f2f5f8) : transparent);
+    background: root.selected ? (root.dark ? #1b2730 : #e8eef4) : (touch.has-hover ? (root.dark ? #1f262d : #f2f5f8) : transparent);
 
     touch := TouchArea {
         clicked => { root.clicked(); }
     }
 
-    Text {
-        x: 8px;
-        width: max(1px, parent.width - 16px);
-        height: parent.height;
-        text: root.label;
-        color: root.selected ? (root.dark ? #e8f6fb : #17445a) : (root.dark ? #dfe7ee : #24303b);
-        font-size: 12px;
-        font-weight: root.selected ? 700 : 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        overflow: elide;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        Text {
+            width: 18px;
+            height: parent.height;
+            text: root.selected ? "X" : "";
+            color: root.dark ? #dfe7ee : #24303b;
+            font-size: 12px;
+            font-weight: 800;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.label;
+            color: root.selected ? (root.dark ? #eef6fb : #1f3a4a) : (root.dark ? #dfe7ee : #24303b);
+            font-size: 13px;
+            font-weight: root.selected ? 700 : 500;
+            overflow: elide;
+            vertical-alignment: center;
+        }
     }
 }
 
-component FilterChoiceRow inherits Rectangle {
+component SearchPopupSelectorRow inherits Rectangle {
     in property <string> title;
-    in property <[string]> labels;
-    in property <int> selected-index;
+    in property <string> value;
     in property <bool> dark;
-    callback selected(int);
+    callback clicked();
 
-    height: 28px;
-    background: transparent;
+    height: 32px;
+    border-radius: 5px;
+    background: touch.has-hover ? (root.dark ? #1f262d : #f2f5f8) : transparent;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
 
     HorizontalLayout {
-        spacing: 6px;
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
 
         Text {
             width: 104px;
@@ -53,14 +71,25 @@ component FilterChoiceRow inherits Rectangle {
             overflow: elide;
         }
 
-        for option[index] in root.labels: SearchOptionButton {
+        Text {
             horizontal-stretch: 1;
-            min-width: 56px;
-            preferred-width: 82px;
-            label: option;
-            selected: root.selected-index == index;
-            dark: root.dark;
-            clicked => { root.selected(index); }
+            text: root.value;
+            color: root.dark ? #dfe7ee : #24303b;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            width: 18px;
+            height: parent.height;
+            text: "v";
+            color: root.dark ? #aeb8c2 : #64748b;
+            font-size: 12px;
+            font-weight: 800;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 }
@@ -122,7 +151,7 @@ component SearchFilterChip inherits Rectangle {
 
             Text {
                 x: 10px;
-                width: max(1px, parent.width - 20px);
+                width: max(1px, parent.width - 34px);
                 height: parent.height;
                 text: root.label;
                 color: root.dark ? #dfe7ee : #24303b;
@@ -130,6 +159,18 @@ component SearchFilterChip inherits Rectangle {
                 font-weight: 500;
                 vertical-alignment: center;
                 overflow: elide;
+            }
+
+            Text {
+                x: max(10px, parent.width - 22px);
+                width: 12px;
+                height: parent.height;
+                text: "v";
+                color: root.dark ? #aeb8c2 : #64748b;
+                font-size: 11px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
             }
         }
 
@@ -178,7 +219,7 @@ export component SearchPanel inherits Rectangle {
     callback submitted(string, bool);
     callback cancel_requested();
     callback filters_changed(int, int, int);
-    callback filter_menu_requested(length, length, int, int, int);
+    callback filter_menu_requested(length, length, int, int, int, int);
     callback close_requested();
     callback focus_changed(bool);
 
@@ -217,8 +258,8 @@ export component SearchPanel inherits Rectangle {
         }
     }
 
-    function request-filter-menu(x: length, y: length) {
-        root.filter_menu_requested(x, y, root.kind-filter, root.modified-filter, root.size-filter);
+    function request-filter-menu(x: length, y: length, target-filter: int) {
+        root.filter_menu_requested(x, y, root.kind-filter, root.modified-filter, root.size-filter, target-filter);
     }
 
     background: transparent;
@@ -319,7 +360,7 @@ export component SearchPanel inherits Rectangle {
                 label: "Filter";
                 dark: root.dark;
                 clicked => {
-                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, 0);
                 }
             }
 
@@ -371,7 +412,7 @@ export component SearchPanel inherits Rectangle {
                 label: root.kind-label;
                 dark: root.dark;
                 clicked => {
-                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, 1);
                 }
                 remove_requested => { root.set-kind-filter(0); }
             }
@@ -382,7 +423,7 @@ export component SearchPanel inherits Rectangle {
                 label: root.modified-label;
                 dark: root.dark;
                 clicked => {
-                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, 2);
                 }
                 remove_requested => { root.set-modified-filter(0); }
             }
@@ -393,7 +434,7 @@ export component SearchPanel inherits Rectangle {
                 label: root.size-label;
                 dark: root.dark;
                 clicked => {
-                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, 3);
                 }
                 remove_requested => { root.set-size-filter(0); }
             }
@@ -410,24 +451,68 @@ export component SearchPanel inherits Rectangle {
 
 export component SearchFilterPopup inherits Rectangle {
     in property <bool> dark;
+    in-out property <int> target-filter: 0;
     in-out property <int> kind-filter;
     in-out property <int> modified-filter;
     in-out property <int> size-filter;
     callback filters_changed(int, int, int);
+    callback close_requested();
+
+    function kind-label(value: int) -> string {
+        if (value == 1) {
+            return "Folders";
+        }
+        if (value == 2) {
+            return "Files";
+        }
+        if (value == 3) {
+            return "Images";
+        }
+        return "Any Type";
+    }
+
+    function modified-label(value: int) -> string {
+        if (value == 1) {
+            return "Today";
+        }
+        if (value == 2) {
+            return "7 days";
+        }
+        if (value == 3) {
+            return "30 days";
+        }
+        return "Any Date";
+    }
+
+    function size-label(value: int) -> string {
+        if (value == 1) {
+            return "<1 MB";
+        }
+        if (value == 2) {
+            return "1-100 MB";
+        }
+        if (value == 3) {
+            return ">100 MB";
+        }
+        return "Any";
+    }
 
     function set-kind-filter(value: int) {
         root.kind-filter = value;
         root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+        root.close_requested();
     }
 
     function set-modified-filter(value: int) {
         root.modified-filter = value;
         root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+        root.close_requested();
     }
 
     function set-size-filter(value: int) {
         root.size-filter = value;
         root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+        root.close_requested();
     }
 
     border-radius: 8px;
@@ -435,38 +520,125 @@ export component SearchFilterPopup inherits Rectangle {
     border-color: root.dark ? #3f474f : #d9e1e8;
     background: root.dark ? #24282c : #fcfdfe;
 
-    VerticalLayout {
+    if (root.target-filter == 0): VerticalLayout {
+        width: parent.width;
+        height: parent.height;
         padding-left: 10px;
         padding-right: 10px;
         padding-top: 8px;
         padding-bottom: 8px;
         spacing: 6px;
 
-        FilterChoiceRow {
+        Text {
+            width: parent.width;
+            height: 24px;
+            text: "Filter";
+            color: root.dark ? #dfe7ee : #24303b;
+            font-size: 13px;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+
+        SearchPopupSelectorRow {
             width: parent.width;
             title: "File Type:";
-            labels: ["Any Type", "Folders", "Files", "Images"];
-            selected-index: root.kind-filter;
+            value: root.kind-label(root.kind-filter);
             dark: root.dark;
-            selected(index) => { root.set-kind-filter(index); }
+            clicked => { root.target-filter = 1; }
         }
 
-        FilterChoiceRow {
+        SearchPopupSelectorRow {
             width: parent.width;
             title: "Modified since:";
-            labels: ["Any Date", "Today", "7 days", "30 days"];
-            selected-index: root.modified-filter;
+            value: root.modified-label(root.modified-filter);
             dark: root.dark;
-            selected(index) => { root.set-modified-filter(index); }
+            clicked => { root.target-filter = 2; }
         }
 
-        FilterChoiceRow {
+        SearchPopupSelectorRow {
             width: parent.width;
             title: "Size:";
-            labels: ["Any", "<1 MB", "1-100 MB", ">100 MB"];
-            selected-index: root.size-filter;
+            value: root.size-label(root.size-filter);
             dark: root.dark;
-            selected(index) => { root.set-size-filter(index); }
+            clicked => { root.target-filter = 3; }
+        }
+    }
+
+    if (root.target-filter == 1): VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+
+        SearchPopupSelectorRow {
+            width: parent.width;
+            title: "Filter";
+            value: "File Type";
+            dark: root.dark;
+            clicked => { root.target-filter = 0; }
+        }
+
+        for option[index] in ["Any Type", "Folders", "Files", "Images"]: SearchPopupOptionRow {
+            width: parent.width;
+            label: option;
+            selected: root.kind-filter == index;
+            dark: root.dark;
+            clicked => { root.set-kind-filter(index); }
+        }
+    }
+
+    if (root.target-filter == 2): VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+
+        SearchPopupSelectorRow {
+            width: parent.width;
+            title: "Filter";
+            value: "Modified since";
+            dark: root.dark;
+            clicked => { root.target-filter = 0; }
+        }
+
+        for option[index] in ["Any Date", "Today", "7 days", "30 days"]: SearchPopupOptionRow {
+            width: parent.width;
+            label: option;
+            selected: root.modified-filter == index;
+            dark: root.dark;
+            clicked => { root.set-modified-filter(index); }
+        }
+    }
+
+    if (root.target-filter == 3): VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+
+        SearchPopupSelectorRow {
+            width: parent.width;
+            title: "Filter";
+            value: "Size";
+            dark: root.dark;
+            clicked => { root.target-filter = 0; }
+        }
+
+        for option[index] in ["Any", "<1 MB", "1-100 MB", ">100 MB"]: SearchPopupOptionRow {
+            width: parent.width;
+            label: option;
+            selected: root.size-filter == index;
+            dark: root.dark;
+            clicked => { root.set-size-filter(index); }
         }
     }
 }
