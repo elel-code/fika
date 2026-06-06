@@ -1,7 +1,7 @@
 use crate::app::pane::PaneView;
 use crate::{
     ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry,
+    ItemViewMetadataEntry, ItemViewPaintEntry,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::ops::Range;
@@ -41,6 +41,10 @@ impl ItemViewRowToken {
 
     pub(crate) fn path_shared(&self) -> SharedString {
         self.path.clone()
+    }
+
+    pub(crate) fn name_shared(&self) -> SharedString {
+        self.name.clone()
     }
 
     pub(crate) fn is_dir(&self) -> bool {
@@ -113,6 +117,83 @@ fn update_item_view_bounds_entries_model(
     };
 
     update_sliding_vec_model(model, old_start, new_start, bounds_entries)
+}
+
+pub(crate) fn new_item_view_paint_model(
+    paint_entries: Vec<ItemViewPaintEntry>,
+) -> ModelRc<ItemViewPaintEntry> {
+    if paint_entries.is_empty() {
+        return ModelRc::default();
+    }
+
+    ModelRc::new(Rc::new(VecModel::from(paint_entries)))
+}
+
+fn item_view_paint_entries(
+    entries: &[ItemViewEntry],
+    bounds_entries: &[ItemViewBoundsEntry],
+) -> Vec<ItemViewPaintEntry> {
+    bounds_entries
+        .iter()
+        .filter_map(|bounds| {
+            let entry = entries.get(usize::try_from(bounds.slice_index).ok()?)?;
+            Some(ItemViewPaintEntry {
+                slice_index: bounds.slice_index,
+                name: entry.name.clone(),
+                is_dir: entry.is_dir,
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                text_width: bounds.text_width,
+            })
+        })
+        .collect()
+}
+
+fn item_view_paint_entries_from_tokens(
+    tokens: &[ItemViewRowToken],
+    bounds_entries: &[ItemViewBoundsEntry],
+) -> Vec<ItemViewPaintEntry> {
+    bounds_entries
+        .iter()
+        .filter_map(|bounds| {
+            let token = tokens.get(usize::try_from(bounds.slice_index).ok()?)?;
+            Some(ItemViewPaintEntry {
+                slice_index: bounds.slice_index,
+                name: token.name_shared(),
+                is_dir: token.is_dir(),
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                text_width: bounds.text_width,
+            })
+        })
+        .collect()
+}
+
+fn update_item_view_paint_entries_model(
+    current: &mut ModelRc<ItemViewPaintEntry>,
+    old_start: usize,
+    new_start: usize,
+    paint_entries: Vec<ItemViewPaintEntry>,
+) -> bool {
+    if paint_entries.is_empty() {
+        if current.row_count() == 0 {
+            return false;
+        }
+        *current = ModelRc::default();
+        return true;
+    }
+
+    let Some(model) = current
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewPaintEntry>>()
+    else {
+        *current = new_item_view_paint_model(paint_entries);
+        return true;
+    };
+
+    update_sliding_vec_model(model, old_start, new_start, paint_entries)
 }
 
 pub(crate) fn new_item_view_metadata_model(
@@ -312,11 +393,18 @@ pub(crate) fn update_pane_item_view_entries_model(
 ) {
     let old_start = view.virtual_start_index;
     let media_tokens = item_view_media_tokens(&entries, &media_entries);
+    let paint_entries = item_view_paint_entries(&entries, &bounds_entries);
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
         start_index,
         bounds_entries,
+    );
+    update_item_view_paint_entries_model(
+        &mut view.virtual_paint_entries,
+        old_start,
+        start_index,
+        paint_entries,
     );
     update_item_view_media_entries_model(
         &mut view.virtual_media_entries,
@@ -380,11 +468,19 @@ pub(crate) fn relayout_pane_item_view_entries_model(
     }
 
     let _ = update_item_view_highlight_model(view);
+    let paint_entries =
+        item_view_paint_entries_from_tokens(&view.virtual_entry_tokens, &bounds_entries);
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
         range.start,
         bounds_entries,
+    );
+    update_item_view_paint_entries_model(
+        &mut view.virtual_paint_entries,
+        old_start,
+        range.start,
+        paint_entries,
     );
     trim_item_view_media_entries_model(
         &mut view.virtual_media_entries,
@@ -733,6 +829,21 @@ mod tests {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| entry.x)
+            .collect()
+    }
+
+    fn paint_rows(model: &ModelRc<ItemViewPaintEntry>) -> Vec<(i32, String, bool, f32, f32)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| {
+                (
+                    entry.slice_index,
+                    entry.name.to_string(),
+                    entry.is_dir,
+                    entry.x,
+                    entry.text_width,
+                )
+            })
             .collect()
     }
 
@@ -1125,6 +1236,63 @@ mod tests {
     }
 
     #[test]
+    fn pane_item_view_paint_model_reuses_vec_model_when_range_slides() {
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            entries_with_tile_metrics(4),
+            bounds_entries(0, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+        let original_paint = view.virtual_paint_entries.clone();
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            2,
+            (2..6).map(entry).collect(),
+            bounds_entries(2, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.virtual_paint_entries, original_paint);
+        assert_eq!(
+            paint_rows(&view.virtual_paint_entries),
+            vec![
+                (0, "item-2".to_string(), false, 20.0, 47.0),
+                (1, "item-3".to_string(), false, 30.0, 48.0),
+                (2, "item-4".to_string(), false, 40.0, 49.0),
+                (3, "item-5".to_string(), false, 50.0, 50.0),
+            ]
+        );
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            1,
+            (1..5).map(entry).collect(),
+            bounds_entries(1, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.virtual_paint_entries, original_paint);
+        assert_eq!(
+            paint_rows(&view.virtual_paint_entries),
+            vec![
+                (0, "item-1".to_string(), false, 10.0, 46.0),
+                (1, "item-2".to_string(), false, 20.0, 47.0),
+                (2, "item-3".to_string(), false, 30.0, 48.0),
+                (3, "item-4".to_string(), false, 40.0, 49.0),
+            ]
+        );
+    }
+
+    #[test]
     fn pane_item_view_metadata_model_reuses_vec_model_for_sparse_updates() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
@@ -1309,6 +1477,7 @@ mod tests {
         );
         let original = view.virtual_entries.clone();
         let original_bounds = view.virtual_bounds_entries.clone();
+        let original_paint = view.virtual_paint_entries.clone();
 
         assert!(relayout_pane_item_view_entries_model(
             &mut view,
@@ -1318,6 +1487,7 @@ mod tests {
 
         assert_eq!(view.virtual_entries, original);
         assert_eq!(view.virtual_bounds_entries, original_bounds);
+        assert_eq!(view.virtual_paint_entries, original_paint);
         assert_eq!(view.virtual_start_index, 11);
         assert_eq!(
             rows(&view.virtual_entries),
@@ -1326,6 +1496,13 @@ mod tests {
         assert_eq!(
             bounds_row_x(&view.virtual_bounds_entries),
             vec![110.0, 120.0]
+        );
+        assert_eq!(
+            paint_rows(&view.virtual_paint_entries),
+            vec![
+                (0, "item-1".to_string(), false, 110.0, 56.0),
+                (1, "item-2".to_string(), false, 120.0, 57.0),
+            ]
         );
         assert_eq!(
             selected_token_rows(&view.virtual_entry_tokens),

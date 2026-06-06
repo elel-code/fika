@@ -2973,21 +2973,21 @@ mod tests {
             .split_once(
                 "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
             )
-            .and_then(|(_, rest)| rest.split_once("for item[index] in root.entries: Image"))
+            .and_then(|(_, rest)| rest.split_once("for paint[index] in root.paint: Image"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have one concrete drop-target overlay");
         let base_image_loop = split_pane
-            .split_once("for item[index] in root.entries: Image")
+            .split_once("for paint[index] in root.paint: Image")
             .and_then(|(_, rest)| rest.split_once("for media[index] in root.media: Image"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have an unconditional base image primitive loop");
         let media_overlay_loop = split_pane
             .split_once("for media[index] in root.media: Image")
-            .and_then(|(_, rest)| rest.split_once("for item[index] in root.entries: Text"))
+            .and_then(|(_, rest)| rest.split_once("for paint[index] in root.paint: Text"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have a sparse thumbnail media overlay loop");
         let base_text_loop = split_pane
-            .split_once("for item[index] in root.entries: Text")
+            .split_once("for paint[index] in root.paint: Text")
             .and_then(|(_, rest)| rest.split_once("for metadata[index] in root.metadata: Text"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have an unconditional base text primitive loop");
@@ -3002,23 +3002,19 @@ mod tests {
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should handle pointer move inside the main touch area");
         assert!(
-            split_pane.contains("for item[index] in root.entries: Image")
-                && split_pane.contains("for item[index] in root.entries: Text")
+            split_pane.contains("for paint[index] in root.paint: Image")
+                && split_pane.contains("for paint[index] in root.paint: Text")
                 && split_pane.contains("in property <int> virtual-start-row;")
                 && split_pane.contains("in property <[ItemViewBoundsEntry]> bounds;")
                 && base_image_loop
-                    .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];")
-                && base_text_loop
-                    .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];")
-                && base_image_loop
-                    .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.media-x;")
+                    .contains("x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.media-x;")
                 && base_image_loop.contains(
-                    "y: root.preview-padding + self.item-bounds.y * 1px + root.media-y;"
+                    "y: root.preview-padding + paint.y * 1px + root.media-y;"
                 )
                 && base_image_loop.contains("width: root.media-width;")
                 && base_image_loop.contains("height: root.media-height;")
                 && base_image_loop.contains(
-                    "source: item.is_dir ? root.item-view-folder-media : root.item-view-file-media;"
+                    "source: paint.is_dir ? root.item-view-folder-media : root.item-view-file-media;"
                 )
                 && base_image_loop.contains("root.item-view-folder-media")
                 && base_image_loop.contains("root.item-view-file-media")
@@ -3033,13 +3029,13 @@ mod tests {
                 && media_overlay_loop.contains("height: root.media-height;")
                 && media_overlay_loop.contains("source: media.media;")
                 && base_text_loop
-                    .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.text-x;")
+                    .contains("x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.text-x;")
                 && base_text_loop.contains(
-                    "y: root.preview-padding + self.item-bounds.y * 1px + root.title-y;"
+                    "y: root.preview-padding + paint.y * 1px + root.title-y;"
                 )
-                && base_text_loop.contains("width: max(1px, self.item-bounds.text_width * 1px);")
+                && base_text_loop.contains("width: max(1px, paint.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
-                && base_text_loop.contains("text: item.name;")
+                && base_text_loop.contains("text: paint.name;")
                 && item_view_bounds_entry.contains("y: float")
                 && !base_image_loop.contains("metadata_line_height")
                 && !base_image_loop.contains("tile-index:")
@@ -3081,6 +3077,7 @@ mod tests {
                 && !item_view_entry.contains("text_x: float")
                 && !item_view_entry.contains("title_line_height: float")
                 && pane_view_data.contains("bounds: [ItemViewBoundsEntry]")
+                && pane_view_data.contains("paint: [ItemViewPaintEntry]")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")
                 && pane_view_data.contains("item_view_text_x: float")
@@ -3146,9 +3143,9 @@ mod tests {
                 && base_text_loop.contains("font-size: root.title-font-size;")
                 && base_text_loop.contains("root.text-x")
                 && base_text_loop.contains("root.title-y")
-                && base_text_loop.contains("width: max(1px, self.item-bounds.text_width * 1px);")
+                && base_text_loop.contains("width: max(1px, paint.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
-                && base_text_loop.contains("text: item.name;")
+                && base_text_loop.contains("text: paint.name;")
                 && base_text_loop.contains("horizontal-alignment: left;")
                 && !base_text_loop.contains("overflow: elide")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
@@ -3194,13 +3191,13 @@ mod tests {
             "Ctrl+wheel zoom should still request pane focus before changing zoom"
         );
         assert!(split_pane.contains("scroll-event(event)"));
-        assert!(split_pane.contains("for item[index] in root.entries: Image"));
-        assert!(split_pane.contains("for item[index] in root.entries: Text"));
+        assert!(split_pane.contains("for paint[index] in root.paint: Image"));
+        assert!(split_pane.contains("for paint[index] in root.paint: Text"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")
                 && split_pane.contains("enabled: root.interactive;")
                 && split_pane.contains(
-                    "data: root.make_drag_data_at(root.drag-source-abs-x / 1px, root.drag-source-abs-y / 1px);"
+                    "data: root.drag-source-abs-x <= -2px || root.drag-source-abs-y <= -2px ? root.make_drag_data_at(-2, -2) : root.make_drag_data_at(-1, -1);"
                 )
                 && split_pane.contains("input-touch := TouchArea")
                 && split_pane.contains("private property <length> drag-source-abs-x: -1px;")
@@ -3307,14 +3304,9 @@ mod tests {
                 && split_pane.contains("x: 0px;")
                 && split_pane.contains("width: parent.width;")
                 && split_pane.contains(
-                    "private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];"
+                    "x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.text-x;"
                 )
-                && split_pane.contains(
-                    "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.text-x;"
-                )
-                && split_pane.contains(
-                    "y: root.preview-padding + self.item-bounds.y * 1px + root.title-y;"
-                )
+                && split_pane.contains("y: root.preview-padding + paint.y * 1px + root.title-y;")
                 && base_text_loop.contains("height: root.title-line-height;")
                 && !split_pane.contains("private property <int> tile-index:")
                 && !split_pane.contains("private property <int> tile-row:")

@@ -9,8 +9,8 @@ use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
     AppWindow, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry, PaneSlotData, PaneSurfaceData, PaneViewData, set_status,
-    sync_virtual_entries_for_slot,
+    ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData,
+    set_status, sync_virtual_entries_for_slot,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -349,6 +349,7 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         slot,
         entries: pane_slot_entries(slot, state),
         bounds: pane_slot_bounds(slot, state),
+        paint: pane_slot_paint(slot, state),
         highlights: pane_slot_highlights(slot, state),
         media: pane_slot_media(slot, state),
         metadata: pane_slot_metadata(slot, state),
@@ -520,6 +521,14 @@ fn pane_slot_bounds(slot: i32, state: &AppState) -> ModelRc<ItemViewBoundsEntry>
         .panes
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_bounds_entries.clone())
+        .unwrap_or_default()
+}
+
+fn pane_slot_paint(slot: i32, state: &AppState) -> ModelRc<ItemViewPaintEntry> {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.view.virtual_paint_entries.clone())
         .unwrap_or_default()
 }
 
@@ -896,6 +905,7 @@ mod tests {
                 )))
             },
             bounds: ModelRc::default(),
+            paint: ModelRc::default(),
             highlights: ModelRc::default(),
             media: ModelRc::default(),
             metadata: ModelRc::default(),

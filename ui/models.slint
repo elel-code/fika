@@ -18,6 +18,16 @@ export struct ItemViewBoundsEntry {
     text_width: float,
 }
 
+export struct ItemViewPaintEntry {
+    slice_index: int,
+    name: string,
+    is_dir: bool,
+    x: float,
+    y: float,
+    width: float,
+    text_width: float,
+}
+
 export struct ItemViewMediaEntry {
     slice_index: int,
     media: image,
@@ -95,6 +105,7 @@ export struct PaneViewData {
     slot: int,
     entries: [ItemViewEntry],
     bounds: [ItemViewBoundsEntry],
+    paint: [ItemViewPaintEntry],
     highlights: [ItemViewHighlightEntry],
     media: [ItemViewMediaEntry],
     metadata: [ItemViewMetadataEntry],

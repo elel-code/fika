@@ -8,7 +8,7 @@ use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use crate::{
     FileEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry,
+    ItemViewMetadataEntry, ItemViewPaintEntry,
 };
 use slint::{Image, Model, ModelRc, VecModel};
 use std::collections::{HashMap, VecDeque};
@@ -76,6 +76,8 @@ impl PaneState {
         pane.view.virtual_entries = clone_item_view_entries_model(&self.view.virtual_entries);
         pane.view.virtual_bounds_entries =
             clone_item_view_bounds_model(&self.view.virtual_bounds_entries);
+        pane.view.virtual_paint_entries =
+            clone_item_view_paint_model(&self.view.virtual_paint_entries);
         pane.view.virtual_entry_tokens =
             clone_item_view_row_tokens_without_selection(&self.view.virtual_entry_tokens);
         pane.view.virtual_highlight_entries = ModelRc::default();
@@ -114,6 +116,7 @@ impl PaneState {
         self.search.visible_location_groups = None;
         self.view.virtual_entries = ModelRc::default();
         self.view.virtual_bounds_entries = ModelRc::default();
+        self.view.virtual_paint_entries = ModelRc::default();
         self.view.virtual_entry_tokens.clear();
         self.view.virtual_highlight_entries = ModelRc::default();
         self.view.virtual_media_entries = ModelRc::default();
@@ -158,6 +161,17 @@ fn clone_item_view_entries_model(model: &ModelRc<ItemViewEntry>) -> ModelRc<Item
 fn clone_item_view_bounds_model(
     model: &ModelRc<ItemViewBoundsEntry>,
 ) -> ModelRc<ItemViewBoundsEntry> {
+    let entries = (0..model.row_count())
+        .filter_map(|row| model.row_data(row))
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        ModelRc::default()
+    } else {
+        ModelRc::new(Rc::new(VecModel::from(entries)))
+    }
+}
+
+fn clone_item_view_paint_model(model: &ModelRc<ItemViewPaintEntry>) -> ModelRc<ItemViewPaintEntry> {
     let entries = (0..model.row_count())
         .filter_map(|row| model.row_data(row))
         .collect::<Vec<_>>();
@@ -543,6 +557,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_generation: GenerationCounter,
     pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
     pub(crate) virtual_bounds_entries: ModelRc<ItemViewBoundsEntry>,
+    pub(crate) virtual_paint_entries: ModelRc<ItemViewPaintEntry>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
     pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,
     pub(crate) virtual_media_entries: ModelRc<ItemViewMediaEntry>,
@@ -1515,6 +1530,7 @@ mod tests {
         assert!(pane.view.virtual_view.layout.is_none());
         assert_eq!(pane.view.virtual_view.thumbnail_size_px, 0);
         assert_eq!(pane.view.virtual_entries.row_count(), 0);
+        assert_eq!(pane.view.virtual_paint_entries.row_count(), 0);
         assert_eq!(pane.view.virtual_media_entries.row_count(), 0);
         assert!(pane.view.virtual_media_tokens.is_empty());
     }

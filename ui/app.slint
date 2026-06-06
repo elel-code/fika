@@ -58,7 +58,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -97,6 +97,7 @@ component FilePane inherits Rectangle {
     in property <int> entry-count;
     in property <[ItemViewEntry]> entries;
     in property <[ItemViewBoundsEntry]> bounds;
+    in property <[ItemViewPaintEntry]> paint;
     in property <[ItemViewHighlightEntry]> highlights;
     in property <[ItemViewMediaEntry]> media;
     in property <[ItemViewMetadataEntry]> metadata;
@@ -308,6 +309,7 @@ component FilePane inherits Rectangle {
                 entry-count: root.entry-count;
                 entries: root.entries;
                 bounds: root.bounds;
+                paint: root.paint;
                 highlights: root.highlights;
                 media: root.media;
                 metadata: root.metadata;
@@ -574,6 +576,7 @@ component PaneSlotSurface inherits Rectangle {
         entry-count: root.view.entry_count;
         entries: root.view.entries;
         bounds: root.view.bounds;
+        paint: root.view.paint;
         highlights: root.view.highlights;
         media: root.view.media;
         metadata: root.view.metadata;

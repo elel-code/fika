@@ -1,10 +1,11 @@
-import { ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry } from "models.slint";
+import { ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
     in property <[ItemViewEntry]> entries;
     in property <[ItemViewBoundsEntry]> bounds;
+    in property <[ItemViewPaintEntry]> paint;
     in property <[ItemViewHighlightEntry]> highlights;
     in property <[ItemViewMediaEntry]> media;
     in property <[ItemViewMetadataEntry]> metadata;
@@ -245,7 +246,7 @@ export component SplitPaneView inherits Rectangle {
             width: parent.width;
             height: parent.height;
             enabled: root.interactive;
-            data: root.make_drag_data_at(root.drag-source-abs-x / 1px, root.drag-source-abs-y / 1px);
+            data: root.drag-source-abs-x <= -2px || root.drag-source-abs-y <= -2px ? root.make_drag_data_at(-2, -2) : root.make_drag_data_at(-1, -1);
 
             input-touch := TouchArea {
                 width: parent.width;
@@ -361,14 +362,12 @@ export component SplitPaneView inherits Rectangle {
                     background: root.drop-background-color;
                 }
 
-                for item[index] in root.entries: Image {
-                    private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];
-
-                    x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.media-x;
-                    y: root.preview-padding + self.item-bounds.y * 1px + root.media-y;
+                for paint[index] in root.paint: Image {
+                    x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.media-x;
+                    y: root.preview-padding + paint.y * 1px + root.media-y;
                     width: root.media-width;
                     height: root.media-height;
-                    source: item.is_dir ? root.item-view-folder-media : root.item-view-file-media;
+                    source: paint.is_dir ? root.item-view-folder-media : root.item-view-file-media;
                     image-fit: contain;
                 }
 
@@ -383,14 +382,12 @@ export component SplitPaneView inherits Rectangle {
                     image-fit: contain;
                 }
 
-                for item[index] in root.entries: Text {
-                    private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];
-
-                    x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.text-x;
-                    y: root.preview-padding + self.item-bounds.y * 1px + root.title-y;
-                    width: max(1px, self.item-bounds.text_width * 1px);
+                for paint[index] in root.paint: Text {
+                    x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.text-x;
+                    y: root.preview-padding + paint.y * 1px + root.title-y;
+                    width: max(1px, paint.text_width * 1px);
                     height: root.title-line-height;
-                    text: item.name;
+                    text: paint.name;
                     color: root.title-color;
                     font-size: root.title-font-size;
                     horizontal-alignment: left;
