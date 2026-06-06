@@ -59,6 +59,7 @@ pub(crate) struct VirtualItemViewPlan {
 pub(crate) struct ItemViewItemBounds {
     pub(crate) slice_index: usize,
     pub(crate) x: f32,
+    pub(crate) y: f32,
     pub(crate) width: f32,
     pub(crate) text_width: f32,
 }
@@ -235,6 +236,7 @@ impl CompactItemViewLayout {
                 Some(ItemViewItemBounds {
                     slice_index,
                     x: self.column_offsets.get(column).copied().unwrap_or_default(),
+                    y: self.row_y_for_index(index),
                     width: self
                         .item_widths
                         .get(index)
@@ -254,6 +256,7 @@ impl CompactItemViewLayout {
         Some(ItemViewItemBounds {
             slice_index: index,
             x: self.column_offsets.get(column).copied().unwrap_or_default(),
+            y: self.row_y_for_index(index),
             width: self
                 .item_widths
                 .get(index)
@@ -261,6 +264,11 @@ impl CompactItemViewLayout {
                 .unwrap_or(self.cell_width),
             text_width: self.item_text_widths.get(index).copied().unwrap_or(1.0),
         })
+    }
+
+    fn row_y_for_index(&self, index: usize) -> f32 {
+        let rows_per_column = self.rows_per_column.max(1);
+        (index % rows_per_column) as f32 * self.row_height.max(1.0)
     }
 
     pub(crate) fn index_at_content_point(&self, x: f32, y: f32) -> Option<usize> {
@@ -2932,6 +2940,11 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewHighlightEntry"))
             .map(|(body, _)| body)
             .expect("models.slint should define ItemViewEntry before ItemViewHighlightEntry");
+        let item_view_bounds_entry = models
+            .split_once("export struct ItemViewBoundsEntry")
+            .and_then(|(_, rest)| rest.split_once("export struct ItemViewMediaEntry"))
+            .map(|(body, _)| body)
+            .expect("models.slint should define ItemViewBoundsEntry before ItemViewMediaEntry");
         let media_entry = models
             .split_once("export struct ItemViewMediaEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
@@ -2993,18 +3006,14 @@ mod tests {
                 && split_pane.contains("for item[index] in root.entries: Text")
                 && split_pane.contains("in property <int> virtual-start-row;")
                 && split_pane.contains("in property <[ItemViewBoundsEntry]> bounds;")
-                && base_image_loop.contains("tile-index: root.virtual-start-row + index;")
-                && base_image_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && base_image_loop
                     .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];")
-                && base_text_loop.contains("tile-index: root.virtual-start-row + index;")
-                && base_text_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && base_text_loop
                     .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];")
                 && base_image_loop
                     .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.media-x;")
                 && base_image_loop.contains(
-                    "y: root.preview-padding + self.tile-row * root.row-height + root.media-y;"
+                    "y: root.preview-padding + self.item-bounds.y * 1px + root.media-y;"
                 )
                 && base_image_loop.contains("width: root.media-width;")
                 && base_image_loop.contains("height: root.media-height;")
@@ -3013,14 +3022,12 @@ mod tests {
                 )
                 && base_image_loop.contains("root.item-view-folder-media")
                 && base_image_loop.contains("root.item-view-file-media")
-                && media_overlay_loop.contains("tile-index: root.virtual-start-row + media.slice_index;")
-                && media_overlay_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && media_overlay_loop
                     .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[media.slice_index];")
                 && media_overlay_loop
                     .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.media-x;")
                 && media_overlay_loop.contains(
-                    "y: root.preview-padding + self.tile-row * root.row-height + root.media-y;"
+                    "y: root.preview-padding + self.item-bounds.y * 1px + root.media-y;"
                 )
                 && media_overlay_loop.contains("width: root.media-width;")
                 && media_overlay_loop.contains("height: root.media-height;")
@@ -3028,13 +3035,20 @@ mod tests {
                 && base_text_loop
                     .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.text-x;")
                 && base_text_loop.contains(
-                    "y: root.preview-padding + self.tile-row * root.row-height + root.title-y;"
+                    "y: root.preview-padding + self.item-bounds.y * 1px + root.title-y;"
                 )
                 && base_text_loop.contains("width: max(1px, self.item-bounds.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
                 && base_text_loop.contains("text: item.name;")
+                && item_view_bounds_entry.contains("y: float")
                 && !base_image_loop.contains("metadata_line_height")
+                && !base_image_loop.contains("tile-index:")
+                && !base_image_loop.contains("tile-row:")
                 && !base_text_loop.contains("metadata_line_height")
+                && !base_text_loop.contains("tile-index:")
+                && !base_text_loop.contains("tile-row:")
+                && !media_overlay_loop.contains("tile-index:")
+                && !media_overlay_loop.contains("tile-row:")
                 && !base_text_loop.contains("has-metadata-lines")
                 && !base_text_loop.contains("metadata-title")
                 && !base_text_loop.contains("metadata-group-color")
@@ -3091,30 +3105,28 @@ mod tests {
             "SplitPaneView should inline Dolphin-style horizontal column-first tile primitives without a FileTile or FolderGlyph component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
         );
         assert!(
-            highlight_loop.contains("tile-index: root.virtual-start-row + highlight.slice_index;")
-                && highlight_loop.contains("tile-row: self.tile-index.mod(root.rows-per-column);")
-                && highlight_loop.contains(
+            highlight_loop.contains(
                     "private property <ItemViewBoundsEntry> item-bounds: root.bounds[highlight.slice_index];"
                 )
                 && highlight_loop.contains(
                     "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px;"
                 )
-                && highlight_loop
-                    .contains("y: root.preview-padding + self.tile-row * root.row-height;")
+                && highlight_loop.contains("y: root.preview-padding + self.item-bounds.y * 1px;")
                 && highlight_loop.contains("width: max(1px, self.item-bounds.width * 1px);")
                 && highlight_loop.contains("height: root.row-height;")
-                && drop_target_loop
-                    .contains("tile-index: root.virtual-start-row + root.drag-target-slice-index;")
-                && drop_target_loop
-                    .contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && drop_target_loop.contains(
                     "private property <ItemViewBoundsEntry> item-bounds: root.bounds[root.drag-target-slice-index];"
                 )
                 && drop_target_loop.contains(
                     "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px;"
                 )
+                && drop_target_loop.contains("y: root.preview-padding + self.item-bounds.y * 1px;")
                 && drop_target_loop.contains("width: max(1px, self.item-bounds.width * 1px);")
                 && drop_target_loop.contains("height: root.row-height;")
+                && !highlight_loop.contains("tile-index:")
+                && !highlight_loop.contains("tile-row:")
+                && !drop_target_loop.contains("tile-index:")
+                && !drop_target_loop.contains("tile-row:")
                 && !split_pane.contains(
                     "root.drag-active && !root.drag-rejected && root.drag-target-path == item.path"
                 ),
@@ -3215,17 +3227,13 @@ mod tests {
         assert!(
             split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
                 && split_pane.contains("for metadata[index] in root.metadata: Text")
-                && metadata_tile_loop
-                    .contains("tile-index: root.virtual-start-row + metadata.slice_index;")
-                && metadata_tile_loop
-                    .contains("tile-row: self.tile-index.mod(root.rows-per-column);")
                 && metadata_tile_loop.contains(
                     "private property <ItemViewBoundsEntry> item-bounds: root.bounds[metadata.slice_index];"
                 )
                 && metadata_tile_loop
                     .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + metadata.text_x * 1px;")
                 && metadata_tile_loop.contains(
-                    "y: root.preview-padding + self.tile-row * root.row-height + metadata.y * 1px;"
+                    "y: root.preview-padding + self.item-bounds.y * 1px + metadata.y * 1px;"
                 )
                 && metadata_tile_loop.contains("height: metadata.line_height * 1px;")
                 && metadata_tile_loop.contains("text: metadata.text;")
@@ -3235,6 +3243,8 @@ mod tests {
                 && metadata_tile_loop.contains("font-size: metadata.font_size * 1px;")
                 && metadata_tile_loop.contains("font-weight: metadata.is_group ? 700 : 400;")
                 && !metadata_tile_loop.contains("visible:")
+                && !metadata_tile_loop.contains("tile-index:")
+                && !metadata_tile_loop.contains("tile-row:")
                 && !metadata_tile_loop.contains("item.group")
                 && !metadata_tile_loop.contains("item.location")
                 && !metadata_tile_loop.contains("source: item.media;")
@@ -3297,23 +3307,21 @@ mod tests {
                 && split_pane.contains("x: 0px;")
                 && split_pane.contains("width: parent.width;")
                 && split_pane.contains(
-                    "private property <int> tile-index: root.virtual-start-row + index;"
-                )
-                && split_pane.contains(
-                    "private property <int> tile-row: self.tile-index.mod(root.rows-per-column);"
-                )
-                && split_pane.contains(
                     "private property <ItemViewBoundsEntry> item-bounds: root.bounds[index];"
                 )
                 && split_pane.contains(
                     "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.text-x;"
                 )
-                && split_pane.contains("y: root.preview-padding + self.tile-row * root.row-height;")
+                && split_pane.contains(
+                    "y: root.preview-padding + self.item-bounds.y * 1px + root.title-y;"
+                )
                 && base_text_loop.contains("height: root.title-line-height;")
+                && !split_pane.contains("private property <int> tile-index:")
+                && !split_pane.contains("private property <int> tile-row:")
                 && !split_pane.contains("item.tile_x")
                 && !split_pane.contains("item.tile_y")
                 && !split_pane.contains("property <int> global-index:"),
-            "virtualized pane slices should be positioned by the self-managed viewport while local tile coordinates come from the reusable loop index instead of ItemViewEntry row data"
+            "virtualized pane slices should be positioned by the self-managed viewport while local tile coordinates come from Rust-projected bounds instead of per-loop modulo or ItemViewEntry row data"
         );
         assert!(!split_pane.contains("root.viewport-content-width - self.x"));
         assert!(split_pane.contains("clip: true;"));
@@ -3536,6 +3544,19 @@ mod tests {
             compact_test_layout(300.0, 13, 4, 100.0, 100.0, 10.0).scroll_max_x,
             144.0
         );
+    }
+
+    #[test]
+    fn compact_item_view_bounds_include_projected_row_y() {
+        let layout = compact_test_layout(300.0, 8, 3, 100.0, 20.0, 10.0);
+
+        let bounds = layout.bounds_for_range(1, 5);
+
+        assert_eq!(
+            bounds.iter().map(|entry| entry.y).collect::<Vec<_>>(),
+            vec![20.0, 40.0, 0.0, 20.0, 40.0]
+        );
+        assert_eq!(layout.item_bounds(6).expect("index 6").y, 0.0);
     }
 
     #[test]

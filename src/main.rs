@@ -4211,6 +4211,7 @@ fn item_view_bounds_entries(
         .map(|bounds| ItemViewBoundsEntry {
             slice_index: bounds.slice_index as i32,
             x: bounds.x,
+            y: bounds.y,
             width: bounds.width,
             text_width: bounds.text_width,
         })
