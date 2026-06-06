@@ -120,13 +120,15 @@ Useful interaction rules:
 - Search options belong near the search field and are visible while searching.
 - Dolphin's bar is structurally two rows: search input + Filter popup + close on the first row, and location buttons plus active selector chips on the second row.
 - The Filter button uses an instant popup (`WidgetMenu` / `Popup`) instead of expanding the view and changing the file area's height.
+- Search text edits are committed by a short single-shot timer; Return commits immediately.
 - Active filters are editable/removable chips built around selector controls; the button text stays stable.
 
 Current Fika mapping:
 
 - Fika opens search from each pane's `PathBar`; every split pane owns its own `SearchPanel` state and popup routing.
-- `SearchPanel` now uses a Dolphin-style two-row layout: search input, fixed `Filter` button, close/cancel controls, second-row `Here` / `Everywhere` location buttons, and removable active filter chips.
-- `SearchFilterPopup` is an anchored overlay rather than an expanded strip, so filter changes do not resize the file view.
-- The `Filter` button opens a stable selector menu for Type / Modified / Size. Clicking an active chip routes the same popup directly to that chip's selector, matching Dolphin's `Chip<Selector>` idea more closely than a static summary label.
+- `SearchPanel` now uses a Dolphin-style two-row layout: search input, fixed `Filter` button, close/cancel controls, second-row `Here` / `Everywhere` location buttons on the left, and removable active filter chips pushed to the right.
+- Search text edits start a 500ms single-shot timer before submitting; Return stops the timer and submits immediately.
+- `SearchFilterPopup` is an anchored single-page widget-menu-style overlay rather than an expanded strip or target-routed subpage, so filter changes do not resize the file view and multiple selectors can be changed while the popup stays open.
+- The `Filter` button and active chip body open the same Type / Modified / Size selector panel. The chip remove control clears only that restriction, matching Dolphin's `Chip<Selector>` removal behavior more closely than static status labels.
 - Recursive search results are grouped by parent location without inserting separate rows, so the current column-first virtualized item-view remains stable.
 - Further work should add deeper filter UI parity only when the filtering backend exists.

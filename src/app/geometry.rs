@@ -2406,9 +2406,13 @@ mod tests {
             search_panel.matches("FilterButton {").count() == 1
                 && search_panel.contains("label: \"Filter\";")
                 && search_panel
-                    .contains("callback filter_menu_requested(length, length, int, int, int, int);")
+                    .contains("callback filter_menu_requested(length, length, int, int, int);")
+                && search_panel.contains("search-submit-timer := Timer")
+                && search_panel.contains("interval: 500ms;")
+                && search_panel.contains("changed text =>")
+                && search_panel.contains("root.schedule-search-submit();")
                 && search_panel.contains("export component SearchFilterPopup inherits Rectangle")
-                && search_panel.contains("in-out property <int> target-filter: 0;")
+                && !search_panel.contains("target-filter")
                 && search_panel.contains("SearchLocationButton {")
                 && search_panel.contains("label: \"Here\";")
                 && search_panel.contains("label: \"Everywhere\";")
@@ -2416,23 +2420,21 @@ mod tests {
                 && search_panel.contains("remove_requested => { root.set-kind-filter(0); }")
                 && search_panel.contains("component SearchLocationButton inherits Rectangle")
                 && search_panel.contains("component SearchFilterChip inherits Rectangle")
-                && search_panel.contains("component SearchPopupSelectorRow inherits Rectangle")
-                && search_panel.contains("component SearchPopupOptionRow inherits Rectangle")
+                && search_panel.contains("component SearchPopupSegmentButton inherits Rectangle")
+                && search_panel.contains("component SearchPopupSectionLabel inherits Text")
                 && search_panel.contains("callback remove_requested();")
-                && search_panel.matches("SearchPopupSelectorRow {").count() >= 6
-                && search_panel.matches("SearchPopupOptionRow {").count() == 3
-                && search_panel.contains("root.target-filter = 1;")
-                && search_panel.contains("root.target-filter = 2;")
-                && search_panel.contains("root.target-filter = 3;")
-                && search_panel.contains("title: \"File Type:\";")
-                && search_panel.contains("title: \"Modified since:\";")
-                && search_panel.contains("title: \"Size:\";")
-                && search_panel.contains("label: root.kind-label;")
-                && search_panel.contains("label: root.modified-label;")
-                && search_panel.contains("label: root.size-label;")
-                && search_panel.contains("root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, 1);")
+                && search_panel.matches("SearchPopupSegmentButton {").count() == 12
+                && search_panel.matches("SearchPopupSectionLabel {").count() == 3
+                && search_panel.contains("label: \"File Type:\";")
+                && search_panel.contains("label: \"Modified since:\";")
+                && search_panel.contains("label: \"Size:\";")
+                && search_panel.contains("root.set-kind-filter(3);")
+                && search_panel.contains("root.set-modified-filter(3);")
+                && search_panel.contains("root.set-size-filter(3);")
+                && search_panel.contains("Rectangle {\n                flex-grow: 1;\n                min-width: 1px;\n                height: 1px;")
+                && search_panel.contains("root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);")
                 && !search_panel.contains("filters-expanded"),
-            "SearchPanel should follow Dolphin's search bar structure with location buttons, target-routed popup selectors, and removable active selector chips"
+            "SearchPanel should follow Dolphin's search bar structure with delayed text commits, left-aligned location buttons, right-aligned chips, and a single-page selector popup"
         );
         assert!(
             !top_bar_component.contains("search_requested")

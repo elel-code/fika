@@ -55,8 +55,8 @@ use app::geometry::{
 };
 use app::item_view::{
     ItemViewControllerAction, SelectionRect, activate_entry_at_pane_point, cancel_blank_for_slot,
-    entry_at_pane_point, item_index_at_pane_point, move_blank_for_slot, press_blank_for_slot,
-    press_entry_at_pane_point, release_blank_for_slot,
+    context_menu_entry_at_pane_point, entry_at_pane_point, item_index_at_pane_point,
+    move_blank_for_slot, press_blank_for_slot, press_entry_at_pane_point, release_blank_for_slot,
 };
 use app::item_view_renderer::{
     ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
@@ -1661,21 +1661,11 @@ fn register_pane_routing_callbacks(
 
     {
         let ui_weak = ui.as_weak();
-        routing.on_search_filter_menu_requested(
-            move |slot, x, y, kind, modified, size, target_filter| {
-                if let Some(ui) = ui_weak.upgrade() {
-                    ui.invoke_route_pane_search_filter_menu_requested(
-                        slot,
-                        x,
-                        y,
-                        kind,
-                        modified,
-                        size,
-                        target_filter,
-                    );
-                }
-            },
-        );
+        routing.on_search_filter_menu_requested(move |slot, x, y, kind, modified, size| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_search_filter_menu_requested(slot, x, y, kind, modified, size);
+            }
+        });
     }
 
     {
@@ -4420,17 +4410,6 @@ fn select_path_for_slot(
     update_selection_ui_for_slot(ui, state, slot, &selected_paths);
 }
 
-fn item_view_entry_at_point_for_slot(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    slot: i32,
-    x: f32,
-    y: f32,
-) -> Option<FileEntry> {
-    let state_ref = state.borrow();
-    entry_at_pane_point(ui, &state_ref, slot, x, y)
-}
-
 fn press_item_view_entry_at_point_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -4486,46 +4465,22 @@ fn request_item_view_entry_context_menu_at_point_for_slot(
     bridge: &AsyncBridge,
     request: ItemViewContextMenuRequest,
 ) -> bool {
-    let Some(entry) =
-        item_view_entry_at_point_for_slot(ui, state, request.slot, request.x, request.y)
-    else {
-        return false;
-    };
-    let path = entry.path.to_string();
-    let already_selected = {
+    let action = {
         let state_ref = state.borrow();
-        state_ref
-            .panes
-            .pane_for_slot(request.slot)
-            .is_some_and(|pane| {
-                pane.selection
-                    .paths
-                    .iter()
-                    .any(|selected| selected == path.as_str())
-            })
+        let Some(action) = context_menu_entry_at_pane_point(
+            ui,
+            &state_ref,
+            request.slot,
+            request.x,
+            request.y,
+            request.abs_x,
+            request.abs_y,
+        ) else {
+            return false;
+        };
+        action
     };
-    if !already_selected {
-        select_path_for_slot(ui, state, request.slot, path.as_str(), false, false);
-    }
-
-    let service_menu_paths = context_service_menu::item_paths(state, request.slot, path.as_str());
-    context_service_menu::refresh_actions_async(
-        ui,
-        state,
-        bridge,
-        request.slot,
-        service_menu_paths,
-    );
-    ui.invoke_route_pane_request_context_menu(
-        request.slot,
-        entry.path,
-        entry.name,
-        entry.size,
-        entry.modified,
-        entry.is_dir,
-        request.abs_x,
-        request.abs_y,
-    );
+    apply_item_view_controller_action(ui, state, bridge, request.slot, action);
     true
 }
 
@@ -4615,6 +4570,36 @@ fn apply_item_view_controller_action(
         ItemViewControllerAction::None => {}
         ItemViewControllerAction::ActivatePath { path } => {
             open_path_for_slot(ui, state, slot, path.as_str(), bridge);
+        }
+        ItemViewControllerAction::RequestContextMenu {
+            entry,
+            select_path,
+            abs_x,
+            abs_y,
+        } => {
+            if let Some(path) = select_path.as_deref() {
+                select_path_for_slot(ui, state, slot, path, false, false);
+            }
+
+            let service_menu_paths =
+                context_service_menu::item_paths(state, slot, entry.path.as_str());
+            context_service_menu::refresh_actions_async(
+                ui,
+                state,
+                bridge,
+                slot,
+                service_menu_paths,
+            );
+            ui.invoke_route_pane_request_context_menu(
+                slot,
+                entry.path,
+                entry.name,
+                entry.size,
+                entry.modified,
+                entry.is_dir,
+                abs_x,
+                abs_y,
+            );
         }
         ItemViewControllerAction::ClearSelection => clear_selection_for_slot(ui, state, slot),
         ItemViewControllerAction::SelectPath {
@@ -7657,6 +7642,11 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn select_all_visible("))
             .map(|(body, _)| body)
             .expect("item context menu routing body should be present");
+        let action_body = source
+            .split_once("fn apply_item_view_controller_action(")
+            .and_then(|(_, rest)| rest.split_once("fn cancel_item_view_blank_for_slot("))
+            .map(|(body, _)| body)
+            .expect("item-view controller action body should be present");
         let blank_route = source
             .split_once("routing.on_request_blank_context_menu")
             .and_then(|(_, rest)| rest.split_once("routing.on_zoom_in"))
@@ -7665,17 +7655,19 @@ mod tests {
 
         assert!(
             item_route.contains(
-                "item_view_entry_at_point_for_slot(ui, state, request.slot, request.x, request.y)"
+                "context_menu_entry_at_pane_point(\n            ui,\n            &state_ref,\n            request.slot,"
             )
-                && item_route
-                    .contains("select_path_for_slot(ui, state, request.slot, path.as_str(), false, false);")
-                && item_route
-                    .contains("context_service_menu::item_paths(state, request.slot, path.as_str())")
                 && item_route.contains(
-                    "context_service_menu::refresh_actions_async(\n        ui,\n        state,\n        bridge,\n        request.slot,\n        service_menu_paths,\n    );"
+                    "apply_item_view_controller_action(ui, state, bridge, request.slot, action);"
                 )
-                && item_route.contains("ui.invoke_route_pane_request_context_menu("),
-            "item service menu discovery should be driven by Rust coordinate hit-test for the pane slot that opened the context menu"
+                && action_body.contains("ItemViewControllerAction::RequestContextMenu")
+                && action_body.contains("select_path_for_slot(ui, state, slot, path, false, false);")
+                && action_body.contains(
+                    "context_service_menu::item_paths(state, slot, entry.path.as_str())"
+                )
+                && action_body.contains("context_service_menu::refresh_actions_async(")
+                && action_body.contains("ui.invoke_route_pane_request_context_menu("),
+            "item service menu discovery should be driven by the item-view controller action for the pane slot that opened the context menu"
         );
         assert!(
             blank_route.contains("context_service_menu::blank_paths(&state, slot)")

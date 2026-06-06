@@ -175,6 +175,12 @@ pub(crate) enum ItemViewControllerAction {
     ActivatePath {
         path: String,
     },
+    RequestContextMenu {
+        entry: FileEntry,
+        select_path: Option<String>,
+        abs_x: f32,
+        abs_y: f32,
+    },
     SelectPath {
         path: String,
         toggle: bool,
@@ -325,6 +331,32 @@ pub(crate) fn activate_entry_at_pane_point(
     let entry = entry_at_pane_point(ui, state, slot, x, y)?;
     Some(ItemViewControllerAction::ActivatePath {
         path: entry.path.to_string(),
+    })
+}
+
+pub(crate) fn context_menu_entry_at_pane_point(
+    ui: &AppWindow,
+    state: &AppState,
+    slot: i32,
+    x: f32,
+    y: f32,
+    abs_x: f32,
+    abs_y: f32,
+) -> Option<ItemViewControllerAction> {
+    let entry = entry_at_pane_point(ui, state, slot, x, y)?;
+    let path = entry.path.to_string();
+    let already_selected = state.panes.pane_for_slot(slot).is_some_and(|pane| {
+        pane.selection
+            .paths
+            .iter()
+            .any(|selected| selected == path.as_str())
+    });
+
+    Some(ItemViewControllerAction::RequestContextMenu {
+        entry,
+        select_path: (!already_selected).then_some(path),
+        abs_x,
+        abs_y,
     })
 }
 
