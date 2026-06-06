@@ -58,6 +58,38 @@ pub(crate) struct ItemViewTileFrameSource {
     pub(crate) text_width: f32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewTileFramePlan {
+    pub(crate) slice_index: usize,
+    pub(crate) text: ItemViewTileTextFrame,
+    pub(crate) fallback_media: ItemViewTileFallbackMediaFrame,
+    pub(crate) highlight: Option<ItemViewTileHighlightFrame>,
+    pub(crate) media_token: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewTileTextFrame {
+    pub(crate) name: SharedString,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+    pub(crate) text_width: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewTileFallbackMediaFrame {
+    pub(crate) is_dir: bool,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewTileHighlightFrame {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+}
+
 pub(crate) trait ItemViewFrameEntry {
     fn frame_name(&self) -> SharedString;
     fn frame_is_dir(&self) -> bool;
@@ -125,6 +157,41 @@ impl ItemViewTileFrameSource {
             text_width: 0.0,
         }
     }
+}
+
+impl ItemViewTileFramePlan {
+    pub(crate) fn from_source(source: &ItemViewTileFrameSource) -> Option<Self> {
+        source.has_bounds.then(|| Self {
+            slice_index: source.slice_index,
+            text: ItemViewTileTextFrame {
+                name: source.name.clone(),
+                x: source.x,
+                y: source.y,
+                width: source.width,
+                text_width: source.text_width,
+            },
+            fallback_media: ItemViewTileFallbackMediaFrame {
+                is_dir: source.is_dir,
+                x: source.x,
+                y: source.y,
+            },
+            highlight: source.selected.then_some(ItemViewTileHighlightFrame {
+                x: source.x,
+                y: source.y,
+                width: source.width,
+            }),
+            media_token: source.media_token,
+        })
+    }
+}
+
+pub(crate) fn item_view_tile_frame_plans(
+    sources: &[ItemViewTileFrameSource],
+) -> Vec<ItemViewTileFramePlan> {
+    sources
+        .iter()
+        .filter_map(ItemViewTileFramePlan::from_source)
+        .collect()
 }
 
 impl ItemViewRenderMetrics {
@@ -547,6 +614,42 @@ mod tests {
         assert_eq!(frame.y, 40.0);
         assert_eq!(frame.width, 180.0);
         assert_eq!(frame.text_width, 96.0);
+    }
+
+    #[test]
+    fn tile_frame_plan_collects_visible_primitives_only() {
+        let entry = ItemViewEntry {
+            name: "Report".into(),
+            path: "/tmp/report.txt".into(),
+            is_dir: true,
+            thumbnail_state: 2,
+            media_token: 42,
+        };
+        let bounds = ItemViewItemBounds {
+            slice_index: 0,
+            x: 120.0,
+            y: 40.0,
+            width: 180.0,
+            text_width: 96.0,
+        };
+        let visible = ItemViewTileFrameSource::from_entry_and_bounds(&entry, &bounds, true);
+        let hidden = ItemViewTileFrameSource::from_entry_without_bounds(1, &entry, false);
+
+        let plans = item_view_tile_frame_plans(&[visible, hidden]);
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].text.name, "Report");
+        assert_eq!(plans[0].text.x, 120.0);
+        assert!(plans[0].fallback_media.is_dir);
+        assert_eq!(plans[0].media_token, 42);
+        assert_eq!(
+            plans[0].highlight,
+            Some(ItemViewTileHighlightFrame {
+                x: 120.0,
+                y: 40.0,
+                width: 180.0,
+            })
+        );
     }
 
     #[test]
