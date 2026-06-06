@@ -1,4 +1,5 @@
 use crate::ItemViewEntry;
+use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
 use crate::app::model_update::ItemViewMetadataOverlaySource;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
@@ -43,11 +44,65 @@ pub(crate) struct ItemViewMetadataSource {
     pub(crate) location: SharedString,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewTileFrameSource {
+    pub(crate) slice_index: usize,
+    pub(crate) name: SharedString,
+    pub(crate) is_dir: bool,
+    pub(crate) selected: bool,
+    pub(crate) media_token: i32,
+    pub(crate) has_bounds: bool,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+    pub(crate) text_width: f32,
+}
+
 impl ItemViewMetadataSource {
     pub(crate) fn new(group: impl Into<SharedString>, location: impl Into<SharedString>) -> Self {
         Self {
             group: group.into(),
             location: location.into(),
+        }
+    }
+}
+
+impl ItemViewTileFrameSource {
+    pub(crate) fn from_entry_and_bounds(
+        entry: &ItemViewEntry,
+        bounds: &ItemViewItemBounds,
+        selected: bool,
+    ) -> Self {
+        Self {
+            slice_index: bounds.slice_index,
+            name: entry.name.clone(),
+            is_dir: entry.is_dir,
+            selected,
+            media_token: entry.media_token,
+            has_bounds: true,
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            text_width: bounds.text_width,
+        }
+    }
+
+    pub(crate) fn from_entry_without_bounds(
+        slice_index: usize,
+        entry: &ItemViewEntry,
+        selected: bool,
+    ) -> Self {
+        Self {
+            slice_index,
+            name: entry.name.clone(),
+            is_dir: entry.is_dir,
+            selected,
+            media_token: entry.media_token,
+            has_bounds: false,
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            text_width: 0.0,
         }
     }
 }
@@ -442,6 +497,36 @@ mod tests {
             entries.iter().all(|entry| !entry.name.is_empty()),
             "visible icon rows must keep a title while geometry lives at pane level"
         );
+    }
+
+    #[test]
+    fn tile_frame_source_collects_render_identity_and_geometry() {
+        let entry = ItemViewEntry {
+            name: "Report".into(),
+            path: "/tmp/report.txt".into(),
+            is_dir: false,
+            thumbnail_state: 2,
+            media_token: 42,
+        };
+        let bounds = ItemViewItemBounds {
+            slice_index: 3,
+            x: 120.0,
+            y: 40.0,
+            width: 180.0,
+            text_width: 96.0,
+        };
+
+        let frame = ItemViewTileFrameSource::from_entry_and_bounds(&entry, &bounds, true);
+
+        assert_eq!(frame.slice_index, 3);
+        assert_eq!(frame.name, "Report");
+        assert!(!frame.is_dir);
+        assert!(frame.selected);
+        assert_eq!(frame.media_token, 42);
+        assert_eq!(frame.x, 120.0);
+        assert_eq!(frame.y, 40.0);
+        assert_eq!(frame.width, 180.0);
+        assert_eq!(frame.text_width, 96.0);
     }
 
     #[test]
