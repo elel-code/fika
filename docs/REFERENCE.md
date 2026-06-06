@@ -182,9 +182,9 @@ ui/
 ├── menu_lifecycle.slint# 菜单生命周期控制器（延迟关闭 timer）
 ├── dnd_bridge.slint    # 拖拽类型枚举 DragKind
 ├── dnd_overlay.slint   # 拖拽覆盖层：ghost, 插入线, 拒绝提示
-├── top_bar.slint       # 顶栏：TopBar (搜索/分屏/主题), PathBar (导航/地址)
+├── top_bar.slint       # 顶栏：TopBar (分屏/主题), PathBar (导航/地址/搜索入口)
 ├── status_bar.slint    # 状态栏：状态文本、外部编辑、撤销、选择器控件
-├── search_panel.slint  # 搜索面板：过滤条件（类型、大小、日期）
+├── search_panel.slint  # 搜索面板：Dolphin-style 两行搜索条、过滤 popup/chips
 ├── split_pane.slint    # 分屏主栏 item-view：横向列优先虚拟化、选择框、view 同步
 └── dialogs.slint       # 弹窗：属性、冲突处理、权限确认、文本输入
 ```
@@ -210,20 +210,20 @@ ui/
 **中文**：`AppWindow` 是主窗口组件，采用 COSMIC 风格的 shell 分层模型和 slot-based pane 架构：
 
 - 最顶层：一个共享的基础表面 + 独立的窗口级 shell/header 行
-- shell 行内：`TopBar` 承载全局搜索、分屏和主题切换（无底部水平分隔线）
+- shell 行内：`TopBar` 承载分屏和主题切换（无底部水平分隔线）
 - shell 行下：左侧圆角侧栏面板 + 右侧主窗格区域，等高一排
 - **Pane 架构**：主窗格区域采用 **slot-based** 模型——`FilePane` 是一个 100% 可复用的独立组件，通过 `PaneSlot`（继承 `FilePane`）将所有 callback 经 `PaneRouting` 全局路由。`PaneSlotSurface` 将 `PaneSlot` 封装为带 slot 编号和焦点状态的容器。Split 打开时，`pane-slot-0` 和 `pane-slot-1` 是两个完全相同的 `PaneSlotSurface` 实例，没有任何功能差异。该设计天然支持扩展到 3 个甚至更多 pane
-- 每个 slot 内：`PathBar`（导航/地址栏）→ 搜索过滤条 → 横向列优先文件视图 → `StatusBar`
+- 每个 slot 内：`PathBar`（导航/地址栏/搜索入口）→ Dolphin-style 两行搜索条 → 横向列优先文件视图 → `StatusBar`
 - 菜单覆盖层通过 `RootContextMenuLayer`、`TransferMenuLayer`、`ChildSubmenuLayer` 统一挂载
 - 弹窗通过 `dialogs.slint` 中定义的组件承载
 
 **English**: `AppWindow` is the main window component, using COSMIC-style shell surface layering and slot-based pane architecture:
 
 - Top level: one shared base surface + separate window-wide shell/header row
-- Shell row: `TopBar` hosts global search, split, and theme controls (no bottom divider)
+- Shell row: `TopBar` hosts split and theme controls (no bottom divider)
 - Below shell: left rounded sidebar panel + right main pane area in one equal-height row
 - **Pane architecture**: the main pane area uses a **slot-based** model — `FilePane` is a 100% reusable standalone component. `PaneSlot` (inheriting `FilePane`) routes all callbacks through the `PaneRouting` global. `PaneSlotSurface` wraps `PaneSlot` in a container with a slot number and focus state. When Split is open, `pane-slot-0` and `pane-slot-1` are two identical `PaneSlotSurface` instances with no functional differences. This design naturally supports extending to 3 or more panes
-- Inside each slot: `PathBar` (nav/address) → search filter strip → horizontal column-first file view → `StatusBar`
+- Inside each slot: `PathBar` (nav/address/search entry) → Dolphin-style two-row search strip → horizontal column-first file view → `StatusBar`
 - Menu overlays mounted through `RootContextMenuLayer`, `TransferMenuLayer`, `ChildSubmenuLayer`
 - Dialogs hosted through components defined in `dialogs.slint`
 

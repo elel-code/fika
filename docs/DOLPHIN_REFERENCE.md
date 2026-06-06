@@ -96,7 +96,7 @@ Current Fika mapping:
 
 - The main pane follows the horizontal compact direction: `rows_per_column` comes from visible height, entry index maps to `column = index / rows_per_column` and `row = index % rows_per_column`, and ordinary item render tokens place media on the left with the file name on the right.
 - Fika already preserves old view during uncached navigation, caches directory entries, and remembers per-directory horizontal scroll.
-- Top/header layout is split between `TopBar` for global search/split/theme controls and `PathBar` for main-pane Back/Forward plus path editing, keeping chrome layout details out of `AppWindow`.
+- Top/header layout is split between `TopBar` for split/theme controls and pane-local `PathBar` for Back/Forward, path editing, and opening search, keeping chrome layout details out of `AppWindow`.
 - Status bar and chooser footer controls now live in `StatusBar`, keeping bottom-row actions out of `AppWindow`.
 - Submenu positioning has been changed to anchor to the actual parent menu item and avoid window edges.
 - File item, viewport, Open With, Create New, Transfer, Places, Devices, and Places blank-area menu content have been split into `ui/menus.slint`.
@@ -110,16 +110,22 @@ Current Fika mapping:
 Reference files:
 
 - `dolphin/src/search/bar.cpp`
+- `dolphin/src/search/chip.cpp`
+- `dolphin/src/search/popup.cpp`
 - `dolphin/src/search/widgetmenu.cpp`
 
 Useful interaction rules:
 
 - Search state is exposed as a real toolbar/panel state, not a modal.
 - Search options belong near the search field and are visible while searching.
-- Search strip layout now lives in `SearchPanel`, so future Dolphin-like filters can be added without expanding `AppWindow`.
+- Dolphin's bar is structurally two rows: search input + Filter popup + close on the first row, and location buttons plus active selector chips on the second row.
+- The Filter button uses an instant popup (`WidgetMenu` / `Popup`) instead of expanding the view and changing the file area's height.
+- Active filters are editable/removable chips built around selector controls; the button text stays stable.
 
 Current Fika mapping:
 
-- Fika already opens a Dolphin-like search strip from the top bar and supports recursive search.
+- Fika opens search from each pane's `PathBar`; every split pane owns its own `SearchPanel` state and popup routing.
+- `SearchPanel` now uses a Dolphin-style two-row layout: search input, fixed `Filter` button, close/cancel controls, second-row `Here` / `Everywhere` location buttons, and removable active filter chips.
+- `SearchFilterPopup` is an anchored overlay rather than an expanded strip, so filter changes do not resize the file view.
 - Recursive search results are grouped by parent location without inserting separate rows, so the current column-first virtualized item-view remains stable.
 - Further work should add deeper filter UI parity only when the filtering backend exists.

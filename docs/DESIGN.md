@@ -34,11 +34,11 @@ Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前
 - `AppWindow` 是主窗口。
 - `ui/models.slint` 定义 Slint-facing 的 `ItemViewEntry` / `PlaceEntry` / `DesktopApp` 等 UI row；Rust-native `FileEntry` 是业务条目，保留在 Rust 侧。
 - `ui/widgets.slint` 包含通用按钮、菜单项、popup surface 和 Places 行。
-- `ui/top_bar.slint` 导出两个 chrome 组件：`TopBar` 负责窗口顶栏里的 COSMIC-style 搜索入口、Split 状态入口和主题切换；`PathBar` 负责主栏内容顶部的 Back/Forward 导航组和路径输入。`AppWindow` 只保留动作 callback、输入状态和持久化转发。
+- `ui/top_bar.slint` 导出两个 chrome 组件：`TopBar` 负责窗口顶栏里的 Split 状态入口和主题切换；`PathBar` 负责每个 pane 内容顶部的 Back/Forward 导航组、路径输入和搜索入口。`AppWindow` 只保留动作 callback、输入状态和持久化转发。
 - `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile primitive 渲染；选择、命中、右键、激活、DnD payload 语义由 Rust item-view controller 决定，可见 tile 的 size/media/text rect、每项 bounds 和 folder/file fallback image 由 pane-level render plan/cache 下发，避免写入每个 `ItemViewEntry` row。
 - `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
 
-Shell surface layering now follows the COSMIC direction outside the main file arrangement: `AppWindow` owns one shared base surface with a separate window-wide shell/header row. That shell/header row hosts global search, split, and theme controls through `TopBar`, and it intentionally does not draw a horizontal divider above the main content. Below it, the left sidebar panel and right main pane share one equal-height content row. The main pane starts with `PathBar` for Back/Forward and address editing, followed by the search filter strip, horizontal column-first file view, and status bar; these rows render transparent backgrounds and keep only necessary internal separators. Sidebar rows are inset inside the rounded panel, and the sidebar border is intentionally a little stronger than the flat shell separators.
+Shell surface layering now follows the COSMIC direction outside the main file arrangement: `AppWindow` owns one shared base surface with a separate window-wide shell/header row. That shell/header row hosts split and theme controls through `TopBar`, and it intentionally does not draw a horizontal divider above the main content. Below it, the left sidebar panel and right main pane share one equal-height content row. Each pane starts with `PathBar` for Back/Forward, address editing, and opening search, followed by the Dolphin-style two-row search strip, horizontal column-first file view, and status bar; these rows render transparent backgrounds and keep only necessary internal separators. Sidebar rows are inset inside the rounded panel, and the sidebar border is intentionally a little stronger than the flat shell separators.
 
 The non-main-pane chrome is intentionally allowed to track COSMIC Files more closely than Dolphin: the default sidebar width is 280px but remains user-resizable and persisted, while Back/Forward, address editing, and search controls live inside each pane so split view has no implicit primary pane. Future visual passes should copy COSMIC Files freely for palette, spacing, address-bar placement, Back/Forward affordances, menu/dialog styling, and main-pane toolbar treatment. The deliberate exception is the main pane's column-first item arrangement and horizontal scrolling model; the sidebar may keep Fika's rounded raised layer on top of COSMIC proportions.
 
@@ -310,13 +310,14 @@ Places 分为内置项和用户项：
 当前支持两种搜索：
 
 - 默认搜索只过滤当前目录已加载条目。
-- 勾选 `Search subfolders` 后，提交搜索会异步递归扫描当前目录。
-- 搜索栏提供 Type、Modified、Size 三个紧凑过滤器；过滤器可在空查询时单独作用于当前目录，也会作用于递归搜索返回的结果。
-- 搜索 strip 的布局集中在 `ui/search_panel.slint` 的 `SearchPanel`。搜索过滤状态 helper、递归搜索取消 token 处理和状态栏文案集中在 `src/app/search_ui.rs`；`ui/app.slint` 只保留查询/过滤状态，`main.rs` 只保留后端 callback 转发、异步搜索启动和主栏高度计算。
+- `SearchPanel` 第二行提供 Dolphin-style 的 `Here` / `Everywhere` 位置按钮；在当前后端里，`Here` 表示只过滤当前目录，`Everywhere` 表示异步递归扫描当前目录及子目录。
+- `Filter` 按钮打开 pane-slot 路由的 anchored popup，提供 File Type、Modified since、Size 三组 selector；过滤器可在空查询时单独作用于当前目录，也会作用于递归搜索返回的结果。
+- 已启用过滤器会在第二行显示为可移除 chip，避免把过滤状态藏在按钮文案或展开式面板里。
+- 搜索 strip 的布局集中在 `ui/search_panel.slint` 的 `SearchPanel` / `SearchFilterPopup`。搜索过滤状态 helper、递归搜索取消 token 处理和状态栏文案集中在 `src/app/search_ui.rs`；`ui/app.slint` 只保留查询/过滤状态、popup 路由和主栏高度计算，`main.rs` 只保留后端 callback 转发与异步搜索启动。
 
 递归搜索使用独立 `search_generation` 和一个协作取消标记。修改查询、清空查询、按下 Cancel 或切换目录会请求当前搜索尽快中断并使旧搜索结果失效；过期结果和过期进度事件回到 UI 线程后直接丢弃。递归搜索进行时 UI 设置 `search_loading`，主栏空状态显示搜索中而不是误报无匹配；后台任务会周期性回传已扫描目录数和已匹配结果数，状态栏据此显示实时进度。有效结果或取消/切目录会清除 loading 状态；用户主动取消时，状态栏会包含最近一次扫描进度。递归搜索完成后，如果 Type / Modified / Size 过滤器隐藏了部分匹配项，状态栏会明确显示可见数量是过滤后的结果数。递归结果按父目录位置排序，并在每个位置组的第一个 tile 上显示组名；每个结果仍显示父目录位置，便于区分同名文件。
 
-切换 `Search subfolders` 时，如果已有查询，会立即按新模式重新提交搜索。
+切换 `Here` / `Everywhere` 时，如果已有查询，会立即按新模式重新提交搜索。
 
 Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为瘦身后的 `ItemViewEntry`，只携带业务身份、目录标记、thumbnail 状态和 media token；成功 thumbnail image 存在 pane-local 稀疏 `ItemViewMediaEntry` overlay，selection 存在 pane-local sidecar/highlight model，render-plan 几何和通用 fallback image 存在 pane-level view data/cache，因此主视图只消费预计算后的 pane-level 绘制坐标和图像；普通文件名和递归搜索元数据都使用同一套 Rust 侧横向 text rect。
 

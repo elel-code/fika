@@ -19,7 +19,7 @@
 - [x] COSMIC-style shell surface layering outside the main file arrangement.
   - Current: `AppWindow` owns one shared base surface with a separate window-wide shell/header row.
   - Current: `TopBar`, `PathBar`, `SearchPanel`, and `StatusBar` render transparent backgrounds, so they read as one layer with the main pane.
-  - Current: `TopBar` lives in the shell/header row, owns global search/split/theme controls, and deliberately does not draw a bottom separator between the shell tool area and main content.
+  - Current: `TopBar` lives in the shell/header row, owns split/theme controls, and deliberately does not draw a bottom separator between the shell tool area and main content.
   - Current: below the shell/header row, the rounded sidebar panel and right main pane share one equal-height content row; the navigation/address `PathBar` is the first row inside that right main pane.
   - Current: the main-pane item arrangement intentionally remains Dolphin compact style: horizontal scrolling, column-first order, icon/media on the left, and filename text on the right.
 - [x] Dark mode.
@@ -313,11 +313,14 @@
 
 - [x] Search filters.
   - Acceptance: search can filter by broad type, modified age, and size without parsing display strings.
-  - Current: the pane-local search strip exposes one concentrated Filters chooser with Type / Modified / Size candidate rows instead of three always-visible cycle buttons; filters apply to current-directory filtering and recursive search results.
+  - Current: the pane-local search strip follows Dolphin's `Search::Bar` structure more closely: the first row is search input + fixed `Filter` popup button + close/cancel controls, and the second row carries location buttons plus active filter chips.
+  - Current: the `Filter` popup is slot-routed and anchored near the button/chip; it exposes Type / Modified / Size selector rows without expanding the pane content height.
+  - Current: active Type / Modified / Size filters appear as removable chips in the second row, closer to Dolphin's selector-chip model than static status labels.
+  - Current: filters apply to current-directory filtering and recursive search results.
   - Current: when filters hide some recursive search matches, the completion status explicitly says the visible count is after filters.
-  - Current: COSMIC-style search query input lives in `TopBar`: the search button turns into a fixed-width header search field while active.
-  - Current: `ui/search_panel.slint` is now a lightweight main-pane search strip for recursive search, one expandable filter chooser, Cancel, Clear, and Close.
-  - Current: search filter controls use scoped `FlexboxLayout`, so they wrap inside the filter strip instead of forcing or narrowing the main pane width.
+  - Current: search is opened from the pane-local `PathBar` search button, so split panes keep independent search UI and state without a main-pane concept.
+  - Current: `ui/search_panel.slint` owns the Dolphin-style two-row pane search bar and popup selector surface.
+  - Current: search filter chips use scoped `FlexboxLayout`, so they wrap inside the second search row instead of forcing or narrowing the main pane width.
   - Current: search UI state helpers, recursive-search cancellation token handling, and search status text live in `src/app/search_ui.rs`, keeping `main.rs` focused on callback wiring and async search startup.
 
 ## Phase 8: Open With
@@ -419,7 +422,7 @@ Acceptance for all:
   - Acceptance: reusable models, buttons, menu rows, Places rows, overlays, and pane chrome are outside the main window file.
   - Current: `ui/models.slint`, `ui/widgets.slint`, `ui/menus.slint`, `ui/dnd_overlay.slint`, `ui/search_panel.slint`, `ui/top_bar.slint`, and `ui/status_bar.slint` are imported by `ui/app.slint`; common menu rows and popup surface styling live in `ui/widgets.slint`, while file, Open With, Create New, Transfer, Places, and viewport menu content is isolated in `ui/menus.slint`.
   - Current: the standalone file tile component has been removed for the Dolphin-style viewport path; visible main-view tile primitives are now inlined in `SplitPaneView` so the next renderer/reuse pass has one focused replacement point.
-  - Current: `TopBar` owns the toolbar/path-entry layout, so `ui/app.slint` keeps path/search/theme action wiring without carrying the top bar drawing.
+  - Current: `TopBar` owns the shell toolbar drawing and `PathBar` owns pane-local path/search entry controls, so `ui/app.slint` keeps action wiring without carrying that chrome drawing.
   - Current: `StatusBar` owns the bottom status/chooser/footer layout, so `ui/app.slint` keeps status and chooser action wiring without carrying the bottom row drawing.
   - Current: `DragOverlayLayer` owns Places insertion lines, drag ghost previews, and rejected-drop banners, so `ui/app.slint` keeps DnD state and action wiring without carrying repeated overlay drawing.
   - Current: dialog bodies and centered popup wrappers live in `ui/dialogs.slint`, so `ui/app.slint` keeps dialog action wiring without repeating the transparent centering shell for every modal.
@@ -532,24 +535,24 @@ Acceptance for all:
   - Acceptance: new UI polish and desktop-integration work first checks `./cosmic-files` before reaching for Dolphin-specific behavior.
   - Acceptance: the current Dolphin-like column-first main-pane arrangement, horizontal scrolling, and virtualized Slint tile model stay intact.
   - Current: `docs/COSMIC_REFERENCE.md` records the policy and concrete source files to inspect.
-  - Current direction: shell visuals should move closer to COSMIC Files: the window-wide shell/header owns global search/tools, below it the main-pane `PathBar` and main pane share one calm surface, and the sidebar content reads as a raised rounded panel in the same content row.
-  - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, top-bar search placement, and transient surface styling; the sidebar keeps Fika's rounded panel treatment on top of COSMIC proportions.
-  - Current direction: once the current structural/menu/performance work is stable, all non-main-pane chrome may move further toward COSMIC Files directly: colors, layout rhythm, address-bar position, Back/Forward affordances, search field position/display, and sidebar treatment should follow COSMIC where practical, while preserving Fika's rounded raised sidebar content panel and the existing main-pane arrangement.
-  - Current direction: future UI work should freely copy COSMIC Files for all chrome outside the main file arrangement, including color tokens, top-bar/main-pane layer treatment, address-bar alignment, navigation/search placement, menus, dialogs, and sidebar rhythm. The main pane's item arrangement remains the explicit exception.
+  - Current direction: shell visuals should move closer to COSMIC Files: the window-wide shell/header owns global tools, below it each pane's `PathBar` / search panel / file content share one calm surface, and the sidebar content reads as a raised rounded panel in the same content row.
+  - Current direction: outside the main-pane item arrangement, UI chrome should increasingly follow COSMIC Files for color, spacing, toolbar layout, address-entry position, Back/Forward controls, and transient surface styling; search remains pane-local and may selectively borrow Dolphin's search bar structure where it better serves split-pane independence.
+  - Current direction: once the current structural/menu/performance work is stable, all non-main-pane chrome may move further toward COSMIC Files directly: colors, layout rhythm, address-bar position, Back/Forward affordances, and sidebar treatment should follow COSMIC where practical, while preserving Fika's rounded raised sidebar content panel, pane-local search ownership, and the existing main-pane arrangement.
+  - Current direction: future UI work should freely copy COSMIC Files for all chrome outside the main file arrangement, including color tokens, top-bar/main-pane layer treatment, address-bar alignment, menus, dialogs, and sidebar rhythm. Pane-local search remains Dolphin-inspired unless Fika gains a better split-pane-compatible COSMIC pattern.
   - Current direction: each pane-local `PathBar` and file content should continue to read as one flat content layer inside the below-header pane area, while the sidebar remains a rounded raised content panel in the same row; the sidebar may be more Fika-specific, but its spacing and rhythm should still start from COSMIC.
   - Current: first shell pass aligns the path bar, search filter panel, status bar, and main pane to one shared surface while the sidebar uses a rounded panel color and a softer divider, keeping the main pane's column-first layout untouched.
-  - Current: the COSMIC-style chrome pass now keeps Slint and Rust geometry in sync for the 56px shell header, 56px main-pane path bar, and 44px/78px search filter strip, so main-pane hit testing and virtual layout follow the visible shell.
+  - Current: the chrome geometry pass now keeps Slint and Rust geometry in sync for the 56px shell header, 56px main-pane path bar, and Dolphin-style 84px/116px two-row search strip, so main-pane hit testing and virtual layout follow the visible shell.
   - Current: header/path controls now use a lighter 32px shared `ToolButton`, 32px path/search input surfaces, and softer light-theme sidebar colors, moving non-main-pane chrome closer to COSMIC while leaving the main file arrangement unchanged.
   - Current: `PathBar` follows COSMIC's previous/next navigation grouping. Home remains a Places/sidebar action rather than a top/path bar button, and the visible Up button is removed from chrome.
-  - Current: Search follows COSMIC's header behavior more closely: the shell `TopBar` search button becomes an inline search field, while detailed filters stay in a slim main-pane strip.
+  - Current: Search is pane-local again: `PathBar` opens a Dolphin-style `SearchPanel`, and detailed filters live in an anchored popup with removable active-filter chips.
   - Current: `TopBar` Split now uses the shared `ToolButton` selected state instead of a hand-drawn one-off rectangle, keeping header controls in one COSMIC-like component family.
   - Current: `TopBar` lives in the shell/header row for global tools; `PathBar` lives as the first row inside the right main pane in the below-header content row for address/navigation.
   - Current: the default sidebar width is now 280px to better match COSMIC's narrower navigation rhythm, while persisted user widths still override it.
-  - Current: the top-bar search field now uses bounded min/preferred/max layout constraints, and the path field stays in the separate main-pane `PathBar` so search mode cannot squeeze the main-pane geometry or create Slint layout recursion.
+  - Current: the search input uses the main first-row stretch inside the pane-local `SearchPanel`, and the path field stays in the separate main-pane `PathBar` so search mode cannot squeeze split-pane geometry or create Slint layout recursion.
   - Current: `AppWindow` now owns a single `main-content-left` edge shared by the sidebar panel and main pane; the sidebar panel starts in the below-header content row, and its right border is the visible divider.
   - Current: the light shell base is subtly distinct from the raised white sidebar, the sidebar border is stronger than the flat top/main separators, and Places/Devices rows are inset inside the rounded sidebar panel.
   - Current: sidebar content geometry now uses a below-header same-row panel with a 16px radius, while pane toolbars and content remain shared flat bases inside the pane area.
-  - Current: shared header controls now use quieter COSMIC-like 32px icon-button styling with 8px radius and lighter text weight, and path/search fields use calmer light/dark tokens without changing the main file arrangement.
+  - Current: shared header controls now use quieter COSMIC-like 32px icon-button styling with 8px radius and lighter text weight, and pane-local path/search fields use calmer light/dark tokens without changing the main file arrangement.
 
 - [~] Align menu/action enablement with COSMIC where it fits Fika.
   - Reference: `cosmic-files/src/menu.rs` and `cosmic-files/src/app.rs`.
