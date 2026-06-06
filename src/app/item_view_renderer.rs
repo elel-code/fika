@@ -74,6 +74,27 @@ pub(crate) struct ItemViewTileFrameBatch {
     plans: Vec<ItemViewTileFramePlan>,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ItemViewTileFrameRasterInput {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) dark: bool,
+    pub(crate) tile_height: f32,
+    pub(crate) media_x: f32,
+    pub(crate) media_y: f32,
+    pub(crate) media_width: f32,
+    pub(crate) media_height: f32,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ItemViewTileFrameRaster {
+    pub(crate) image: Image,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewTileTextFrame {
     pub(crate) name: SharedString,
@@ -283,6 +304,53 @@ impl ItemViewTileFrameBatch {
             .ok()
             .and_then(|row| self.sources.get(row))
             .map_or(0, |source| source.media_token)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn render_raster_layer(
+        &self,
+        input: ItemViewTileFrameRasterInput,
+    ) -> ItemViewTileFrameRaster {
+        let buffer = self.render_raster_buffer(input);
+        ItemViewTileFrameRaster {
+            image: Image::from_rgba8(buffer),
+            width: input.width,
+            height: input.height,
+        }
+    }
+
+    fn render_raster_buffer(
+        &self,
+        input: ItemViewTileFrameRasterInput,
+    ) -> SharedPixelBuffer<Rgba8Pixel> {
+        let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(input.width, input.height);
+        buffer
+            .make_mut_slice()
+            .fill(GlyphColor::rgba(0, 0, 0, 0).pixel());
+
+        for plan in &self.plans {
+            if let Some(highlight) = plan.highlight {
+                draw_tile_highlight(
+                    &mut buffer,
+                    highlight.x,
+                    highlight.y,
+                    highlight.width,
+                    input.tile_height,
+                    input.dark,
+                );
+            }
+            draw_fallback_media_glyph_at(
+                &mut buffer,
+                plan.fallback_media.is_dir,
+                input.dark,
+                plan.fallback_media.x + input.media_x,
+                plan.fallback_media.y + input.media_y,
+                input.media_width,
+                input.media_height,
+            );
+        }
+
+        buffer
     }
 }
 
@@ -556,7 +624,46 @@ fn fallback_media_image(is_dir: bool, dark: bool, width: u32, height: u32) -> Im
     Image::from_rgba8(buffer)
 }
 
-fn draw_folder_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+fn draw_tile_highlight(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    dark: bool,
+) {
+    let background = if dark {
+        GlyphColor::rgba(34, 63, 79, 255)
+    } else {
+        GlyphColor::rgba(228, 240, 248, 255)
+    };
+    draw_absolute_rect(buffer, x, y, width, height, background);
+}
+
+fn draw_fallback_media_glyph_at(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    is_dir: bool,
+    dark: bool,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) {
+    if is_dir {
+        draw_folder_glyph_at(buffer, dark, x, y, width, height);
+    } else {
+        draw_file_glyph_at(buffer, dark, x, y, width, height);
+    }
+}
+
+fn draw_folder_glyph_at(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    dark: bool,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) {
     let tab = if dark {
         GlyphColor::rgba(59, 102, 139, 255)
     } else {
@@ -572,12 +679,21 @@ fn draw_folder_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
     } else {
         GlyphColor::rgba(237, 244, 250, 255)
     };
-    draw_rect(buffer, 0.0, 0.14, 0.48, 0.26, tab);
-    draw_rect(buffer, 0.0, 0.29, 1.0, 0.69, body);
-    draw_rect(buffer, 0.08, 0.37, 0.82, 0.10, highlight);
+    draw_relative_rect(buffer, x, y, width, height, 0.0, 0.14, 0.48, 0.26, tab);
+    draw_relative_rect(buffer, x, y, width, height, 0.0, 0.29, 1.0, 0.69, body);
+    draw_relative_rect(
+        buffer, x, y, width, height, 0.08, 0.37, 0.82, 0.10, highlight,
+    );
 }
 
-fn draw_file_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+fn draw_file_glyph_at(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    dark: bool,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) {
     let body = if dark {
         GlyphColor::rgba(139, 145, 151, 255)
     } else {
@@ -593,13 +709,57 @@ fn draw_file_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
     } else {
         GlyphColor::rgba(85, 85, 85, 255)
     };
-    draw_rect(buffer, 0.18, 0.10, 0.64, 0.82, body);
-    draw_rect(buffer, 0.58, 0.10, 0.24, 0.24, shade);
-    draw_rect(buffer, 0.30, 0.52, 0.40, 0.06, line);
-    draw_rect(buffer, 0.30, 0.66, 0.32, 0.06, line);
+    draw_relative_rect(buffer, x, y, width, height, 0.18, 0.10, 0.64, 0.82, body);
+    draw_relative_rect(buffer, x, y, width, height, 0.58, 0.10, 0.24, 0.24, shade);
+    draw_relative_rect(buffer, x, y, width, height, 0.30, 0.52, 0.40, 0.06, line);
+    draw_relative_rect(buffer, x, y, width, height, 0.30, 0.66, 0.32, 0.06, line);
 }
 
-fn draw_rect(
+fn draw_relative_rect(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    origin_x: f32,
+    origin_y: f32,
+    origin_width: f32,
+    origin_height: f32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: GlyphColor,
+) {
+    draw_absolute_rect(
+        buffer,
+        origin_x + x * origin_width,
+        origin_y + y * origin_height,
+        width * origin_width,
+        height * origin_height,
+        color,
+    );
+}
+
+fn draw_folder_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    draw_folder_glyph_at(
+        buffer,
+        dark,
+        0.0,
+        0.0,
+        buffer.width() as f32,
+        buffer.height() as f32,
+    );
+}
+
+fn draw_file_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    draw_file_glyph_at(
+        buffer,
+        dark,
+        0.0,
+        0.0,
+        buffer.width() as f32,
+        buffer.height() as f32,
+    );
+}
+
+fn draw_absolute_rect(
     buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
     x: f32,
     y: f32,
@@ -609,17 +769,14 @@ fn draw_rect(
 ) {
     let buffer_width = buffer.width() as usize;
     let buffer_height = buffer.height() as usize;
-    if buffer_width == 0 || buffer_height == 0 {
+    if buffer_width == 0 || buffer_height == 0 || width <= 0.0 || height <= 0.0 {
         return;
     }
-    let start_x = (x * buffer_width as f32).round().max(0.0) as usize;
-    let start_y = (y * buffer_height as f32).round().max(0.0) as usize;
-    let end_x = ((x + width) * buffer_width as f32)
-        .round()
-        .max(start_x as f32) as usize;
-    let end_y = ((y + height) * buffer_height as f32)
-        .round()
-        .max(start_y as f32) as usize;
+
+    let start_x = x.floor().max(0.0) as usize;
+    let start_y = y.floor().max(0.0) as usize;
+    let end_x = (x + width).ceil().max(start_x as f32) as usize;
+    let end_y = (y + height).ceil().max(start_y as f32) as usize;
     let end_x = end_x.min(buffer_width);
     let end_y = end_y.min(buffer_height);
     let pixel = color.pixel();
@@ -761,6 +918,59 @@ mod tests {
         assert_eq!(batch.media_token_for_slice_index(1), 42);
         assert_eq!(batch.media_token_for_slice_index(-1), 0);
         assert_eq!(batch.media_token_for_slice_index(2), 0);
+    }
+
+    #[test]
+    fn tile_frame_batch_renders_raster_layer_for_highlight_and_fallback_media() {
+        let mut folder = test_entry(0);
+        folder.is_dir = true;
+        let mut file = test_entry(1);
+        file.is_dir = false;
+        let bounds = vec![
+            ItemViewItemBounds {
+                slice_index: 0,
+                x: 5.0,
+                y: 5.0,
+                width: 40.0,
+                text_width: 20.0,
+            },
+            ItemViewItemBounds {
+                slice_index: 1,
+                x: 5.0,
+                y: 30.0,
+                width: 40.0,
+                text_width: 20.0,
+            },
+        ];
+        let batch = ItemViewTileFrameBatch::from_entries_and_bounds(
+            &[folder, file],
+            &bounds,
+            &["/tmp/item-0".to_string()],
+        );
+
+        let buffer = batch.render_raster_buffer(ItemViewTileFrameRasterInput {
+            width: 64,
+            height: 64,
+            dark: false,
+            tile_height: 20.0,
+            media_x: 2.0,
+            media_y: 2.0,
+            media_width: 8.0,
+            media_height: 8.0,
+        });
+
+        assert_eq!(
+            pixel_at(&buffer, 43, 6),
+            Rgba8Pixel::new(228, 240, 248, 255)
+        );
+        assert_eq!(
+            pixel_at(&buffer, 11, 11),
+            Rgba8Pixel::new(96, 159, 224, 255)
+        );
+        assert_eq!(
+            pixel_at(&buffer, 9, 34),
+            Rgba8Pixel::new(174, 180, 186, 255)
+        );
     }
 
     #[test]
@@ -924,5 +1134,9 @@ mod tests {
                 .iter()
                 .any(|pixel| pixel.a != 0 && (pixel.r != 0 || pixel.g != 0 || pixel.b != 0))
         );
+    }
+
+    fn pixel_at(buffer: &SharedPixelBuffer<Rgba8Pixel>, x: usize, y: usize) -> Rgba8Pixel {
+        buffer.as_slice()[y * buffer.width() as usize + x]
     }
 }
