@@ -58,6 +58,12 @@ pub(crate) struct ItemViewTileFrameSource {
     pub(crate) text_width: f32,
 }
 
+pub(crate) trait ItemViewFrameEntry {
+    fn frame_name(&self) -> SharedString;
+    fn frame_is_dir(&self) -> bool;
+    fn frame_media_token(&self) -> i32;
+}
+
 impl ItemViewMetadataSource {
     pub(crate) fn new(group: impl Into<SharedString>, location: impl Into<SharedString>) -> Self {
         Self {
@@ -67,18 +73,32 @@ impl ItemViewMetadataSource {
     }
 }
 
+impl ItemViewFrameEntry for ItemViewEntry {
+    fn frame_name(&self) -> SharedString {
+        self.name.clone()
+    }
+
+    fn frame_is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    fn frame_media_token(&self) -> i32 {
+        self.media_token
+    }
+}
+
 impl ItemViewTileFrameSource {
     pub(crate) fn from_entry_and_bounds(
-        entry: &ItemViewEntry,
+        entry: &impl ItemViewFrameEntry,
         bounds: &ItemViewItemBounds,
         selected: bool,
     ) -> Self {
         Self {
             slice_index: bounds.slice_index,
-            name: entry.name.clone(),
-            is_dir: entry.is_dir,
+            name: entry.frame_name(),
+            is_dir: entry.frame_is_dir(),
             selected,
-            media_token: entry.media_token,
+            media_token: entry.frame_media_token(),
             has_bounds: true,
             x: bounds.x,
             y: bounds.y,
@@ -89,15 +109,15 @@ impl ItemViewTileFrameSource {
 
     pub(crate) fn from_entry_without_bounds(
         slice_index: usize,
-        entry: &ItemViewEntry,
+        entry: &impl ItemViewFrameEntry,
         selected: bool,
     ) -> Self {
         Self {
             slice_index,
-            name: entry.name.clone(),
-            is_dir: entry.is_dir,
+            name: entry.frame_name(),
+            is_dir: entry.frame_is_dir(),
             selected,
-            media_token: entry.media_token,
+            media_token: entry.frame_media_token(),
             has_bounds: false,
             x: 0.0,
             y: 0.0,

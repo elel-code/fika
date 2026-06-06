@@ -1,5 +1,5 @@
 use crate::app::geometry::ItemViewItemBounds;
-use crate::app::item_view_renderer::ItemViewTileFrameSource;
+use crate::app::item_view_renderer::{ItemViewFrameEntry, ItemViewTileFrameSource};
 use crate::app::pane::PaneView;
 use crate::{
     ItemViewEntry, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
@@ -101,6 +101,20 @@ impl ItemViewRowToken {
 
     pub(crate) fn has_renderable_title(&self) -> bool {
         !self.name.as_str().trim().is_empty()
+    }
+}
+
+impl ItemViewFrameEntry for ItemViewRowToken {
+    fn frame_name(&self) -> SharedString {
+        self.name_shared()
+    }
+
+    fn frame_is_dir(&self) -> bool {
+        self.is_dir()
+    }
+
+    fn frame_media_token(&self) -> i32 {
+        self.media_token()
     }
 }
 
@@ -208,18 +222,11 @@ fn item_view_tile_frame_sources_from_tokens(
         .iter()
         .filter_map(|bounds| {
             let token = tokens.get(bounds.slice_index)?;
-            Some(ItemViewTileFrameSource {
-                slice_index: bounds.slice_index,
-                name: token.name_shared(),
-                is_dir: token.is_dir(),
-                selected: token.selected(),
-                media_token: token.media_token(),
-                has_bounds: true,
-                x: bounds.x,
-                y: bounds.y,
-                width: bounds.width,
-                text_width: bounds.text_width,
-            })
+            Some(ItemViewTileFrameSource::from_entry_and_bounds(
+                token,
+                bounds,
+                token.selected(),
+            ))
         })
         .collect()
 }
@@ -1250,6 +1257,24 @@ mod tests {
             }]
         );
         assert_eq!(media_tokens(&projected_media_tokens), vec![(1, 77)]);
+    }
+
+    #[test]
+    fn item_view_row_token_can_feed_tile_frame_source_trait() {
+        let entries = entries_with_tile_metrics(1);
+        let tokens = item_view_row_tokens(&entries, &["/tmp/item-0".to_string()]);
+        let bounds = bounds_entries(5, 1);
+
+        let frame = ItemViewTileFrameSource::from_entry_and_bounds(
+            &tokens[0],
+            &bounds[0],
+            tokens[0].selected(),
+        );
+
+        assert_eq!(frame.name, "item-0");
+        assert!(frame.selected);
+        assert_eq!(frame.x, 50.0);
+        assert_eq!(frame.text_width, 50.0);
     }
 
     #[test]
