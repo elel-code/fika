@@ -367,15 +367,9 @@ fn item_view_media_tokens(
 ) -> Vec<ItemViewMediaToken> {
     media_entries
         .iter()
-        .map(|media| {
-            let media_token = usize::try_from(media.slice_index)
-                .ok()
-                .and_then(|row| batch.sources().get(row))
-                .map_or(0, |frame| frame.media_token);
-            ItemViewMediaToken {
-                slice_index: media.slice_index,
-                media_token,
-            }
+        .map(|media| ItemViewMediaToken {
+            slice_index: media.slice_index,
+            media_token: batch.media_token_for_slice_index(media.slice_index),
         })
         .collect()
 }

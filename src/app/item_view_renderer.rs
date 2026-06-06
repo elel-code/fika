@@ -269,12 +269,20 @@ impl ItemViewTileFrameBatch {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn sources(&self) -> &[ItemViewTileFrameSource] {
         &self.sources
     }
 
     pub(crate) fn plans(&self) -> &[ItemViewTileFramePlan] {
         &self.plans
+    }
+
+    pub(crate) fn media_token_for_slice_index(&self, slice_index: i32) -> i32 {
+        usize::try_from(slice_index)
+            .ok()
+            .and_then(|row| self.sources.get(row))
+            .map_or(0, |source| source.media_token)
     }
 }
 
@@ -735,6 +743,24 @@ mod tests {
                 width: 180.0,
             })
         );
+    }
+
+    #[test]
+    fn tile_frame_batch_owns_media_token_lookup() {
+        let mut first = test_entry(0);
+        first.media_token = 21;
+        let mut second = test_entry(1);
+        second.media_token = 42;
+
+        let batch = ItemViewTileFrameBatch::from_sources(vec![
+            ItemViewTileFrameSource::from_entry_without_bounds(0, &first, false),
+            ItemViewTileFrameSource::from_entry_without_bounds(1, &second, false),
+        ]);
+
+        assert_eq!(batch.media_token_for_slice_index(0), 21);
+        assert_eq!(batch.media_token_for_slice_index(1), 42);
+        assert_eq!(batch.media_token_for_slice_index(-1), 0);
+        assert_eq!(batch.media_token_for_slice_index(2), 0);
     }
 
     #[test]
