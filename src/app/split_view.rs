@@ -8,7 +8,7 @@ use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
+    AppWindow, ItemViewBoundsEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
     ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData,
     set_status, sync_virtual_entries_for_slot,
 };
@@ -270,7 +270,7 @@ fn replace_pane_surfaces_model(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 fn pane_view_requires_surface_rebind(current: &PaneViewData, next: &PaneViewData) -> bool {
     (current.entry_count == 0) != (next.entry_count == 0)
-        || (current.entries.row_count() == 0) != (next.entries.row_count() == 0)
+        || (current.paint.row_count() == 0) != (next.paint.row_count() == 0)
 }
 
 fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
@@ -347,7 +347,6 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
 
     PaneViewData {
         slot,
-        entries: pane_slot_entries(slot, state),
         bounds: pane_slot_bounds(slot, state),
         paint: pane_slot_paint(slot, state),
         highlights: pane_slot_highlights(slot, state),
@@ -506,14 +505,6 @@ fn pane_slot_can_go_forward(state: &AppState, slot: i32) -> bool {
         .panes
         .pane_for_slot(slot)
         .is_some_and(|pane| pane.history.forward_len() > 0)
-}
-
-fn pane_slot_entries(slot: i32, state: &AppState) -> ModelRc<ItemViewEntry> {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_entries.clone())
-        .unwrap_or_default()
 }
 
 fn pane_slot_bounds(slot: i32, state: &AppState) -> ModelRc<ItemViewBoundsEntry> {
@@ -889,23 +880,24 @@ mod tests {
     fn pane_view(entry_count: i32, visible_rows: usize) -> PaneViewData {
         PaneViewData {
             slot: 0,
-            entries: if visible_rows == 0 {
+            bounds: ModelRc::default(),
+            paint: if visible_rows == 0 {
                 ModelRc::default()
             } else {
                 ModelRc::new(Rc::new(VecModel::from(
                     (0..visible_rows)
-                        .map(|index| ItemViewEntry {
+                        .map(|index| ItemViewPaintEntry {
+                            slice_index: index as i32,
                             name: format!("item-{index}").into(),
-                            path: format!("/tmp/item-{index}").into(),
                             is_dir: false,
-                            thumbnail_state: 0,
-                            media_token: 0,
+                            x: index as f32 * 10.0,
+                            y: 0.0,
+                            width: 80.0,
+                            text_width: 64.0,
                         })
                         .collect::<Vec<_>>(),
                 )))
             },
-            bounds: ModelRc::default(),
-            paint: ModelRc::default(),
             highlights: ModelRc::default(),
             media: ModelRc::default(),
             metadata: ModelRc::default(),

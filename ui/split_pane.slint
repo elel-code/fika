@@ -1,9 +1,8 @@
-import { ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
+import { ItemViewBoundsEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
-    in property <[ItemViewEntry]> entries;
     in property <[ItemViewBoundsEntry]> bounds;
     in property <[ItemViewPaintEntry]> paint;
     in property <[ItemViewHighlightEntry]> highlights;

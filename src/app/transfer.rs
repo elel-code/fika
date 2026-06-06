@@ -27,20 +27,26 @@ pub(crate) fn prepare_place_transfer(
     x: f32,
     y: f32,
 ) -> bool {
-    let state_ref = state.borrow();
     let Ok(target_index) = usize::try_from(target_index) else {
         return false;
     };
-    let Some(target) = state_ref.places.get(target_index) else {
+    let Some((target_path, target_label)) = ({
+        let state_ref = state.borrow();
+        state_ref
+            .places
+            .get(target_index)
+            .map(|target| (target.path.clone(), target.label.clone()))
+    }) else {
         return false;
     };
+    let source_label = path_label(source);
     prepare_transfer_menu(
         ui,
         state,
         source,
-        path_label(source).as_str(),
-        target.path.as_str(),
-        target.label.as_str(),
+        source_label.as_str(),
+        target_path.as_str(),
+        target_label.as_str(),
         x,
         y,
     )
@@ -54,25 +60,30 @@ pub(crate) fn prepare_entry_transfer(
     x: f32,
     y: f32,
 ) -> bool {
-    let state_ref = state.borrow();
-    let target = usize::try_from(target_index)
-        .ok()
-        .and_then(|target_index| filtered_entry_at(&state_ref, target_index));
+    let target = {
+        let state_ref = state.borrow();
+        usize::try_from(target_index)
+            .ok()
+            .and_then(|target_index| filtered_entry_at(&state_ref, target_index))
+            .filter(|target| target.is_dir && target.path.as_str() != source)
+            .map(|target| (target.path.to_string(), target.name.to_string()))
+    };
+    let source_label = path_label(source);
 
-    if let Some(target) = target.filter(|target| target.is_dir && target.path.as_str() != source) {
+    if let Some((target_path, target_label)) = target {
         return prepare_transfer_menu(
             ui,
             state,
             source,
-            path_label(source).as_str(),
-            target.path.as_str(),
-            target.name.as_str(),
+            source_label.as_str(),
+            target_path.as_str(),
+            target_label.as_str(),
             x,
             y,
         );
     }
 
-    prepare_current_dir_transfer_with_state(ui, state, source, path_label(source).as_str(), x, y)
+    prepare_current_dir_transfer_with_state(ui, state, source, source_label.as_str(), x, y)
 }
 
 pub(crate) fn prepare_current_dir_transfer(
@@ -94,17 +105,22 @@ pub(crate) fn prepare_pane_transfer(
     x: f32,
     y: f32,
 ) -> bool {
-    let state_ref = state.borrow();
-    if let Some(target) = entry_at_pane_point(ui, &state_ref, slot, x, y)
-        .filter(|target| target.is_dir && target.path.as_str() != source)
-    {
+    let target = {
+        let state_ref = state.borrow();
+        entry_at_pane_point(ui, &state_ref, slot, x, y)
+            .filter(|target| target.is_dir && target.path.as_str() != source)
+            .map(|target| (target.path.to_string(), target.name.to_string()))
+    };
+    let source_label = path_label(source);
+
+    if let Some((target_path, target_label)) = target {
         return prepare_transfer_menu(
             ui,
             state,
             source,
-            path_label(source).as_str(),
-            target.path.as_str(),
-            target.name.as_str(),
+            source_label.as_str(),
+            target_path.as_str(),
+            target_label.as_str(),
             x,
             y,
         );
@@ -115,7 +131,7 @@ pub(crate) fn prepare_pane_transfer(
         state,
         PaneTarget::Slot(slot),
         source,
-        path_label(source).as_str(),
+        source_label.as_str(),
         x,
         y,
     )
@@ -195,10 +211,14 @@ fn prepare_current_dir_transfer_with_state(
     x: f32,
     y: f32,
 ) -> bool {
-    let state_ref = state.borrow();
-    let current_dir = focused_current_dir(&state_ref);
-    let target_path = current_dir.display().to_string();
-    let target_label = display_location_name(current_dir);
+    let (target_path, target_label) = {
+        let state_ref = state.borrow();
+        let current_dir = focused_current_dir(&state_ref);
+        (
+            current_dir.display().to_string(),
+            display_location_name(current_dir),
+        )
+    };
     prepare_transfer_menu(
         ui,
         state,
@@ -220,15 +240,21 @@ fn prepare_current_dir_transfer_for_target_with_state(
     x: f32,
     y: f32,
 ) -> bool {
-    let binding = state.borrow();
-    let Some(current_dir) = pane_current_dir(&binding, target) else {
+    let target = {
+        let state_ref = state.borrow();
+        pane_current_dir(&state_ref, target).map(|current_dir| {
+            (
+                current_dir.display().to_string(),
+                display_location_name(current_dir),
+            )
+        })
+    };
+    let Some((target_path, target_label)) = target else {
         set_status(ui, state, "No split pane target is available");
         ui.set_transfer_source_path("".into());
         ui.set_transfer_target_path("".into());
         return false;
     };
-    let target_path = current_dir.display().to_string();
-    let target_label = display_location_name(current_dir);
     prepare_transfer_menu(
         ui,
         state,
@@ -720,6 +746,71 @@ mod tests {
             1,
             &source
         ));
+    }
+
+    #[test]
+    fn transfer_menu_preparation_releases_state_borrow_before_status_updates() {
+        let source = include_str!("transfer.rs");
+
+        let place_body = source
+            .split_once("pub(crate) fn prepare_place_transfer(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn prepare_entry_transfer("))
+            .map(|(body, _)| body)
+            .expect("prepare_place_transfer body should be present");
+        let place_borrow_end = place_body
+            .find("}) else")
+            .expect("place target lookup should leave a scoped borrow");
+        let place_menu = place_body
+            .find("prepare_transfer_menu(")
+            .expect("place transfer should prepare a menu");
+
+        assert!(
+            place_body.contains("let state_ref = state.borrow();")
+                && place_body
+                    .contains(".map(|target| (target.path.clone(), target.label.clone()))")
+                && place_borrow_end < place_menu,
+            "place transfer target data must be copied before prepare_transfer_menu can call set_status"
+        );
+
+        for (name, start, end) in [
+            (
+                "entry",
+                "pub(crate) fn prepare_entry_transfer(",
+                "pub(crate) fn prepare_current_dir_transfer(",
+            ),
+            (
+                "pane",
+                "pub(crate) fn prepare_pane_transfer(",
+                "pub(crate) fn pane_drop_allowed(",
+            ),
+            (
+                "focused current directory",
+                "fn prepare_current_dir_transfer_with_state(",
+                "fn prepare_current_dir_transfer_for_target_with_state(",
+            ),
+            (
+                "target current directory",
+                "fn prepare_current_dir_transfer_for_target_with_state(",
+                "fn focused_current_dir(",
+            ),
+        ] {
+            let body = source
+                .split_once(start)
+                .and_then(|(_, rest)| rest.split_once(end))
+                .map(|(body, _)| body)
+                .expect("transfer preparation body should be present");
+            let borrow_end = body
+                .find("};\n")
+                .expect("state borrow should be scoped before menu preparation");
+            let menu = body
+                .find("prepare_transfer_menu(")
+                .expect("transfer preparation should call prepare_transfer_menu");
+
+            assert!(
+                body.contains("let state_ref = state.borrow();") && borrow_end < menu,
+                "{name} transfer target lookup must end its state borrow before prepare_transfer_menu"
+            );
+        }
     }
 
     #[cfg(unix)]

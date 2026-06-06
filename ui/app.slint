@@ -2,6 +2,7 @@
 // `include_modules!()` generates Rust types for `ui.global::<...>()`.
 export { MenuGeometry } from "menu_geometry.slint";
 export { MenuLifecycle } from "menu_lifecycle.slint";
+export { ItemViewEntry } from "models.slint";
 
 export global DndApi {
     pure callback make-drag-place(path: string) -> data-transfer;
@@ -58,7 +59,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewBoundsEntry, ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewBoundsEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -95,7 +96,6 @@ component FilePane inherits Rectangle {
     in property <bool> drop-ready: true;
     in property <string> drop-trace-prefix;
     in property <int> entry-count;
-    in property <[ItemViewEntry]> entries;
     in property <[ItemViewBoundsEntry]> bounds;
     in property <[ItemViewPaintEntry]> paint;
     in property <[ItemViewHighlightEntry]> highlights;
@@ -307,7 +307,6 @@ component FilePane inherits Rectangle {
                 height: parent.height;
                 dark: root.dark;
                 entry-count: root.entry-count;
-                entries: root.entries;
                 bounds: root.bounds;
                 paint: root.paint;
                 highlights: root.highlights;
@@ -574,7 +573,6 @@ component PaneSlotSurface inherits Rectangle {
         drop-ready: root.view.drop_ready;
         drop-trace-prefix: root.pane.drop_trace_prefix;
         entry-count: root.view.entry_count;
-        entries: root.view.entries;
         bounds: root.view.bounds;
         paint: root.view.paint;
         highlights: root.view.highlights;

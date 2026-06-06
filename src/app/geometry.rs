@@ -2641,8 +2641,9 @@ mod tests {
                     "root.live-slot != root.view.slot || root.live-viewport-x != root.view.viewport_x"
                 )
                 && pane_slot_surface.contains("viewport-x <=> root.live-viewport-x;")
-                && pane_slot_surface.contains("entries: root.view.entries;")
+                && !pane_slot_surface.contains("entries: root.view.entries;")
                 && pane_slot_surface.contains("bounds: root.view.bounds;")
+                && pane_slot_surface.contains("paint: root.view.paint;")
                 && pane_slot_surface.contains("highlights: root.view.highlights;")
                 && pane_slot_surface.contains("media: root.view.media;")
                 && pane_slot_surface.contains("metadata: root.view.metadata;")

@@ -6746,8 +6746,9 @@ mod tests {
             .expect("pane_view_data body should be present");
 
         assert!(
-            pane_view_data.contains("entries: [ItemViewEntry]")
+            !pane_view_data.contains("entries: [ItemViewEntry]")
                 && pane_view_data.contains("bounds: [ItemViewBoundsEntry]")
+                && pane_view_data.contains("paint: [ItemViewPaintEntry]")
                 && pane_view_data.contains("highlights: [ItemViewHighlightEntry]")
                 && pane_view_data.contains("media: [ItemViewMediaEntry]")
                 && pane_view_data.contains("metadata: [ItemViewMetadataEntry]")
@@ -6760,17 +6761,19 @@ mod tests {
                 && !split_view.contains("fn sync_pane_entries_ui(")
                 && !split_view.contains("fn sync_pane_media_ui(")
                 && !split_view.contains("fn sync_pane_metadata_ui(")
-                && surface_body.contains("entries: root.view.entries;")
+                && !surface_body.contains("entries: root.view.entries;")
                 && surface_body.contains("bounds: root.view.bounds;")
+                && surface_body.contains("paint: root.view.paint;")
                 && surface_body.contains("highlights: root.view.highlights;")
                 && surface_body.contains("media: root.view.media;")
                 && surface_body.contains("metadata: root.view.metadata;")
-                && view_data_body.contains("entries: pane_slot_entries(slot, state)")
+                && !view_data_body.contains("entries: pane_slot_entries(slot, state)")
                 && view_data_body.contains("bounds: pane_slot_bounds(slot, state)")
+                && view_data_body.contains("paint: pane_slot_paint(slot, state)")
                 && view_data_body.contains("highlights: pane_slot_highlights(slot, state)")
                 && view_data_body.contains("media: pane_slot_media(slot, state)")
                 && view_data_body.contains("metadata: pane_slot_metadata(slot, state)"),
-            "visible item, bounds, selection, thumbnail media, and metadata models should be pane-local data on PaneViewData instead of fixed slot sidecars"
+            "visible paint, bounds, selection, thumbnail media, and metadata models should be pane-local data on PaneViewData instead of fixed slot sidecars, while business entries stay Rust-side"
         );
     }
 
