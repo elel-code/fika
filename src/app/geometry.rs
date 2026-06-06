@@ -7,9 +7,9 @@ const SHELL_HEADER_HEIGHT: f32 = 56.0;
 pub(crate) const PATH_BAR_HEIGHT: f32 = 56.0;
 pub(crate) const STATUS_BAR_HEIGHT: f32 = 36.0;
 const SPLIT_DIVIDER_WIDTH: f32 = 1.0;
-const SEARCH_PANEL_WIDE_HEIGHT: f32 = 44.0;
-const SEARCH_PANEL_NARROW_HEIGHT: f32 = 78.0;
-const SEARCH_PANEL_NARROW_WIDTH: f32 = 760.0;
+const SEARCH_PANEL_WIDE_HEIGHT: f32 = 84.0;
+const SEARCH_PANEL_NARROW_HEIGHT: f32 = 116.0;
+const SEARCH_PANEL_NARROW_WIDTH: f32 = 620.0;
 pub(crate) const ITEM_VIEW_OVERSCAN_COLUMNS: usize = 2;
 pub(crate) const MIN_ICON_ZOOM_LEVEL: i32 = 0;
 pub(crate) const MAX_ICON_ZOOM_LEVEL: i32 = 4;
@@ -2161,20 +2161,23 @@ mod tests {
             app.contains("private property <length> main-content-height: max(1px, root.height - root.shell-header-height);")
                 && app.contains("component FilePane inherits Rectangle")
                 && app.contains("pane-content := Rectangle")
-                && app.contains("private property <length> search-panel-effective-height: root.search-panel-height + (root.search-filters-expanded ? 112px : 0px);")
-                && app.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-effective-height : 0px));")
+                && !app.contains("search-panel-effective-height")
+                && app.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));")
                 && app.contains("in property <[PaneSlotData]> pane_slots;")
                 && app.contains("in property <[PaneSurfaceData]> pane_surfaces;")
                 && app.contains("for surface in root.pane_surfaces : PaneSlotSurface")
                 && app.contains("current-path: root.pane.current_path;")
                 && app.contains("if (root.search-panel-visible) : SearchPanel")
                 && app.contains("SplitPaneView {"),
-            "pane content height should subtract the pane-local path bar, search filters, and status bar inside the reusable file pane"
+            "pane content height should subtract the pane-local path bar, fixed search strip, and status bar inside the reusable file pane"
         );
         assert!(
-            app.contains("search-panel-height: root.pane.search_panel_visible ? (root.width < 760px ? 78px : 44px) : 0px;")
-                && app.contains("filters-expanded <=> root.search-filters-expanded;"),
-            "search filters should size against the rendered pane slot width instead of squeezing another split pane"
+            app.contains("search-panel-height: root.pane.search_panel_visible ? (root.width < 620px ? 116px : 84px) : 0px;")
+                && app.contains("SearchFilterPopup")
+                && app.contains("search-filter-menu-open")
+                && app.contains("PaneRouting.search-filter-menu-requested")
+                && !app.contains("filters-expanded"),
+            "search filters should keep a Dolphin-style two-row pane strip and open a slot-routed popup instead of resizing from an expanded filter panel"
         );
         assert!(
             app.contains(
@@ -2281,9 +2284,10 @@ mod tests {
         );
         assert!(
             search_panel.contains("min-width: 190px;")
-                && search_panel.contains("preferred-width: 280px;")
-                && search_panel.contains("max-width: 420px;"),
-            "SearchPanel input should keep bounded flexible width inside each pane"
+                && search_panel.contains("preferred-width: 420px;")
+                && search_panel.contains("horizontal-stretch: 1;")
+                && !search_panel.contains("max-width: 420px;"),
+            "SearchPanel input should take the main first-row stretch like Dolphin's QLineEdit"
         );
         assert!(
             search_panel.contains("width: max(1px, parent.width - 48px);"),
@@ -2291,17 +2295,27 @@ mod tests {
         );
         assert!(
             search_panel.matches("FilterButton {").count() == 1
+                && search_panel.contains("label: \"Filter\";")
                 && search_panel
-                    .contains("label: root.filters-active ? \"Filters: On\" : \"Filters\";")
-                && search_panel.contains("filters-expanded")
+                    .contains("callback filter_menu_requested(length, length, int, int, int);")
+                && search_panel.contains("export component SearchFilterPopup inherits Rectangle")
+                && search_panel.contains("SearchLocationButton {")
+                && search_panel.contains("label: \"Here\";")
+                && search_panel.contains("label: \"Everywhere\";")
+                && search_panel.contains("SearchFilterChip {")
+                && search_panel.contains("remove_requested => { root.set-kind-filter(0); }")
+                && search_panel.contains("component SearchLocationButton inherits Rectangle")
+                && search_panel.contains("component SearchFilterChip inherits Rectangle")
+                && search_panel.contains("callback remove_requested();")
                 && search_panel.matches("FilterChoiceRow {").count() == 3
-                && search_panel.contains("title: \"Type\";")
-                && search_panel.contains("title: \"Modified\";")
-                && search_panel.contains("title: \"Size\";")
-                && !search_panel.contains("label: root.kind-label;")
-                && !search_panel.contains("label: root.modified-label;")
-                && !search_panel.contains("label: root.size-label;"),
-            "SearchPanel should collapse kind/modified/size filters into one concentrated filter chooser"
+                && search_panel.contains("title: \"File Type:\";")
+                && search_panel.contains("title: \"Modified since:\";")
+                && search_panel.contains("title: \"Size:\";")
+                && search_panel.contains("label: root.kind-label;")
+                && search_panel.contains("label: root.modified-label;")
+                && search_panel.contains("label: root.size-label;")
+                && !search_panel.contains("filters-expanded"),
+            "SearchPanel should follow Dolphin's search bar structure with location buttons, popup selectors, and removable active-filter chips"
         );
         assert!(
             !top_bar_component.contains("search_requested")
@@ -2520,8 +2534,8 @@ mod tests {
             "FilePane should own one status bar"
         );
         assert!(
-            file_pane.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-effective-height : 0px));")
-                && file_pane.contains("private property <length> search-panel-effective-height")
+            file_pane.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));")
+                && !file_pane.contains("private property <length> search-panel-effective-height")
                 && file_pane.contains("path-text: root.path-text;")
                 && file_pane.contains("path-focused: root.path-focused;")
                 && file_pane.contains("root.path-text = text;")
@@ -3563,8 +3577,9 @@ mod tests {
     #[test]
     fn search_panel_height_matches_slint_visibility_rules() {
         assert_eq!(search_panel_height(false, 900.0), 0.0);
-        assert_eq!(search_panel_height(true, 900.0), 44.0);
-        assert_eq!(search_panel_height(true, 700.0), 78.0);
+        assert_eq!(search_panel_height(true, 900.0), 84.0);
+        assert_eq!(search_panel_height(true, 700.0), 84.0);
+        assert_eq!(search_panel_height(true, 500.0), 116.0);
     }
 
     #[test]

@@ -23,6 +23,7 @@ export global PaneRouting {
     callback search-submitted(int, string, bool);
     callback cancel-search(int);
     callback search-filters-changed(int, int, int, int);
+    callback search-filter-menu-requested(int, length, length, int, int, int);
     callback search-close-requested(int);
     callback search-focus-changed(int, bool);
     callback view-changed(int);
@@ -52,6 +53,7 @@ export global PaneRouting {
 }
 
 import { DragKind } from "dnd_bridge.slint";
+import { MenuGeometry } from "menu_geometry.slint";
 import { MenuLifecycle, MenuLifecycleController } from "menu_lifecycle.slint";
 import { ScrollView } from "std-widgets.slint";
 import {
@@ -62,7 +64,7 @@ import {
 } from "widgets.slint";
 import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
-import { SearchPanel } from "search_panel.slint";
+import { SearchFilterPopup, SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
 import { StatusBar } from "status_bar.slint";
 import { PathBar, TopBar } from "top_bar.slint";
@@ -148,9 +150,6 @@ component FilePane inherits Rectangle {
     in property <string> chooser-filter-label;
     in property <[ChooserChoice]> chooser-choices;
     in-out property <string> chooser-save-name;
-    private property <bool> search-filters-expanded: false;
-    private property <length> search-panel-effective-height: root.search-panel-height + (root.search-filters-expanded ? 112px : 0px);
-
     callback focus_requested(int);
     callback path_submitted(int, string);
     callback path_text_changed(int, string);
@@ -161,6 +160,7 @@ component FilePane inherits Rectangle {
     callback search_submitted(int, string, bool);
     callback cancel_search(int);
     callback search_filters_changed(int, int, int, int);
+    callback search_filter_menu_requested(int, length, length, int, int, int);
     callback search_close_requested(int);
     callback search_focus_changed(int, bool);
     callback viewport_changed(int, float);
@@ -227,7 +227,7 @@ component FilePane inherits Rectangle {
 
         if (root.search-panel-visible) : SearchPanel {
             horizontal-stretch: 1;
-            height: root.search-panel-effective-height;
+            height: root.search-panel-height;
             dark: root.dark;
             loading: root.search-loading;
             filters-active: root.search-filters-active;
@@ -240,11 +240,13 @@ component FilePane inherits Rectangle {
             kind-filter <=> root.search-kind-filter;
             modified-filter <=> root.search-modified-filter;
             size-filter <=> root.search-size-filter;
-            filters-expanded <=> root.search-filters-expanded;
             submitted(query, recursive) => { root.search_submitted(root.pane-slot, query, recursive); }
             cancel_requested => { root.cancel_search(root.pane-slot); }
             filters_changed(kind, modified, size) => {
                 root.search_filters_changed(root.pane-slot, kind, modified, size);
+            }
+            filter_menu_requested(x, y, kind, modified, size) => {
+                root.search_filter_menu_requested(root.pane-slot, x, y, kind, modified, size);
             }
             close_requested => { root.search_close_requested(root.pane-slot); }
             focus_changed(focused) => { root.search_focus_changed(root.pane-slot, focused); }
@@ -254,7 +256,7 @@ component FilePane inherits Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
             width: parent.width;
-            height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-effective-height : 0px));
+            height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));
             background: root.shell-base-color;
             clip: true;
 
@@ -437,6 +439,9 @@ component PaneSlot inherits FilePane {
     search_filters_changed(slot, kind, modified, size) => {
         PaneRouting.search-filters-changed(slot, kind, modified, size);
     }
+    search_filter_menu_requested(slot, x, y, kind, modified, size) => {
+        PaneRouting.search-filter-menu-requested(slot, x, y, kind, modified, size);
+    }
     search_close_requested(slot) => { PaneRouting.search-close-requested(slot); }
     search_focus_changed(slot, focused) => { PaneRouting.search-focus-changed(slot, focused); }
     view_changed(slot) => { PaneRouting.view-changed(slot); }
@@ -574,7 +579,7 @@ component PaneSlotSurface inherits Rectangle {
         path-text <=> root.live-path-text;
         path-focused <=> root.live-path-focused;
         search-panel-visible: root.pane.search_panel_visible;
-        search-panel-height: root.pane.search_panel_visible ? (root.width < 760px ? 78px : 44px) : 0px;
+        search-panel-height: root.pane.search_panel_visible ? (root.width < 620px ? 116px : 84px) : 0px;
         search-loading: root.pane.search_loading;
         search-filters-active: root.pane.search_filters_active;
         search-kind-label: root.pane.search_kind_label;
@@ -797,6 +802,15 @@ export component AppWindow inherits Window {
     private property <length> chooser-filter-menu-x: 0px;
     private property <length> chooser-filter-menu-y: 0px;
     private property <length> chooser-filter-menu-width: 220px;
+    private property <bool> search-filter-menu-open: false;
+    private property <int> search-filter-menu-slot: 0;
+    private property <length> search-filter-menu-x: 0px;
+    private property <length> search-filter-menu-y: 0px;
+    private property <length> search-filter-menu-width: 420px;
+    private property <length> search-filter-menu-height: 118px;
+    private property <int> search-filter-menu-kind-filter: 0;
+    private property <int> search-filter-menu-modified-filter: 0;
+    private property <int> search-filter-menu-size-filter: 0;
     private property <bool> custom-open-with-open: false;
     private property <bool> service-policy-open: false;
     in property <[ContextServiceAction]> context_service_actions;
@@ -849,7 +863,7 @@ export component AppWindow inherits Window {
     private property <length> place_list_y: 0px;
     private property <bool> search-input-focused: false;
     private property <bool> chooser-save-input-focused: false;
-    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || MenuLifecycle.service-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.custom-open-with-open || root.service-policy-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
+    private property <bool> transient-popup-open: root.context-menu-open || root.rename-place-open || root.transfer-menu-open || root.transfer_conflict_open || MenuLifecycle.open-with-open || MenuLifecycle.create-new-open || MenuLifecycle.service-menu-open || root.chooser-choice-menu-open || root.chooser-filter-menu-open || root.search-filter-menu-open || root.custom-open-with-open || root.service-policy-open || root.new-folder-open || root.new-file-open || root.rename-entry-open || root.properties-open || root.privileged_prompt_open || root.trash-confirm-open;
     private property <bool> file-operation-shortcuts-blocked: root.search-input-focused || root.chooser-save-input-focused || root.transient-popup-open;
 
     callback go_home();
@@ -1000,6 +1014,10 @@ export component AppWindow inherits Window {
         root.chooser-filter-menu-open = false;
     }
 
+    function close-search-filter-popup() {
+        root.search-filter-menu-open = false;
+    }
+
     function dismiss-transient-popups() {
         root.close-context-popups();
         root.rename-place-open = false;
@@ -1008,6 +1026,7 @@ export component AppWindow inherits Window {
             root.transfer_conflict_choice("skip");
         }
         root.close-chooser-popups();
+        root.close-search-filter-popup();
         root.custom-open-with-open = false;
         root.service-policy-open = false;
         root.new-folder-open = false;
@@ -1137,8 +1156,22 @@ export component AppWindow inherits Window {
         root.search_filters_changed(slot, kind, modified, size);
     }
 
+    public function route-pane-search-filter-menu-requested(slot: int, x: length, y: length, kind: int, modified: int, size: int) {
+        root.route-pane-focus(slot);
+        root.close-context-popups();
+        root.close-chooser-popups();
+        root.search-filter-menu-slot = slot;
+        root.search-filter-menu-x = x;
+        root.search-filter-menu-y = y;
+        root.search-filter-menu-kind-filter = kind;
+        root.search-filter-menu-modified-filter = modified;
+        root.search-filter-menu-size-filter = size;
+        root.search-filter-menu-open = true;
+    }
+
     public function route-pane-search-close-requested(slot: int) {
         root.route-pane-focus(slot);
+        root.close-search-filter-popup();
         root.search_close_requested(slot);
     }
 
@@ -1388,6 +1421,8 @@ export component AppWindow inherits Window {
                     root.close-context-popups();
                 } else if (root.chooser-choice-menu-open || root.chooser-filter-menu-open) {
                     root.close-chooser-popups();
+                } else if (root.search-filter-menu-open) {
+                    root.close-search-filter-popup();
                 } else if (root.rename-place-open) {
                     root.rename-place-open = false;
                 } else if (root.privileged_prompt_open) {
@@ -2217,6 +2252,20 @@ export component AppWindow inherits Window {
         option_selected(option-index) => {
             root.chooser_select_filter(option-index);
             root.chooser-filter-menu-open = false;
+        }
+    }
+
+    if (root.search-filter-menu-open): SearchFilterPopup {
+        x: MenuGeometry.anchored_menu_left(root.width / 1px, root.height / 1px, root.search-filter-menu-x / 1px, root.search-filter-menu-y / 1px, root.search-filter-menu-width / 1px, root.search-filter-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+        y: MenuGeometry.anchored_menu_top(root.width / 1px, root.height / 1px, root.search-filter-menu-x / 1px, root.search-filter-menu-y / 1px, root.search-filter-menu-width / 1px, root.search-filter-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+        width: root.search-filter-menu-width;
+        height: root.search-filter-menu-height;
+        dark: root.dark_mode;
+        kind-filter <=> root.search-filter-menu-kind-filter;
+        modified-filter <=> root.search-filter-menu-modified-filter;
+        size-filter <=> root.search-filter-menu-size-filter;
+        filters_changed(kind, modified, size) => {
+            root.search_filters_changed(root.search-filter-menu-slot, kind, modified, size);
         }
     }
 
