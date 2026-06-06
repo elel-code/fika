@@ -1,7 +1,5 @@
 use crate::app::geometry::ItemViewItemBounds;
-use crate::app::item_view_renderer::{
-    ItemViewFrameEntry, ItemViewTileFrameBatch, ItemViewTileFrameSource,
-};
+use crate::app::item_view_renderer::{ItemViewFrameEntry, ItemViewTileFrameBatch};
 use crate::app::pane::PaneView;
 use crate::{
     ItemViewEntry, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
@@ -111,12 +109,20 @@ impl ItemViewFrameEntry for ItemViewRowToken {
         self.name_shared()
     }
 
+    fn frame_path(&self) -> &str {
+        self.path()
+    }
+
     fn frame_is_dir(&self) -> bool {
         self.is_dir()
     }
 
     fn frame_media_token(&self) -> i32 {
         self.media_token()
+    }
+
+    fn frame_selected(&self) -> bool {
+        self.selected()
     }
 }
 
@@ -177,60 +183,6 @@ pub(crate) fn new_item_view_fallback_media_model(
     }
 
     ModelRc::new(Rc::new(VecModel::from(fallback_entries)))
-}
-
-fn item_view_tile_frame_sources(
-    entries: &[ItemViewEntry],
-    bounds_entries: &[ItemViewItemBounds],
-    selected_paths: &[String],
-) -> Vec<ItemViewTileFrameSource> {
-    let selected = selected_paths
-        .iter()
-        .map(String::as_str)
-        .collect::<std::collections::HashSet<_>>();
-
-    if bounds_entries.is_empty() {
-        return entries
-            .iter()
-            .enumerate()
-            .map(|(slice_index, entry)| {
-                ItemViewTileFrameSource::from_entry_without_bounds(
-                    slice_index,
-                    entry,
-                    selected.contains(entry.path.as_str()),
-                )
-            })
-            .collect();
-    }
-
-    bounds_entries
-        .iter()
-        .filter_map(|bounds| {
-            let entry = entries.get(bounds.slice_index)?;
-            Some(ItemViewTileFrameSource::from_entry_and_bounds(
-                entry,
-                bounds,
-                selected.contains(entry.path.as_str()),
-            ))
-        })
-        .collect()
-}
-
-fn item_view_tile_frame_sources_from_tokens(
-    tokens: &[ItemViewRowToken],
-    bounds_entries: &[ItemViewItemBounds],
-) -> Vec<ItemViewTileFrameSource> {
-    bounds_entries
-        .iter()
-        .filter_map(|bounds| {
-            let token = tokens.get(bounds.slice_index)?;
-            Some(ItemViewTileFrameSource::from_entry_and_bounds(
-                token,
-                bounds,
-                token.selected(),
-            ))
-        })
-        .collect()
 }
 
 fn item_view_paint_entries(batch: &ItemViewTileFrameBatch) -> Vec<ItemViewPaintEntry> {
@@ -511,9 +463,8 @@ fn update_item_view_highlight_entries_model(
 
 pub(crate) fn update_item_view_highlight_model(view: &mut PaneView) -> bool {
     let bounds_entries = current_item_view_bounds_entries(view);
-    let frames =
-        item_view_tile_frame_sources_from_tokens(&view.virtual_entry_tokens, &bounds_entries);
-    let frame_batch = ItemViewTileFrameBatch::from_sources(frames);
+    let frame_batch =
+        ItemViewTileFrameBatch::from_bounded_entries(&view.virtual_entry_tokens, &bounds_entries);
     update_item_view_highlight_entries_model(
         &mut view.virtual_highlight_entries,
         item_view_highlight_entries(&frame_batch),
@@ -573,11 +524,8 @@ pub(crate) fn update_pane_item_view_entries_model(
     selected_paths: &[String],
 ) {
     let old_start = view.virtual_start_index;
-    let frame_batch = ItemViewTileFrameBatch::from_sources(item_view_tile_frame_sources(
-        &entries,
-        &bounds_entries,
-        selected_paths,
-    ));
+    let frame_batch =
+        ItemViewTileFrameBatch::from_entries_and_bounds(&entries, &bounds_entries, selected_paths);
     let media_tokens = item_view_media_tokens(&frame_batch, &media_entries);
     let media_entries = project_media_entries_with_bounds(media_entries, &bounds_entries);
     let metadata_entries = project_metadata_entries_with_bounds(metadata_entries, &bounds_entries);
@@ -665,9 +613,8 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         return false;
     }
 
-    let frame_batch = ItemViewTileFrameBatch::from_sources(
-        item_view_tile_frame_sources_from_tokens(&view.virtual_entry_tokens, &bounds_entries),
-    );
+    let frame_batch =
+        ItemViewTileFrameBatch::from_bounded_entries(&view.virtual_entry_tokens, &bounds_entries);
     let paint_entries = item_view_paint_entries(&frame_batch);
     let folder_media_entries = item_view_fallback_media_entries(&frame_batch, true);
     let file_media_entries = item_view_fallback_media_entries(&frame_batch, false);
@@ -1232,11 +1179,11 @@ mod tests {
         entries[1].media_token = 77;
         let bounds = bounds_entries(10, 3);
 
-        let frame_batch = ItemViewTileFrameBatch::from_sources(item_view_tile_frame_sources(
+        let frame_batch = ItemViewTileFrameBatch::from_entries_and_bounds(
             &entries,
             &bounds,
             &["/tmp/item-1".to_string()],
-        ));
+        );
         let paint = item_view_paint_entries(&frame_batch);
         let folder_fallback = item_view_fallback_media_entries(&frame_batch, true);
         let file_fallback = item_view_fallback_media_entries(&frame_batch, false);
@@ -1274,16 +1221,13 @@ mod tests {
     }
 
     #[test]
-    fn item_view_row_token_can_feed_tile_frame_source_trait() {
+    fn item_view_row_token_can_feed_tile_frame_batch_trait() {
         let entries = entries_with_tile_metrics(1);
         let tokens = item_view_row_tokens(&entries, &["/tmp/item-0".to_string()]);
         let bounds = bounds_entries(5, 1);
 
-        let frame = ItemViewTileFrameSource::from_entry_and_bounds(
-            &tokens[0],
-            &bounds[0],
-            tokens[0].selected(),
-        );
+        let batch = ItemViewTileFrameBatch::from_bounded_entries(&tokens, &bounds);
+        let frame = &batch.sources()[0];
 
         assert_eq!(frame.name, "item-0");
         assert!(frame.selected);

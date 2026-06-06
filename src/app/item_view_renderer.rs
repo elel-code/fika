@@ -3,6 +3,7 @@ use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
 use crate::app::model_update::ItemViewMetadataOverlaySource;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -98,8 +99,12 @@ pub(crate) struct ItemViewTileHighlightFrame {
 
 pub(crate) trait ItemViewFrameEntry {
     fn frame_name(&self) -> SharedString;
+    fn frame_path(&self) -> &str;
     fn frame_is_dir(&self) -> bool;
     fn frame_media_token(&self) -> i32;
+    fn frame_selected(&self) -> bool {
+        false
+    }
 }
 
 impl ItemViewMetadataSource {
@@ -114,6 +119,10 @@ impl ItemViewMetadataSource {
 impl ItemViewFrameEntry for ItemViewEntry {
     fn frame_name(&self) -> SharedString {
         self.name.clone()
+    }
+
+    fn frame_path(&self) -> &str {
+        self.path.as_str()
     }
 
     fn frame_is_dir(&self) -> bool {
@@ -198,6 +207,66 @@ impl ItemViewTileFrameBatch {
             .filter_map(ItemViewTileFramePlan::from_source)
             .collect();
         Self { sources, plans }
+    }
+
+    pub(crate) fn from_entries_and_bounds<T: ItemViewFrameEntry>(
+        entries: &[T],
+        bounds_entries: &[ItemViewItemBounds],
+        selected_paths: &[String],
+    ) -> Self {
+        let selected = selected_paths
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+
+        if bounds_entries.is_empty() {
+            return Self::from_sources(
+                entries
+                    .iter()
+                    .enumerate()
+                    .map(|(slice_index, entry)| {
+                        ItemViewTileFrameSource::from_entry_without_bounds(
+                            slice_index,
+                            entry,
+                            entry.frame_selected() || selected.contains(entry.frame_path()),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+
+        Self::from_sources(
+            bounds_entries
+                .iter()
+                .filter_map(|bounds| {
+                    let entry = entries.get(bounds.slice_index)?;
+                    Some(ItemViewTileFrameSource::from_entry_and_bounds(
+                        entry,
+                        bounds,
+                        entry.frame_selected() || selected.contains(entry.frame_path()),
+                    ))
+                })
+                .collect(),
+        )
+    }
+
+    pub(crate) fn from_bounded_entries<T: ItemViewFrameEntry>(
+        entries: &[T],
+        bounds_entries: &[ItemViewItemBounds],
+    ) -> Self {
+        Self::from_sources(
+            bounds_entries
+                .iter()
+                .filter_map(|bounds| {
+                    let entry = entries.get(bounds.slice_index)?;
+                    Some(ItemViewTileFrameSource::from_entry_and_bounds(
+                        entry,
+                        bounds,
+                        entry.frame_selected(),
+                    ))
+                })
+                .collect(),
+        )
     }
 
     pub(crate) fn sources(&self) -> &[ItemViewTileFrameSource] {
