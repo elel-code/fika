@@ -1,6 +1,6 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_renderer::{
-    ItemViewFrameEntry, ItemViewTileFramePlan, ItemViewTileFrameSource, item_view_tile_frame_plans,
+    ItemViewFrameEntry, ItemViewTileFrameBatch, ItemViewTileFrameSource,
 };
 use crate::app::pane::PaneView;
 use crate::{
@@ -233,8 +233,9 @@ fn item_view_tile_frame_sources_from_tokens(
         .collect()
 }
 
-fn item_view_paint_entries(plans: &[ItemViewTileFramePlan]) -> Vec<ItemViewPaintEntry> {
-    plans
+fn item_view_paint_entries(batch: &ItemViewTileFrameBatch) -> Vec<ItemViewPaintEntry> {
+    batch
+        .plans()
         .iter()
         .map(|plan| ItemViewPaintEntry {
             name: plan.text.name.clone(),
@@ -272,10 +273,11 @@ fn update_item_view_paint_entries_model(
 }
 
 fn item_view_fallback_media_entries(
-    plans: &[ItemViewTileFramePlan],
+    batch: &ItemViewTileFrameBatch,
     is_dir: bool,
 ) -> Vec<ItemViewFallbackMediaEntry> {
-    plans
+    batch
+        .plans()
         .iter()
         .filter_map(|plan| {
             (plan.fallback_media.is_dir == is_dir).then_some(ItemViewFallbackMediaEntry {
@@ -408,7 +410,7 @@ fn project_media_entries_with_bounds(
 }
 
 fn item_view_media_tokens(
-    frames: &[ItemViewTileFrameSource],
+    batch: &ItemViewTileFrameBatch,
     media_entries: &[ItemViewMediaSource],
 ) -> Vec<ItemViewMediaToken> {
     media_entries
@@ -416,7 +418,7 @@ fn item_view_media_tokens(
         .map(|media| {
             let media_token = usize::try_from(media.slice_index)
                 .ok()
-                .and_then(|row| frames.get(row))
+                .and_then(|row| batch.sources().get(row))
                 .map_or(0, |frame| frame.media_token);
             ItemViewMediaToken {
                 slice_index: media.slice_index,
@@ -456,8 +458,9 @@ fn update_item_view_media_entries_model(
     changed
 }
 
-fn item_view_highlight_entries(plans: &[ItemViewTileFramePlan]) -> Vec<ItemViewHighlightEntry> {
-    plans
+fn item_view_highlight_entries(batch: &ItemViewTileFrameBatch) -> Vec<ItemViewHighlightEntry> {
+    batch
+        .plans()
         .iter()
         .filter_map(|plan| plan.highlight)
         .map(|highlight| ItemViewHighlightEntry {
@@ -510,10 +513,10 @@ pub(crate) fn update_item_view_highlight_model(view: &mut PaneView) -> bool {
     let bounds_entries = current_item_view_bounds_entries(view);
     let frames =
         item_view_tile_frame_sources_from_tokens(&view.virtual_entry_tokens, &bounds_entries);
-    let frame_plans = item_view_tile_frame_plans(&frames);
+    let frame_batch = ItemViewTileFrameBatch::from_sources(frames);
     update_item_view_highlight_entries_model(
         &mut view.virtual_highlight_entries,
-        item_view_highlight_entries(&frame_plans),
+        item_view_highlight_entries(&frame_batch),
     )
 }
 
@@ -570,14 +573,17 @@ pub(crate) fn update_pane_item_view_entries_model(
     selected_paths: &[String],
 ) {
     let old_start = view.virtual_start_index;
-    let frame_sources = item_view_tile_frame_sources(&entries, &bounds_entries, selected_paths);
-    let frame_plans = item_view_tile_frame_plans(&frame_sources);
-    let media_tokens = item_view_media_tokens(&frame_sources, &media_entries);
+    let frame_batch = ItemViewTileFrameBatch::from_sources(item_view_tile_frame_sources(
+        &entries,
+        &bounds_entries,
+        selected_paths,
+    ));
+    let media_tokens = item_view_media_tokens(&frame_batch, &media_entries);
     let media_entries = project_media_entries_with_bounds(media_entries, &bounds_entries);
     let metadata_entries = project_metadata_entries_with_bounds(metadata_entries, &bounds_entries);
-    let paint_entries = item_view_paint_entries(&frame_plans);
-    let folder_media_entries = item_view_fallback_media_entries(&frame_plans, true);
-    let file_media_entries = item_view_fallback_media_entries(&frame_plans, false);
+    let paint_entries = item_view_paint_entries(&frame_batch);
+    let folder_media_entries = item_view_fallback_media_entries(&frame_batch, true);
+    let file_media_entries = item_view_fallback_media_entries(&frame_batch, false);
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
@@ -659,13 +665,13 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         return false;
     }
 
-    let frame_sources =
-        item_view_tile_frame_sources_from_tokens(&view.virtual_entry_tokens, &bounds_entries);
-    let frame_plans = item_view_tile_frame_plans(&frame_sources);
-    let paint_entries = item_view_paint_entries(&frame_plans);
-    let folder_media_entries = item_view_fallback_media_entries(&frame_plans, true);
-    let file_media_entries = item_view_fallback_media_entries(&frame_plans, false);
-    let highlight_entries = item_view_highlight_entries(&frame_plans);
+    let frame_batch = ItemViewTileFrameBatch::from_sources(
+        item_view_tile_frame_sources_from_tokens(&view.virtual_entry_tokens, &bounds_entries),
+    );
+    let paint_entries = item_view_paint_entries(&frame_batch);
+    let folder_media_entries = item_view_fallback_media_entries(&frame_batch, true);
+    let file_media_entries = item_view_fallback_media_entries(&frame_batch, false);
+    let highlight_entries = item_view_highlight_entries(&frame_batch);
     trim_item_view_media_entries_model(
         &mut view.virtual_media_entries,
         &mut view.virtual_media_tokens,
@@ -1226,17 +1232,22 @@ mod tests {
         entries[1].media_token = 77;
         let bounds = bounds_entries(10, 3);
 
-        let frames = item_view_tile_frame_sources(&entries, &bounds, &["/tmp/item-1".to_string()]);
-        let frame_plans = item_view_tile_frame_plans(&frames);
-        let paint = item_view_paint_entries(&frame_plans);
-        let folder_fallback = item_view_fallback_media_entries(&frame_plans, true);
-        let file_fallback = item_view_fallback_media_entries(&frame_plans, false);
-        let highlights = item_view_highlight_entries(&frame_plans);
-        let projected_media_tokens =
-            item_view_media_tokens(&frames, &[media_source(1, Rgba8Pixel::new(255, 0, 0, 255))]);
+        let frame_batch = ItemViewTileFrameBatch::from_sources(item_view_tile_frame_sources(
+            &entries,
+            &bounds,
+            &["/tmp/item-1".to_string()],
+        ));
+        let paint = item_view_paint_entries(&frame_batch);
+        let folder_fallback = item_view_fallback_media_entries(&frame_batch, true);
+        let file_fallback = item_view_fallback_media_entries(&frame_batch, false);
+        let highlights = item_view_highlight_entries(&frame_batch);
+        let projected_media_tokens = item_view_media_tokens(
+            &frame_batch,
+            &[media_source(1, Rgba8Pixel::new(255, 0, 0, 255))],
+        );
 
-        assert_eq!(frames.len(), 3);
-        assert_eq!(frame_plans.len(), 3);
+        assert_eq!(frame_batch.sources().len(), 3);
+        assert_eq!(frame_batch.plans().len(), 3);
         assert_eq!(paint[1].name, "item-1");
         assert_eq!(paint[1].x, 110.0);
         assert_eq!(paint[1].text_width, 56.0);

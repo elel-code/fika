@@ -67,6 +67,12 @@ pub(crate) struct ItemViewTileFramePlan {
     pub(crate) media_token: i32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ItemViewTileFrameBatch {
+    sources: Vec<ItemViewTileFrameSource>,
+    plans: Vec<ItemViewTileFramePlan>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewTileTextFrame {
     pub(crate) name: SharedString,
@@ -185,13 +191,22 @@ impl ItemViewTileFramePlan {
     }
 }
 
-pub(crate) fn item_view_tile_frame_plans(
-    sources: &[ItemViewTileFrameSource],
-) -> Vec<ItemViewTileFramePlan> {
-    sources
-        .iter()
-        .filter_map(ItemViewTileFramePlan::from_source)
-        .collect()
+impl ItemViewTileFrameBatch {
+    pub(crate) fn from_sources(sources: Vec<ItemViewTileFrameSource>) -> Self {
+        let plans = sources
+            .iter()
+            .filter_map(ItemViewTileFramePlan::from_source)
+            .collect();
+        Self { sources, plans }
+    }
+
+    pub(crate) fn sources(&self) -> &[ItemViewTileFrameSource] {
+        &self.sources
+    }
+
+    pub(crate) fn plans(&self) -> &[ItemViewTileFramePlan] {
+        &self.plans
+    }
 }
 
 impl ItemViewRenderMetrics {
@@ -617,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn tile_frame_plan_collects_visible_primitives_only() {
+    fn tile_frame_batch_keeps_sources_and_collects_visible_primitives_only() {
         let entry = ItemViewEntry {
             name: "Report".into(),
             path: "/tmp/report.txt".into(),
@@ -635,15 +650,16 @@ mod tests {
         let visible = ItemViewTileFrameSource::from_entry_and_bounds(&entry, &bounds, true);
         let hidden = ItemViewTileFrameSource::from_entry_without_bounds(1, &entry, false);
 
-        let plans = item_view_tile_frame_plans(&[visible, hidden]);
+        let batch = ItemViewTileFrameBatch::from_sources(vec![visible, hidden]);
 
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].text.name, "Report");
-        assert_eq!(plans[0].text.x, 120.0);
-        assert!(plans[0].fallback_media.is_dir);
-        assert_eq!(plans[0].media_token, 42);
+        assert_eq!(batch.sources().len(), 2);
+        assert_eq!(batch.plans().len(), 1);
+        assert_eq!(batch.plans()[0].text.name, "Report");
+        assert_eq!(batch.plans()[0].text.x, 120.0);
+        assert!(batch.plans()[0].fallback_media.is_dir);
+        assert_eq!(batch.plans()[0].media_token, 42);
         assert_eq!(
-            plans[0].highlight,
+            batch.plans()[0].highlight,
             Some(ItemViewTileHighlightFrame {
                 x: 120.0,
                 y: 40.0,
