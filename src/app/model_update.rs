@@ -243,8 +243,6 @@ fn item_view_fallback_media_entries_from_tokens(
 
 fn update_item_view_fallback_media_entries_model(
     current: &mut ModelRc<ItemViewFallbackMediaEntry>,
-    old_start: usize,
-    new_start: usize,
     fallback_entries: Vec<ItemViewFallbackMediaEntry>,
 ) -> bool {
     if fallback_entries.is_empty() {
@@ -263,7 +261,7 @@ fn update_item_view_fallback_media_entries_model(
         return true;
     };
 
-    update_sliding_vec_model(model, old_start, new_start, fallback_entries)
+    update_sparse_vec_model(model, fallback_entries)
 }
 
 pub(crate) fn new_item_view_metadata_model(
@@ -543,14 +541,10 @@ pub(crate) fn update_pane_item_view_entries_model(
     );
     update_item_view_fallback_media_entries_model(
         &mut view.virtual_folder_media_entries,
-        old_start,
-        start_index,
         folder_media_entries,
     );
     update_item_view_fallback_media_entries_model(
         &mut view.virtual_file_media_entries,
-        old_start,
-        start_index,
         file_media_entries,
     );
     update_item_view_media_entries_model(
@@ -649,14 +643,10 @@ pub(crate) fn relayout_pane_item_view_entries_model(
     );
     update_item_view_fallback_media_entries_model(
         &mut view.virtual_folder_media_entries,
-        old_start,
-        range.start,
         folder_media_entries,
     );
     update_item_view_fallback_media_entries_model(
         &mut view.virtual_file_media_entries,
-        old_start,
-        range.start,
         file_media_entries,
     );
     let _ = update_item_view_highlight_entries_model(
@@ -1068,6 +1058,13 @@ mod tests {
         tokens
             .iter()
             .map(|token| (token.slice_index, token.media_token))
+            .collect()
+    }
+
+    fn fallback_rows(model: &ModelRc<ItemViewFallbackMediaEntry>) -> Vec<(i32, f32, f32)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| (entry.slice_index, entry.x, entry.y))
             .collect()
     }
 
@@ -1694,6 +1691,65 @@ mod tests {
         assert_eq!(
             media_tokens(&view.virtual_media_tokens),
             vec![(1, 201), (3, 203)]
+        );
+    }
+
+    #[test]
+    fn fallback_media_model_uses_sparse_updates_not_continuous_range_sliding() {
+        let source = include_str!("model_update.rs");
+        let body = source
+            .split_once("fn update_item_view_fallback_media_entries_model(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn new_item_view_metadata_model"))
+            .map(|(body, _)| body)
+            .expect("fallback media update helper should be present");
+
+        assert!(body.contains("update_sparse_vec_model(model, fallback_entries)"));
+        assert!(!body.contains("update_sliding_vec_model"));
+    }
+
+    #[test]
+    fn pane_item_view_fallback_media_model_reuses_sparse_rows_for_mixed_kinds() {
+        let mut initial_entries = entries_with_tile_metrics(4);
+        initial_entries[0].is_dir = true;
+        initial_entries[2].is_dir = true;
+        let mut view = PaneView::default();
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            initial_entries,
+            bounds_entries(0, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+        let original_folder = view.virtual_folder_media_entries.clone();
+        let original_file = view.virtual_file_media_entries.clone();
+
+        let mut next_entries = entries_with_tile_metrics(4);
+        next_entries[0].is_dir = false;
+        next_entries[1].is_dir = true;
+        next_entries[2].is_dir = false;
+        next_entries[3].is_dir = true;
+        update_pane_item_view_entries_model(
+            &mut view,
+            1,
+            next_entries,
+            bounds_entries(1, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.virtual_folder_media_entries, original_folder);
+        assert_eq!(view.virtual_file_media_entries, original_file);
+        assert_eq!(
+            fallback_rows(&view.virtual_folder_media_entries),
+            vec![(1, 20.0, 2.0), (3, 40.0, 6.0)]
+        );
+        assert_eq!(
+            fallback_rows(&view.virtual_file_media_entries),
+            vec![(0, 10.0, 0.0), (2, 30.0, 4.0)]
         );
     }
 
