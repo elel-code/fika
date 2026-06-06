@@ -54,8 +54,9 @@ use app::geometry::{
     inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
-    ItemViewControllerAction, SelectionRect, entry_at_pane_point, item_index_at_pane_point,
-    press_entry_at_pane_point,
+    ItemViewControllerAction, SelectionRect, cancel_blank_for_slot, entry_at_pane_point,
+    item_index_at_pane_point, move_blank_for_slot, press_blank_for_slot, press_entry_at_pane_point,
+    release_blank_for_slot,
 };
 use app::item_view_renderer::{
     ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
@@ -4567,24 +4568,12 @@ fn press_item_view_blank_for_slot(
     toggle: bool,
 ) {
     let mut state = state.borrow_mut();
-    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
-        return;
-    };
-    let layout = pane
-        .view
-        .virtual_view
-        .layout
-        .clone()
-        .unwrap_or_else(CompactItemViewLayout::empty);
-    pane.view.input.press_blank(x, y, layout, toggle);
+    press_blank_for_slot(&mut state, slot, x, y, toggle);
 }
 
 fn move_item_view_blank_for_slot(state: &Rc<RefCell<AppState>>, slot: i32, x: f32, y: f32) -> bool {
     let mut state = state.borrow_mut();
-    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
-        return false;
-    };
-    pane.view.input.move_blank(x, y)
+    move_blank_for_slot(&mut state, slot, x, y)
 }
 
 fn release_item_view_blank_for_slot(
@@ -4596,10 +4585,10 @@ fn release_item_view_blank_for_slot(
 ) {
     let action = {
         let mut state = state.borrow_mut();
-        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        let Some(action) = release_blank_for_slot(&mut state, slot, x, y) else {
             return;
         };
-        pane.view.input.release_blank(x, y)
+        action
     };
 
     apply_item_view_controller_action(ui, state, slot, action);
@@ -4627,10 +4616,7 @@ fn apply_item_view_controller_action(
 
 fn cancel_item_view_blank_for_slot(state: &Rc<RefCell<AppState>>, slot: i32) {
     let mut state = state.borrow_mut();
-    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
-        return;
-    };
-    pane.view.input.cancel_blank();
+    cancel_blank_for_slot(&mut state, slot);
 }
 
 fn clear_selection_for_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {

@@ -312,6 +312,51 @@ pub(crate) fn press_entry_at_pane_point(
     )
 }
 
+pub(crate) fn press_blank_for_slot(
+    state: &mut AppState,
+    slot: i32,
+    x: f32,
+    y: f32,
+    toggle: bool,
+) -> bool {
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return false;
+    };
+    let layout = pane
+        .view
+        .virtual_view
+        .layout
+        .clone()
+        .unwrap_or_else(CompactItemViewLayout::empty);
+    pane.view.input.press_blank(x, y, layout, toggle);
+    true
+}
+
+pub(crate) fn move_blank_for_slot(state: &mut AppState, slot: i32, x: f32, y: f32) -> bool {
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return false;
+    };
+    pane.view.input.move_blank(x, y)
+}
+
+pub(crate) fn release_blank_for_slot(
+    state: &mut AppState,
+    slot: i32,
+    x: f32,
+    y: f32,
+) -> Option<ItemViewControllerAction> {
+    let pane = state.panes.pane_mut_for_slot(slot)?;
+    Some(pane.view.input.release_blank(x, y))
+}
+
+pub(crate) fn cancel_blank_for_slot(state: &mut AppState, slot: i32) -> bool {
+    let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+        return false;
+    };
+    pane.view.input.cancel_blank();
+    true
+}
+
 pub(crate) fn item_index_at_pane_point(
     ui: &AppWindow,
     state: &AppState,
