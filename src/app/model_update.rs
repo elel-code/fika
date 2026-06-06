@@ -119,6 +119,29 @@ pub(crate) fn new_item_view_metadata_model(
     ModelRc::new(Rc::new(VecModel::from(metadata)))
 }
 
+fn update_item_view_metadata_entries_model(
+    current: &mut ModelRc<ItemViewMetadataEntry>,
+    metadata: Vec<ItemViewMetadataEntry>,
+) -> bool {
+    if metadata.is_empty() {
+        if current.row_count() == 0 {
+            return false;
+        }
+        *current = ModelRc::default();
+        return true;
+    }
+
+    let Some(model) = current
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewMetadataEntry>>()
+    else {
+        *current = new_item_view_metadata_model(metadata);
+        return true;
+    };
+
+    update_sparse_vec_model(model, metadata)
+}
+
 pub(crate) fn new_item_view_media_model(
     media_entries: Vec<ItemViewMediaEntry>,
 ) -> ModelRc<ItemViewMediaEntry> {
@@ -240,7 +263,7 @@ pub(crate) fn update_pane_item_view_entries_model(
         bounds_entries,
     );
     view.virtual_media_entries = new_item_view_media_model(media_entries);
-    view.virtual_metadata_entries = new_item_view_metadata_model(metadata_entries);
+    update_item_view_metadata_entries_model(&mut view.virtual_metadata_entries, metadata_entries);
     let current = view.virtual_entries.clone();
     if let Some(model) = update_item_view_entries_model(
         &current,
@@ -518,6 +541,33 @@ where
     changed
 }
 
+fn update_sparse_vec_model<T>(model: &VecModel<T>, entries: Vec<T>) -> bool
+where
+    T: Clone + PartialEq + 'static,
+{
+    let mut changed = false;
+    let overlap_len = model.row_count().min(entries.len());
+    for (row, entry) in entries.iter().enumerate().take(overlap_len) {
+        if model.row_data(row).as_ref() != Some(entry) {
+            model.set_row_data(row, entry.clone());
+            changed = true;
+        }
+    }
+
+    while model.row_count() > entries.len() {
+        model.remove(model.row_count() - 1);
+        changed = true;
+    }
+
+    let current_len = model.row_count();
+    if current_len < entries.len() {
+        model.extend(entries[current_len..].iter().cloned());
+        changed = true;
+    }
+
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,6 +624,43 @@ mod tests {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| (entry.slice_index, first_pixel(&entry.media)))
+            .collect()
+    }
+
+    fn metadata_rows(model: &ModelRc<ItemViewMetadataEntry>) -> Vec<(i32, String, bool)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| (entry.slice_index, entry.text.to_string(), entry.is_group))
+            .collect()
+    }
+
+    fn metadata_entries(start: usize, count: usize) -> Vec<ItemViewMetadataEntry> {
+        (0..count)
+            .flat_map(|row| {
+                let index = start + row;
+                [
+                    ItemViewMetadataEntry {
+                        slice_index: row as i32,
+                        text: format!("Group {index}").into(),
+                        text_x: 52.0,
+                        text_width: 75.0 + index as f32,
+                        y: 2.0,
+                        line_height: 14.0,
+                        font_size: 11.0,
+                        is_group: true,
+                    },
+                    ItemViewMetadataEntry {
+                        slice_index: row as i32,
+                        text: format!("/tmp/group-{index}").into(),
+                        text_x: 52.0,
+                        text_width: 75.0 + index as f32,
+                        y: 41.0,
+                        line_height: 14.0,
+                        font_size: 11.0,
+                        is_group: false,
+                    },
+                ]
+            })
             .collect()
     }
 
@@ -897,6 +984,83 @@ mod tests {
             bounds_row_x(&view.virtual_bounds_entries),
             vec![10.0, 20.0, 30.0, 40.0]
         );
+    }
+
+    #[test]
+    fn pane_item_view_metadata_model_reuses_vec_model_for_sparse_updates() {
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            entries_with_tile_metrics(3),
+            Vec::new(),
+            Vec::new(),
+            metadata_entries(0, 3),
+            &[],
+        );
+        let original_metadata = view.virtual_metadata_entries.clone();
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            2,
+            (2..5).map(entry).collect(),
+            Vec::new(),
+            Vec::new(),
+            metadata_entries(2, 3),
+            &[],
+        );
+
+        assert_eq!(view.virtual_metadata_entries, original_metadata);
+        assert_eq!(
+            metadata_rows(&view.virtual_metadata_entries),
+            vec![
+                (0, "Group 2".to_string(), true),
+                (0, "/tmp/group-2".to_string(), false),
+                (1, "Group 3".to_string(), true),
+                (1, "/tmp/group-3".to_string(), false),
+                (2, "Group 4".to_string(), true),
+                (2, "/tmp/group-4".to_string(), false),
+            ]
+        );
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            2,
+            (2..5).map(entry).collect(),
+            Vec::new(),
+            Vec::new(),
+            metadata_entries(2, 3),
+            &[],
+        );
+
+        assert_eq!(view.virtual_metadata_entries, original_metadata);
+    }
+
+    #[test]
+    fn pane_item_view_metadata_model_clears_sparse_rows_without_stale_text() {
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            entries_with_tile_metrics(2),
+            Vec::new(),
+            Vec::new(),
+            metadata_entries(0, 2),
+            &[],
+        );
+        assert_eq!(view.virtual_metadata_entries.row_count(), 4);
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            entries_with_tile_metrics(2),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.virtual_metadata_entries.row_count(), 0);
     }
 
     #[test]
