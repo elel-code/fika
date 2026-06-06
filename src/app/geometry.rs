@@ -192,6 +192,21 @@ impl CompactItemViewLayout {
         }
     }
 
+    pub(crate) fn matches_layout_signature(&self, other: &Self) -> bool {
+        self.entry_count == other.entry_count
+            && self.rows_per_column == other.rows_per_column
+            && same_layout_metric(self.viewport_width, other.viewport_width)
+            && same_layout_metric(self.cell_width, other.cell_width)
+            && same_layout_metric(self.row_height, other.row_height)
+            && same_layout_metric(self.padding, other.padding)
+            && same_layout_metric(self.content_width, other.content_width)
+            && same_layout_metric(self.scroll_max_x, other.scroll_max_x)
+            && same_layout_vec(&self.item_widths, &other.item_widths)
+            && same_layout_vec(&self.item_text_widths, &other.item_text_widths)
+            && same_layout_vec(&self.column_widths, &other.column_widths)
+            && same_layout_vec(&self.column_offsets, &other.column_offsets)
+    }
+
     pub(crate) fn virtual_plan(
         &self,
         requested_viewport_x: f32,
@@ -675,6 +690,17 @@ fn compact_item_view_column_offsets(column_widths: &[f32]) -> Vec<f32> {
         x += width.max(1.0) + COMPACT_COLUMN_MARGIN_WIDTH;
     }
     offsets
+}
+
+fn same_layout_metric(a: f32, b: f32) -> bool {
+    (a - b).abs() <= 0.01
+}
+
+fn same_layout_vec(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(left, right)| same_layout_metric(*left, *right))
 }
 
 fn compact_item_view_content_width(
@@ -3751,6 +3777,21 @@ mod tests {
                 width: 1.0,
             }
         );
+    }
+
+    #[test]
+    fn compact_item_view_layout_owns_cache_signature_comparison() {
+        let layout = compact_test_layout(300.0, 12, 4, 100.0, 100.0, 10.0);
+        let mut same = layout.clone();
+        same.scroll_max_x += 0.005;
+        same.column_offsets[1] += 0.005;
+
+        assert!(layout.matches_layout_signature(&same));
+
+        let mut changed = layout.clone();
+        changed.column_widths[1] += 1.0;
+
+        assert!(!layout.matches_layout_signature(&changed));
     }
 
     #[test]

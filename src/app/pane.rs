@@ -827,20 +827,10 @@ impl VirtualViewCache {
         layout: &CompactItemViewLayout,
         thumbnail_size_px: u32,
     ) -> bool {
-        self.layout.as_ref().is_some_and(|current| {
-            current.entry_count == layout.entry_count
-                && current.rows_per_column == layout.rows_per_column
-                && same_layout_metric(current.viewport_width, layout.viewport_width)
-                && same_layout_metric(current.cell_width, layout.cell_width)
-                && same_layout_metric(current.row_height, layout.row_height)
-                && same_layout_metric(current.padding, layout.padding)
-                && same_layout_metric(current.content_width, layout.content_width)
-                && same_layout_metric(current.scroll_max_x, layout.scroll_max_x)
-                && same_layout_vec(&current.item_widths, &layout.item_widths)
-                && same_layout_vec(&current.item_text_widths, &layout.item_text_widths)
-                && same_layout_vec(&current.column_widths, &layout.column_widths)
-                && same_layout_vec(&current.column_offsets, &layout.column_offsets)
-        }) && self.thumbnail_size_px == thumbnail_size_px
+        self.layout
+            .as_ref()
+            .is_some_and(|current| current.matches_layout_signature(layout))
+            && self.thumbnail_size_px == thumbnail_size_px
     }
 
     pub(crate) fn update_layout_signature(
@@ -851,17 +841,6 @@ impl VirtualViewCache {
         self.layout = Some(layout);
         self.thumbnail_size_px = thumbnail_size_px;
     }
-}
-
-fn same_layout_metric(a: f32, b: f32) -> bool {
-    (a - b).abs() <= 0.01
-}
-
-fn same_layout_vec(a: &[f32], b: &[f32]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(left, right)| same_layout_metric(*left, *right))
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
