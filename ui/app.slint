@@ -11,6 +11,7 @@ export global DndApi {
     pure callback make-drag-at(slot: int, x: float, y: float) -> data-transfer;
     pure callback event-kind(event: DropEvent) -> DragKind;
     pure callback event-path(event: DropEvent) -> string;
+    pure callback event-label(event: DropEvent) -> string;
 }
 
 export global PaneRouting {
@@ -180,6 +181,8 @@ component FilePane inherits Rectangle {
     callback prepare_transfer(int, string, float, float) -> bool;
     callback transfer_menu_requested(int);
     callback trace_drop(string, string, string, float, float, bool, string);
+    callback drag_preview_changed(int, string, length, length);
+    callback drag_preview_cleared(int);
     callback save_focus_changed(int, bool);
     callback commit_external_edit(int);
     callback discard_external_edit(int);
@@ -265,6 +268,7 @@ component FilePane inherits Rectangle {
                         root.drag-rejected = false;
                         root.drag-target-path = "";
                         root.drag-target-slice-index = -1;
+                        root.drag_preview_cleared(root.pane-slot);
                     }
                 }
                 can-drop(event) => {
@@ -274,10 +278,12 @@ component FilePane inherits Rectangle {
                         root.drag-rejected = true;
                         root.drag-target-path = "";
                         root.drag-target-slice-index = -1;
+                        root.drag_preview_cleared(root.pane-slot);
                         return DragAction.none;
                     }
                     if (DndApi.event-kind(event) == DragKind.folder || DndApi.event-kind(event) == DragKind.file || DndApi.event-kind(event) == DragKind.place) {
                         root.drag-active = true;
+                        root.drag_preview_changed(root.pane-slot, DndApi.event-label(event), self.absolute-position.x + event.position.x, self.absolute-position.y + event.position.y);
                         root.drag-target-path = root.drop_target_path(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                         root.drag-rejected = !root.drop_allowed(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                         root.drag-target-slice-index = root.drag-target-path == "" || root.drag-rejected ? -1 : root.drop_target_slice_index(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
@@ -288,6 +294,7 @@ component FilePane inherits Rectangle {
                         root.drag-rejected = false;
                         root.drag-target-path = "";
                         root.drag-target-slice-index = -1;
+                        root.drag_preview_cleared(root.pane-slot);
                         root.trace_drop(root.drop-trace-prefix + "can-drop-rejected:unsupported-dnd-payload", "unsupported", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
                         return DragAction.none;
                     }
@@ -302,6 +309,7 @@ component FilePane inherits Rectangle {
                     root.drag-rejected = false;
                     root.drag-target-path = "";
                     root.drag-target-slice-index = -1;
+                    root.drag_preview_cleared(root.pane-slot);
                     return DragAction.copy;
                 }
             }
@@ -474,6 +482,8 @@ component PaneSlot inherits FilePane {
     trace_drop(action, kind, path, x, y, rejected, target) => {
         PaneRouting.trace-drop(action, kind, path, x, y, rejected, target);
     }
+    drag_preview_changed(slot, label, x, y) => {}
+    drag_preview_cleared(slot) => {}
     save_focus_changed(slot, focused) => { PaneRouting.save-focus-changed(slot, focused); }
     commit_external_edit(slot) => { PaneRouting.commit-external-edit(slot); }
     discard_external_edit(slot) => { PaneRouting.discard-external-edit(slot); }
@@ -501,6 +511,8 @@ component PaneSlotSurface inherits Rectangle {
     callback path_text_changed(int, string);
     callback path_focus_changed(int, bool);
     callback viewport_changed(int, float);
+    callback drag_preview_changed(int, string, length, length);
+    callback drag_preview_cleared(int);
 
     private property <string> live-path-text: root.pane.path_text;
     private property <bool> live-path-focused: root.pane.path_focused;
@@ -633,6 +645,12 @@ component PaneSlotSurface inherits Rectangle {
         path_focus_changed(slot, focused) => { root.path_focus_changed(slot, focused); }
         viewport_changed(slot, viewport-x) => {
             root.viewport_changed(slot, viewport-x);
+        }
+        drag_preview_changed(slot, label, x, y) => {
+            root.drag_preview_changed(slot, label, x, y);
+        }
+        drag_preview_cleared(slot) => {
+            root.drag_preview_cleared(slot);
         }
         search_focus_changed(slot, focused) => {
             root.live-search-focused = focused;
@@ -1662,6 +1680,24 @@ export component AppWindow inherits Window {
                         }
                         viewport_changed(slot, viewport-x) => {
                             root.pane_viewport_changed(slot, viewport-x);
+                        }
+                        drag_preview_changed(slot, label, x, y) => {
+                            root.folder_drag_active = true;
+                            root.folder_drag_label = label;
+                            root.folder_drag_x = x;
+                            root.folder_drag_y = y;
+                            root.folder_drag_slot = slot;
+                            root.folder_drag_over_place_gap = false;
+                            root.folder_drag_over_place_item = false;
+                            root.place_drag_rejected = false;
+                        }
+                        drag_preview_cleared(slot) => {
+                            if (root.folder_drag_slot == slot) {
+                                root.folder_drag_active = false;
+                                root.folder_drag_over_place_gap = false;
+                                root.folder_drag_over_place_item = false;
+                                root.place_drag_rejected = false;
+                            }
                         }
                     }
 

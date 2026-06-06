@@ -3302,6 +3302,21 @@ mod tests {
             "SplitPaneView should use one pane-level input controller while keeping DragArea.data pinned to the press target and suppressing blank-area drags without toggling DragArea.enabled"
         );
         assert!(
+            file_pane.contains("callback drag_preview_changed")
+                && file_pane.contains("callback drag_preview_cleared")
+                && file_pane.contains(
+                    "root.drag_preview_changed(root.pane-slot, DndApi.event-label(event), self.absolute-position.x + event.position.x, self.absolute-position.y + event.position.y);"
+                )
+                && file_pane.contains("root.drag_preview_cleared(root.pane-slot);")
+                && app.contains("pure callback event-label(event: DropEvent) -> string;")
+                && app.contains("root.folder_drag_active = true;")
+                && app.contains("root.folder_drag_label = label;")
+                && app.contains("root.folder_drag_x = x;")
+                && app.contains("root.folder_drag_y = y;")
+                && app.contains("folder-drag-label: root.folder_drag_label;"),
+            "main-view item drags should feed the shared DragOverlayLayer with a visible floating label instead of relying only on the compositor action badge"
+        );
+        assert!(
             split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
                 && split_pane.contains("for metadata[index] in root.metadata: Text")
                 && metadata_tile_loop

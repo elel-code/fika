@@ -346,6 +346,15 @@ fn main() -> Result<(), slint::PlatformError> {
             })
         }
 
+        fn drag_label(path: &str) -> SharedString {
+            Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(path)
+                .into()
+        }
+
         let dnd_api = ui.global::<DndApi>();
 
         // ── DragArea.data constructors ──────────────────────────
@@ -429,6 +438,33 @@ fn main() -> Result<(), slint::PlatformError> {
                         FikaDragInfo::Place(p)
                         | FikaDragInfo::Folder(p)
                         | FikaDragInfo::File(p) => SharedString::from(p.as_str()),
+                    };
+                }
+                SharedString::new()
+            });
+        }
+
+        {
+            let state = Rc::clone(&state);
+            dnd_api.on_event_label(move |event: DropEvent| -> SharedString {
+                if let Some(rc) = event.data.user_data()
+                    && let Some(info) = rc.downcast_ref::<FikaDragInfo>()
+                {
+                    return match info {
+                        FikaDragInfo::Pending(slot) => {
+                            let state_ref = state.borrow();
+                            match pending_drag_info(&state_ref, *slot) {
+                                Some(
+                                    FikaDragInfo::Place(p)
+                                    | FikaDragInfo::Folder(p)
+                                    | FikaDragInfo::File(p),
+                                ) => drag_label(p.as_str()),
+                                _ => SharedString::new(),
+                            }
+                        }
+                        FikaDragInfo::Place(p)
+                        | FikaDragInfo::Folder(p)
+                        | FikaDragInfo::File(p) => drag_label(p.as_str()),
                     };
                 }
                 SharedString::new()
