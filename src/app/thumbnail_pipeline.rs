@@ -1,7 +1,7 @@
-use crate::app::model_update::ItemViewRowToken;
+use crate::ItemViewEntry;
+use crate::app::model_update::{ItemViewMediaSource, ItemViewRowToken};
 use crate::app::state::AppState;
 use crate::fs::thumbnails;
-use crate::{ItemViewEntry, ItemViewMediaEntry};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -99,7 +99,7 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
     pane_id: u64,
     entries: &mut [ItemViewEntry],
     size_px: u32,
-) -> Vec<ItemViewMediaEntry> {
+) -> Vec<ItemViewMediaSource> {
     let Some(pane) = state.panes.pane_by_id(pane_id) else {
         return Vec::new();
     };
@@ -117,7 +117,7 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
             continue;
         };
         if let Some(data) = state.thumbnail_cache.get(&key) {
-            media_entries.push(ItemViewMediaEntry {
+            media_entries.push(ItemViewMediaSource {
                 slice_index: row as i32,
                 media: image_from_thumbnail(data),
                 x: 0.0,

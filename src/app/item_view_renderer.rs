@@ -1,5 +1,6 @@
+use crate::ItemViewEntry;
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
-use crate::{ItemViewEntry, ItemViewMetadataEntry};
+use crate::app::model_update::ItemViewMetadataOverlaySource;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::path::Path;
 
@@ -160,7 +161,7 @@ pub(crate) fn decorate_render_plan_with_metadata(
     entries: &mut [ItemViewEntry],
     input: ItemViewRenderPlanInput,
     metadata_sources: &[ItemViewMetadataSource],
-) -> Vec<ItemViewMetadataEntry> {
+) -> Vec<ItemViewMetadataOverlaySource> {
     let render_metrics = input.render_metrics;
     let geometry = ItemViewRenderGeometry::from_plan_input(input);
     let text_plan =
@@ -177,7 +178,7 @@ pub(crate) fn decorate_render_plan_with_metadata(
 
         if let Some(metadata) = metadata.filter(|_| input.show_location) {
             if has_group {
-                metadata_entries.push(ItemViewMetadataEntry {
+                metadata_entries.push(ItemViewMetadataOverlaySource {
                     slice_index: row as i32,
                     text: metadata.group.clone(),
                     item_x: 0.0,
@@ -191,7 +192,7 @@ pub(crate) fn decorate_render_plan_with_metadata(
                 });
             }
             if has_location {
-                metadata_entries.push(ItemViewMetadataEntry {
+                metadata_entries.push(ItemViewMetadataOverlaySource {
                     slice_index: row as i32,
                     text: metadata.location.clone(),
                     item_x: 0.0,
@@ -478,7 +479,7 @@ mod tests {
         assert_eq!(
             metadata_entries,
             vec![
-                ItemViewMetadataEntry {
+                ItemViewMetadataOverlaySource {
                     slice_index: 0,
                     text: "Documents".into(),
                     item_x: 0.0,
@@ -490,7 +491,7 @@ mod tests {
                     font_size: 11.0,
                     is_group: true,
                 },
-                ItemViewMetadataEntry {
+                ItemViewMetadataOverlaySource {
                     slice_index: 0,
                     text: "/home/user/Documents".into(),
                     item_x: 0.0,

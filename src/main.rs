@@ -61,8 +61,8 @@ use app::item_view_renderer::{
     decorate_render_plan_with_metadata,
 };
 use app::model_update::{
-    relayout_pane_item_view_entries_model, update_pane_item_view_entries_model,
-    update_pane_item_view_selection_model,
+    ItemViewMediaSource, ItemViewMetadataOverlaySource, relayout_pane_item_view_entries_model,
+    update_pane_item_view_entries_model, update_pane_item_view_selection_model,
 };
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
@@ -4219,8 +4219,8 @@ fn set_pane_virtual_entries(
     start_index: usize,
     entries: Vec<ItemViewEntry>,
     bounds_entries: Vec<ItemViewItemBounds>,
-    media_entries: Vec<ItemViewMediaEntry>,
-    metadata_entries: Vec<ItemViewMetadataEntry>,
+    media_entries: Vec<ItemViewMediaSource>,
+    metadata_entries: Vec<ItemViewMetadataOverlaySource>,
     selected_paths: &[String],
 ) {
     if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
