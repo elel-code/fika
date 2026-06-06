@@ -8,9 +8,9 @@ use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewBoundsEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData,
-    set_status, sync_virtual_entries_for_slot,
+    AppWindow, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry,
+    ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, set_status,
+    sync_virtual_entries_for_slot,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -347,7 +347,6 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
 
     PaneViewData {
         slot,
-        bounds: pane_slot_bounds(slot, state),
         paint: pane_slot_paint(slot, state),
         highlights: pane_slot_highlights(slot, state),
         media: pane_slot_media(slot, state),
@@ -505,14 +504,6 @@ fn pane_slot_can_go_forward(state: &AppState, slot: i32) -> bool {
         .panes
         .pane_for_slot(slot)
         .is_some_and(|pane| pane.history.forward_len() > 0)
-}
-
-fn pane_slot_bounds(slot: i32, state: &AppState) -> ModelRc<ItemViewBoundsEntry> {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_bounds_entries.clone())
-        .unwrap_or_default()
 }
 
 fn pane_slot_paint(slot: i32, state: &AppState) -> ModelRc<ItemViewPaintEntry> {
@@ -880,7 +871,6 @@ mod tests {
     fn pane_view(entry_count: i32, visible_rows: usize) -> PaneViewData {
         PaneViewData {
             slot: 0,
-            bounds: ModelRc::default(),
             paint: if visible_rows == 0 {
                 ModelRc::default()
             } else {

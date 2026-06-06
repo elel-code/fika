@@ -2642,7 +2642,7 @@ mod tests {
                 )
                 && pane_slot_surface.contains("viewport-x <=> root.live-viewport-x;")
                 && !pane_slot_surface.contains("entries: root.view.entries;")
-                && pane_slot_surface.contains("bounds: root.view.bounds;")
+                && !pane_slot_surface.contains("bounds: root.view.bounds;")
                 && pane_slot_surface.contains("paint: root.view.paint;")
                 && pane_slot_surface.contains("highlights: root.view.highlights;")
                 && pane_slot_surface.contains("media: root.view.media;")
@@ -3011,7 +3011,7 @@ mod tests {
             split_pane.contains("for paint[index] in root.paint: Image")
                 && split_pane.contains("for paint[index] in root.paint: Text")
                 && split_pane.contains("in property <int> virtual-start-row;")
-                && split_pane.contains("in property <[ItemViewBoundsEntry]> bounds;")
+                && !split_pane.contains("in property <[ItemViewBoundsEntry]> bounds;")
                 && base_image_loop
                     .contains("x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.media-x;")
                 && base_image_loop.contains(
@@ -3086,7 +3086,7 @@ mod tests {
                 && !item_view_entry.contains("media_width: float")
                 && !item_view_entry.contains("text_x: float")
                 && !item_view_entry.contains("title_line_height: float")
-                && pane_view_data.contains("bounds: [ItemViewBoundsEntry]")
+                && !pane_view_data.contains("bounds: [ItemViewBoundsEntry]")
                 && pane_view_data.contains("paint: [ItemViewPaintEntry]")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")
@@ -3121,13 +3121,13 @@ mod tests {
                 && highlight_loop.contains("height: root.row-height;")
                 && !highlight_loop.contains("root.bounds[highlight.slice_index]")
                 && drop_target_loop.contains(
-                    "private property <ItemViewBoundsEntry> item-bounds: root.bounds[root.drag-target-slice-index];"
+                    "private property <ItemViewPaintEntry> item-paint: root.paint[root.drag-target-slice-index];"
                 )
                 && drop_target_loop.contains(
-                    "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px;"
+                    "x: root.preview-padding + self.item-paint.x * 1px - root.viewport-x * 1px;"
                 )
-                && drop_target_loop.contains("y: root.preview-padding + self.item-bounds.y * 1px;")
-                && drop_target_loop.contains("width: max(1px, self.item-bounds.width * 1px);")
+                && drop_target_loop.contains("y: root.preview-padding + self.item-paint.y * 1px;")
+                && drop_target_loop.contains("width: max(1px, self.item-paint.width * 1px);")
                 && drop_target_loop.contains("height: root.row-height;")
                 && !highlight_loop.contains("tile-index:")
                 && !highlight_loop.contains("tile-row:")

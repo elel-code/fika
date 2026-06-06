@@ -1,9 +1,8 @@
-import { ItemViewBoundsEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
+import { ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
-    in property <[ItemViewBoundsEntry]> bounds;
     in property <[ItemViewPaintEntry]> paint;
     in property <[ItemViewHighlightEntry]> highlights;
     in property <[ItemViewMediaEntry]> media;
@@ -347,11 +346,11 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle {
-                    private property <ItemViewBoundsEntry> item-bounds: root.bounds[root.drag-target-slice-index];
+                    private property <ItemViewPaintEntry> item-paint: root.paint[root.drag-target-slice-index];
 
-                    x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px;
-                    y: root.preview-padding + self.item-bounds.y * 1px;
-                    width: max(1px, self.item-bounds.width * 1px);
+                    x: root.preview-padding + self.item-paint.x * 1px - root.viewport-x * 1px;
+                    y: root.preview-padding + self.item-paint.y * 1px;
+                    width: max(1px, self.item-paint.width * 1px);
                     height: root.row-height;
                     border-radius: 7px;
                     border-width: 1px;
