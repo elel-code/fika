@@ -895,7 +895,6 @@ mod tests {
                 ModelRc::new(Rc::new(VecModel::from(
                     (0..visible_rows)
                         .map(|index| ItemViewPaintEntry {
-                            slice_index: index as i32,
                             name: format!("item-{index}").into(),
                             x: index as f32 * 10.0,
                             y: 0.0,
@@ -956,7 +955,6 @@ mod tests {
 
         let mut selected = nonempty.clone();
         selected.highlights = ModelRc::new(Rc::new(VecModel::from(vec![ItemViewHighlightEntry {
-            slice_index: 0,
             x: 0.0,
             y: 0.0,
             width: 80.0,

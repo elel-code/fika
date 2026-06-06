@@ -149,7 +149,6 @@ fn item_view_paint_entries(
         .filter_map(|bounds| {
             let entry = entries.get(bounds.slice_index)?;
             Some(ItemViewPaintEntry {
-                slice_index: bounds.slice_index as i32,
                 name: entry.name.clone(),
                 x: bounds.x,
                 y: bounds.y,
@@ -169,7 +168,6 @@ fn item_view_paint_entries_from_tokens(
         .filter_map(|bounds| {
             let token = tokens.get(bounds.slice_index)?;
             Some(ItemViewPaintEntry {
-                slice_index: bounds.slice_index as i32,
                 name: token.name_shared(),
                 x: bounds.x,
                 y: bounds.y,
@@ -411,7 +409,6 @@ fn item_view_highlight_entries(
         .filter_map(|(row, token)| {
             let bounds = bounds_for_slice_index(bounds_entries, row as i32);
             token.selected().then_some(ItemViewHighlightEntry {
-                slice_index: row as i32,
                 x: bounds.map_or(0.0, |b| b.x),
                 y: bounds.map_or(0.0, |b| b.y),
                 width: bounds.map_or(0.0, |b| b.width),
@@ -986,19 +983,17 @@ mod tests {
             .collect()
     }
 
-    fn highlight_rows(model: &ModelRc<ItemViewHighlightEntry>) -> Vec<i32> {
+    fn highlight_rows(model: &ModelRc<ItemViewHighlightEntry>) -> Vec<(f32, f32, f32)> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
-            .map(|entry| entry.slice_index)
+            .map(|entry| (entry.x, entry.y, entry.width))
             .collect()
     }
 
-    fn highlight_geometry_rows(
-        model: &ModelRc<ItemViewHighlightEntry>,
-    ) -> Vec<(i32, f32, f32, f32)> {
+    fn highlight_geometry_rows(model: &ModelRc<ItemViewHighlightEntry>) -> Vec<(f32, f32, f32)> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.slice_index, entry.x, entry.y, entry.width))
+            .map(|entry| (entry.x, entry.y, entry.width))
             .collect()
     }
 
@@ -1009,17 +1004,10 @@ mod tests {
             .collect()
     }
 
-    fn paint_rows(model: &ModelRc<ItemViewPaintEntry>) -> Vec<(i32, String, f32, f32)> {
+    fn paint_rows(model: &ModelRc<ItemViewPaintEntry>) -> Vec<(String, f32, f32)> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
-            .map(|entry| {
-                (
-                    entry.slice_index,
-                    entry.name.to_string(),
-                    entry.x,
-                    entry.text_width,
-                )
-            })
+            .map(|entry| (entry.name.to_string(), entry.x, entry.text_width))
             .collect()
     }
 
@@ -1167,7 +1155,7 @@ mod tests {
 
         assert_eq!(
             highlight_geometry_rows(&view.virtual_highlight_entries),
-            vec![(1, 210.0, 2.0, 111.0)]
+            vec![(210.0, 2.0, 111.0)]
         );
         assert_eq!(
             media_geometry_rows(&view.virtual_media_entries),
@@ -1406,7 +1394,7 @@ mod tests {
             &mut view,
             0,
             entries_with_tile_metrics(4),
-            Vec::new(),
+            bounds_entries(0, 4),
             Vec::new(),
             Vec::new(),
             &[],
@@ -1422,7 +1410,10 @@ mod tests {
             selected_token_rows(&view.virtual_entry_tokens),
             vec!["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         );
-        assert_eq!(highlight_rows(&view.virtual_highlight_entries), vec![1, 3]);
+        assert_eq!(
+            highlight_rows(&view.virtual_highlight_entries),
+            vec![(10.0, 2.0, 91.0), (30.0, 6.0, 93.0)]
+        );
 
         let selected_highlights = view.virtual_highlight_entries.clone();
         assert!(!update_pane_item_view_selection_model(
@@ -1512,10 +1503,10 @@ mod tests {
         assert_eq!(
             paint_rows(&view.virtual_paint_entries),
             vec![
-                (0, "item-2".to_string(), 20.0, 47.0),
-                (1, "item-3".to_string(), 30.0, 48.0),
-                (2, "item-4".to_string(), 40.0, 49.0),
-                (3, "item-5".to_string(), 50.0, 50.0),
+                ("item-2".to_string(), 20.0, 47.0),
+                ("item-3".to_string(), 30.0, 48.0),
+                ("item-4".to_string(), 40.0, 49.0),
+                ("item-5".to_string(), 50.0, 50.0),
             ]
         );
 
@@ -1533,10 +1524,10 @@ mod tests {
         assert_eq!(
             paint_rows(&view.virtual_paint_entries),
             vec![
-                (0, "item-1".to_string(), 10.0, 46.0),
-                (1, "item-2".to_string(), 20.0, 47.0),
-                (2, "item-3".to_string(), 30.0, 48.0),
-                (3, "item-4".to_string(), 40.0, 49.0),
+                ("item-1".to_string(), 10.0, 46.0),
+                ("item-2".to_string(), 20.0, 47.0),
+                ("item-3".to_string(), 30.0, 48.0),
+                ("item-4".to_string(), 40.0, 49.0),
             ]
         );
     }
@@ -1758,7 +1749,7 @@ mod tests {
             &mut view,
             0,
             entries_with_tile_metrics(4),
-            Vec::new(),
+            bounds_entries(0, 4),
             Vec::new(),
             Vec::new(),
             &[],
@@ -1776,7 +1767,10 @@ mod tests {
         ));
 
         assert_eq!(view.virtual_highlight_entries, original_highlights);
-        assert_eq!(highlight_rows(&view.virtual_highlight_entries), vec![2]);
+        assert_eq!(
+            highlight_rows(&view.virtual_highlight_entries),
+            vec![(20.0, 4.0, 92.0)]
+        );
     }
 
     #[test]
@@ -1816,15 +1810,18 @@ mod tests {
         assert_eq!(
             paint_rows(&view.virtual_paint_entries),
             vec![
-                (0, "item-1".to_string(), 110.0, 56.0),
-                (1, "item-2".to_string(), 120.0, 57.0),
+                ("item-1".to_string(), 110.0, 56.0),
+                ("item-2".to_string(), 120.0, 57.0),
             ]
         );
         assert_eq!(
             selected_token_rows(&view.virtual_entry_tokens),
             vec!["/tmp/item-2".to_string()]
         );
-        assert_eq!(highlight_rows(&view.virtual_highlight_entries), vec![1]);
+        assert_eq!(
+            highlight_rows(&view.virtual_highlight_entries),
+            vec![(120.0, 2.0, 102.0)]
+        );
     }
 
     #[test]
