@@ -10,9 +10,11 @@
 ### 滚动数据流
 
 ```
-Slint SplitPaneView 自管 viewport-x
-  ├─ TouchArea.scroll-event → set-viewport-x(raw)
-  ├─ 自管 scrollbar drag/click → set-viewport-x(raw)
+Slint SplitPaneView 自管 logical viewport-x + animated paint-viewport-x
+  ├─ TouchArea.scroll-event → set-viewport-x(raw, smooth=true)
+  ├─ 自管 scrollbar drag/click → set-viewport-x(raw, smooth=false)
+  ├─ paint layer 减 paint-viewport-x；scrollbar / hit-test / selection 坐标继续用 viewport-x
+  ├─ 只有当前 virtual slice 同时覆盖旧 paint window 和目标 viewport window 时才平滑；否则立即同步
   └─ pane-local width / rows-per-column 变化 → relayout-visible-slice()
        └─ root.view_changed() → PaneRouting.view-changed(slot)
             └─ Rust: PaneViewSyncScheduler 同步重建当前 visible slice
@@ -39,7 +41,7 @@ Slint SplitPaneView 自管 viewport-x
 Rectangle viewport shell (clip: true)
   ├─ full-viewport DragArea + TouchArea (wheel / item click / double click / context / blank click / rectangle selection)
   ├─ Rust-projected item-view layout metrics (rows/cell/column/content/scroll extent)
-  ├─ slice-layer (x = padding + column_offset + virtual_start_column * column_width - viewport_x; tile_index = virtual_start_row + slice_index)
+  ├─ slice-layer (x = padding + Rust-projected item_x - paint-viewport-x)
   │    ├─ for highlight[index] in highlights: Rectangle primitive
   │    │    └─ 只绘制选中背景；Slint-facing row 只带 Rust-projected x/y/width
   │    ├─ single drag-target-slice-index Rectangle primitive
@@ -68,6 +70,7 @@ Rectangle viewport shell (clip: true)
 | 缓存命中免重建：`should_rebuild_virtual_model` | `virtual_view.rs:180` | 同范围内滚动零模型更新 |
 | 缩略图优先可见列 | `thumbnail_pipeline.rs:40` | 减少首屏缩略图延迟 |
 | 自管 viewport clamp/round | `split_pane.slint` | 避免 ScrollView/Flickable viewport 回写和子像素漂移触发同步 |
+| Dolphin-style smooth paint viewport | `split_pane.slint` / `split_view.rs` | 滚轮滚动时 scrollbar/Rust visible slice 立即跟随 logical `viewport-x`，绘制层用 `paint-viewport-x` 平滑追随；只有当前 virtual slice 覆盖旧/新可见窗口时才动画，scrollbar drag、resize clamp 和外部 viewport 恢复立即同步 |
 | 普通滚轮不重复请求焦点 | `split_pane.slint:78` | 减少 FFI 调用 |
 | 自管滚动条消费 Rust item-view layout metrics | `split_view.rs` / `split_pane.slint` | `rows_per_column`、column width/offset、content width、scroll max 与虚拟切片使用同一 Rust layouter |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
@@ -107,7 +110,7 @@ changed viewport-x => {
 }
 ```
 
-当前 `SplitPaneView` 已删除 `ScrollView`、`changed viewport-x`、`viewport-offset` 和 epsilon 写回路径，改为 `set-viewport-x(raw)` 统一夹紧和取整。
+当前 `SplitPaneView` 已删除 `ScrollView`/`Flickable` viewport 写回、`viewport-offset` 和 epsilon clamp 路径，改为 `set-viewport-x(raw, smooth)` 统一夹紧、取整和触发当前 visible slice 同步。保留的 `changed viewport-x` 只处理外部 viewport 写入（例如恢复目录状态或 Rust 发布 clamp）：它停止 smooth paint animation 并把 `paint-viewport-x` 立即同步到 logical `viewport-x`，不再做旧的 `stable-viewport-x(-self.viewport-x)` 写回，也不调用 `view_changed()` 或 `focus_requested()`。
 
 **收益**：消除所有边界滚动时的无效 FFI 往返和 Rust 计算。
 
@@ -121,20 +124,21 @@ changed viewport-x => {
 
 **涉及代码**：
 - `src/main.rs` — `sync_virtual_entries_for_slot`
-- `ui/split_pane.slint` — `set-viewport-x(raw)` / `relayout-visible-slice()`
+- `ui/split_pane.slint` — `set-viewport-x(raw, smooth)` / `relayout-visible-slice()`
 
 **实际实现**（✅ 已替换）：当前路径参考 Dolphin `KItemListView::setScrollOffset()`：viewport 变化后立刻进入 `sync_pane_viewport_for_slot()`，同步夹紧并重建当前 visible slice；`PaneViewSyncScheduler` 只保留 re-entrancy guard，防止 Slint 回调重入，不再延迟滚动布局。
 
 ```
 滚动事件到达
-  ├─ Slint 本地 live viewport-x 立即更新
+  ├─ Slint 本地 logical viewport-x 立即更新
+  ├─ paint-viewport-x 按 smooth 参数和当前 slice 覆盖范围决定平滑追随或立即同步
   └─ Rust 同步 sync_virtual_entries_for_slot_with_count(..., immediate=true)
        ├─ 缓存覆盖当前 visible range：只更新 AppState viewport，必要时发布 clamp
        └─ 缓存不覆盖：同步准备并写入当前 PaneViewData + pane-local paint/overlay models
 ```
 
 关键设计点：
-- viewport-x 的 Slint 本地状态仍由 pane surface 持有，普通滚动不再每步把 viewport 反发布到 pane row。
+- viewport-x 的 Slint 本地状态仍由 pane surface 持有，普通滚动不再每步把 viewport 反发布到 pane row。scrollbar、hit-test、selection 和 Rust visible slice 以 logical `viewport-x` 为真值；只有绘制 primitive 的 x 偏移使用 `paint-viewport-x`。Rust 额外下发当前 virtual slice 的 content 起点和宽度，Slint 只在旧 paint window 与目标 viewport window 都落在当前 slice 内时启用平滑，避免模型已切到新 range 而 paint offset 还停在旧 range 时出现空白。
 - layout/fullscreen/rows-per-column 变化走 immediate layout rebuild，不等待 timer，也不需要手动拖动滚动条恢复。
 - `PaneViewData` 承载 viewport、layout metrics、空状态等主视图热数据；Slint-facing view data 不再携带 `ItemViewEntry` 或完整 bounds model。可见业务 row 保留在 Rust `PaneView.virtual_entries`，用于 controller/hit-test/DnD/token state；Slint 只接收 pane-local paint、highlight、media、metadata sidecar。`PaneSlotData` 只保留地址栏、搜索、状态栏、chooser 等 pane chrome 冷数据。
 
@@ -360,6 +364,7 @@ Slint: Rectangle viewport + input/DnD overlays
 10. show-location metadata overlay 已从 per-item 透明 `Rectangle` wrapper 和 `visible:` 过滤，收敛成 pane-local `ItemViewMetadataEntry` 稀疏模型；普通空 metadata row 不再进入 Slint overlay loop，非空 metadata overlay 先通过 Rust-only `ItemViewMetadataOverlaySource` 保留 slice identity 完成 bounds projection，再发布为不带 `slice_index` 的 Slint-facing row，并复用同一个 pane-local `VecModel` 做稀疏 row 级更新。空 metadata 仍清回空模型，split snapshot 也会复制独立 metadata model，保持 pane 独立。
 11. Dolphin compact visual metrics 已收敛到 `src/app/item_view_metrics.rs`：`geometry.rs` 负责 viewport/visible range/layout，`item_view.rs` 负责 input/controller/hit-test，`item_view_renderer.rs` 负责 render plan、metadata projection 和 fallback media。它们不再分别维护 zoom/media/font/line/cell/row 公式；fallback 源图和 zoom 几何已经解耦，为后续 renderer cache 或 tile-frame 自绘提供更稳定的输入边界。
 12. DnD 仍保留 Slint 原生 `data-transfer` 路径，drag payload 和 drop target 解析都继续向 Rust hit-test 收敛。
+13. Dolphin `KItemListSmoothScroller` 的分层已经映射到 Slint 主视图：logical `viewport-x` 继续立即驱动 scrollbar、Rust visible slice、hit-test、DnD 和 selection 坐标；新增 `paint-viewport-x` 只作为绘制 primitive 的 offset，并在普通滚轮滚动时用 120ms ease-out 平滑追随。`PaneViewData` 下发当前 virtual slice 的 content 起点/宽度，`SplitPaneView` 只有在旧 paint window 与目标 viewport window 都被当前 slice 覆盖时才动画；否则立即同步 paint offset，避免虚拟模型已切到新 range 时动画途中露出空白。scrollbar 点击/拖动、pane-local relayout、`scroll-max-x` 变化、pointer press、slice 起点/宽度变化和外部 viewport 写入都会调用 `stop-smooth-scroll()`，保证手动拖动、目录恢复和 fullscreen/resize clamp 不落后于动画。
 
 ---
 
@@ -387,8 +392,8 @@ Slint: 用户交互（滚动/点击/右键菜单/...）
 
 | 触发来源 | Slint 位置 | 频率 |
 |---------|-----------|------|
-| 滚轮滚动 | `split_pane.slint` `set-viewport-x(raw)` | 每帧 |
-| 自管滚动条拖动/点击 | `split_pane.slint` `set-viewport-x(raw)` | 每帧 |
+| 滚轮滚动 | `split_pane.slint` `set-viewport-x(raw, smooth=true)` | 每帧 |
+| 自管滚动条拖动/点击 | `split_pane.slint` `set-viewport-x(raw, smooth=false)` | 每帧 |
 | Ctrl+滚轮缩放 | `split_pane.slint:80` `handle-scroll` | 按需 |
 | 点击 tile / 空白区 | `split_pane.slint` TouchArea | 按需 |
 | PathBar Back/Forward 按钮 | `top_bar.slint:184,194` | 按需 |
@@ -483,17 +488,17 @@ changed viewport-x => {
 }
 ```
 
-当前自管 viewport 路径中普通滚动只走 `set-viewport-x(raw)`，不再从滚动路径请求焦点。`handle-scroll` 中 Ctrl+滚轮的 `focus_requested()` 仍是合理的——Ctrl+滚轮切换缩放模式，确实需要声明焦点。
+当前自管 viewport 路径中普通滚动只走 `set-viewport-x(raw, smooth=true)`，不再从滚动路径请求焦点。保留的 `changed viewport-x` 只处理外部 viewport 写入时的 paint offset 同步，不调用 `focus_requested()`。`handle-scroll` 中 Ctrl+滚轮的 `focus_requested()` 仍是合理的——Ctrl+滚轮切换缩放模式，确实需要声明焦点。
 
 **涉及代码**：
 - `ui/split_pane.slint:67` — `pan-horizontal` 末尾的 `focus_requested()`
-- `ui/split_pane.slint:153` — `changed viewport-x` 回调中的 `focus_requested()`
+- `ui/split_pane.slint` — 旧 `changed viewport-x` 写回路径中的 `focus_requested()`
 
 **安全性分析**：pane 内容现在通过 `PaneSlotSurface`/`PaneSlot` 统一路由，滚动和 viewport 变化都携带 slot 并写回对应 pane 的 `DirectoryViewState`。普通滚动不需要额外声明焦点；需要焦点语义的路径（点击激活、Ctrl+滚轮缩放、右键菜单、拖放）仍显式走 slot-aware focus/route 回调。
 
 **收益**：每帧省两次属性比较 + 分支判断（配合 F0 后为两次整数比较）。
 
-**难度**：低。旧路径为两行删除；当前路径已经删除 `changed viewport-x` 回调和 `viewport-offset` 写回。
+**难度**：低。旧路径为两行删除；当前路径已经删除 `viewport-offset` 写回和旧 `changed viewport-x` focus 分支，保留的外部写入守卫只同步 `paint-viewport-x`。
 
 ---
 
@@ -849,14 +854,16 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 | **Phase 4** | P2 缩略图批量写入 (Flush 16ms) | 2-3h | ✅ 已完成 |
 | **Phase 5** | P3 UI 线程计算后移 | 1-2d | ✅ 已完成 |
 | **Phase 6** | P3 tile primitive 简化 | 1-2h | ✅ 已完成 |
+| **Phase 7** | Dolphin-style smooth paint viewport | 30min-1h | ✅ 已完成 |
 
 **Phase 1-6 实现要点**：
-- **Phase 1**: `changed viewport-x` 提前退出 + `sync_pane_slots_ui` row_data 脏检查 + 新增 `sync_pane_slot_ui` 单 slot 增量；主视图热字段现已拆到 `PaneViewData`
+- **Phase 1**: 旧 `changed viewport-x` 写回路径提前退出 + `sync_pane_slots_ui` row_data 脏检查 + 新增 `sync_pane_slot_ui` 单 slot 增量；主视图热字段现已拆到 `PaneViewData`
 - **Phase 2**: 旧 `PaneViewSyncScheduler` 8ms timer 已删除；当前 scheduler 同步调用 `sync_pane_viewport_for_slot` 并只保留重入保护，layout/viewport 变化立即重建当前 visible slice
 - **Phase 3**: 新模块 `src/app/model_update.rs` — `VecModel::downcast_ref` 增量更新，支持前/后滑动 + `set_row_data` 逐行脏检查；当前重叠 row 复用通过 pane-local `ItemViewRowToken` sidecar 判断，避免为了比较而读取并克隆 Slint row data
 - **Phase 4**: `ThumbnailFlushScheduler` (16ms) — 缩略图结果入队批量写入，`AsyncEvent::ThumbnailLoaded` 不再逐张触发 `sync_virtual_entries`
 - **Phase 5**: `PaneEntrySnapshot`（不含 `Image` 的轻量快照, `Arc` 零拷贝共享）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）— 虚拟视图的条目过滤/切片/clone/location 标注全部在 `tokio::spawn_blocking` 中完成，UI 线程只做 generation staleness 检查 + Slint 模型写入 + 缩略图缓存装饰。`virtual_generation` 独立于 `load_generation`，目录切换时自动推进。`apply_virtual_view_result` 先在 `borrow_mut` 内写 state 再 drop 后写 Slint，避免 RefCell 跨线程风险。所有可见 pane 走同一条 slot-aware 虚拟视图管线。
 - **Phase 6**: zoom 派生尺寸/字体 token、tile size、media/text rect 和 group/title/location line 坐标迁到 Rust item-view render plan；slice-local tile x/y 改由 Rust-projected bounds/paint sidecar 提供，避免滑动窗口时重叠条目因局部坐标变化触发 row-data 写入；可见 tile primitive 内联到 `SplitPaneView`，且不再为每个 item 使用 Slint layout 容器
+- **Phase 7**: logical `viewport-x` 继续立即驱动 scrollbar、Rust visible slice、hit-test 和 selection；新增 `paint-viewport-x` 只用于绘制 offset，普通滚轮在当前 virtual slice 覆盖旧/新可见窗口时平滑追随，scrollbar drag、relayout、slice 几何变化、`scroll-max-x` 变化和外部 viewport 写入立即同步，贴近 Dolphin `KItemListSmoothScroller` 的 target/animated offset 分层
 
 **审查发现的后继微优化**：
 - **cleanup-1**: 旧 state-based 虚拟视图更新 helper 和测试路径已删除，虚拟视图测试改为覆盖当前 snapshot 管线
@@ -874,7 +881,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 
 **焦点已实现要点**：
 - **F0**: `route-pane-focus` 加 `if root.focused_pane == slot` 守卫，且额外处理输入框焦点回收
-- **F1**: `pan-horizontal` 和 `changed viewport-x` 中的 `focus_requested()` 已移除；`handle-scroll` 中 Ctrl+滚轮的调用保留
+- **F1**: `pan-horizontal` 和旧 `changed viewport-x` focus 分支中的 `focus_requested()` 已移除；`handle-scroll` 中 Ctrl+滚轮的调用保留
 - **F2**: 新增 `sync_focus_navigation_ui` — 与 `sync_navigation_ui` 相比跳过左栏 8 setter 和 `set_split_view_open`，只读取 focused pane 数据并写入 `sync_focused_ui`；旧 pane 和新 focused pane 的 row data 通过 `sync_pane_slot_ui` 增量刷新，不再执行完整 `sync_pane_slots_ui`
 
 ### 虚拟 Item-View 内部优化

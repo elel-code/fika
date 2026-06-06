@@ -113,6 +113,7 @@ component FilePane inherits Rectangle {
     in property <float> item-view-row-height: 1;
     in property <float> item-view-padding: 14;
     in property <float> item-view-content-width: 1;
+    in property <float> item-view-virtual-slice-start-x: 0;
     in property <float> item-view-virtual-slice-width: 1;
     in property <float> item-view-scroll-max-x: 0;
     in property <float> item-view-media-x: 0;
@@ -335,6 +336,7 @@ component FilePane inherits Rectangle {
                 item-view-row-height: root.item-view-row-height;
                 item-view-padding: root.item-view-padding;
                 item-view-content-width: root.item-view-content-width;
+                item-view-virtual-slice-start-x: root.item-view-virtual-slice-start-x;
                 item-view-virtual-slice-width: root.item-view-virtual-slice-width;
                 item-view-scroll-max-x: root.item-view-scroll-max-x;
                 item-view-media-x: root.item-view-media-x;
@@ -609,6 +611,7 @@ component PaneSlotSurface inherits Rectangle {
         item-view-row-height: root.view.item_view_row_height;
         item-view-padding: root.view.item_view_padding;
         item-view-content-width: root.view.item_view_content_width;
+        item-view-virtual-slice-start-x: root.view.item_view_virtual_slice_start_x;
         item-view-virtual-slice-width: root.view.item_view_virtual_slice_width;
         item-view-scroll-max-x: root.view.item_view_scroll_max_x;
         item-view-media-x: root.view.item_view_media_x;

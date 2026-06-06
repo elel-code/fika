@@ -2685,6 +2685,9 @@ mod tests {
                     "root.live-slot != root.view.slot || root.live-viewport-x != root.view.viewport_x"
                 )
                 && pane_slot_surface.contains("viewport-x <=> root.live-viewport-x;")
+                && pane_slot_surface.contains(
+                    "item-view-virtual-slice-start-x: root.view.item_view_virtual_slice_start_x;"
+                )
                 && !pane_slot_surface.contains("entries: root.view.entries;")
                 && !pane_slot_surface.contains("bounds: root.view.bounds;")
                 && pane_slot_surface.contains("paint: root.view.paint;")
@@ -2931,11 +2934,28 @@ mod tests {
         assert!(split_pane.contains("callback view_changed();"));
         assert!(split_pane.contains("callback focus_requested();"));
         assert!(split_pane.contains(
-            "function set-viewport-x(raw: float) {\n        root.pan-target-viewport-x = root.entry-count == 0"
+            "function set-viewport-x(raw: float, smooth: bool) {\n        root.pan-target-viewport-x = root.entry-count == 0"
         ));
         assert!(split_pane.contains(
-            "function pan-horizontal(delta: length) {\n        root.set-viewport-x(root.viewport-x + delta / 1px);"
+            "function pan-horizontal(delta: length) {\n        root.set-viewport-x(root.viewport-x + delta / 1px, true);"
         ));
+        assert!(
+            split_pane.contains("private property <float> paint-viewport-x: 0;")
+                && split_pane.contains("private property <bool> smooth-scroll-active: false;")
+                && split_pane.contains("function stop-smooth-scroll()")
+                && split_pane.contains(
+                    "let smooth-paint = smooth && root.can-smooth-scroll-to(root.pan-target-viewport-x);"
+                )
+                && split_pane.contains("root.smooth-scroll-active = smooth-paint;")
+                && split_pane.contains("root.paint-viewport-x = root.pan-target-viewport-x;")
+                && split_pane
+                    .contains("function viewport-covered-by-current-slice(viewport: float) -> bool")
+                && split_pane.contains("function can-smooth-scroll-to(target: float) -> bool")
+                && split_pane.contains(
+                    "animate paint-viewport-x { duration: root.smooth-scroll-active ? 120ms : 0ms; easing: ease-out; }"
+                ),
+            "SplitPaneView should keep a Dolphin-style animated paint viewport separate from the logical scrollbar viewport"
+        );
         assert!(!split_pane.contains("root.viewport-offset = -root.viewport-x * 1px;"));
         assert!(
             !split_pane.contains(
@@ -3073,7 +3093,7 @@ mod tests {
                 && !split_pane.contains("bounds;")
                 && !split_pane.contains("ItemViewBounds")
                 && folder_media_loop
-                    .contains("x: root.preview-padding + fallback.x * 1px - root.viewport-x * 1px + root.media-x;")
+                    .contains("x: root.preview-padding + fallback.x * 1px - root.paint-viewport-x * 1px + root.media-x;")
                 && folder_media_loop.contains(
                     "y: root.preview-padding + fallback.y * 1px + root.media-y;"
                 )
@@ -3081,7 +3101,7 @@ mod tests {
                 && folder_media_loop.contains("height: root.media-height;")
                 && folder_media_loop.contains("source: root.item-view-folder-media;")
                 && file_media_loop
-                    .contains("x: root.preview-padding + fallback.x * 1px - root.viewport-x * 1px + root.media-x;")
+                    .contains("x: root.preview-padding + fallback.x * 1px - root.paint-viewport-x * 1px + root.media-x;")
                 && file_media_loop.contains(
                     "y: root.preview-padding + fallback.y * 1px + root.media-y;"
                 )
@@ -3091,7 +3111,7 @@ mod tests {
                 && !folder_media_loop.contains("paint.is_dir")
                 && !file_media_loop.contains("paint.is_dir")
                 && media_overlay_loop
-                    .contains("x: root.preview-padding + media.x * 1px - root.viewport-x * 1px + root.media-x;")
+                    .contains("x: root.preview-padding + media.x * 1px - root.paint-viewport-x * 1px + root.media-x;")
                 && media_overlay_loop.contains(
                     "y: root.preview-padding + media.y * 1px + root.media-y;"
                 )
@@ -3100,7 +3120,7 @@ mod tests {
                 && media_overlay_loop.contains("height: root.media-height;")
                 && media_overlay_loop.contains("source: media.media;")
                 && base_text_loop
-                    .contains("x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.text-x;")
+                    .contains("x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.text-x;")
                 && base_text_loop.contains(
                     "y: root.preview-padding + paint.y * 1px + root.title-y;"
                 )
@@ -3170,6 +3190,7 @@ mod tests {
                 && pane_view_data.contains("paint: [ItemViewPaintEntry]")
                 && pane_view_data.contains("folder_media: [ItemViewFallbackMediaEntry]")
                 && pane_view_data.contains("file_media: [ItemViewFallbackMediaEntry]")
+                && pane_view_data.contains("item_view_virtual_slice_start_x: float")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")
                 && pane_view_data.contains("item_view_text_x: float")
@@ -3197,7 +3218,7 @@ mod tests {
         );
         assert!(
             highlight_loop
-                .contains("x: root.preview-padding + highlight.x * 1px - root.viewport-x * 1px;")
+                .contains("x: root.preview-padding + highlight.x * 1px - root.paint-viewport-x * 1px;")
                 && highlight_loop.contains("y: root.preview-padding + highlight.y * 1px;")
                 && highlight_loop.contains("width: max(1px, highlight.width * 1px);")
                 && highlight_loop.contains("height: root.row-height;")
@@ -3206,7 +3227,7 @@ mod tests {
                     "private property <ItemViewPaintEntry> item-paint: root.paint[root.drag-target-slice-index];"
                 )
                 && drop_target_loop.contains(
-                    "x: root.preview-padding + self.item-paint.x * 1px - root.viewport-x * 1px;"
+                    "x: root.preview-padding + self.item-paint.x * 1px - root.paint-viewport-x * 1px;"
                 )
                 && drop_target_loop.contains("y: root.preview-padding + self.item-paint.y * 1px;")
                 && drop_target_loop.contains("width: max(1px, self.item-paint.width * 1px);")
@@ -3259,13 +3280,15 @@ mod tests {
         );
         assert!(
             split_pane.contains(
-                "function pan-horizontal(delta: length) {\n        root.set-viewport-x(root.viewport-x + delta / 1px);"
+                "function pan-horizontal(delta: length) {\n        root.set-viewport-x(root.viewport-x + delta / 1px, true);"
             ),
             "ordinary pane scrolling should update the viewport before requesting focus"
         );
         assert!(
             split_pane.contains("private property <float> pan-target-viewport-x: 0;")
+                && split_pane.contains("private property <bool> internal-viewport-write: false;")
                 && split_pane.contains("if (root.pan-target-viewport-x != root.viewport-x) {")
+                && split_pane.contains("root.internal-viewport-write = true;")
                 && split_pane.contains("root.view_changed();"),
             "pane scrolling should skip virtual refreshes when wheel input clamps to the current viewport"
         );
@@ -3334,7 +3357,7 @@ mod tests {
             split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
                 && split_pane.contains("for metadata[index] in root.metadata: Text")
                 && metadata_tile_loop
-                    .contains("x: root.preview-padding + metadata.item_x * 1px - root.viewport-x * 1px + metadata.text_x * 1px;")
+                    .contains("x: root.preview-padding + metadata.item_x * 1px - root.paint-viewport-x * 1px + metadata.text_x * 1px;")
                 && metadata_tile_loop.contains(
                     "y: root.preview-padding + metadata.item_y * 1px + metadata.y * 1px;"
                 )
@@ -3360,12 +3383,22 @@ mod tests {
             split_pane.contains("slice-layer := Rectangle")
                 && split_pane.contains("x: 0px;")
                 && split_pane.contains("private property <bool> scrollbar-visible:")
+                && split_pane.contains(
+                    "private property <length> scrollbar-thumb-track-x: root.scroll-max-x <= 0 ? 0px : root.scrollbar-thumb-travel * root.viewport-x / root.scroll-max-x;"
+                )
+                && !split_pane.contains("scrollbar-thumb-travel * root.paint-viewport-x")
                 && split_pane.contains("scrollbar-track := Rectangle")
                 && split_pane.contains("root.set-viewport-x(root.viewport-x-from-scrollbar-thumb")
+                && split_pane.contains(
+                    "root.set-viewport-x(root.viewport-x-from-scrollbar-thumb(self.mouse-x - root.scrollbar-thumb-width / 2), false);"
+                )
                 && !split_pane.contains("viewport-x <=> root.viewport-offset;")
                 && !split_pane.contains("viewport-sync-epsilon")
-                && !split_pane.contains("changed viewport-x =>"),
-            "SplitPaneView should use a self-managed viewport instead of ScrollView/Flickable viewport writeback"
+                && split_pane.contains(
+                    "changed viewport-x => {\n        if (!root.internal-viewport-write) {\n            root.stop-smooth-scroll();\n        }\n    }"
+                )
+                && !split_pane.contains("changed viewport-x => {\n        let clamped ="),
+            "SplitPaneView should use a self-managed viewport instead of ScrollView/Flickable viewport writeback while only syncing paint offset for external viewport writes"
         );
         assert!(
             split_pane.contains("function relayout-visible-slice()")
@@ -3384,6 +3417,9 @@ mod tests {
             "private property <int> rows-per-column: max(1, root.item-view-rows-per-column);"
         ));
         assert!(split_pane.contains(
+            "private property <float> virtual-slice-start-x: max(0, root.item-view-virtual-slice-start-x);"
+        ));
+        assert!(split_pane.contains(
             "private property <length> virtual-slice-width: max(1px, root.item-view-virtual-slice-width * 1px);"
         ));
         assert!(
@@ -3397,6 +3433,7 @@ mod tests {
                 && split_pane.contains(
                     "private property <length> viewport-content-width: max(1px, root.item-view-content-width * 1px);"
                 )
+                && split_pane.contains("in property <float> item-view-virtual-slice-start-x: 0;")
                 && split_pane.contains(
                     "private property <float> scroll-max-x: max(0, root.item-view-scroll-max-x);"
                 )
@@ -3411,7 +3448,7 @@ mod tests {
                 && split_pane.contains("x: 0px;")
                 && split_pane.contains("width: parent.width;")
                 && split_pane.contains(
-                    "x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.text-x;"
+                    "x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.text-x;"
                 )
                 && split_pane.contains("y: root.preview-padding + paint.y * 1px + root.title-y;")
                 && base_text_loop.contains("height: root.title-line-height;")

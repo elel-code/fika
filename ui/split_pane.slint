@@ -17,6 +17,7 @@ export component SplitPaneView inherits Rectangle {
     in property <float> item-view-row-height: 1;
     in property <float> item-view-padding: 14;
     in property <float> item-view-content-width: 1;
+    in property <float> item-view-virtual-slice-start-x: 0;
     in property <float> item-view-virtual-slice-width: 1;
     in property <float> item-view-scroll-max-x: 0;
     in property <float> item-view-media-x: 0;
@@ -77,9 +78,13 @@ export component SplitPaneView inherits Rectangle {
     private property <color> title-color: root.dark ? #edf2f7 : #1f2933;
     private property <int> rows-per-column: max(1, root.item-view-rows-per-column);
     private property <length> viewport-content-width: max(1px, root.item-view-content-width * 1px);
+    private property <float> virtual-slice-start-x: max(0, root.item-view-virtual-slice-start-x);
     private property <length> virtual-slice-width: max(1px, root.item-view-virtual-slice-width * 1px);
     private property <float> scroll-max-x: max(0, root.item-view-scroll-max-x);
     private property <float> pan-target-viewport-x: 0;
+    private property <float> paint-viewport-x: 0;
+    private property <bool> smooth-scroll-active: false;
+    private property <bool> internal-viewport-write: false;
     private property <bool> scrollbar-visible: root.entry-count > 0 && root.scroll-max-x > 0;
     private property <length> scrollbar-height: 10px;
     private property <length> scrollbar-track-margin: 8px;
@@ -100,16 +105,28 @@ export component SplitPaneView inherits Rectangle {
     private property <length> drag-source-abs-x: -1px;
     private property <length> drag-source-abs-y: -1px;
 
-    function set-viewport-x(raw: float) {
+    animate paint-viewport-x { duration: root.smooth-scroll-active ? 120ms : 0ms; easing: ease-out; }
+
+    function set-viewport-x(raw: float, smooth: bool) {
         root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(raw);
         if (root.pan-target-viewport-x != root.viewport-x) {
+            let smooth-paint = smooth && root.can-smooth-scroll-to(root.pan-target-viewport-x);
+            root.internal-viewport-write = true;
             root.viewport-x = root.pan-target-viewport-x;
+            root.internal-viewport-write = false;
+            root.smooth-scroll-active = smooth-paint;
+            root.paint-viewport-x = root.pan-target-viewport-x;
             root.view_changed();
         }
     }
 
     function pan-horizontal(delta: length) {
-        root.set-viewport-x(root.viewport-x + delta / 1px);
+        root.set-viewport-x(root.viewport-x + delta / 1px, true);
+    }
+
+    function stop-smooth-scroll() {
+        root.smooth-scroll-active = false;
+        root.paint-viewport-x = root.viewport-x;
     }
 
     function stable-viewport-x(raw: float) -> float {
@@ -118,6 +135,19 @@ export component SplitPaneView inherits Rectangle {
 
     function viewport-x-from-scrollbar-thumb(raw-thumb-x: length) -> float {
         return root.scroll-max-x <= 0 ? 0 : root.stable-viewport-x(max(0, min(root.scrollbar-thumb-travel / 1px, raw-thumb-x / 1px)) / max(1, root.scrollbar-thumb-travel / 1px) * root.scroll-max-x);
+    }
+
+    function viewport-covered-by-current-slice(viewport: float) -> bool {
+        let visible-start = max(0, viewport - root.item-view-padding);
+        let visible-end = max(visible-start, viewport + root.width / 1px - root.item-view-padding);
+        let slice-start = root.virtual-slice-start-x;
+        let slice-end = root.virtual-slice-start-x + root.item-view-virtual-slice-width;
+        return visible-start >= slice-start - 1 && visible-end <= slice-end + 1;
+    }
+
+    function can-smooth-scroll-to(target: float) -> bool {
+        return root.viewport-covered-by-current-slice(root.paint-viewport-x)
+            && root.viewport-covered-by-current-slice(target);
     }
 
     function scroll-pan-delta(delta-x: length, delta-y: length) -> length {
@@ -169,9 +199,30 @@ export component SplitPaneView inherits Rectangle {
     function relayout-visible-slice() {
         root.pan-target-viewport-x = root.entry-count == 0 ? 0 : root.stable-viewport-x(root.viewport-x);
         if (root.viewport-x != root.pan-target-viewport-x) {
+            root.internal-viewport-write = true;
             root.viewport-x = root.pan-target-viewport-x;
+            root.internal-viewport-write = false;
         }
+        root.stop-smooth-scroll();
         root.view_changed();
+    }
+
+    changed viewport-x => {
+        if (!root.internal-viewport-write) {
+            root.stop-smooth-scroll();
+        }
+    }
+
+    changed scroll-max-x => {
+        root.stop-smooth-scroll();
+    }
+
+    changed item-view-virtual-slice-start-x => {
+        root.stop-smooth-scroll();
+    }
+
+    changed item-view-virtual-slice-width => {
+        root.stop-smooth-scroll();
     }
 
     changed width => {
@@ -262,14 +313,17 @@ export component SplitPaneView inherits Rectangle {
                     let abs-x = self.absolute-position.x + self.mouse-x;
                     let abs-y = self.absolute-position.y + self.mouse-y;
                     if (event.button == PointerEventButton.back && event.kind == PointerEventKind.down) {
+                        root.stop-smooth-scroll();
                         root.clear-drag-source-abs();
                         root.focus_requested();
                         root.navigate_back();
                     } else if (event.button == PointerEventButton.forward && event.kind == PointerEventKind.down) {
+                        root.stop-smooth-scroll();
                         root.clear-drag-source-abs();
                         root.focus_requested();
                         root.navigate_forward();
                     } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                        root.stop-smooth-scroll();
                         root.focus_requested();
                         if (root.item_pressed(abs-x / 1px, abs-y / 1px, event.modifiers.control, event.modifiers.shift)) {
                             root.set-drag-source-abs(abs-x, abs-y);
@@ -296,6 +350,7 @@ export component SplitPaneView inherits Rectangle {
                         root.selection-rect-pending = false;
                         root.clear-drag-source-abs();
                     } else if (root.interactive && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                        root.stop-smooth-scroll();
                         root.clear-drag-source-abs();
                         root.focus_requested();
                         if (!root.item_context_menu(abs-x / 1px, abs-y / 1px, abs-x, abs-y)) {
@@ -306,6 +361,7 @@ export component SplitPaneView inherits Rectangle {
 
                 double-clicked => {
                     if (root.interactive) {
+                        root.stop-smooth-scroll();
                         let abs-x = self.absolute-position.x + self.mouse-x;
                         let abs-y = self.absolute-position.y + self.mouse-y;
                         root.clear-drag-source-abs();
@@ -337,7 +393,7 @@ export component SplitPaneView inherits Rectangle {
                 height: parent.height;
 
                 for highlight[index] in root.highlights: Rectangle {
-                    x: root.preview-padding + highlight.x * 1px - root.viewport-x * 1px;
+                    x: root.preview-padding + highlight.x * 1px - root.paint-viewport-x * 1px;
                     y: root.preview-padding + highlight.y * 1px;
                     width: max(1px, highlight.width * 1px);
                     height: root.row-height;
@@ -350,7 +406,7 @@ export component SplitPaneView inherits Rectangle {
                 if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle {
                     private property <ItemViewPaintEntry> item-paint: root.paint[root.drag-target-slice-index];
 
-                    x: root.preview-padding + self.item-paint.x * 1px - root.viewport-x * 1px;
+                    x: root.preview-padding + self.item-paint.x * 1px - root.paint-viewport-x * 1px;
                     y: root.preview-padding + self.item-paint.y * 1px;
                     width: max(1px, self.item-paint.width * 1px);
                     height: root.row-height;
@@ -361,7 +417,7 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for fallback[index] in root.folder-media: Image {
-                    x: root.preview-padding + fallback.x * 1px - root.viewport-x * 1px + root.media-x;
+                    x: root.preview-padding + fallback.x * 1px - root.paint-viewport-x * 1px + root.media-x;
                     y: root.preview-padding + fallback.y * 1px + root.media-y;
                     width: root.media-width;
                     height: root.media-height;
@@ -370,7 +426,7 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for fallback[index] in root.file-media: Image {
-                    x: root.preview-padding + fallback.x * 1px - root.viewport-x * 1px + root.media-x;
+                    x: root.preview-padding + fallback.x * 1px - root.paint-viewport-x * 1px + root.media-x;
                     y: root.preview-padding + fallback.y * 1px + root.media-y;
                     width: root.media-width;
                     height: root.media-height;
@@ -379,7 +435,7 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for media[index] in root.media: Image {
-                    x: root.preview-padding + media.x * 1px - root.viewport-x * 1px + root.media-x;
+                    x: root.preview-padding + media.x * 1px - root.paint-viewport-x * 1px + root.media-x;
                     y: root.preview-padding + media.y * 1px + root.media-y;
                     width: root.media-width;
                     height: root.media-height;
@@ -388,7 +444,7 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for paint[index] in root.paint: Text {
-                    x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.text-x;
+                    x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.text-x;
                     y: root.preview-padding + paint.y * 1px + root.title-y;
                     width: max(1px, paint.text_width * 1px);
                     height: root.title-line-height;
@@ -400,7 +456,7 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for metadata[index] in root.metadata: Text {
-                    x: root.preview-padding + metadata.item_x * 1px - root.viewport-x * 1px + metadata.text_x * 1px;
+                    x: root.preview-padding + metadata.item_x * 1px - root.paint-viewport-x * 1px + metadata.text_x * 1px;
                     y: root.preview-padding + metadata.item_y * 1px + metadata.y * 1px;
                     width: metadata.text_width * 1px;
                     height: metadata.line_height * 1px;
@@ -448,8 +504,9 @@ export component SplitPaneView inherits Rectangle {
 
                 pointer-event(event) => {
                     if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                        root.stop-smooth-scroll();
                         if (self.mouse-x < root.scrollbar-thumb-track-x || self.mouse-x > root.scrollbar-thumb-track-x + root.scrollbar-thumb-width) {
-                            root.set-viewport-x(root.viewport-x-from-scrollbar-thumb(self.mouse-x - root.scrollbar-thumb-width / 2));
+                            root.set-viewport-x(root.viewport-x-from-scrollbar-thumb(self.mouse-x - root.scrollbar-thumb-width / 2), false);
                         }
                         root.scrollbar-drag-start-viewport-x = root.viewport-x;
                         root.scrollbar-drag-press-x = self.mouse-x;
@@ -461,7 +518,7 @@ export component SplitPaneView inherits Rectangle {
 
                 moved => {
                     if (self.pressed && root.scrollbar-drag-active) {
-                        root.set-viewport-x(root.scrollbar-drag-start-viewport-x + ((self.mouse-x - root.scrollbar-drag-press-x) / 1px) / max(1, root.scrollbar-thumb-travel / 1px) * root.scroll-max-x);
+                        root.set-viewport-x(root.scrollbar-drag-start-viewport-x + ((self.mouse-x - root.scrollbar-drag-press-x) / 1px) / max(1, root.scrollbar-thumb-travel / 1px) * root.scroll-max-x, false);
                     }
                 }
             }

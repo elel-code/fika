@@ -362,6 +362,7 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         item_view_row_height: item_view_metrics.row_height,
         item_view_padding: item_view_metrics.padding,
         item_view_content_width: item_view_metrics.content_width,
+        item_view_virtual_slice_start_x: item_view_metrics.virtual_slice_start_x,
         item_view_virtual_slice_width: item_view_metrics.virtual_slice_width,
         item_view_scroll_max_x: item_view_metrics.scroll_max_x,
         item_view_media_x: item_view_render_geometry.media_x,
@@ -427,6 +428,7 @@ struct ItemViewSlotMetrics {
     row_height: f32,
     padding: f32,
     content_width: f32,
+    virtual_slice_start_x: f32,
     virtual_slice_width: f32,
     scroll_max_x: f32,
 }
@@ -454,6 +456,11 @@ fn pane_slot_item_view_metrics(
     let rows_per_column = compact_item_view.rows_per_column.max(1);
     let virtual_start_column = virtual_start_index / rows_per_column;
     let virtual_start_row = virtual_start_index % rows_per_column;
+    let virtual_slice_start_x = compact_item_view
+        .column_offsets
+        .get(virtual_start_column)
+        .copied()
+        .unwrap_or_default();
     let virtual_slice_width = compact_item_view
         .virtual_slice_width_from_start_row(virtual_slice_count, virtual_start_row);
 
@@ -466,6 +473,7 @@ fn pane_slot_item_view_metrics(
         row_height: compact_item_view.row_height,
         padding: compact_item_view.padding,
         content_width: compact_item_view.content_width,
+        virtual_slice_start_x,
         virtual_slice_width,
         scroll_max_x: compact_item_view.scroll_max_x,
     }
@@ -918,6 +926,7 @@ mod tests {
             item_view_row_height: 80.0,
             item_view_padding: 10.0,
             item_view_content_width: 300.0,
+            item_view_virtual_slice_start_x: 0.0,
             item_view_virtual_slice_width: 240.0,
             item_view_scroll_max_x: 200.0,
             item_view_media_x: 0.0,
