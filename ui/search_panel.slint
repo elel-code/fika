@@ -12,7 +12,7 @@ component SearchPopupSectionLabel inherits Text {
     vertical-alignment: center;
 }
 
-component SearchPopupSegmentButton inherits Rectangle {
+component SearchSelectorOption inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     in property <bool> dark;
@@ -20,9 +20,8 @@ component SearchPopupSegmentButton inherits Rectangle {
 
     height: 30px;
     border-radius: 5px;
-    border-width: root.selected ? 1px : 0px;
-    border-color: root.selected ? (root.dark ? #4a6170 : #c9d7e2) : transparent;
-    background: root.selected ? (root.dark ? #1b2730 : #e8eef4) : (touch.has-hover ? (root.dark ? #1f262d : #f2f5f8) : transparent);
+    border-width: 0px;
+    background: touch.has-hover ? (root.dark ? #1f262d : #f2f5f8) : transparent;
 
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -30,7 +29,19 @@ component SearchPopupSegmentButton inherits Rectangle {
 
     Text {
         x: 8px;
-        width: max(1px, parent.width - 16px);
+        width: 18px;
+        height: parent.height;
+        text: root.selected ? "X" : "";
+        color: root.dark ? #58b4d8 : #2f8dbc;
+        font-size: 11px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 32px;
+        width: max(1px, parent.width - 42px);
         height: parent.height;
         text: root.label;
         color: root.selected ? (root.dark ? #eef6fb : #1f3a4a) : (root.dark ? #dfe7ee : #24303b);
@@ -39,6 +50,59 @@ component SearchPopupSegmentButton inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         overflow: elide;
+    }
+}
+
+component SearchSelectorRow inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <bool> dark;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: root.dark ? #343d46 : #d9e1e8;
+    background: touch.has-hover ? (root.dark ? #1f262d : #f2f5f8) : (root.dark ? #151b20 : #ffffff);
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        x: 10px;
+        width: 112px;
+        height: parent.height;
+        text: root.title;
+        color: root.dark ? #9aa5af : #64748b;
+        font-size: 12px;
+        font-weight: 700;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    Text {
+        x: 130px;
+        width: max(1px, parent.width - 160px);
+        height: parent.height;
+        text: root.value;
+        color: root.dark ? #dfe7ee : #24303b;
+        font-size: 13px;
+        font-weight: 500;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    Text {
+        x: max(10px, parent.width - 24px);
+        width: 14px;
+        height: parent.height;
+        text: "v";
+        color: root.dark ? #aeb8c2 : #64748b;
+        font-size: 11px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 }
 
@@ -167,9 +231,14 @@ export component SearchPanel inherits Rectangle {
     callback submitted(string, bool);
     callback cancel_requested();
     callback filters_changed(int, int, int);
-    callback filter_menu_requested(length, length, int, int, int);
+    callback filter_menu_requested(length, length, int, int, int, int);
     callback close_requested();
     callback focus_changed(bool);
+
+    private property <int> selector-all: 0;
+    private property <int> selector-kind: 1;
+    private property <int> selector-modified: 2;
+    private property <int> selector-size: 3;
 
     function clear-search-state() {
         search-submit-timer.stop();
@@ -207,8 +276,8 @@ export component SearchPanel inherits Rectangle {
         }
     }
 
-    function request-filter-menu(x: length, y: length) {
-        root.filter_menu_requested(x, y, root.kind-filter, root.modified-filter, root.size-filter);
+    function request-filter-menu(x: length, y: length, selector: int) {
+        root.filter_menu_requested(x, y, root.kind-filter, root.modified-filter, root.size-filter, selector);
     }
 
     function schedule-search-submit() {
@@ -331,7 +400,7 @@ export component SearchPanel inherits Rectangle {
                 label: "Filter";
                 dark: root.dark;
                 clicked => {
-                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, root.selector-all);
                 }
             }
 
@@ -390,7 +459,7 @@ export component SearchPanel inherits Rectangle {
                 label: root.kind-label;
                 dark: root.dark;
                 clicked => {
-                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, root.selector-kind);
                 }
                 remove_requested => { root.set-kind-filter(0); }
             }
@@ -401,7 +470,7 @@ export component SearchPanel inherits Rectangle {
                 label: root.modified-label;
                 dark: root.dark;
                 clicked => {
-                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, root.selector-modified);
                 }
                 remove_requested => { root.set-modified-filter(0); }
             }
@@ -412,7 +481,7 @@ export component SearchPanel inherits Rectangle {
                 label: root.size-label;
                 dark: root.dark;
                 clicked => {
-                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height);
+                    root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, root.selector-size);
                 }
                 remove_requested => { root.set-size-filter(0); }
             }
@@ -422,11 +491,21 @@ export component SearchPanel inherits Rectangle {
 
 export component SearchFilterPopup inherits Rectangle {
     in property <bool> dark;
+    in property <int> selector-mode: 0;
     in-out property <int> kind-filter;
     in-out property <int> modified-filter;
     in-out property <int> size-filter;
     callback filters_changed(int, int, int);
+    callback selector_requested(int);
     callback close_requested();
+
+    private property <int> selector-all: 0;
+    private property <int> selector-kind: 1;
+    private property <int> selector-modified: 2;
+    private property <int> selector-size: 3;
+    private property <string> kind-selector-label: root.kind-filter == 1 ? "Folders" : (root.kind-filter == 2 ? "Files" : (root.kind-filter == 3 ? "Images" : "Any Type"));
+    private property <string> modified-selector-label: root.modified-filter == 1 ? "Today" : (root.modified-filter == 2 ? "7 days" : (root.modified-filter == 3 ? "30 days" : "Any Date"));
+    private property <string> size-selector-label: root.size-filter == 1 ? "<1 MB" : (root.size-filter == 2 ? "1-100 MB" : (root.size-filter == 3 ? ">100 MB" : "Any"));
 
     function set-kind-filter(value: int) {
         if (root.kind-filter == value) {
@@ -434,6 +513,9 @@ export component SearchFilterPopup inherits Rectangle {
         }
         root.kind-filter = value;
         root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+        if (root.selector-mode != root.selector-all) {
+            root.close_requested();
+        }
     }
 
     function set-modified-filter(value: int) {
@@ -442,6 +524,9 @@ export component SearchFilterPopup inherits Rectangle {
         }
         root.modified-filter = value;
         root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+        if (root.selector-mode != root.selector-all) {
+            root.close_requested();
+        }
     }
 
     function set-size-filter(value: int) {
@@ -450,6 +535,9 @@ export component SearchFilterPopup inherits Rectangle {
         }
         root.size-filter = value;
         root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+        if (root.selector-mode != root.selector-all) {
+            root.close_requested();
+        }
     }
 
     border-radius: 8px;
@@ -469,133 +557,187 @@ export component SearchFilterPopup inherits Rectangle {
         Text {
             width: parent.width;
             height: 24px;
-            text: "Filter";
+            text: root.selector-mode == root.selector-kind ? "File Type" : (root.selector-mode == root.selector-modified ? "Modified since" : (root.selector-mode == root.selector-size ? "Size" : "Filter"));
             color: root.dark ? #dfe7ee : #24303b;
             font-size: 13px;
             font-weight: 800;
             vertical-alignment: center;
         }
 
-        SearchPopupSectionLabel {
+        if (root.selector-mode == root.selector-all): Rectangle {
             width: parent.width;
-            label: "File Type:";
-            dark: root.dark;
-        }
+            height: 110px;
+            background: transparent;
 
-        HorizontalLayout {
-            width: parent.width;
-            height: 30px;
-            spacing: 4px;
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 7px;
 
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "Any Type";
-                selected: root.kind-filter == 0;
-                dark: root.dark;
-                clicked => { root.set-kind-filter(0); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "Folders";
-                selected: root.kind-filter == 1;
-                dark: root.dark;
-                clicked => { root.set-kind-filter(1); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "Files";
-                selected: root.kind-filter == 2;
-                dark: root.dark;
-                clicked => { root.set-kind-filter(2); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "Images";
-                selected: root.kind-filter == 3;
-                dark: root.dark;
-                clicked => { root.set-kind-filter(3); }
+                SearchSelectorRow {
+                    width: parent.width;
+                    title: "File Type:";
+                    value: root.kind-selector-label;
+                    dark: root.dark;
+                    clicked => { root.selector_requested(root.selector-kind); }
+                }
+
+                SearchSelectorRow {
+                    width: parent.width;
+                    title: "Modified since:";
+                    value: root.modified-selector-label;
+                    dark: root.dark;
+                    clicked => { root.selector_requested(root.selector-modified); }
+                }
+
+                SearchSelectorRow {
+                    width: parent.width;
+                    title: "Size:";
+                    value: root.size-selector-label;
+                    dark: root.dark;
+                    clicked => { root.selector_requested(root.selector-size); }
+                }
             }
         }
 
-        SearchPopupSectionLabel {
+        if (root.selector-mode == root.selector-kind): Rectangle {
             width: parent.width;
-            label: "Modified since:";
-            dark: root.dark;
+            height: 152px;
+            background: transparent;
+
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 3px;
+
+                SearchPopupSectionLabel {
+                    width: parent.width;
+                    label: "File Type:";
+                    dark: root.dark;
+                }
+
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "Any Type";
+                    selected: root.kind-filter == 0;
+                    dark: root.dark;
+                    clicked => { root.set-kind-filter(0); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "Folders";
+                    selected: root.kind-filter == 1;
+                    dark: root.dark;
+                    clicked => { root.set-kind-filter(1); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "Files";
+                    selected: root.kind-filter == 2;
+                    dark: root.dark;
+                    clicked => { root.set-kind-filter(2); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "Images";
+                    selected: root.kind-filter == 3;
+                    dark: root.dark;
+                    clicked => { root.set-kind-filter(3); }
+                }
+            }
         }
 
-        HorizontalLayout {
+        if (root.selector-mode == root.selector-modified): Rectangle {
             width: parent.width;
-            height: 30px;
-            spacing: 4px;
+            height: 152px;
+            background: transparent;
 
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "Any Date";
-                selected: root.modified-filter == 0;
-                dark: root.dark;
-                clicked => { root.set-modified-filter(0); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "Today";
-                selected: root.modified-filter == 1;
-                dark: root.dark;
-                clicked => { root.set-modified-filter(1); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "7 days";
-                selected: root.modified-filter == 2;
-                dark: root.dark;
-                clicked => { root.set-modified-filter(2); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "30 days";
-                selected: root.modified-filter == 3;
-                dark: root.dark;
-                clicked => { root.set-modified-filter(3); }
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 3px;
+
+                SearchPopupSectionLabel {
+                    width: parent.width;
+                    label: "Modified since:";
+                    dark: root.dark;
+                }
+
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "Any Date";
+                    selected: root.modified-filter == 0;
+                    dark: root.dark;
+                    clicked => { root.set-modified-filter(0); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "Today";
+                    selected: root.modified-filter == 1;
+                    dark: root.dark;
+                    clicked => { root.set-modified-filter(1); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "7 days";
+                    selected: root.modified-filter == 2;
+                    dark: root.dark;
+                    clicked => { root.set-modified-filter(2); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "30 days";
+                    selected: root.modified-filter == 3;
+                    dark: root.dark;
+                    clicked => { root.set-modified-filter(3); }
+                }
             }
         }
 
-        SearchPopupSectionLabel {
+        if (root.selector-mode == root.selector-size): Rectangle {
             width: parent.width;
-            label: "Size:";
-            dark: root.dark;
-        }
+            height: 152px;
+            background: transparent;
 
-        HorizontalLayout {
-            width: parent.width;
-            height: 30px;
-            spacing: 4px;
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 3px;
 
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "Any";
-                selected: root.size-filter == 0;
-                dark: root.dark;
-                clicked => { root.set-size-filter(0); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "<1 MB";
-                selected: root.size-filter == 1;
-                dark: root.dark;
-                clicked => { root.set-size-filter(1); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: "1-100 MB";
-                selected: root.size-filter == 2;
-                dark: root.dark;
-                clicked => { root.set-size-filter(2); }
-            }
-            SearchPopupSegmentButton {
-                horizontal-stretch: 1;
-                label: ">100 MB";
-                selected: root.size-filter == 3;
-                dark: root.dark;
-                clicked => { root.set-size-filter(3); }
+                SearchPopupSectionLabel {
+                    width: parent.width;
+                    label: "Size:";
+                    dark: root.dark;
+                }
+
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "Any";
+                    selected: root.size-filter == 0;
+                    dark: root.dark;
+                    clicked => { root.set-size-filter(0); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "<1 MB";
+                    selected: root.size-filter == 1;
+                    dark: root.dark;
+                    clicked => { root.set-size-filter(1); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: "1-100 MB";
+                    selected: root.size-filter == 2;
+                    dark: root.dark;
+                    clicked => { root.set-size-filter(2); }
+                }
+                SearchSelectorOption {
+                    width: parent.width;
+                    label: ">100 MB";
+                    selected: root.size-filter == 3;
+                    dark: root.dark;
+                    clicked => { root.set-size-filter(3); }
+                }
             }
         }
     }

@@ -72,7 +72,7 @@ Rectangle viewport shell (clip: true)
 | 自管 viewport clamp/round | `split_pane.slint` | 避免 ScrollView/Flickable viewport 回写和子像素漂移触发同步 |
 | Dolphin-style smooth paint viewport | `split_pane.slint` / `split_view.rs` | 滚轮滚动时 scrollbar/Rust visible slice 立即跟随 logical `viewport-x`，绘制层用 `paint-viewport-x` 平滑追随；只有当前 virtual slice 覆盖旧/新可见窗口时才动画，scrollbar drag、resize clamp 和外部 viewport 恢复立即同步 |
 | 普通滚轮不重复请求焦点 | `split_pane.slint:78` | 减少 FFI 调用 |
-| Dolphin-style pane search selectors | `search_panel.slint` / `app.slint` | 搜索过滤不再展开成 pane 内过滤框；输入使用 500ms delayed commit；`Filter` 和 active chip 打开同一个 Type/Modified/Size 单页 selector popup，popup anchored 到按钮/chip 且不改变主视图高度 |
+| Dolphin-style pane search selectors | `search_panel.slint` / `app.slint` | 搜索过滤不再展开成 pane 内过滤框；输入使用 500ms delayed commit；`Filter` 打开 Type/Modified/Size selector rows，active chip 只打开自己的 selector，popup anchored 到按钮/chip 且不改变主视图高度 |
 | 自管滚动条消费 Rust item-view layout metrics | `split_view.rs` / `geometry.rs` / `split_pane.slint` | `rows_per_column`、content width、scroll max 和 virtual slice 起点/宽度都来自同一 Rust layouter |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
 | Rust item-view hit-test | `item_view.rs` | click/activation/context/DnD/drop target 命中不再散落在 Slint tile 或 transfer 几何代码中 |

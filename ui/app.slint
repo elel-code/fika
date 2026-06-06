@@ -23,7 +23,7 @@ export global PaneRouting {
     callback search-submitted(int, string, bool);
     callback cancel-search(int);
     callback search-filters-changed(int, int, int, int);
-    callback search-filter-menu-requested(int, length, length, int, int, int);
+    callback search-filter-menu-requested(int, length, length, int, int, int, int);
     callback search-close-requested(int);
     callback search-focus-changed(int, bool);
     callback view-changed(int);
@@ -161,7 +161,7 @@ component FilePane inherits Rectangle {
     callback search_submitted(int, string, bool);
     callback cancel_search(int);
     callback search_filters_changed(int, int, int, int);
-    callback search_filter_menu_requested(int, length, length, int, int, int);
+    callback search_filter_menu_requested(int, length, length, int, int, int, int);
     callback search_close_requested(int);
     callback search_focus_changed(int, bool);
     callback viewport_changed(int, float);
@@ -246,8 +246,8 @@ component FilePane inherits Rectangle {
             filters_changed(kind, modified, size) => {
                 root.search_filters_changed(root.pane-slot, kind, modified, size);
             }
-            filter_menu_requested(x, y, kind, modified, size) => {
-                root.search_filter_menu_requested(root.pane-slot, x, y, kind, modified, size);
+            filter_menu_requested(x, y, kind, modified, size, selector) => {
+                root.search_filter_menu_requested(root.pane-slot, x, y, kind, modified, size, selector);
             }
             close_requested => { root.search_close_requested(root.pane-slot); }
             focus_changed(focused) => { root.search_focus_changed(root.pane-slot, focused); }
@@ -441,8 +441,8 @@ component PaneSlot inherits FilePane {
     search_filters_changed(slot, kind, modified, size) => {
         PaneRouting.search-filters-changed(slot, kind, modified, size);
     }
-    search_filter_menu_requested(slot, x, y, kind, modified, size) => {
-        PaneRouting.search-filter-menu-requested(slot, x, y, kind, modified, size);
+    search_filter_menu_requested(slot, x, y, kind, modified, size, selector) => {
+        PaneRouting.search-filter-menu-requested(slot, x, y, kind, modified, size, selector);
     }
     search_close_requested(slot) => { PaneRouting.search-close-requested(slot); }
     search_focus_changed(slot, focused) => { PaneRouting.search-focus-changed(slot, focused); }
@@ -814,6 +814,7 @@ export component AppWindow inherits Window {
     private property <int> search-filter-menu-kind-filter: 0;
     private property <int> search-filter-menu-modified-filter: 0;
     private property <int> search-filter-menu-size-filter: 0;
+    private property <int> search-filter-menu-selector: 0;
     private property <bool> custom-open-with-open: false;
     private property <bool> service-policy-open: false;
     in property <[ContextServiceAction]> context_service_actions;
@@ -1159,7 +1160,7 @@ export component AppWindow inherits Window {
         root.search_filters_changed(slot, kind, modified, size);
     }
 
-    public function route-pane-search-filter-menu-requested(slot: int, x: length, y: length, kind: int, modified: int, size: int) {
+    public function route-pane-search-filter-menu-requested(slot: int, x: length, y: length, kind: int, modified: int, size: int, selector: int) {
         root.route-pane-focus(slot);
         root.close-context-popups();
         root.close-chooser-popups();
@@ -1169,6 +1170,9 @@ export component AppWindow inherits Window {
         root.search-filter-menu-kind-filter = kind;
         root.search-filter-menu-modified-filter = modified;
         root.search-filter-menu-size-filter = size;
+        root.search-filter-menu-selector = selector;
+        root.search-filter-menu-width = selector == 0 ? 360px : 250px;
+        root.search-filter-menu-height = selector == 0 ? 170px : 205px;
         root.search-filter-menu-open = true;
     }
 
@@ -2264,11 +2268,16 @@ export component AppWindow inherits Window {
         width: root.search-filter-menu-width;
         height: root.search-filter-menu-height;
         dark: root.dark_mode;
+        selector-mode: root.search-filter-menu-selector;
         kind-filter <=> root.search-filter-menu-kind-filter;
         modified-filter <=> root.search-filter-menu-modified-filter;
         size-filter <=> root.search-filter-menu-size-filter;
         filters_changed(kind, modified, size) => {
             root.search_filters_changed(root.search-filter-menu-slot, kind, modified, size);
+        }
+        selector_requested(selector) => {
+            root.search-filter-menu-selector = selector;
+            root.search-filter-menu-height = 205px;
         }
         close_requested => {
             root.search-filter-menu-open = false;

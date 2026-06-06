@@ -316,8 +316,8 @@
   - Acceptance: search can filter by broad type, modified age, and size without parsing display strings.
   - Current: the pane-local search strip follows Dolphin's `Search::Bar` structure more closely: the first row is search input + fixed `Filter` popup button + close/cancel controls, and the second row keeps `Here` / `Everywhere` on the left while active filter chips are pushed to the right like Dolphin's `BarSecondRowFlowLayout`.
   - Current: search text edits are submitted through a 500ms single-shot timer, while Return submits immediately, matching Dolphin's delayed `slotSearchTermEdited()` / `commitCurrentConfiguration()` flow.
-  - Current: the `Filter` popup is slot-routed and anchored near the button/chip; it is now a single-page widget-menu-style selector panel for Type / Modified / Size, not a pane-expanding strip or target-routed subpage.
-  - Current: active Type / Modified / Size filters appear as removable chips in the second row; clicking the chip body opens the shared selector panel, while the trailing remove control clears only that restriction.
+  - Current: the `Filter` popup is slot-routed and anchored near the button/chip; the Filter button opens widget-menu-style selector rows for Type / Modified / Size, not a pane-expanding strip.
+  - Current: active Type / Modified / Size filters appear as removable selector chips in the second row; clicking the chip body opens only that chip's selector, while the trailing remove control clears only that restriction.
   - Current: filters apply to current-directory filtering and recursive search results.
   - Current: when filters hide some recursive search matches, the completion status explicitly says the visible count is after filters.
   - Current: search is opened from the pane-local `PathBar` search button, so split panes keep independent search UI and state without a main-pane concept.
