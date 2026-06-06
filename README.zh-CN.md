@@ -3,9 +3,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://blog.rust-lang.org/2024/02/08/Rust-1.76.0.html)
 
-一个面向现代 Wayland 桌面的轻量文件管理器原型，使用 Rust + [Slint](https://slint.dev) 构建。
+一个面向现代 Wayland 桌面的轻量文件管理器，使用 Rust + [Slint](https://slint.dev) 构建。
 
-**当前状态：** 原型阶段，聚焦于小而可用的核心功能集。部分高级特性仍在开发中（见 [docs/TODO.md](docs/TODO.md)）。
+**当前状态：** 活跃开发阶段，功能集持续增长中。部分高级特性仍在开发中（见 [docs/TODO.md](docs/TODO.md)）。
 
 > [English version](README.md)
 
@@ -16,10 +16,17 @@
 - 浏览本地目录，支持面包屑导航和路径直接输入
 - 目录历史：前进/后退，鼠标侧键导航
 - 左侧 Places 侧栏（内置项 + 用户自定义，支持拖拽排序、重命名、新窗口打开）
-- Devices 侧栏：通过 UDisks2 发现存储设备，支持挂载/卸载/弹出
+- Devices 侧栏：通过 UDisks2 发现存储设备，支持挂载/卸载/弹出，包含挂起和错误状态
 - 防抖动目录监控（inotify），自动刷新
 - 轻量虚拟化主视图：横向列优先、Dolphin 风格的 compact 布局，大目录下保持低资源占用
-- Split View 分屏：同时预览两个目录，可交换焦点
+- Split View 分屏：同时预览两个目录，可交换焦点、独立滚动、可拖拽调整分栏比例
+
+### 搜索
+
+- 实时递归搜索，支持进度报告和取消
+- 文件类型过滤器：文件夹、文档、图片、音频、视频
+- 搜索结果按相对位置分组，按路径排序
+- 搜索栏带可展开的过滤芯片，使用作用域 FlexboxLayout 实现自适应换行
 
 ### 文件操作
 
@@ -28,20 +35,43 @@
 - 内部拖放传输菜单（移动/复制/链接）
 - 框选与多选
 - 剪贴板集成（Ctrl+C/X/V）
+- 右键菜单创建新文件夹 / 新文件
+- 原地复制、复制路径、重命名
+- 从 Wayland 剪贴板粘贴图片、视频和文本内容为文件
+
+### 回收站管理
+
+- 移至回收站（Delete 键），含每文件 `.trashinfo` 元数据
+- 从回收站还原：从 `.trashinfo` 读取原始位置
+- 永久删除（仅在回收站中可用，需确认）
+- 清空回收站（含确认对话框）
+- 回收站视图显示原始位置和删除日期，按最新删除排序
+- 回收站目录监控：同时监视 `files/` 和 `info/` 目录的外部变更
 
 ### UI / UX
 
 - 明暗主题切换
-- 可调整大小的侧栏和分屏比例
+- 可调整大小的侧栏和分屏比例（持久化保存）
 - 受保护最小窗口尺寸，防止内容溢出
 - COSMIC 风格的 shell 表面分层，Dolphin 风格的 compact 主栏文件视图
 - Ctrl+滚轮缩放图标
-- 右键上下文菜单（含用户安装的服务菜单 `.desktop` 项）
+- 右键上下文菜单：文件、文件夹、空白区域和 Places 项
 
 ### 桌面集成
 
 - 内置 MIME 类型推断和默认应用程序启动（不依赖 `xdg-open`）
-- Open With 菜单，从已安装 `.desktop` 文件解析
+- Open With 菜单：默认应用、已添加关联、已缓存关联
+- Open With 子菜单和应用选择器对话框（"Other Applications…"）
+- 设置默认应用程序（写入用户级 `mimeapps.list`）
+- 通过 systemd 用户 scope 启动应用程序，追踪进程生命周期
+
+### 服务菜单
+
+- 右键菜单加载用户安装的服务菜单 `.desktop` 项
+- 发现 Fika 自有 `fika/servicemenus` 和 KDE/Dolphin `kio/servicemenus` 目录
+- MIME 类型和多选过滤
+- 无 Shell 的 Exec 字段代码展开（`%f`、`%F`、`%u`、`%U`、`%d`、`%n`）
+- 子菜单分组和顶层动作排序
 
 ### 缩略图
 
@@ -49,6 +79,7 @@
 - 内存 LRU 缓存 + 磁盘缓存（符合 [freedesktop.org Thumbnail Managing Standard](https://specifications.freedesktop.org/thumbnail-spec/)）
 - 外部 thumbnailer 支持：自动发现 XDG `.thumbnailer` 条目，处理 PDF / SVG / AVIF 等格式
 - 失败缓存：避免坏图或非支持格式重复排队解码
+- 可见优先调度：视口内缩略图优先于屏幕外项目生成
 
 ### 文件选择器 / Portal
 
@@ -61,7 +92,32 @@
 - GUI 进程意图非特权化
 - 受保护操作通过独立的系统总线 D-Bus helper (`fika-privileged-helper`) 执行
 - 按方法进行 Polkit 鉴权
-- 外部编辑器受保护文件编辑：临时副本 + 自动写回
+- 受保护外部编辑器：临时副本 + 通过 systemd unit 生命周期监控自动写回
+
+### 状态持久化
+
+- 窗口尺寸、侧栏宽度、分屏比例
+- 暗色模式偏好
+- 图标缩放级别
+- 上次打开的目录
+- 设置存储在 `$XDG_CONFIG_HOME/fika/settings.tsv`
+
+### Dolphin 虚拟 Pane 架构对齐
+
+Fika 主视图以 Dolphin 的五层 `KItemListView` 架构
+（`kfileitemmodel → kitemlistviewlayouter → kitemlistview → kitemlistcontroller → kstandarditemlistwidget`）为目标。
+当前对齐状态：
+
+| 层级 | Dolphin 对应 | 状态 |
+|------|-------------|------|
+| **平滑滚动器** | `kitemlistsmoothscroller` | ❌ 未开始 — viewport 直接跳变，无插值动画 |
+| **多态 Layouter** | `kitemlistviewlayouter` | 🟡 仅 Compact — 无 trait、无逻辑→物理转置、无 Details/Icons |
+| **自渲染 Tile** | `kstandarditemlistwidget` | 🟡 Slint primitive 已深度优化（sidecar/sparse-overlay）；`SharedPixelBuffer` 自渲染未开始 |
+| **Model Trait** | `kfileitemmodel` | ❌ 未开始 — 具体 `FileEntry`/`PaneEntrySnapshot` 类型，无 trait 抽象 |
+| **Controller 总线** | `kitemlistcontroller` | 🟡 `ItemViewInputState` 已抽到 `item_view.rs`；无信号总线，仍耦合 `AppState` |
+| **两阶段刷新** | `kitemlistview` | 🟡 uncached 导航保留旧视图已实现；无正式 pending→commit 状态机 |
+
+详见 [docs/TODO.md](docs/TODO.md) "Spike Dolphin-style self-managed main viewport" 项。
 
 ## 前置条件
 
@@ -137,7 +193,7 @@ fika [选项] [起始目录]
 | `Ctrl + A` | 全选可见文件 |
 | `Ctrl + F` | 打开搜索 |
 | `Ctrl + Z` | 撤销上次文件操作 |
-| `Delete` | 将选中文件移至回收站 |
+| `Delete` | 将选中文件移至回收站（回收站内禁用） |
 | `F5` | 刷新当前目录 |
 | `Escape` | 清除选择 / 关闭弹窗 / 退出搜索 |
 | `Ctrl + 滚轮` | 缩放图标大小 |
@@ -209,11 +265,13 @@ src/
 ├── lib.rs           库根
 ├── config/          CLI 参数解析、路径、设置持久化、服务菜单策略
 ├── app/             UI 线程共享状态、异步事件桥接、目录加载、DnD、
-│                    Places、主视图虚拟化、选择、缩略图流水线、分屏
-├── desktop/         内置 MIME/默认应用解析、Open With、终端启动、
-│                    Wayland 剪贴板、图标查找
-├── fs/              文件条目、文件操作、设备发现、Places 后端、
-│                    搜索、缩略图、特权操作
+│                    Places、主视图虚拟化、选择、缩略图流水线、分屏、
+│                    搜索 UI、上下文菜单路由、文件选择器和设备监控
+├── desktop/         内置 MIME/默认应用解析、Open With、应用选择器、
+│                    Wayland 剪贴板、图标查找、服务菜单发现与启动、
+│                    systemd 用户 scope 集成
+├── fs/              文件条目、文件操作、设备发现（UDisks2 + mountinfo）、
+│                    Places 后端、递归搜索、缩略图、特权操作
 ├── support/         选择器输出、世代计数器
 └── bin/
     ├── fika-privileged-helper.rs   系统总线 D-Bus 特权 helper

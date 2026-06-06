@@ -3,11 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://blog.rust-lang.org/2024/02/08/Rust-1.76.0.html)
 
-A lightweight file manager prototype for modern Wayland desktops, built with
+A lightweight file manager for modern Wayland desktops, built with
 Rust + [Slint](https://slint.dev).
 
-**Status:** Prototype — focusing on a small, usable core. Some advanced features
-are still in progress (see [docs/TODO.md](docs/TODO.md)).
+**Status:** Active development — a small, usable core with a growing feature set.
+Some advanced features are still in progress (see [docs/TODO.md](docs/TODO.md)).
 
 > [中文版 / Chinese](README.zh-CN.md)
 
@@ -18,10 +18,17 @@ are still in progress (see [docs/TODO.md](docs/TODO.md)).
 - Browse local directories with breadcrumb navigation and direct path entry
 - Directory history: back/forward, mouse side-button navigation
 - Places sidebar (built-in + user-defined, with drag-to-reorder, rename, open in new window)
-- Devices sidebar: storage device discovery via UDisks2 with mount/unmount/eject
+- Devices sidebar: storage device discovery via UDisks2 with mount/unmount/eject, pending and error states
 - Debounced directory monitoring (inotify) with auto-refresh
 - Lightweight virtualized main view: horizontal column-first, Dolphin-style compact layout that stays responsive in large directories
-- Split View: preview two directories side by side, swappable focus
+- Split View: preview two directories side by side, swappable focus, independent scrolling, resizable divider
+
+### Search
+
+- Real-time recursive search with progress reporting and cancel
+- File type filters: folders, documents, images, audio, video
+- Results grouped by relative location, sorted by path
+- Search strip with expandable filter chips, using scoped FlexboxLayout for responsive wrapping
 
 ### File Operations
 
@@ -30,20 +37,43 @@ are still in progress (see [docs/TODO.md](docs/TODO.md)).
 - Internal drag-and-drop transfer menu (move / copy / link)
 - Rubber-band and multi-selection
 - Clipboard integration (Ctrl+C/X/V)
+- Create New Folder / New File from context menu
+- Duplicate Here, Copy Location, Rename
+- Paste image, video, and text content from the Wayland clipboard as files
+
+### Trash Management
+
+- Move to Trash (Delete key) with per-file `.trashinfo` metadata
+- Restore From Trash: reads original location from `.trashinfo`
+- Delete Permanently (Trash context only, with confirmation)
+- Empty Trash with confirmation dialog
+- Trash view shows original location and deletion date, sorted by newest deletion first
+- Trash directory monitoring: watches both `files/` and `info/` for external changes
 
 ### UI / UX
 
 - Light and dark theme switching
-- Resizable sidebar and split pane ratio
+- Resizable sidebar and split pane ratio (persisted)
 - Guarded minimum window dimensions to prevent content overflow
 - COSMIC-style shell surface layering, Dolphin-style compact main file view
 - Ctrl+scroll to zoom icon size
-- Right-click context menus including user-installed service menu `.desktop` entries
+- Right-click context menus: file, folder, blank-area, and Places
 
 ### Desktop Integration
 
 - Built-in MIME type detection and default application launching (no `xdg-open` dependency)
-- Open With menu, resolved from installed `.desktop` files
+- Open With menu: default app, added associations, cached associations
+- Open With submenu and application chooser dialog ("Other Applications…")
+- Set default application (writes user-level `mimeapps.list`)
+- Application launching through systemd user scopes for process lifecycle tracking
+
+### Service Menu
+
+- User-installed service menu `.desktop` entries on right-click
+- Discovers Fika-owned `fika/servicemenus` and KDE/Dolphin `kio/servicemenus` directories
+- MIME-type and multi-selection filtering
+- Shell-free Exec field code expansion (`%f`, `%F`, `%u`, `%U`, `%d`, `%n`)
+- Submenu grouping and top-level action sorting
 
 ### Thumbnails
 
@@ -51,6 +81,7 @@ are still in progress (see [docs/TODO.md](docs/TODO.md)).
 - In-memory LRU cache + disk cache (conforms to the [freedesktop.org Thumbnail Managing Standard](https://specifications.freedesktop.org/thumbnail-spec/))
 - External thumbnailer support: auto-discovers XDG `.thumbnailer` entries for PDF / SVG / AVIF and more
 - Failure cache: avoids re-queuing broken or unsupported images on repeated scrolls
+- Visible-first scheduling: viewport thumbnails generated before offscreen items
 
 ### File Chooser / Portal
 
@@ -63,7 +94,32 @@ are still in progress (see [docs/TODO.md](docs/TODO.md)).
 - GUI process is intentionally non-privileged
 - Protected operations go through a separate system-bus D-Bus helper (`fika-privileged-helper`)
 - Per-method Polkit authorization
-- Protected external editor: scratch copy + automatic writeback
+- Protected external editor: scratch copy + automatic writeback via systemd unit lifecycle monitoring
+
+### State Persistence
+
+- Window size, sidebar width, split pane ratio
+- Dark mode preference
+- Icon zoom level
+- Last opened directory
+- Settings stored in `$XDG_CONFIG_HOME/fika/settings.tsv`
+
+### Dolphin Virtual Pane Architecture Alignment
+
+Fika's main view targets Dolphin's five-layer `KItemListView` architecture
+(`kfileitemmodel → kitemlistviewlayouter → kitemlistview → kitemlistcontroller → kstandarditemlistwidget`).
+Current alignment status:
+
+| Layer | Dolphin Equivalent | Status |
+|-------|-------------------|--------|
+| **Smooth Scroller** | `kitemlistsmoothscroller` | ❌ Not started — viewport jumps directly, no interpolation |
+| **Polymorphic Layouter** | `kitemlistviewlayouter` | 🟡 Compact-only — no trait, no logical→physical transpose, no Details/Icons |
+| **Self-rendered Tiles** | `kstandarditemlistwidget` | 🟡 Slint primitives optimized with sidecar/sparse-overlay models; `SharedPixelBuffer` self-rendering not started |
+| **Model Trait** | `kfileitemmodel` | ❌ Not started — concrete `FileEntry`/`PaneEntrySnapshot` types, no trait abstraction |
+| **Controller Bus** | `kitemlistcontroller` | 🟡 `ItemViewInputState` extracted to `item_view.rs`; no signal bus, still coupled to `AppState` |
+| **Two-phase Refresh** | `kitemlistview` | 🟡 Old view preserved on uncached navigation; no formal pending→commit state machine |
+
+See [docs/TODO.md](docs/TODO.md) § "Spike Dolphin-style self-managed main viewport" for details.
 
 ## Prerequisites
 
@@ -139,7 +195,7 @@ In chooser mode, select an item and press **Choose** to print the path to stdout
 | `Ctrl + A` | Select all visible files |
 | `Ctrl + F` | Open search |
 | `Ctrl + Z` | Undo last file operation |
-| `Delete` | Move selected files to trash |
+| `Delete` | Move selected files to trash (disabled inside Trash) |
 | `F5` | Refresh current directory |
 | `Escape` | Clear selection / close popups / exit search |
 | `Ctrl + Scroll` | Zoom icon size |
@@ -225,12 +281,15 @@ src/
 ├── app/             UI-thread shared state, async event bridge,
 │                    directory loading, DnD, Places, main-view
 │                    virtualization, selection, thumbnail pipeline,
-│                    split view
+│                    split view, search UI, context menu routing,
+│                    chooser and device monitor
 ├── desktop/         Built-in MIME / default-app resolution,
-│                    Open With, terminal launching, Wayland clipboard,
-│                    icon lookup
-├── fs/              File entries, file operations, device discovery,
-│                    Places backend, search, thumbnails, privilege
+│                    Open With, application chooser, Wayland clipboard,
+│                    icon lookup, service menu discovery and launch,
+│                    systemd user scope integration
+├── fs/              File entries, file operations, device discovery
+│                    (UDisks2 + mountinfo), Places backend, recursive
+│                    search, thumbnails, privilege escalation
 ├── support/         Chooser output, generation counters
 └── bin/
     ├── fika-privileged-helper.rs   System-bus D-Bus privileged helper
