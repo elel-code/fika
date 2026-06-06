@@ -353,6 +353,9 @@ fn main() -> Result<(), slint::PlatformError> {
             let ui_weak = ui.as_weak();
             let state = Rc::clone(&state);
             dnd_api.on_make_drag_at(move |slot, x, y| -> DataTransfer {
+                if x <= -2.0 || y <= -2.0 {
+                    return DataTransfer::default();
+                }
                 if x < 0.0 || y < 0.0 {
                     return drag_transfer(FikaDragInfo::Pending);
                 }
@@ -6510,6 +6513,22 @@ mod tests {
         assert!(
             !source.contains(nested_slot_lookup),
             "focused slot lookup must be stored before update_selection_ui_for_slot so the RefCell borrow ends before selection sync mutably borrows state"
+        );
+    }
+
+    #[test]
+    fn blank_drag_sentinel_returns_empty_transfer_before_pending_drag_probe() {
+        let source = include_str!("main.rs");
+        let body = source
+            .split_once("dnd_api.on_make_drag_at(move |slot, x, y| -> DataTransfer {")
+            .and_then(|(_, rest)| rest.split_once("let Some(ui) = ui_weak.upgrade() else"))
+            .map(|(body, _)| body)
+            .expect("make-drag-at body should be present");
+
+        assert!(
+            body.contains("if x <= -2.0 || y <= -2.0 {\n                    return DataTransfer::default();\n                }")
+                && body.contains("if x < 0.0 || y < 0.0 {\n                    return drag_transfer(FikaDragInfo::Pending);\n                }"),
+            "blank-area rectangle selection should suppress DragArea with an empty transfer while preserving the pending press probe for item drags"
         );
     }
 

@@ -145,6 +145,11 @@ export component SplitPaneView inherits Rectangle {
         root.drag-source-abs-y = -1px;
     }
 
+    function suppress-drag-source-abs() {
+        root.drag-source-abs-x = -2px;
+        root.drag-source-abs-y = -2px;
+    }
+
     function begin-blank-press(mouse-x: length, mouse-y: length, toggle: bool) {
         root.selection-rect-pending = true;
         root.selection-rect-active = false;
@@ -239,7 +244,7 @@ export component SplitPaneView inherits Rectangle {
         item-drag-area := DragArea {
             width: parent.width;
             height: parent.height;
-            enabled: root.interactive && !root.selection-rect-pending;
+            enabled: root.interactive;
             data: root.make_drag_data_at(root.drag-source-abs-x / 1px, root.drag-source-abs-y / 1px);
 
             input-touch := TouchArea {
@@ -270,7 +275,7 @@ export component SplitPaneView inherits Rectangle {
                             root.selection-rect-active = false;
                             root.selection-rect-pending = false;
                         } else {
-                            root.clear-drag-source-abs();
+                            root.suppress-drag-source-abs();
                             root.begin-blank-press(self.mouse-x, self.mouse-y, event.modifiers.control);
                         }
                     } else if (root.interactive && event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
