@@ -295,9 +295,14 @@ fn prepare_transfer_menu(
         set_status(ui, state, reason);
         ui.set_transfer_source_path("".into());
         ui.set_transfer_target_path("".into());
+        ui.set_transfer_move_available(true);
         return false;
     }
 
+    ui.set_transfer_move_available(move_transfer_available(
+        Path::new(source_path),
+        Path::new(target_path),
+    ));
     ui.set_transfer_source_path(source_path.into());
     ui.set_transfer_source_label(source_label.into());
     ui.set_transfer_target_path(target_path.into());
@@ -305,6 +310,10 @@ fn prepare_transfer_menu(
     ui.set_transfer_menu_x(x);
     ui.set_transfer_menu_y(y);
     true
+}
+
+fn move_transfer_available(source_path: &Path, target_dir: &Path) -> bool {
+    source_path.parent() != Some(target_dir)
 }
 
 pub(crate) fn target_is_source_or_descendant(source: &Path, target_dir: &Path) -> bool {
@@ -328,7 +337,7 @@ pub(crate) fn start_transfer_operation(
 ) -> TransferStart {
     let source = PathBuf::from(source);
     let target_dir = PathBuf::from(target_dir);
-    if let Some(reason) = transfer_start_rejection(&source, &target_dir) {
+    if let Some(reason) = transfer_operation_start_rejection(operation, &source, &target_dir) {
         set_status(ui, state, reason);
         return TransferStart::Rejected;
     }
@@ -361,6 +370,17 @@ fn transfer_start_rejection(source: &Path, target_dir: &Path) -> Option<&'static
         return Some("Target is not a folder");
     }
     transfer_target_rejection(source, target_dir)
+}
+
+fn transfer_operation_start_rejection(
+    operation: &str,
+    source: &Path,
+    target_dir: &Path,
+) -> Option<&'static str> {
+    transfer_start_rejection(source, target_dir).or_else(|| {
+        (operation == "move" && !move_transfer_available(source, target_dir))
+            .then_some("Cannot move an item to its current folder")
+    })
 }
 
 pub(crate) fn resolve_transfer_conflict(
@@ -649,7 +669,8 @@ fn display_location_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        focused_current_dir, pane_current_dir_drop_allowed, target_is_source_or_descendant,
+        focused_current_dir, move_transfer_available, pane_current_dir_drop_allowed,
+        target_is_source_or_descendant, transfer_operation_start_rejection,
         transfer_start_rejection,
     };
     use crate::app::state::AppState;
@@ -691,6 +712,32 @@ mod tests {
             Some("Cannot drop a folder into itself")
         );
         assert_eq!(transfer_start_rejection(&source, &target_dir), None);
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn same_directory_transfer_hides_and_rejects_noop_move() {
+        let temp = test_dir("same-directory-transfer");
+        let source = temp.join("note.txt");
+        fs::create_dir_all(&temp).unwrap();
+        fs::write(&source, "new").unwrap();
+
+        assert!(!move_transfer_available(&source, &temp));
+        assert!(move_transfer_available(&source, &temp.join("subdir")));
+        assert_eq!(transfer_start_rejection(&source, &temp), None);
+        assert_eq!(
+            transfer_operation_start_rejection("copy", &source, &temp),
+            None
+        );
+        assert_eq!(
+            transfer_operation_start_rejection("link", &source, &temp),
+            None
+        );
+        assert_eq!(
+            transfer_operation_start_rejection("move", &source, &temp),
+            Some("Cannot move an item to its current folder")
+        );
 
         let _ = fs::remove_dir_all(temp);
     }

@@ -23,6 +23,12 @@ export struct ItemViewPaintEntry {
     text_width: float,
 }
 
+export struct ItemViewFallbackMediaEntry {
+    slice_index: int,
+    x: float,
+    y: float,
+}
+
 export struct ItemViewMediaEntry {
     slice_index: int,
     media: image,
@@ -103,6 +109,8 @@ export struct ChooserChoice {
 export struct PaneViewData {
     slot: int,
     paint: [ItemViewPaintEntry],
+    folder_media: [ItemViewFallbackMediaEntry],
+    file_media: [ItemViewFallbackMediaEntry],
     highlights: [ItemViewHighlightEntry],
     media: [ItemViewMediaEntry],
     metadata: [ItemViewMetadataEntry],

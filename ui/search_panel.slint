@@ -1,5 +1,69 @@
 import { CheckOption, FilterButton, SidebarAction, ToolButton } from "widgets.slint";
 
+component FilterChoiceChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> dark;
+    callback clicked();
+
+    height: 26px;
+    border-radius: 7px;
+    border-width: root.selected ? 1px : 0px;
+    border-color: root.selected ? (root.dark ? #58b4d8 : #2f8dbc) : transparent;
+    background: root.selected ? (root.dark ? #12303d : #e4f3fa) : (touch.has-hover ? (root.dark ? #1f262d : #f2f5f8) : transparent);
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        color: root.selected ? (root.dark ? #e8f6fb : #17445a) : (root.dark ? #dfe7ee : #24303b);
+        font-size: 12px;
+        font-weight: root.selected ? 700 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+component FilterChoiceRow inherits Rectangle {
+    in property <string> title;
+    in property <[string]> labels;
+    in property <int> selected-index;
+    in property <bool> dark;
+    callback selected(int);
+
+    height: 26px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: 6px;
+
+        Text {
+            width: 72px;
+            text: root.title;
+            color: root.dark ? #9aa5af : #64748b;
+            font-size: 12px;
+            font-weight: 700;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        for option[index] in root.labels: FilterChoiceChip {
+            horizontal-stretch: 1;
+            min-width: 48px;
+            preferred-width: 76px;
+            label: option;
+            selected: root.selected-index == index;
+            dark: root.dark;
+            clicked => { root.selected(index); }
+        }
+    }
+}
+
 export component SearchPanel inherits Rectangle {
     in property <bool> dark;
     in property <bool> loading;
@@ -13,6 +77,7 @@ export component SearchPanel inherits Rectangle {
     in-out property <int> kind-filter;
     in-out property <int> modified-filter;
     in-out property <int> size-filter;
+    in-out property <bool> filters-expanded: false;
     callback submitted(string, bool);
     callback cancel_requested();
     callback filters_changed(int, int, int);
@@ -25,8 +90,24 @@ export component SearchPanel inherits Rectangle {
         root.kind-filter = 0;
         root.modified-filter = 0;
         root.size-filter = 0;
+        root.filters-expanded = false;
         root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
         root.submitted("", root.recursive);
+    }
+
+    function set-kind-filter(value: int) {
+        root.kind-filter = value;
+        root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+    }
+
+    function set-modified-filter(value: int) {
+        root.modified-filter = value;
+        root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+    }
+
+    function set-size-filter(value: int) {
+        root.size-filter = value;
+        root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
     }
 
     background: transparent;
@@ -39,6 +120,7 @@ export component SearchPanel inherits Rectangle {
     private property <color> field-focus-border: root.dark ? #58b4d8 : #2f8dbc;
     private property <color> field-text-color: root.dark ? #eef3f7 : #24303b;
     private property <color> muted-text-color: root.dark ? #8b97a3 : #667381;
+    private property <length> main-row-height: root.width < 760px ? 78px : 44px;
 
     changed focus-request => {
         if (root.focus-request > 0) {
@@ -54,6 +136,7 @@ export component SearchPanel inherits Rectangle {
     }
 
     FlexboxLayout {
+        height: root.main-row-height;
         padding-left: 16px;
         padding-right: 16px;
         padding-top: 7px;
@@ -133,35 +216,12 @@ export component SearchPanel inherits Rectangle {
         }
 
         FilterButton {
-            width: 122px;
+            width: 116px;
             flex-shrink: 0;
-            label: root.kind-label;
+            label: root.filters-active ? "Filters: On" : "Filters";
             dark: root.dark;
             clicked => {
-                root.kind-filter = mod(root.kind-filter + 1, 4);
-                root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
-            }
-        }
-
-        FilterButton {
-            width: 148px;
-            flex-shrink: 0;
-            label: root.modified-label;
-            dark: root.dark;
-            clicked => {
-                root.modified-filter = mod(root.modified-filter + 1, 4);
-                root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
-            }
-        }
-
-        FilterButton {
-            width: 138px;
-            flex-shrink: 0;
-            label: root.size-label;
-            dark: root.dark;
-            clicked => {
-                root.size-filter = mod(root.size-filter + 1, 4);
-                root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
+                root.filters-expanded = !root.filters-expanded;
             }
         }
 
@@ -195,6 +255,52 @@ export component SearchPanel inherits Rectangle {
             clicked => {
                 root.clear-search-state();
                 root.close_requested();
+            }
+        }
+    }
+
+    if (root.filters-expanded): Rectangle {
+        x: 16px;
+        y: root.main-row-height;
+        width: max(1px, parent.width - 32px);
+        height: parent.height - root.main-row-height - 7px;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: root.field-border;
+        background: root.field-background;
+
+        VerticalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: 5px;
+
+            FilterChoiceRow {
+                width: parent.width;
+                title: "Type";
+                labels: ["All", "Folders", "Files", "Images"];
+                selected-index: root.kind-filter;
+                dark: root.dark;
+                selected(index) => { root.set-kind-filter(index); }
+            }
+
+            FilterChoiceRow {
+                width: parent.width;
+                title: "Modified";
+                labels: ["Any", "Today", "7 days", "30 days"];
+                selected-index: root.modified-filter;
+                dark: root.dark;
+                selected(index) => { root.set-modified-filter(index); }
+            }
+
+            FilterChoiceRow {
+                width: parent.width;
+                title: "Size";
+                labels: ["Any", "<1 MB", "1-100 MB", ">100 MB"];
+                selected-index: root.size-filter;
+                dark: root.dark;
+                selected(index) => { root.set-size-filter(index); }
             }
         }
     }

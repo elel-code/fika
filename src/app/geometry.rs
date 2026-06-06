@@ -2161,7 +2161,8 @@ mod tests {
             app.contains("private property <length> main-content-height: max(1px, root.height - root.shell-header-height);")
                 && app.contains("component FilePane inherits Rectangle")
                 && app.contains("pane-content := Rectangle")
-                && app.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));")
+                && app.contains("private property <length> search-panel-effective-height: root.search-panel-height + (root.search-filters-expanded ? 112px : 0px);")
+                && app.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-effective-height : 0px));")
                 && app.contains("in property <[PaneSlotData]> pane_slots;")
                 && app.contains("in property <[PaneSurfaceData]> pane_surfaces;")
                 && app.contains("for surface in root.pane_surfaces : PaneSlotSurface")
@@ -2171,7 +2172,8 @@ mod tests {
             "pane content height should subtract the pane-local path bar, search filters, and status bar inside the reusable file pane"
         );
         assert!(
-            app.contains("search-panel-height: root.pane.search_panel_visible ? (root.width < 760px ? 78px : 44px) : 0px;"),
+            app.contains("search-panel-height: root.pane.search_panel_visible ? (root.width < 760px ? 78px : 44px) : 0px;")
+                && app.contains("filters-expanded <=> root.search-filters-expanded;"),
             "search filters should size against the rendered pane slot width instead of squeezing another split pane"
         );
         assert!(
@@ -2286,6 +2288,20 @@ mod tests {
         assert!(
             search_panel.contains("width: max(1px, parent.width - 48px);"),
             "SearchPanel input text should clamp narrow available widths instead of overflowing"
+        );
+        assert!(
+            search_panel.matches("FilterButton {").count() == 1
+                && search_panel
+                    .contains("label: root.filters-active ? \"Filters: On\" : \"Filters\";")
+                && search_panel.contains("filters-expanded")
+                && search_panel.matches("FilterChoiceRow {").count() == 3
+                && search_panel.contains("title: \"Type\";")
+                && search_panel.contains("title: \"Modified\";")
+                && search_panel.contains("title: \"Size\";")
+                && !search_panel.contains("label: root.kind-label;")
+                && !search_panel.contains("label: root.modified-label;")
+                && !search_panel.contains("label: root.size-label;"),
+            "SearchPanel should collapse kind/modified/size filters into one concentrated filter chooser"
         );
         assert!(
             !top_bar_component.contains("search_requested")
@@ -2504,7 +2520,8 @@ mod tests {
             "FilePane should own one status bar"
         );
         assert!(
-            file_pane.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));")
+            file_pane.contains("height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-effective-height : 0px));")
+                && file_pane.contains("private property <length> search-panel-effective-height")
                 && file_pane.contains("path-text: root.path-text;")
                 && file_pane.contains("path-focused: root.path-focused;")
                 && file_pane.contains("root.path-text = text;")
@@ -2987,14 +3004,19 @@ mod tests {
             .split_once(
                 "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
             )
-            .and_then(|(_, rest)| rest.split_once("for paint[index] in root.paint: Image"))
+            .and_then(|(_, rest)| rest.split_once("for fallback[index] in root.folder-media: Image"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have one concrete drop-target overlay");
-        let base_image_loop = split_pane
-            .split_once("for paint[index] in root.paint: Image")
+        let folder_media_loop = split_pane
+            .split_once("for fallback[index] in root.folder-media: Image")
+            .and_then(|(_, rest)| rest.split_once("for fallback[index] in root.file-media: Image"))
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should have a sparse folder fallback media loop");
+        let file_media_loop = split_pane
+            .split_once("for fallback[index] in root.file-media: Image")
             .and_then(|(_, rest)| rest.split_once("for media[index] in root.media: Image"))
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have an unconditional base image primitive loop");
+            .expect("SplitPaneView should have a sparse file fallback media loop");
         let media_overlay_loop = split_pane
             .split_once("for media[index] in root.media: Image")
             .and_then(|(_, rest)| rest.split_once("for paint[index] in root.paint: Text"))
@@ -3016,23 +3038,30 @@ mod tests {
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should handle pointer move inside the main touch area");
         assert!(
-            split_pane.contains("for paint[index] in root.paint: Image")
+            split_pane.contains("for fallback[index] in root.folder-media: Image")
+                && split_pane.contains("for fallback[index] in root.file-media: Image")
                 && split_pane.contains("for paint[index] in root.paint: Text")
                 && split_pane.contains("in property <int> virtual-start-row;")
                 && !split_pane.contains("bounds;")
                 && !split_pane.contains("ItemViewBounds")
-                && base_image_loop
-                    .contains("x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.media-x;")
-                && base_image_loop.contains(
-                    "y: root.preview-padding + paint.y * 1px + root.media-y;"
+                && folder_media_loop
+                    .contains("x: root.preview-padding + fallback.x * 1px - root.viewport-x * 1px + root.media-x;")
+                && folder_media_loop.contains(
+                    "y: root.preview-padding + fallback.y * 1px + root.media-y;"
                 )
-                && base_image_loop.contains("width: root.media-width;")
-                && base_image_loop.contains("height: root.media-height;")
-                && base_image_loop.contains(
-                    "source: paint.is_dir ? root.item-view-folder-media : root.item-view-file-media;"
+                && folder_media_loop.contains("width: root.media-width;")
+                && folder_media_loop.contains("height: root.media-height;")
+                && folder_media_loop.contains("source: root.item-view-folder-media;")
+                && file_media_loop
+                    .contains("x: root.preview-padding + fallback.x * 1px - root.viewport-x * 1px + root.media-x;")
+                && file_media_loop.contains(
+                    "y: root.preview-padding + fallback.y * 1px + root.media-y;"
                 )
-                && base_image_loop.contains("root.item-view-folder-media")
-                && base_image_loop.contains("root.item-view-file-media")
+                && file_media_loop.contains("width: root.media-width;")
+                && file_media_loop.contains("height: root.media-height;")
+                && file_media_loop.contains("source: root.item-view-file-media;")
+                && !folder_media_loop.contains("paint.is_dir")
+                && !file_media_loop.contains("paint.is_dir")
                 && media_overlay_loop
                     .contains("x: root.preview-padding + media.x * 1px - root.viewport-x * 1px + root.media-x;")
                 && media_overlay_loop.contains(
@@ -3050,9 +3079,12 @@ mod tests {
                 && base_text_loop.contains("width: max(1px, paint.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
                 && base_text_loop.contains("text: paint.name;")
-                && !base_image_loop.contains("metadata_line_height")
-                && !base_image_loop.contains("tile-index:")
-                && !base_image_loop.contains("tile-row:")
+                && !folder_media_loop.contains("metadata_line_height")
+                && !file_media_loop.contains("metadata_line_height")
+                && !folder_media_loop.contains("tile-index:")
+                && !file_media_loop.contains("tile-index:")
+                && !folder_media_loop.contains("tile-row:")
+                && !file_media_loop.contains("tile-row:")
                 && !base_text_loop.contains("metadata_line_height")
                 && !base_text_loop.contains("tile-index:")
                 && !base_text_loop.contains("tile-row:")
@@ -3067,9 +3099,11 @@ mod tests {
                 && !base_text_loop.contains("text: item.group")
                 && !base_text_loop.contains("text: item.location")
                 && !base_text_loop.contains("item.selected")
-                && !base_image_loop.contains("thumbnail_state")
+                && !folder_media_loop.contains("thumbnail_state")
+                && !file_media_loop.contains("thumbnail_state")
                 && !base_text_loop.contains("thumbnail_state")
-                && !base_image_loop.contains("item.media")
+                && !folder_media_loop.contains("item.media")
+                && !file_media_loop.contains("item.media")
                 && !media_overlay_loop.contains("item.")
                 && !widgets.contains("export component FolderGlyph")
                 && !split_pane.contains("entry: item;")
@@ -3097,6 +3131,8 @@ mod tests {
                 && !item_view_entry.contains("title_line_height: float")
                 && !pane_view_data.contains("bounds:")
                 && pane_view_data.contains("paint: [ItemViewPaintEntry]")
+                && pane_view_data.contains("folder_media: [ItemViewFallbackMediaEntry]")
+                && pane_view_data.contains("file_media: [ItemViewFallbackMediaEntry]")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")
                 && pane_view_data.contains("item_view_text_x: float")
@@ -3155,8 +3191,8 @@ mod tests {
                 && split_pane.contains(
                     "color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;"
                 )
-                && base_image_loop.contains("width: root.media-width;")
-                && base_image_loop.contains("height: root.media-height;")
+                && folder_media_loop.contains("width: root.media-width;")
+                && file_media_loop.contains("height: root.media-height;")
                 && media_overlay_loop.contains("source: media.media;")
                 && base_text_loop.contains("font-size: root.title-font-size;")
                 && base_text_loop.contains("root.text-x")
@@ -3173,8 +3209,10 @@ mod tests {
                 && !split_pane.contains("doc-font-size:")
                 && !split_pane.contains("item.tile_padding_x")
                 && !split_pane.contains("item.tile_spacing")
-                && !base_image_loop.contains("HorizontalLayout")
-                && !base_image_loop.contains("VerticalLayout")
+                && !folder_media_loop.contains("HorizontalLayout")
+                && !folder_media_loop.contains("VerticalLayout")
+                && !file_media_loop.contains("HorizontalLayout")
+                && !file_media_loop.contains("VerticalLayout")
                 && !base_text_loop.contains("HorizontalLayout")
                 && !base_text_loop.contains("VerticalLayout")
                 && !base_text_loop.contains("self.metadata-title")
@@ -3209,7 +3247,8 @@ mod tests {
             "Ctrl+wheel zoom should still request pane focus before changing zoom"
         );
         assert!(split_pane.contains("scroll-event(event)"));
-        assert!(split_pane.contains("for paint[index] in root.paint: Image"));
+        assert!(split_pane.contains("for fallback[index] in root.folder-media: Image"));
+        assert!(split_pane.contains("for fallback[index] in root.file-media: Image"));
         assert!(split_pane.contains("for paint[index] in root.paint: Text"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")
@@ -4320,8 +4359,17 @@ mod tests {
 
     #[test]
     fn transfer_menu_geometry_uses_shared_root_popup_rules() {
+        let menus = include_str!("../../ui/menus.slint");
         let menu_width = 240.0;
         let menu_height = 30.0 + 4.0 * 38.0 + 8.0;
+
+        assert!(
+            menus.contains("in property <bool> move-available: true;")
+                && menus.contains("if (root.move-available): ActionMenuRow")
+                && menus.contains("private property <length> menu-height: root.title-height + (root.move-available ? 4 : 3) * root.item-height + root.separator-height;")
+                && menus.contains("move-available: root.move-available;"),
+            "transfer menu should hide the no-op Move Here row while keeping popup height in sync"
+        );
 
         assert_eq!(
             RootMenuGeometry {

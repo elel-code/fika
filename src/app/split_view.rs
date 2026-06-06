@@ -8,9 +8,9 @@ use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry,
-    ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, set_status,
-    sync_virtual_entries_for_slot,
+    AppWindow, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
+    ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData,
+    set_status, sync_virtual_entries_for_slot,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -348,6 +348,8 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
     PaneViewData {
         slot,
         paint: pane_slot_paint(slot, state),
+        folder_media: pane_slot_folder_media(slot, state),
+        file_media: pane_slot_file_media(slot, state),
         highlights: pane_slot_highlights(slot, state),
         media: pane_slot_media(slot, state),
         metadata: pane_slot_metadata(slot, state),
@@ -511,6 +513,22 @@ fn pane_slot_paint(slot: i32, state: &AppState) -> ModelRc<ItemViewPaintEntry> {
         .panes
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_paint_entries.clone())
+        .unwrap_or_default()
+}
+
+fn pane_slot_folder_media(slot: i32, state: &AppState) -> ModelRc<ItemViewFallbackMediaEntry> {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.view.virtual_folder_media_entries.clone())
+        .unwrap_or_default()
+}
+
+fn pane_slot_file_media(slot: i32, state: &AppState) -> ModelRc<ItemViewFallbackMediaEntry> {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.view.virtual_file_media_entries.clone())
         .unwrap_or_default()
 }
 
@@ -888,6 +906,8 @@ mod tests {
                         .collect::<Vec<_>>(),
                 )))
             },
+            folder_media: ModelRc::default(),
+            file_media: ModelRc::default(),
             highlights: ModelRc::default(),
             media: ModelRc::default(),
             metadata: ModelRc::default(),

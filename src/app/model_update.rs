@@ -1,8 +1,8 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::pane::PaneView;
 use crate::{
-    ItemViewEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry,
-    ItemViewPaintEntry,
+    ItemViewEntry, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
+    ItemViewMetadataEntry, ItemViewPaintEntry,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::ops::Range;
@@ -130,6 +130,16 @@ pub(crate) fn new_item_view_paint_model(
     ModelRc::new(Rc::new(VecModel::from(paint_entries)))
 }
 
+pub(crate) fn new_item_view_fallback_media_model(
+    fallback_entries: Vec<ItemViewFallbackMediaEntry>,
+) -> ModelRc<ItemViewFallbackMediaEntry> {
+    if fallback_entries.is_empty() {
+        return ModelRc::default();
+    }
+
+    ModelRc::new(Rc::new(VecModel::from(fallback_entries)))
+}
+
 fn item_view_paint_entries(
     entries: &[ItemViewEntry],
     bounds_entries: &[ItemViewItemBounds],
@@ -195,6 +205,67 @@ fn update_item_view_paint_entries_model(
     };
 
     update_sliding_vec_model(model, old_start, new_start, paint_entries)
+}
+
+fn item_view_fallback_media_entries(
+    entries: &[ItemViewEntry],
+    bounds_entries: &[ItemViewItemBounds],
+    is_dir: bool,
+) -> Vec<ItemViewFallbackMediaEntry> {
+    bounds_entries
+        .iter()
+        .filter_map(|bounds| {
+            let entry = entries.get(bounds.slice_index)?;
+            (entry.is_dir == is_dir).then_some(ItemViewFallbackMediaEntry {
+                slice_index: bounds.slice_index as i32,
+                x: bounds.x,
+                y: bounds.y,
+            })
+        })
+        .collect()
+}
+
+fn item_view_fallback_media_entries_from_tokens(
+    tokens: &[ItemViewRowToken],
+    bounds_entries: &[ItemViewItemBounds],
+    is_dir: bool,
+) -> Vec<ItemViewFallbackMediaEntry> {
+    bounds_entries
+        .iter()
+        .filter_map(|bounds| {
+            let token = tokens.get(bounds.slice_index)?;
+            (token.is_dir() == is_dir).then_some(ItemViewFallbackMediaEntry {
+                slice_index: bounds.slice_index as i32,
+                x: bounds.x,
+                y: bounds.y,
+            })
+        })
+        .collect()
+}
+
+fn update_item_view_fallback_media_entries_model(
+    current: &mut ModelRc<ItemViewFallbackMediaEntry>,
+    old_start: usize,
+    new_start: usize,
+    fallback_entries: Vec<ItemViewFallbackMediaEntry>,
+) -> bool {
+    if fallback_entries.is_empty() {
+        if current.row_count() == 0 {
+            return false;
+        }
+        *current = ModelRc::default();
+        return true;
+    }
+
+    let Some(model) = current
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewFallbackMediaEntry>>()
+    else {
+        *current = new_item_view_fallback_media_model(fallback_entries);
+        return true;
+    };
+
+    update_sliding_vec_model(model, old_start, new_start, fallback_entries)
 }
 
 pub(crate) fn new_item_view_metadata_model(
@@ -458,6 +529,8 @@ pub(crate) fn update_pane_item_view_entries_model(
     let metadata_entries = project_metadata_entries_with_bounds(metadata_entries, &bounds_entries);
     let media_tokens = item_view_media_tokens(&entries, &media_entries);
     let paint_entries = item_view_paint_entries(&entries, &bounds_entries);
+    let folder_media_entries = item_view_fallback_media_entries(&entries, &bounds_entries, true);
+    let file_media_entries = item_view_fallback_media_entries(&entries, &bounds_entries, false);
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
@@ -469,6 +542,18 @@ pub(crate) fn update_pane_item_view_entries_model(
         old_start,
         start_index,
         paint_entries,
+    );
+    update_item_view_fallback_media_entries_model(
+        &mut view.virtual_folder_media_entries,
+        old_start,
+        start_index,
+        folder_media_entries,
+    );
+    update_item_view_fallback_media_entries_model(
+        &mut view.virtual_file_media_entries,
+        old_start,
+        start_index,
+        file_media_entries,
     );
     update_item_view_media_entries_model(
         &mut view.virtual_media_entries,
@@ -533,6 +618,16 @@ pub(crate) fn relayout_pane_item_view_entries_model(
 
     let paint_entries =
         item_view_paint_entries_from_tokens(&view.virtual_entry_tokens, &bounds_entries);
+    let folder_media_entries = item_view_fallback_media_entries_from_tokens(
+        &view.virtual_entry_tokens,
+        &bounds_entries,
+        true,
+    );
+    let file_media_entries = item_view_fallback_media_entries_from_tokens(
+        &view.virtual_entry_tokens,
+        &bounds_entries,
+        false,
+    );
     let highlight_entries =
         item_view_highlight_entries(&view.virtual_entry_tokens, &bounds_entries);
     trim_item_view_media_entries_model(
@@ -553,6 +648,18 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         old_start,
         range.start,
         paint_entries,
+    );
+    update_item_view_fallback_media_entries_model(
+        &mut view.virtual_folder_media_entries,
+        old_start,
+        range.start,
+        folder_media_entries,
+    );
+    update_item_view_fallback_media_entries_model(
+        &mut view.virtual_file_media_entries,
+        old_start,
+        range.start,
+        file_media_entries,
     );
     let _ = update_item_view_highlight_entries_model(
         &mut view.virtual_highlight_entries,

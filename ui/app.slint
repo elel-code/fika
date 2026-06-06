@@ -59,7 +59,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -97,6 +97,8 @@ component FilePane inherits Rectangle {
     in property <string> drop-trace-prefix;
     in property <int> entry-count;
     in property <[ItemViewPaintEntry]> paint;
+    in property <[ItemViewFallbackMediaEntry]> folder-media;
+    in property <[ItemViewFallbackMediaEntry]> file-media;
     in property <[ItemViewHighlightEntry]> highlights;
     in property <[ItemViewMediaEntry]> media;
     in property <[ItemViewMetadataEntry]> metadata;
@@ -145,6 +147,8 @@ component FilePane inherits Rectangle {
     in property <string> chooser-filter-label;
     in property <[ChooserChoice]> chooser-choices;
     in-out property <string> chooser-save-name;
+    private property <bool> search-filters-expanded: false;
+    private property <length> search-panel-effective-height: root.search-panel-height + (root.search-filters-expanded ? 112px : 0px);
 
     callback focus_requested(int);
     callback path_submitted(int, string);
@@ -220,7 +224,7 @@ component FilePane inherits Rectangle {
 
         if (root.search-panel-visible) : SearchPanel {
             horizontal-stretch: 1;
-            height: root.search-panel-height;
+            height: root.search-panel-effective-height;
             dark: root.dark;
             loading: root.search-loading;
             filters-active: root.search-filters-active;
@@ -233,6 +237,7 @@ component FilePane inherits Rectangle {
             kind-filter <=> root.search-kind-filter;
             modified-filter <=> root.search-modified-filter;
             size-filter <=> root.search-size-filter;
+            filters-expanded <=> root.search-filters-expanded;
             submitted(query, recursive) => { root.search_submitted(root.pane-slot, query, recursive); }
             cancel_requested => { root.cancel_search(root.pane-slot); }
             filters_changed(kind, modified, size) => {
@@ -246,7 +251,7 @@ component FilePane inherits Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
             width: parent.width;
-            height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-height : 0px));
+            height: max(1px, parent.height - root.path-bar-height - root.status-bar-height - (root.search-panel-visible ? root.search-panel-effective-height : 0px));
             background: root.shell-base-color;
             clip: true;
 
@@ -307,6 +312,8 @@ component FilePane inherits Rectangle {
                 dark: root.dark;
                 entry-count: root.entry-count;
                 paint: root.paint;
+                folder-media: root.folder-media;
+                file-media: root.file-media;
                 highlights: root.highlights;
                 media: root.media;
                 metadata: root.metadata;
@@ -572,6 +579,8 @@ component PaneSlotSurface inherits Rectangle {
         drop-trace-prefix: root.pane.drop_trace_prefix;
         entry-count: root.view.entry_count;
         paint: root.view.paint;
+        folder-media: root.view.folder_media;
+        file-media: root.view.file_media;
         highlights: root.view.highlights;
         media: root.view.media;
         metadata: root.view.metadata;
@@ -806,6 +815,7 @@ export component AppWindow inherits Window {
     in-out property <string> transfer_source_label;
     in-out property <string> transfer_target_path;
     in-out property <string> transfer_target_label;
+    in-out property <bool> transfer_move_available: true;
     in-out property <float> transfer_menu_x: 0;
     in-out property <float> transfer_menu_y: 0;
     private property <bool> place_drag_active: false;
@@ -2074,6 +2084,7 @@ export component AppWindow inherits Window {
         separator-height: root.menu-separator-height;
         title-height: root.menu-title-height;
         title: root.transfer_source_label + " -> " + root.transfer_target_label;
+        move-available: root.transfer_move_available;
         dark: root.dark_mode;
         operation_selected(operation) => {
             root.transfer_operation(operation, root.transfer_source_path, root.transfer_target_path);

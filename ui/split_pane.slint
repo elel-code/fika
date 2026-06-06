@@ -1,9 +1,11 @@
-import { ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
+import { ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
     in property <[ItemViewPaintEntry]> paint;
+    in property <[ItemViewFallbackMediaEntry]> folder-media;
+    in property <[ItemViewFallbackMediaEntry]> file-media;
     in property <[ItemViewHighlightEntry]> highlights;
     in property <[ItemViewMediaEntry]> media;
     in property <[ItemViewMetadataEntry]> metadata;
@@ -358,12 +360,21 @@ export component SplitPaneView inherits Rectangle {
                     background: root.drop-background-color;
                 }
 
-                for paint[index] in root.paint: Image {
-                    x: root.preview-padding + paint.x * 1px - root.viewport-x * 1px + root.media-x;
-                    y: root.preview-padding + paint.y * 1px + root.media-y;
+                for fallback[index] in root.folder-media: Image {
+                    x: root.preview-padding + fallback.x * 1px - root.viewport-x * 1px + root.media-x;
+                    y: root.preview-padding + fallback.y * 1px + root.media-y;
                     width: root.media-width;
                     height: root.media-height;
-                    source: paint.is_dir ? root.item-view-folder-media : root.item-view-file-media;
+                    source: root.item-view-folder-media;
+                    image-fit: contain;
+                }
+
+                for fallback[index] in root.file-media: Image {
+                    x: root.preview-padding + fallback.x * 1px - root.viewport-x * 1px + root.media-x;
+                    y: root.preview-padding + fallback.y * 1px + root.media-y;
+                    width: root.media-width;
+                    height: root.media-height;
+                    source: root.item-view-file-media;
                     image-fit: contain;
                 }
 

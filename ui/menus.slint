@@ -546,6 +546,7 @@ export component ChooserOptionPopupLayer inherits Rectangle {
 
 export component TransferMenu inherits PopupSurface {
     in property <string> title;
+    in property <bool> move-available: true;
     callback operation_selected(string);
     callback cancelled();
 
@@ -557,7 +558,7 @@ export component TransferMenu inherits PopupSurface {
             dark: root.dark;
         }
 
-        ActionMenuRow {
+        if (root.move-available): ActionMenuRow {
             label: "Move Here";
             dark: root.dark;
             clicked => { root.operation_selected("move"); }
@@ -599,9 +600,10 @@ export component TransferMenuLayer inherits Rectangle {
     in property <length> separator-height: 8px;
     in property <length> title-height: 30px;
     in property <string> title;
+    in property <bool> move-available: true;
     in property <bool> dark;
     private property <length> menu-width: 240px;
-    private property <length> menu-height: root.title-height + 4 * root.item-height + root.separator-height;
+    private property <length> menu-height: root.title-height + (root.move-available ? 4 : 3) * root.item-height + root.separator-height;
     private property <length> menu-left: MenuGeometry.root_menu_left(root.window-width / 1px, root.window-height / 1px, root.menu-x, root.menu-y, root.menu-width / 1px, root.menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     private property <length> menu-top: MenuGeometry.root_menu_top(root.window-width / 1px, root.window-height / 1px, root.menu-x, root.menu-y, root.menu-width / 1px, root.menu-height / 1px, root.screen-margin / 1px, root.pointer-gap / 1px) * 1px;
     callback operation_selected(string);
@@ -615,6 +617,7 @@ export component TransferMenuLayer inherits Rectangle {
         width: root.menu-width;
         height: root.menu-height;
         title: root.title;
+        move-available: root.move-available;
         dark: root.dark;
         operation_selected(operation) => { root.operation_selected(operation); }
         cancelled => { root.cancelled(); }
