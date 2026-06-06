@@ -3877,7 +3877,7 @@ fn cached_virtual_viewport_sync(
         return None;
     }
 
-    let compact_item_view = pane.view.virtual_view.layout.as_ref()?;
+    let compact_item_view = pane.view.virtual_view.layout.as_ref()?.as_compact();
     let current_entry_count = pane_visible_entry_count_for_virtual_cache(pane, chooser_patterns)?;
     if compact_item_view.entry_count != current_entry_count {
         return None;
@@ -4257,7 +4257,7 @@ fn set_pane_virtual_entries(
 }
 
 fn item_view_bounds_entries(
-    layout: &CompactItemViewLayout,
+    layout: &impl ItemViewLayouter,
     start_index: usize,
     count: usize,
 ) -> Vec<ItemViewItemBounds> {
@@ -4997,7 +4997,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         pane.view.virtual_view.range = relayout_range;
         pane.view
             .virtual_view
-            .update_layout_signature(compact_item_view, size_px);
+            .update_layout_signature(compact_item_view.into(), size_px);
         true
     };
 
@@ -5009,7 +5009,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
                 .panes
                 .pane_for_slot(slot)
                 .and_then(|pane| pane.view.virtual_view.layout.as_ref())
-                .map(|layout| layout.entry_count)
+                .map(|layout| layout.layout_metrics().entry_count)
                 .unwrap_or_default();
             ui.set_entry_count(entry_count as i32);
         }
@@ -5859,7 +5859,7 @@ mod tests {
             title_font_size: 1.0,
         };
         let mut pane = PaneState::new(PathBuf::from("/tmp"));
-        pane.view.virtual_view.layout = Some(stale_empty_layout);
+        pane.view.virtual_view.layout = Some(stale_empty_layout.into());
         pane.view.virtual_view.range = 0..0;
         pane.view.virtual_view.thumbnail_size_px = 64;
 
@@ -6297,7 +6297,7 @@ mod tests {
                 y1: 0.0,
                 x2: 109.0,
                 y2: 205.0,
-                layout: selection_test_layout(&["a", "b", "c", "d"]),
+                layout: selection_test_layout(&["a", "b", "c", "d"]).into(),
             },
         );
 
@@ -6322,7 +6322,7 @@ mod tests {
                 y1: 0.0,
                 x2: 109.0,
                 y2: 205.0,
-                layout: selection_test_layout(&["alpha.txt", "beta.txt", "gamma.txt"]),
+                layout: selection_test_layout(&["alpha.txt", "beta.txt", "gamma.txt"]).into(),
             },
         );
 
@@ -6355,7 +6355,8 @@ mod tests {
                         .iter()
                         .map(String::as_str)
                         .collect::<Vec<_>>(),
-                ),
+                )
+                .into(),
             },
         );
 

@@ -1,4 +1,4 @@
-use crate::app::geometry::{CompactItemViewLayout, ItemViewItemBounds, ItemViewLayouter};
+use crate::app::geometry::{ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter};
 use crate::app::item_view::ItemViewInputState;
 use crate::app::item_view_renderer::{ItemViewMediaCache, ItemViewRenderMetrics};
 #[cfg(test)]
@@ -797,7 +797,7 @@ pub(crate) struct DirectoryViewState {
 #[derive(Clone, Debug)]
 pub(crate) struct VirtualViewCache {
     pub(crate) range: Range<usize>,
-    pub(crate) layout: Option<CompactItemViewLayout>,
+    pub(crate) layout: Option<ItemViewLayoutEngine>,
     pub(crate) thumbnail_size_px: u32,
 }
 
@@ -824,7 +824,7 @@ impl VirtualViewCache {
 
     pub(crate) fn matches_layout(
         &self,
-        layout: &CompactItemViewLayout,
+        layout: &ItemViewLayoutEngine,
         thumbnail_size_px: u32,
     ) -> bool {
         self.layout
@@ -835,7 +835,7 @@ impl VirtualViewCache {
 
     pub(crate) fn update_layout_signature(
         &mut self,
-        layout: CompactItemViewLayout,
+        layout: ItemViewLayoutEngine,
         thumbnail_size_px: u32,
     ) {
         self.layout = Some(layout);
@@ -986,7 +986,8 @@ mod tests {
                 1.0,
                 0.0,
                 1.0,
-            ),
+            )
+            .into(),
             thumbnail_size_px,
         );
         cache
@@ -1398,10 +1399,11 @@ mod tests {
             .layout
             .as_ref()
             .expect("inactive pane should keep compact layout");
-        assert_eq!(inactive_layout.entry_count, 24);
-        assert_eq!(inactive_layout.rows_per_column, 4);
-        assert_eq!(inactive_layout.cell_width, 100.0);
-        assert_eq!(inactive_layout.row_height, 90.0);
+        let inactive_metrics = inactive_layout.layout_metrics();
+        assert_eq!(inactive_metrics.entry_count, 24);
+        assert_eq!(inactive_metrics.rows_per_column, 4);
+        assert_eq!(inactive_metrics.cell_width, 100.0);
+        assert_eq!(inactive_metrics.row_height, 90.0);
         assert_eq!(inactive.view.virtual_view.thumbnail_size_px, 80);
         assert_eq!(inactive.view.virtual_start_index, 4);
         assert_eq!(inactive.view.virtual_entries.row_count(), 2);
@@ -1498,10 +1500,11 @@ mod tests {
             .layout
             .as_ref()
             .expect("invalidating range should keep compact layout");
-        assert_eq!(layout.entry_count, 64);
-        assert_eq!(layout.rows_per_column, 4);
-        assert_eq!(layout.cell_width, 100.0);
-        assert_eq!(layout.row_height, 90.0);
+        let metrics = layout.layout_metrics();
+        assert_eq!(metrics.entry_count, 64);
+        assert_eq!(metrics.rows_per_column, 4);
+        assert_eq!(metrics.cell_width, 100.0);
+        assert_eq!(metrics.row_height, 90.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
     }
 

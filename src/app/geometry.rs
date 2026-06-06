@@ -44,6 +44,11 @@ pub(crate) struct CompactItemViewLayout {
     pub(crate) column_offsets: Vec<f32>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ItemViewLayoutEngine {
+    Compact(CompactItemViewLayout),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CompactItemViewLayoutMetrics {
     pub(crate) entry_count: usize,
@@ -259,6 +264,24 @@ impl CompactItemViewLayout {
             column_widths: Vec::new(),
             column_offsets: Vec::new(),
         }
+    }
+}
+
+impl ItemViewLayoutEngine {
+    pub(crate) fn empty_compact() -> Self {
+        Self::Compact(CompactItemViewLayout::empty())
+    }
+
+    pub(crate) fn as_compact(&self) -> &CompactItemViewLayout {
+        match self {
+            Self::Compact(layout) => layout,
+        }
+    }
+}
+
+impl From<CompactItemViewLayout> for ItemViewLayoutEngine {
+    fn from(layout: CompactItemViewLayout) -> Self {
+        Self::Compact(layout)
     }
 }
 
@@ -488,6 +511,112 @@ impl ItemViewLayouter for CompactItemViewLayout {
 
         RectBounds::new(x1, y1, x2, y2)
             .intersects(RectBounds::new(tile_x1, tile_y1, tile_x2, tile_y2))
+    }
+}
+
+impl ItemViewLayouter for ItemViewLayoutEngine {
+    fn layout_mode(&self) -> ItemViewLayoutMode {
+        match self {
+            Self::Compact(layout) => layout.layout_mode(),
+        }
+    }
+
+    fn scroll_axis(&self) -> ItemViewScrollAxis {
+        match self {
+            Self::Compact(layout) => layout.scroll_axis(),
+        }
+    }
+
+    fn matches_layout_signature(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Compact(left), Self::Compact(right)) => left.matches_layout_signature(right),
+        }
+    }
+
+    fn layout_metrics(&self) -> CompactItemViewLayoutMetrics {
+        match self {
+            Self::Compact(layout) => layout.layout_metrics(),
+        }
+    }
+
+    fn virtual_plan(
+        &self,
+        requested_viewport_x: f32,
+        overscan_columns: usize,
+    ) -> VirtualItemViewPlan {
+        match self {
+            Self::Compact(layout) => layout.virtual_plan(requested_viewport_x, overscan_columns),
+        }
+    }
+
+    fn virtual_slice_geometry(
+        &self,
+        range_start: usize,
+        virtual_slice_count: usize,
+    ) -> VirtualSliceGeometry {
+        match self {
+            Self::Compact(layout) => {
+                layout.virtual_slice_geometry(range_start, virtual_slice_count)
+            }
+        }
+    }
+
+    fn expand_virtual_range_to_hint(
+        &self,
+        range: Range<usize>,
+        hint: Option<&Range<usize>>,
+    ) -> Range<usize> {
+        match self {
+            Self::Compact(layout) => layout.expand_virtual_range_to_hint(range, hint),
+        }
+    }
+
+    fn range_anchor(&self, range_start: usize) -> VirtualRangeAnchor {
+        match self {
+            Self::Compact(layout) => layout.range_anchor(range_start),
+        }
+    }
+
+    fn logical_item_rect(&self, index: usize, slice_index: usize) -> Option<LogicalItemRect> {
+        match self {
+            Self::Compact(layout) => layout.logical_item_rect(index, slice_index),
+        }
+    }
+
+    fn physical_item_bounds(&self, rect: LogicalItemRect) -> ItemViewItemBounds {
+        match self {
+            Self::Compact(layout) => layout.physical_item_bounds(rect),
+        }
+    }
+
+    fn bounds_for_range(&self, range_start: usize, count: usize) -> Vec<ItemViewItemBounds> {
+        match self {
+            Self::Compact(layout) => layout.bounds_for_range(range_start, count),
+        }
+    }
+
+    fn item_bounds(&self, index: usize) -> Option<ItemViewItemBounds> {
+        match self {
+            Self::Compact(layout) => layout.item_bounds(index),
+        }
+    }
+
+    fn index_at_content_point(&self, x: f32, y: f32) -> Option<usize> {
+        match self {
+            Self::Compact(layout) => layout.index_at_content_point(x, y),
+        }
+    }
+
+    fn selection_candidate_range(&self, x1: f32, x2: f32) -> Range<usize> {
+        match self {
+            Self::Compact(layout) => layout.selection_candidate_range(x1, x2),
+        }
+    }
+
+    fn intersects_index(&self, index: usize, x1: f32, y1: f32, x2: f32, y2: f32) -> bool {
+        match self {
+            Self::Compact(layout) => layout.intersects_index(index, x1, y1, x2, y2),
+        }
     }
 }
 
@@ -1722,11 +1851,12 @@ pub(crate) fn clamp_popup(position: f32, popup_size: f32, safe_min: f32, safe_ma
 mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
-        CompactItemViewLayout, HoverBridgeInput, ItemViewLayoutMode, ItemViewLayouter,
-        ItemViewScrollAxis, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
-        PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, VirtualRangeAnchor, VirtualSliceGeometry,
-        active_main_pane_width, compact_item_view_layout, context_menu_metrics,
-        inactive_main_pane_width, main_pane_bounds, place_drop_geometry, search_panel_height,
+        CompactItemViewLayout, HoverBridgeInput, ItemViewLayoutEngine, ItemViewLayoutMode,
+        ItemViewLayouter, ItemViewScrollAxis, MenuMetricsInput, PlaceDropGeometry, PopupPlacement,
+        PopupPoint, PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, VirtualRangeAnchor,
+        VirtualSliceGeometry, active_main_pane_width, compact_item_view_layout,
+        context_menu_metrics, inactive_main_pane_width, main_pane_bounds, place_drop_geometry,
+        search_panel_height,
     };
     use crate::app::item_view_metrics::{compact_cell_width, compact_row_height};
 
@@ -3994,6 +4124,28 @@ mod tests {
         assert_eq!(physical.y, absolute.y);
         assert_eq!(physical.width, absolute.width);
         assert_eq!(physical.text_width, absolute.text_width);
+    }
+
+    #[test]
+    fn item_view_layout_engine_dispatches_to_compact_layouter() {
+        let compact = compact_test_layout(300.0, 8, 3, 100.0, 20.0, 10.0);
+        let engine = ItemViewLayoutEngine::from(compact.clone());
+
+        assert_eq!(engine.layout_mode(), ItemViewLayoutMode::Compact);
+        assert_eq!(engine.scroll_axis(), ItemViewScrollAxis::Horizontal);
+        assert_eq!(engine.layout_metrics(), compact.layout_metrics());
+        assert_eq!(
+            engine.virtual_plan(120.0, 2),
+            compact.virtual_plan(120.0, 2)
+        );
+        assert_eq!(
+            engine.index_at_content_point(112.0, 21.0),
+            compact.index_at_content_point(112.0, 21.0)
+        );
+        assert!(
+            engine.matches_layout_signature(&ItemViewLayoutEngine::from(compact)),
+            "runtime layout engine should preserve compact cache signature semantics"
+        );
     }
 
     #[test]

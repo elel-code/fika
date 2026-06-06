@@ -1,5 +1,5 @@
 use crate::app::geometry::{
-    CompactItemViewLayout, ItemViewLayouter, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT,
+    ItemViewLayoutEngine, ItemViewLayouter, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT,
     active_main_pane_width, inactive_main_pane_width, main_pane_bounds, search_panel_height,
 };
 use crate::app::selection::filtered_entry_at_for_slot;
@@ -17,7 +17,7 @@ pub(crate) struct ItemViewLayout {
     pub(crate) width: f32,
     pub(crate) height: f32,
     pub(crate) viewport_x: f32,
-    pub(crate) layout: CompactItemViewLayout,
+    pub(crate) layout: ItemViewLayoutEngine,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -26,7 +26,7 @@ pub(crate) struct SelectionRect {
     pub(crate) y1: f32,
     pub(crate) x2: f32,
     pub(crate) y2: f32,
-    pub(crate) layout: CompactItemViewLayout,
+    pub(crate) layout: ItemViewLayoutEngine,
 }
 
 impl SelectionRect {
@@ -121,7 +121,7 @@ impl ItemViewInputState {
         &mut self,
         x: f32,
         y: f32,
-        layout: CompactItemViewLayout,
+        layout: ItemViewLayoutEngine,
         toggle: bool,
     ) {
         self.clear_drag_source();
@@ -184,7 +184,7 @@ struct SelectionRectGesture {
     start_y: f32,
     current_x: f32,
     current_y: f32,
-    layout: CompactItemViewLayout,
+    layout: ItemViewLayoutEngine,
     toggle: bool,
     active: bool,
 }
@@ -234,7 +234,7 @@ impl ItemViewLayout {
         width: f32,
         height: f32,
         viewport_x: f32,
-        layout: CompactItemViewLayout,
+        layout: ItemViewLayoutEngine,
     ) -> Self {
         Self {
             x,
@@ -396,7 +396,7 @@ pub(crate) fn press_blank_for_slot(
         .virtual_view
         .layout
         .clone()
-        .unwrap_or_else(CompactItemViewLayout::empty);
+        .unwrap_or_else(ItemViewLayoutEngine::empty_compact);
     pane.view.input.press_blank(x, y, layout, toggle);
     true
 }
@@ -440,7 +440,7 @@ pub(crate) fn item_index_at_pane_point(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::compact_item_view_layout;
+    use crate::app::geometry::{CompactItemViewLayout, compact_item_view_layout};
 
     fn test_layout() -> CompactItemViewLayout {
         compact_item_view_layout(
@@ -461,7 +461,7 @@ mod tests {
     fn item_view_layout_hit_test_uses_layout_offsets_and_viewport() {
         let compact = test_layout();
         let second_column_x = compact.column_offsets[1] + 10.0 - 40.0;
-        let layout = ItemViewLayout::new(100.0, 50.0, 250.0, 220.0, 40.0, compact);
+        let layout = ItemViewLayout::new(100.0, 50.0, 250.0, 220.0, 40.0, compact.into());
 
         assert_eq!(
             layout.index_at_point(100.0 + second_column_x, 65.0),
@@ -477,7 +477,7 @@ mod tests {
             y1: 0.0,
             x2: compact.column_offsets[0] + compact.column_widths[0] + 10.0,
             y2: 205.0,
-            layout: compact,
+            layout: compact.into(),
         };
 
         assert!(rect.intersects_index(0));
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn item_view_input_turns_blank_click_into_clear_selection() {
         let mut input = ItemViewInputState::default();
-        input.press_blank(10.0, 20.0, test_layout(), false);
+        input.press_blank(10.0, 20.0, test_layout().into(), false);
 
         assert!(!input.move_blank(14.0, 24.0));
         assert_eq!(
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn item_view_input_turns_blank_drag_into_selection_rect() {
-        let layout = test_layout();
+        let layout = ItemViewLayoutEngine::from(test_layout());
         let mut input = ItemViewInputState::default();
         input.press_blank(120.0, 80.0, layout.clone(), true);
 
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn item_view_input_cancel_drops_pending_blank_selection() {
         let mut input = ItemViewInputState::default();
-        input.press_blank(10.0, 20.0, test_layout(), false);
+        input.press_blank(10.0, 20.0, test_layout().into(), false);
 
         input.cancel_blank();
 
@@ -561,7 +561,7 @@ mod tests {
         assert_eq!(source.path(), "/tmp/file.txt");
         assert!(!source.is_dir());
 
-        input.press_blank(10.0, 20.0, test_layout(), false);
+        input.press_blank(10.0, 20.0, test_layout().into(), false);
 
         assert!(input.drag_source().is_none());
     }

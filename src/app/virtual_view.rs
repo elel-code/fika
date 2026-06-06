@@ -1,5 +1,5 @@
 use crate::app::geometry::{
-    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewLayouter, MainItemViewLayout,
+    ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewLayoutEngine, ItemViewLayouter, MainItemViewLayout,
     VirtualItemViewPlan,
 };
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VirtualViewSnapshotUpdate {
     pub(crate) entry_count: usize,
-    pub(crate) layout: CompactItemViewLayout,
+    pub(crate) layout: ItemViewLayoutEngine,
     pub(crate) viewport_x: f32,
     pub(crate) viewport_clamped: bool,
     pub(crate) range: Range<usize>,
@@ -49,6 +49,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     let compact_item_view = input
         .layout
         .compact_item_view_from_names(visible_names.iter().map(String::as_str));
+    let item_view_layout = ItemViewLayoutEngine::from(compact_item_view.clone());
     let plan =
         compact_item_view.virtual_plan(input.requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
     let range = compact_item_view
@@ -59,14 +60,14 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         || should_rebuild_virtual_cache(
             &input.cache,
             &plan,
-            &compact_item_view,
+            &item_view_layout,
             input.thumbnail_size_px,
         );
 
     if !rebuild_model {
         return VirtualViewSnapshotUpdate {
             entry_count: visible_count,
-            layout: compact_item_view,
+            layout: item_view_layout,
             viewport_x: plan.viewport_x,
             viewport_clamped,
             range: plan.range,
@@ -82,7 +83,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 
     VirtualViewSnapshotUpdate {
         entry_count: visible_count,
-        layout: compact_item_view,
+        layout: item_view_layout,
         viewport_x: plan.viewport_x,
         viewport_clamped,
         range,
@@ -96,7 +97,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 fn should_rebuild_virtual_cache(
     cache: &VirtualViewCache,
     plan: &VirtualItemViewPlan,
-    layout: &CompactItemViewLayout,
+    layout: &ItemViewLayoutEngine,
     thumbnail_size_px: u32,
 ) -> bool {
     !cache.matches_layout(layout, thumbnail_size_px)
@@ -463,7 +464,9 @@ mod tests {
             ..VirtualViewCache::default()
         };
         cache.update_layout_signature(
-            layout().compact_item_view_from_names(names.iter().map(String::as_str)),
+            layout()
+                .compact_item_view_from_names(names.iter().map(String::as_str))
+                .into(),
             thumbnail_size_px,
         );
         cache
@@ -560,7 +563,7 @@ mod tests {
             .map(PaneEntrySnapshot::to_item_view_entry)
             .collect::<Vec<_>>();
         let input = ItemViewRenderPlanInput {
-            cell_width: update.layout.cell_width,
+            cell_width: update.layout.layout_metrics().cell_width,
             render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
             show_location: false,
         };
