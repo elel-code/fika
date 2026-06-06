@@ -84,6 +84,31 @@ pub(crate) fn new_item_view_bounds_model(
     ModelRc::new(Rc::new(VecModel::from(bounds_entries)))
 }
 
+fn update_item_view_bounds_entries_model(
+    current: &mut ModelRc<ItemViewBoundsEntry>,
+    old_start: usize,
+    new_start: usize,
+    bounds_entries: Vec<ItemViewBoundsEntry>,
+) -> bool {
+    if bounds_entries.is_empty() {
+        if current.row_count() == 0 {
+            return false;
+        }
+        *current = ModelRc::default();
+        return true;
+    }
+
+    let Some(model) = current
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewBoundsEntry>>()
+    else {
+        *current = new_item_view_bounds_model(bounds_entries);
+        return true;
+    };
+
+    update_sliding_vec_model(model, old_start, new_start, bounds_entries)
+}
+
 pub(crate) fn new_item_view_metadata_model(
     metadata: Vec<ItemViewMetadataEntry>,
 ) -> ModelRc<ItemViewMetadataEntry> {
@@ -207,11 +232,16 @@ pub(crate) fn update_pane_item_view_entries_model(
     metadata_entries: Vec<ItemViewMetadataEntry>,
     selected_paths: &[String],
 ) {
-    view.virtual_bounds_entries = new_item_view_bounds_model(bounds_entries);
+    let old_start = view.virtual_start_index;
+    update_item_view_bounds_entries_model(
+        &mut view.virtual_bounds_entries,
+        old_start,
+        start_index,
+        bounds_entries,
+    );
     view.virtual_media_entries = new_item_view_media_model(media_entries);
     view.virtual_metadata_entries = new_item_view_metadata_model(metadata_entries);
     let current = view.virtual_entries.clone();
-    let old_start = view.virtual_start_index;
     if let Some(model) = update_item_view_entries_model(
         &current,
         old_start,
@@ -266,7 +296,12 @@ pub(crate) fn relayout_pane_item_view_entries_model(
     }
 
     let _ = update_item_view_highlight_model(view);
-    view.virtual_bounds_entries = new_item_view_bounds_model(bounds_entries);
+    update_item_view_bounds_entries_model(
+        &mut view.virtual_bounds_entries,
+        old_start,
+        range.start,
+        bounds_entries,
+    );
     trim_item_view_media_entries_model(&mut view.virtual_media_entries, remove_front, target_len);
     view.virtual_start_index = range.start;
     true
@@ -408,6 +443,81 @@ fn update_vec_model(
     *current_tokens = std::mem::take(next_tokens);
 }
 
+fn update_sliding_vec_model<T>(
+    model: &VecModel<T>,
+    old_start: usize,
+    new_start: usize,
+    entries: Vec<T>,
+) -> bool
+where
+    T: Clone + PartialEq + 'static,
+{
+    let old_len = model.row_count();
+    if old_len == 0 || entries.is_empty() {
+        let changed = old_len != entries.len()
+            || entries
+                .iter()
+                .enumerate()
+                .any(|(row, entry)| model.row_data(row).as_ref() != Some(entry));
+        if changed {
+            model.set_vec(entries);
+        }
+        return changed;
+    }
+
+    let old_end = old_start.saturating_add(old_len);
+    let new_end = new_start.saturating_add(entries.len());
+    let overlap_start = old_start.max(new_start);
+    let overlap_end = old_end.min(new_end);
+
+    if overlap_start >= overlap_end {
+        let changed = old_len != entries.len()
+            || entries
+                .iter()
+                .enumerate()
+                .any(|(row, entry)| model.row_data(row).as_ref() != Some(entry));
+        if changed {
+            model.set_vec(entries);
+        }
+        return changed;
+    }
+
+    let mut changed = false;
+    if new_start > old_start {
+        let remove_count = (new_start - old_start).min(model.row_count());
+        for _ in 0..remove_count {
+            model.remove(0);
+            changed = true;
+        }
+    } else if new_start < old_start {
+        let prefix_len = (old_start - new_start).min(entries.len());
+        for entry in entries[..prefix_len].iter().rev() {
+            model.insert(0, entry.clone());
+            changed = true;
+        }
+    }
+
+    let overlap_rows = overlap_start - new_start..overlap_end - new_start;
+    for row in overlap_rows {
+        if model.row_data(row).as_ref() != Some(&entries[row]) {
+            model.set_row_data(row, entries[row].clone());
+            changed = true;
+        }
+    }
+
+    while model.row_count() > entries.len() {
+        model.remove(model.row_count() - 1);
+        changed = true;
+    }
+
+    let current_len = model.row_count();
+    if current_len < entries.len() {
+        model.extend(entries[current_len..].iter().cloned());
+        changed = true;
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,6 +545,28 @@ mod tests {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| entry.slice_index)
+            .collect()
+    }
+
+    fn bounds_row_x(model: &ModelRc<ItemViewBoundsEntry>) -> Vec<f32> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| entry.x)
+            .collect()
+    }
+
+    fn bounds_entries(start: usize, count: usize) -> Vec<ItemViewBoundsEntry> {
+        (0..count)
+            .map(|row| {
+                let index = start + row;
+                ItemViewBoundsEntry {
+                    slice_index: row as i32,
+                    x: index as f32 * 10.0,
+                    y: row as f32 * 2.0,
+                    width: 90.0 + index as f32,
+                    text_width: 45.0 + index as f32,
+                }
+            })
             .collect()
     }
 
@@ -721,6 +853,53 @@ mod tests {
     }
 
     #[test]
+    fn pane_item_view_bounds_model_reuses_vec_model_when_range_slides() {
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            entries_with_tile_metrics(4),
+            bounds_entries(0, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+        let original_bounds = view.virtual_bounds_entries.clone();
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            2,
+            (2..6).map(entry).collect(),
+            bounds_entries(2, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.virtual_bounds_entries, original_bounds);
+        assert_eq!(
+            bounds_row_x(&view.virtual_bounds_entries),
+            vec![20.0, 30.0, 40.0, 50.0]
+        );
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            1,
+            (1..5).map(entry).collect(),
+            bounds_entries(1, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.virtual_bounds_entries, original_bounds);
+        assert_eq!(
+            bounds_row_x(&view.virtual_bounds_entries),
+            vec![10.0, 20.0, 30.0, 40.0]
+        );
+    }
+
+    #[test]
     fn pane_item_view_highlight_model_reuses_vec_model_when_selection_shape_changes() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
@@ -755,24 +934,30 @@ mod tests {
             &mut view,
             10,
             entries_with_tile_metrics(4),
-            Vec::new(),
+            bounds_entries(10, 4),
             Vec::new(),
             Vec::new(),
             &["/tmp/item-2".to_string()],
         );
         let original = view.virtual_entries.clone();
+        let original_bounds = view.virtual_bounds_entries.clone();
 
         assert!(relayout_pane_item_view_entries_model(
             &mut view,
             11..13,
-            Vec::new()
+            bounds_entries(11, 2)
         ));
 
         assert_eq!(view.virtual_entries, original);
+        assert_eq!(view.virtual_bounds_entries, original_bounds);
         assert_eq!(view.virtual_start_index, 11);
         assert_eq!(
             rows(&view.virtual_entries),
             vec!["/tmp/item-1".to_string(), "/tmp/item-2".to_string()]
+        );
+        assert_eq!(
+            bounds_row_x(&view.virtual_bounds_entries),
+            vec![110.0, 120.0]
         );
         assert_eq!(
             selected_token_rows(&view.virtual_entry_tokens),
