@@ -325,7 +325,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
         #[derive(Clone, Debug)]
         enum FikaDragInfo {
-            Pending,
+            Pending(i32),
             Place(String),
             Folder(String),
             File(String),
@@ -335,6 +335,15 @@ fn main() -> Result<(), slint::PlatformError> {
             let mut dt = DataTransfer::default();
             dt.set_user_data(Rc::new(info));
             dt
+        }
+
+        fn pending_drag_info(state: &AppState, slot: i32) -> Option<FikaDragInfo> {
+            let source = state.panes.pane_for_slot(slot)?.view.input.drag_source()?;
+            Some(if source.is_dir() {
+                FikaDragInfo::Folder(source.path().to_string())
+            } else {
+                FikaDragInfo::File(source.path().to_string())
+            })
         }
 
         let dnd_api = ui.global::<DndApi>();
@@ -357,7 +366,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     return DataTransfer::default();
                 }
                 if x < 0.0 || y < 0.0 {
-                    return drag_transfer(FikaDragInfo::Pending);
+                    return drag_transfer(FikaDragInfo::Pending(slot));
                 }
                 let Some(ui) = ui_weak.upgrade() else {
                     return DataTransfer::default();
@@ -376,32 +385,55 @@ fn main() -> Result<(), slint::PlatformError> {
         }
 
         // ── DropEvent inspectors ────────────────────────────────
-        dnd_api.on_event_kind(|event: DropEvent| -> DragKind {
-            if let Some(rc) = event.data.user_data() {
-                match rc.downcast_ref::<FikaDragInfo>() {
-                    Some(FikaDragInfo::Pending) => return DragKind::Unsupported,
-                    Some(FikaDragInfo::Place(_)) => return DragKind::Place,
-                    Some(FikaDragInfo::Folder(_)) => return DragKind::Folder,
-                    Some(FikaDragInfo::File(_)) => return DragKind::File,
-                    None => {}
-                }
-            }
-            DragKind::Unsupported
-        });
-
-        dnd_api.on_event_path(|event: DropEvent| -> SharedString {
-            if let Some(rc) = event.data.user_data()
-                && let Some(info) = rc.downcast_ref::<FikaDragInfo>()
-            {
-                return match info {
-                    FikaDragInfo::Place(p) | FikaDragInfo::Folder(p) | FikaDragInfo::File(p) => {
-                        SharedString::from(p.as_str())
+        {
+            let state = Rc::clone(&state);
+            dnd_api.on_event_kind(move |event: DropEvent| -> DragKind {
+                if let Some(rc) = event.data.user_data() {
+                    match rc.downcast_ref::<FikaDragInfo>() {
+                        Some(FikaDragInfo::Pending(slot)) => {
+                            let state_ref = state.borrow();
+                            return match pending_drag_info(&state_ref, *slot) {
+                                Some(FikaDragInfo::Folder(_)) => DragKind::Folder,
+                                Some(FikaDragInfo::File(_)) => DragKind::File,
+                                _ => DragKind::Unsupported,
+                            };
+                        }
+                        Some(FikaDragInfo::Place(_)) => return DragKind::Place,
+                        Some(FikaDragInfo::Folder(_)) => return DragKind::Folder,
+                        Some(FikaDragInfo::File(_)) => return DragKind::File,
+                        None => {}
                     }
-                    FikaDragInfo::Pending => SharedString::new(),
-                };
-            }
-            SharedString::new()
-        });
+                }
+                DragKind::Unsupported
+            });
+        }
+
+        {
+            let state = Rc::clone(&state);
+            dnd_api.on_event_path(move |event: DropEvent| -> SharedString {
+                if let Some(rc) = event.data.user_data()
+                    && let Some(info) = rc.downcast_ref::<FikaDragInfo>()
+                {
+                    return match info {
+                        FikaDragInfo::Pending(slot) => {
+                            let state_ref = state.borrow();
+                            match pending_drag_info(&state_ref, *slot) {
+                                Some(
+                                    FikaDragInfo::Place(p)
+                                    | FikaDragInfo::Folder(p)
+                                    | FikaDragInfo::File(p),
+                                ) => SharedString::from(p.as_str()),
+                                _ => SharedString::new(),
+                            }
+                        }
+                        FikaDragInfo::Place(p)
+                        | FikaDragInfo::Folder(p)
+                        | FikaDragInfo::File(p) => SharedString::from(p.as_str()),
+                    };
+                }
+                SharedString::new()
+            });
+        }
     }
     ui.set_chooser_mode(matches!(args.mode, Mode::Chooser));
     ui.set_chooser_select_directories(args.chooser_select_directories);
@@ -4359,6 +4391,14 @@ fn press_item_view_entry_at_point_for_slot(
     let Some(entry) = item_view_entry_at_point_for_slot(ui, state, slot, x, y) else {
         return false;
     };
+    {
+        let mut state_ref = state.borrow_mut();
+        if let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) {
+            pane.view
+                .input
+                .set_drag_source(entry.path.to_string(), entry.is_dir);
+        }
+    }
     select_path_for_slot(ui, state, slot, entry.path.as_str(), toggle, range);
     true
 }
@@ -6527,8 +6567,47 @@ mod tests {
 
         assert!(
             body.contains("if x <= -2.0 || y <= -2.0 {\n                    return DataTransfer::default();\n                }")
-                && body.contains("if x < 0.0 || y < 0.0 {\n                    return drag_transfer(FikaDragInfo::Pending);\n                }"),
+                && body.contains("if x < 0.0 || y < 0.0 {\n                    return drag_transfer(FikaDragInfo::Pending(slot));\n                }"),
             "blank-area rectangle selection should suppress DragArea with an empty transfer while preserving the pending press probe for item drags"
+        );
+    }
+
+    #[test]
+    fn pending_drag_probe_resolves_from_pane_local_press_source() {
+        let source = include_str!("main.rs");
+        let dnd_block = source
+            .split_once("enum FikaDragInfo {")
+            .and_then(|(_, rest)| rest.split_once("// ── DropEvent inspectors"))
+            .map(|(body, _)| body)
+            .expect("DndApi setup should define drag info before inspectors");
+        let press_body = source
+            .split_once("fn press_item_view_entry_at_point_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn activate_item_view_entry_at_point_for_slot("))
+            .map(|(body, _)| body)
+            .expect("item-view press handler should be present");
+
+        let drag_source_write = press_body
+            .find(".set_drag_source(entry.path.to_string(), entry.is_dir);")
+            .expect("item press should record the pane-local drag source");
+        let selection_update = press_body
+            .find("select_path_for_slot(ui, state, slot, entry.path.as_str(), toggle, range);")
+            .expect("item press should still update selection");
+
+        assert!(dnd_block.contains("Pending(i32)"));
+        assert!(
+            dnd_block.contains(
+                "fn pending_drag_info(state: &AppState, slot: i32) -> Option<FikaDragInfo>"
+            )
+        );
+        assert!(dnd_block.contains("pane_for_slot(slot)?.view.input.drag_source()?"));
+        assert!(dnd_block.contains("return drag_transfer(FikaDragInfo::Pending(slot));"));
+        assert!(source.contains("Some(FikaDragInfo::Pending(slot)) => {"));
+        assert!(source.contains("return match pending_drag_info(&state_ref, *slot)"));
+        assert!(source.contains("FikaDragInfo::Pending(slot) => {"));
+        assert!(source.contains("match pending_drag_info(&state_ref, *slot)"));
+        assert!(
+            drag_source_write < selection_update,
+            "item press must record the drag source before selection UI refresh can disturb the Slint press-time drag data"
         );
     }
 

@@ -48,9 +48,38 @@ impl SelectionRect {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ItemViewInputState {
     selection_rect: Option<SelectionRectGesture>,
+    drag_source: Option<ItemViewDragSource>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewDragSource {
+    path: String,
+    is_dir: bool,
+}
+
+impl ItemViewDragSource {
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) fn is_dir(&self) -> bool {
+        self.is_dir
+    }
 }
 
 impl ItemViewInputState {
+    pub(crate) fn set_drag_source(&mut self, path: String, is_dir: bool) {
+        self.drag_source = Some(ItemViewDragSource { path, is_dir });
+    }
+
+    pub(crate) fn clear_drag_source(&mut self) {
+        self.drag_source = None;
+    }
+
+    pub(crate) fn drag_source(&self) -> Option<&ItemViewDragSource> {
+        self.drag_source.as_ref()
+    }
+
     pub(crate) fn press_blank(
         &mut self,
         x: f32,
@@ -58,6 +87,7 @@ impl ItemViewInputState {
         layout: CompactItemViewLayout,
         toggle: bool,
     ) {
+        self.clear_drag_source();
         self.selection_rect = Some(SelectionRectGesture {
             start_x: x,
             start_y: y,
@@ -345,5 +375,19 @@ mod tests {
             input.release_blank(100.0, 120.0),
             ItemViewReleaseAction::None
         );
+    }
+
+    #[test]
+    fn item_view_input_tracks_press_drag_source_until_blank_press() {
+        let mut input = ItemViewInputState::default();
+        input.set_drag_source("/tmp/file.txt".to_string(), false);
+
+        let source = input.drag_source().expect("drag source");
+        assert_eq!(source.path(), "/tmp/file.txt");
+        assert!(!source.is_dir());
+
+        input.press_blank(10.0, 20.0, test_layout(), false);
+
+        assert!(input.drag_source().is_none());
     }
 }
