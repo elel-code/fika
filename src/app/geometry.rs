@@ -55,6 +55,16 @@ pub(crate) struct CompactItemViewLayoutMetrics {
     pub(crate) scroll_max_x: f32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ItemViewLayoutMode {
+    Compact,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ItemViewScrollAxis {
+    Horizontal,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct VirtualRangeAnchor {
     pub(crate) start_column: usize,
@@ -79,6 +89,16 @@ pub(crate) struct VirtualSliceGeometry {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LogicalItemRect {
+    pub(crate) slice_index: usize,
+    pub(crate) main: f32,
+    pub(crate) cross: f32,
+    pub(crate) main_extent: f32,
+    pub(crate) cross_extent: f32,
+    pub(crate) text_main_extent: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewItemBounds {
     pub(crate) slice_index: usize,
     pub(crate) x: f32,
@@ -88,6 +108,8 @@ pub(crate) struct ItemViewItemBounds {
 }
 
 pub(crate) trait ItemViewLayouter {
+    fn layout_mode(&self) -> ItemViewLayoutMode;
+    fn scroll_axis(&self) -> ItemViewScrollAxis;
     fn matches_layout_signature(&self, other: &Self) -> bool
     where
         Self: Sized;
@@ -108,6 +130,8 @@ pub(crate) trait ItemViewLayouter {
         hint: Option<&Range<usize>>,
     ) -> Range<usize>;
     fn range_anchor(&self, range_start: usize) -> VirtualRangeAnchor;
+    fn logical_item_rect(&self, index: usize, slice_index: usize) -> Option<LogicalItemRect>;
+    fn physical_item_bounds(&self, rect: LogicalItemRect) -> ItemViewItemBounds;
     fn bounds_for_range(&self, range_start: usize, count: usize) -> Vec<ItemViewItemBounds>;
     fn item_bounds(&self, index: usize) -> Option<ItemViewItemBounds>;
     fn index_at_content_point(&self, x: f32, y: f32) -> Option<usize>;
@@ -239,8 +263,17 @@ impl CompactItemViewLayout {
 }
 
 impl ItemViewLayouter for CompactItemViewLayout {
+    fn layout_mode(&self) -> ItemViewLayoutMode {
+        ItemViewLayoutMode::Compact
+    }
+
+    fn scroll_axis(&self) -> ItemViewScrollAxis {
+        ItemViewScrollAxis::Horizontal
+    }
+
     fn matches_layout_signature(&self, other: &Self) -> bool {
-        self.entry_count == other.entry_count
+        self.layout_mode() == other.layout_mode()
+            && self.entry_count == other.entry_count
             && self.rows_per_column == other.rows_per_column
             && same_layout_metric(self.viewport_width, other.viewport_width)
             && same_layout_metric(self.cell_width, other.cell_width)
@@ -350,43 +383,49 @@ impl ItemViewLayouter for CompactItemViewLayout {
         }
     }
 
-    fn bounds_for_range(&self, range_start: usize, count: usize) -> Vec<ItemViewItemBounds> {
-        let end = range_start.saturating_add(count).min(self.entry_count);
-        (range_start.min(end)..end)
-            .enumerate()
-            .filter_map(|(slice_index, index)| {
-                let column = self.column_for_index(index)?;
-                Some(ItemViewItemBounds {
-                    slice_index,
-                    x: self.column_offsets.get(column).copied().unwrap_or_default(),
-                    y: self.row_y_for_index(index),
-                    width: self
-                        .item_widths
-                        .get(index)
-                        .copied()
-                        .unwrap_or(self.cell_width),
-                    text_width: self.item_text_widths.get(index).copied().unwrap_or(1.0),
-                })
-            })
-            .collect()
-    }
-
-    fn item_bounds(&self, index: usize) -> Option<ItemViewItemBounds> {
+    fn logical_item_rect(&self, index: usize, slice_index: usize) -> Option<LogicalItemRect> {
         if index >= self.entry_count {
             return None;
         }
         let column = self.column_for_index(index)?;
-        Some(ItemViewItemBounds {
-            slice_index: index,
-            x: self.column_offsets.get(column).copied().unwrap_or_default(),
-            y: self.row_y_for_index(index),
-            width: self
+        Some(LogicalItemRect {
+            slice_index,
+            main: self.column_offsets.get(column).copied().unwrap_or_default(),
+            cross: self.row_y_for_index(index),
+            main_extent: self
                 .item_widths
                 .get(index)
                 .copied()
                 .unwrap_or(self.cell_width),
-            text_width: self.item_text_widths.get(index).copied().unwrap_or(1.0),
+            cross_extent: self.row_height.max(1.0),
+            text_main_extent: self.item_text_widths.get(index).copied().unwrap_or(1.0),
         })
+    }
+
+    fn physical_item_bounds(&self, rect: LogicalItemRect) -> ItemViewItemBounds {
+        match self.scroll_axis() {
+            ItemViewScrollAxis::Horizontal => ItemViewItemBounds {
+                slice_index: rect.slice_index,
+                x: rect.main,
+                y: rect.cross,
+                width: rect.main_extent,
+                text_width: rect.text_main_extent,
+            },
+        }
+    }
+
+    fn bounds_for_range(&self, range_start: usize, count: usize) -> Vec<ItemViewItemBounds> {
+        let end = range_start.saturating_add(count).min(self.entry_count);
+        (range_start.min(end)..end)
+            .enumerate()
+            .filter_map(|(slice_index, index)| self.logical_item_rect(index, slice_index))
+            .map(|rect| self.physical_item_bounds(rect))
+            .collect()
+    }
+
+    fn item_bounds(&self, index: usize) -> Option<ItemViewItemBounds> {
+        self.logical_item_rect(index, index)
+            .map(|rect| self.physical_item_bounds(rect))
     }
 
     fn index_at_content_point(&self, x: f32, y: f32) -> Option<usize> {
@@ -438,15 +477,14 @@ impl ItemViewLayouter for CompactItemViewLayout {
     }
 
     fn intersects_index(&self, index: usize, x1: f32, y1: f32, x2: f32, y2: f32) -> bool {
-        let Some(bounds) = self.item_bounds(index) else {
+        let Some(rect) = self.logical_item_rect(index, index) else {
             return false;
         };
-        let rows_per_column = self.rows_per_column.max(1);
-        let row = index % rows_per_column;
+        let bounds = self.physical_item_bounds(rect);
         let tile_x1 = self.padding + bounds.x;
-        let tile_y1 = self.padding + row as f32 * self.row_height;
+        let tile_y1 = self.padding + bounds.y;
         let tile_x2 = tile_x1 + bounds.width.max(1.0);
-        let tile_y2 = tile_y1 + self.row_height.max(1.0);
+        let tile_y2 = tile_y1 + rect.cross_extent.max(1.0);
 
         RectBounds::new(x1, y1, x2, y2)
             .intersects(RectBounds::new(tile_x1, tile_y1, tile_x2, tile_y2))
@@ -1684,11 +1722,11 @@ pub(crate) fn clamp_popup(position: f32, popup_size: f32, safe_min: f32, safe_ma
 mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
-        CompactItemViewLayout, HoverBridgeInput, ItemViewLayouter, MenuMetricsInput,
-        PlaceDropGeometry, PopupPlacement, PopupPoint, PopupRect, RootMenuGeometry,
-        SHELL_HEADER_HEIGHT, VirtualRangeAnchor, VirtualSliceGeometry, active_main_pane_width,
-        compact_item_view_layout, context_menu_metrics, inactive_main_pane_width, main_pane_bounds,
-        place_drop_geometry, search_panel_height,
+        CompactItemViewLayout, HoverBridgeInput, ItemViewLayoutMode, ItemViewLayouter,
+        ItemViewScrollAxis, MenuMetricsInput, PlaceDropGeometry, PopupPlacement, PopupPoint,
+        PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, VirtualRangeAnchor, VirtualSliceGeometry,
+        active_main_pane_width, compact_item_view_layout, context_menu_metrics,
+        inactive_main_pane_width, main_pane_bounds, place_drop_geometry, search_panel_height,
     };
     use crate::app::item_view_metrics::{compact_cell_width, compact_row_height};
 
@@ -3933,6 +3971,32 @@ mod tests {
     }
 
     #[test]
+    fn compact_item_view_layout_exposes_mode_axis_and_projection() {
+        let layout = compact_test_layout(300.0, 8, 3, 100.0, 20.0, 10.0);
+
+        assert_eq!(layout.layout_mode(), ItemViewLayoutMode::Compact);
+        assert_eq!(layout.scroll_axis(), ItemViewScrollAxis::Horizontal);
+
+        let logical = layout
+            .logical_item_rect(4, 1)
+            .expect("logical rect for visible item");
+        let physical = layout.physical_item_bounds(logical);
+        let absolute = layout.item_bounds(4).expect("absolute item bounds");
+
+        assert_eq!(logical.slice_index, 1);
+        assert_eq!(logical.main, absolute.x);
+        assert_eq!(logical.cross, absolute.y);
+        assert_eq!(logical.main_extent, absolute.width);
+        assert_eq!(logical.cross_extent, layout.row_height);
+        assert_eq!(logical.text_main_extent, absolute.text_width);
+        assert_eq!(physical.slice_index, 1);
+        assert_eq!(physical.x, absolute.x);
+        assert_eq!(physical.y, absolute.y);
+        assert_eq!(physical.width, absolute.width);
+        assert_eq!(physical.text_width, absolute.text_width);
+    }
+
+    #[test]
     fn compact_item_view_layout_exposes_layouter_trait_boundary() {
         fn projected_metrics<L: ItemViewLayouter>(
             layout: &L,
@@ -3962,10 +4026,14 @@ mod tests {
         assert!(
             source.contains("pub(crate) trait ItemViewLayouter")
                 && source.contains("impl ItemViewLayouter for CompactItemViewLayout")
+                && source.contains("fn layout_mode(&self) -> ItemViewLayoutMode;")
+                && source.contains("fn scroll_axis(&self) -> ItemViewScrollAxis;")
+                && source.contains("fn logical_item_rect(&self, index: usize, slice_index: usize) -> Option<LogicalItemRect>;")
+                && source.contains("fn physical_item_bounds(&self, rect: LogicalItemRect) -> ItemViewItemBounds;")
                 && !compact_empty_impl.contains("fn layout_metrics(&self)")
                 && !compact_empty_impl.contains("fn virtual_plan(")
                 && !compact_empty_impl.contains("fn virtual_slice_geometry("),
-            "item-view layout responsibilities should be exposed through ItemViewLayouter instead of concrete public CompactItemViewLayout methods"
+            "item-view layout responsibilities should be exposed through ItemViewLayouter, including Dolphin-style mode/axis/projection boundaries"
         );
     }
 
