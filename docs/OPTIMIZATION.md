@@ -60,6 +60,8 @@ Rectangle viewport shell (clip: true)
 
 ### 现有优化
 
+补充进展：`ItemViewPaintEntry` 已继续收窄为 title 文本和 Rust-projected 绘制几何，不再携带 `is_dir`。目录/文件身份只留在 Rust row token 与 folder/file fallback sparse sidecar 中，避免 Slint title paint row 重新承担 fallback 分支状态。
+
 | 措施 | 位置 | 效果 |
 |------|------|------|
 | 虚拟化：Slint 只接收可见范围条目 | `virtual_view.rs` | 大目录不实例化全部 tile |

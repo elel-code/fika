@@ -151,7 +151,6 @@ fn item_view_paint_entries(
             Some(ItemViewPaintEntry {
                 slice_index: bounds.slice_index as i32,
                 name: entry.name.clone(),
-                is_dir: entry.is_dir,
                 x: bounds.x,
                 y: bounds.y,
                 width: bounds.width,
@@ -172,7 +171,6 @@ fn item_view_paint_entries_from_tokens(
             Some(ItemViewPaintEntry {
                 slice_index: bounds.slice_index as i32,
                 name: token.name_shared(),
-                is_dir: token.is_dir(),
                 x: bounds.x,
                 y: bounds.y,
                 width: bounds.width,
@@ -1023,14 +1021,13 @@ mod tests {
             .collect()
     }
 
-    fn paint_rows(model: &ModelRc<ItemViewPaintEntry>) -> Vec<(i32, String, bool, f32, f32)> {
+    fn paint_rows(model: &ModelRc<ItemViewPaintEntry>) -> Vec<(i32, String, f32, f32)> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| {
                 (
                     entry.slice_index,
                     entry.name.to_string(),
-                    entry.is_dir,
                     entry.x,
                     entry.text_width,
                 )
@@ -1520,10 +1517,10 @@ mod tests {
         assert_eq!(
             paint_rows(&view.virtual_paint_entries),
             vec![
-                (0, "item-2".to_string(), false, 20.0, 47.0),
-                (1, "item-3".to_string(), false, 30.0, 48.0),
-                (2, "item-4".to_string(), false, 40.0, 49.0),
-                (3, "item-5".to_string(), false, 50.0, 50.0),
+                (0, "item-2".to_string(), 20.0, 47.0),
+                (1, "item-3".to_string(), 30.0, 48.0),
+                (2, "item-4".to_string(), 40.0, 49.0),
+                (3, "item-5".to_string(), 50.0, 50.0),
             ]
         );
 
@@ -1541,10 +1538,10 @@ mod tests {
         assert_eq!(
             paint_rows(&view.virtual_paint_entries),
             vec![
-                (0, "item-1".to_string(), false, 10.0, 46.0),
-                (1, "item-2".to_string(), false, 20.0, 47.0),
-                (2, "item-3".to_string(), false, 30.0, 48.0),
-                (3, "item-4".to_string(), false, 40.0, 49.0),
+                (0, "item-1".to_string(), 10.0, 46.0),
+                (1, "item-2".to_string(), 20.0, 47.0),
+                (2, "item-3".to_string(), 30.0, 48.0),
+                (3, "item-4".to_string(), 40.0, 49.0),
             ]
         );
     }
@@ -1765,8 +1762,8 @@ mod tests {
         assert_eq!(
             paint_rows(&view.virtual_paint_entries),
             vec![
-                (0, "item-1".to_string(), false, 110.0, 56.0),
-                (1, "item-2".to_string(), false, 120.0, 57.0),
+                (0, "item-1".to_string(), 110.0, 56.0),
+                (1, "item-2".to_string(), 120.0, 57.0),
             ]
         );
         assert_eq!(

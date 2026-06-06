@@ -897,7 +897,6 @@ mod tests {
                         .map(|index| ItemViewPaintEntry {
                             slice_index: index as i32,
                             name: format!("item-{index}").into(),
-                            is_dir: false,
                             x: index as f32 * 10.0,
                             y: 0.0,
                             width: 80.0,
