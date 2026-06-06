@@ -294,6 +294,24 @@ pub(crate) fn entry_at_pane_point(
     filtered_entry_at_for_slot(state, slot, index)
 }
 
+pub(crate) fn press_entry_at_pane_point(
+    ui: &AppWindow,
+    state: &mut AppState,
+    slot: i32,
+    x: f32,
+    y: f32,
+    toggle: bool,
+    range: bool,
+) -> Option<ItemViewControllerAction> {
+    let entry = entry_at_pane_point(ui, state, slot, x, y)?;
+    let pane = state.panes.pane_mut_for_slot(slot)?;
+    Some(
+        pane.view
+            .input
+            .press_entry(entry.path.to_string(), entry.is_dir, toggle, range),
+    )
+}
+
 pub(crate) fn item_index_at_pane_point(
     ui: &AppWindow,
     state: &AppState,

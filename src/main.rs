@@ -55,6 +55,7 @@ use app::geometry::{
 };
 use app::item_view::{
     ItemViewControllerAction, SelectionRect, entry_at_pane_point, item_index_at_pane_point,
+    press_entry_at_pane_point,
 };
 use app::item_view_renderer::{
     ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
@@ -4434,17 +4435,13 @@ fn press_item_view_entry_at_point_for_slot(
     toggle: bool,
     range: bool,
 ) -> bool {
-    let Some(entry) = item_view_entry_at_point_for_slot(ui, state, slot, x, y) else {
-        return false;
-    };
     let action = {
         let mut state_ref = state.borrow_mut();
-        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
+        let Some(action) = press_entry_at_pane_point(ui, &mut state_ref, slot, x, y, toggle, range)
+        else {
             return false;
         };
-        pane.view
-            .input
-            .press_entry(entry.path.to_string(), entry.is_dir, toggle, range)
+        action
     };
     apply_item_view_controller_action(ui, state, slot, action);
     true
@@ -6657,8 +6654,8 @@ mod tests {
             .expect("item-view press handler should be present");
 
         let controller_action = press_body
-            .find(".press_entry(entry.path.to_string(), entry.is_dir, toggle, range)")
-            .expect("item press should route through the pane-local item-view controller");
+            .find("press_entry_at_pane_point(ui, &mut state_ref, slot, x, y, toggle, range)")
+            .expect("item press hit-test and input update should route through the pane-local item-view controller");
         let action_execution = press_body
             .find("apply_item_view_controller_action(ui, state, slot, action);")
             .expect("item press should execute the controller action after recording press state");
