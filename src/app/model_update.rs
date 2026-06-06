@@ -17,6 +17,12 @@ pub(crate) struct ItemViewRowToken {
     media_token: i32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewMediaToken {
+    slice_index: i32,
+    media_token: i32,
+}
+
 impl ItemViewRowToken {
     pub(crate) fn from_entry(entry: &ItemViewEntry) -> Self {
         Self {
@@ -152,6 +158,55 @@ pub(crate) fn new_item_view_media_model(
     ModelRc::new(Rc::new(VecModel::from(media_entries)))
 }
 
+fn item_view_media_tokens(
+    entries: &[ItemViewEntry],
+    media_entries: &[ItemViewMediaEntry],
+) -> Vec<ItemViewMediaToken> {
+    media_entries
+        .iter()
+        .map(|media| {
+            let media_token = usize::try_from(media.slice_index)
+                .ok()
+                .and_then(|row| entries.get(row))
+                .map_or(0, |entry| entry.media_token);
+            ItemViewMediaToken {
+                slice_index: media.slice_index,
+                media_token,
+            }
+        })
+        .collect()
+}
+
+fn update_item_view_media_entries_model(
+    current: &mut ModelRc<ItemViewMediaEntry>,
+    current_tokens: &mut Vec<ItemViewMediaToken>,
+    media_entries: Vec<ItemViewMediaEntry>,
+    next_tokens: Vec<ItemViewMediaToken>,
+) -> bool {
+    if media_entries.is_empty() {
+        let had_tokens = !current_tokens.is_empty();
+        current_tokens.clear();
+        if current.row_count() == 0 {
+            return had_tokens;
+        }
+        *current = ModelRc::default();
+        return true;
+    }
+
+    let Some(model) = current
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewMediaEntry>>()
+    else {
+        *current = new_item_view_media_model(media_entries);
+        *current_tokens = next_tokens;
+        return true;
+    };
+
+    let changed =
+        update_sparse_vec_model_by_tokens(model, current_tokens, media_entries, next_tokens);
+    changed
+}
+
 fn item_view_highlight_entries(tokens: &[ItemViewRowToken]) -> Vec<ItemViewHighlightEntry> {
     tokens
         .iter()
@@ -256,13 +311,19 @@ pub(crate) fn update_pane_item_view_entries_model(
     selected_paths: &[String],
 ) {
     let old_start = view.virtual_start_index;
+    let media_tokens = item_view_media_tokens(&entries, &media_entries);
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
         start_index,
         bounds_entries,
     );
-    view.virtual_media_entries = new_item_view_media_model(media_entries);
+    update_item_view_media_entries_model(
+        &mut view.virtual_media_entries,
+        &mut view.virtual_media_tokens,
+        media_entries,
+        media_tokens,
+    );
     update_item_view_metadata_entries_model(&mut view.virtual_metadata_entries, metadata_entries);
     let current = view.virtual_entries.clone();
     if let Some(model) = update_item_view_entries_model(
@@ -325,19 +386,36 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         range.start,
         bounds_entries,
     );
-    trim_item_view_media_entries_model(&mut view.virtual_media_entries, remove_front, target_len);
+    trim_item_view_media_entries_model(
+        &mut view.virtual_media_entries,
+        &mut view.virtual_media_tokens,
+        remove_front,
+        target_len,
+    );
     view.virtual_start_index = range.start;
     true
 }
 
 fn trim_item_view_media_entries_model(
     current: &mut ModelRc<ItemViewMediaEntry>,
+    current_tokens: &mut Vec<ItemViewMediaToken>,
     remove_front: usize,
     target_len: usize,
 ) {
-    let entries = (0..current.row_count())
-        .filter_map(|row| current.row_data(row))
-        .filter_map(|mut entry| {
+    let retained = (0..current.row_count())
+        .filter_map(|row| {
+            current.row_data(row).map(|entry| {
+                let token = current_tokens
+                    .get(row)
+                    .cloned()
+                    .unwrap_or(ItemViewMediaToken {
+                        slice_index: entry.slice_index,
+                        media_token: 0,
+                    });
+                (entry, token)
+            })
+        })
+        .filter_map(|(mut entry, mut token)| {
             let slice_index = usize::try_from(entry.slice_index).ok()?;
             if slice_index < remove_front {
                 return None;
@@ -347,11 +425,22 @@ fn trim_item_view_media_entries_model(
                 return None;
             }
             entry.slice_index = shifted as i32;
-            Some(entry)
+            token.slice_index = shifted as i32;
+            Some((entry, token))
         })
         .collect::<Vec<_>>();
 
-    *current = new_item_view_media_model(entries);
+    let (entries, tokens): (Vec<_>, Vec<_>) = retained.into_iter().unzip();
+
+    if let Some(model) = current
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewMediaEntry>>()
+    {
+        model.set_vec(entries);
+    } else {
+        *current = new_item_view_media_model(entries);
+    }
+    *current_tokens = tokens;
 }
 
 pub(crate) fn update_pane_item_view_selection_model(
@@ -568,6 +657,48 @@ where
     changed
 }
 
+fn update_sparse_vec_model_by_tokens<T, U>(
+    model: &VecModel<T>,
+    current_tokens: &mut Vec<U>,
+    entries: Vec<T>,
+    next_tokens: Vec<U>,
+) -> bool
+where
+    T: Clone + 'static,
+    U: Clone + PartialEq,
+{
+    let mut changed = false;
+    let overlap_len = model.row_count().min(entries.len());
+    for row in 0..overlap_len {
+        let row_changed = current_tokens
+            .get(row)
+            .zip(next_tokens.get(row))
+            .is_none_or(|(current, next)| current != next);
+        if row_changed {
+            model.set_row_data(row, entries[row].clone());
+            changed = true;
+        }
+    }
+
+    while model.row_count() > entries.len() {
+        model.remove(model.row_count() - 1);
+        changed = true;
+    }
+
+    let current_len = model.row_count();
+    if current_len < entries.len() {
+        model.extend(entries[current_len..].iter().cloned());
+        changed = true;
+    }
+
+    if *current_tokens != next_tokens {
+        *current_tokens = next_tokens;
+        changed = true;
+    }
+
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,6 +755,13 @@ mod tests {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
             .map(|entry| (entry.slice_index, first_pixel(&entry.media)))
+            .collect()
+    }
+
+    fn media_tokens(tokens: &[ItemViewMediaToken]) -> Vec<(i32, i32)> {
+        tokens
+            .iter()
+            .map(|token| (token.slice_index, token.media_token))
             .collect()
     }
 
@@ -1064,6 +1202,72 @@ mod tests {
     }
 
     #[test]
+    fn pane_item_view_media_model_reuses_vec_model_without_image_comparison() {
+        let mut entries = entries_with_tile_metrics(4);
+        entries[1].thumbnail_state = 2;
+        entries[1].media_token = 101;
+        entries[3].thumbnail_state = 2;
+        entries[3].media_token = 103;
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            entries,
+            Vec::new(),
+            vec![
+                ItemViewMediaEntry {
+                    slice_index: 1,
+                    media: colored_image(Rgba8Pixel::new(255, 0, 0, 255)),
+                },
+                ItemViewMediaEntry {
+                    slice_index: 3,
+                    media: colored_image(Rgba8Pixel::new(0, 0, 255, 255)),
+                },
+            ],
+            Vec::new(),
+            &[],
+        );
+        let original_media = view.virtual_media_entries.clone();
+
+        let mut updated_entries = entries_with_tile_metrics(4);
+        updated_entries[1].thumbnail_state = 2;
+        updated_entries[1].media_token = 201;
+        updated_entries[3].thumbnail_state = 2;
+        updated_entries[3].media_token = 203;
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            updated_entries,
+            Vec::new(),
+            vec![
+                ItemViewMediaEntry {
+                    slice_index: 1,
+                    media: colored_image(Rgba8Pixel::new(0, 255, 0, 255)),
+                },
+                ItemViewMediaEntry {
+                    slice_index: 3,
+                    media: colored_image(Rgba8Pixel::new(255, 255, 0, 255)),
+                },
+            ],
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.virtual_media_entries, original_media);
+        assert_eq!(
+            media_rows(&view.virtual_media_entries),
+            vec![
+                (1, Rgba8Pixel::new(0, 255, 0, 255)),
+                (3, Rgba8Pixel::new(255, 255, 0, 255)),
+            ]
+        );
+        assert_eq!(
+            media_tokens(&view.virtual_media_tokens),
+            vec![(1, 201), (3, 203)]
+        );
+    }
+
+    #[test]
     fn pane_item_view_highlight_model_reuses_vec_model_when_selection_shape_changes() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
@@ -1156,6 +1360,7 @@ mod tests {
             Vec::new(),
             &[],
         );
+        let original_media = view.virtual_media_entries.clone();
 
         assert_eq!(
             media_rows(&view.virtual_media_entries),
@@ -1171,10 +1376,12 @@ mod tests {
             Vec::new()
         ));
 
+        assert_eq!(view.virtual_media_entries, original_media);
         assert_eq!(
             media_rows(&view.virtual_media_entries),
             vec![(0, Rgba8Pixel::new(255, 0, 0, 255))]
         );
+        assert_eq!(media_tokens(&view.virtual_media_tokens), vec![(0, 101)]);
     }
 
     #[test]

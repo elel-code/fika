@@ -1,7 +1,7 @@
 use crate::app::geometry::CompactItemViewLayout;
 use crate::app::item_view::ItemViewInputState;
 use crate::app::item_view_renderer::{ItemViewMediaCache, ItemViewRenderMetrics};
-use crate::app::model_update::ItemViewRowToken;
+use crate::app::model_update::{ItemViewMediaToken, ItemViewRowToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
@@ -81,6 +81,7 @@ impl PaneState {
         pane.view.virtual_highlight_entries = ModelRc::default();
         pane.view.virtual_media_entries =
             clone_item_view_media_model(&self.view.virtual_media_entries);
+        pane.view.virtual_media_tokens = self.view.virtual_media_tokens.clone();
         pane.view.virtual_metadata_entries =
             clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
         pane.view.fallback_media_caches = self.view.fallback_media_caches.clone();
@@ -116,6 +117,7 @@ impl PaneState {
         self.view.virtual_entry_tokens.clear();
         self.view.virtual_highlight_entries = ModelRc::default();
         self.view.virtual_media_entries = ModelRc::default();
+        self.view.virtual_media_tokens.clear();
         self.view.virtual_metadata_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
         self.view.clear_virtual_view();
@@ -544,6 +546,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
     pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,
     pub(crate) virtual_media_entries: ModelRc<ItemViewMediaEntry>,
+    pub(crate) virtual_media_tokens: Vec<ItemViewMediaToken>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     fallback_media_caches: Vec<Rc<ItemViewMediaCache>>,
     active_fallback_media_cache: Option<Rc<ItemViewMediaCache>>,
@@ -1490,6 +1493,20 @@ mod tests {
         let mut pane = PaneState::new(PathBuf::from("/tmp"));
         pane.view.virtual_view = cache_for_layout(4..12, 64, 128);
         pane.set_file_entries(vec![test_entry("one.txt", "/tmp/one.txt")]);
+        let mut rendered = pane.entries[0].to_item_view_entry();
+        rendered.media_token = 101;
+        update_pane_item_view_entries_model(
+            &mut pane.view,
+            0,
+            vec![rendered],
+            Vec::new(),
+            vec![ItemViewMediaEntry {
+                slice_index: 0,
+                media: Image::default(),
+            }],
+            Vec::new(),
+            &[],
+        );
 
         pane.clear_entries();
 
@@ -1498,6 +1515,8 @@ mod tests {
         assert!(pane.view.virtual_view.layout.is_none());
         assert_eq!(pane.view.virtual_view.thumbnail_size_px, 0);
         assert_eq!(pane.view.virtual_entries.row_count(), 0);
+        assert_eq!(pane.view.virtual_media_entries.row_count(), 0);
+        assert!(pane.view.virtual_media_tokens.is_empty());
     }
 
     #[test]
