@@ -87,6 +87,34 @@ pub(crate) struct ItemViewItemBounds {
     pub(crate) text_width: f32,
 }
 
+pub(crate) trait ItemViewLayouter {
+    fn matches_layout_signature(&self, other: &Self) -> bool
+    where
+        Self: Sized;
+    fn layout_metrics(&self) -> CompactItemViewLayoutMetrics;
+    fn virtual_plan(
+        &self,
+        requested_viewport_x: f32,
+        overscan_columns: usize,
+    ) -> VirtualItemViewPlan;
+    fn virtual_slice_geometry(
+        &self,
+        range_start: usize,
+        virtual_slice_count: usize,
+    ) -> VirtualSliceGeometry;
+    fn expand_virtual_range_to_hint(
+        &self,
+        range: Range<usize>,
+        hint: Option<&Range<usize>>,
+    ) -> Range<usize>;
+    fn range_anchor(&self, range_start: usize) -> VirtualRangeAnchor;
+    fn bounds_for_range(&self, range_start: usize, count: usize) -> Vec<ItemViewItemBounds>;
+    fn item_bounds(&self, index: usize) -> Option<ItemViewItemBounds>;
+    fn index_at_content_point(&self, x: f32, y: f32) -> Option<usize>;
+    fn selection_candidate_range(&self, x1: f32, x2: f32) -> Range<usize>;
+    fn intersects_index(&self, index: usize, x1: f32, y1: f32, x2: f32, y2: f32) -> bool;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct RectBounds {
     x1: f32,
@@ -208,8 +236,10 @@ impl CompactItemViewLayout {
             column_offsets: Vec::new(),
         }
     }
+}
 
-    pub(crate) fn matches_layout_signature(&self, other: &Self) -> bool {
+impl ItemViewLayouter for CompactItemViewLayout {
+    fn matches_layout_signature(&self, other: &Self) -> bool {
         self.entry_count == other.entry_count
             && self.rows_per_column == other.rows_per_column
             && same_layout_metric(self.viewport_width, other.viewport_width)
@@ -224,7 +254,7 @@ impl CompactItemViewLayout {
             && same_layout_vec(&self.column_offsets, &other.column_offsets)
     }
 
-    pub(crate) fn layout_metrics(&self) -> CompactItemViewLayoutMetrics {
+    fn layout_metrics(&self) -> CompactItemViewLayoutMetrics {
         CompactItemViewLayoutMetrics {
             entry_count: self.entry_count,
             rows_per_column: self.rows_per_column,
@@ -236,7 +266,7 @@ impl CompactItemViewLayout {
         }
     }
 
-    pub(crate) fn virtual_plan(
+    fn virtual_plan(
         &self,
         requested_viewport_x: f32,
         overscan_columns: usize,
@@ -256,7 +286,7 @@ impl CompactItemViewLayout {
         }
     }
 
-    pub(crate) fn virtual_slice_geometry(
+    fn virtual_slice_geometry(
         &self,
         range_start: usize,
         virtual_slice_count: usize,
@@ -290,7 +320,7 @@ impl CompactItemViewLayout {
         }
     }
 
-    pub(crate) fn expand_virtual_range_to_hint(
+    fn expand_virtual_range_to_hint(
         &self,
         range: Range<usize>,
         hint: Option<&Range<usize>>,
@@ -312,7 +342,7 @@ impl CompactItemViewLayout {
         range
     }
 
-    pub(crate) fn range_anchor(&self, range_start: usize) -> VirtualRangeAnchor {
+    fn range_anchor(&self, range_start: usize) -> VirtualRangeAnchor {
         let rows_per_column = self.rows_per_column.max(1);
         VirtualRangeAnchor {
             start_column: range_start / rows_per_column,
@@ -320,11 +350,7 @@ impl CompactItemViewLayout {
         }
     }
 
-    pub(crate) fn bounds_for_range(
-        &self,
-        range_start: usize,
-        count: usize,
-    ) -> Vec<ItemViewItemBounds> {
+    fn bounds_for_range(&self, range_start: usize, count: usize) -> Vec<ItemViewItemBounds> {
         let end = range_start.saturating_add(count).min(self.entry_count);
         (range_start.min(end)..end)
             .enumerate()
@@ -345,7 +371,7 @@ impl CompactItemViewLayout {
             .collect()
     }
 
-    pub(crate) fn item_bounds(&self, index: usize) -> Option<ItemViewItemBounds> {
+    fn item_bounds(&self, index: usize) -> Option<ItemViewItemBounds> {
         if index >= self.entry_count {
             return None;
         }
@@ -363,12 +389,7 @@ impl CompactItemViewLayout {
         })
     }
 
-    fn row_y_for_index(&self, index: usize) -> f32 {
-        let rows_per_column = self.rows_per_column.max(1);
-        (index % rows_per_column) as f32 * self.row_height.max(1.0)
-    }
-
-    pub(crate) fn index_at_content_point(&self, x: f32, y: f32) -> Option<usize> {
+    fn index_at_content_point(&self, x: f32, y: f32) -> Option<usize> {
         if self.entry_count == 0 {
             return None;
         }
@@ -397,7 +418,7 @@ impl CompactItemViewLayout {
         Some(index)
     }
 
-    pub(crate) fn selection_candidate_range(&self, x1: f32, x2: f32) -> Range<usize> {
+    fn selection_candidate_range(&self, x1: f32, x2: f32) -> Range<usize> {
         if self.entry_count == 0 {
             return 0..0;
         }
@@ -416,14 +437,7 @@ impl CompactItemViewLayout {
         )
     }
 
-    pub(crate) fn intersects_index(
-        &self,
-        index: usize,
-        x1: f32,
-        y1: f32,
-        x2: f32,
-        y2: f32,
-    ) -> bool {
+    fn intersects_index(&self, index: usize, x1: f32, y1: f32, x2: f32, y2: f32) -> bool {
         let Some(bounds) = self.item_bounds(index) else {
             return false;
         };
@@ -436,6 +450,13 @@ impl CompactItemViewLayout {
 
         RectBounds::new(x1, y1, x2, y2)
             .intersects(RectBounds::new(tile_x1, tile_y1, tile_x2, tile_y2))
+    }
+}
+
+impl CompactItemViewLayout {
+    fn row_y_for_index(&self, index: usize) -> f32 {
+        let rows_per_column = self.rows_per_column.max(1);
+        (index % rows_per_column) as f32 * self.row_height.max(1.0)
     }
 
     fn virtual_entry_ranges(
@@ -1663,11 +1684,11 @@ pub(crate) fn clamp_popup(position: f32, popup_size: f32, safe_min: f32, safe_ma
 mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
-        CompactItemViewLayout, HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry,
-        PopupPlacement, PopupPoint, PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT,
-        VirtualRangeAnchor, VirtualSliceGeometry, active_main_pane_width, compact_item_view_layout,
-        context_menu_metrics, inactive_main_pane_width, main_pane_bounds, place_drop_geometry,
-        search_panel_height,
+        CompactItemViewLayout, HoverBridgeInput, ItemViewLayouter, MenuMetricsInput,
+        PlaceDropGeometry, PopupPlacement, PopupPoint, PopupRect, RootMenuGeometry,
+        SHELL_HEADER_HEIGHT, VirtualRangeAnchor, VirtualSliceGeometry, active_main_pane_width,
+        compact_item_view_layout, context_menu_metrics, inactive_main_pane_width, main_pane_bounds,
+        place_drop_geometry, search_panel_height,
     };
     use crate::app::item_view_metrics::{compact_cell_width, compact_row_height};
 
@@ -3897,6 +3918,43 @@ mod tests {
         assert_eq!(metrics.padding, 10.0);
         assert_eq!(metrics.content_width, layout.content_width);
         assert_eq!(metrics.scroll_max_x, layout.scroll_max_x);
+    }
+
+    #[test]
+    fn compact_item_view_layout_exposes_layouter_trait_boundary() {
+        fn projected_metrics<L: ItemViewLayouter>(
+            layout: &L,
+        ) -> super::CompactItemViewLayoutMetrics {
+            layout.layout_metrics()
+        }
+
+        let layout = compact_test_layout(300.0, 18, 4, 100.0, 100.0, 10.0);
+        let metrics = projected_metrics(&layout);
+        let plan = layout.virtual_plan(120.0, 2);
+
+        assert_eq!(metrics.entry_count, 18);
+        assert!(!plan.range.is_empty());
+        assert_eq!(
+            layout.range_anchor(plan.range.start).start_column,
+            plan.start_column
+        );
+
+        let source = include_str!("geometry.rs");
+        let compact_empty_impl = source
+            .split_once("impl CompactItemViewLayout {\n    pub(crate) fn empty()")
+            .and_then(|(_, rest)| {
+                rest.split_once("\n}\n\nimpl ItemViewLayouter for CompactItemViewLayout")
+            })
+            .map(|(body, _)| body)
+            .expect("CompactItemViewLayout empty impl should precede layouter trait impl");
+        assert!(
+            source.contains("pub(crate) trait ItemViewLayouter")
+                && source.contains("impl ItemViewLayouter for CompactItemViewLayout")
+                && !compact_empty_impl.contains("fn layout_metrics(&self)")
+                && !compact_empty_impl.contains("fn virtual_plan(")
+                && !compact_empty_impl.contains("fn virtual_slice_geometry("),
+            "item-view layout responsibilities should be exposed through ItemViewLayouter instead of concrete public CompactItemViewLayout methods"
+        );
     }
 
     #[test]

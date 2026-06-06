@@ -1,5 +1,6 @@
 use crate::app::geometry::{
-    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, MainItemViewLayout, VirtualItemViewPlan,
+    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewLayouter, MainItemViewLayout,
+    VirtualItemViewPlan,
 };
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
 use std::ops::Range;

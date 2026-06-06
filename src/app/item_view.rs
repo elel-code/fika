@@ -1,6 +1,6 @@
 use crate::app::geometry::{
-    CompactItemViewLayout, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT, active_main_pane_width,
-    inactive_main_pane_width, main_pane_bounds, search_panel_height,
+    CompactItemViewLayout, ItemViewLayouter, PATH_BAR_HEIGHT, STATUS_BAR_HEIGHT,
+    active_main_pane_width, inactive_main_pane_width, main_pane_bounds, search_panel_height,
 };
 use crate::app::selection::filtered_entry_at_for_slot;
 use crate::app::state::AppState;

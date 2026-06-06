@@ -49,9 +49,10 @@ use app::file_clipboard::{
     refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, MAX_ICON_ZOOM_LEVEL,
-    MIN_ICON_ZOOM_LEVEL, MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio,
-    inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
+    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayouter,
+    MAX_ICON_ZOOM_LEVEL, MIN_ICON_ZOOM_LEVEL, MainItemViewLayout, active_main_pane_width,
+    clamped_split_pane_ratio, inactive_main_pane_width, place_drop_geometry,
+    register_menu_geometry_callbacks,
 };
 use app::item_view::{
     ItemViewControllerAction, SelectionRect, activate_entry_at_pane_point, cancel_blank_for_slot,

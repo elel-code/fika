@@ -1,4 +1,4 @@
-use crate::app::geometry::{CompactItemViewLayout, ItemViewItemBounds};
+use crate::app::geometry::{CompactItemViewLayout, ItemViewItemBounds, ItemViewLayouter};
 use crate::app::item_view::ItemViewInputState;
 use crate::app::item_view_renderer::{ItemViewMediaCache, ItemViewRenderMetrics};
 #[cfg(test)]

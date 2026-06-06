@@ -1,5 +1,5 @@
 use crate::app::async_bridge::AsyncBridge;
-use crate::app::geometry::CompactItemViewLayout;
+use crate::app::geometry::{CompactItemViewLayout, ItemViewLayouter};
 use crate::app::item_view_renderer::{
     ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
 };
