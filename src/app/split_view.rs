@@ -456,13 +456,8 @@ fn pane_slot_item_view_metrics(
     let rows_per_column = compact_item_view.rows_per_column.max(1);
     let virtual_start_column = virtual_start_index / rows_per_column;
     let virtual_start_row = virtual_start_index % rows_per_column;
-    let virtual_slice_start_x = compact_item_view
-        .column_offsets
-        .get(virtual_start_column)
-        .copied()
-        .unwrap_or_default();
-    let virtual_slice_width = compact_item_view
-        .virtual_slice_width_from_start_row(virtual_slice_count, virtual_start_row);
+    let virtual_slice_geometry =
+        compact_item_view.virtual_slice_geometry(virtual_start_index, virtual_slice_count);
 
     ItemViewSlotMetrics {
         entry_count: compact_item_view.entry_count as i32,
@@ -473,8 +468,8 @@ fn pane_slot_item_view_metrics(
         row_height: compact_item_view.row_height,
         padding: compact_item_view.padding,
         content_width: compact_item_view.content_width,
-        virtual_slice_start_x,
-        virtual_slice_width,
+        virtual_slice_start_x: virtual_slice_geometry.start_x,
+        virtual_slice_width: virtual_slice_geometry.width,
         scroll_max_x: compact_item_view.scroll_max_x,
     }
 }

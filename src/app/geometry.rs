@@ -56,6 +56,12 @@ pub(crate) struct VirtualItemViewPlan {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct VirtualSliceGeometry {
+    pub(crate) start_x: f32,
+    pub(crate) width: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewItemBounds {
     pub(crate) slice_index: usize,
     pub(crate) x: f32,
@@ -206,21 +212,38 @@ impl CompactItemViewLayout {
         }
     }
 
-    pub(crate) fn virtual_slice_width_from_start_row(
+    pub(crate) fn virtual_slice_geometry(
         &self,
+        range_start: usize,
         virtual_slice_count: usize,
-        start_row: usize,
-    ) -> f32 {
+    ) -> VirtualSliceGeometry {
         if virtual_slice_count == 0 || self.entry_count == 0 {
-            return 1.0;
+            return VirtualSliceGeometry {
+                start_x: 0.0,
+                width: 1.0,
+            };
         }
 
-        let rows_per_column = self.rows_per_column.max(1);
-        let start_index = start_row.min(rows_per_column.saturating_sub(1));
-        let end_index = start_index
+        let start = range_start.min(self.entry_count);
+        let end = start
             .saturating_add(virtual_slice_count)
             .min(self.entry_count);
-        self.slice_width(start_index..end_index)
+        if start >= end {
+            return VirtualSliceGeometry {
+                start_x: 0.0,
+                width: 1.0,
+            };
+        }
+
+        let start_column = start / self.rows_per_column.max(1);
+        VirtualSliceGeometry {
+            start_x: self
+                .column_offsets
+                .get(start_column)
+                .copied()
+                .unwrap_or_default(),
+            width: self.slice_width(start..end),
+        }
     }
 
     pub(crate) fn bounds_for_range(
@@ -1557,8 +1580,9 @@ mod tests {
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         CompactItemViewLayout, HoverBridgeInput, MenuMetricsInput, PlaceDropGeometry,
         PopupPlacement, PopupPoint, PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT,
-        active_main_pane_width, compact_item_view_layout, context_menu_metrics,
-        inactive_main_pane_width, main_pane_bounds, place_drop_geometry, search_panel_height,
+        VirtualSliceGeometry, active_main_pane_width, compact_item_view_layout,
+        context_menu_metrics, inactive_main_pane_width, main_pane_bounds, place_drop_geometry,
+        search_panel_height,
     };
     use crate::app::item_view_metrics::{compact_cell_width, compact_row_height};
 
@@ -3694,6 +3718,39 @@ mod tests {
             vec![20.0, 40.0, 0.0, 20.0, 40.0]
         );
         assert_eq!(layout.item_bounds(6).expect("index 6").y, 0.0);
+    }
+
+    #[test]
+    fn compact_item_view_layout_reports_virtual_slice_geometry_from_absolute_range() {
+        let layout = compact_item_view_layout(
+            260.0,
+            ["short", "mmmmmmmmmmmm", "tiny", "wide-wide-wide-wide", "z"],
+            2,
+            100.0,
+            24.0,
+            10.0,
+            6.0,
+            32.0,
+            8.0,
+            10.0,
+        );
+
+        let slice = layout.virtual_slice_geometry(2, 3);
+
+        assert_eq!(slice.start_x, layout.column_offsets[1]);
+        assert_eq!(
+            slice.width,
+            layout.column_offsets[2] + layout.column_widths[2] - layout.column_offsets[1]
+        );
+        assert!(slice.start_x > 0.0);
+        assert!(slice.width > layout.cell_width);
+        assert_eq!(
+            layout.virtual_slice_geometry(usize::MAX, 3),
+            VirtualSliceGeometry {
+                start_x: 0.0,
+                width: 1.0,
+            }
+        );
     }
 
     #[test]
