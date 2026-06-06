@@ -215,7 +215,6 @@ fn item_view_fallback_media_entries(
         .filter_map(|bounds| {
             let entry = entries.get(bounds.slice_index)?;
             (entry.is_dir == is_dir).then_some(ItemViewFallbackMediaEntry {
-                slice_index: bounds.slice_index as i32,
                 x: bounds.x,
                 y: bounds.y,
             })
@@ -233,7 +232,6 @@ fn item_view_fallback_media_entries_from_tokens(
         .filter_map(|bounds| {
             let token = tokens.get(bounds.slice_index)?;
             (token.is_dir() == is_dir).then_some(ItemViewFallbackMediaEntry {
-                slice_index: bounds.slice_index as i32,
                 x: bounds.x,
                 y: bounds.y,
             })
@@ -1061,10 +1059,10 @@ mod tests {
             .collect()
     }
 
-    fn fallback_rows(model: &ModelRc<ItemViewFallbackMediaEntry>) -> Vec<(i32, f32, f32)> {
+    fn fallback_rows(model: &ModelRc<ItemViewFallbackMediaEntry>) -> Vec<(f32, f32)> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.slice_index, entry.x, entry.y))
+            .map(|entry| (entry.x, entry.y))
             .collect()
     }
 
@@ -1745,11 +1743,11 @@ mod tests {
         assert_eq!(view.virtual_file_media_entries, original_file);
         assert_eq!(
             fallback_rows(&view.virtual_folder_media_entries),
-            vec![(1, 20.0, 2.0), (3, 40.0, 6.0)]
+            vec![(20.0, 2.0), (40.0, 6.0)]
         );
         assert_eq!(
             fallback_rows(&view.virtual_file_media_entries),
-            vec![(0, 10.0, 0.0), (2, 30.0, 4.0)]
+            vec![(10.0, 0.0), (30.0, 4.0)]
         );
     }
 

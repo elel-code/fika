@@ -2983,6 +2983,13 @@ mod tests {
             .expect(
                 "models.slint should define ItemViewPaintEntry before ItemViewFallbackMediaEntry",
             );
+        let fallback_media_entry = models
+            .split_once("export struct ItemViewFallbackMediaEntry")
+            .and_then(|(_, rest)| rest.split_once("export struct ItemViewMediaEntry"))
+            .map(|(body, _)| body)
+            .expect(
+                "models.slint should define ItemViewFallbackMediaEntry before ItemViewMediaEntry",
+            );
         let media_entry = models
             .split_once("export struct ItemViewMediaEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
@@ -3135,6 +3142,9 @@ mod tests {
                 && paint_entry.contains("x: float")
                 && paint_entry.contains("text_width: float")
                 && !paint_entry.contains("is_dir")
+                && fallback_media_entry.contains("x: float")
+                && fallback_media_entry.contains("y: float")
+                && !fallback_media_entry.contains("slice_index")
                 && !item_view_entry.contains("tile_width: float")
                 && !item_view_entry.contains("tile_height: float")
                 && !item_view_entry.contains("media_x: float")
