@@ -589,8 +589,7 @@ pub(crate) struct PaneView {
     fallback_media_caches: Vec<Rc<ItemViewMediaCache>>,
     active_fallback_media_cache: Option<Rc<ItemViewMediaCache>>,
     pub(crate) virtual_start_index: usize,
-    virtual_prepare_in_flight: Option<u64>,
-    virtual_prepare_pending: Option<VirtualViewPrepareRequest>,
+    virtual_refresh_state: VirtualViewRefreshState,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
     state_cache: HashMap<PathBuf, DirectoryViewState>,
     state_cache_order: VecDeque<PathBuf>,
@@ -607,6 +606,47 @@ pub(crate) struct VirtualViewPrepareRequest {
     pub(crate) input: Box<VirtualViewSnapshotInput>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct VirtualViewRefreshState {
+    in_flight: Option<u64>,
+    pending: Option<VirtualViewPrepareRequest>,
+}
+
+impl VirtualViewRefreshState {
+    fn has_in_flight(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
+    fn mark_started(&mut self, generation: u64) {
+        self.in_flight = Some(generation);
+    }
+
+    fn defer(&mut self, request: VirtualViewPrepareRequest) {
+        self.pending = Some(request);
+    }
+
+    fn clear_pending(&mut self) {
+        self.pending = None;
+    }
+
+    fn cancel(&mut self) {
+        self.in_flight = None;
+        self.pending = None;
+    }
+
+    fn finish(&mut self, generation: u64) -> Option<VirtualViewPrepareRequest> {
+        if self.in_flight != Some(generation) {
+            return None;
+        }
+        self.in_flight = None;
+        if let Some(pending) = self.pending.take() {
+            self.in_flight = Some(pending.generation);
+            return Some(pending);
+        }
+        None
+    }
+}
+
 impl PaneView {
     pub(crate) fn invalidate_virtual_view(&mut self) {
         self.virtual_view.invalidate();
@@ -621,24 +661,23 @@ impl PaneView {
     }
 
     pub(crate) fn has_virtual_prepare_in_flight(&self) -> bool {
-        self.virtual_prepare_in_flight.is_some()
+        self.virtual_refresh_state.has_in_flight()
     }
 
     pub(crate) fn mark_virtual_prepare_started(&mut self, generation: u64) {
-        self.virtual_prepare_in_flight = Some(generation);
+        self.virtual_refresh_state.mark_started(generation);
     }
 
     pub(crate) fn defer_virtual_prepare(&mut self, request: VirtualViewPrepareRequest) {
-        self.virtual_prepare_pending = Some(request);
+        self.virtual_refresh_state.defer(request);
     }
 
     pub(crate) fn clear_pending_virtual_prepare(&mut self) {
-        self.virtual_prepare_pending = None;
+        self.virtual_refresh_state.clear_pending();
     }
 
     pub(crate) fn cancel_virtual_prepare_queue(&mut self) {
-        self.virtual_prepare_in_flight = None;
-        self.virtual_prepare_pending = None;
+        self.virtual_refresh_state.cancel();
     }
 
     fn fallback_media_cache_for_theme(&self, dark: bool) -> Option<Rc<ItemViewMediaCache>> {
@@ -698,15 +737,7 @@ impl PaneView {
         &mut self,
         generation: u64,
     ) -> Option<VirtualViewPrepareRequest> {
-        if self.virtual_prepare_in_flight != Some(generation) {
-            return None;
-        }
-        self.virtual_prepare_in_flight = None;
-        if let Some(pending) = self.virtual_prepare_pending.take() {
-            self.virtual_prepare_in_flight = Some(pending.generation);
-            return Some(pending);
-        }
-        None
+        self.virtual_refresh_state.finish(generation)
     }
 
     pub(crate) fn thumbnail_pending_key(&self, path: &str) -> Option<&thumbnails::ThumbnailKey> {
