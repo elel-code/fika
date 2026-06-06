@@ -239,7 +239,7 @@ export component SplitPaneView inherits Rectangle {
         item-drag-area := DragArea {
             width: parent.width;
             height: parent.height;
-            enabled: root.interactive;
+            enabled: root.interactive && !root.selection-rect-pending;
             data: root.make_drag_data_at(root.drag-source-abs-x / 1px, root.drag-source-abs-y / 1px);
 
             input-touch := TouchArea {

@@ -3186,6 +3186,7 @@ mod tests {
         assert!(split_pane.contains("for item[index] in root.entries: Text"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")
+                && split_pane.contains("enabled: root.interactive && !root.selection-rect-pending;")
                 && split_pane.contains(
                     "data: root.make_drag_data_at(root.drag-source-abs-x / 1px, root.drag-source-abs-y / 1px);"
                 )
@@ -3207,7 +3208,7 @@ mod tests {
                 && !split_pane.contains("activated(path) =>")
                 && !split_pane.contains("request_select(path")
                 && !split_pane.contains("request_context_menu(path"),
-            "SplitPaneView should use one pane-level input controller while keeping DragArea.data pinned to the press target instead of hover/move coordinates"
+            "SplitPaneView should use one pane-level input controller while keeping DragArea.data pinned to the press target and disabled during box selection"
         );
         assert!(
             split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")

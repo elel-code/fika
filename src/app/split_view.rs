@@ -134,10 +134,11 @@ pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
                 let state_ref = state.borrow();
                 pane_view_data(ui, slot, &state_ref)
             };
+            let rebind_surface = pane_view_requires_surface_rebind(&current_view, &next);
             if current_view != next {
                 current.set_row_data(row, next);
             }
-            sync_pane_surface_ui(ui, state, slot);
+            sync_pane_surface_ui_with_rebind(ui, state, slot, rebind_surface);
             return;
         }
     }
@@ -214,12 +215,25 @@ fn sync_pane_surfaces_model(ui: &AppWindow, surfaces: Vec<PaneSurfaceData>) {
 }
 
 fn sync_pane_surface_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    sync_pane_surface_ui_with_rebind(ui, state, slot, false);
+}
+
+fn sync_pane_surface_ui_with_rebind(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    rebind: bool,
+) {
     let current = ui.get_pane_surfaces();
     for row in 0..current.row_count() {
         let Some(current_surface) = current.row_data(row) else {
             continue;
         };
         if current_surface.slot == slot {
+            if rebind {
+                replace_pane_surfaces_model(ui, state);
+                return;
+            }
             let next = {
                 let state_ref = state.borrow();
                 PaneSurfaceData {
@@ -236,6 +250,27 @@ fn sync_pane_surface_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32
     }
 
     sync_pane_slots_ui(ui, state);
+}
+
+fn replace_pane_surfaces_model(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let visible_slots = visible_pane_slots(ui);
+    let surfaces = {
+        let state_ref = state.borrow();
+        visible_slots
+            .into_iter()
+            .map(|slot| PaneSurfaceData {
+                slot,
+                pane: pane_slot_data(ui, slot, &state_ref),
+                view: pane_view_data(ui, slot, &state_ref),
+            })
+            .collect::<Vec<_>>()
+    };
+    ui.set_pane_surfaces(ModelRc::new(Rc::new(VecModel::from(surfaces))));
+}
+
+fn pane_view_requires_surface_rebind(current: &PaneViewData, next: &PaneViewData) -> bool {
+    (current.entry_count == 0) != (next.entry_count == 0)
+        || (current.entries.row_count() == 0) != (next.entries.row_count() == 0)
 }
 
 fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
@@ -834,5 +869,84 @@ fn display_location_name(path: &Path) -> String {
             .filter(|name| !name.is_empty())
             .unwrap_or("/")
             .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slint::Image;
+
+    fn pane_view(entry_count: i32, visible_rows: usize) -> PaneViewData {
+        PaneViewData {
+            slot: 0,
+            entries: if visible_rows == 0 {
+                ModelRc::default()
+            } else {
+                ModelRc::new(Rc::new(VecModel::from(
+                    (0..visible_rows)
+                        .map(|index| ItemViewEntry {
+                            name: format!("item-{index}").into(),
+                            path: format!("/tmp/item-{index}").into(),
+                            is_dir: false,
+                            thumbnail_state: 0,
+                            media_token: 0,
+                        })
+                        .collect::<Vec<_>>(),
+                )))
+            },
+            bounds: ModelRc::default(),
+            highlights: ModelRc::default(),
+            media: ModelRc::default(),
+            metadata: ModelRc::default(),
+            entry_count,
+            virtual_start_column: 0,
+            virtual_start_row: 0,
+            viewport_x: 0.0,
+            item_view_rows_per_column: 4,
+            item_view_cell_width: 120.0,
+            item_view_row_height: 80.0,
+            item_view_padding: 10.0,
+            item_view_content_width: 300.0,
+            item_view_virtual_slice_width: 240.0,
+            item_view_scroll_max_x: 200.0,
+            item_view_media_x: 0.0,
+            item_view_media_y: 0.0,
+            item_view_media_width: 32.0,
+            item_view_media_height: 32.0,
+            item_view_text_x: 40.0,
+            item_view_text_width: 80.0,
+            item_view_title_y: 10.0,
+            item_view_title_line_height: 18.0,
+            item_view_title_font_size: 14.0,
+            item_view_folder_media: Image::default(),
+            item_view_file_media: Image::default(),
+            show_location: false,
+            content_interactive: true,
+            drop_ready: true,
+            empty_message_visible: true,
+            empty_title: SharedString::new(),
+            empty_subtitle: SharedString::new(),
+        }
+    }
+
+    #[test]
+    fn pane_surface_rebind_is_limited_to_empty_model_boundary() {
+        let empty = pane_view(0, 0);
+        let nonempty = pane_view(24, 8);
+
+        assert!(pane_view_requires_surface_rebind(&empty, &nonempty));
+        assert!(pane_view_requires_surface_rebind(&nonempty, &empty));
+
+        let mut scrolled = nonempty.clone();
+        scrolled.virtual_start_column = 3;
+        scrolled.viewport_x = 240.0;
+        assert!(!pane_view_requires_surface_rebind(&nonempty, &scrolled));
+
+        let mut selected = nonempty.clone();
+        selected.highlights = ModelRc::new(Rc::new(VecModel::from(vec![ItemViewHighlightEntry {
+            slice_index: 0,
+        }])));
+        assert!(!pane_view_requires_surface_rebind(&nonempty, &selected));
     }
 }

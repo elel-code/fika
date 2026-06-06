@@ -118,7 +118,7 @@ impl PaneState {
         self.view.virtual_media_entries = ModelRc::default();
         self.view.virtual_metadata_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
-        self.view.invalidate_virtual_view();
+        self.view.clear_virtual_view();
     }
 
     pub(crate) fn entry_snapshot(&self) -> Arc<[PaneEntrySnapshot]> {
@@ -573,6 +573,12 @@ impl PaneView {
         self.cancel_virtual_prepare_queue();
     }
 
+    pub(crate) fn clear_virtual_view(&mut self) {
+        self.virtual_view.clear();
+        self.virtual_generation.next();
+        self.cancel_virtual_prepare_queue();
+    }
+
     pub(crate) fn has_virtual_prepare_in_flight(&self) -> bool {
         self.virtual_prepare_in_flight.is_some()
     }
@@ -767,6 +773,12 @@ impl Default for VirtualViewCache {
 impl VirtualViewCache {
     pub(crate) fn invalidate(&mut self) {
         self.range = 0..0;
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.range = 0..0;
+        self.layout = None;
+        self.thumbnail_size_px = 0;
     }
 
     pub(crate) fn matches_layout(
@@ -1471,6 +1483,21 @@ mod tests {
         assert_eq!(layout.cell_width, 100.0);
         assert_eq!(layout.row_height, 90.0);
         assert_eq!(view.virtual_view.thumbnail_size_px, 128);
+    }
+
+    #[test]
+    fn pane_clear_entries_drops_directory_virtual_layout_signature() {
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+        pane.view.virtual_view = cache_for_layout(4..12, 64, 128);
+        pane.set_file_entries(vec![test_entry("one.txt", "/tmp/one.txt")]);
+
+        pane.clear_entries();
+
+        assert!(pane.entries.is_empty());
+        assert!(pane.view.virtual_view.range.is_empty());
+        assert!(pane.view.virtual_view.layout.is_none());
+        assert_eq!(pane.view.virtual_view.thumbnail_size_px, 0);
+        assert_eq!(pane.view.virtual_entries.row_count(), 0);
     }
 
     #[test]
