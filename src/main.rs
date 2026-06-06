@@ -585,8 +585,8 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    clear_pane_models_ui(&ui);
     load_directory(&ui, &state, &bridge);
-    sync_navigation_ui(&ui, &state);
     prefetch_sidebar_locations_async(&state, &bridge);
 
     {
@@ -1933,6 +1933,18 @@ fn set_current_location_ui(ui: &AppWindow, path: &Path) {
     ui.set_current_in_trash(in_trash);
 }
 
+fn clear_pane_models_ui(ui: &AppWindow) {
+    ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(
+        Vec::<PaneViewData>::new(),
+    ))));
+    ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(
+        Vec::<PaneSlotData>::new(),
+    ))));
+    ui.set_pane_surfaces(ModelRc::new(Rc::new(VecModel::from(
+        Vec::<PaneSurfaceData>::new(),
+    ))));
+}
+
 fn load_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
     load_directory_with_preservation(ui, state, bridge, false);
 }
@@ -2015,7 +2027,7 @@ fn load_prepared_pane_directory(
     if !preserve_view && !defer_view_restore {
         restore_pane_view_state(ui, state, slot, &current_dir);
     }
-    if let Some(cached_entries) = cached_entries {
+    let sync_virtual_view = if let Some(cached_entries) = cached_entries {
         {
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
@@ -2031,6 +2043,7 @@ fn load_prepared_pane_directory(
         }
         sync_pane_slot_ui(ui, state, slot);
         set_pane_status(ui, state, slot, "Refreshing cached folder...");
+        true
     } else if !preserve_view {
         {
             let mut state = state.borrow_mut();
@@ -2045,13 +2058,20 @@ fn load_prepared_pane_directory(
         }
         sync_pane_slot_ui(ui, state, slot);
         set_pane_status(ui, state, slot, "Loading folder...");
+        if pane_view_row_exists(ui, slot) {
+            sync_pane_view_ui(ui, state, slot);
+        }
+        false
     } else {
         if target_is_focused {
             ui.set_directory_loading(false);
         }
         set_pane_status(ui, state, slot, "Refreshing folder...");
+        true
+    };
+    if sync_virtual_view {
+        sync_pane_view_for_slot(ui, state, bridge, slot);
     }
-    sync_pane_view_for_slot(ui, state, bridge, slot);
     watch_current_directory(&current_dir, pane_id, generation, bridge);
 
     let async_tx = bridge.tx.clone();
@@ -4069,6 +4089,15 @@ fn apply_virtual_view_result(
     if target_is_focused {
         ui.set_entry_count(update.entry_count as i32);
     }
+    debug_log(&format!(
+        "virtual_view_result applied pane_id={} generation={} range={}..{} entries={} entry_count={}",
+        result.pane_id,
+        result.generation,
+        update.range.start,
+        update.range.end,
+        update.range.end.saturating_sub(update.range.start),
+        update.entry_count
+    ));
     sync_pane_view_ui(ui, state, slot);
 }
 
@@ -4721,13 +4750,6 @@ fn sync_visible_pane_layouts_with_thumbnail_scheduling(
 ) {
     let slots = ui.get_pane_slots();
     if slots.row_count() == 0 {
-        sync_pane_layout_for_slot_with_thumbnail_scheduling(
-            ui,
-            state,
-            bridge,
-            0,
-            schedule_thumbnails,
-        );
         return;
     }
 
@@ -4751,7 +4773,6 @@ fn sync_visible_pane_icon_zoom_layouts(
 ) {
     let slots = ui.get_pane_slots();
     if slots.row_count() == 0 {
-        sync_pane_icon_zoom_layout_for_slot(ui, state, bridge, 0);
         return;
     }
 
@@ -5036,7 +5057,18 @@ fn update_selection_ui_for_slot(
         ui.set_selected_count(selected_count);
         ui.set_selected_status(selected_status);
     }
-    sync_pane_view_ui(ui, state, slot);
+    if pane_view_row_exists(ui, slot) {
+        sync_pane_view_ui(ui, state, slot);
+    }
+}
+
+fn pane_view_row_exists(ui: &AppWindow, slot: i32) -> bool {
+    let current = ui.get_pane_views();
+    (0..current.row_count()).any(|row| {
+        current
+            .row_data(row)
+            .is_some_and(|current| current.slot == slot)
+    })
 }
 
 fn update_virtual_selection_for_slot(
@@ -6596,8 +6628,8 @@ mod tests {
                 )
                 && body.contains("if current_slot != next")
                 && body.contains("current.set_row_data(row, next);")
-                && body.contains("sync_pane_slots_ui(ui, state);"),
-            "single-pane refreshes should update the affected pane row and fall back to full sync only when the row is missing"
+                && !body.contains("sync_pane_slots_ui(ui, state);"),
+            "single-pane refreshes should update the affected pane row without creating missing pane surfaces"
         );
     }
 
@@ -6809,6 +6841,11 @@ mod tests {
             })
             .map(|(body, _)| body)
             .expect("visible pane layout body should be present");
+        let visible_layout_with_thumbnail_body = source
+            .split_once("fn sync_visible_pane_layouts_with_thumbnail_scheduling(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_visible_pane_icon_zoom_layouts("))
+            .map(|(body, _)| body)
+            .expect("visible pane layout with thumbnails body should be present");
         let layout_with_thumbnail_body = source
             .split_once("fn sync_pane_layout_for_slot_with_thumbnail_scheduling(")
             .and_then(|(_, rest)| rest.split_once("fn sync_pane_view_for_slot("))
@@ -6846,8 +6883,12 @@ mod tests {
         assert!(
             visible_layout_body.contains(
                 "sync_visible_pane_layouts_with_thumbnail_scheduling(ui, state, bridge, true);"
+            ) && visible_layout_with_thumbnail_body.contains(
+                "if slots.row_count() == 0 {\n        return;\n    }"
+            ) && !visible_layout_with_thumbnail_body.contains(
+                "sync_pane_layout_for_slot_with_thumbnail_scheduling(\n            ui,\n            state,\n            bridge,\n            0,"
             ),
-            "ordinary layout changes should keep thumbnail scheduling enabled"
+            "ordinary layout changes should keep thumbnail scheduling enabled without creating the initial pane surface before entries are loaded"
         );
         assert!(
             layout_with_thumbnail_body.contains("schedule_thumbnails,")
@@ -6875,6 +6916,11 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn try_relayout_cached_pane_icon_zoom_layout("))
             .map(|(body, _)| body)
             .expect("icon zoom layout body should be present");
+        let visible_icon_zoom_body = source
+            .split_once("fn sync_visible_pane_icon_zoom_layouts(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_icon_zoom_layout_for_slot("))
+            .map(|(body, _)| body)
+            .expect("visible icon zoom layout body should be present");
         let prepare_body = source
             .split_once("fn prepare_pane_icon_zoom_layout_for_slot(")
             .and_then(|(_, rest)| rest.split_once("fn try_relayout_cached_pane_icon_zoom_layout("))
@@ -6920,6 +6966,10 @@ mod tests {
         assert!(
             icon_zoom_body.contains("try_relayout_cached_pane_icon_zoom_layout(ui, state, slot)")
                 && icon_zoom_body.contains("prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);")
+                && visible_icon_zoom_body
+                    .contains("if slots.row_count() == 0 {\n        return;\n    }")
+                && !visible_icon_zoom_body
+                    .contains("sync_pane_icon_zoom_layout_for_slot(ui, state, bridge, 0);")
                 && !icon_zoom_body.contains("sync_pane_layout_for_slot_with_thumbnail_scheduling")
                 && prepare_body.contains(
                     "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);"

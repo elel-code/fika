@@ -163,8 +163,6 @@ pub(crate) fn sync_pane_slot_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
             return;
         }
     }
-
-    sync_pane_slots_ui(ui, state);
 }
 
 fn visible_pane_slots(ui: &AppWindow) -> Vec<i32> {
