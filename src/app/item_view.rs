@@ -57,6 +57,27 @@ pub(crate) struct ItemViewDragSource {
     is_dir: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewHitEntry {
+    pub(crate) name: slint::SharedString,
+    pub(crate) path: slint::SharedString,
+    pub(crate) size: slint::SharedString,
+    pub(crate) modified: slint::SharedString,
+    pub(crate) is_dir: bool,
+}
+
+impl From<FileEntry> for ItemViewHitEntry {
+    fn from(entry: FileEntry) -> Self {
+        Self {
+            name: entry.name,
+            path: entry.path,
+            size: entry.size,
+            modified: entry.modified,
+            is_dir: entry.is_dir,
+        }
+    }
+}
+
 impl ItemViewDragSource {
     pub(crate) fn path(&self) -> &str {
         &self.path
@@ -176,7 +197,7 @@ pub(crate) enum ItemViewControllerAction {
         path: String,
     },
     RequestContextMenu {
-        entry: FileEntry,
+        entry: ItemViewHitEntry,
         select_path: Option<String>,
         abs_x: f32,
         abs_y: f32,
@@ -343,7 +364,7 @@ pub(crate) fn context_menu_entry_at_pane_point(
     abs_x: f32,
     abs_y: f32,
 ) -> Option<ItemViewControllerAction> {
-    let entry = entry_at_pane_point(ui, state, slot, x, y)?;
+    let entry = ItemViewHitEntry::from(entry_at_pane_point(ui, state, slot, x, y)?);
     let path = entry.path.to_string();
     let already_selected = state.panes.pane_for_slot(slot).is_some_and(|pane| {
         pane.selection
@@ -543,5 +564,29 @@ mod tests {
         input.press_blank(10.0, 20.0, test_layout(), false);
 
         assert!(input.drag_source().is_none());
+    }
+
+    #[test]
+    fn item_view_hit_entry_keeps_controller_facing_identity_only() {
+        let entry = FileEntry {
+            name: "file.txt".into(),
+            path: "/tmp/file.txt".into(),
+            group: "Documents".into(),
+            location: "/tmp".into(),
+            kind: "Text".into(),
+            size: "1 KiB".into(),
+            size_bytes: 1024.0,
+            modified: "Today".into(),
+            modified_age_days: 0,
+            is_dir: false,
+        };
+
+        let hit = ItemViewHitEntry::from(entry);
+
+        assert_eq!(hit.name, "file.txt");
+        assert_eq!(hit.path, "/tmp/file.txt");
+        assert_eq!(hit.size, "1 KiB");
+        assert_eq!(hit.modified, "Today");
+        assert!(!hit.is_dir);
     }
 }
