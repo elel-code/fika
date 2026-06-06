@@ -1,7 +1,9 @@
 use crate::app::geometry::{CompactItemViewLayout, ItemViewItemBounds};
 use crate::app::item_view::ItemViewInputState;
 use crate::app::item_view_renderer::{ItemViewMediaCache, ItemViewRenderMetrics};
-use crate::app::model_update::{ItemViewMediaSource, ItemViewMediaToken, ItemViewRowToken};
+#[cfg(test)]
+use crate::app::model_update::ItemViewMediaSource;
+use crate::app::model_update::{ItemViewMediaToken, ItemViewRowToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
