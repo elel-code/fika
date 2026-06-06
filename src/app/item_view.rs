@@ -68,6 +68,22 @@ impl ItemViewDragSource {
 }
 
 impl ItemViewInputState {
+    pub(crate) fn press_entry(
+        &mut self,
+        path: String,
+        is_dir: bool,
+        toggle: bool,
+        range: bool,
+    ) -> ItemViewControllerAction {
+        self.selection_rect = None;
+        self.set_drag_source(path.clone(), is_dir);
+        ItemViewControllerAction::SelectPath {
+            path,
+            toggle,
+            range,
+        }
+    }
+
     pub(crate) fn set_drag_source(&mut self, path: String, is_dir: bool) {
         self.drag_source = Some(ItemViewDragSource { path, is_dir });
     }
@@ -111,9 +127,9 @@ impl ItemViewInputState {
         active
     }
 
-    pub(crate) fn release_blank(&mut self, x: f32, y: f32) -> ItemViewReleaseAction {
+    pub(crate) fn release_blank(&mut self, x: f32, y: f32) -> ItemViewControllerAction {
         let Some(mut gesture) = self.selection_rect.take() else {
-            return ItemViewReleaseAction::None;
+            return ItemViewControllerAction::None;
         };
         gesture.current_x = x;
         gesture.current_y = y;
@@ -121,7 +137,7 @@ impl ItemViewInputState {
         if gesture.active {
             let (x1, x2) = ordered_pair(gesture.start_x, gesture.current_x);
             let (y1, y2) = ordered_pair(gesture.start_y, gesture.current_y);
-            ItemViewReleaseAction::SelectRect {
+            ItemViewControllerAction::SelectRect {
                 rect: SelectionRect {
                     x1,
                     y1,
@@ -132,7 +148,7 @@ impl ItemViewInputState {
                 toggle: gesture.toggle,
             }
         } else {
-            ItemViewReleaseAction::ClearSelection
+            ItemViewControllerAction::ClearSelection
         }
     }
 
@@ -153,10 +169,18 @@ struct SelectionRectGesture {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum ItemViewReleaseAction {
+pub(crate) enum ItemViewControllerAction {
     None,
     ClearSelection,
-    SelectRect { rect: SelectionRect, toggle: bool },
+    SelectPath {
+        path: String,
+        toggle: bool,
+        range: bool,
+    },
+    SelectRect {
+        rect: SelectionRect,
+        toggle: bool,
+    },
 }
 
 fn selection_drag_threshold_crossed(
@@ -338,7 +362,7 @@ mod tests {
         assert!(!input.move_blank(14.0, 24.0));
         assert_eq!(
             input.release_blank(14.0, 24.0),
-            ItemViewReleaseAction::ClearSelection
+            ItemViewControllerAction::ClearSelection
         );
     }
 
@@ -351,7 +375,7 @@ mod tests {
         assert!(input.move_blank(40.0, 140.0));
         assert_eq!(
             input.release_blank(40.0, 140.0),
-            ItemViewReleaseAction::SelectRect {
+            ItemViewControllerAction::SelectRect {
                 rect: SelectionRect {
                     x1: 40.0,
                     y1: 80.0,
@@ -373,8 +397,27 @@ mod tests {
 
         assert_eq!(
             input.release_blank(100.0, 120.0),
-            ItemViewReleaseAction::None
+            ItemViewControllerAction::None
         );
+    }
+
+    #[test]
+    fn item_view_input_turns_item_press_into_select_action_and_drag_source() {
+        let mut input = ItemViewInputState::default();
+
+        let action = input.press_entry("/tmp/file.txt".to_string(), false, true, false);
+
+        assert_eq!(
+            action,
+            ItemViewControllerAction::SelectPath {
+                path: "/tmp/file.txt".to_string(),
+                toggle: true,
+                range: false,
+            }
+        );
+        let source = input.drag_source().expect("drag source");
+        assert_eq!(source.path(), "/tmp/file.txt");
+        assert!(!source.is_dir());
     }
 
     #[test]

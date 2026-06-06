@@ -54,7 +54,7 @@ use app::geometry::{
     inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
-    ItemViewReleaseAction, SelectionRect, entry_at_pane_point, item_index_at_pane_point,
+    ItemViewControllerAction, SelectionRect, entry_at_pane_point, item_index_at_pane_point,
 };
 use app::item_view_renderer::{
     ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
@@ -4437,15 +4437,16 @@ fn press_item_view_entry_at_point_for_slot(
     let Some(entry) = item_view_entry_at_point_for_slot(ui, state, slot, x, y) else {
         return false;
     };
-    {
+    let action = {
         let mut state_ref = state.borrow_mut();
-        if let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) {
-            pane.view
-                .input
-                .set_drag_source(entry.path.to_string(), entry.is_dir);
-        }
-    }
-    select_path_for_slot(ui, state, slot, entry.path.as_str(), toggle, range);
+        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
+            return false;
+        };
+        pane.view
+            .input
+            .press_entry(entry.path.to_string(), entry.is_dir, toggle, range)
+    };
+    apply_item_view_controller_action(ui, state, slot, action);
     true
 }
 
@@ -4604,10 +4605,24 @@ fn release_item_view_blank_for_slot(
         pane.view.input.release_blank(x, y)
     };
 
+    apply_item_view_controller_action(ui, state, slot, action);
+}
+
+fn apply_item_view_controller_action(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    action: ItemViewControllerAction,
+) {
     match action {
-        ItemViewReleaseAction::None => {}
-        ItemViewReleaseAction::ClearSelection => clear_selection_for_slot(ui, state, slot),
-        ItemViewReleaseAction::SelectRect { rect, toggle } => {
+        ItemViewControllerAction::None => {}
+        ItemViewControllerAction::ClearSelection => clear_selection_for_slot(ui, state, slot),
+        ItemViewControllerAction::SelectPath {
+            path,
+            toggle,
+            range,
+        } => select_path_for_slot(ui, state, slot, path.as_str(), toggle, range),
+        ItemViewControllerAction::SelectRect { rect, toggle } => {
             select_rect_for_slot(ui, state, slot, rect, toggle);
         }
     }
@@ -6641,12 +6656,12 @@ mod tests {
             .map(|(body, _)| body)
             .expect("item-view press handler should be present");
 
-        let drag_source_write = press_body
-            .find(".set_drag_source(entry.path.to_string(), entry.is_dir);")
-            .expect("item press should record the pane-local drag source");
-        let selection_update = press_body
-            .find("select_path_for_slot(ui, state, slot, entry.path.as_str(), toggle, range);")
-            .expect("item press should still update selection");
+        let controller_action = press_body
+            .find(".press_entry(entry.path.to_string(), entry.is_dir, toggle, range)")
+            .expect("item press should route through the pane-local item-view controller");
+        let action_execution = press_body
+            .find("apply_item_view_controller_action(ui, state, slot, action);")
+            .expect("item press should execute the controller action after recording press state");
 
         assert!(dnd_block.contains("Pending(i32)"));
         assert!(
@@ -6661,8 +6676,12 @@ mod tests {
         assert!(source.contains("FikaDragInfo::Pending(slot) => {"));
         assert!(source.contains("match pending_drag_info(&state_ref, *slot)"));
         assert!(
-            drag_source_write < selection_update,
-            "item press must record the drag source before selection UI refresh can disturb the Slint press-time drag data"
+            controller_action < action_execution,
+            "item press must record pane-local drag source inside the controller before action execution can refresh selection UI"
+        );
+        assert!(
+            !press_body.contains(".set_drag_source("),
+            "main.rs should execute item-view controller actions instead of mutating the input state internals directly"
         );
     }
 
