@@ -50,13 +50,9 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         .compact_item_view_from_names(visible_names.iter().map(String::as_str));
     let plan =
         compact_item_view.virtual_plan(input.requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
-    let range = expanded_snapshot_range(
-        plan.range.clone(),
-        input.range_hint.as_ref(),
-        visible_count,
-        compact_item_view.rows_per_column,
-    );
-    let start_column = range.start / compact_item_view.rows_per_column.max(1);
+    let range = compact_item_view
+        .expand_virtual_range_to_hint(plan.range.clone(), input.range_hint.as_ref());
+    let start_column = compact_item_view.start_column_for_range_start(range.start);
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
     let rebuild_model = !input.schedule_thumbnails
         || should_rebuild_virtual_cache(
@@ -94,29 +90,6 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         entries,
         rebuild_model: true,
     }
-}
-
-fn expanded_snapshot_range(
-    plan_range: Range<usize>,
-    range_hint: Option<&Range<usize>>,
-    entry_count: usize,
-    rows_per_column: usize,
-) -> Range<usize> {
-    let mut range = plan_range;
-    let Some(hint) = range_hint.filter(|hint| !hint.is_empty()) else {
-        return range;
-    };
-
-    let rows_per_column = rows_per_column.max(1);
-    let hint_start = hint.start.min(entry_count);
-    let hint_end = hint.end.min(entry_count).max(hint_start);
-    let aligned_start = (hint_start / rows_per_column) * rows_per_column;
-    let aligned_end = hint_end.div_ceil(rows_per_column) * rows_per_column;
-
-    range.start = range.start.min(aligned_start).min(entry_count);
-    range.end = range.end.max(aligned_end).min(entry_count);
-    range.end = range.end.max(range.start);
-    range
 }
 
 fn should_rebuild_virtual_cache(

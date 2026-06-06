@@ -261,6 +261,32 @@ impl CompactItemViewLayout {
         }
     }
 
+    pub(crate) fn expand_virtual_range_to_hint(
+        &self,
+        range: Range<usize>,
+        hint: Option<&Range<usize>>,
+    ) -> Range<usize> {
+        let mut range = range;
+        let Some(hint) = hint.filter(|hint| !hint.is_empty()) else {
+            return range;
+        };
+
+        let rows_per_column = self.rows_per_column.max(1);
+        let hint_start = hint.start.min(self.entry_count);
+        let hint_end = hint.end.min(self.entry_count).max(hint_start);
+        let aligned_start = (hint_start / rows_per_column) * rows_per_column;
+        let aligned_end = hint_end.div_ceil(rows_per_column) * rows_per_column;
+
+        range.start = range.start.min(aligned_start).min(self.entry_count);
+        range.end = range.end.max(aligned_end).min(self.entry_count);
+        range.end = range.end.max(range.start);
+        range
+    }
+
+    pub(crate) fn start_column_for_range_start(&self, range_start: usize) -> usize {
+        range_start / self.rows_per_column.max(1)
+    }
+
     pub(crate) fn bounds_for_range(
         &self,
         range_start: usize,
@@ -3792,6 +3818,22 @@ mod tests {
         changed.column_widths[1] += 1.0;
 
         assert!(!layout.matches_layout_signature(&changed));
+    }
+
+    #[test]
+    fn compact_item_view_layout_expands_virtual_range_to_aligned_hint() {
+        let layout = compact_test_layout(300.0, 18, 4, 100.0, 100.0, 10.0);
+
+        assert_eq!(
+            layout.expand_virtual_range_to_hint(8..12, Some(&(5..13))),
+            4..16
+        );
+        assert_eq!(
+            layout.expand_virtual_range_to_hint(8..12, Some(&(200..240))),
+            8..18
+        );
+        assert_eq!(layout.expand_virtual_range_to_hint(8..12, None), 8..12);
+        assert_eq!(layout.start_column_for_range_start(12), 3);
     }
 
     #[test]
