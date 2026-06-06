@@ -3780,13 +3780,17 @@ fn cached_virtual_viewport_sync(
     thumbnail_size_px: u32,
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
-    _chooser_patterns: &[String],
+    chooser_patterns: &[String],
 ) -> Option<(f32, bool)> {
     if !schedule_thumbnails || visible_count_override.is_some() {
         return None;
     }
 
     let compact_item_view = pane.view.virtual_view.layout.as_ref()?;
+    let current_entry_count = pane_visible_entry_count_for_virtual_cache(pane, chooser_patterns)?;
+    if compact_item_view.entry_count != current_entry_count {
+        return None;
+    }
     if !main_layout_matches_compact_layout(layout, compact_item_view)
         || pane.view.virtual_view.thumbnail_size_px != thumbnail_size_px
     {
@@ -3802,6 +3806,22 @@ fn cached_virtual_viewport_sync(
         plan.viewport_x,
         (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON,
     ))
+}
+
+fn pane_visible_entry_count_for_virtual_cache(
+    pane: &PaneState,
+    chooser_patterns: &[String],
+) -> Option<usize> {
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
+        return Some(indices.len());
+    }
+
+    (pane.search.query.is_empty()
+        && pane.search.kind_filter == 0
+        && pane.search.modified_filter == 0
+        && pane.search.size_filter == 0
+        && chooser_patterns.is_empty())
+    .then_some(pane.entries.len())
 }
 
 fn main_layout_matches_compact_layout(
@@ -5710,6 +5730,49 @@ mod tests {
         );
         assert_eq!(cached_zoom_relayout_range(&(5..30), &(4..24), 100), None);
         assert_eq!(cached_zoom_relayout_range(&(5..101), &(12..24), 100), None);
+    }
+
+    #[test]
+    fn cached_virtual_viewport_rejects_stale_empty_layout_after_directory_switch() {
+        let stale_empty_layout = compact_item_view_layout(
+            480.0,
+            std::iter::empty::<&str>(),
+            4,
+            100.0,
+            90.0,
+            10.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        );
+        let main_layout = MainItemViewLayout {
+            viewport_x: 0.0,
+            viewport_width: stale_empty_layout.viewport_width,
+            rows_per_column: stale_empty_layout.rows_per_column,
+            cell_width: stale_empty_layout.cell_width,
+            row_height: stale_empty_layout.row_height,
+            padding: stale_empty_layout.padding,
+            item_padding: 0.0,
+            media_width: 1.0,
+            media_text_gap: 0.0,
+            title_font_size: 1.0,
+        };
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+        pane.view.virtual_view.layout = Some(stale_empty_layout);
+        pane.view.virtual_view.range = 0..0;
+        pane.view.virtual_view.thumbnail_size_px = 64;
+
+        let entries = PreparedDirectoryEntries::new(vec![PaneEntrySnapshot::from_entry(
+            &test_entry("new", "/tmp/new"),
+        )]);
+        pane.set_entries_with_location_state(Arc::clone(&entries.entries), entries.has_locations);
+
+        assert_eq!(
+            cached_virtual_viewport_sync(&mut pane, &main_layout, 0.0, 64, true, None, &[]),
+            None,
+            "directory switches must not reuse an empty virtual layout for a newly loaded non-empty directory"
+        );
     }
 
     #[test]

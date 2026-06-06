@@ -1,4 +1,4 @@
-# Bug 分析：启动时目录内容空白，分屏后恢复正常
+# Bug 分析：启动/切换目录后内容空白，分屏后恢复正常
 
 **日期**: 2026-06-06  
 **状态**: 已定位并修复  
@@ -6,11 +6,13 @@
 
 ## 问题描述
 
-fika 启动时，目录区域显示为空白，不渲染任何文件条目。触发分屏后内容恢复正常。
+fika 启动时或切换到未缓存目录后，目录区域显示为空白，不渲染任何文件条目。触发分屏后内容恢复正常。
 
 ## 真实根因
 
 启动时 Rust 侧没有显式清空 Slint 的 pane 模型。实测在首个目录真正加载完成前，`ui.get_pane_slots()`/`ui.get_pane_views()` 已经能让 slot 0 被当作可同步目标处理。随后启动流程中的状态、选择、布局同步把一个 entries 为空的 pane surface 和 virtual view 发布到了 UI。
+
+切换目录时也有同类问题：已有 pane row 存在，所以 uncached load 的 loading 状态会先发布空 `PaneViewData`。这一步会留下 `entry_count=0` 的 virtual layout/cache。真实目录条目返回后，`cached_virtual_viewport_sync()` 只比较布局尺寸和缓存 range，没有比较当前目录可见 entry count，于是可能把这个空 layout 当作可复用 cache，直接跳过真实条目的模型重建。
 
 关键不是“有一瞬间为空”，而是这个空 virtual view 进入了正常的 generation/cache 流程：
 
@@ -19,6 +21,14 @@ fika 启动时，目录区域显示为空白，不渲染任何文件条目。触
 3. `sync_virtual_entries_for_slot_with_count(... immediate=true ...)` 在 `entries=0` 时构造并应用了空 virtual result。
 4. 空 result 发布了 `range=0..0 entries=0 entry_count=0`，同时推进 `virtual_generation`。
 5. 真实目录加载完成后，`DirectoryLoaded` 里已经有 `/etc entries=197`，但后续 prepare 结果要么被已经推进的 generation 判 stale，要么走到已有空 cache 的快速路径，无法把真实 entries 发布到 pane surface。
+
+切换目录时的关键链路是：
+
+1. `navigate_pane_to_slot()` 更新 `current_dir` 后进入 `load_current_directory_for_slot()`。
+2. uncached load 先调用 `pane.clear_entries()`，然后状态/选择同步发布空 view。
+3. layout/viewport 同步在 `entries=0` 时生成空 virtual layout。
+4. `DirectoryLoaded` 设置真实 entries 后调用 `sync_pane_view_for_slot()`。
+5. `cached_virtual_viewport_sync()` 看到旧空 layout 的尺寸匹配、空 range 覆盖空 visible range，就返回 cache hit，真实 entries 没有进入 `apply_virtual_view_result()` 的 rebuild path。
 
 调试日志能直接看到这个顺序。修复前：
 
@@ -69,6 +79,7 @@ virtual_view_result applied ... range=0..110 entries=110 entry_count=197
 - `sync_pane_slot_ui()` 在找不到目标 row 时不再 fallback 到 `sync_pane_slots_ui()`，防止单行状态刷新创建缺失 pane。
 - selection 更新只有在 pane view row 已存在时才刷新 `PaneViewData`，避免清空选择时触发首个空 view。
 - layout/zoom 的 visible pane 同步在 pane model 为空时直接返回，不再把 “0 行” 解释成 slot 0。
+- `cached_virtual_viewport_sync()` 增加当前目录可见 entry count 校验，禁止把 `entry_count=0` 的旧 virtual layout 复用于新加载的非空目录。
 
 ## 验证
 
@@ -76,6 +87,7 @@ virtual_view_result applied ... range=0..110 entries=110 entry_count=197
 
 - `cargo check`
 - `cargo test`
+- targeted test: `cached_virtual_viewport_rejects_stale_empty_layout_after_directory_switch`
 - Wayland GUI 烟测：`FIKA_DEBUG_NAV=1 timeout 5s target/debug/fika /etc`
 
 烟测确认 `/etc` 的首个真实 virtual result 成功应用：
@@ -88,3 +100,5 @@ virtual_view_result applied pane_id=1 generation=4 range=0..110 entries=110 entr
 ## 经验
 
 启动首屏不要依赖 Slint 默认模型状态，也不要让 layout/selection/status 回调在目录数据到达前创建 pane surface。pane 独立模型下，首个 `PaneSlotSurface` 应该和真实 `PaneViewData` 一起发布；否则空 virtual cache 会成为后续 generation 判定和 cache fast path 的污染源。
+
+虚拟视图 cache 的命中条件不能只看几何尺寸。目录内容、搜索过滤结果、chooser 过滤结果都会改变 entry identity；至少必须校验当前可见 entry count，一旦无法可靠证明 cache 对应当前数据，就必须走 rebuild path。
