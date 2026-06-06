@@ -2941,6 +2941,11 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewHighlightEntry"))
             .map(|(body, _)| body)
             .expect("models.slint should define ItemViewEntry before ItemViewHighlightEntry");
+        let highlight_entry = models
+            .split_once("export struct ItemViewHighlightEntry")
+            .and_then(|(_, rest)| rest.split_once("export struct ItemViewBoundsEntry"))
+            .map(|(body, _)| body)
+            .expect("models.slint should define ItemViewHighlightEntry before ItemViewBoundsEntry");
         let item_view_bounds_entry = models
             .split_once("export struct ItemViewBoundsEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMediaEntry"))
@@ -3020,12 +3025,11 @@ mod tests {
                 && base_image_loop.contains("root.item-view-folder-media")
                 && base_image_loop.contains("root.item-view-file-media")
                 && media_overlay_loop
-                    .contains("private property <ItemViewBoundsEntry> item-bounds: root.bounds[media.slice_index];")
-                && media_overlay_loop
-                    .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.media-x;")
+                    .contains("x: root.preview-padding + media.x * 1px - root.viewport-x * 1px + root.media-x;")
                 && media_overlay_loop.contains(
-                    "y: root.preview-padding + self.item-bounds.y * 1px + root.media-y;"
+                    "y: root.preview-padding + media.y * 1px + root.media-y;"
                 )
+                && !media_overlay_loop.contains("root.bounds[media.slice_index]")
                 && media_overlay_loop.contains("width: root.media-width;")
                 && media_overlay_loop.contains("height: root.media-height;")
                 && media_overlay_loop.contains("source: media.media;")
@@ -3071,6 +3075,11 @@ mod tests {
                 && !item_view_entry.contains("media: image")
                 && media_entry.contains("slice_index: int")
                 && media_entry.contains("media: image")
+                && media_entry.contains("x: float")
+                && media_entry.contains("y: float")
+                && highlight_entry.contains("x: float")
+                && highlight_entry.contains("y: float")
+                && highlight_entry.contains("width: float")
                 && !item_view_entry.contains("tile_width: float")
                 && !item_view_entry.contains("tile_height: float")
                 && !item_view_entry.contains("media_x: float")
@@ -3087,6 +3096,8 @@ mod tests {
                 && pane_view_data.contains("item_view_file_media: image")
                 && metadata_entry.contains("slice_index: int")
                 && metadata_entry.contains("text: string")
+                && metadata_entry.contains("item_x: float")
+                && metadata_entry.contains("item_y: float")
                 && metadata_entry.contains("text_x: float")
                 && metadata_entry.contains("text_width: float")
                 && metadata_entry.contains("line_height: float")
@@ -3103,15 +3114,12 @@ mod tests {
             "SplitPaneView should inline Dolphin-style horizontal column-first tile primitives without a FileTile or FolderGlyph component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
         );
         assert!(
-            highlight_loop.contains(
-                    "private property <ItemViewBoundsEntry> item-bounds: root.bounds[highlight.slice_index];"
-                )
-                && highlight_loop.contains(
-                    "x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px;"
-                )
-                && highlight_loop.contains("y: root.preview-padding + self.item-bounds.y * 1px;")
-                && highlight_loop.contains("width: max(1px, self.item-bounds.width * 1px);")
+            highlight_loop
+                .contains("x: root.preview-padding + highlight.x * 1px - root.viewport-x * 1px;")
+                && highlight_loop.contains("y: root.preview-padding + highlight.y * 1px;")
+                && highlight_loop.contains("width: max(1px, highlight.width * 1px);")
                 && highlight_loop.contains("height: root.row-height;")
+                && !highlight_loop.contains("root.bounds[highlight.slice_index]")
                 && drop_target_loop.contains(
                     "private property <ItemViewBoundsEntry> item-bounds: root.bounds[root.drag-target-slice-index];"
                 )
@@ -3225,14 +3233,12 @@ mod tests {
         assert!(
             split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
                 && split_pane.contains("for metadata[index] in root.metadata: Text")
-                && metadata_tile_loop.contains(
-                    "private property <ItemViewBoundsEntry> item-bounds: root.bounds[metadata.slice_index];"
-                )
                 && metadata_tile_loop
-                    .contains("x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + metadata.text_x * 1px;")
+                    .contains("x: root.preview-padding + metadata.item_x * 1px - root.viewport-x * 1px + metadata.text_x * 1px;")
                 && metadata_tile_loop.contains(
-                    "y: root.preview-padding + self.item-bounds.y * 1px + metadata.y * 1px;"
+                    "y: root.preview-padding + metadata.item_y * 1px + metadata.y * 1px;"
                 )
+                && !metadata_tile_loop.contains("root.bounds[metadata.slice_index]")
                 && metadata_tile_loop.contains("height: metadata.line_height * 1px;")
                 && metadata_tile_loop.contains("text: metadata.text;")
                 && metadata_tile_loop.contains(

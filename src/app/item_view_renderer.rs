@@ -180,6 +180,8 @@ pub(crate) fn decorate_render_plan_with_metadata(
                 metadata_entries.push(ItemViewMetadataEntry {
                     slice_index: row as i32,
                     text: metadata.group.clone(),
+                    item_x: 0.0,
+                    item_y: 0.0,
                     text_x: geometry.text_x,
                     text_width: geometry.text_width,
                     y: text_plan.group_y,
@@ -192,6 +194,8 @@ pub(crate) fn decorate_render_plan_with_metadata(
                 metadata_entries.push(ItemViewMetadataEntry {
                     slice_index: row as i32,
                     text: metadata.location.clone(),
+                    item_x: 0.0,
+                    item_y: 0.0,
                     text_x: geometry.text_x,
                     text_width: geometry.text_width,
                     y: text_plan.location_y,
@@ -477,6 +481,8 @@ mod tests {
                 ItemViewMetadataEntry {
                     slice_index: 0,
                     text: "Documents".into(),
+                    item_x: 0.0,
+                    item_y: 0.0,
                     text_x: 52.0,
                     text_width: 75.0,
                     y: 2.0,
@@ -487,6 +493,8 @@ mod tests {
                 ItemViewMetadataEntry {
                     slice_index: 0,
                     text: "/home/user/Documents".into(),
+                    item_x: 0.0,
+                    item_y: 0.0,
                     text_x: 52.0,
                     text_width: 75.0,
                     y: 41.0,

@@ -948,6 +948,9 @@ mod tests {
         let mut selected = nonempty.clone();
         selected.highlights = ModelRc::new(Rc::new(VecModel::from(vec![ItemViewHighlightEntry {
             slice_index: 0,
+            x: 0.0,
+            y: 0.0,
+            width: 80.0,
         }])));
         assert!(!pane_view_requires_surface_rebind(&nonempty, &selected));
     }

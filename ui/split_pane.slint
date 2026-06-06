@@ -336,11 +336,9 @@ export component SplitPaneView inherits Rectangle {
                 height: parent.height;
 
                 for highlight[index] in root.highlights: Rectangle {
-                    private property <ItemViewBoundsEntry> item-bounds: root.bounds[highlight.slice_index];
-
-                    x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px;
-                    y: root.preview-padding + self.item-bounds.y * 1px;
-                    width: max(1px, self.item-bounds.width * 1px);
+                    x: root.preview-padding + highlight.x * 1px - root.viewport-x * 1px;
+                    y: root.preview-padding + highlight.y * 1px;
+                    width: max(1px, highlight.width * 1px);
                     height: root.row-height;
                     border-radius: 7px;
                     border-width: 1px;
@@ -371,10 +369,8 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for media[index] in root.media: Image {
-                    private property <ItemViewBoundsEntry> item-bounds: root.bounds[media.slice_index];
-
-                    x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + root.media-x;
-                    y: root.preview-padding + self.item-bounds.y * 1px + root.media-y;
+                    x: root.preview-padding + media.x * 1px - root.viewport-x * 1px + root.media-x;
+                    y: root.preview-padding + media.y * 1px + root.media-y;
                     width: root.media-width;
                     height: root.media-height;
                     source: media.media;
@@ -394,10 +390,8 @@ export component SplitPaneView inherits Rectangle {
                 }
 
                 for metadata[index] in root.metadata: Text {
-                    private property <ItemViewBoundsEntry> item-bounds: root.bounds[metadata.slice_index];
-
-                    x: root.preview-padding + self.item-bounds.x * 1px - root.viewport-x * 1px + metadata.text_x * 1px;
-                    y: root.preview-padding + self.item-bounds.y * 1px + metadata.y * 1px;
+                    x: root.preview-padding + metadata.item_x * 1px - root.viewport-x * 1px + metadata.text_x * 1px;
+                    y: root.preview-padding + metadata.item_y * 1px + metadata.y * 1px;
                     width: metadata.text_width * 1px;
                     height: metadata.line_height * 1px;
                     text: metadata.text;

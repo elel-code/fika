@@ -120,6 +120,8 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
             media_entries.push(ItemViewMediaEntry {
                 slice_index: row as i32,
                 media: image_from_thumbnail(data),
+                x: 0.0,
+                y: 0.0,
             });
             entry.media_token = key.item_view_media_token();
             entry.thumbnail_state = THUMBNAIL_STATE_LOADED;

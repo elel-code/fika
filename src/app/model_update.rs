@@ -229,6 +229,36 @@ fn update_item_view_metadata_entries_model(
     update_sparse_vec_model(model, metadata)
 }
 
+fn bounds_for_slice_index(
+    bounds_entries: &[ItemViewBoundsEntry],
+    slice_index: i32,
+) -> Option<&ItemViewBoundsEntry> {
+    bounds_entries
+        .get(usize::try_from(slice_index).ok()?)
+        .filter(|bounds| bounds.slice_index == slice_index)
+        .or_else(|| {
+            bounds_entries
+                .iter()
+                .find(|bounds| bounds.slice_index == slice_index)
+        })
+}
+
+fn project_metadata_entries_with_bounds(
+    metadata: Vec<ItemViewMetadataEntry>,
+    bounds_entries: &[ItemViewBoundsEntry],
+) -> Vec<ItemViewMetadataEntry> {
+    metadata
+        .into_iter()
+        .map(|mut metadata| {
+            if let Some(bounds) = bounds_for_slice_index(bounds_entries, metadata.slice_index) {
+                metadata.item_x = bounds.x;
+                metadata.item_y = bounds.y;
+            }
+            metadata
+        })
+        .collect()
+}
+
 pub(crate) fn new_item_view_media_model(
     media_entries: Vec<ItemViewMediaEntry>,
 ) -> ModelRc<ItemViewMediaEntry> {
@@ -237,6 +267,22 @@ pub(crate) fn new_item_view_media_model(
     }
 
     ModelRc::new(Rc::new(VecModel::from(media_entries)))
+}
+
+fn project_media_entries_with_bounds(
+    media_entries: Vec<ItemViewMediaEntry>,
+    bounds_entries: &[ItemViewBoundsEntry],
+) -> Vec<ItemViewMediaEntry> {
+    media_entries
+        .into_iter()
+        .map(|mut media| {
+            if let Some(bounds) = bounds_for_slice_index(bounds_entries, media.slice_index) {
+                media.x = bounds.x;
+                media.y = bounds.y;
+            }
+            media
+        })
+        .collect()
 }
 
 fn item_view_media_tokens(
@@ -288,15 +334,28 @@ fn update_item_view_media_entries_model(
     changed
 }
 
-fn item_view_highlight_entries(tokens: &[ItemViewRowToken]) -> Vec<ItemViewHighlightEntry> {
+fn item_view_highlight_entries(
+    tokens: &[ItemViewRowToken],
+    bounds_entries: &[ItemViewBoundsEntry],
+) -> Vec<ItemViewHighlightEntry> {
     tokens
         .iter()
         .enumerate()
         .filter_map(|(row, token)| {
+            let bounds = bounds_for_slice_index(bounds_entries, row as i32);
             token.selected().then_some(ItemViewHighlightEntry {
                 slice_index: row as i32,
+                x: bounds.map_or(0.0, |b| b.x),
+                y: bounds.map_or(0.0, |b| b.y),
+                width: bounds.map_or(0.0, |b| b.width),
             })
         })
+        .collect()
+}
+
+fn current_item_view_bounds_entries(view: &PaneView) -> Vec<ItemViewBoundsEntry> {
+    (0..view.virtual_bounds_entries.row_count())
+        .filter_map(|row| view.virtual_bounds_entries.row_data(row))
         .collect()
 }
 
@@ -333,9 +392,10 @@ fn update_item_view_highlight_entries_model(
 }
 
 pub(crate) fn update_item_view_highlight_model(view: &mut PaneView) -> bool {
+    let bounds_entries = current_item_view_bounds_entries(view);
     update_item_view_highlight_entries_model(
         &mut view.virtual_highlight_entries,
-        item_view_highlight_entries(&view.virtual_entry_tokens),
+        item_view_highlight_entries(&view.virtual_entry_tokens, &bounds_entries),
     )
 }
 
@@ -392,6 +452,8 @@ pub(crate) fn update_pane_item_view_entries_model(
     selected_paths: &[String],
 ) {
     let old_start = view.virtual_start_index;
+    let media_entries = project_media_entries_with_bounds(media_entries, &bounds_entries);
+    let metadata_entries = project_metadata_entries_with_bounds(metadata_entries, &bounds_entries);
     let media_tokens = item_view_media_tokens(&entries, &media_entries);
     let paint_entries = item_view_paint_entries(&entries, &bounds_entries);
     update_item_view_bounds_entries_model(
@@ -467,9 +529,17 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         return false;
     }
 
-    let _ = update_item_view_highlight_model(view);
     let paint_entries =
         item_view_paint_entries_from_tokens(&view.virtual_entry_tokens, &bounds_entries);
+    let highlight_entries =
+        item_view_highlight_entries(&view.virtual_entry_tokens, &bounds_entries);
+    trim_item_view_media_entries_model(
+        &mut view.virtual_media_entries,
+        &mut view.virtual_media_tokens,
+        remove_front,
+        target_len,
+        &bounds_entries,
+    );
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
@@ -482,11 +552,9 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         range.start,
         paint_entries,
     );
-    trim_item_view_media_entries_model(
-        &mut view.virtual_media_entries,
-        &mut view.virtual_media_tokens,
-        remove_front,
-        target_len,
+    let _ = update_item_view_highlight_entries_model(
+        &mut view.virtual_highlight_entries,
+        highlight_entries,
     );
     view.virtual_start_index = range.start;
     true
@@ -497,6 +565,7 @@ fn trim_item_view_media_entries_model(
     current_tokens: &mut Vec<ItemViewMediaToken>,
     remove_front: usize,
     target_len: usize,
+    bounds_entries: &[ItemViewBoundsEntry],
 ) {
     let retained = (0..current.row_count())
         .filter_map(|row| {
@@ -522,6 +591,10 @@ fn trim_item_view_media_entries_model(
             }
             entry.slice_index = shifted as i32;
             token.slice_index = shifted as i32;
+            if let Some(bounds) = bounds_for_slice_index(bounds_entries, entry.slice_index) {
+                entry.x = bounds.x;
+                entry.y = bounds.y;
+            }
             Some((entry, token))
         })
         .collect::<Vec<_>>();
@@ -825,6 +898,15 @@ mod tests {
             .collect()
     }
 
+    fn highlight_geometry_rows(
+        model: &ModelRc<ItemViewHighlightEntry>,
+    ) -> Vec<(i32, f32, f32, f32)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| (entry.slice_index, entry.x, entry.y, entry.width))
+            .collect()
+    }
+
     fn bounds_row_x(model: &ModelRc<ItemViewBoundsEntry>) -> Vec<f32> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
@@ -869,6 +951,13 @@ mod tests {
             .collect()
     }
 
+    fn media_geometry_rows(model: &ModelRc<ItemViewMediaEntry>) -> Vec<(i32, f32, f32)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| (entry.slice_index, entry.x, entry.y))
+            .collect()
+    }
+
     fn media_tokens(tokens: &[ItemViewMediaToken]) -> Vec<(i32, i32)> {
         tokens
             .iter()
@@ -883,6 +972,13 @@ mod tests {
             .collect()
     }
 
+    fn metadata_geometry_rows(model: &ModelRc<ItemViewMetadataEntry>) -> Vec<(i32, f32, f32)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| (entry.slice_index, entry.item_x, entry.item_y))
+            .collect()
+    }
+
     fn metadata_entries(start: usize, count: usize) -> Vec<ItemViewMetadataEntry> {
         (0..count)
             .flat_map(|row| {
@@ -891,6 +987,8 @@ mod tests {
                     ItemViewMetadataEntry {
                         slice_index: row as i32,
                         text: format!("Group {index}").into(),
+                        item_x: 0.0,
+                        item_y: 0.0,
                         text_x: 52.0,
                         text_width: 75.0 + index as f32,
                         y: 2.0,
@@ -901,6 +999,8 @@ mod tests {
                     ItemViewMetadataEntry {
                         slice_index: row as i32,
                         text: format!("/tmp/group-{index}").into(),
+                        item_x: 0.0,
+                        item_y: 0.0,
                         text_x: 52.0,
                         text_width: 75.0 + index as f32,
                         y: 41.0,
@@ -928,6 +1028,54 @@ mod tests {
             .to_rgba8()
             .expect("test image should be rgba")
             .as_slice()[0]
+    }
+
+    #[test]
+    fn sparse_overlay_models_carry_projected_item_bounds() {
+        let mut entries = entries_with_tile_metrics(3);
+        entries[1].thumbnail_state = 2;
+        entries[1].media_token = 101;
+        let bounds = bounds_entries(20, 3);
+        let mut view = PaneView::default();
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            20,
+            entries,
+            bounds,
+            vec![ItemViewMediaEntry {
+                slice_index: 1,
+                media: colored_image(Rgba8Pixel::new(255, 0, 0, 255)),
+                x: 0.0,
+                y: 0.0,
+            }],
+            vec![ItemViewMetadataEntry {
+                slice_index: 1,
+                text: "Group".into(),
+                item_x: 0.0,
+                item_y: 0.0,
+                text_x: 52.0,
+                text_width: 75.0,
+                y: 2.0,
+                line_height: 14.0,
+                font_size: 11.0,
+                is_group: true,
+            }],
+            &["/tmp/item-1".to_string()],
+        );
+
+        assert_eq!(
+            highlight_geometry_rows(&view.virtual_highlight_entries),
+            vec![(1, 210.0, 2.0, 111.0)]
+        );
+        assert_eq!(
+            media_geometry_rows(&view.virtual_media_entries),
+            vec![(1, 210.0, 2.0)]
+        );
+        assert_eq!(
+            metadata_geometry_rows(&view.virtual_metadata_entries),
+            vec![(1, 210.0, 2.0)]
+        );
     }
 
     #[test]
@@ -1386,10 +1534,14 @@ mod tests {
                 ItemViewMediaEntry {
                     slice_index: 1,
                     media: colored_image(Rgba8Pixel::new(255, 0, 0, 255)),
+                    x: 0.0,
+                    y: 0.0,
                 },
                 ItemViewMediaEntry {
                     slice_index: 3,
                     media: colored_image(Rgba8Pixel::new(0, 0, 255, 255)),
+                    x: 0.0,
+                    y: 0.0,
                 },
             ],
             Vec::new(),
@@ -1411,10 +1563,14 @@ mod tests {
                 ItemViewMediaEntry {
                     slice_index: 1,
                     media: colored_image(Rgba8Pixel::new(0, 255, 0, 255)),
+                    x: 0.0,
+                    y: 0.0,
                 },
                 ItemViewMediaEntry {
                     slice_index: 3,
                     media: colored_image(Rgba8Pixel::new(255, 255, 0, 255)),
+                    x: 0.0,
+                    y: 0.0,
                 },
             ],
             Vec::new(),
@@ -1528,10 +1684,14 @@ mod tests {
                 ItemViewMediaEntry {
                     slice_index: 1,
                     media: colored_image(Rgba8Pixel::new(255, 0, 0, 255)),
+                    x: 0.0,
+                    y: 0.0,
                 },
                 ItemViewMediaEntry {
                     slice_index: 3,
                     media: colored_image(Rgba8Pixel::new(0, 0, 255, 255)),
+                    x: 0.0,
+                    y: 0.0,
                 },
             ],
             Vec::new(),
@@ -1618,6 +1778,8 @@ mod tests {
             ItemViewMetadataEntry {
                 slice_index: 0,
                 text: "Documents".into(),
+                item_x: 0.0,
+                item_y: 0.0,
                 text_x: 52.0,
                 text_width: 75.0,
                 y: 2.0,
@@ -1628,6 +1790,8 @@ mod tests {
             ItemViewMetadataEntry {
                 slice_index: 0,
                 text: "/home/user/Documents".into(),
+                item_x: 0.0,
+                item_y: 0.0,
                 text_x: 52.0,
                 text_width: 75.0,
                 y: 41.0,

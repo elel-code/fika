@@ -1518,6 +1518,8 @@ mod tests {
             vec![ItemViewMediaEntry {
                 slice_index: 0,
                 media: Image::default(),
+                x: 0.0,
+                y: 0.0,
             }],
             Vec::new(),
             &[],
