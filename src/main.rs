@@ -6856,9 +6856,12 @@ mod tests {
                 && viewport_body.contains("if current_view.slot == slot")
                 && viewport_body.contains("current_view.viewport_x = viewport_x;")
                 && viewport_body.contains("current.set_row_data(row, current_view);")
+                && viewport_body.contains("sync_pane_surface_viewport_ui(ui, slot, viewport_x)")
+                && viewport_body.contains("current_surface.view.viewport_x = viewport_x;")
                 && viewport_body.contains("sync_pane_view_ui(ui, state, slot);")
+                && !viewport_body.contains("sync_pane_surface_ui(ui, state, slot);")
                 && !viewport_body.contains("pane_slot_data(ui"),
-            "viewport-only row sync should patch only PaneViewData.viewport_x and use hot view sync as a missing-row fallback"
+            "viewport-only row sync should patch only viewport fields on PaneViewData/PaneSurfaceData and use hot view sync as a missing-row fallback"
         );
     }
 

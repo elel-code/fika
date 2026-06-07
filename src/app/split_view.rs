@@ -64,12 +64,32 @@ fn sync_pane_view_viewport_ui(
                 current_view.viewport_x = viewport_x;
                 current.set_row_data(row, current_view);
             }
-            sync_pane_surface_ui(ui, state, slot);
+            if sync_pane_surface_viewport_ui(ui, slot, viewport_x) {
+                return;
+            }
+            sync_pane_view_ui(ui, state, slot);
             return;
         }
     }
 
     sync_pane_view_ui(ui, state, slot);
+}
+
+fn sync_pane_surface_viewport_ui(ui: &AppWindow, slot: i32, viewport_x: f32) -> bool {
+    let current = ui.get_pane_surfaces();
+    for row in 0..current.row_count() {
+        let Some(mut current_surface) = current.row_data(row) else {
+            continue;
+        };
+        if current_surface.slot == slot {
+            if (current_surface.view.viewport_x - viewport_x).abs() > f32::EPSILON {
+                current_surface.view.viewport_x = viewport_x;
+                current.set_row_data(row, current_surface);
+            }
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {

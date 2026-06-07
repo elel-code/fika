@@ -68,6 +68,7 @@ Rectangle viewport shell (clip: true)
 | 普通滚轮不重复请求焦点 | `split_pane.slint:78` | 减少 FFI 调用 |
 | Dolphin-style pane search selectors | `search_panel.slint` / `app.slint` | 搜索过滤不再展开成 pane 内过滤框；输入使用 500ms delayed commit；`Filter` 打开 Type/Modified/Size selector rows，active chip 只打开自己的 selector，popup anchored 到按钮/chip 且不改变主视图高度 |
 | 自管滚动条消费 Rust item-view layout metrics | `split_view.rs` / `geometry.rs` / `split_pane.slint` | `rows_per_column`、content width、scroll max 和 virtual slice 起点/宽度都来自同一 Rust layouter |
+| Dolphin-style viewport-only patch | `split_view.rs` | viewport/clamp 发布只 patch `PaneViewData.viewport_x` 和 `PaneSurfaceData.view.viewport_x`，不再重建 `PaneSurfaceData` 或调用 `pane_view_data()` 触发 tile raster 路径；对齐 Dolphin `setScrollOffset()` 只更新 scroll offset/visible indexes 的边界 |
 | 每 pane latest-only virtual prepare | `pane.rs` / `main.rs` | 快速滚动时每个 pane 只保留一个后台 prepare，等待队列只保存最新请求 |
 | Rust item-view hit-test | `item_view.rs` | click/activation/context/DnD/drop target 命中不再散落在 Slint tile 或 transfer 几何代码中 |
 | Press-pinned drag source | `split_pane.slint` / `item_view.rs` | 主视图 `DragArea.data` 只发布 blank-suppress / pending sentinel；真实 drag payload 从 Rust pane-local press-time `drag_source` 延迟解析，hover/move 不再更新 data-transfer 绑定，也不再反复触发 Rust hit-test |
@@ -136,6 +137,7 @@ changed viewport-x => {
 
 关键设计点：
 - viewport-x 的 Slint 本地状态仍由 pane surface 持有，普通滚动不再每步把 viewport 反发布到 pane row。scrollbar、hit-test、selection 和 Rust visible slice 以 logical `viewport-x` 为真值；只有绘制 primitive 的 x 偏移使用 `paint-viewport-x`。Rust 额外下发当前 virtual slice 的 content 起点和宽度，Slint 只在旧 paint window 与目标 viewport window 都落在当前 slice 内时启用平滑，避免模型已切到新 range 而 paint offset 还停在旧 range 时出现空白。
+- viewport-only 发布路径参考 Dolphin `KItemListView::setScrollOffset()` / `KItemListViewLayouter::updateVisibleIndexes()` 的边界：只更新 offset/visible 状态，不重建 item widget。Fika 对应地只 patch `pane_views[row].viewport_x` 和 `pane_surfaces[row].view.viewport_x`；缺 row 才回退完整 view sync。这样 clamp、恢复目录 viewport 或 cached viewport sync 不会重新构造 `PaneSurfaceData`，也不会因为调用 `pane_view_data()` 而走 tile raster 生成。
 - layout/fullscreen/rows-per-column 变化走 immediate layout rebuild，不等待 timer，也不需要手动拖动滚动条恢复。
 - `PaneViewData` 承载 viewport、layout metrics、空状态和当前 tile raster base layer 等主视图热数据；Slint-facing view data 不再携带 `ItemViewEntry` 或完整 bounds model。可见业务 row 保留在 Rust `PaneView.virtual_entries`，用于 controller/hit-test/DnD/token state；Slint 只接收 pane-local raster、paint、media、metadata 绘制数据。`PaneSlotData` 只保留地址栏、搜索、状态栏、chooser 等 pane chrome 冷数据。
 
