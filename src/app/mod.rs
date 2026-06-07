@@ -6,6 +6,7 @@ pub(crate) mod directory_loading;
 pub(crate) mod dnd;
 pub(crate) mod events;
 pub(crate) mod file_clipboard;
+pub(crate) mod file_item_roles_updater;
 pub(crate) mod geometry;
 pub(crate) mod item_view;
 pub(crate) mod item_view_metrics;

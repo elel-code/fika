@@ -4,7 +4,6 @@ use crate::app::model_update::ItemViewRowToken;
 use crate::app::state::AppState;
 use crate::fs::thumbnails;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 pub(crate) const MAX_THUMBNAIL_CACHE_ENTRIES: usize = 512;
@@ -133,27 +132,6 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
         }
     }
     media_entries
-}
-
-pub(crate) fn prioritize_thumbnail_entries<T: ThumbnailScheduleRow>(
-    entries: &[T],
-    virtual_start_index: usize,
-    visible_range: Range<usize>,
-) -> impl Iterator<Item = &T> {
-    let visible_start = visible_range
-        .start
-        .saturating_sub(virtual_start_index)
-        .min(entries.len());
-    let visible_end = visible_range
-        .end
-        .saturating_sub(virtual_start_index)
-        .min(entries.len())
-        .max(visible_start);
-
-    entries[visible_start..visible_end]
-        .iter()
-        .chain(entries[..visible_start].iter())
-        .chain(entries[visible_end..].iter())
 }
 
 #[cfg(test)]
@@ -736,36 +714,6 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_priority_schedules_visible_entries_before_overscan() {
-        let entries = (8..20)
-            .map(|index| test_entry(&format!("item-{index}.png"), &format!("/tmp/{index}.png")))
-            .collect::<Vec<_>>();
-
-        let prioritized = prioritize_thumbnail_entries(&entries, 8, 12..16)
-            .into_iter()
-            .map(|entry| entry.name.to_string())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            prioritized,
-            vec![
-                "item-12.png".to_string(),
-                "item-13.png".to_string(),
-                "item-14.png".to_string(),
-                "item-15.png".to_string(),
-                "item-8.png".to_string(),
-                "item-9.png".to_string(),
-                "item-10.png".to_string(),
-                "item-11.png".to_string(),
-                "item-16.png".to_string(),
-                "item-17.png".to_string(),
-                "item-18.png".to_string(),
-                "item-19.png".to_string(),
-            ]
-        );
-    }
-
-    #[test]
     fn thumbnail_schedule_entries_can_derive_from_row_tokens_without_images() {
         let temp_dir = temp_test_dir("row-token-schedule");
         let entries = (0..6)
@@ -781,33 +729,32 @@ mod tests {
             .map(|token| ThumbnailScheduleEntry::from_row_token(&token))
             .collect::<Vec<_>>();
 
-        let prioritized = prioritize_thumbnail_entries(&tokens, 0, 2..4);
-        let prioritized_paths = prioritized
+        let token_paths = tokens
+            .iter()
             .map(|entry| entry.path().to_string())
             .collect::<Vec<_>>();
         assert_eq!(
-            prioritized_paths,
+            token_paths,
             vec![
-                temp_dir.join("item-2.png").to_string_lossy().to_string(),
-                temp_dir.join("item-3.png").to_string_lossy().to_string(),
                 temp_dir.join("item-0.png").to_string_lossy().to_string(),
                 temp_dir.join("item-1.png").to_string_lossy().to_string(),
+                temp_dir.join("item-2.png").to_string_lossy().to_string(),
+                temp_dir.join("item-3.png").to_string_lossy().to_string(),
                 temp_dir.join("item-4.png").to_string_lossy().to_string(),
                 temp_dir.join("item-5.png").to_string_lossy().to_string(),
             ]
         );
 
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let prioritized = prioritize_thumbnail_entries(&tokens, 0, 2..4);
-        let paths = thumbnail_schedule_batch(&mut state, prioritized, 64);
-        assert_eq!(paths[0], temp_dir.join("item-2.png"));
-        assert_eq!(paths[1], temp_dir.join("item-3.png"));
+        let paths = thumbnail_schedule_batch(&mut state, tokens.iter(), 64);
+        assert_eq!(paths[0], temp_dir.join("item-0.png"));
+        assert_eq!(paths[1], temp_dir.join("item-1.png"));
         assert!(
             state
                 .panes
                 .focused()
                 .view
-                .has_thumbnail_pending(temp_dir.join("item-2.png").to_str().unwrap())
+                .has_thumbnail_pending(temp_dir.join("item-0.png").to_str().unwrap())
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -859,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_schedule_batch_marks_pending_visible_first_and_respects_cap() {
+    fn thumbnail_schedule_batch_marks_pending_in_input_order_and_respects_cap() {
         let temp_dir = temp_test_dir("batch-cap");
         let mut entries = Vec::new();
         for index in 0..(MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC + 8) {
@@ -872,20 +819,19 @@ mod tests {
         }
 
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let prioritized = prioritize_thumbnail_entries(&entries, 0, 4..8);
-        let paths = thumbnail_schedule_batch(&mut state, prioritized, 64);
+        let paths = thumbnail_schedule_batch(&mut state, entries.iter(), 64);
 
         assert_eq!(paths.len(), MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC);
-        assert_eq!(paths[0], temp_dir.join("item-4.png"));
-        assert_eq!(paths[1], temp_dir.join("item-5.png"));
-        assert_eq!(paths[2], temp_dir.join("item-6.png"));
-        assert_eq!(paths[3], temp_dir.join("item-7.png"));
+        assert_eq!(paths[0], temp_dir.join("item-0.png"));
+        assert_eq!(paths[1], temp_dir.join("item-1.png"));
+        assert_eq!(paths[2], temp_dir.join("item-2.png"));
+        assert_eq!(paths[3], temp_dir.join("item-3.png"));
         assert!(
             state
                 .panes
                 .focused()
                 .view
-                .has_thumbnail_pending(temp_dir.join("item-4.png").to_str().unwrap())
+                .has_thumbnail_pending(temp_dir.join("item-0.png").to_str().unwrap())
         );
         assert!(
             state

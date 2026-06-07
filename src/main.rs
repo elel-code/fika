@@ -49,6 +49,10 @@ use app::file_clipboard::{
     apply_clipboard_load_result, apply_clipboard_paste_load_result,
     refresh_clipboard_availability_async, sync_clipboard_ui,
 };
+use app::file_item_roles_updater::{
+    ICON_SIZE_UPDATE_INTERVAL, schedule_thumbnail_roles_for_entries,
+    schedule_thumbnail_roles_for_visible_panes, thumbnail_size_px,
+};
 use app::geometry::{
     CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayoutEngine,
     ItemViewLayouter, MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio,
@@ -95,15 +99,13 @@ use app::settings_save::{SettingsSaveScheduler, save_settings_latest};
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui, sync_focus_navigation_ui,
     sync_navigation_ui, sync_pane_slot_ui, sync_pane_slots_ui, sync_pane_view_ui,
-    sync_pane_view_ui_defer_raster, toggle_split_view,
+    toggle_split_view,
 };
 #[cfg(test)]
 use app::state::PaneExternalEdit;
 use app::state::{AppState, DeviceAction};
 use app::thumbnail_pipeline::{
-    ThumbnailScheduleEntry, ThumbnailScheduleRow, apply_thumbnail_load_to_state_for_pane,
-    decorate_entries_with_cached_thumbnails_for_pane, prioritize_thumbnail_entries,
-    thumbnail_schedule_batch_for_pane,
+    apply_thumbnail_load_to_state_for_pane, decorate_entries_with_cached_thumbnails_for_pane,
 };
 use app::transfer::{
     cancel_queued_operations, pane_drop_allowed, pane_drop_target_path, place_drop_allowed,
@@ -144,8 +146,6 @@ pub(crate) struct FileEntry {
 }
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
-const ICON_ZOOM_THUMBNAIL_COALESCE: Duration = Duration::from_millis(300);
-const ICON_ZOOM_RASTER_COALESCE: Duration = ICON_ZOOM_THUMBNAIL_COALESCE;
 const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = 4096;
 const ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT: usize = 128;
 
@@ -195,7 +195,6 @@ struct PaneLayoutSyncScheduler {
     bridge: AsyncBridge,
     pane_view_sync: Rc<PaneViewSyncScheduler>,
     pending_icon_zoom_thumbnails: Rc<Cell<bool>>,
-    pending_icon_zoom_rasters: Rc<Cell<bool>>,
 }
 
 impl PaneLayoutSyncScheduler {
@@ -211,23 +210,17 @@ impl PaneLayoutSyncScheduler {
         let timer_bridge = bridge.clone();
         let pending_icon_zoom_thumbnails = Rc::new(Cell::new(false));
         let timer_pending_icon_zoom_thumbnails = Rc::clone(&pending_icon_zoom_thumbnails);
-        let pending_icon_zoom_rasters = Rc::new(Cell::new(false));
-        let timer_pending_icon_zoom_rasters = Rc::clone(&pending_icon_zoom_rasters);
 
         timer.start(
             TimerMode::SingleShot,
-            ICON_ZOOM_RASTER_COALESCE,
+            ICON_SIZE_UPDATE_INTERVAL,
             move || {
-                let flush_icon_zoom_rasters = timer_pending_icon_zoom_rasters.replace(false);
                 let flush_icon_zoom_thumbnails = timer_pending_icon_zoom_thumbnails.replace(false);
                 let Some(ui) = timer_ui.upgrade() else {
                     return;
                 };
-                if flush_icon_zoom_rasters {
-                    refresh_visible_pane_tile_frame_rasters(&ui, &timer_state);
-                }
                 if flush_icon_zoom_thumbnails {
-                    schedule_visible_thumbnails_for_visible_panes(&ui, &timer_state, &timer_bridge);
+                    schedule_thumbnail_roles_for_visible_panes(&ui, &timer_state, &timer_bridge);
                 }
             },
         );
@@ -240,13 +233,11 @@ impl PaneLayoutSyncScheduler {
             bridge,
             pane_view_sync,
             pending_icon_zoom_thumbnails,
-            pending_icon_zoom_rasters,
         }
     }
 
     fn sync_now(&self) {
         let flush_icon_zoom_thumbnails = self.pending_icon_zoom_thumbnails.replace(false);
-        self.pending_icon_zoom_rasters.set(false);
         self.timer.stop();
         let Some(ui) = self.ui.upgrade() else {
             return;
@@ -254,7 +245,7 @@ impl PaneLayoutSyncScheduler {
         self.pane_view_sync.flush_all();
         sync_visible_pane_layouts(&ui, &self.state, &self.bridge);
         if flush_icon_zoom_thumbnails {
-            schedule_visible_thumbnails_for_visible_panes(&ui, &self.state, &self.bridge);
+            schedule_thumbnail_roles_for_visible_panes(&ui, &self.state, &self.bridge);
         }
     }
 
@@ -264,7 +255,6 @@ impl PaneLayoutSyncScheduler {
         };
         self.pane_view_sync.flush_all();
         sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);
-        self.pending_icon_zoom_rasters.set(true);
         self.pending_icon_zoom_thumbnails.set(true);
         self.timer.restart();
     }
@@ -4346,16 +4336,20 @@ fn apply_virtual_view_result(
     };
 
     if result.schedule_thumbnails {
-        let thumbnail_entries =
-            prioritize_thumbnail_entries(&entries, update.range.start, update.visible_range);
-        schedule_visible_thumbnails(
-            ui,
+        let maximum_visible_items = update
+            .visible_range
+            .end
+            .saturating_sub(update.visible_range.start)
+            .max(1);
+        schedule_thumbnail_roles_for_entries(
             state,
             bridge,
             result.pane_id,
-            thumbnail_entries,
+            &entries,
+            update.range.start,
+            update.visible_range,
+            maximum_visible_items,
             result.thumbnail_size_px,
-            false,
         );
     }
     let bounds_entries =
@@ -4831,76 +4825,6 @@ fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     clear_selection_for_slot(ui, state, slot);
 }
 
-fn schedule_visible_thumbnails<'a, T, I>(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    pane_id: u64,
-    entries: I,
-    size_px: u32,
-    announce: bool,
-) where
-    T: ThumbnailScheduleRow + ?Sized + 'a,
-    I: IntoIterator<Item = &'a T>,
-{
-    let (generation, paths) = {
-        let mut state = state.borrow_mut();
-        let Some(pane) = state.panes.pane_by_id(pane_id) else {
-            return;
-        };
-        let generation = pane.thumbnail_generation.current();
-        let paths = thumbnail_schedule_batch_for_pane(&mut state, pane_id, entries, size_px);
-
-        (generation, paths)
-    };
-
-    if paths.is_empty() {
-        return;
-    }
-
-    if announce {
-        set_status(ui, state, "Loading thumbnails...");
-    }
-    let async_tx = bridge.tx.clone();
-    let notify_ui = bridge.ui_weak.clone();
-    bridge.handle.spawn(async move {
-        let fallback_paths = paths.clone();
-        let loads = match tokio::task::spawn_blocking(move || {
-            paths
-                .into_iter()
-                .map(|path| thumbnails::load_thumbnail(path, size_px))
-                .collect::<Vec<_>>()
-        })
-        .await
-        {
-            Ok(loads) => loads,
-            Err(err) => {
-                let message = format!("thumbnail task failed: {err}");
-                fallback_paths
-                    .into_iter()
-                    .map(|path| thumbnails::ThumbnailLoad {
-                        key: thumbnails::fallback_key(&path, size_px),
-                        path,
-                        cache_paths: None,
-                        data: Err(io::Error::other(message.clone())),
-                    })
-                    .collect()
-            }
-        };
-        for load in loads {
-            send_async_event(
-                async_tx.clone(),
-                notify_ui.clone(),
-                AsyncEvent::ThumbnailLoaded {
-                    pane_id,
-                    generation,
-                    load,
-                },
-            );
-        }
-    });
-}
-
 fn flush_thumbnail_results(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
@@ -4928,84 +4852,6 @@ fn flush_thumbnail_results(
             sync_virtual_entries_for_slot(ui, state, bridge, slot, false);
         }
     }
-}
-
-fn thumbnail_size_px(ui: &AppWindow) -> u32 {
-    match ui.get_icon_zoom_level() {
-        0 => 64,
-        1 => 80,
-        2 => 104,
-        3 => 128,
-        _ => 160,
-    }
-}
-
-fn schedule_visible_thumbnails_for_visible_panes(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-) {
-    let slots = ui.get_pane_slots();
-    if slots.row_count() == 0 {
-        schedule_visible_thumbnails_for_slot(ui, state, bridge, 0);
-        return;
-    }
-
-    for row in 0..slots.row_count() {
-        if let Some(pane) = slots.row_data(row) {
-            schedule_visible_thumbnails_for_slot(ui, state, bridge, pane.slot);
-        }
-    }
-}
-
-fn schedule_visible_thumbnails_for_slot(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    slot: i32,
-) {
-    let size_px = thumbnail_size_px(ui);
-    let (pane_id, virtual_start_index, visible_range, entries) = {
-        let state_ref = state.borrow();
-        let Some(pane) = state_ref.panes.pane_for_slot(slot) else {
-            return;
-        };
-        let entries = pane
-            .view
-            .virtual_entry_tokens
-            .iter()
-            .map(ThumbnailScheduleEntry::from_row_token)
-            .collect::<Vec<_>>();
-        if entries.is_empty() {
-            return;
-        }
-        (
-            pane.id,
-            pane.view.virtual_start_index,
-            current_pane_visible_range(pane),
-            entries,
-        )
-    };
-    let thumbnail_entries =
-        prioritize_thumbnail_entries(&entries, virtual_start_index, visible_range);
-    schedule_visible_thumbnails(
-        ui,
-        state,
-        bridge,
-        pane_id,
-        thumbnail_entries,
-        size_px,
-        false,
-    );
-}
-
-fn current_pane_visible_range(pane: &PaneState) -> Range<usize> {
-    pane.view
-        .virtual_view
-        .layout
-        .as_ref()
-        .map(|layout| layout.virtual_plan(pane.view.viewport_x, 0).visible_range)
-        .unwrap_or(0..0)
 }
 
 fn refresh_visible_pane_tile_frame_rasters(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -5199,7 +5045,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
             ui.set_entry_count(entry_count as i32);
         }
         schedule_zoom_layout_prewarm(ui, state, bridge, slot);
-        sync_pane_view_ui_defer_raster(ui, state, slot);
+        sync_pane_view_ui(ui, state, slot);
     }
     applied
 }
@@ -7399,7 +7245,12 @@ mod tests {
     #[test]
     fn icon_zoom_layout_is_immediate_and_thumbnail_updates_are_coalesced() {
         let source = include_str!("main.rs");
+        let production_source = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(body, _)| body)
+            .expect("main.rs should contain tests after production code");
         let app = include_str!("../ui/app.slint");
+        let roles_updater_source = include_str!("app/file_item_roles_updater.rs");
         let setup_body = source
             .split_once("let pane_layout_sync = Rc::new(PaneLayoutSyncScheduler::new(")
             .and_then(|(_, rest)| rest.split_once("ui.on_pane_slots_refresh_requested"))
@@ -7449,10 +7300,8 @@ mod tests {
         let layout_prewarm_call = ["prepare_virtual_view_layout", "_prewarm_input(input)"].concat();
 
         assert!(
-            source.contains(
-                "const ICON_ZOOM_THUMBNAIL_COALESCE: Duration = Duration::from_millis(300);"
-            ) && source.contains(
-                "const ICON_ZOOM_RASTER_COALESCE: Duration = ICON_ZOOM_THUMBNAIL_COALESCE;"
+            roles_updater_source.contains(
+                "pub(crate) const ICON_SIZE_UPDATE_INTERVAL: Duration = Duration::from_millis(300);"
             ) && app.contains("callback icon_zoom_layout_changed();")
                 && app.contains(
                     "changed icon_zoom_level => {\n        root.icon_zoom_layout_changed();\n    }"
@@ -7469,24 +7318,27 @@ mod tests {
         );
         assert!(
             scheduler_body.contains("TimerMode::SingleShot")
-                && scheduler_body.contains("ICON_ZOOM_RASTER_COALESCE")
-                && scheduler_body.contains("pending_icon_zoom_rasters")
-                && scheduler_body.contains("refresh_visible_pane_tile_frame_rasters(&ui, &timer_state);")
+                && scheduler_body.contains("ICON_SIZE_UPDATE_INTERVAL")
+                && !scheduler_body.contains("pending_icon_zoom_rasters")
+                && !scheduler_body
+                    .contains("refresh_visible_pane_tile_frame_rasters(&ui, &timer_state);")
                 && scheduler_body.contains("fn sync_icon_zoom_now(&self)")
-                && scheduler_body
-                    .contains("sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);")
+                && scheduler_body.contains(
+                    "sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);"
+                )
                 && scheduler_body.contains("pending_icon_zoom_thumbnails")
                 && scheduler_body.contains("self.timer.restart();")
                 && scheduler_body.contains("fn sync_now(&self)")
                 && scheduler_body.contains("self.timer.stop();")
-                && scheduler_body
-                    .contains("schedule_visible_thumbnails_for_visible_panes(&ui, &timer_state, &timer_bridge);"),
-            "continuous zoom should refresh item layout immediately while coalescing thumbnail work like Dolphin's icon-size updater"
+                && scheduler_body.contains(
+                    "schedule_thumbnail_roles_for_visible_panes(&ui, &timer_state, &timer_bridge);"
+                ),
+            "continuous zoom should refresh item layout immediately while coalescing thumbnail/preview roles like Dolphin's KFileItemModelRolesUpdater"
         );
         assert!(
             icon_zoom_body.contains("try_relayout_cached_pane_icon_zoom_layout(ui, state, bridge, slot)")
                 && icon_zoom_body.contains("prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);")
-                && !source.contains(&removed_zoom_style_function)
+                && !production_source.contains(&removed_zoom_style_function)
                 && !icon_zoom_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && visible_icon_zoom_body
                     .contains("if slots.row_count() == 0 {\n        return;\n    }")
@@ -7497,8 +7349,9 @@ mod tests {
                     "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);"
                 )
                 && fast_path_body.contains("relayout_pane_item_view_entries_model(")
-                && source.contains("const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = 4096;")
-                && source.contains(
+                && production_source
+                    .contains("const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = 4096;")
+                && production_source.contains(
                     "const ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT: usize = 128;"
                 )
                 && fast_path_body.contains(
@@ -7511,24 +7364,25 @@ mod tests {
                     "zoom_item_view_layout_engine(pane, layout, entry_count, &[], allow_uncached_layout)"
                 )
                 && fast_path_body.contains("update_layout_signature_arc(item_view_layout, size_px)")
-                && !source.contains(&removed_zoom_width_function)
-                && !source.contains(&removed_zoom_width_vec)
-                && !source.contains(&removed_zoom_range_hint_function)
+                && !production_source.contains(&removed_zoom_width_function)
+                && !production_source.contains(&removed_zoom_width_vec)
+                && !production_source.contains(&removed_zoom_range_hint_function)
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
-                && fast_path_body.contains("sync_pane_view_ui_defer_raster(ui, state, slot);")
-                && !fast_path_body.contains("sync_pane_view_ui(ui, state, slot);")
+                && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);")
+                && !production_source.contains("sync_pane_view_ui_defer_raster")
+                && !production_source.contains("ICON_ZOOM_RASTER_COALESCE")
                 && fast_path_body
                     .contains("schedule_zoom_layout_prewarm(ui, state, bridge, slot);")
-                && source.contains("fn zoom_layout_prewarm_levels(current_zoom: i32)")
-                && source.contains("[-1, 1, -2, 2, -3, 3, -4, 4]")
-                && source.contains(&layout_prewarm_call)
+                && production_source.contains("fn zoom_layout_prewarm_levels(current_zoom: i32)")
+                && production_source.contains("[-1, 1, -2, 2, -3, 3, -4, 4]")
+                && production_source.contains(&layout_prewarm_call)
                 && prewarm_body.contains("for (index, input) in inputs.into_iter().enumerate()")
                 && prewarm_body.contains("finished: index + 1 == input_count")
                 && apply_prewarm_body.contains("if result.finished")
                 && apply_prewarm_body.contains("pane.view.finish_layout_prewarm(result.generation);"),
-            "icon zoom should synchronously reuse cached/prewarmed layouts only, keep cache-miss relayout and raster rebuilds off the input event, and commit prewarmed zoom layouts incrementally by distance"
+            "icon zoom should follow Dolphin: visible cached relayout/raster updates stay immediate, cache-miss layout work stays off the input event, expensive thumbnail/preview scheduling is coalesced, and prewarmed zoom layouts commit incrementally by distance"
         );
     }
 
@@ -7657,7 +7511,7 @@ mod tests {
             .expect("apply_async_event body should be present");
         let flush_body = source
             .split_once("fn flush_thumbnail_results(")
-            .and_then(|(_, rest)| rest.split_once("fn thumbnail_size_px("))
+            .and_then(|(_, rest)| rest.split_once("fn refresh_visible_pane_tile_frame_rasters("))
             .map(|(body, _)| body)
             .expect("thumbnail flush body should be present");
 
@@ -7682,21 +7536,31 @@ mod tests {
     }
 
     #[test]
-    fn delayed_thumbnail_scheduling_uses_row_tokens_without_slint_image_clones() {
+    fn delayed_thumbnail_roles_updater_uses_row_tokens_without_slint_image_clones() {
         let source = include_str!("main.rs");
-        let schedule_body = source
-            .split_once("fn schedule_visible_thumbnails_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("fn current_pane_visible_range("))
+        let production_source = source
+            .split_once("#[cfg(test)]\nmod tests")
             .map(|(body, _)| body)
-            .expect("visible thumbnail scheduling body should be present");
+            .expect("main.rs should contain tests after production code");
+        let roles_updater_source = include_str!("app/file_item_roles_updater.rs");
+        let schedule_body = roles_updater_source
+            .split_once("pub(crate) fn schedule_thumbnail_roles_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("#[allow(clippy::too_many_arguments)]"))
+            .map(|(body, _)| body)
+            .expect("visible thumbnail roles scheduling body should be present");
 
         assert!(
-            schedule_body.contains(".virtual_entry_tokens")
+            production_source.contains("schedule_thumbnail_roles_for_entries(")
+                && !production_source.contains("fn schedule_visible_thumbnails(")
+                && schedule_body.contains(".virtual_entry_tokens")
                 && schedule_body.contains(".map(ThumbnailScheduleEntry::from_row_token)")
-                && schedule_body.contains("prioritize_thumbnail_entries(&entries")
+                && roles_updater_source.contains("indexes_to_resolve_for_slice(")
+                && roles_updater_source.contains("READ_AHEAD_PAGES")
+                && roles_updater_source.contains("RESOLVE_ALL_ITEMS_LIMIT")
+                && !roles_updater_source.contains("prioritize_thumbnail_entries(")
                 && !schedule_body.contains(".virtual_entries")
                 && !schedule_body.contains("row_data("),
-            "coalesced zoom thumbnail scheduling should use Rust row tokens instead of touching the Slint row model"
+            "coalesced zoom thumbnail/preview roles should live in the Dolphin-style roles updater and use Rust row tokens instead of touching the Slint row model"
         );
     }
 
