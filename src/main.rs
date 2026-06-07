@@ -140,6 +140,7 @@ pub(crate) struct FileEntry {
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
 const ICON_ZOOM_THUMBNAIL_COALESCE: Duration = Duration::from_millis(300);
+const ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT: usize = 128;
 
 struct PaneViewSyncScheduler {
     ui: slint::Weak<AppWindow>,
@@ -4868,12 +4869,18 @@ fn try_relayout_cached_pane_icon_zoom_layout(
             return false;
         }
 
+        let Some(entry_count) = pane_visible_entry_count_for_virtual_cache(pane, &[]) else {
+            return false;
+        };
+        if entry_count == 0 || entry_count > ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT {
+            return false;
+        }
+
         let Some(visible_name_width_units) = zoom_range_visible_name_width_units(pane, None, &[])
         else {
             return false;
         };
-        let entry_count = visible_name_width_units.len();
-        if entry_count == 0 {
+        if visible_name_width_units.len() != entry_count {
             return false;
         }
 
@@ -7167,6 +7174,13 @@ mod tests {
                     "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);"
                 )
                 && fast_path_body.contains("relayout_pane_item_view_entries_model(")
+                && source.contains(
+                    "const ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT: usize = 128;"
+                )
+                && fast_path_body.contains(
+                    "pane_visible_entry_count_for_virtual_cache(pane, &[])"
+                )
+                && fast_path_body.contains("entry_count > ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT")
                 && !source.contains(&removed_zoom_range_hint_function)
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
