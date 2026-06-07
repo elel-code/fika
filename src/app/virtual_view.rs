@@ -98,34 +98,6 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn prepare_virtual_view_layout_prewarm(
-    inputs: Vec<VirtualViewSnapshotInput>,
-) -> Vec<Arc<ItemViewLayoutEngine>> {
-    inputs
-        .into_iter()
-        .filter_map(prepare_virtual_view_layout_prewarm_input)
-        .collect()
-}
-
-pub(crate) fn prepare_virtual_view_layout_prewarm_input(
-    input: VirtualViewSnapshotInput,
-) -> Option<Arc<ItemViewLayoutEngine>> {
-    let visible_count = input
-        .visible_count_override
-        .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-    if visible_count == 0 {
-        return None;
-    }
-    Some(
-        cached_snapshot_layout(&input, visible_count).unwrap_or_else(|| {
-            Arc::new(ItemViewLayoutEngine::from(
-                snapshot_compact_item_view_layout(&input, visible_count),
-            ))
-        }),
-    )
-}
-
 fn cached_snapshot_layout(
     input: &VirtualViewSnapshotInput,
     visible_count: usize,
@@ -133,9 +105,8 @@ fn cached_snapshot_layout(
     input
         .cache
         .layout
-        .iter()
-        .chain(input.cache.layout_history.iter())
-        .find(|cached| {
+        .as_ref()
+        .filter(|cached| {
             let compact = cached.as_compact();
             compact.entry_count == visible_count
                 && main_layout_matches_cached_layout(&input.layout, compact)
@@ -515,39 +486,6 @@ mod tests {
         assert!(update.rebuild_model);
         assert!(!update.entries.is_empty());
         assert!(Arc::ptr_eq(&update.layout, &cached_layout));
-    }
-
-    #[test]
-    fn snapshot_update_reuses_layout_history_for_matching_signature() {
-        let entries = snapshot_entries(100);
-        let matching_layout = Arc::new(ItemViewLayoutEngine::from(
-            layout().compact_item_view_from_names((0..entries.len()).map(|index| {
-                let name = format!("item-{index}.txt");
-                name
-            })),
-        ));
-        let mut cache = VirtualViewCache::default();
-        cache.layout_history.push(Arc::clone(&matching_layout));
-
-        let update = prepare_virtual_view_snapshot_update(snapshot_input(entries, 40.0, cache));
-
-        assert!(update.rebuild_model);
-        assert!(Arc::ptr_eq(&update.layout, &matching_layout));
-    }
-
-    #[test]
-    fn layout_prewarm_reuses_cached_layout_or_builds_missing_layout() {
-        let entries = snapshot_entries(100);
-        let cache = cache_for_layout(0..20, entries.len(), 64);
-        let cached_layout = Arc::clone(cache.layout.as_ref().expect("layout should be cached"));
-        let cached_input = snapshot_input(Arc::clone(&entries), 0.0, cache);
-        let missing_input = snapshot_input(entries, 0.0, VirtualViewCache::default());
-
-        let layouts = prepare_virtual_view_layout_prewarm(vec![cached_input, missing_input]);
-
-        assert_eq!(layouts.len(), 2);
-        assert!(Arc::ptr_eq(&layouts[0], &cached_layout));
-        assert_eq!(layouts[1].layout_metrics().entry_count, 100);
     }
 
     #[test]

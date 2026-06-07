@@ -7,7 +7,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::env;
 use std::io;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,8 +41,7 @@ use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
     EXTERNAL_EDIT_DISCARD_OPERATION, EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult,
     FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult, FileUndoResult,
-    RecursiveSearchProgress, RecursiveSearchResult, VirtualViewLayoutPrewarmResult,
-    VirtualViewResult,
+    RecursiveSearchProgress, RecursiveSearchResult, VirtualViewResult,
 };
 use app::file_clipboard::{
     apply_clipboard_load_result, apply_clipboard_paste_load_result,
@@ -54,9 +52,9 @@ use app::file_item_roles_updater::{
     schedule_thumbnail_roles_for_visible_panes, thumbnail_size_px,
 };
 use app::geometry::{
-    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayoutEngine,
-    ItemViewLayouter, MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio,
-    inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
+    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayouter,
+    MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
+    place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
     ItemViewControllerAction, SelectionRect, activate_entry_at_pane_point, cancel_blank_for_slot,
@@ -68,8 +66,7 @@ use app::item_view_renderer::{
     ItemViewRenderMetrics, ItemViewRenderPlanInput, decorate_render_plan_with_metadata,
 };
 use app::model_update::{
-    relayout_pane_item_view_entries_model, update_pane_item_view_entries_model,
-    update_pane_item_view_selection_model,
+    update_pane_item_view_entries_model, update_pane_item_view_selection_model,
 };
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
@@ -113,10 +110,7 @@ use app::transfer::{
     prepare_place_transfer, resolve_transfer_conflict, start_next_operation,
     start_transfer_operation,
 };
-use app::virtual_view::{
-    VirtualViewSnapshotInput, prepare_virtual_view_layout_prewarm_input,
-    prepare_virtual_view_snapshot_update,
-};
+use app::virtual_view::{VirtualViewSnapshotInput, prepare_virtual_view_snapshot_update};
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::service_menu_policy::load_service_menu_policy;
@@ -146,15 +140,6 @@ pub(crate) struct FileEntry {
 }
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
-const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = 4096;
-const ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT: usize = 128;
-
-#[derive(Debug)]
-struct VirtualLayoutPrewarmRequest {
-    pane_id: u64,
-    generation: u64,
-    inputs: Vec<VirtualViewSnapshotInput>,
-}
 
 struct PaneViewSyncScheduler {
     ui: slint::Weak<AppWindow>,
@@ -2588,9 +2573,6 @@ fn apply_async_event(
         AsyncEvent::VirtualViewPrepared(result) => {
             apply_virtual_view_result(ui, state, bridge, result);
         }
-        AsyncEvent::VirtualViewLayoutsPrewarmed(result) => {
-            apply_virtual_layout_prewarm_result(state, result);
-        }
         AsyncEvent::VirtualViewPrepareFailed {
             pane_id,
             generation,
@@ -3773,7 +3755,6 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
             )
         {
             pane.view.virtual_generation.next();
-            pane.view.cancel_layout_prewarm();
             pane.view.clear_pending_virtual_prepare();
             Some(VirtualViewSyncRequest::Cached {
                 viewport_x,
@@ -3782,7 +3763,6 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
             })
         } else {
             let generation = pane.view.virtual_generation.next();
-            pane.view.cancel_layout_prewarm();
             let query = pane.search.query.to_ascii_lowercase();
             let request = VirtualViewPrepareRequest {
                 pane_id: pane.id,
@@ -3917,162 +3897,6 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
     });
 }
 
-fn schedule_zoom_layout_prewarm(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    slot: i32,
-) {
-    let size_px = thumbnail_size_px(ui);
-    let current_zoom = ui.get_icon_zoom_level();
-    let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-    let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
-    let viewport_width = pane_slot_width(ui, main_width, slot);
-
-    let request = {
-        let mut state_ref = state.borrow_mut();
-        let chooser_patterns = state_ref
-            .chooser_filters
-            .get(state_ref.chooser_filter_index)
-            .map(|filter| filter.patterns.clone())
-            .unwrap_or_default();
-        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
-            return;
-        };
-        let Some(visible_count) =
-            pane_visible_entry_count_for_virtual_cache(pane, &chooser_patterns)
-        else {
-            return;
-        };
-        if visible_count == 0 || visible_count > ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT {
-            return;
-        }
-
-        let generation = pane.view.virtual_generation.current();
-        if pane.view.has_layout_prewarm_in_flight() {
-            return;
-        }
-
-        let search_panel_visible = pane.search.panel_visible();
-        let text_line_count = pane.item_view_text_line_count();
-        let requested_viewport_x = pane.view.viewport_x;
-        let cache = pane.view.virtual_view.clone();
-        let entries = pane.entry_snapshot();
-        let visible_entry_indices = pane.search.visible_entry_indices.clone();
-        let visible_entries_have_locations = pane.search.visible_entries_have_locations;
-        let visible_location_groups = pane.search.visible_location_groups.clone();
-        let query = pane.search.query.to_ascii_lowercase();
-        let kind_filter = pane.search.kind_filter;
-        let modified_filter = pane.search.modified_filter;
-        let size_filter = pane.search.size_filter;
-        let pane_id = pane.id;
-
-        let mut inputs = Vec::new();
-        for zoom_level in zoom_layout_prewarm_levels(current_zoom) {
-            let mut layout = MainItemViewLayout::from_ui_for_pane_width_with_zoom_and_text_lines(
-                ui,
-                viewport_width,
-                search_panel_visible,
-                zoom_level,
-                text_line_count,
-            );
-            layout.viewport_x = requested_viewport_x;
-            if virtual_layout_signature_cached(&cache, &layout, visible_count) {
-                continue;
-            }
-            inputs.push(VirtualViewSnapshotInput {
-                layout,
-                requested_viewport_x,
-                range_hint: None,
-                thumbnail_size_px: size_px,
-                schedule_thumbnails: false,
-                visible_count_override: Some(visible_count),
-                cache: cache.clone(),
-                entries: Arc::clone(&entries),
-                visible_entry_indices: visible_entry_indices.clone(),
-                visible_entries_have_locations,
-                visible_location_groups: visible_location_groups.clone(),
-                query: query.clone(),
-                kind_filter,
-                modified_filter,
-                size_filter,
-                chooser_patterns: chooser_patterns.clone(),
-            });
-        }
-
-        if inputs.is_empty() {
-            return;
-        }
-        pane.view.mark_layout_prewarm_started(generation);
-        Some(VirtualLayoutPrewarmRequest {
-            pane_id,
-            generation,
-            inputs,
-        })
-    };
-
-    if let Some(request) = request {
-        start_virtual_layout_prewarm(bridge, request);
-    }
-}
-
-fn zoom_layout_prewarm_levels(current_zoom: i32) -> impl Iterator<Item = i32> {
-    [-1, 1, -2, 2, -3, 3, -4, 4]
-        .into_iter()
-        .filter_map(move |delta| {
-            let zoom = current_zoom + delta;
-            (0..=4).contains(&zoom).then_some(zoom)
-        })
-}
-
-fn virtual_layout_signature_cached(
-    cache: &app::pane::VirtualViewCache,
-    layout: &MainItemViewLayout,
-    visible_count: usize,
-) -> bool {
-    cache
-        .layout
-        .iter()
-        .chain(cache.layout_history.iter())
-        .any(|cached| {
-            let compact = cached.as_compact();
-            compact.entry_count == visible_count
-                && main_layout_matches_compact_layout(layout, compact)
-        })
-}
-
-fn start_virtual_layout_prewarm(bridge: &AsyncBridge, request: VirtualLayoutPrewarmRequest) {
-    let VirtualLayoutPrewarmRequest {
-        pane_id,
-        generation,
-        inputs,
-    } = request;
-    let async_tx = bridge.tx.clone();
-    let notify_ui = bridge.ui_weak.clone();
-    bridge.handle.spawn(async move {
-        let input_count = inputs.len();
-        for (index, input) in inputs.into_iter().enumerate() {
-            let layout = tokio::task::spawn_blocking(move || {
-                prepare_virtual_view_layout_prewarm_input(input)
-            })
-            .await
-            .ok()
-            .flatten();
-            let layouts = layout.into_iter().collect();
-            send_async_event(
-                async_tx.clone(),
-                notify_ui.clone(),
-                AsyncEvent::VirtualViewLayoutsPrewarmed(VirtualViewLayoutPrewarmResult {
-                    pane_id,
-                    generation,
-                    layouts,
-                    finished: index + 1 == input_count,
-                }),
-            );
-        }
-    });
-}
-
 #[allow(clippy::too_many_arguments)]
 fn cached_virtual_viewport_sync(
     pane: &mut PaneState,
@@ -4138,86 +3962,6 @@ fn main_layout_matches_compact_layout(
 
 fn same_layout_metric(left: f32, right: f32) -> bool {
     (left - right).abs() <= 0.5
-}
-
-fn zoom_item_view_layout_engine(
-    pane: &PaneState,
-    layout: MainItemViewLayout,
-    visible_count: usize,
-    chooser_patterns: &[String],
-    allow_uncached_layout: bool,
-) -> Option<Arc<ItemViewLayoutEngine>> {
-    if let Some(cached) = pane
-        .view
-        .virtual_view
-        .layout
-        .iter()
-        .chain(pane.view.virtual_view.layout_history.iter())
-        .find(|cached| {
-            let compact = cached.as_compact();
-            compact.entry_count == visible_count
-                && main_layout_matches_compact_layout(&layout, compact)
-        })
-    {
-        return Some(Arc::clone(cached));
-    }
-
-    if !allow_uncached_layout {
-        return None;
-    }
-
-    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
-        let widths = indices
-            .iter()
-            .take(visible_count)
-            .map(|&index| {
-                pane.entries
-                    .get(index)
-                    .map(|entry| entry.name_width_units)
-                    .unwrap_or_default()
-            })
-            .chain(std::iter::repeat(0.0))
-            .take(visible_count);
-        return Some(Arc::new(ItemViewLayoutEngine::from(
-            layout.compact_item_view_from_text_width_units(widths),
-        )));
-    }
-
-    if pane.search.query.is_empty()
-        && pane.search.kind_filter == 0
-        && pane.search.modified_filter == 0
-        && pane.search.size_filter == 0
-        && chooser_patterns.is_empty()
-    {
-        let widths = pane
-            .entries
-            .iter()
-            .take(visible_count)
-            .map(|entry| entry.name_width_units)
-            .chain(std::iter::repeat(0.0))
-            .take(visible_count);
-        Some(Arc::new(ItemViewLayoutEngine::from(
-            layout.compact_item_view_from_text_width_units(widths),
-        )))
-    } else {
-        None
-    }
-}
-
-fn cached_zoom_relayout_range(
-    cached_range: &Range<usize>,
-    visible_range: &Range<usize>,
-    entry_count: usize,
-) -> Option<Range<usize>> {
-    if visible_range.is_empty()
-        || !virtual_cache_covers_visible_range(cached_range, visible_range)
-        || cached_range.start >= cached_range.end
-        || cached_range.end > entry_count
-    {
-        return None;
-    }
-
-    Some(cached_range.clone())
 }
 
 fn virtual_cache_covers_visible_range(
@@ -4376,27 +4120,7 @@ fn apply_virtual_view_result(
         update.range.end.saturating_sub(update.range.start),
         update.entry_count
     ));
-    schedule_zoom_layout_prewarm(ui, state, bridge, slot);
     sync_pane_view_ui(ui, state, slot);
-}
-
-fn apply_virtual_layout_prewarm_result(
-    state: &Rc<RefCell<AppState>>,
-    result: VirtualViewLayoutPrewarmResult,
-) {
-    let mut state_ref = state.borrow_mut();
-    let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
-        return;
-    };
-    if result.finished {
-        pane.view.finish_layout_prewarm(result.generation);
-    }
-    if !pane.view.virtual_generation.is_current(result.generation) {
-        return;
-    }
-    for layout in result.layouts {
-        pane.view.virtual_view.store_recent_layout(layout);
-    }
 }
 
 fn apply_virtual_view_prepare_failure(
@@ -4927,127 +4651,7 @@ fn sync_pane_icon_zoom_layout_for_slot(
     bridge: &AsyncBridge,
     slot: i32,
 ) {
-    if try_relayout_cached_pane_icon_zoom_layout(ui, state, bridge, slot) {
-        return;
-    }
-    prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);
-}
-
-fn prepare_pane_icon_zoom_layout_for_slot(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    slot: i32,
-) {
-    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);
-}
-
-fn try_relayout_cached_pane_icon_zoom_layout(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    slot: i32,
-) -> bool {
-    let size_px = thumbnail_size_px(ui);
-    let window_size = ui.window().size().to_logical(ui.window().scale_factor());
-    let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
-    let viewport_width = pane_slot_width(ui, main_width, slot);
-    let (search_panel_visible, text_line_count) = {
-        let state_ref = state.borrow();
-        state_ref
-            .panes
-            .pane_for_slot(slot)
-            .map(|pane| {
-                (
-                    pane.search.panel_visible(),
-                    pane.item_view_text_line_count(),
-                )
-            })
-            .unwrap_or((false, 1))
-    };
-    let mut layout = MainItemViewLayout::from_ui_for_pane_width_with_text_lines(
-        ui,
-        viewport_width,
-        search_panel_visible,
-        text_line_count,
-    );
-
-    let applied = {
-        let mut state_ref = state.borrow_mut();
-        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
-            return false;
-        };
-        if pane.show_item_locations()
-            || pane.view.virtual_metadata_entries.row_count() != 0
-            || !pane.view.has_renderable_virtual_entries()
-        {
-            return false;
-        }
-
-        let Some(entry_count) = pane_visible_entry_count_for_virtual_cache(pane, &[]) else {
-            return false;
-        };
-        if entry_count == 0 {
-            return false;
-        }
-
-        let requested_viewport_x = pane.view.viewport_x;
-        layout.viewport_x = requested_viewport_x;
-        let allow_uncached_layout = entry_count <= ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT;
-        let Some(item_view_layout) =
-            zoom_item_view_layout_engine(pane, layout, entry_count, &[], allow_uncached_layout)
-        else {
-            return false;
-        };
-        let plan = item_view_layout
-            .as_compact()
-            .virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
-        let current_range = pane.view.virtual_view.range.clone();
-        let Some(relayout_range) =
-            cached_zoom_relayout_range(&current_range, &plan.visible_range, entry_count)
-        else {
-            return false;
-        };
-        let bounds_entries = item_view_bounds_entries(
-            item_view_layout.as_compact(),
-            relayout_range.start,
-            relayout_range.end.saturating_sub(relayout_range.start),
-        );
-
-        if !relayout_pane_item_view_entries_model(
-            &mut pane.view,
-            relayout_range.clone(),
-            bounds_entries,
-        ) {
-            return false;
-        }
-        pane.view.cancel_virtual_prepare_queue();
-        pane.view.virtual_generation.next();
-        pane.view.cancel_layout_prewarm();
-        pane.view.viewport_x = plan.viewport_x;
-        pane.view.virtual_view.range = relayout_range;
-        pane.view
-            .virtual_view
-            .update_layout_signature_arc(item_view_layout, size_px);
-        true
-    };
-
-    if applied {
-        let target_is_focused = state.borrow().panes.focused_slot() == slot;
-        if target_is_focused {
-            let entry_count = state
-                .borrow()
-                .panes
-                .pane_for_slot(slot)
-                .and_then(|pane| pane.view.virtual_view.layout.as_ref())
-                .map(|layout| layout.layout_metrics().entry_count)
-                .unwrap_or_default();
-            ui.set_entry_count(entry_count as i32);
-        }
-        schedule_zoom_layout_prewarm(ui, state, bridge, slot);
-        sync_pane_view_ui(ui, state, slot);
-    }
-    applied
+    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, true, true);
 }
 
 fn sync_pane_viewport_for_slot(
@@ -5845,41 +5449,6 @@ mod tests {
 
     fn selection_test_engine(names: &[&str]) -> Arc<ItemViewLayoutEngine> {
         Arc::new(ItemViewLayoutEngine::from(selection_test_layout(names)))
-    }
-
-    #[test]
-    fn cached_zoom_relayout_range_only_requires_visible_range() {
-        assert_eq!(
-            cached_zoom_relayout_range(&(0..20), &(8..20), 100),
-            Some(0..20)
-        );
-        assert_eq!(
-            cached_zoom_relayout_range(&(4..24), &(12..24), 100),
-            Some(4..24)
-        );
-        assert_eq!(cached_zoom_relayout_range(&(4..24), &(3..24), 100), None);
-    }
-
-    #[test]
-    fn cached_zoom_relayout_range_keeps_aligned_cached_window() {
-        assert_eq!(
-            cached_zoom_relayout_range(&(8..44), &(20..28), 100),
-            Some(8..44)
-        );
-    }
-
-    #[test]
-    fn cached_zoom_relayout_range_keeps_unaligned_window_when_visible_is_covered() {
-        assert_eq!(
-            cached_zoom_relayout_range(&(5..30), &(12..24), 100),
-            Some(5..30)
-        );
-        assert_eq!(
-            cached_zoom_relayout_range(&(5..30), &(6..24), 100),
-            Some(5..30)
-        );
-        assert_eq!(cached_zoom_relayout_range(&(5..30), &(4..24), 100), None);
-        assert_eq!(cached_zoom_relayout_range(&(5..101), &(12..24), 100), None);
     }
 
     #[test]
@@ -7263,7 +6832,7 @@ mod tests {
             .expect("pane layout scheduler body should be present");
         let icon_zoom_body = source
             .split_once("fn sync_pane_icon_zoom_layout_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("fn prepare_pane_icon_zoom_layout_for_slot("))
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
             .map(|(body, _)| body)
             .expect("icon zoom layout body should be present");
         let visible_icon_zoom_body = source
@@ -7271,33 +6840,12 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn sync_pane_icon_zoom_layout_for_slot("))
             .map(|(body, _)| body)
             .expect("visible icon zoom layout body should be present");
-        let prepare_body = source
-            .split_once("fn prepare_pane_icon_zoom_layout_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("fn try_relayout_cached_pane_icon_zoom_layout("))
-            .map(|(body, _)| body)
-            .expect("icon zoom background prepare body should be present");
-        let fast_path_body = source
-            .split_once("fn try_relayout_cached_pane_icon_zoom_layout(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
-            .map(|(body, _)| body)
-            .expect("icon zoom cached relayout body should be present");
-        let prewarm_body = source
-            .split_once("fn start_virtual_layout_prewarm(")
-            .and_then(|(_, rest)| rest.split_once("fn cached_virtual_viewport_sync("))
-            .map(|(body, _)| body)
-            .expect("zoom layout prewarm body should be present");
-        let apply_prewarm_body = source
-            .split_once("fn apply_virtual_layout_prewarm_result(")
-            .and_then(|(_, rest)| rest.split_once("fn apply_virtual_view_prepare_failure("))
-            .map(|(body, _)| body)
-            .expect("zoom layout prewarm apply body should be present");
         let removed_zoom_range_hint_function = ["fn ", "icon_zoom_range_hint("].concat();
         let removed_zoom_style_function =
             ["fn ", "sync_pane_icon_zoom", "_style_for_slot("].concat();
         let removed_zoom_width_function =
             ["zoom", "_range", "_visible", "_name", "_width", "_units"].concat();
         let removed_zoom_width_vec = ["visible", "_name", "_width", "_units"].concat();
-        let layout_prewarm_call = ["prepare_virtual_view_layout", "_prewarm_input(input)"].concat();
 
         assert!(
             roles_updater_source.contains(
@@ -7336,69 +6884,34 @@ mod tests {
             "continuous zoom should refresh item layout immediately while coalescing thumbnail/preview roles like Dolphin's KFileItemModelRolesUpdater"
         );
         assert!(
-            icon_zoom_body.contains("try_relayout_cached_pane_icon_zoom_layout(ui, state, bridge, slot)")
-                && icon_zoom_body.contains("prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);")
+            icon_zoom_body.contains("sync_virtual_entries_for_slot_with_count(")
+                && icon_zoom_body.contains(
+                    "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, true, true);"
+                )
                 && !production_source.contains(&removed_zoom_style_function)
-                && !icon_zoom_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && visible_icon_zoom_body
                     .contains("if slots.row_count() == 0 {\n        return;\n    }")
                 && !visible_icon_zoom_body
                     .contains("sync_pane_icon_zoom_layout_for_slot(ui, state, bridge, 0);")
                 && !icon_zoom_body.contains("sync_pane_layout_for_slot_with_thumbnail_scheduling")
-                && prepare_body.contains(
-                    "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);"
-                )
-                && fast_path_body.contains("relayout_pane_item_view_entries_model(")
-                && production_source
-                    .contains("const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = 4096;")
-                && production_source.contains(
-                    "const ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT: usize = 128;"
-                )
-                && fast_path_body.contains(
-                    "pane_visible_entry_count_for_virtual_cache(pane, &[])"
-                )
-                && fast_path_body.contains(
-                    "entry_count <= ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT"
-                )
-                && fast_path_body.contains(
-                    "zoom_item_view_layout_engine(pane, layout, entry_count, &[], allow_uncached_layout)"
-                )
-                && fast_path_body.contains("update_layout_signature_arc(item_view_layout, size_px)")
                 && !production_source.contains(&removed_zoom_width_function)
                 && !production_source.contains(&removed_zoom_width_vec)
                 && !production_source.contains(&removed_zoom_range_hint_function)
-                && fast_path_body.contains("cached_zoom_relayout_range(")
-                && fast_path_body.contains("&plan.visible_range")
-                && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
-                && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);")
+                && !production_source.contains("try_relayout_cached_pane_icon_zoom_layout")
+                && !production_source.contains("prepare_pane_icon_zoom_layout_for_slot")
+                && !production_source.contains("relayout_pane_item_view_entries_model")
+                && !production_source.contains("cached_zoom_relayout_range")
+                && !production_source.contains("zoom_item_view_layout_engine")
+                && !production_source.contains("ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT")
+                && !production_source.contains("ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT")
+                && !production_source.contains("schedule_zoom_layout_prewarm")
+                && !production_source.contains("zoom_layout_prewarm_levels")
+                && !production_source.contains("prepare_virtual_view_layout_prewarm")
+                && !production_source.contains("VirtualViewLayoutsPrewarmed")
+                && !production_source.contains("layout_history")
                 && !production_source.contains("sync_pane_view_ui_defer_raster")
-                && !production_source.contains("ICON_ZOOM_RASTER_COALESCE")
-                && fast_path_body
-                    .contains("schedule_zoom_layout_prewarm(ui, state, bridge, slot);")
-                && production_source.contains("fn zoom_layout_prewarm_levels(current_zoom: i32)")
-                && production_source.contains("[-1, 1, -2, 2, -3, 3, -4, 4]")
-                && production_source.contains(&layout_prewarm_call)
-                && prewarm_body.contains("for (index, input) in inputs.into_iter().enumerate()")
-                && prewarm_body.contains("finished: index + 1 == input_count")
-                && apply_prewarm_body.contains("if result.finished")
-                && apply_prewarm_body.contains("pane.view.finish_layout_prewarm(result.generation);"),
-            "icon zoom should follow Dolphin: visible cached relayout/raster updates stay immediate, cache-miss layout work stays off the input event, expensive thumbnail/preview scheduling is coalesced, and prewarmed zoom layouts commit incrementally by distance"
-        );
-    }
-
-    #[test]
-    fn zoom_layout_prewarm_levels_cover_all_other_levels_by_distance() {
-        assert_eq!(
-            zoom_layout_prewarm_levels(2).collect::<Vec<_>>(),
-            vec![1, 3, 0, 4]
-        );
-        assert_eq!(
-            zoom_layout_prewarm_levels(0).collect::<Vec<_>>(),
-            vec![1, 2, 3, 4]
-        );
-        assert_eq!(
-            zoom_layout_prewarm_levels(4).collect::<Vec<_>>(),
-            vec![3, 2, 1, 0]
+                && !production_source.contains("ICON_ZOOM_RASTER_COALESCE"),
+            "icon zoom should follow Dolphin: style/layout updates are synchronous; thumbnail/preview roles alone are coalesced through the 300ms updater timer"
         );
     }
 
