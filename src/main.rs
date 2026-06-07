@@ -72,7 +72,8 @@ use app::operation_controller::{
     affected_directory_pane_ids, cleanup_file_undo_backup,
 };
 use app::pane::{
-    DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries, VirtualViewPrepareRequest,
+    DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries, VirtualViewCache,
+    VirtualViewPrepareRequest,
 };
 #[cfg(test)]
 use app::pane::{PaneEntrySnapshot, PaneHistory};
@@ -3688,6 +3689,31 @@ fn sync_virtual_entries_for_slot_with_count(
     immediate: bool,
     publish_layout_on_cache: bool,
 ) {
+    sync_virtual_entries_for_slot_with_count_and_cache_policy(
+        ui,
+        state,
+        bridge,
+        slot,
+        schedule_thumbnails,
+        visible_count_override,
+        immediate,
+        publish_layout_on_cache,
+        false,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+    schedule_thumbnails: bool,
+    visible_count_override: Option<usize>,
+    immediate: bool,
+    publish_layout_on_cache: bool,
+    force_uncached_prepare: bool,
+) {
     let size_px = thumbnail_size_px(ui);
     let zoom_level = ui.get_icon_zoom_level();
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
@@ -3732,15 +3758,17 @@ fn sync_virtual_entries_for_slot_with_count(
         if immediate {
             pane.view.cancel_virtual_prepare_queue();
         }
-        if let Some((viewport_x, publish_viewport)) = cached_virtual_viewport_sync(
-            pane,
-            &layout,
-            requested_viewport_x,
-            size_px,
-            schedule_thumbnails,
-            visible_count_override,
-            &chooser_patterns,
-        ) {
+        if !force_uncached_prepare
+            && let Some((viewport_x, publish_viewport)) = cached_virtual_viewport_sync(
+                pane,
+                &layout,
+                requested_viewport_x,
+                size_px,
+                schedule_thumbnails,
+                visible_count_override,
+                &chooser_patterns,
+            )
+        {
             pane.view.virtual_generation.next();
             pane.view.cancel_layout_prewarm();
             pane.view.clear_pending_virtual_prepare();
@@ -3767,7 +3795,11 @@ fn sync_virtual_entries_for_slot_with_count(
                     thumbnail_size_px: size_px,
                     schedule_thumbnails,
                     visible_count_override,
-                    cache: pane.view.virtual_view.clone(),
+                    cache: if force_uncached_prepare {
+                        VirtualViewCache::default()
+                    } else {
+                        pane.view.virtual_view.clone()
+                    },
                     entries: pane.entry_snapshot(),
                     visible_entry_indices: pane.search.visible_entry_indices.clone(),
                     visible_entries_have_locations: pane.search.visible_entries_have_locations,
@@ -4426,13 +4458,13 @@ fn apply_filter_for_slot(
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             return;
         };
-        pane.view.clear_virtual_view();
+        pane.view.virtual_view.invalidate();
         let query = pane.search.query.to_ascii_lowercase();
         let filters_active = pane.search.filters_active();
         let total = pane.entries.len();
         (query, filters_active, total, summary)
     };
-    sync_virtual_entries_for_slot_with_count(
+    sync_virtual_entries_for_slot_with_count_and_cache_policy(
         ui,
         state,
         bridge,
@@ -4441,6 +4473,7 @@ fn apply_filter_for_slot(
         Some(summary.count),
         false,
         false,
+        true,
     );
     if preserve_selection {
         let empty_paths = Vec::new();
@@ -7112,6 +7145,35 @@ mod tests {
                 && !production_body.contains("set_pane_viewport_ui_if_clamped")
                 && !production_body.contains("sync_pane_slot_viewport_ui"),
             "cached viewport sync should only publish clamp corrections, while virtual model rebuilds update PaneViewData instead of pane chrome rows"
+        );
+    }
+
+    #[test]
+    fn filter_refresh_preserves_current_view_until_uncached_prepare_commits() {
+        let source = include_str!("main.rs");
+        let filter_body = source
+            .split_once("fn apply_filter_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn select_entry_path_for_slot("))
+            .map(|(body, _)| body)
+            .expect("filter body should be present");
+        let sync_body = source
+            .split_once("fn sync_virtual_entries_for_slot_with_count_and_cache_policy(")
+            .and_then(|(_, rest)| rest.split_once("fn start_virtual_view_prepare("))
+            .map(|(body, _)| body)
+            .expect("virtual entry sync body should be present");
+
+        assert!(
+            filter_body.contains("rebuild_visible_entry_index_for_slot")
+                && !filter_body.contains("pane.view.clear_virtual_view();")
+                && filter_body.contains("pane.view.virtual_view.invalidate();")
+                && filter_body
+                    .contains("sync_virtual_entries_for_slot_with_count_and_cache_policy(")
+                && filter_body.contains("Some(summary.count),")
+                && filter_body.contains("true,\n    );")
+                && sync_body.contains("force_uncached_prepare: bool")
+                && sync_body.contains("if !force_uncached_prepare")
+                && sync_body.contains("VirtualViewCache::default()"),
+            "filter/search refresh should keep the old visible view alive, force an uncached background prepare for the new filter model, and commit atomically when the virtual result returns"
         );
     }
 
