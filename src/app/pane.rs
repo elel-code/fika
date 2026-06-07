@@ -109,7 +109,7 @@ impl PaneState {
         self.search.visible_entry_indices = None;
         self.search.visible_entries_have_locations = has_locations;
         self.search.visible_location_groups = None;
-        self.view.invalidate_virtual_view();
+        self.view.clear_virtual_view();
     }
 
     pub(crate) fn clear_entries(&mut self) {
@@ -887,7 +887,7 @@ pub(crate) struct DirectoryViewState {
 #[derive(Clone, Debug)]
 pub(crate) struct VirtualViewCache {
     pub(crate) range: Range<usize>,
-    pub(crate) layout: Option<ItemViewLayoutEngine>,
+    pub(crate) layout: Option<Arc<ItemViewLayoutEngine>>,
     pub(crate) thumbnail_size_px: u32,
 }
 
@@ -928,7 +928,7 @@ impl VirtualViewCache {
         layout: ItemViewLayoutEngine,
         thumbnail_size_px: u32,
     ) {
-        self.layout = Some(layout);
+        self.layout = Some(Arc::new(layout));
         self.thumbnail_size_px = thumbnail_size_px;
     }
 }

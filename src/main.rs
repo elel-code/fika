@@ -50,9 +50,8 @@ use app::file_clipboard::{
 };
 use app::geometry::{
     CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayouter,
-    MAX_ICON_ZOOM_LEVEL, MIN_ICON_ZOOM_LEVEL, MainItemViewLayout, active_main_pane_width,
-    clamped_split_pane_ratio, inactive_main_pane_width, place_drop_geometry,
-    register_menu_geometry_callbacks,
+    MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
+    place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
     ItemViewControllerAction, SelectionRect, activate_entry_at_pane_point, cancel_blank_for_slot,
@@ -3736,22 +3735,6 @@ fn sync_virtual_entries_for_slot_with_count(
         } else {
             let generation = pane.view.virtual_generation.next();
             let query = pane.search.query.to_ascii_lowercase();
-            let range_hint = if pane.show_item_locations() {
-                None
-            } else {
-                zoom_range_visible_name_width_units(pane, visible_count_override, &chooser_patterns)
-                    .and_then(|visible_name_width_units| {
-                        icon_zoom_range_hint(
-                            ui,
-                            viewport_width,
-                            search_panel_visible,
-                            text_line_count,
-                            zoom_level,
-                            requested_viewport_x,
-                            &visible_name_width_units,
-                        )
-                    })
-            };
             let request = VirtualViewPrepareRequest {
                 pane_id: pane.id,
                 generation,
@@ -3762,7 +3745,7 @@ fn sync_virtual_entries_for_slot_with_count(
                 input: Box::new(VirtualViewSnapshotInput {
                     layout,
                     requested_viewport_x,
-                    range_hint,
+                    range_hint: None,
                     thumbnail_size_px: size_px,
                     schedule_thumbnails,
                     visible_count_override,
@@ -3984,79 +3967,6 @@ fn zoom_range_visible_name_width_units(
             .map(|entry| entry.name_width_units)
             .collect()
     })
-}
-
-fn icon_zoom_range_hint(
-    ui: &AppWindow,
-    viewport_width: f32,
-    search_panel_visible: bool,
-    text_line_count: usize,
-    current_zoom_level: i32,
-    requested_viewport_x: f32,
-    visible_name_width_units: &[f32],
-) -> Option<Range<usize>> {
-    let visible_count = visible_name_width_units.len();
-    if visible_count == 0 {
-        return None;
-    }
-
-    let mut range_hint = None;
-    for zoom_level in MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL {
-        let layout = MainItemViewLayout::from_ui_for_pane_width_with_zoom_and_text_lines(
-            ui,
-            viewport_width,
-            search_panel_visible,
-            zoom_level,
-            text_line_count,
-        );
-        let plan = layout
-            .compact_item_view_from_text_width_units(visible_name_width_units.iter().copied())
-            .virtual_plan(
-                requested_viewport_x,
-                if zoom_level == current_zoom_level {
-                    ITEM_VIEW_OVERSCAN_COLUMNS
-                } else {
-                    0
-                },
-            );
-        let candidate = if zoom_level == current_zoom_level {
-            plan.range
-        } else {
-            plan.visible_range
-        };
-        let candidate = align_zoom_range_for_rows(candidate, layout.rows_per_column, visible_count);
-        if candidate.is_empty() {
-            continue;
-        }
-        range_hint = Some(merge_ranges(range_hint, candidate));
-    }
-    range_hint
-}
-
-fn align_zoom_range_for_rows(
-    range: Range<usize>,
-    rows_per_column: usize,
-    entry_count: usize,
-) -> Range<usize> {
-    if range.is_empty() || entry_count == 0 {
-        return range.start.min(entry_count)..range.start.min(entry_count);
-    }
-
-    let rows_per_column = rows_per_column.max(1);
-    let start = (range.start.min(entry_count) / rows_per_column) * rows_per_column;
-    let end = range
-        .end
-        .min(entry_count)
-        .max(start)
-        .div_ceil(rows_per_column)
-        * rows_per_column;
-    start..end.min(entry_count).max(start)
-}
-
-fn merge_ranges(current: Option<Range<usize>>, next: Range<usize>) -> Range<usize> {
-    current
-        .map(|current| current.start.min(next.start)..current.end.max(next.end))
-        .unwrap_or(next)
 }
 
 fn cached_zoom_relayout_range(
@@ -4295,7 +4205,7 @@ fn apply_filter_for_slot(
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             return;
         };
-        pane.view.invalidate_virtual_view();
+        pane.view.clear_virtual_view();
         let query = pane.search.query.to_ascii_lowercase();
         let filters_active = pane.search.filters_active();
         let total = pane.entries.len();
@@ -5761,7 +5671,7 @@ fn dnd_debug_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::app::geometry::{
-        CompactItemViewLayout, compact_item_view_layout, place_drop_geometry,
+        CompactItemViewLayout, ItemViewLayoutEngine, compact_item_view_layout, place_drop_geometry,
     };
     use crate::app::operation_controller::transfer_target_rejection;
     use crate::app::selection::{
@@ -5810,6 +5720,10 @@ mod tests {
         )
     }
 
+    fn selection_test_engine(names: &[&str]) -> Arc<ItemViewLayoutEngine> {
+        Arc::new(ItemViewLayoutEngine::from(selection_test_layout(names)))
+    }
+
     #[test]
     fn cached_zoom_relayout_range_only_requires_visible_range() {
         assert_eq!(
@@ -5824,7 +5738,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_zoom_relayout_range_keeps_aligned_prewarmed_window() {
+    fn cached_zoom_relayout_range_keeps_aligned_cached_window() {
         assert_eq!(
             cached_zoom_relayout_range(&(8..44), &(20..28), 100),
             Some(8..44)
@@ -5872,7 +5786,7 @@ mod tests {
             title_font_size: 1.0,
         };
         let mut pane = PaneState::new(PathBuf::from("/tmp"));
-        pane.view.virtual_view.layout = Some(stale_empty_layout.into());
+        pane.view.virtual_view.layout = Some(Arc::new(stale_empty_layout.into()));
         pane.view.virtual_view.range = 0..0;
         pane.view.virtual_view.thumbnail_size_px = 64;
 
@@ -5886,13 +5800,6 @@ mod tests {
             None,
             "directory switches must not reuse an empty virtual layout for a newly loaded non-empty directory"
         );
-    }
-
-    #[test]
-    fn icon_zoom_range_hint_aligns_each_candidate_to_target_rows() {
-        assert_eq!(align_zoom_range_for_rows(13..21, 4, 100), 12..24);
-        assert_eq!(align_zoom_range_for_rows(98..100, 8, 100), 96..100);
-        assert_eq!(align_zoom_range_for_rows(13..13, 4, 100), 13..13);
     }
 
     #[test]
@@ -6310,7 +6217,7 @@ mod tests {
                 y1: 0.0,
                 x2: 109.0,
                 y2: 205.0,
-                layout: selection_test_layout(&["a", "b", "c", "d"]).into(),
+                layout: selection_test_engine(&["a", "b", "c", "d"]),
             },
         );
 
@@ -6335,7 +6242,7 @@ mod tests {
                 y1: 0.0,
                 x2: 109.0,
                 y2: 205.0,
-                layout: selection_test_layout(&["alpha.txt", "beta.txt", "gamma.txt"]).into(),
+                layout: selection_test_engine(&["alpha.txt", "beta.txt", "gamma.txt"]),
             },
         );
 
@@ -6361,15 +6268,14 @@ mod tests {
                 y1: 0.0,
                 x2: 325.0,
                 y2: 205.0,
-                layout: selection_test_layout(
+                layout: selection_test_engine(
                     &(0..20)
                         .map(|index| format!("entry-{index}"))
                         .collect::<Vec<_>>()
                         .iter()
                         .map(String::as_str)
                         .collect::<Vec<_>>(),
-                )
-                .into(),
+                ),
             },
         );
 
@@ -7215,6 +7121,7 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
             .map(|(body, _)| body)
             .expect("icon zoom cached relayout body should be present");
+        let removed_zoom_range_hint_function = ["fn ", "icon_zoom_range_hint("].concat();
 
         assert!(
             source.contains(
@@ -7259,10 +7166,9 @@ mod tests {
                     "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);"
                 )
                 && fast_path_body.contains("relayout_pane_item_view_entries_model(")
-                && !fast_path_body.contains("let preferred_range = icon_zoom_range_hint(")
+                && !source.contains(&removed_zoom_range_hint_function)
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
-                && !fast_path_body.contains("prewarm_pane_fallback_media")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
                 && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);"),
             "icon zoom should reuse the current virtual slice synchronously when it covers the new Dolphin-style visible range, and move cache-miss snapshot rebuilds off the input event"
@@ -7324,8 +7230,7 @@ mod tests {
                 && refresh_body.contains("sync_pane_view_ui(ui, state, 0);")
                 && refresh_body.contains("sync_pane_view_ui(ui, state, pane.slot);")
                 && !refresh_body.contains("sync_pane_layout_for_slot")
-                && !refresh_body.contains("sync_virtual_entries_for_slot")
-                && !source.contains("prewarm_pane_fallback_media"),
+                && !refresh_body.contains("sync_virtual_entries_for_slot"),
             "dark-mode raster refresh should regenerate visible tile frame images without rebuilding the directory snapshot"
         );
     }

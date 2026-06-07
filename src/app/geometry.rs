@@ -11,9 +11,6 @@ const SEARCH_PANEL_WIDE_HEIGHT: f32 = 84.0;
 const SEARCH_PANEL_NARROW_HEIGHT: f32 = 116.0;
 const SEARCH_PANEL_NARROW_WIDTH: f32 = 620.0;
 pub(crate) const ITEM_VIEW_OVERSCAN_COLUMNS: usize = 2;
-pub(crate) const MIN_ICON_ZOOM_LEVEL: i32 = 0;
-pub(crate) const MAX_ICON_ZOOM_LEVEL: i32 = 4;
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MainItemViewLayout {
     pub(crate) viewport_x: f32,

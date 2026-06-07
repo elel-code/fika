@@ -1,6 +1,6 @@
 use crate::app::geometry::{
-    ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewLayoutEngine, ItemViewLayouter, MainItemViewLayout,
-    VirtualItemViewPlan,
+    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewLayoutEngine, ItemViewLayouter,
+    MainItemViewLayout, VirtualItemViewPlan,
 };
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
 use std::ops::Range;
@@ -45,10 +45,12 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     let visible_count = input
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-    let visible_name_widths = snapshot_visible_entry_name_width_units(&input, visible_count);
-    let compact_item_view = input
-        .layout
-        .compact_item_view_from_text_width_units(visible_name_widths);
+    let compact_item_view = cached_snapshot_layout(&input, visible_count).unwrap_or_else(|| {
+        let visible_name_widths = snapshot_visible_entry_name_width_units(&input, visible_count);
+        input
+            .layout
+            .compact_item_view_from_text_width_units(visible_name_widths)
+    });
     let item_view_layout = ItemViewLayoutEngine::from(compact_item_view.clone());
     let plan =
         compact_item_view.virtual_plan(input.requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
@@ -92,6 +94,39 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         entries,
         rebuild_model: true,
     }
+}
+
+fn cached_snapshot_layout(
+    input: &VirtualViewSnapshotInput,
+    visible_count: usize,
+) -> Option<CompactItemViewLayout> {
+    if input.cache.range.is_empty() || input.cache.thumbnail_size_px != input.thumbnail_size_px {
+        return None;
+    }
+
+    let cached = input.cache.layout.as_ref()?.as_compact();
+    if cached.entry_count != visible_count
+        || !main_layout_matches_cached_layout(&input.layout, cached)
+    {
+        return None;
+    }
+
+    Some(cached.clone())
+}
+
+fn main_layout_matches_cached_layout(
+    layout: &MainItemViewLayout,
+    compact_item_view: &CompactItemViewLayout,
+) -> bool {
+    layout.rows_per_column == compact_item_view.rows_per_column
+        && same_snapshot_layout_metric(layout.viewport_width, compact_item_view.viewport_width)
+        && same_snapshot_layout_metric(layout.cell_width, compact_item_view.cell_width)
+        && same_snapshot_layout_metric(layout.row_height, compact_item_view.row_height)
+        && same_snapshot_layout_metric(layout.padding, compact_item_view.padding)
+}
+
+fn same_snapshot_layout_metric(left: f32, right: f32) -> bool {
+    (left - right).abs() <= 0.5
 }
 
 fn should_rebuild_virtual_cache(

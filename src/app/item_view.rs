@@ -7,6 +7,7 @@ use crate::app::state::AppState;
 use crate::{AppWindow, FileEntry};
 use slint::ComponentHandle;
 use std::ops::Range;
+use std::sync::Arc;
 
 const SELECTION_DRAG_THRESHOLD: f32 = 5.0;
 
@@ -17,7 +18,7 @@ pub(crate) struct ItemViewLayout {
     pub(crate) width: f32,
     pub(crate) height: f32,
     pub(crate) viewport_x: f32,
-    pub(crate) layout: ItemViewLayoutEngine,
+    pub(crate) layout: Arc<ItemViewLayoutEngine>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -26,7 +27,7 @@ pub(crate) struct SelectionRect {
     pub(crate) y1: f32,
     pub(crate) x2: f32,
     pub(crate) y2: f32,
-    pub(crate) layout: ItemViewLayoutEngine,
+    pub(crate) layout: Arc<ItemViewLayoutEngine>,
 }
 
 impl SelectionRect {
@@ -121,7 +122,7 @@ impl ItemViewInputState {
         &mut self,
         x: f32,
         y: f32,
-        layout: ItemViewLayoutEngine,
+        layout: impl Into<Arc<ItemViewLayoutEngine>>,
         toggle: bool,
     ) {
         self.clear_drag_source();
@@ -130,7 +131,7 @@ impl ItemViewInputState {
             start_y: y,
             current_x: x,
             current_y: y,
-            layout,
+            layout: layout.into(),
             toggle,
             active: false,
         });
@@ -184,7 +185,7 @@ struct SelectionRectGesture {
     start_y: f32,
     current_x: f32,
     current_y: f32,
-    layout: ItemViewLayoutEngine,
+    layout: Arc<ItemViewLayoutEngine>,
     toggle: bool,
     active: bool,
 }
@@ -234,7 +235,7 @@ impl ItemViewLayout {
         width: f32,
         height: f32,
         viewport_x: f32,
-        layout: ItemViewLayoutEngine,
+        layout: impl Into<Arc<ItemViewLayoutEngine>>,
     ) -> Self {
         Self {
             x,
@@ -242,7 +243,7 @@ impl ItemViewLayout {
             width: width.max(1.0),
             height: height.max(1.0),
             viewport_x: viewport_x.max(0.0),
-            layout,
+            layout: layout.into(),
         }
     }
 
@@ -396,7 +397,7 @@ pub(crate) fn press_blank_for_slot(
         .virtual_view
         .layout
         .clone()
-        .unwrap_or_else(ItemViewLayoutEngine::empty_compact);
+        .unwrap_or_else(|| Arc::new(ItemViewLayoutEngine::empty_compact()));
     pane.view.input.press_blank(x, y, layout, toggle);
     true
 }
@@ -457,11 +458,22 @@ mod tests {
         )
     }
 
+    fn test_engine() -> Arc<ItemViewLayoutEngine> {
+        Arc::new(ItemViewLayoutEngine::from(test_layout()))
+    }
+
     #[test]
     fn item_view_layout_hit_test_uses_layout_offsets_and_viewport() {
         let compact = test_layout();
         let second_column_x = compact.column_offsets[1] + 10.0 - 40.0;
-        let layout = ItemViewLayout::new(100.0, 50.0, 250.0, 220.0, 40.0, compact.into());
+        let layout = ItemViewLayout::new(
+            100.0,
+            50.0,
+            250.0,
+            220.0,
+            40.0,
+            ItemViewLayoutEngine::from(compact),
+        );
 
         assert_eq!(
             layout.index_at_point(100.0 + second_column_x, 65.0),
@@ -477,7 +489,7 @@ mod tests {
             y1: 0.0,
             x2: compact.column_offsets[0] + compact.column_widths[0] + 10.0,
             y2: 205.0,
-            layout: compact.into(),
+            layout: Arc::new(ItemViewLayoutEngine::from(compact)),
         };
 
         assert!(rect.intersects_index(0));
@@ -489,7 +501,7 @@ mod tests {
     #[test]
     fn item_view_input_turns_blank_click_into_clear_selection() {
         let mut input = ItemViewInputState::default();
-        input.press_blank(10.0, 20.0, test_layout().into(), false);
+        input.press_blank(10.0, 20.0, test_engine(), false);
 
         assert!(!input.move_blank(14.0, 24.0));
         assert_eq!(
@@ -500,7 +512,7 @@ mod tests {
 
     #[test]
     fn item_view_input_turns_blank_drag_into_selection_rect() {
-        let layout = ItemViewLayoutEngine::from(test_layout());
+        let layout = test_engine();
         let mut input = ItemViewInputState::default();
         input.press_blank(120.0, 80.0, layout.clone(), true);
 
@@ -523,7 +535,7 @@ mod tests {
     #[test]
     fn item_view_input_cancel_drops_pending_blank_selection() {
         let mut input = ItemViewInputState::default();
-        input.press_blank(10.0, 20.0, test_layout().into(), false);
+        input.press_blank(10.0, 20.0, test_engine(), false);
 
         input.cancel_blank();
 
@@ -561,7 +573,7 @@ mod tests {
         assert_eq!(source.path(), "/tmp/file.txt");
         assert!(!source.is_dir());
 
-        input.press_blank(10.0, 20.0, test_layout().into(), false);
+        input.press_blank(10.0, 20.0, test_engine(), false);
 
         assert!(input.drag_source().is_none());
     }

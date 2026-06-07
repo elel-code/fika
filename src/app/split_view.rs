@@ -490,12 +490,12 @@ fn pane_slot_item_view_metrics(
                     .virtual_view
                     .layout
                     .clone()
-                    .unwrap_or_else(ItemViewLayoutEngine::empty_compact),
+                    .unwrap_or_else(|| ItemViewLayoutEngine::empty_compact().into()),
                 pane.view.virtual_entries.row_count(),
                 pane.view.virtual_start_index,
             )
         })
-        .unwrap_or_else(|| (ItemViewLayoutEngine::empty_compact(), 0, 0));
+        .unwrap_or_else(|| (ItemViewLayoutEngine::empty_compact().into(), 0, 0));
     let layout_metrics = compact_item_view.layout_metrics();
     let virtual_anchor = compact_item_view.range_anchor(virtual_start_index);
     let virtual_slice_geometry =
