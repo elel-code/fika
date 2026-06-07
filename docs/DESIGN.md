@@ -63,7 +63,7 @@ The non-main-pane chrome is intentionally allowed to track COSMIC Files more clo
 - 过滤、搜索、缩放或窗口尺寸变化导致内容变窄时，Rust 会按同一套列宽规则夹紧横向滚动位置，避免旧 viewport 落在新内容之外造成空白主栏。
 - tile 的真实全局索引由 Rust item-view layout/hit-test 根据 viewport、rows-per-column 和可见索引缓存解析，因此选择范围、拖拽命中和右键语义仍然基于完整模型，而不是 Slint row index。
 - 横向滚动、缩放和窗口尺寸变化会重新切片 `virtual_entries`，避免大目录一次性实例化所有可见 tile primitive。
-- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为瘦身后的 `ItemViewEntry`。`ItemViewEntry` 只携带 name/path/is_dir、thumbnail 状态和 media token；成功 thumbnail image 另行投影为 pane-local 稀疏 `ItemViewMediaEntry` overlay，并通过 Rust-only media token sidecar 复用该 overlay model 而不比较 `Image`。普通 item 使用 Dolphin 横向列模式的 compact 布局，图标在左、文件名在右侧居中显示。tile x/y/width/text_width 由可复用的 pane-local bounds sidecar 提供，基础 name primitive 消费 pane-local `ItemViewPaintEntry` paint sidecar，selection background 和 folder/file fallback glyph 画入当前 virtual slice 的 `PaneViewData.item_view_raster_layer`；tile height、media rect、text rect、标题 y/line height 和字体由 pane-level `PaneViewData` 下发。带 group/location 的递归搜索结果再通过可复用的稀疏 `ItemViewMetadataEntry` 模型展开多行信息。`SplitPaneView` 的可见 item overlay 只按 Rust raster 底图、Rust-projected paint rows、pane-level 几何和稀疏 media/metadata 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成 fallback glyph。
+- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为瘦身后的 `ItemViewEntry`。`ItemViewEntry` 只携带 name/path/is_dir、thumbnail 状态和 media token；已加载 thumbnail image 另行投影为 pane-local Rust-only `ItemViewRasterMediaEntry`，并通过 Rust-only media token sidecar 复用 raster input 而不比较 `Image`。普通 item 使用 Dolphin 横向列模式的 compact 布局，图标在左、文件名在右侧居中显示。tile x/y/width/text_width 由可复用的 pane-local bounds sidecar 提供，基础 name primitive 消费 pane-local `ItemViewPaintEntry` paint sidecar，selection background、folder/file fallback glyph 和已加载 thumbnail image 画入当前 virtual slice 的 `PaneViewData.item_view_raster_layer`；tile height、media rect、text rect、标题 y/line height 和字体由 pane-level `PaneViewData` 下发。带 group/location 的递归搜索结果再通过可复用的稀疏 `ItemViewMetadataEntry` 模型展开多行信息。`SplitPaneView` 的可见 item overlay 只按 Rust raster 底图、Rust-projected paint rows、pane-level 几何和稀疏 metadata 绘制 primitive，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成 fallback glyph 或 thumbnail raster row。
 - 框选仍按完整可见顺序返回路径，但候选项会先裁剪到选择矩形横向覆盖的列范围；搜索/过滤状态下通过可见索引缓存解析真实条目。
 - 缩略图调度按“当前可见列优先，overscan 后置”排序，减少大目录图片预览队列对当前屏幕反馈的拖慢。
 - 离屏缩略图完成时只更新 Rust 缓存，不重置 Slint 模型；缩略图所属路径落在当前虚拟切片内时才刷新 `virtual_entries`。
@@ -319,13 +319,13 @@ Places 分为内置项和用户项：
 
 切换 `Here` / `Everywhere` 时，如果已有查询，会立即按新模式重新提交搜索。
 
-Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为瘦身后的 `ItemViewEntry`，只携带业务身份、目录标记、thumbnail 状态和 media token；成功 thumbnail image 存在 pane-local 稀疏 `ItemViewMediaEntry` overlay，selection/fallback glyph 存在 Rust-only sidecar 并画入当前 tile raster base layer，render-plan 几何存在 pane-level view data，因此主视图只消费预计算后的 pane-level 绘制坐标和图像；普通文件名和递归搜索元数据都使用同一套 Rust 侧横向 text rect。
+Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 的 Slint row 另行投影为瘦身后的 `ItemViewEntry`，只携带业务身份、目录标记、thumbnail 状态和 media token；已加载 thumbnail image、selection/fallback glyph 都存在 Rust-only sidecar 并画入当前 tile raster base layer，render-plan 几何存在 pane-level view data，因此主视图只消费预计算后的 pane-level 绘制坐标和图像；普通文件名和递归搜索元数据都使用同一套 Rust 侧横向 text rect。
 
 ### Thumbnails
 
 缩略图流水线当前覆盖 PNG/JPEG/WebP：
 
-- `ItemViewEntry` 包含 `thumbnail_state` 和 `media_token`；成功 thumbnail image 使用 pane-local 稀疏 `ItemViewMediaEntry` overlay 绘制，未成功时 `SplitPaneView` 使用 pane-level Rust item-view media renderer cache 生成的通用文件/目录图标。
+- `ItemViewEntry` 包含 `thumbnail_state` 和 `media_token`；已加载 thumbnail image 使用 pane-local Rust-only raster input 绘制进 tile raster base layer，未成功时同一 raster layer 使用 pane-level Rust item-view media renderer cache 生成的通用文件/目录图标。
 - 当前可见顺序的前若干项会先被调度，符合列优先图标视图的首屏优先策略。
 - 后台任务用 `image` crate 解码并缩放到当前 zoom 对应尺寸，回传 RGBA 像素给 UI 线程构造 Slint `Image`。
 - 缓存 key 为路径、mtime 和目标尺寸；重复访问或刷新同一目录时可复用。

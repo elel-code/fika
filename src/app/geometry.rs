@@ -2981,6 +2981,7 @@ mod tests {
                 "PaneSlot should own shared pane event routing: {binding}"
             );
         }
+        let legacy_surface_media_binding = concat!("media: root.view.", "media;");
         assert!(
             pane_slot_surface.contains("PaneSlot {")
                 && pane_slot_surface.contains("in property <PaneSlotData> pane;")
@@ -3018,7 +3019,7 @@ mod tests {
                 && pane_slot_surface
                     .contains("item-view-raster-height: root.view.item_view_raster_height;")
                 && !pane_slot_surface.contains("highlights: root.view.highlights;")
-                && pane_slot_surface.contains("media: root.view.media;")
+                && !pane_slot_surface.contains(legacy_surface_media_binding)
                 && pane_slot_surface.contains("metadata: root.view.metadata;")
                 && pane_slot_surface.contains("callback viewport_changed(int, float);")
                 && pane_slot_surface.contains(
@@ -3333,14 +3334,9 @@ mod tests {
             .expect("models.slint should define ItemViewEntry before ItemViewPaintEntry");
         let paint_entry = models
             .split_once("export struct ItemViewPaintEntry")
-            .and_then(|(_, rest)| rest.split_once("export struct ItemViewMediaEntry"))
-            .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewPaintEntry before ItemViewMediaEntry");
-        let media_entry = models
-            .split_once("export struct ItemViewMediaEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
             .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewMediaEntry before ItemViewMetadataEntry");
+            .expect("models.slint should define ItemViewPaintEntry before ItemViewMetadataEntry");
         let pane_view_data = models
             .split_once("export struct PaneViewData")
             .and_then(|(_, rest)| rest.split_once("export struct PaneSlotData"))
@@ -3365,14 +3361,9 @@ mod tests {
             .split_once(
                 "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
             )
-            .and_then(|(_, rest)| rest.split_once("for media[index] in root.media: Image"))
-            .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have one concrete drop-target overlay");
-        let media_overlay_loop = split_pane
-            .split_once("for media[index] in root.media: Image")
             .and_then(|(_, rest)| rest.split_once("for paint[index] in root.paint: Text"))
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have a sparse thumbnail media overlay loop");
+            .expect("SplitPaneView should have one concrete drop-target overlay");
         let base_text_loop = split_pane
             .split_once("for paint[index] in root.paint: Text")
             .and_then(|(_, rest)| rest.split_once("for metadata[index] in root.metadata: Text"))
@@ -3388,6 +3379,10 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("scroll-event(event)"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should handle pointer move inside the main touch area");
+        let legacy_media_loop = concat!("for ", "media[index] in root.", "media: Image");
+        let legacy_media_entry = concat!("ItemView", "MediaEntry");
+        let legacy_media_property = format!("in property <[{legacy_media_entry}]> media");
+        let legacy_media_struct = format!("export struct {legacy_media_entry}");
         assert!(
             split_pane.contains("source: root.item-view-raster-layer;")
                 && split_pane.contains("in property <float> item-view-raster-width: 1;")
@@ -3398,21 +3393,14 @@ mod tests {
                 && !split_pane.contains("ItemViewBounds")
                 && !split_pane.contains("for fallback[index] in root.folder-media: Image")
                 && !split_pane.contains("for fallback[index] in root.file-media: Image")
+                && !split_pane.contains(legacy_media_loop)
+                && !split_pane.contains(&legacy_media_property)
                 && raster_layer.contains("x: root.preview-padding + root.item-view-virtual-slice-start-x * 1px - root.paint-viewport-x * 1px;")
                 && raster_layer.contains("y: root.preview-padding;")
                 && raster_layer.contains("width: max(1px, root.item-view-raster-width * 1px);")
                 && raster_layer.contains("height: max(1px, root.item-view-raster-height * 1px);")
                 && !split_pane.contains("root.item-view-folder-media")
                 && !split_pane.contains("root.item-view-file-media")
-                && media_overlay_loop
-                    .contains("x: root.preview-padding + media.x * 1px - root.paint-viewport-x * 1px + root.media-x;")
-                && media_overlay_loop.contains(
-                    "y: root.preview-padding + media.y * 1px + root.media-y;"
-                )
-                && !media_overlay_loop.contains("root.bounds[media.slice_index]")
-                && media_overlay_loop.contains("width: root.media-width;")
-                && media_overlay_loop.contains("height: root.media-height;")
-                && media_overlay_loop.contains("source: media.media;")
                 && base_text_loop
                     .contains("x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.text-x;")
                 && base_text_loop.contains(
@@ -3424,8 +3412,6 @@ mod tests {
                 && !base_text_loop.contains("metadata_line_height")
                 && !base_text_loop.contains("tile-index:")
                 && !base_text_loop.contains("tile-row:")
-                && !media_overlay_loop.contains("tile-index:")
-                && !media_overlay_loop.contains("tile-row:")
                 && !base_text_loop.contains("has-metadata-lines")
                 && !base_text_loop.contains("metadata-title")
                 && !base_text_loop.contains("metadata-group-color")
@@ -3436,7 +3422,6 @@ mod tests {
                 && !base_text_loop.contains("text: item.location")
                 && !base_text_loop.contains("item.selected")
                 && !base_text_loop.contains("thumbnail_state")
-                && !media_overlay_loop.contains("item.")
                 && !widgets.contains("export component FolderGlyph")
                 && !split_pane.contains("entry: item;")
                 && !split_pane.contains("selected: item.selected;")
@@ -3448,10 +3433,7 @@ mod tests {
                 && item_view_entry.contains("thumbnail_state: int")
                 && item_view_entry.contains("media_token: int")
                 && !item_view_entry.contains("media: image")
-                && !media_entry.contains("slice_index")
-                && media_entry.contains("media: image")
-                && media_entry.contains("x: float")
-                && media_entry.contains("y: float")
+                && !models.contains(&legacy_media_struct)
                 && paint_entry.contains("name: string")
                 && paint_entry.contains("x: float")
                 && paint_entry.contains("text_width: float")
@@ -3470,6 +3452,7 @@ mod tests {
                 && pane_view_data.contains("item_view_raster_layer: image")
                 && pane_view_data.contains("item_view_raster_width: float")
                 && pane_view_data.contains("item_view_raster_height: float")
+                && !pane_view_data.contains("media: [")
                 && pane_view_data.contains("item_view_virtual_slice_start_x: float")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")
@@ -3528,7 +3511,6 @@ mod tests {
                 )
                 && raster_layer.contains("width: max(1px, root.item-view-raster-width * 1px);")
                 && raster_layer.contains("height: max(1px, root.item-view-raster-height * 1px);")
-                && media_overlay_loop.contains("source: media.media;")
                 && base_text_loop.contains("font-size: root.title-font-size;")
                 && base_text_loop.contains("root.text-x")
                 && base_text_loop.contains("root.title-y")

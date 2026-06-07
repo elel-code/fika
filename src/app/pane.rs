@@ -7,15 +7,14 @@ use crate::app::item_view_renderer::{
 #[cfg(test)]
 use crate::app::model_update::ItemViewMediaSource;
 use crate::app::model_update::{
-    ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaToken, ItemViewRowToken,
+    ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaToken,
+    ItemViewRasterMediaEntry, ItemViewRowToken,
 };
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
-use crate::{
-    FileEntry, ItemViewEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry,
-};
+use crate::{FileEntry, ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
 #[cfg(test)]
 use slint::Image;
 use slint::{Model, ModelRc, VecModel};
@@ -93,8 +92,7 @@ impl PaneState {
         pane.view.virtual_entry_tokens =
             clone_item_view_row_tokens_without_selection(&self.view.virtual_entry_tokens);
         pane.view.virtual_highlight_entries = ModelRc::default();
-        pane.view.virtual_media_entries =
-            clone_item_view_media_model(&self.view.virtual_media_entries);
+        pane.view.virtual_media_entries = self.view.virtual_media_entries.clone();
         pane.view.virtual_media_tokens = self.view.virtual_media_tokens.clone();
         pane.view.virtual_metadata_entries =
             clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
@@ -131,7 +129,7 @@ impl PaneState {
         self.view.virtual_file_media_entries = ModelRc::default();
         self.view.virtual_entry_tokens.clear();
         self.view.virtual_highlight_entries = ModelRc::default();
-        self.view.virtual_media_entries = ModelRc::default();
+        self.view.virtual_media_entries.clear();
         self.view.virtual_media_tokens.clear();
         self.view.virtual_metadata_entries = ModelRc::default();
         self.view.virtual_start_index = 0;
@@ -210,17 +208,6 @@ fn clone_item_view_fallback_media_model(
 fn clone_item_view_metadata_model(
     model: &ModelRc<ItemViewMetadataEntry>,
 ) -> ModelRc<ItemViewMetadataEntry> {
-    let entries = (0..model.row_count())
-        .filter_map(|row| model.row_data(row))
-        .collect::<Vec<_>>();
-    if entries.is_empty() {
-        ModelRc::default()
-    } else {
-        ModelRc::new(Rc::new(VecModel::from(entries)))
-    }
-}
-
-fn clone_item_view_media_model(model: &ModelRc<ItemViewMediaEntry>) -> ModelRc<ItemViewMediaEntry> {
     let entries = (0..model.row_count())
         .filter_map(|row| model.row_data(row))
         .collect::<Vec<_>>();
@@ -587,7 +574,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_file_media_entries: ModelRc<ItemViewFallbackMediaEntry>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
     pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,
-    pub(crate) virtual_media_entries: ModelRc<ItemViewMediaEntry>,
+    pub(crate) virtual_media_entries: Vec<ItemViewRasterMediaEntry>,
     pub(crate) virtual_media_tokens: Vec<ItemViewMediaToken>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     pub(crate) virtual_start_index: usize,
@@ -688,7 +675,7 @@ impl PaneView {
     ) -> ItemViewTileFrameRaster {
         let bounds_entries = self.current_virtual_bounds_entries();
         ItemViewTileFrameBatch::from_bounded_entries(&self.virtual_entry_tokens, &bounds_entries)
-            .render_raster_layer(input)
+            .render_raster_layer(input, &self.virtual_media_entries)
     }
 
     fn current_virtual_bounds_entries(&self) -> Vec<ItemViewItemBounds> {
@@ -1543,7 +1530,7 @@ mod tests {
         assert_eq!(pane.view.virtual_view.thumbnail_size_px, 0);
         assert_eq!(pane.view.virtual_entries.row_count(), 0);
         assert_eq!(pane.view.virtual_paint_entries.row_count(), 0);
-        assert_eq!(pane.view.virtual_media_entries.row_count(), 0);
+        assert!(pane.view.virtual_media_entries.is_empty());
         assert!(pane.view.virtual_media_tokens.is_empty());
     }
 

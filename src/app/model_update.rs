@@ -1,7 +1,7 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_renderer::{ItemViewFrameEntry, ItemViewTileFrameBatch};
 use crate::app::pane::PaneView;
-use crate::{ItemViewEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
+use crate::{ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::ops::Range;
 use std::rc::Rc;
@@ -38,6 +38,13 @@ pub(crate) struct ItemViewMediaToken {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewMediaSource {
     pub(crate) slice_index: i32,
+    pub(crate) media: Image,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ItemViewRasterMediaEntry {
     pub(crate) media: Image,
     pub(crate) x: f32,
     pub(crate) y: f32,
@@ -344,25 +351,15 @@ fn project_metadata_entries_with_bounds(
         .collect()
 }
 
-pub(crate) fn new_item_view_media_model(
-    media_entries: Vec<ItemViewMediaEntry>,
-) -> ModelRc<ItemViewMediaEntry> {
-    if media_entries.is_empty() {
-        return ModelRc::default();
-    }
-
-    ModelRc::new(Rc::new(VecModel::from(media_entries)))
-}
-
 fn project_media_entries_with_bounds(
     media_entries: Vec<ItemViewMediaSource>,
     bounds_entries: &[ItemViewItemBounds],
-) -> Vec<ItemViewMediaEntry> {
+) -> Vec<ItemViewRasterMediaEntry> {
     media_entries
         .into_iter()
         .map(|media| {
             let bounds = bounds_for_slice_index(bounds_entries, media.slice_index);
-            ItemViewMediaEntry {
+            ItemViewRasterMediaEntry {
                 media: media.media,
                 x: bounds.map_or(media.x, |b| b.x),
                 y: bounds.map_or(media.y, |b| b.y),
@@ -385,32 +382,22 @@ fn item_view_media_tokens(
 }
 
 fn update_item_view_media_entries_model(
-    current: &mut ModelRc<ItemViewMediaEntry>,
+    current: &mut Vec<ItemViewRasterMediaEntry>,
     current_tokens: &mut Vec<ItemViewMediaToken>,
-    media_entries: Vec<ItemViewMediaEntry>,
+    media_entries: Vec<ItemViewRasterMediaEntry>,
     next_tokens: Vec<ItemViewMediaToken>,
 ) -> bool {
-    if media_entries.is_empty() {
-        let had_tokens = !current_tokens.is_empty();
-        current_tokens.clear();
-        if current.row_count() == 0 {
-            return had_tokens;
-        }
-        *current = ModelRc::default();
-        return true;
-    }
-
-    let Some(model) = current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewMediaEntry>>()
-    else {
-        *current = new_item_view_media_model(media_entries);
+    let geometry_changed = current.len() != media_entries.len()
+        || current
+            .iter()
+            .zip(media_entries.iter())
+            .any(|(current, next)| current.x != next.x || current.y != next.y);
+    let tokens_changed = *current_tokens != next_tokens;
+    let changed = geometry_changed || tokens_changed;
+    if changed {
+        *current = media_entries;
         *current_tokens = next_tokens;
-        return true;
-    };
-
-    let changed =
-        update_sparse_vec_model_by_tokens(model, current_tokens, media_entries, next_tokens);
+    }
     changed
 }
 
@@ -659,15 +646,15 @@ pub(crate) fn relayout_pane_item_view_entries_model(
 }
 
 fn trim_item_view_media_entries_model(
-    current: &mut ModelRc<ItemViewMediaEntry>,
+    current: &mut Vec<ItemViewRasterMediaEntry>,
     current_tokens: &mut Vec<ItemViewMediaToken>,
     remove_front: usize,
     target_len: usize,
     bounds_entries: &[ItemViewItemBounds],
 ) {
-    let retained = (0..current.row_count())
+    let retained = (0..current.len())
         .filter_map(|row| {
-            current.row_data(row).map(|entry| {
+            current.get(row).cloned().map(|entry| {
                 let token = current_tokens
                     .get(row)
                     .cloned()
@@ -698,14 +685,7 @@ fn trim_item_view_media_entries_model(
 
     let (entries, tokens): (Vec<_>, Vec<_>) = retained.into_iter().unzip();
 
-    if let Some(model) = current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewMediaEntry>>()
-    {
-        model.set_vec(entries);
-    } else {
-        *current = new_item_view_media_model(entries);
-    }
+    *current = entries;
     *current_tokens = tokens;
 }
 
@@ -923,48 +903,6 @@ where
     changed
 }
 
-fn update_sparse_vec_model_by_tokens<T, U>(
-    model: &VecModel<T>,
-    current_tokens: &mut Vec<U>,
-    entries: Vec<T>,
-    next_tokens: Vec<U>,
-) -> bool
-where
-    T: Clone + 'static,
-    U: Clone + PartialEq,
-{
-    let mut changed = false;
-    let overlap_len = model.row_count().min(entries.len());
-    for row in 0..overlap_len {
-        let row_changed = current_tokens
-            .get(row)
-            .zip(next_tokens.get(row))
-            .is_none_or(|(current, next)| current != next);
-        if row_changed {
-            model.set_row_data(row, entries[row].clone());
-            changed = true;
-        }
-    }
-
-    while model.row_count() > entries.len() {
-        model.remove(model.row_count() - 1);
-        changed = true;
-    }
-
-    let current_len = model.row_count();
-    if current_len < entries.len() {
-        model.extend(entries[current_len..].iter().cloned());
-        changed = true;
-    }
-
-    if *current_tokens != next_tokens {
-        *current_tokens = next_tokens;
-        changed = true;
-    }
-
-    changed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1031,18 +969,15 @@ mod tests {
             .collect()
     }
 
-    fn media_rows(model: &ModelRc<ItemViewMediaEntry>) -> Vec<Rgba8Pixel> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
+    fn media_rows(entries: &[ItemViewRasterMediaEntry]) -> Vec<Rgba8Pixel> {
+        entries
+            .iter()
             .map(|entry| first_pixel(&entry.media))
             .collect()
     }
 
-    fn media_geometry_rows(model: &ModelRc<ItemViewMediaEntry>) -> Vec<(f32, f32)> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.x, entry.y))
-            .collect()
+    fn media_geometry_rows(entries: &[ItemViewRasterMediaEntry]) -> Vec<(f32, f32)> {
+        entries.iter().map(|entry| (entry.x, entry.y)).collect()
     }
 
     fn media_tokens(tokens: &[ItemViewMediaToken]) -> Vec<(i32, i32)> {
@@ -1682,7 +1617,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_item_view_media_model_reuses_vec_model_without_image_comparison() {
+    fn pane_item_view_raster_media_uses_tokens_without_image_comparison() {
         let mut entries = entries_with_tile_metrics(4);
         entries[1].thumbnail_state = 2;
         entries[1].media_token = 101;
@@ -1701,7 +1636,38 @@ mod tests {
             Vec::new(),
             &[],
         );
-        let original_media = view.virtual_media_entries.clone();
+        assert_eq!(
+            media_rows(&view.virtual_media_entries),
+            vec![
+                Rgba8Pixel::new(255, 0, 0, 255),
+                Rgba8Pixel::new(0, 0, 255, 255),
+            ]
+        );
+
+        let mut same_token_entries = entries_with_tile_metrics(4);
+        same_token_entries[1].thumbnail_state = 2;
+        same_token_entries[1].media_token = 101;
+        same_token_entries[3].thumbnail_state = 2;
+        same_token_entries[3].media_token = 103;
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            same_token_entries,
+            Vec::new(),
+            vec![
+                media_source(1, Rgba8Pixel::new(0, 255, 0, 255)),
+                media_source(3, Rgba8Pixel::new(255, 255, 0, 255)),
+            ],
+            Vec::new(),
+            &[],
+        );
+        assert_eq!(
+            media_rows(&view.virtual_media_entries),
+            vec![
+                Rgba8Pixel::new(255, 0, 0, 255),
+                Rgba8Pixel::new(0, 0, 255, 255),
+            ]
+        );
 
         let mut updated_entries = entries_with_tile_metrics(4);
         updated_entries[1].thumbnail_state = 2;
@@ -1721,7 +1687,6 @@ mod tests {
             &[],
         );
 
-        assert_eq!(view.virtual_media_entries, original_media);
         assert_eq!(
             media_rows(&view.virtual_media_entries),
             vec![
@@ -1896,8 +1861,6 @@ mod tests {
             Vec::new(),
             &[],
         );
-        let original_media = view.virtual_media_entries.clone();
-
         assert_eq!(
             media_rows(&view.virtual_media_entries),
             vec![
@@ -1912,7 +1875,6 @@ mod tests {
             Vec::new()
         ));
 
-        assert_eq!(view.virtual_media_entries, original_media);
         assert_eq!(
             media_rows(&view.virtual_media_entries),
             vec![Rgba8Pixel::new(255, 0, 0, 255)]

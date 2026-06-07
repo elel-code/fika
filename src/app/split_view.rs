@@ -9,8 +9,8 @@ use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData,
-    PaneSurfaceData, PaneViewData, set_status, sync_virtual_entries_for_slot,
+    AppWindow, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData,
+    PaneViewData, set_status, sync_virtual_entries_for_slot,
 };
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -354,7 +354,6 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         item_view_raster_layer,
         item_view_raster_width,
         item_view_raster_height,
-        media: pane_slot_media(slot, state),
         metadata: pane_slot_metadata(slot, state),
         entry_count: item_view_metrics.entry_count,
         virtual_start_column: item_view_metrics.virtual_start_column,
@@ -558,14 +557,6 @@ fn pane_slot_paint(slot: i32, state: &AppState) -> ModelRc<ItemViewPaintEntry> {
         .panes
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_paint_entries.clone())
-        .unwrap_or_default()
-}
-
-fn pane_slot_media(slot: i32, state: &AppState) -> ModelRc<ItemViewMediaEntry> {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_media_entries.clone())
         .unwrap_or_default()
 }
 
@@ -928,7 +919,6 @@ mod tests {
             item_view_raster_layer: Image::default(),
             item_view_raster_width: 1.0,
             item_view_raster_height: 1.0,
-            media: ModelRc::default(),
             metadata: ModelRc::default(),
             entry_count,
             virtual_start_column: 0,

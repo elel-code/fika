@@ -6804,6 +6804,10 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn pane_slot_item_view_render_geometry("))
             .map(|(body, _)| body)
             .expect("pane_view_data body should be present");
+        let legacy_media_entry = concat!("ItemView", "MediaEntry");
+        let legacy_pane_view_media_field = format!("media: [{legacy_media_entry}]");
+        let legacy_surface_media_binding = concat!("media: root.view.", "media;");
+        let legacy_slot_binding = concat!("media: pane_slot_", "media(slot, state)");
 
         assert!(
             !pane_view_data.contains("entries: [ItemViewEntry]")
@@ -6813,7 +6817,7 @@ mod tests {
                 && pane_view_data.contains("item_view_raster_width: float")
                 && pane_view_data.contains("item_view_raster_height: float")
                 && !pane_view_data.contains("highlights:")
-                && pane_view_data.contains("media: [ItemViewMediaEntry]")
+                && !pane_view_data.contains(&legacy_pane_view_media_field)
                 && pane_view_data.contains("metadata: [ItemViewMetadataEntry]")
                 && !app.contains("ItemViewBounds")
                 && !models.contains("ItemViewBounds")
@@ -6838,16 +6842,16 @@ mod tests {
                 && surface_body
                     .contains("item-view-raster-height: root.view.item_view_raster_height;")
                 && !surface_body.contains("highlights: root.view.highlights;")
-                && surface_body.contains("media: root.view.media;")
+                && !surface_body.contains(legacy_surface_media_binding)
                 && surface_body.contains("metadata: root.view.metadata;")
                 && !view_data_body.contains("entries: pane_slot_entries(slot, state)")
                 && !view_data_body.contains("bounds: pane_slot_bounds(slot, state)")
                 && view_data_body.contains("paint: pane_slot_paint(slot, state)")
                 && view_data_body.contains("item_view_raster_layer")
                 && !view_data_body.contains("pane_slot_highlights(slot, state)")
-                && view_data_body.contains("media: pane_slot_media(slot, state)")
+                && !view_data_body.contains(legacy_slot_binding)
                 && view_data_body.contains("metadata: pane_slot_metadata(slot, state)"),
-            "visible paint, tile raster, thumbnail media, and metadata should be pane-local data on PaneViewData instead of fixed slot sidecars, while business entries and bounds stay Rust-side"
+            "visible paint, tile raster, raster thumbnail input, and metadata should be pane-local data on PaneViewData instead of fixed slot sidecars, while business entries and bounds stay Rust-side"
         );
     }
 

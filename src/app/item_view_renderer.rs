@@ -1,7 +1,7 @@
 use crate::ItemViewEntry;
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
-use crate::app::model_update::ItemViewMetadataOverlaySource;
+use crate::app::model_update::{ItemViewMetadataOverlaySource, ItemViewRasterMediaEntry};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::collections::HashSet;
 use std::path::Path;
@@ -308,8 +308,9 @@ impl ItemViewTileFrameBatch {
     pub(crate) fn render_raster_layer(
         &self,
         input: ItemViewTileFrameRasterInput,
+        media_entries: &[ItemViewRasterMediaEntry],
     ) -> ItemViewTileFrameRaster {
-        let buffer = self.render_raster_buffer(input);
+        let buffer = self.render_raster_buffer(input, media_entries);
         ItemViewTileFrameRaster {
             image: Image::from_rgba8(buffer),
             width: input.width,
@@ -320,6 +321,7 @@ impl ItemViewTileFrameBatch {
     fn render_raster_buffer(
         &self,
         input: ItemViewTileFrameRasterInput,
+        media_entries: &[ItemViewRasterMediaEntry],
     ) -> SharedPixelBuffer<Rgba8Pixel> {
         let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(input.width, input.height);
         buffer
@@ -343,6 +345,16 @@ impl ItemViewTileFrameBatch {
                 input.dark,
                 plan.fallback_media.x - input.content_origin_x + input.media_x,
                 plan.fallback_media.y + input.media_y,
+                input.media_width,
+                input.media_height,
+            );
+        }
+        for media in media_entries {
+            draw_image_contain_at(
+                &mut buffer,
+                &media.media,
+                media.x - input.content_origin_x + input.media_x,
+                media.y + input.media_y,
                 input.media_width,
                 input.media_height,
             );
@@ -672,6 +684,78 @@ fn draw_relative_rect(
     );
 }
 
+fn draw_image_contain_at(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    image: &Image,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) {
+    let Some(source) = image.to_rgba8() else {
+        return;
+    };
+    let source_width = source.width();
+    let source_height = source.height();
+    if source_width == 0 || source_height == 0 || width <= 0.0 || height <= 0.0 {
+        return;
+    }
+
+    let scale = (width / source_width as f32).min(height / source_height as f32);
+    if !scale.is_finite() || scale <= 0.0 {
+        return;
+    }
+    let draw_width = (source_width as f32 * scale).max(1.0);
+    let draw_height = (source_height as f32 * scale).max(1.0);
+    let draw_x = x + (width - draw_width) / 2.0;
+    let draw_y = y + (height - draw_height) / 2.0;
+    let dest_left = draw_x.floor().max(0.0) as u32;
+    let dest_top = draw_y.floor().max(0.0) as u32;
+    let dest_right = (draw_x + draw_width).ceil().min(buffer.width() as f32) as u32;
+    let dest_bottom = (draw_y + draw_height).ceil().min(buffer.height() as f32) as u32;
+    if dest_left >= dest_right || dest_top >= dest_bottom {
+        return;
+    }
+
+    let source_pixels = source.as_slice();
+    let dest_width = buffer.width() as usize;
+    let dest_pixels = buffer.make_mut_slice();
+    for dest_y in dest_top..dest_bottom {
+        let local_y = ((dest_y as f32 + 0.5 - draw_y) / scale)
+            .floor()
+            .clamp(0.0, (source_height - 1) as f32) as u32;
+        for dest_x in dest_left..dest_right {
+            let local_x = ((dest_x as f32 + 0.5 - draw_x) / scale)
+                .floor()
+                .clamp(0.0, (source_width - 1) as f32) as u32;
+            let source_pixel = source_pixels[(local_y * source_width + local_x) as usize];
+            let dest_index = dest_y as usize * dest_width + dest_x as usize;
+            dest_pixels[dest_index] = alpha_blend(source_pixel, dest_pixels[dest_index]);
+        }
+    }
+}
+
+fn alpha_blend(source: Rgba8Pixel, dest: Rgba8Pixel) -> Rgba8Pixel {
+    let alpha = source.a as u32;
+    if alpha == 255 {
+        return source;
+    }
+    if alpha == 0 {
+        return dest;
+    }
+    let inv_alpha = 255 - alpha;
+    let out_alpha = alpha + (dest.a as u32 * inv_alpha + 127) / 255;
+    let blend = |source_channel: u8, dest_channel: u8| -> u8 {
+        ((source_channel as u32 * alpha + dest_channel as u32 * inv_alpha + 127) / 255) as u8
+    };
+    Rgba8Pixel::new(
+        blend(source.r, dest.r),
+        blend(source.g, dest.g),
+        blend(source.b, dest.b),
+        out_alpha as u8,
+    )
+}
+
 fn draw_absolute_rect(
     buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
     x: f32,
@@ -861,17 +945,20 @@ mod tests {
             &["/tmp/item-0".to_string()],
         );
 
-        let buffer = batch.render_raster_buffer(ItemViewTileFrameRasterInput {
-            width: 64,
-            height: 64,
-            content_origin_x: 0.0,
-            dark: false,
-            tile_height: 20.0,
-            media_x: 2.0,
-            media_y: 2.0,
-            media_width: 8.0,
-            media_height: 8.0,
-        });
+        let buffer = batch.render_raster_buffer(
+            ItemViewTileFrameRasterInput {
+                width: 64,
+                height: 64,
+                content_origin_x: 0.0,
+                dark: false,
+                tile_height: 20.0,
+                media_x: 2.0,
+                media_y: 2.0,
+                media_width: 8.0,
+                media_height: 8.0,
+            },
+            &[],
+        );
 
         assert_eq!(
             pixel_at(&buffer, 43, 6),

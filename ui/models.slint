@@ -14,12 +14,6 @@ export struct ItemViewPaintEntry {
     text_width: float,
 }
 
-export struct ItemViewMediaEntry {
-    media: image,
-    x: float,
-    y: float,
-}
-
 export struct ItemViewMetadataEntry {
     text: string,
     item_x: float,
@@ -95,7 +89,6 @@ export struct PaneViewData {
     item_view_raster_layer: image,
     item_view_raster_width: float,
     item_view_raster_height: float,
-    media: [ItemViewMediaEntry],
     metadata: [ItemViewMetadataEntry],
     entry_count: int,
     virtual_start_column: int,
