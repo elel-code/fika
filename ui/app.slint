@@ -62,7 +62,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchFilterPopup, SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -100,9 +100,9 @@ component FilePane inherits Rectangle {
     in property <string> drop-trace-prefix;
     in property <int> entry-count;
     in property <[ItemViewPaintEntry]> paint;
-    in property <[ItemViewFallbackMediaEntry]> folder-media;
-    in property <[ItemViewFallbackMediaEntry]> file-media;
-    in property <[ItemViewHighlightEntry]> highlights;
+    in property <image> item-view-raster-layer;
+    in property <float> item-view-raster-width: 1;
+    in property <float> item-view-raster-height: 1;
     in property <[ItemViewMediaEntry]> media;
     in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
@@ -125,8 +125,6 @@ component FilePane inherits Rectangle {
     in property <float> item-view-title-y: 0;
     in property <float> item-view-title-line-height: 1;
     in property <float> item-view-title-font-size: 15;
-    in property <image> item-view-folder-media;
-    in property <image> item-view-file-media;
     in property <bool> show-location: false;
     in-out property <bool> drag-active;
     in-out property <bool> drag-rejected;
@@ -323,9 +321,9 @@ component FilePane inherits Rectangle {
                 dark: root.dark;
                 entry-count: root.entry-count;
                 paint: root.paint;
-                folder-media: root.folder-media;
-                file-media: root.file-media;
-                highlights: root.highlights;
+                item-view-raster-layer: root.item-view-raster-layer;
+                item-view-raster-width: root.item-view-raster-width;
+                item-view-raster-height: root.item-view-raster-height;
                 media: root.media;
                 metadata: root.metadata;
                 virtual-start-column: root.virtual-start-column;
@@ -348,8 +346,6 @@ component FilePane inherits Rectangle {
                 item-view-title-y: root.item-view-title-y;
                 item-view-title-line-height: root.item-view-title-line-height;
                 item-view-title-font-size: root.item-view-title-font-size;
-                item-view-folder-media: root.item-view-folder-media;
-                item-view-file-media: root.item-view-file-media;
                 interactive: root.content-interactive;
                 empty-message-visible: root.empty-message-visible;
                 empty-title: root.empty-title;
@@ -598,9 +594,9 @@ component PaneSlotSurface inherits Rectangle {
         drop-trace-prefix: root.pane.drop_trace_prefix;
         entry-count: root.view.entry_count;
         paint: root.view.paint;
-        folder-media: root.view.folder_media;
-        file-media: root.view.file_media;
-        highlights: root.view.highlights;
+        item-view-raster-layer: root.view.item_view_raster_layer;
+        item-view-raster-width: root.view.item_view_raster_width;
+        item-view-raster-height: root.view.item_view_raster_height;
         media: root.view.media;
         metadata: root.view.metadata;
         virtual-start-column: root.view.virtual_start_column;
@@ -623,8 +619,6 @@ component PaneSlotSurface inherits Rectangle {
         item-view-title-y: root.view.item_view_title_y;
         item-view-title-line-height: root.view.item_view_title_line_height;
         item-view-title-font-size: root.view.item_view_title_font_size;
-        item-view-folder-media: root.view.item_view_folder_media;
-        item-view-file-media: root.view.item_view_file_media;
         show-location: root.view.show_location;
         drag-active <=> root.live-drag-active;
         drag-rejected <=> root.live-drag-rejected;

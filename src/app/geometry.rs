@@ -3011,7 +3011,13 @@ mod tests {
                 && !pane_slot_surface.contains("entries: root.view.entries;")
                 && !pane_slot_surface.contains("bounds: root.view.bounds;")
                 && pane_slot_surface.contains("paint: root.view.paint;")
-                && pane_slot_surface.contains("highlights: root.view.highlights;")
+                && pane_slot_surface
+                    .contains("item-view-raster-layer: root.view.item_view_raster_layer;")
+                && pane_slot_surface
+                    .contains("item-view-raster-width: root.view.item_view_raster_width;")
+                && pane_slot_surface
+                    .contains("item-view-raster-height: root.view.item_view_raster_height;")
+                && !pane_slot_surface.contains("highlights: root.view.highlights;")
                 && pane_slot_surface.contains("media: root.view.media;")
                 && pane_slot_surface.contains("metadata: root.view.metadata;")
                 && pane_slot_surface.contains("callback viewport_changed(int, float);")
@@ -3299,15 +3305,15 @@ mod tests {
         assert!(split_pane.contains("callback zoom_in();"));
         assert!(split_pane.contains("callback zoom_out();"));
         assert!(
-            split_pane.contains("in property <[ItemViewHighlightEntry]> highlights;")
-                && split_pane.contains("for highlight[index] in root.highlights: Rectangle")
-                && split_pane.contains("background: root.selected-background-color;")
+            split_pane.contains("in property <image> item-view-raster-layer;")
+                && split_pane.contains("source: root.item-view-raster-layer;")
+                && !split_pane.contains("for highlight[index] in root.highlights: Rectangle")
                 && !split_pane.contains("pure callback is_selected")
                 && !split_pane.contains("root.is_selected(item.path)")
                 && !split_pane.contains("selection-revision")
                 && !split_pane
                     .contains("item.selected ? root.selected-background-color : transparent"),
-            "SplitPaneView should draw selection from a sparse pane-local highlight model instead of per-item selected backgrounds"
+            "SplitPaneView should draw selection through the pane-local tile raster layer instead of per-item selected backgrounds"
         );
         assert!(split_pane.contains("function handle-scroll("));
         assert!(
@@ -3322,28 +3328,14 @@ mod tests {
         let models = include_str!("../../ui/models.slint");
         let item_view_entry = models
             .split_once("export struct ItemViewEntry")
-            .and_then(|(_, rest)| rest.split_once("export struct ItemViewHighlightEntry"))
-            .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewEntry before ItemViewHighlightEntry");
-        let highlight_entry = models
-            .split_once("export struct ItemViewHighlightEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewPaintEntry"))
             .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewHighlightEntry before ItemViewPaintEntry");
+            .expect("models.slint should define ItemViewEntry before ItemViewPaintEntry");
         let paint_entry = models
             .split_once("export struct ItemViewPaintEntry")
-            .and_then(|(_, rest)| rest.split_once("export struct ItemViewFallbackMediaEntry"))
-            .map(|(body, _)| body)
-            .expect(
-                "models.slint should define ItemViewPaintEntry before ItemViewFallbackMediaEntry",
-            );
-        let fallback_media_entry = models
-            .split_once("export struct ItemViewFallbackMediaEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMediaEntry"))
             .map(|(body, _)| body)
-            .expect(
-                "models.slint should define ItemViewFallbackMediaEntry before ItemViewMediaEntry",
-            );
+            .expect("models.slint should define ItemViewPaintEntry before ItemViewMediaEntry");
         let media_entry = models
             .split_once("export struct ItemViewMediaEntry")
             .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
@@ -3359,32 +3351,23 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
             .map(|(body, _)| body)
             .expect("models.slint should define ItemViewMetadataEntry before PlaceEntry");
-        let highlight_loop = split_pane
-            .split_once("for highlight[index] in root.highlights: Rectangle")
+        let raster_layer = split_pane
+            .split_once("slice-layer := Rectangle")
+            .and_then(|(_, rest)| rest.split_once("Image {"))
             .and_then(|(_, rest)| {
                 rest.split_once(
                     "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
                 )
             })
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have a sparse selection highlight overlay");
+            .expect("SplitPaneView should draw a tile raster layer before overlays");
         let drop_target_loop = split_pane
             .split_once(
                 "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
             )
-            .and_then(|(_, rest)| rest.split_once("for fallback[index] in root.folder-media: Image"))
-            .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have one concrete drop-target overlay");
-        let folder_media_loop = split_pane
-            .split_once("for fallback[index] in root.folder-media: Image")
-            .and_then(|(_, rest)| rest.split_once("for fallback[index] in root.file-media: Image"))
-            .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have a sparse folder fallback media loop");
-        let file_media_loop = split_pane
-            .split_once("for fallback[index] in root.file-media: Image")
             .and_then(|(_, rest)| rest.split_once("for media[index] in root.media: Image"))
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have a sparse file fallback media loop");
+            .expect("SplitPaneView should have one concrete drop-target overlay");
         let media_overlay_loop = split_pane
             .split_once("for media[index] in root.media: Image")
             .and_then(|(_, rest)| rest.split_once("for paint[index] in root.paint: Text"))
@@ -3406,30 +3389,21 @@ mod tests {
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should handle pointer move inside the main touch area");
         assert!(
-            split_pane.contains("for fallback[index] in root.folder-media: Image")
-                && split_pane.contains("for fallback[index] in root.file-media: Image")
+            split_pane.contains("source: root.item-view-raster-layer;")
+                && split_pane.contains("in property <float> item-view-raster-width: 1;")
+                && split_pane.contains("in property <float> item-view-raster-height: 1;")
                 && split_pane.contains("for paint[index] in root.paint: Text")
                 && split_pane.contains("in property <int> virtual-start-row;")
                 && !split_pane.contains("bounds;")
                 && !split_pane.contains("ItemViewBounds")
-                && folder_media_loop
-                    .contains("x: root.preview-padding + fallback.x * 1px - root.paint-viewport-x * 1px + root.media-x;")
-                && folder_media_loop.contains(
-                    "y: root.preview-padding + fallback.y * 1px + root.media-y;"
-                )
-                && folder_media_loop.contains("width: root.media-width;")
-                && folder_media_loop.contains("height: root.media-height;")
-                && folder_media_loop.contains("source: root.item-view-folder-media;")
-                && file_media_loop
-                    .contains("x: root.preview-padding + fallback.x * 1px - root.paint-viewport-x * 1px + root.media-x;")
-                && file_media_loop.contains(
-                    "y: root.preview-padding + fallback.y * 1px + root.media-y;"
-                )
-                && file_media_loop.contains("width: root.media-width;")
-                && file_media_loop.contains("height: root.media-height;")
-                && file_media_loop.contains("source: root.item-view-file-media;")
-                && !folder_media_loop.contains("paint.is_dir")
-                && !file_media_loop.contains("paint.is_dir")
+                && !split_pane.contains("for fallback[index] in root.folder-media: Image")
+                && !split_pane.contains("for fallback[index] in root.file-media: Image")
+                && raster_layer.contains("x: root.preview-padding + root.item-view-virtual-slice-start-x * 1px - root.paint-viewport-x * 1px;")
+                && raster_layer.contains("y: root.preview-padding;")
+                && raster_layer.contains("width: max(1px, root.item-view-raster-width * 1px);")
+                && raster_layer.contains("height: max(1px, root.item-view-raster-height * 1px);")
+                && !split_pane.contains("root.item-view-folder-media")
+                && !split_pane.contains("root.item-view-file-media")
                 && media_overlay_loop
                     .contains("x: root.preview-padding + media.x * 1px - root.paint-viewport-x * 1px + root.media-x;")
                 && media_overlay_loop.contains(
@@ -3447,12 +3421,6 @@ mod tests {
                 && base_text_loop.contains("width: max(1px, paint.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
                 && base_text_loop.contains("text: paint.name;")
-                && !folder_media_loop.contains("metadata_line_height")
-                && !file_media_loop.contains("metadata_line_height")
-                && !folder_media_loop.contains("tile-index:")
-                && !file_media_loop.contains("tile-index:")
-                && !folder_media_loop.contains("tile-row:")
-                && !file_media_loop.contains("tile-row:")
                 && !base_text_loop.contains("metadata_line_height")
                 && !base_text_loop.contains("tile-index:")
                 && !base_text_loop.contains("tile-row:")
@@ -3467,11 +3435,7 @@ mod tests {
                 && !base_text_loop.contains("text: item.group")
                 && !base_text_loop.contains("text: item.location")
                 && !base_text_loop.contains("item.selected")
-                && !folder_media_loop.contains("thumbnail_state")
-                && !file_media_loop.contains("thumbnail_state")
                 && !base_text_loop.contains("thumbnail_state")
-                && !folder_media_loop.contains("item.media")
-                && !file_media_loop.contains("item.media")
                 && !media_overlay_loop.contains("item.")
                 && !widgets.contains("export component FolderGlyph")
                 && !split_pane.contains("entry: item;")
@@ -3488,18 +3452,13 @@ mod tests {
                 && media_entry.contains("media: image")
                 && media_entry.contains("x: float")
                 && media_entry.contains("y: float")
-                && highlight_entry.contains("x: float")
-                && highlight_entry.contains("y: float")
-                && highlight_entry.contains("width: float")
-                && !highlight_entry.contains("slice_index")
                 && paint_entry.contains("name: string")
                 && paint_entry.contains("x: float")
                 && paint_entry.contains("text_width: float")
                 && !paint_entry.contains("is_dir")
                 && !paint_entry.contains("slice_index")
-                && fallback_media_entry.contains("x: float")
-                && fallback_media_entry.contains("y: float")
-                && !fallback_media_entry.contains("slice_index")
+                && !models.contains("export struct ItemViewHighlightEntry")
+                && !models.contains("export struct ItemViewFallbackMediaEntry")
                 && !item_view_entry.contains("tile_width: float")
                 && !item_view_entry.contains("tile_height: float")
                 && !item_view_entry.contains("media_x: float")
@@ -3508,15 +3467,16 @@ mod tests {
                 && !item_view_entry.contains("title_line_height: float")
                 && !pane_view_data.contains("bounds:")
                 && pane_view_data.contains("paint: [ItemViewPaintEntry]")
-                && pane_view_data.contains("folder_media: [ItemViewFallbackMediaEntry]")
-                && pane_view_data.contains("file_media: [ItemViewFallbackMediaEntry]")
+                && pane_view_data.contains("item_view_raster_layer: image")
+                && pane_view_data.contains("item_view_raster_width: float")
+                && pane_view_data.contains("item_view_raster_height: float")
                 && pane_view_data.contains("item_view_virtual_slice_start_x: float")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")
                 && pane_view_data.contains("item_view_text_x: float")
                 && pane_view_data.contains("item_view_title_line_height: float")
-                && pane_view_data.contains("item_view_folder_media: image")
-                && pane_view_data.contains("item_view_file_media: image")
+                && !pane_view_data.contains("item_view_folder_media: image")
+                && !pane_view_data.contains("item_view_file_media: image")
                 && !metadata_entry.contains("slice_index")
                 && metadata_entry.contains("text: string")
                 && metadata_entry.contains("item_x: float")
@@ -3537,12 +3497,9 @@ mod tests {
             "SplitPaneView should inline Dolphin-style horizontal column-first tile primitives without a FileTile or FolderGlyph component boundary, and ItemViewEntry should not carry reusable local tile coordinates"
         );
         assert!(
-            highlight_loop
-                .contains("x: root.preview-padding + highlight.x * 1px - root.paint-viewport-x * 1px;")
-                && highlight_loop.contains("y: root.preview-padding + highlight.y * 1px;")
-                && highlight_loop.contains("width: max(1px, highlight.width * 1px);")
-                && highlight_loop.contains("height: root.row-height;")
-                && !highlight_loop.contains("root.bounds[highlight.slice_index]")
+            raster_layer.contains("root.item-view-virtual-slice-start-x")
+                && raster_layer.contains("root.item-view-raster-width")
+                && raster_layer.contains("root.item-view-raster-height")
                 && drop_target_loop.contains(
                     "private property <ItemViewPaintEntry> item-paint: root.paint[root.drag-target-slice-index];"
                 )
@@ -3552,14 +3509,14 @@ mod tests {
                 && drop_target_loop.contains("y: root.preview-padding + self.item-paint.y * 1px;")
                 && drop_target_loop.contains("width: max(1px, self.item-paint.width * 1px);")
                 && drop_target_loop.contains("height: root.row-height;")
-                && !highlight_loop.contains("tile-index:")
-                && !highlight_loop.contains("tile-row:")
+                && !raster_layer.contains("tile-index:")
+                && !raster_layer.contains("tile-row:")
                 && !drop_target_loop.contains("tile-index:")
                 && !drop_target_loop.contains("tile-row:")
                 && !split_pane.contains(
                     "root.drag-active && !root.drag-rejected && root.drag-target-path == item.path"
                 ),
-            "selection and drop feedback should use sparse slice-index overlays with the same horizontal column-first coordinates"
+            "selection raster and drop feedback should use the same horizontal column-first coordinates"
         );
         assert!(
             !split_pane.contains("private property <length> tile-height:")
@@ -3569,8 +3526,8 @@ mod tests {
                 && split_pane.contains(
                     "color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;"
                 )
-                && folder_media_loop.contains("width: root.media-width;")
-                && file_media_loop.contains("height: root.media-height;")
+                && raster_layer.contains("width: max(1px, root.item-view-raster-width * 1px);")
+                && raster_layer.contains("height: max(1px, root.item-view-raster-height * 1px);")
                 && media_overlay_loop.contains("source: media.media;")
                 && base_text_loop.contains("font-size: root.title-font-size;")
                 && base_text_loop.contains("root.text-x")
@@ -3587,10 +3544,8 @@ mod tests {
                 && !split_pane.contains("doc-font-size:")
                 && !split_pane.contains("item.tile_padding_x")
                 && !split_pane.contains("item.tile_spacing")
-                && !folder_media_loop.contains("HorizontalLayout")
-                && !folder_media_loop.contains("VerticalLayout")
-                && !file_media_loop.contains("HorizontalLayout")
-                && !file_media_loop.contains("VerticalLayout")
+                && !raster_layer.contains("HorizontalLayout")
+                && !raster_layer.contains("VerticalLayout")
                 && !base_text_loop.contains("HorizontalLayout")
                 && !base_text_loop.contains("VerticalLayout")
                 && !base_text_loop.contains("self.metadata-title")
@@ -3627,8 +3582,7 @@ mod tests {
             "Ctrl+wheel zoom should still request pane focus before changing zoom"
         );
         assert!(split_pane.contains("scroll-event(event)"));
-        assert!(split_pane.contains("for fallback[index] in root.folder-media: Image"));
-        assert!(split_pane.contains("for fallback[index] in root.file-media: Image"));
+        assert!(split_pane.contains("source: root.item-view-raster-layer;"));
         assert!(split_pane.contains("for paint[index] in root.paint: Text"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")

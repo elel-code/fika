@@ -6,23 +6,12 @@ export struct ItemViewEntry {
     media_token: int,
 }
 
-export struct ItemViewHighlightEntry {
-    x: float,
-    y: float,
-    width: float,
-}
-
 export struct ItemViewPaintEntry {
     name: string,
     x: float,
     y: float,
     width: float,
     text_width: float,
-}
-
-export struct ItemViewFallbackMediaEntry {
-    x: float,
-    y: float,
 }
 
 export struct ItemViewMediaEntry {
@@ -103,9 +92,9 @@ export struct ChooserChoice {
 export struct PaneViewData {
     slot: int,
     paint: [ItemViewPaintEntry],
-    folder_media: [ItemViewFallbackMediaEntry],
-    file_media: [ItemViewFallbackMediaEntry],
-    highlights: [ItemViewHighlightEntry],
+    item_view_raster_layer: image,
+    item_view_raster_width: float,
+    item_view_raster_height: float,
     media: [ItemViewMediaEntry],
     metadata: [ItemViewMetadataEntry],
     entry_count: int,
@@ -129,8 +118,6 @@ export struct PaneViewData {
     item_view_title_y: float,
     item_view_title_line_height: float,
     item_view_title_font_size: float,
-    item_view_folder_media: image,
-    item_view_file_media: image,
     show_location: bool,
     content_interactive: bool,
     drop_ready: bool,

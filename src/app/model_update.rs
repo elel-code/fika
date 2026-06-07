@@ -1,13 +1,23 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_renderer::{ItemViewFrameEntry, ItemViewTileFrameBatch};
 use crate::app::pane::PaneView;
-use crate::{
-    ItemViewEntry, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry, ItemViewPaintEntry,
-};
+use crate::{ItemViewEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::ops::Range;
 use std::rc::Rc;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewFallbackMediaEntry {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewHighlightEntry {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewRowToken {

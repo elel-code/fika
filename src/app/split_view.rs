@@ -2,17 +2,17 @@ use crate::app::async_bridge::AsyncBridge;
 use crate::app::geometry::{ItemViewLayoutEngine, ItemViewLayouter};
 use crate::app::item_view_renderer::{
     ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
+    ItemViewTileFrameRasterInput,
 };
 use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry,
-    ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData,
-    set_status, sync_virtual_entries_for_slot,
+    AppWindow, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData,
+    PaneSurfaceData, PaneViewData, set_status, sync_virtual_entries_for_slot,
 };
-use slint::{Model, ModelRc, SharedString, VecModel};
+use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -339,18 +339,21 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
     let item_view_metrics = pane_slot_item_view_metrics(ui, slot, state);
     let item_view_render_geometry =
         pane_slot_item_view_render_geometry(ui, slot, state, item_view_metrics.cell_width);
-    let (item_view_folder_media, item_view_file_media) = state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.fallback_media_images())
-        .unwrap_or_default();
+    let (item_view_raster_layer, item_view_raster_width, item_view_raster_height) =
+        pane_slot_tile_frame_raster(
+            ui,
+            slot,
+            state,
+            item_view_metrics,
+            item_view_render_geometry,
+        );
 
     PaneViewData {
         slot,
         paint: pane_slot_paint(slot, state),
-        folder_media: pane_slot_folder_media(slot, state),
-        file_media: pane_slot_file_media(slot, state),
-        highlights: pane_slot_highlights(slot, state),
+        item_view_raster_layer,
+        item_view_raster_width,
+        item_view_raster_height,
         media: pane_slot_media(slot, state),
         metadata: pane_slot_metadata(slot, state),
         entry_count: item_view_metrics.entry_count,
@@ -374,8 +377,6 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         item_view_title_y: item_view_render_geometry.title_y,
         item_view_title_line_height: item_view_render_geometry.title_line_height,
         item_view_title_font_size: item_view_render_geometry.title_font_size,
-        item_view_folder_media,
-        item_view_file_media,
         show_location: pane_slot_show_location(state, slot),
         content_interactive: if is_focused {
             !ui.get_directory_loading()
@@ -416,6 +417,48 @@ fn pane_slot_item_view_render_geometry(
         ),
         show_location,
     })
+}
+
+fn pane_slot_tile_frame_raster(
+    ui: &AppWindow,
+    slot: i32,
+    state: &AppState,
+    metrics: ItemViewSlotMetrics,
+    render_geometry: ItemViewRenderGeometry,
+) -> (Image, f32, f32) {
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return (Image::default(), 1.0, 1.0);
+    };
+    if pane.view.virtual_entry_tokens.is_empty()
+        || pane.view.virtual_bounds_entries.row_count() == 0
+    {
+        return (Image::default(), 1.0, 1.0);
+    }
+
+    let raster_width = raster_dimension_px(metrics.virtual_slice_width);
+    let raster_height =
+        raster_dimension_px(metrics.rows_per_column.max(1) as f32 * metrics.row_height);
+    let raster = pane
+        .view
+        .tile_frame_raster_layer(ItemViewTileFrameRasterInput {
+            width: raster_width,
+            height: raster_height,
+            content_origin_x: metrics.virtual_slice_start_x,
+            dark: ui.get_dark_mode(),
+            tile_height: metrics.row_height,
+            media_x: render_geometry.media_x,
+            media_y: render_geometry.media_y,
+            media_width: render_geometry.media_width,
+            media_height: render_geometry.media_height,
+        });
+    (raster.image, raster.width as f32, raster.height as f32)
+}
+
+fn raster_dimension_px(value: f32) -> u32 {
+    if !value.is_finite() || value <= 0.0 {
+        return 1;
+    }
+    value.ceil().min(u32::MAX as f32) as u32
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -515,30 +558,6 @@ fn pane_slot_paint(slot: i32, state: &AppState) -> ModelRc<ItemViewPaintEntry> {
         .panes
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_paint_entries.clone())
-        .unwrap_or_default()
-}
-
-fn pane_slot_folder_media(slot: i32, state: &AppState) -> ModelRc<ItemViewFallbackMediaEntry> {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_folder_media_entries.clone())
-        .unwrap_or_default()
-}
-
-fn pane_slot_file_media(slot: i32, state: &AppState) -> ModelRc<ItemViewFallbackMediaEntry> {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_file_media_entries.clone())
-        .unwrap_or_default()
-}
-
-fn pane_slot_highlights(slot: i32, state: &AppState) -> ModelRc<ItemViewHighlightEntry> {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_highlight_entries.clone())
         .unwrap_or_default()
 }
 
@@ -906,9 +925,9 @@ mod tests {
                         .collect::<Vec<_>>(),
                 )))
             },
-            folder_media: ModelRc::default(),
-            file_media: ModelRc::default(),
-            highlights: ModelRc::default(),
+            item_view_raster_layer: Image::default(),
+            item_view_raster_width: 1.0,
+            item_view_raster_height: 1.0,
             media: ModelRc::default(),
             metadata: ModelRc::default(),
             entry_count,
@@ -932,8 +951,6 @@ mod tests {
             item_view_title_y: 10.0,
             item_view_title_line_height: 18.0,
             item_view_title_font_size: 14.0,
-            item_view_folder_media: Image::default(),
-            item_view_file_media: Image::default(),
             show_location: false,
             content_interactive: true,
             drop_ready: true,
@@ -957,11 +974,7 @@ mod tests {
         assert!(!pane_view_requires_surface_rebind(&nonempty, &scrolled));
 
         let mut selected = nonempty.clone();
-        selected.highlights = ModelRc::new(Rc::new(VecModel::from(vec![ItemViewHighlightEntry {
-            x: 0.0,
-            y: 0.0,
-            width: 80.0,
-        }])));
+        selected.item_view_raster_width = 241.0;
         assert!(!pane_view_requires_surface_rebind(&nonempty, &selected));
     }
 }

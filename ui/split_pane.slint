@@ -1,12 +1,12 @@
-import { ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
+import { ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
     in property <[ItemViewPaintEntry]> paint;
-    in property <[ItemViewFallbackMediaEntry]> folder-media;
-    in property <[ItemViewFallbackMediaEntry]> file-media;
-    in property <[ItemViewHighlightEntry]> highlights;
+    in property <image> item-view-raster-layer;
+    in property <float> item-view-raster-width: 1;
+    in property <float> item-view-raster-height: 1;
     in property <[ItemViewMediaEntry]> media;
     in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
@@ -29,8 +29,6 @@ export component SplitPaneView inherits Rectangle {
     in property <float> item-view-title-y: 0;
     in property <float> item-view-title-line-height: 1;
     in property <float> item-view-title-font-size: 15;
-    in property <image> item-view-folder-media;
-    in property <image> item-view-file-media;
     in property <bool> interactive: true;
     in property <bool> empty-message-visible: true;
     in property <string> empty-title: "This folder is empty";
@@ -392,15 +390,12 @@ export component SplitPaneView inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
 
-                for highlight[index] in root.highlights: Rectangle {
-                    x: root.preview-padding + highlight.x * 1px - root.paint-viewport-x * 1px;
-                    y: root.preview-padding + highlight.y * 1px;
-                    width: max(1px, highlight.width * 1px);
-                    height: root.row-height;
-                    border-radius: 7px;
-                    border-width: 1px;
-                    border-color: root.selection-border-color;
-                    background: root.selected-background-color;
+                Image {
+                    x: root.preview-padding + root.item-view-virtual-slice-start-x * 1px - root.paint-viewport-x * 1px;
+                    y: root.preview-padding;
+                    width: max(1px, root.item-view-raster-width * 1px);
+                    height: max(1px, root.item-view-raster-height * 1px);
+                    source: root.item-view-raster-layer;
                 }
 
                 if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle {
@@ -414,24 +409,6 @@ export component SplitPaneView inherits Rectangle {
                     border-width: 1px;
                     border-color: root.drop-border-color;
                     background: root.drop-background-color;
-                }
-
-                for fallback[index] in root.folder-media: Image {
-                    x: root.preview-padding + fallback.x * 1px - root.paint-viewport-x * 1px + root.media-x;
-                    y: root.preview-padding + fallback.y * 1px + root.media-y;
-                    width: root.media-width;
-                    height: root.media-height;
-                    source: root.item-view-folder-media;
-                    image-fit: contain;
-                }
-
-                for fallback[index] in root.file-media: Image {
-                    x: root.preview-padding + fallback.x * 1px - root.paint-viewport-x * 1px + root.media-x;
-                    y: root.preview-padding + fallback.y * 1px + root.media-y;
-                    width: root.media-width;
-                    height: root.media-height;
-                    source: root.item-view-file-media;
-                    image-fit: contain;
                 }
 
                 for media[index] in root.media: Image {

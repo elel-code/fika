@@ -1557,7 +1557,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = Rc::clone(&state);
         ui.on_dark_mode_changed(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                refresh_visible_pane_fallback_media(&ui, &state);
+                refresh_visible_pane_tile_frame_rasters(&ui, &state);
             }
         });
     }
@@ -4153,7 +4153,7 @@ fn apply_virtual_view_result(
         &metadata_sources,
     );
     let (selected_paths, media_entries) = {
-        let mut state_ref = state.borrow_mut();
+        let state_ref = state.borrow();
         let selected_paths = state_ref
             .panes
             .pane_by_id(result.pane_id)
@@ -4165,10 +4165,9 @@ fn apply_virtual_view_result(
             &mut entries,
             result.thumbnail_size_px,
         );
-        let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
+        if state_ref.panes.pane_by_id(result.pane_id).is_none() {
             return;
-        };
-        prewarm_pane_fallback_media(pane, ui.get_dark_mode());
+        }
         (selected_paths, media_entries)
     };
 
@@ -4811,33 +4810,17 @@ fn current_pane_visible_range(pane: &PaneState) -> Range<usize> {
         .unwrap_or(0..0)
 }
 
-fn refresh_visible_pane_fallback_media(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+fn refresh_visible_pane_tile_frame_rasters(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let slots = ui.get_pane_slots();
     if slots.row_count() == 0 {
-        refresh_pane_fallback_media_for_slot(ui, state, 0);
+        sync_pane_view_ui(ui, state, 0);
         return;
     }
 
     for row in 0..slots.row_count() {
         if let Some(pane) = slots.row_data(row) {
-            refresh_pane_fallback_media_for_slot(ui, state, pane.slot);
+            sync_pane_view_ui(ui, state, pane.slot);
         }
-    }
-}
-
-fn refresh_pane_fallback_media_for_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
-    let dark = ui.get_dark_mode();
-    let refreshed = {
-        let mut state_ref = state.borrow_mut();
-        let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
-            return;
-        };
-        prewarm_pane_fallback_media(pane, dark);
-        true
-    };
-
-    if refreshed {
-        sync_pane_view_ui(ui, state, slot);
     }
 }
 
@@ -4921,7 +4904,6 @@ fn try_relayout_cached_pane_icon_zoom_layout(
     slot: i32,
 ) -> bool {
     let size_px = thumbnail_size_px(ui);
-    let dark = ui.get_dark_mode();
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
     let main_width = (window_size.width - ui.get_sidebar_width_px()).max(1.0);
     let viewport_width = pane_slot_width(ui, main_width, slot);
@@ -4989,8 +4971,6 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         ) {
             return false;
         }
-        prewarm_pane_fallback_media(pane, dark);
-
         pane.view.cancel_virtual_prepare_queue();
         pane.view.virtual_generation.next();
         pane.view.viewport_x = plan.viewport_x;
@@ -5016,10 +4996,6 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         sync_pane_view_ui(ui, state, slot);
     }
     applied
-}
-
-fn prewarm_pane_fallback_media(pane: &mut PaneState, dark: bool) {
-    pane.view.prewarm_fallback_media_cache(dark);
 }
 
 fn sync_pane_viewport_for_slot(
@@ -6833,7 +6809,10 @@ mod tests {
             !pane_view_data.contains("entries: [ItemViewEntry]")
                 && !pane_view_data.contains("bounds:")
                 && pane_view_data.contains("paint: [ItemViewPaintEntry]")
-                && pane_view_data.contains("highlights: [ItemViewHighlightEntry]")
+                && pane_view_data.contains("item_view_raster_layer: image")
+                && pane_view_data.contains("item_view_raster_width: float")
+                && pane_view_data.contains("item_view_raster_height: float")
+                && !pane_view_data.contains("highlights:")
                 && pane_view_data.contains("media: [ItemViewMediaEntry]")
                 && pane_view_data.contains("metadata: [ItemViewMetadataEntry]")
                 && !app.contains("ItemViewBounds")
@@ -6852,16 +6831,23 @@ mod tests {
                 && !surface_body.contains("entries: root.view.entries;")
                 && !surface_body.contains("bounds: root.view.bounds;")
                 && surface_body.contains("paint: root.view.paint;")
-                && surface_body.contains("highlights: root.view.highlights;")
+                && surface_body
+                    .contains("item-view-raster-layer: root.view.item_view_raster_layer;")
+                && surface_body
+                    .contains("item-view-raster-width: root.view.item_view_raster_width;")
+                && surface_body
+                    .contains("item-view-raster-height: root.view.item_view_raster_height;")
+                && !surface_body.contains("highlights: root.view.highlights;")
                 && surface_body.contains("media: root.view.media;")
                 && surface_body.contains("metadata: root.view.metadata;")
                 && !view_data_body.contains("entries: pane_slot_entries(slot, state)")
                 && !view_data_body.contains("bounds: pane_slot_bounds(slot, state)")
                 && view_data_body.contains("paint: pane_slot_paint(slot, state)")
-                && view_data_body.contains("highlights: pane_slot_highlights(slot, state)")
+                && view_data_body.contains("item_view_raster_layer")
+                && !view_data_body.contains("pane_slot_highlights(slot, state)")
                 && view_data_body.contains("media: pane_slot_media(slot, state)")
                 && view_data_body.contains("metadata: pane_slot_metadata(slot, state)"),
-            "visible paint, selection, thumbnail media, and metadata models should be pane-local data on PaneViewData instead of fixed slot sidecars, while business entries and bounds stay Rust-side"
+            "visible paint, tile raster, thumbnail media, and metadata should be pane-local data on PaneViewData instead of fixed slot sidecars, while business entries and bounds stay Rust-side"
         );
     }
 
@@ -7235,7 +7221,7 @@ mod tests {
                 && !fast_path_body.contains("let preferred_range = icon_zoom_range_hint(")
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
-                && fast_path_body.contains("prewarm_pane_fallback_media(pane, dark);")
+                && !fast_path_body.contains("prewarm_pane_fallback_media")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
                 && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);"),
             "icon zoom should reuse the current virtual slice synchronously when it covers the new Dolphin-style visible range, and move cache-miss snapshot rebuilds off the input event"
@@ -7266,7 +7252,7 @@ mod tests {
     }
 
     #[test]
-    fn dark_mode_toggle_refreshes_pane_level_fallback_media() {
+    fn dark_mode_toggle_refreshes_tile_frame_rasters() {
         let source = include_str!("main.rs");
         let app = include_str!("../ui/app.slint");
         let dark_toggle_body = app
@@ -7280,33 +7266,26 @@ mod tests {
             .map(|(body, _)| body)
             .expect("dark mode changed handler should be present");
         let refresh_body = source
-            .split_once("fn refresh_pane_fallback_media_for_slot(")
+            .split_once("fn refresh_visible_pane_tile_frame_rasters(")
             .and_then(|(_, rest)| rest.split_once("fn selection_status_text("))
             .map(|(body, _)| body)
-            .expect("fallback media refresh body should be present");
-        let prewarm_body = source
-            .split_once("fn prewarm_pane_fallback_media(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
-            .map(|(body, _)| body)
-            .expect("fallback media prewarm body should be present");
+            .expect("tile frame raster refresh body should be present");
 
         assert!(
             app.contains("callback dark_mode_changed();")
                 && dark_toggle_body.contains("root.dark_mode = !root.dark_mode;")
                 && dark_toggle_body.contains("root.dark_mode_changed();")
                 && dark_toggle_body.contains("root.persist_ui_state();"),
-            "theme toggles should notify Rust before saving settings so pane-level fallback icons can match the new theme"
+            "theme toggles should notify Rust before saving settings so tile frame rasters can match the new theme"
         );
         assert!(
-            dark_handler_body.contains("refresh_visible_pane_fallback_media(&ui, &state);")
-                && refresh_body.contains("prewarm_pane_fallback_media(pane, dark);")
-                && prewarm_body.contains("prewarm_fallback_media_cache(dark)")
-                && !prewarm_body.contains("MIN_ICON_ZOOM_LEVEL..=MAX_ICON_ZOOM_LEVEL")
-                && !prewarm_body.contains("ui.get_icon_zoom_level()")
-                && refresh_body.contains("sync_pane_view_ui(ui, state, slot);")
+            dark_handler_body.contains("refresh_visible_pane_tile_frame_rasters(&ui, &state);")
+                && refresh_body.contains("sync_pane_view_ui(ui, state, 0);")
+                && refresh_body.contains("sync_pane_view_ui(ui, state, pane.slot);")
                 && !refresh_body.contains("sync_pane_layout_for_slot")
-                && !refresh_body.contains("sync_virtual_entries_for_slot"),
-            "dark-mode fallback refresh should rebuild pane-level fallback images without rebuilding the directory snapshot"
+                && !refresh_body.contains("sync_virtual_entries_for_slot")
+                && !source.contains("prewarm_pane_fallback_media"),
+            "dark-mode raster refresh should regenerate visible tile frame images without rebuilding the directory snapshot"
         );
     }
 

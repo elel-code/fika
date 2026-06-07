@@ -1,18 +1,24 @@
 use crate::app::geometry::{ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter};
 use crate::app::item_view::ItemViewInputState;
-use crate::app::item_view_renderer::{ItemViewMediaCache, ItemViewRenderMetrics};
+use crate::app::item_view_renderer::{
+    ItemViewRenderMetrics, ItemViewTileFrameBatch, ItemViewTileFrameRaster,
+    ItemViewTileFrameRasterInput,
+};
 #[cfg(test)]
 use crate::app::model_update::ItemViewMediaSource;
-use crate::app::model_update::{ItemViewMediaToken, ItemViewRowToken};
+use crate::app::model_update::{
+    ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaToken, ItemViewRowToken,
+};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use crate::{
-    FileEntry, ItemViewEntry, ItemViewFallbackMediaEntry, ItemViewHighlightEntry,
-    ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry,
+    FileEntry, ItemViewEntry, ItemViewMediaEntry, ItemViewMetadataEntry, ItemViewPaintEntry,
 };
-use slint::{Image, Model, ModelRc, VecModel};
+#[cfg(test)]
+use slint::Image;
+use slint::{Model, ModelRc, VecModel};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -92,8 +98,6 @@ impl PaneState {
         pane.view.virtual_media_tokens = self.view.virtual_media_tokens.clone();
         pane.view.virtual_metadata_entries =
             clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
-        pane.view.fallback_media_caches = self.view.fallback_media_caches.clone();
-        pane.view.active_fallback_media_cache = self.view.active_fallback_media_cache.clone();
         pane.view.virtual_start_index = self.view.virtual_start_index;
         pane
     }
@@ -586,8 +590,6 @@ pub(crate) struct PaneView {
     pub(crate) virtual_media_entries: ModelRc<ItemViewMediaEntry>,
     pub(crate) virtual_media_tokens: Vec<ItemViewMediaToken>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
-    fallback_media_caches: Vec<Rc<ItemViewMediaCache>>,
-    active_fallback_media_cache: Option<Rc<ItemViewMediaCache>>,
     pub(crate) virtual_start_index: usize,
     virtual_refresh_state: VirtualViewRefreshState,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
@@ -680,36 +682,19 @@ impl PaneView {
         self.virtual_refresh_state.cancel();
     }
 
-    fn fallback_media_cache_for_theme(&self, dark: bool) -> Option<Rc<ItemViewMediaCache>> {
-        self.active_fallback_media_cache
-            .as_ref()
-            .filter(|cache| cache.dark() == dark)
-            .cloned()
-            .or_else(|| {
-                self.fallback_media_caches
-                    .iter()
-                    .find(|cache| cache.dark() == dark)
-                    .cloned()
-            })
+    pub(crate) fn tile_frame_raster_layer(
+        &self,
+        input: ItemViewTileFrameRasterInput,
+    ) -> ItemViewTileFrameRaster {
+        let bounds_entries = self.current_virtual_bounds_entries();
+        ItemViewTileFrameBatch::from_bounded_entries(&self.virtual_entry_tokens, &bounds_entries)
+            .render_raster_layer(input)
     }
 
-    pub(crate) fn prewarm_fallback_media_cache(&mut self, dark: bool) -> Rc<ItemViewMediaCache> {
-        if let Some(cache) = self.fallback_media_cache_for_theme(dark) {
-            self.active_fallback_media_cache = Some(cache.clone());
-            return cache;
-        }
-
-        let cache = Rc::new(ItemViewMediaCache::new(dark));
-        self.fallback_media_caches.push(cache.clone());
-        self.active_fallback_media_cache = Some(cache.clone());
-        cache
-    }
-
-    pub(crate) fn fallback_media_images(&self) -> (Image, Image) {
-        self.active_fallback_media_cache
-            .as_ref()
-            .map(|cache| (cache.folder_image(), cache.file_image()))
-            .unwrap_or_else(|| (Image::default(), Image::default()))
+    fn current_virtual_bounds_entries(&self) -> Vec<ItemViewItemBounds> {
+        (0..self.virtual_bounds_entries.row_count())
+            .filter_map(|row| self.virtual_bounds_entries.row_data(row))
+            .collect()
     }
 
     pub(crate) fn has_renderable_virtual_entries(&self) -> bool {
@@ -1377,7 +1362,6 @@ mod tests {
         panes.focused_mut().view.viewport_x = 128.0;
         panes.focused_mut().view.virtual_view = cache_for_layout(4..12, 24, 80);
         panes.focused_mut().view.virtual_start_index = 4;
-        let warmed_fallback = panes.focused_mut().view.prewarm_fallback_media_cache(false);
         let virtual_entries = panes
             .focused()
             .entries
@@ -1396,16 +1380,6 @@ mod tests {
 
         assert!(panes.open_peer_from_focused());
         assert!(panes.open_peer_from_focused());
-
-        let inactive_fallback = panes
-            .pane_mut_for_slot(1)
-            .expect("inactive pane")
-            .view
-            .prewarm_fallback_media_cache(false);
-        assert!(
-            Rc::ptr_eq(&warmed_fallback, &inactive_fallback),
-            "split panes should inherit warmed pane-level fallback media caches"
-        );
 
         let inactive = panes.pane_for_slot(1).expect("inactive pane");
         assert_ne!(inactive.id, active_id);
@@ -1571,29 +1545,6 @@ mod tests {
         assert_eq!(pane.view.virtual_paint_entries.row_count(), 0);
         assert_eq!(pane.view.virtual_media_entries.row_count(), 0);
         assert!(pane.view.virtual_media_tokens.is_empty());
-    }
-
-    #[test]
-    fn pane_view_reuses_fallback_media_cache_across_zoom_until_theme_changes() {
-        let mut view = PaneView::default();
-        let mid = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1);
-        let zoomed = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
-        assert_ne!(mid.media_width, zoomed.media_width);
-
-        let first = view.prewarm_fallback_media_cache(false);
-        let same_zoom = view.prewarm_fallback_media_cache(false);
-        assert!(Rc::ptr_eq(&first, &same_zoom));
-
-        let dark = view.prewarm_fallback_media_cache(true);
-        assert!(!Rc::ptr_eq(&first, &dark));
-        let dark_again = view.prewarm_fallback_media_cache(true);
-        assert!(Rc::ptr_eq(&dark, &dark_again));
-
-        let first_again = view.prewarm_fallback_media_cache(false);
-        assert!(
-            Rc::ptr_eq(&first, &first_again),
-            "fallback media caches should keep theme images warm while zoom changes only target geometry"
-        );
     }
 
     #[test]

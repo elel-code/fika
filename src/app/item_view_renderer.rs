@@ -74,11 +74,11 @@ pub(crate) struct ItemViewTileFrameBatch {
     plans: Vec<ItemViewTileFramePlan>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewTileFrameRasterInput {
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) content_origin_x: f32,
     pub(crate) dark: bool,
     pub(crate) tile_height: f32,
     pub(crate) media_x: f32,
@@ -87,7 +87,6 @@ pub(crate) struct ItemViewTileFrameRasterInput {
     pub(crate) media_height: f32,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct ItemViewTileFrameRaster {
     pub(crate) image: Image,
@@ -306,7 +305,6 @@ impl ItemViewTileFrameBatch {
             .map_or(0, |source| source.media_token)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn render_raster_layer(
         &self,
         input: ItemViewTileFrameRasterInput,
@@ -332,7 +330,7 @@ impl ItemViewTileFrameBatch {
             if let Some(highlight) = plan.highlight {
                 draw_tile_highlight(
                     &mut buffer,
-                    highlight.x,
+                    highlight.x - input.content_origin_x,
                     highlight.y,
                     highlight.width,
                     input.tile_height,
@@ -343,7 +341,7 @@ impl ItemViewTileFrameBatch {
                 &mut buffer,
                 plan.fallback_media.is_dir,
                 input.dark,
-                plan.fallback_media.x + input.media_x,
+                plan.fallback_media.x - input.content_origin_x + input.media_x,
                 plan.fallback_media.y + input.media_y,
                 input.media_width,
                 input.media_height,
@@ -401,56 +399,6 @@ impl ItemViewRenderGeometry {
             title_line_height: text_plan.title_line_height,
             title_font_size: render_metrics.title_font_size,
         }
-    }
-}
-
-const FALLBACK_MEDIA_SOURCE_SIZE_PX: u32 = 72;
-
-#[derive(Clone)]
-pub(crate) struct ItemViewMediaCache {
-    dark: bool,
-    folder: Image,
-    file: Image,
-}
-
-impl ItemViewMediaCache {
-    pub(crate) fn new(dark: bool) -> Self {
-        Self {
-            dark,
-            folder: fallback_media_image(
-                true,
-                dark,
-                FALLBACK_MEDIA_SOURCE_SIZE_PX,
-                FALLBACK_MEDIA_SOURCE_SIZE_PX,
-            ),
-            file: fallback_media_image(
-                false,
-                dark,
-                FALLBACK_MEDIA_SOURCE_SIZE_PX,
-                FALLBACK_MEDIA_SOURCE_SIZE_PX,
-            ),
-        }
-    }
-
-    pub(crate) fn dark(&self) -> bool {
-        self.dark
-    }
-
-    pub(crate) fn folder_image(&self) -> Image {
-        self.folder.clone()
-    }
-
-    pub(crate) fn file_image(&self) -> Image {
-        self.file.clone()
-    }
-}
-
-impl std::fmt::Debug for ItemViewMediaCache {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ItemViewMediaCache")
-            .field("dark", &self.dark)
-            .field("source_size_px", &FALLBACK_MEDIA_SOURCE_SIZE_PX)
-            .finish()
     }
 }
 
@@ -611,19 +559,6 @@ impl GlyphColor {
     }
 }
 
-fn fallback_media_image(is_dir: bool, dark: bool, width: u32, height: u32) -> Image {
-    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
-    buffer
-        .make_mut_slice()
-        .fill(GlyphColor::rgba(0, 0, 0, 0).pixel());
-    if is_dir {
-        draw_folder_glyph(&mut buffer, dark);
-    } else {
-        draw_file_glyph(&mut buffer, dark);
-    }
-    Image::from_rgba8(buffer)
-}
-
 fn draw_tile_highlight(
     buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
     x: f32,
@@ -734,28 +669,6 @@ fn draw_relative_rect(
         width * origin_width,
         height * origin_height,
         color,
-    );
-}
-
-fn draw_folder_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
-    draw_folder_glyph_at(
-        buffer,
-        dark,
-        0.0,
-        0.0,
-        buffer.width() as f32,
-        buffer.height() as f32,
-    );
-}
-
-fn draw_file_glyph(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
-    draw_file_glyph_at(
-        buffer,
-        dark,
-        0.0,
-        0.0,
-        buffer.width() as f32,
-        buffer.height() as f32,
     );
 }
 
@@ -951,6 +864,7 @@ mod tests {
         let buffer = batch.render_raster_buffer(ItemViewTileFrameRasterInput {
             width: 64,
             height: 64,
+            content_origin_x: 0.0,
             dark: false,
             tile_height: 20.0,
             media_x: 2.0,
@@ -979,7 +893,7 @@ mod tests {
         let large = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
 
         assert_ne!(small.media_width, large.media_width);
-        assert_eq!(FALLBACK_MEDIA_SOURCE_SIZE_PX as f32, large.media_width);
+        assert_eq!(large.media_width, 72.0);
     }
 
     #[test]
@@ -1109,31 +1023,6 @@ mod tests {
         assert_eq!(geometry.title_y, 0.0);
         assert_eq!(geometry.title_line_height, 76.0);
         assert!(entries.iter().all(|entry| !entry.name.is_empty()));
-    }
-
-    #[test]
-    fn fallback_media_renderer_supplies_pane_level_icons() {
-        let cache = ItemViewMediaCache::new(false);
-
-        let folder_media = cache
-            .folder_image()
-            .to_rgba8()
-            .expect("folder fallback media");
-        assert_eq!(folder_media.width(), FALLBACK_MEDIA_SOURCE_SIZE_PX);
-        assert_eq!(folder_media.height(), FALLBACK_MEDIA_SOURCE_SIZE_PX);
-        assert!(
-            folder_media
-                .as_slice()
-                .iter()
-                .any(|pixel| pixel.a != 0 && (pixel.r != 0 || pixel.g != 0 || pixel.b != 0))
-        );
-        let file_media = cache.file_image().to_rgba8().expect("file fallback media");
-        assert!(
-            file_media
-                .as_slice()
-                .iter()
-                .any(|pixel| pixel.a != 0 && (pixel.r != 0 || pixel.g != 0 || pixel.b != 0))
-        );
     }
 
     fn pixel_at(buffer: &SharedPixelBuffer<Rgba8Pixel>, x: usize, y: usize) -> Rgba8Pixel {
