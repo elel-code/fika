@@ -61,7 +61,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         || should_rebuild_virtual_cache(
             &input.cache,
             &plan,
-            item_view_layout.as_ref(),
+            &item_view_layout,
             input.thumbnail_size_px,
         );
 
@@ -132,10 +132,10 @@ fn same_snapshot_layout_metric(left: f32, right: f32) -> bool {
 fn should_rebuild_virtual_cache(
     cache: &VirtualViewCache,
     plan: &VirtualItemViewPlan,
-    layout: &ItemViewLayoutEngine,
+    layout: &Arc<ItemViewLayoutEngine>,
     thumbnail_size_px: u32,
 ) -> bool {
-    !cache.matches_layout(layout, thumbnail_size_px)
+    !cache.matches_layout_arc(layout, thumbnail_size_px)
         || !cached_range_covers_visible_range(cache, &plan.visible_range)
 }
 

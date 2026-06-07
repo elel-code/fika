@@ -912,15 +912,18 @@ impl VirtualViewCache {
         self.thumbnail_size_px = 0;
     }
 
-    pub(crate) fn matches_layout(
+    pub(crate) fn matches_layout_arc(
         &self,
-        layout: &ItemViewLayoutEngine,
+        layout: &Arc<ItemViewLayoutEngine>,
         thumbnail_size_px: u32,
     ) -> bool {
-        self.layout
-            .as_ref()
-            .is_some_and(|current| current.matches_layout_signature(layout))
-            && self.thumbnail_size_px == thumbnail_size_px
+        if self.thumbnail_size_px != thumbnail_size_px {
+            return false;
+        }
+
+        self.layout.as_ref().is_some_and(|current| {
+            Arc::ptr_eq(current, layout) || current.matches_layout_signature(layout.as_ref())
+        })
     }
 
     pub(crate) fn update_layout_signature(
@@ -1002,7 +1005,9 @@ impl PaneHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::geometry::{MainItemViewLayout, compact_item_view_layout};
+    use crate::app::geometry::{
+        ItemViewLayoutEngine, MainItemViewLayout, compact_item_view_layout,
+    };
     use crate::app::model_update::update_pane_item_view_entries_model;
     use slint::Model;
 
@@ -1090,6 +1095,41 @@ mod tests {
             thumbnail_size_px,
         );
         cache
+    }
+
+    #[test]
+    fn virtual_view_cache_matches_shared_layout_by_arc_identity() {
+        let layout = Arc::new(ItemViewLayoutEngine::from(compact_item_view_layout(
+            250.0,
+            ["alpha", "beta", "gamma", "delta"],
+            4,
+            100.0,
+            90.0,
+            10.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        )));
+        let mut cache = VirtualViewCache {
+            range: 0..4,
+            ..VirtualViewCache::default()
+        };
+        cache.update_layout_signature_arc(Arc::clone(&layout), 64);
+
+        assert!(cache.matches_layout_arc(&layout, 64));
+        assert!(!cache.matches_layout_arc(&layout, 128));
+
+        let same_signature = Arc::new(layout.as_ref().clone());
+        assert!(cache.matches_layout_arc(&same_signature, 64));
+
+        let source = include_str!("pane.rs");
+        let body = source
+            .split_once("pub(crate) fn matches_layout_arc(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn update_layout_signature("))
+            .map(|(body, _)| body)
+            .expect("matches_layout_arc body should be present");
+        assert!(body.contains("Arc::ptr_eq(current, layout)"));
     }
 
     fn test_raster_signature(
