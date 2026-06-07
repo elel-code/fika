@@ -1298,6 +1298,16 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let state = Rc::clone(&state);
+        ui.on_pane_drop_target_changed(move |slot, slice_index| {
+            if let Some(ui) = ui_weak.upgrade() {
+                set_pane_drop_target_slice_index_ui(&ui, &state, slot, slice_index);
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        let state = Rc::clone(&state);
         ui.on_pane_drop_allowed(move |slot, x, y, source| {
             let Some(ui) = ui_weak.upgrade() else {
                 return false;
@@ -1815,6 +1825,15 @@ fn register_pane_routing_callbacks(
             ui_weak.upgrade().map_or(-1, |ui| {
                 ui.invoke_route_pane_drop_target_slice_index(slot, x, y, source)
             })
+        });
+    }
+
+    {
+        let ui_weak = ui.as_weak();
+        routing.on_drop_target_changed(move |slot, slice_index| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_route_pane_drop_target_changed(slot, slice_index);
+            }
         });
     }
 
@@ -5110,6 +5129,24 @@ fn pane_drop_target_slice_index_for_slot(
         return -1;
     }
     slice_index as i32
+}
+
+fn set_pane_drop_target_slice_index_ui(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    slice_index: i32,
+) {
+    let changed = {
+        let mut state = state.borrow_mut();
+        state
+            .panes
+            .pane_mut_for_slot(slot)
+            .is_some_and(|pane| pane.view.set_drop_target_slice_index(slice_index))
+    };
+    if changed {
+        sync_pane_view_ui(ui, state, slot);
+    }
 }
 
 fn pane_drop_allowed_for_slot(

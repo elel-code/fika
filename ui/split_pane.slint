@@ -33,9 +33,6 @@ export component SplitPaneView inherits Rectangle {
     in property <string> empty-title: "This folder is empty";
     in property <string> empty-subtitle: "";
     in property <bool> show-location: false;
-    in property <bool> drag-active: false;
-    in property <bool> drag-rejected: false;
-    in property <int> drag-target-slice-index: -1;
     callback view_changed();
     callback focus_requested();
     callback item_pressed(float, float, bool, bool) -> bool;
@@ -67,8 +64,6 @@ export component SplitPaneView inherits Rectangle {
     private property <length> title-line-height: max(1, root.item-view-title-line-height) * 1px;
     private property <length> title-font-size: max(1, root.item-view-title-font-size) * 1px;
     private property <color> selection-border-color: root.dark ? #51a9d4 : #2b86b7;
-    private property <color> drop-border-color: root.dark ? #f59e0b : #d97706;
-    private property <color> drop-background-color: root.dark ? #3a2a12 : #fff7dd;
     private property <color> selected-background-color: root.dark ? #223f4f : #e4f0f8;
     private property <color> metadata-group-color: root.dark ? #9bc7ec : #2b6f9f;
     private property <color> metadata-location-color: root.dark ? #9aa5af : #697684;
@@ -395,19 +390,6 @@ export component SplitPaneView inherits Rectangle {
                     width: max(1px, root.item-view-raster-width * 1px);
                     height: max(1px, root.item-view-raster-height * 1px);
                     source: root.item-view-raster-layer;
-                }
-
-                if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle {
-                    private property <ItemViewPaintEntry> item-paint: root.paint[root.drag-target-slice-index];
-
-                    x: root.preview-padding + self.item-paint.x * 1px - root.paint-viewport-x * 1px;
-                    y: root.preview-padding + self.item-paint.y * 1px;
-                    width: max(1px, self.item-paint.width * 1px);
-                    height: root.row-height;
-                    border-radius: 7px;
-                    border-width: 1px;
-                    border-color: root.drop-border-color;
-                    background: root.drop-background-color;
                 }
 
                 for paint[index] in root.paint: Text {

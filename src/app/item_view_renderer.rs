@@ -79,6 +79,7 @@ pub(crate) struct ItemViewTileFrameRasterInput {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) content_origin_x: f32,
+    pub(crate) drop_target_slice_index: i32,
     pub(crate) dark: bool,
     pub(crate) tile_height: f32,
     pub(crate) media_x: f32,
@@ -359,6 +360,23 @@ impl ItemViewTileFrameBatch {
                 input.media_height,
             );
         }
+        if input.drop_target_slice_index >= 0 {
+            let drop_target_slice_index = input.drop_target_slice_index as usize;
+            if let Some(plan) = self
+                .plans
+                .iter()
+                .find(|plan| plan.slice_index == drop_target_slice_index)
+            {
+                draw_drop_target(
+                    &mut buffer,
+                    plan.text.x - input.content_origin_x,
+                    plan.text.y,
+                    plan.text.width,
+                    input.tile_height,
+                    input.dark,
+                );
+            }
+        }
 
         buffer
     }
@@ -587,6 +605,27 @@ fn draw_tile_highlight(
     draw_absolute_rect(buffer, x, y, width, height, background);
 }
 
+fn draw_drop_target(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    dark: bool,
+) {
+    let background = if dark {
+        GlyphColor::rgba(58, 42, 18, 255)
+    } else {
+        GlyphColor::rgba(255, 247, 221, 255)
+    };
+    let border = if dark {
+        GlyphColor::rgba(245, 158, 11, 255)
+    } else {
+        GlyphColor::rgba(217, 119, 6, 255)
+    };
+    draw_rounded_rect(buffer, x, y, width, height, 7.0, background, border, 1.0);
+}
+
 fn draw_fallback_media_glyph_at(
     buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
     is_dir: bool,
@@ -682,6 +721,101 @@ fn draw_relative_rect(
         height * origin_height,
         color,
     );
+}
+
+fn draw_rounded_rect(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    background: GlyphColor,
+    border: GlyphColor,
+    border_width: f32,
+) {
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    let left = x.floor().max(0.0) as u32;
+    let top = y.floor().max(0.0) as u32;
+    let right = (x + width).ceil().min(buffer.width() as f32) as u32;
+    let bottom = (y + height).ceil().min(buffer.height() as f32) as u32;
+    if left >= right || top >= bottom {
+        return;
+    }
+
+    let radius = radius.max(0.0).min(width / 2.0).min(height / 2.0);
+    let inner_radius = (radius - border_width).max(0.0);
+    let inner_left = x + border_width;
+    let inner_top = y + border_width;
+    let inner_width = (width - border_width * 2.0).max(0.0);
+    let inner_height = (height - border_width * 2.0).max(0.0);
+    let stride = buffer.width() as usize;
+    let pixels = buffer.make_mut_slice();
+    for dest_y in top..bottom {
+        let py = dest_y as f32 + 0.5;
+        for dest_x in left..right {
+            let px = dest_x as f32 + 0.5;
+            if !point_in_rounded_rect(px, py, x, y, width, height, radius) {
+                continue;
+            }
+            let inside_inner = inner_width > 0.0
+                && inner_height > 0.0
+                && point_in_rounded_rect(
+                    px,
+                    py,
+                    inner_left,
+                    inner_top,
+                    inner_width,
+                    inner_height,
+                    inner_radius,
+                );
+            let dest_index = dest_y as usize * stride + dest_x as usize;
+            pixels[dest_index] = if inside_inner {
+                background.pixel()
+            } else {
+                border.pixel()
+            };
+        }
+    }
+}
+
+fn point_in_rounded_rect(
+    px: f32,
+    py: f32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+) -> bool {
+    if px < x || px >= x + width || py < y || py >= y + height {
+        return false;
+    }
+    if radius <= 0.0 {
+        return true;
+    }
+    let inner_left = x + radius;
+    let inner_right = x + width - radius;
+    let inner_top = y + radius;
+    let inner_bottom = y + height - radius;
+    if (px >= inner_left && px < inner_right) || (py >= inner_top && py < inner_bottom) {
+        return true;
+    }
+    let cx = if px < inner_left {
+        inner_left
+    } else {
+        inner_right
+    };
+    let cy = if py < inner_top {
+        inner_top
+    } else {
+        inner_bottom
+    };
+    let dx = px - cx;
+    let dy = py - cy;
+    dx * dx + dy * dy <= radius * radius
 }
 
 fn draw_image_contain_at(
@@ -950,6 +1084,7 @@ mod tests {
                 width: 64,
                 height: 64,
                 content_origin_x: 0.0,
+                drop_target_slice_index: -1,
                 dark: false,
                 tile_height: 20.0,
                 media_x: 2.0,
@@ -971,6 +1106,51 @@ mod tests {
         assert_eq!(
             pixel_at(&buffer, 9, 34),
             Rgba8Pixel::new(174, 180, 186, 255)
+        );
+    }
+
+    #[test]
+    fn tile_frame_batch_renders_drop_target_into_raster_layer() {
+        let first = test_entry(0);
+        let second = test_entry(1);
+        let bounds = vec![
+            ItemViewItemBounds {
+                slice_index: 0,
+                x: 5.0,
+                y: 5.0,
+                width: 40.0,
+                text_width: 20.0,
+            },
+            ItemViewItemBounds {
+                slice_index: 1,
+                x: 5.0,
+                y: 30.0,
+                width: 40.0,
+                text_width: 20.0,
+            },
+        ];
+        let batch = ItemViewTileFrameBatch::from_entries_and_bounds(&[first, second], &bounds, &[]);
+
+        let buffer = batch.render_raster_buffer(
+            ItemViewTileFrameRasterInput {
+                width: 64,
+                height: 64,
+                content_origin_x: 0.0,
+                drop_target_slice_index: 1,
+                dark: false,
+                tile_height: 20.0,
+                media_x: 2.0,
+                media_y: 2.0,
+                media_width: 8.0,
+                media_height: 8.0,
+            },
+            &[],
+        );
+
+        assert_eq!(pixel_at(&buffer, 5, 40), Rgba8Pixel::new(217, 119, 6, 255));
+        assert_eq!(
+            pixel_at(&buffer, 20, 40),
+            Rgba8Pixel::new(255, 247, 221, 255)
         );
     }
 

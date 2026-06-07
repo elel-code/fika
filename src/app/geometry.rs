@@ -2823,6 +2823,7 @@ mod tests {
                 && pane_routing.contains("callback request-blank-context-menu(int, length, length);")
                 && pane_routing.contains("callback drop-target-path(int, float, float, string) -> string;")
                 && pane_routing.contains("callback drop-target-slice-index(int, float, float, string) -> int;")
+                && pane_routing.contains("callback drop-target-changed(int, int);")
                 && pane_routing.contains("callback drop-allowed(int, float, float, string) -> bool;")
                 && pane_routing.contains("callback prepare-transfer(int, string, float, float) -> bool;")
                 && !pane_routing.contains("callback activated")
@@ -2865,7 +2866,7 @@ mod tests {
                 && file_pane.contains(
                     "root.viewport_changed(root.pane-slot, root.viewport-x);"
                 )
-                && file_pane.contains("drag-active: root.drag-active;")
+                && file_pane.contains("root.drag-active = true;")
                 && file_pane.contains("status: root.status;")
                 && file_pane.contains("selected-count: root.selected-count;")
                 && file_pane.contains("selected-status: root.selected-status;"),
@@ -2888,6 +2889,7 @@ mod tests {
                 && file_pane.contains("callback item_view_blank_cancelled")
                 && file_pane.contains("callback drop_target_path")
                 && file_pane.contains("callback drop_target_slice_index")
+                && file_pane.contains("callback drop_target_changed")
                 && file_pane.contains("callback drop_allowed")
                 && file_pane.contains("callback prepare_transfer")
                 && file_pane.contains("callback make_drag_data_at")
@@ -2962,6 +2964,7 @@ mod tests {
             "zoom_out(slot) => { PaneRouting.zoom-out(slot); }",
             "drop_target_path(slot, x, y, source) => {\n        PaneRouting.drop-target-path(slot, x, y, source)\n    }",
             "drop_target_slice_index(slot, x, y, source) => {\n        PaneRouting.drop-target-slice-index(slot, x, y, source)\n    }",
+            "drop_target_changed(slot, slice-index) => {\n        PaneRouting.drop-target-changed(slot, slice-index);\n    }",
             "drop_allowed(slot, x, y, source) => {\n        PaneRouting.drop-allowed(slot, x, y, source)\n    }",
             "prepare_transfer(slot, source, x, y) => {\n        PaneRouting.prepare-transfer(slot, source, x, y)\n    }",
             "transfer_menu_requested(slot) => { PaneRouting.transfer-menu-requested(slot); }",
@@ -3192,6 +3195,9 @@ mod tests {
                     .contains("public function route-pane-drop-target-slice-index(slot: int,")
                 && route_functions
                     .contains("return root.pane_drop_target_slice_index(slot, x, y, source);")
+                && route_functions
+                    .contains("public function route-pane-drop-target-changed(slot: int,")
+                && route_functions.contains("root.pane_drop_target_changed(slot, slice-index);")
                 && route_functions.contains("public function route-pane-drop-allowed(slot: int,")
                 && route_functions.contains("return root.pane_drop_allowed(slot, x, y, source);")
                 && route_functions
@@ -3244,10 +3250,12 @@ mod tests {
                 "callback pane_drop_target_slice_index(int, float, float, string) -> int;"
             )
         );
+        assert!(app.contains("callback pane_drop_target_changed(int, int);"));
         assert!(app.contains("callback pane_drop_allowed(int, float, float, string) -> bool;"));
         assert!(app.contains("root.pane_prepare_transfer(slot, source, x, y)"));
         assert!(app.contains("root.pane_drop_target_path(slot, x, y, source)"));
         assert!(app.contains("root.pane_drop_target_slice_index(slot, x, y, source)"));
+        assert!(app.contains("root.pane_drop_target_changed(slot, slice-index)"));
         assert!(app.contains("root.pane_drop_allowed(slot, x, y, source)"));
         assert!(!app.contains("inactive-pane-drag-active"));
         assert!(!app.contains("main_drag_active"));
@@ -3350,20 +3358,9 @@ mod tests {
         let raster_layer = split_pane
             .split_once("slice-layer := Rectangle")
             .and_then(|(_, rest)| rest.split_once("Image {"))
-            .and_then(|(_, rest)| {
-                rest.split_once(
-                    "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
-                )
-            })
-            .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should draw a tile raster layer before overlays");
-        let drop_target_loop = split_pane
-            .split_once(
-                "if (root.drag-active && !root.drag-rejected && root.drag-target-slice-index >= 0): Rectangle",
-            )
             .and_then(|(_, rest)| rest.split_once("for paint[index] in root.paint: Text"))
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have one concrete drop-target overlay");
+            .expect("SplitPaneView should draw a tile raster layer before overlays");
         let base_text_loop = split_pane
             .split_once("for paint[index] in root.paint: Text")
             .and_then(|(_, rest)| rest.split_once("for metadata[index] in root.metadata: Text"))
@@ -3395,6 +3392,10 @@ mod tests {
                 && !split_pane.contains("for fallback[index] in root.file-media: Image")
                 && !split_pane.contains(legacy_media_loop)
                 && !split_pane.contains(&legacy_media_property)
+                && !split_pane.contains("drag-target-slice-index")
+                && !split_pane.contains("drop-border-color")
+                && !split_pane.contains("drop-background-color")
+                && !split_pane.contains("root.drag-active && !root.drag-rejected")
                 && raster_layer.contains("x: root.preview-padding + root.item-view-virtual-slice-start-x * 1px - root.paint-viewport-x * 1px;")
                 && raster_layer.contains("y: root.preview-padding;")
                 && raster_layer.contains("width: max(1px, root.item-view-raster-width * 1px);")
@@ -3483,23 +3484,12 @@ mod tests {
             raster_layer.contains("root.item-view-virtual-slice-start-x")
                 && raster_layer.contains("root.item-view-raster-width")
                 && raster_layer.contains("root.item-view-raster-height")
-                && drop_target_loop.contains(
-                    "private property <ItemViewPaintEntry> item-paint: root.paint[root.drag-target-slice-index];"
-                )
-                && drop_target_loop.contains(
-                    "x: root.preview-padding + self.item-paint.x * 1px - root.paint-viewport-x * 1px;"
-                )
-                && drop_target_loop.contains("y: root.preview-padding + self.item-paint.y * 1px;")
-                && drop_target_loop.contains("width: max(1px, self.item-paint.width * 1px);")
-                && drop_target_loop.contains("height: root.row-height;")
                 && !raster_layer.contains("tile-index:")
                 && !raster_layer.contains("tile-row:")
-                && !drop_target_loop.contains("tile-index:")
-                && !drop_target_loop.contains("tile-row:")
                 && !split_pane.contains(
                     "root.drag-active && !root.drag-rejected && root.drag-target-path == item.path"
                 ),
-            "selection raster and drop feedback should use the same horizontal column-first coordinates"
+            "selection and drop feedback should be raster inputs instead of SplitPane overlay nodes"
         );
         assert!(
             !split_pane.contains("private property <length> tile-height:")

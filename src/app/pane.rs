@@ -132,6 +132,7 @@ impl PaneState {
         self.view.virtual_media_entries.clear();
         self.view.virtual_media_tokens.clear();
         self.view.virtual_metadata_entries = ModelRc::default();
+        self.view.drop_target_slice_index = None;
         self.view.virtual_start_index = 0;
         self.view.clear_virtual_view();
     }
@@ -578,6 +579,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_media_tokens: Vec<ItemViewMediaToken>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     pub(crate) virtual_start_index: usize,
+    drop_target_slice_index: Option<usize>,
     virtual_refresh_state: VirtualViewRefreshState,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
     state_cache: HashMap<PathBuf, DirectoryViewState>,
@@ -671,11 +673,29 @@ impl PaneView {
 
     pub(crate) fn tile_frame_raster_layer(
         &self,
-        input: ItemViewTileFrameRasterInput,
+        mut input: ItemViewTileFrameRasterInput,
     ) -> ItemViewTileFrameRaster {
+        input.drop_target_slice_index = self.drop_target_slice_index_i32();
         let bounds_entries = self.current_virtual_bounds_entries();
         ItemViewTileFrameBatch::from_bounded_entries(&self.virtual_entry_tokens, &bounds_entries)
             .render_raster_layer(input, &self.virtual_media_entries)
+    }
+
+    pub(crate) fn set_drop_target_slice_index(&mut self, slice_index: i32) -> bool {
+        let next = usize::try_from(slice_index)
+            .ok()
+            .filter(|index| *index < self.virtual_entries.row_count());
+        if self.drop_target_slice_index == next {
+            return false;
+        }
+        self.drop_target_slice_index = next;
+        true
+    }
+
+    pub(crate) fn drop_target_slice_index_i32(&self) -> i32 {
+        self.drop_target_slice_index
+            .and_then(|index| i32::try_from(index).ok())
+            .unwrap_or(-1)
     }
 
     fn current_virtual_bounds_entries(&self) -> Vec<ItemViewItemBounds> {

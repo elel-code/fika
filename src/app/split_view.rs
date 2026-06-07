@@ -443,6 +443,7 @@ fn pane_slot_tile_frame_raster(
             width: raster_width,
             height: raster_height,
             content_origin_x: metrics.virtual_slice_start_x,
+            drop_target_slice_index: -1,
             dark: ui.get_dark_mode(),
             tile_height: metrics.row_height,
             media_x: render_geometry.media_x,

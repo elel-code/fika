@@ -39,6 +39,7 @@ export global PaneRouting {
     callback zoom-out(int);
     callback drop-target-path(int, float, float, string) -> string;
     callback drop-target-slice-index(int, float, float, string) -> int;
+    callback drop-target-changed(int, int);
     callback drop-allowed(int, float, float, string) -> bool;
     callback prepare-transfer(int, string, float, float) -> bool;
     callback transfer-menu-requested(int);
@@ -175,6 +176,7 @@ component FilePane inherits Rectangle {
     callback zoom_out(int);
     callback drop_target_path(int, float, float, string) -> string;
     callback drop_target_slice_index(int, float, float, string) -> int;
+    callback drop_target_changed(int, int);
     callback drop_allowed(int, float, float, string) -> bool;
     callback prepare_transfer(int, string, float, float) -> bool;
     callback transfer_menu_requested(int);
@@ -268,6 +270,7 @@ component FilePane inherits Rectangle {
                         root.drag-rejected = false;
                         root.drag-target-path = "";
                         root.drag-target-slice-index = -1;
+                        root.drop_target_changed(root.pane-slot, root.drag-target-slice-index);
                         root.drag_preview_cleared(root.pane-slot);
                     }
                 }
@@ -278,6 +281,7 @@ component FilePane inherits Rectangle {
                         root.drag-rejected = true;
                         root.drag-target-path = "";
                         root.drag-target-slice-index = -1;
+                        root.drop_target_changed(root.pane-slot, root.drag-target-slice-index);
                         root.drag_preview_cleared(root.pane-slot);
                         return DragAction.none;
                     }
@@ -287,6 +291,7 @@ component FilePane inherits Rectangle {
                         root.drag-target-path = root.drop_target_path(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                         root.drag-rejected = !root.drop_allowed(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
                         root.drag-target-slice-index = root.drag-target-path == "" || root.drag-rejected ? -1 : root.drop_target_slice_index(root.pane-slot, (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, DndApi.event-path(event));
+                        root.drop_target_changed(root.pane-slot, root.drag-target-slice-index);
                         root.trace_drop(root.drop-trace-prefix + (root.drag-rejected ? "can-drop-rejected" : "can-drop-accepted"), DndApi.event-kind(event) == DragKind.place ? "place" : (DndApi.event-kind(event) == DragKind.folder ? "folder" : "file"), DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, root.drag-rejected, root.drag-target-path);
                         return DragAction.copy;
                     } else {
@@ -294,6 +299,7 @@ component FilePane inherits Rectangle {
                         root.drag-rejected = false;
                         root.drag-target-path = "";
                         root.drag-target-slice-index = -1;
+                        root.drop_target_changed(root.pane-slot, root.drag-target-slice-index);
                         root.drag_preview_cleared(root.pane-slot);
                         root.trace_drop(root.drop-trace-prefix + "can-drop-rejected:unsupported-dnd-payload", "unsupported", DndApi.event-path(event), (self.absolute-position.x + event.position.x) / 1px, (self.absolute-position.y + event.position.y) / 1px, true, "");
                         return DragAction.none;
@@ -309,6 +315,7 @@ component FilePane inherits Rectangle {
                     root.drag-rejected = false;
                     root.drag-target-path = "";
                     root.drag-target-slice-index = -1;
+                    root.drop_target_changed(root.pane-slot, root.drag-target-slice-index);
                     root.drag_preview_cleared(root.pane-slot);
                     return DragAction.copy;
                 }
@@ -349,9 +356,6 @@ component FilePane inherits Rectangle {
                 empty-title: root.empty-title;
                 empty-subtitle: root.empty-subtitle;
                 show-location: root.show-location;
-                drag-active: root.drag-active;
-                drag-rejected: root.drag-rejected;
-                drag-target-slice-index: root.drag-target-slice-index;
                 make_drag_data_at(x, y) => {
                     root.make_drag_data_at(root.pane-slot, x, y)
                 }
@@ -472,6 +476,9 @@ component PaneSlot inherits FilePane {
     }
     drop_target_slice_index(slot, x, y, source) => {
         PaneRouting.drop-target-slice-index(slot, x, y, source)
+    }
+    drop_target_changed(slot, slice-index) => {
+        PaneRouting.drop-target-changed(slot, slice-index);
     }
     drop_allowed(slot, x, y, source) => {
         PaneRouting.drop-allowed(slot, x, y, source)
@@ -936,6 +943,7 @@ export component AppWindow inherits Window {
     callback pane_prepare_transfer(int, string, float, float) -> bool;
     callback pane_drop_target_path(int, float, float, string) -> string;
     callback pane_drop_target_slice_index(int, float, float, string) -> int;
+    callback pane_drop_target_changed(int, int);
     callback pane_drop_allowed(int, float, float, string) -> bool;
     callback pane_view_changed(int);
     callback pane_layout_changed();
@@ -1260,6 +1268,10 @@ export component AppWindow inherits Window {
 
     public function route-pane-drop-target-slice-index(slot: int, x: float, y: float, source: string) -> int {
         return root.pane_drop_target_slice_index(slot, x, y, source);
+    }
+
+    public function route-pane-drop-target-changed(slot: int, slice-index: int) {
+        root.pane_drop_target_changed(slot, slice-index);
     }
 
     public function route-pane-drop-allowed(slot: int, x: float, y: float, source: string) -> bool {
