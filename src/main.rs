@@ -3912,7 +3912,7 @@ fn schedule_adjacent_zoom_layout_prewarm(
         }
 
         let generation = pane.view.virtual_generation.current();
-        if pane.view.has_layout_prewarm_in_flight(generation) {
+        if pane.view.has_layout_prewarm_in_flight() {
             return;
         }
 
@@ -4332,7 +4332,7 @@ fn apply_virtual_layout_prewarm_result(
     let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
         return;
     };
-    pane.view.finish_layout_prewarm(result.generation);
+    pane.view.finish_layout_prewarm();
     if !pane.view.virtual_generation.is_current(result.generation) {
         return;
     }
