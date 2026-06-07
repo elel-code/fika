@@ -140,7 +140,7 @@ pub(crate) struct FileEntry {
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
 const ICON_ZOOM_THUMBNAIL_COALESCE: Duration = Duration::from_millis(300);
-const ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT: usize = 128;
+const ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT: usize = 4096;
 
 struct PaneViewSyncScheduler {
     ui: slint::Weak<AppWindow>,
@@ -7205,7 +7205,7 @@ mod tests {
                 )
                 && fast_path_body.contains("relayout_pane_item_view_entries_model(")
                 && source.contains(
-                    "const ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT: usize = 128;"
+                    "const ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT: usize = 4096;"
                 )
                 && fast_path_body.contains(
                     "pane_visible_entry_count_for_virtual_cache(pane, &[])"
