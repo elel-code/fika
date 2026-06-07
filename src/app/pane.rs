@@ -928,7 +928,15 @@ impl VirtualViewCache {
         layout: ItemViewLayoutEngine,
         thumbnail_size_px: u32,
     ) {
-        self.layout = Some(Arc::new(layout));
+        self.update_layout_signature_arc(Arc::new(layout), thumbnail_size_px);
+    }
+
+    pub(crate) fn update_layout_signature_arc(
+        &mut self,
+        layout: Arc<ItemViewLayoutEngine>,
+        thumbnail_size_px: u32,
+    ) {
+        self.layout = Some(layout);
         self.thumbnail_size_px = thumbnail_size_px;
     }
 }

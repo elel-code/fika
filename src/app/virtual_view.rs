@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VirtualViewSnapshotUpdate {
     pub(crate) entry_count: usize,
-    pub(crate) layout: ItemViewLayoutEngine,
+    pub(crate) layout: Arc<ItemViewLayoutEngine>,
     pub(crate) viewport_x: f32,
     pub(crate) viewport_clamped: bool,
     pub(crate) range: Range<usize>,
@@ -45,13 +45,15 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     let visible_count = input
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-    let compact_item_view = cached_snapshot_layout(&input, visible_count).unwrap_or_else(|| {
+    let item_view_layout = cached_snapshot_layout(&input, visible_count).unwrap_or_else(|| {
         let visible_name_widths = snapshot_visible_entry_name_width_units(&input, visible_count);
-        input
-            .layout
-            .compact_item_view_from_text_width_units(visible_name_widths)
+        Arc::new(ItemViewLayoutEngine::from(
+            input
+                .layout
+                .compact_item_view_from_text_width_units(visible_name_widths),
+        ))
     });
-    let item_view_layout = ItemViewLayoutEngine::from(compact_item_view.clone());
+    let compact_item_view = item_view_layout.as_compact();
     let plan =
         compact_item_view.virtual_plan(input.requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
     let range = compact_item_view
@@ -62,7 +64,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         || should_rebuild_virtual_cache(
             &input.cache,
             &plan,
-            &item_view_layout,
+            item_view_layout.as_ref(),
             input.thumbnail_size_px,
         );
 
@@ -99,19 +101,20 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
 fn cached_snapshot_layout(
     input: &VirtualViewSnapshotInput,
     visible_count: usize,
-) -> Option<CompactItemViewLayout> {
+) -> Option<Arc<ItemViewLayoutEngine>> {
     if input.cache.range.is_empty() || input.cache.thumbnail_size_px != input.thumbnail_size_px {
         return None;
     }
 
-    let cached = input.cache.layout.as_ref()?.as_compact();
-    if cached.entry_count != visible_count
-        || !main_layout_matches_cached_layout(&input.layout, cached)
+    let cached = input.cache.layout.as_ref()?;
+    let compact = cached.as_compact();
+    if compact.entry_count != visible_count
+        || !main_layout_matches_cached_layout(&input.layout, compact)
     {
         return None;
     }
 
-    Some(cached.clone())
+    Some(Arc::clone(cached))
 }
 
 fn main_layout_matches_cached_layout(

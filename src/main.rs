@@ -4021,9 +4021,10 @@ fn apply_virtual_view_result(
             pane.view.viewport_x = update.viewport_x;
             if update.rebuild_model {
                 pane.view.virtual_view.range = update.range.clone();
-                pane.view
-                    .virtual_view
-                    .update_layout_signature(update.layout.clone(), result.thumbnail_size_px);
+                pane.view.virtual_view.update_layout_signature_arc(
+                    Arc::clone(&update.layout),
+                    result.thumbnail_size_px,
+                );
             }
         }
     }
@@ -4113,7 +4114,7 @@ fn apply_virtual_view_result(
         );
     }
     let bounds_entries =
-        item_view_bounds_entries(&update.layout, update.range.start, entries.len());
+        item_view_bounds_entries(update.layout.as_ref(), update.range.start, entries.len());
     set_pane_virtual_entries(
         state,
         slot,
