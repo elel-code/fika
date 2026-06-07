@@ -46,11 +46,8 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
     let item_view_layout = cached_snapshot_layout(&input, visible_count).unwrap_or_else(|| {
-        let visible_name_widths = snapshot_visible_entry_name_width_units(&input, visible_count);
         Arc::new(ItemViewLayoutEngine::from(
-            input
-                .layout
-                .compact_item_view_from_text_width_units(visible_name_widths),
+            snapshot_compact_item_view_layout(&input, visible_count),
         ))
     });
     let compact_item_view = item_view_layout.as_compact();
@@ -169,35 +166,44 @@ fn snapshot_visible_entry_count(input: &VirtualViewSnapshotInput) -> usize {
         .count()
 }
 
-fn snapshot_visible_entry_name_width_units(
+fn snapshot_compact_item_view_layout(
     input: &VirtualViewSnapshotInput,
     visible_count: usize,
-) -> Vec<f32> {
-    let mut widths = if let Some(indices) = input.visible_entry_indices.as_ref() {
-        indices
+) -> CompactItemViewLayout {
+    if let Some(indices) = input.visible_entry_indices.as_ref() {
+        let widths = indices
             .iter()
             .take(visible_count)
-            .filter_map(|&index| input.entries.get(index).map(|entry| entry.name_width_units))
-            .collect::<Vec<_>>()
+            .map(|&index| {
+                input
+                    .entries
+                    .get(index)
+                    .map(|entry| entry.name_width_units)
+                    .unwrap_or_default()
+            })
+            .chain(std::iter::repeat(0.0))
+            .take(visible_count);
+        input.layout.compact_item_view_from_text_width_units(widths)
     } else if snapshot_filters_are_identity(input) {
-        input
+        let widths = input
             .entries
             .iter()
             .take(visible_count)
             .map(|entry| entry.name_width_units)
-            .collect::<Vec<_>>()
+            .chain(std::iter::repeat(0.0))
+            .take(visible_count);
+        input.layout.compact_item_view_from_text_width_units(widths)
     } else {
-        input
+        let widths = input
             .entries
             .iter()
             .filter(|entry| snapshot_matches_entry_filters(entry, input))
             .take(visible_count)
             .map(|entry| entry.name_width_units)
-            .collect::<Vec<_>>()
-    };
-
-    widths.resize(visible_count, 0.0);
-    widths
+            .chain(std::iter::repeat(0.0))
+            .take(visible_count);
+        input.layout.compact_item_view_from_text_width_units(widths)
+    }
 }
 
 fn snapshot_entries_range(
