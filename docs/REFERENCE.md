@@ -726,7 +726,7 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 | `FileOperationCompleted(FileOperationResult)` | 文件操作完成 |
 | `FileOperationProgress(FileOperationProgress)` | 操作进度更新 |
 | `FileUndoCompleted(FileUndoResult)` | 撤销完成 |
-| `ThumbnailsLoaded(Vec<ThumbnailLoad>)` | 缩略图生成完成 |
+| `ThumbnailLoaded { pane_id, generation, load }` | 单个缩略图生成完成，UI 线程通过 `ThumbnailFlushScheduler` 批量应用 |
 | `ExternalEditCompleted(ExternalEditResult)` | 外部编辑完成 |
 | `DevicesLoaded(DevicesLoadedResult)` | 设备列表更新 |
 | `DeviceMountCompleted(DeviceMountResult)` | 设备挂载完成 |
@@ -744,7 +744,7 @@ Corrupt values are ignored and fall back to defaults (covered by tests).
 | `FileOperationCompleted(FileOperationResult)` | File operation complete |
 | `FileOperationProgress(FileOperationProgress)` | Operation progress update |
 | `FileUndoCompleted(FileUndoResult)` | Undo complete |
-| `ThumbnailsLoaded(Vec<ThumbnailLoad>)` | Thumbnails generated |
+| `ThumbnailLoaded { pane_id, generation, load }` | One thumbnail generated; UI applies batches through `ThumbnailFlushScheduler` |
 | `ExternalEditCompleted(ExternalEditResult)` | External edit complete |
 | `DevicesLoaded(DevicesLoadedResult)` | Device list updated |
 | `DeviceMountCompleted(DeviceMountResult)` | Device mount complete |
@@ -1175,20 +1175,27 @@ start_next_operation() → Tokio spawn_blocking
 虚拟切片更新
     │
     ▼
-prioritize_thumbnail_entries() → 可见优先排序
+file_item_roles_updater::schedule_thumbnail_roles_for_entries()
+    ├─ Dolphin indexesToResolve 顺序
+    └─ pane-local row token → ThumbnailScheduleEntry
     │
     ▼
-thumbnails::spawn_thumbnail_async() → Tokio
+thumbnail_pipeline::thumbnail_schedule_batch_for_pane()
+    ├─ 候选/cache/failure/pending 检查
+    └─ capped batch
+    │
+    ▼
+spawn_thumbnail_preview_job() → Tokio
     ├─ 检查 freedesktop 磁盘缓存
     ├─ 检查失败 marker
     ├─ 内置解码（PNG/JPEG/WebP）
     └─ 外部 thumbnailer（PDF/SVG/AVIF）
     │
     ▼
-AsyncEvent::ThumbnailsLoaded
+AsyncEvent::ThumbnailLoaded
     ├─ 写入内存缓存（成功/失败）
     ├─ 写入 freedesktop 磁盘缓存
-    └─ 刷新可见切片
+    └─ ThumbnailFlushScheduler 批量刷新可见切片
 ```
 
 **English**:
@@ -1197,20 +1204,27 @@ AsyncEvent::ThumbnailsLoaded
 Virtual slice update
     │
     ▼
-prioritize_thumbnail_entries() → visible-first sort
+file_item_roles_updater::schedule_thumbnail_roles_for_entries()
+    ├─ Dolphin indexesToResolve order
+    └─ pane-local row token → ThumbnailScheduleEntry
     │
     ▼
-thumbnails::spawn_thumbnail_async() → Tokio
+thumbnail_pipeline::thumbnail_schedule_batch_for_pane()
+    ├─ Candidate/cache/failure/pending checks
+    └─ Capped batch
+    │
+    ▼
+spawn_thumbnail_preview_job() → Tokio
     ├─ Check freedesktop disk cache
     ├─ Check failure marker
     ├─ Built-in decode (PNG/JPEG/WebP)
     └─ External thumbnailer (PDF/SVG/AVIF)
     │
     ▼
-AsyncEvent::ThumbnailsLoaded
+AsyncEvent::ThumbnailLoaded
     ├─ Write memory cache (success/failure)
     ├─ Write freedesktop disk cache
-    └─ Refresh visible slice
+    └─ ThumbnailFlushScheduler batches visible-slice refresh
 ```
 
 ### 14.4 特权操作流程 / Privileged Operation Flow
