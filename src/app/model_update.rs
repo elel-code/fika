@@ -1,7 +1,7 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_renderer::{
     ItemViewFrameEntry, ItemViewMediaSource, ItemViewMediaToken, ItemViewMetadataOverlaySource,
-    ItemViewRasterMediaEntry, ItemViewTileFrameBatch,
+    ItemViewRasterMediaEntry, ItemViewTileFrameBatch, metadata_entries_with_bounds,
 };
 use crate::app::pane::PaneView;
 use crate::{ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
@@ -220,29 +220,6 @@ fn bounds_for_slice_index(
         })
 }
 
-fn project_metadata_entries_with_bounds(
-    metadata: Vec<ItemViewMetadataOverlaySource>,
-    bounds_entries: &[ItemViewItemBounds],
-) -> Vec<ItemViewMetadataEntry> {
-    metadata
-        .into_iter()
-        .map(|metadata| {
-            let bounds = bounds_for_slice_index(bounds_entries, metadata.slice_index);
-            ItemViewMetadataEntry {
-                text: metadata.text,
-                item_x: bounds.map_or(metadata.item_x, |b| b.x),
-                item_y: bounds.map_or(metadata.item_y, |b| b.y),
-                text_x: metadata.text_x,
-                text_width: metadata.text_width,
-                y: metadata.y,
-                line_height: metadata.line_height,
-                font_size: metadata.font_size,
-                is_group: metadata.is_group,
-            }
-        })
-        .collect()
-}
-
 fn project_media_entries_with_bounds(
     media_entries: Vec<ItemViewMediaSource>,
     bounds_entries: &[ItemViewItemBounds],
@@ -337,7 +314,7 @@ pub(crate) fn update_pane_item_view_entries_model(
         ItemViewTileFrameBatch::from_entries_and_bounds(&entries, &bounds_entries, selected_paths);
     let media_tokens = frame_batch.media_tokens_for_sources(&media_entries);
     let media_entries = project_media_entries_with_bounds(media_entries, &bounds_entries);
-    let metadata_entries = project_metadata_entries_with_bounds(metadata_entries, &bounds_entries);
+    let metadata_entries = metadata_entries_with_bounds(metadata_entries, &bounds_entries);
     let paint_entries = frame_batch.paint_entries();
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
@@ -926,6 +903,20 @@ mod tests {
 
         assert!(!source.contains(&obsolete_helper));
         assert!(source.contains("frame_batch.paint_entries()"));
+    }
+
+    #[test]
+    fn renderer_owns_metadata_text_projection() {
+        let source = include_str!("model_update.rs");
+        let obsolete_helper = ["fn project_metadata_", "entries_with_bounds("].concat();
+        let renderer_projection_call = [
+            "metadata_entries_",
+            "with_bounds(metadata_entries, &bounds_entries)",
+        ]
+        .concat();
+
+        assert!(!source.contains(&obsolete_helper));
+        assert!(source.contains(&renderer_projection_call));
     }
 
     #[test]

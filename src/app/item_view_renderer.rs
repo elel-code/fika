@@ -1,6 +1,6 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
-use crate::{ItemViewEntry, ItemViewPaintEntry};
+use crate::{ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::collections::HashSet;
 use std::path::Path;
@@ -491,6 +491,44 @@ impl ItemViewRenderGeometry {
             title_font_size: render_metrics.title_font_size,
         }
     }
+}
+
+pub(crate) fn metadata_entries_with_bounds(
+    metadata: Vec<ItemViewMetadataOverlaySource>,
+    bounds_entries: &[ItemViewItemBounds],
+) -> Vec<ItemViewMetadataEntry> {
+    metadata
+        .into_iter()
+        .map(|metadata| {
+            let bounds = bounds_for_slice_index(bounds_entries, metadata.slice_index);
+            ItemViewMetadataEntry {
+                text: metadata.text,
+                item_x: bounds.map_or(metadata.item_x, |bounds| bounds.x),
+                item_y: bounds.map_or(metadata.item_y, |bounds| bounds.y),
+                text_x: metadata.text_x,
+                text_width: metadata.text_width,
+                y: metadata.y,
+                line_height: metadata.line_height,
+                font_size: metadata.font_size,
+                is_group: metadata.is_group,
+            }
+        })
+        .collect()
+}
+
+fn bounds_for_slice_index(
+    bounds_entries: &[ItemViewItemBounds],
+    slice_index: i32,
+) -> Option<&ItemViewItemBounds> {
+    let slice_index = usize::try_from(slice_index).ok()?;
+    bounds_entries
+        .get(slice_index)
+        .filter(|bounds| bounds.slice_index == slice_index)
+        .or_else(|| {
+            bounds_entries
+                .iter()
+                .find(|bounds| bounds.slice_index == slice_index)
+        })
 }
 
 #[cfg(test)]
@@ -1144,6 +1182,63 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(0, 21), (1, 42), (4, 0)]
         );
+    }
+
+    #[test]
+    fn renderer_projects_metadata_overlay_bounds_for_text_backend() {
+        let bounds = vec![
+            ItemViewItemBounds {
+                slice_index: 0,
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                text_width: 50.0,
+            },
+            ItemViewItemBounds {
+                slice_index: 1,
+                x: 30.0,
+                y: 40.0,
+                width: 120.0,
+                text_width: 60.0,
+            },
+        ];
+        let metadata = vec![
+            ItemViewMetadataOverlaySource {
+                slice_index: 1,
+                text: "Documents".into(),
+                item_x: 0.0,
+                item_y: 0.0,
+                text_x: 52.0,
+                text_width: 75.0,
+                y: 2.0,
+                line_height: 14.0,
+                font_size: 11.0,
+                is_group: true,
+            },
+            ItemViewMetadataOverlaySource {
+                slice_index: 9,
+                text: "/tmp/missing".into(),
+                item_x: 90.0,
+                item_y: 100.0,
+                text_x: 52.0,
+                text_width: 75.0,
+                y: 41.0,
+                line_height: 14.0,
+                font_size: 11.0,
+                is_group: false,
+            },
+        ];
+
+        let entries = metadata_entries_with_bounds(metadata, &bounds);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].text, "Documents");
+        assert_eq!((entries[0].item_x, entries[0].item_y), (30.0, 40.0));
+        assert_eq!(entries[0].text_width, 75.0);
+        assert!(entries[0].is_group);
+        assert_eq!(entries[1].text, "/tmp/missing");
+        assert_eq!((entries[1].item_x, entries[1].item_y), (90.0, 100.0));
+        assert!(!entries[1].is_group);
     }
 
     #[test]
