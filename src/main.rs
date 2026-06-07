@@ -3932,42 +3932,44 @@ fn same_layout_metric(left: f32, right: f32) -> bool {
     (left - right).abs() <= 0.5
 }
 
-fn zoom_range_visible_name_width_units(
+fn zoom_compact_item_view_layout(
     pane: &PaneState,
-    visible_count_override: Option<usize>,
+    layout: MainItemViewLayout,
+    visible_count: usize,
     chooser_patterns: &[String],
-) -> Option<Vec<f32>> {
-    if let Some(visible_count) = visible_count_override {
-        let mut widths = pane
+) -> Option<CompactItemViewLayout> {
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
+        let widths = indices
+            .iter()
+            .take(visible_count)
+            .map(|&index| {
+                pane.entries
+                    .get(index)
+                    .map(|entry| entry.name_width_units)
+                    .unwrap_or_default()
+            })
+            .chain(std::iter::repeat(0.0))
+            .take(visible_count);
+        return Some(layout.compact_item_view_from_text_width_units(widths));
+    }
+
+    if pane.search.query.is_empty()
+        && pane.search.kind_filter == 0
+        && pane.search.modified_filter == 0
+        && pane.search.size_filter == 0
+        && chooser_patterns.is_empty()
+    {
+        let widths = pane
             .entries
             .iter()
             .take(visible_count)
             .map(|entry| entry.name_width_units)
-            .collect::<Vec<_>>();
-        widths.resize(visible_count, 0.0);
-        return Some(widths);
+            .chain(std::iter::repeat(0.0))
+            .take(visible_count);
+        Some(layout.compact_item_view_from_text_width_units(widths))
+    } else {
+        None
     }
-
-    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
-        return Some(
-            indices
-                .iter()
-                .filter_map(|&index| pane.entries.get(index).map(|entry| entry.name_width_units))
-                .collect(),
-        );
-    }
-
-    (pane.search.query.is_empty()
-        && pane.search.kind_filter == 0
-        && pane.search.modified_filter == 0
-        && pane.search.size_filter == 0
-        && chooser_patterns.is_empty())
-    .then(|| {
-        pane.entries
-            .iter()
-            .map(|entry| entry.name_width_units)
-            .collect()
-    })
 }
 
 fn cached_zoom_relayout_range(
@@ -4894,18 +4896,12 @@ fn try_relayout_cached_pane_icon_zoom_layout(
             return false;
         }
 
-        let Some(visible_name_width_units) = zoom_range_visible_name_width_units(pane, None, &[])
+        let requested_viewport_x = pane.view.viewport_x;
+        layout.viewport_x = requested_viewport_x;
+        let Some(compact_item_view) = zoom_compact_item_view_layout(pane, layout, entry_count, &[])
         else {
             return false;
         };
-        if visible_name_width_units.len() != entry_count {
-            return false;
-        }
-
-        let requested_viewport_x = pane.view.viewport_x;
-        layout.viewport_x = requested_viewport_x;
-        let compact_item_view =
-            layout.compact_item_view_from_text_width_units(visible_name_width_units);
         let plan = compact_item_view.virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
         let current_range = pane.view.virtual_view.range.clone();
         let Some(relayout_range) =
@@ -7156,6 +7152,9 @@ mod tests {
             .map(|(body, _)| body)
             .expect("icon zoom cached relayout body should be present");
         let removed_zoom_range_hint_function = ["fn ", "icon_zoom_range_hint("].concat();
+        let removed_zoom_width_function =
+            ["zoom", "_range", "_visible", "_name", "_width", "_units"].concat();
+        let removed_zoom_width_vec = ["visible", "_name", "_width", "_units"].concat();
 
         assert!(
             source.contains(
@@ -7211,6 +7210,11 @@ mod tests {
                     "pane_visible_entry_count_for_virtual_cache(pane, &[])"
                 )
                 && fast_path_body.contains("entry_count > ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT")
+                && fast_path_body.contains(
+                    "zoom_compact_item_view_layout(pane, layout, entry_count, &[])"
+                )
+                && !source.contains(&removed_zoom_width_function)
+                && !source.contains(&removed_zoom_width_vec)
                 && !source.contains(&removed_zoom_range_hint_function)
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
