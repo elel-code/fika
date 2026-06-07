@@ -60,12 +60,12 @@ use app::item_view::{
     move_blank_for_slot, press_blank_for_slot, press_entry_at_pane_point, release_blank_for_slot,
 };
 use app::item_view_renderer::{
-    ItemViewMetadataSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
-    decorate_render_plan_with_metadata,
+    ItemViewMediaSource, ItemViewMetadataOverlaySource, ItemViewMetadataSource,
+    ItemViewRenderMetrics, ItemViewRenderPlanInput, decorate_render_plan_with_metadata,
 };
 use app::model_update::{
-    ItemViewMediaSource, ItemViewMetadataOverlaySource, relayout_pane_item_view_entries_model,
-    update_pane_item_view_entries_model, update_pane_item_view_selection_model,
+    relayout_pane_item_view_entries_model, update_pane_item_view_entries_model,
+    update_pane_item_view_selection_model,
 };
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,

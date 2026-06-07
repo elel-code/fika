@@ -1,8 +1,11 @@
 use crate::app::geometry::ItemViewItemBounds;
-use crate::app::item_view_renderer::{ItemViewFrameEntry, ItemViewTileFrameBatch};
+use crate::app::item_view_renderer::{
+    ItemViewFrameEntry, ItemViewMediaSource, ItemViewMediaToken, ItemViewMetadataOverlaySource,
+    ItemViewRasterMediaEntry, ItemViewTileFrameBatch,
+};
 use crate::app::pane::PaneView;
 use crate::{ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
-use slint::{Image, Model, ModelRc, SharedString, VecModel};
+use slint::{Model, ModelRc, SharedString, VecModel};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -14,41 +17,6 @@ pub(crate) struct ItemViewRowToken {
     selected: bool,
     thumbnail_state: i32,
     media_token: i32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ItemViewMediaToken {
-    slice_index: i32,
-    media_token: i32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ItemViewMediaSource {
-    pub(crate) slice_index: i32,
-    pub(crate) media: Image,
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ItemViewRasterMediaEntry {
-    pub(crate) media: Image,
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ItemViewMetadataOverlaySource {
-    pub(crate) slice_index: i32,
-    pub(crate) text: SharedString,
-    pub(crate) item_x: f32,
-    pub(crate) item_y: f32,
-    pub(crate) text_x: f32,
-    pub(crate) text_width: f32,
-    pub(crate) y: f32,
-    pub(crate) line_height: f32,
-    pub(crate) font_size: f32,
-    pub(crate) is_group: bool,
 }
 
 impl ItemViewRowToken {
@@ -973,6 +941,19 @@ mod tests {
 
         assert!(!source.contains(&obsolete_helper));
         assert!(source.contains("frame_batch.paint_entries()"));
+    }
+
+    #[test]
+    fn renderer_owns_raster_media_and_metadata_overlay_types() {
+        let source = include_str!("model_update.rs");
+        for obsolete_type in [
+            ["struct ItemView", "MediaSource"].concat(),
+            ["struct ItemView", "MediaToken"].concat(),
+            ["struct ItemView", "RasterMediaEntry"].concat(),
+            ["struct ItemView", "MetadataOverlaySource"].concat(),
+        ] {
+            assert!(!source.contains(&obsolete_type));
+        }
     }
 
     #[test]

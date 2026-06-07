@@ -1,12 +1,12 @@
 use crate::app::geometry::{ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter};
 use crate::app::item_view::ItemViewInputState;
-use crate::app::item_view_renderer::{
-    ItemViewRenderMetrics, ItemViewTileFrameBatch, ItemViewTileFrameRaster,
-    ItemViewTileFrameRasterInput,
-};
 #[cfg(test)]
-use crate::app::model_update::ItemViewMediaSource;
-use crate::app::model_update::{ItemViewMediaToken, ItemViewRasterMediaEntry, ItemViewRowToken};
+use crate::app::item_view_renderer::ItemViewMediaSource;
+use crate::app::item_view_renderer::{
+    ItemViewMediaToken, ItemViewRasterMediaEntry, ItemViewRenderMetrics, ItemViewTileFrameBatch,
+    ItemViewTileFrameRaster, ItemViewTileFrameRasterInput,
+};
+use crate::app::model_update::ItemViewRowToken;
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};

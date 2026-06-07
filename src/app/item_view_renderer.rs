@@ -1,6 +1,5 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
-use crate::app::model_update::{ItemViewMetadataOverlaySource, ItemViewRasterMediaEntry};
 use crate::{ItemViewEntry, ItemViewPaintEntry};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::collections::HashSet;
@@ -43,6 +42,41 @@ pub(crate) struct ItemViewRenderGeometry {
 pub(crate) struct ItemViewMetadataSource {
     pub(crate) group: SharedString,
     pub(crate) location: SharedString,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewMediaToken {
+    pub(crate) slice_index: i32,
+    pub(crate) media_token: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewMediaSource {
+    pub(crate) slice_index: i32,
+    pub(crate) media: Image,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ItemViewRasterMediaEntry {
+    pub(crate) media: Image,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewMetadataOverlaySource {
+    pub(crate) slice_index: i32,
+    pub(crate) text: SharedString,
+    pub(crate) item_x: f32,
+    pub(crate) item_y: f32,
+    pub(crate) text_x: f32,
+    pub(crate) text_width: f32,
+    pub(crate) y: f32,
+    pub(crate) line_height: f32,
+    pub(crate) font_size: f32,
+    pub(crate) is_group: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

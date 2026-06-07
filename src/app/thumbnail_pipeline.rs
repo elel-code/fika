@@ -1,5 +1,6 @@
 use crate::ItemViewEntry;
-use crate::app::model_update::{ItemViewMediaSource, ItemViewRowToken};
+use crate::app::item_view_renderer::ItemViewMediaSource;
+use crate::app::model_update::ItemViewRowToken;
 use crate::app::state::AppState;
 use crate::fs::thumbnails;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
