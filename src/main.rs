@@ -49,9 +49,9 @@ use app::file_clipboard::{
     refresh_clipboard_availability_async, sync_clipboard_ui,
 };
 use app::geometry::{
-    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayouter,
-    MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio, inactive_main_pane_width,
-    place_drop_geometry, register_menu_geometry_callbacks,
+    CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayoutEngine,
+    ItemViewLayouter, MainItemViewLayout, active_main_pane_width, clamped_split_pane_ratio,
+    inactive_main_pane_width, place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
     ItemViewControllerAction, SelectionRect, activate_entry_at_pane_point, cancel_blank_for_slot,
@@ -3932,12 +3932,27 @@ fn same_layout_metric(left: f32, right: f32) -> bool {
     (left - right).abs() <= 0.5
 }
 
-fn zoom_compact_item_view_layout(
+fn zoom_item_view_layout_engine(
     pane: &PaneState,
     layout: MainItemViewLayout,
     visible_count: usize,
     chooser_patterns: &[String],
-) -> Option<CompactItemViewLayout> {
+) -> Option<Arc<ItemViewLayoutEngine>> {
+    if let Some(cached) = pane
+        .view
+        .virtual_view
+        .layout
+        .iter()
+        .chain(pane.view.virtual_view.layout_history.iter())
+        .find(|cached| {
+            let compact = cached.as_compact();
+            compact.entry_count == visible_count
+                && main_layout_matches_compact_layout(&layout, compact)
+        })
+    {
+        return Some(Arc::clone(cached));
+    }
+
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         let widths = indices
             .iter()
@@ -3950,7 +3965,9 @@ fn zoom_compact_item_view_layout(
             })
             .chain(std::iter::repeat(0.0))
             .take(visible_count);
-        return Some(layout.compact_item_view_from_text_width_units(widths));
+        return Some(Arc::new(ItemViewLayoutEngine::from(
+            layout.compact_item_view_from_text_width_units(widths),
+        )));
     }
 
     if pane.search.query.is_empty()
@@ -3966,7 +3983,9 @@ fn zoom_compact_item_view_layout(
             .map(|entry| entry.name_width_units)
             .chain(std::iter::repeat(0.0))
             .take(visible_count);
-        Some(layout.compact_item_view_from_text_width_units(widths))
+        Some(Arc::new(ItemViewLayoutEngine::from(
+            layout.compact_item_view_from_text_width_units(widths),
+        )))
     } else {
         None
     }
@@ -4898,11 +4917,13 @@ fn try_relayout_cached_pane_icon_zoom_layout(
 
         let requested_viewport_x = pane.view.viewport_x;
         layout.viewport_x = requested_viewport_x;
-        let Some(compact_item_view) = zoom_compact_item_view_layout(pane, layout, entry_count, &[])
+        let Some(item_view_layout) = zoom_item_view_layout_engine(pane, layout, entry_count, &[])
         else {
             return false;
         };
-        let plan = compact_item_view.virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
+        let plan = item_view_layout
+            .as_compact()
+            .virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
         let current_range = pane.view.virtual_view.range.clone();
         let Some(relayout_range) =
             cached_zoom_relayout_range(&current_range, &plan.visible_range, entry_count)
@@ -4910,7 +4931,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
             return false;
         };
         let bounds_entries = item_view_bounds_entries(
-            &compact_item_view,
+            item_view_layout.as_compact(),
             relayout_range.start,
             relayout_range.end.saturating_sub(relayout_range.start),
         );
@@ -4928,7 +4949,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         pane.view.virtual_view.range = relayout_range;
         pane.view
             .virtual_view
-            .update_layout_signature(compact_item_view.into(), size_px);
+            .update_layout_signature_arc(item_view_layout, size_px);
         true
     };
 
@@ -7211,8 +7232,9 @@ mod tests {
                 )
                 && fast_path_body.contains("entry_count > ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT")
                 && fast_path_body.contains(
-                    "zoom_compact_item_view_layout(pane, layout, entry_count, &[])"
+                    "zoom_item_view_layout_engine(pane, layout, entry_count, &[])"
                 )
+                && fast_path_body.contains("update_layout_signature_arc(item_view_layout, size_px)")
                 && !source.contains(&removed_zoom_width_function)
                 && !source.contains(&removed_zoom_width_vec)
                 && !source.contains(&removed_zoom_range_hint_function)

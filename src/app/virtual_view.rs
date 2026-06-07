@@ -99,19 +99,17 @@ fn cached_snapshot_layout(
     input: &VirtualViewSnapshotInput,
     visible_count: usize,
 ) -> Option<Arc<ItemViewLayoutEngine>> {
-    if input.cache.range.is_empty() || input.cache.thumbnail_size_px != input.thumbnail_size_px {
-        return None;
-    }
-
-    let cached = input.cache.layout.as_ref()?;
-    let compact = cached.as_compact();
-    if compact.entry_count != visible_count
-        || !main_layout_matches_cached_layout(&input.layout, compact)
-    {
-        return None;
-    }
-
-    Some(Arc::clone(cached))
+    input
+        .cache
+        .layout
+        .iter()
+        .chain(input.cache.layout_history.iter())
+        .find(|cached| {
+            let compact = cached.as_compact();
+            compact.entry_count == visible_count
+                && main_layout_matches_cached_layout(&input.layout, compact)
+        })
+        .map(Arc::clone)
 }
 
 fn main_layout_matches_cached_layout(
@@ -509,10 +507,10 @@ mod tests {
             range,
             ..VirtualViewCache::default()
         };
-        cache.update_layout_signature(
-            layout()
-                .compact_item_view_from_names(names.iter().map(String::as_str))
-                .into(),
+        cache.update_layout_signature_arc(
+            Arc::new(ItemViewLayoutEngine::from(
+                layout().compact_item_view_from_names(names.iter().map(String::as_str)),
+            )),
             thumbnail_size_px,
         );
         cache
@@ -564,6 +562,37 @@ mod tests {
         assert_eq!(second.range, 0..24);
         assert!(!second.rebuild_model);
         assert!(second.entries.is_empty());
+    }
+
+    #[test]
+    fn snapshot_update_reuses_layout_when_thumbnail_size_changes() {
+        let entries = snapshot_entries(100);
+        let cache = cache_for_layout(0..20, entries.len(), 32);
+        let cached_layout = Arc::clone(cache.layout.as_ref().expect("layout should be cached"));
+
+        let update = prepare_virtual_view_snapshot_update(snapshot_input(entries, 40.0, cache));
+
+        assert!(update.rebuild_model);
+        assert!(!update.entries.is_empty());
+        assert!(Arc::ptr_eq(&update.layout, &cached_layout));
+    }
+
+    #[test]
+    fn snapshot_update_reuses_layout_history_for_matching_signature() {
+        let entries = snapshot_entries(100);
+        let matching_layout = Arc::new(ItemViewLayoutEngine::from(
+            layout().compact_item_view_from_names((0..entries.len()).map(|index| {
+                let name = format!("item-{index}.txt");
+                name
+            })),
+        ));
+        let mut cache = VirtualViewCache::default();
+        cache.layout_history.push(Arc::clone(&matching_layout));
+
+        let update = prepare_virtual_view_snapshot_update(snapshot_input(entries, 40.0, cache));
+
+        assert!(update.rebuild_model);
+        assert!(Arc::ptr_eq(&update.layout, &matching_layout));
     }
 
     #[test]

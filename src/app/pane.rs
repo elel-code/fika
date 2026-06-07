@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 pub(crate) const MAX_VIEW_STATE_CACHE_ENTRIES: usize = 128;
+const MAX_VIRTUAL_VIEW_LAYOUT_HISTORY: usize = 6;
 
 #[derive(Debug)]
 pub(crate) struct PaneState {
@@ -888,6 +889,7 @@ pub(crate) struct DirectoryViewState {
 pub(crate) struct VirtualViewCache {
     pub(crate) range: Range<usize>,
     pub(crate) layout: Option<Arc<ItemViewLayoutEngine>>,
+    pub(crate) layout_history: Vec<Arc<ItemViewLayoutEngine>>,
     pub(crate) thumbnail_size_px: u32,
 }
 
@@ -896,6 +898,7 @@ impl Default for VirtualViewCache {
         Self {
             range: 0..0,
             layout: None,
+            layout_history: Vec::new(),
             thumbnail_size_px: 0,
         }
     }
@@ -909,6 +912,7 @@ impl VirtualViewCache {
     pub(crate) fn clear(&mut self) {
         self.range = 0..0;
         self.layout = None;
+        self.layout_history.clear();
         self.thumbnail_size_px = 0;
     }
 
@@ -926,21 +930,28 @@ impl VirtualViewCache {
         })
     }
 
-    pub(crate) fn update_layout_signature(
-        &mut self,
-        layout: ItemViewLayoutEngine,
-        thumbnail_size_px: u32,
-    ) {
-        self.update_layout_signature_arc(Arc::new(layout), thumbnail_size_px);
-    }
-
     pub(crate) fn update_layout_signature_arc(
         &mut self,
         layout: Arc<ItemViewLayoutEngine>,
         thumbnail_size_px: u32,
     ) {
+        if let Some(previous) = self.layout.take() {
+            self.store_layout_history(previous);
+        }
+        self.layout_history.retain(|current| {
+            !Arc::ptr_eq(current, &layout) && !current.matches_layout_signature(layout.as_ref())
+        });
         self.layout = Some(layout);
         self.thumbnail_size_px = thumbnail_size_px;
+    }
+
+    fn store_layout_history(&mut self, layout: Arc<ItemViewLayoutEngine>) {
+        self.layout_history.retain(|current| {
+            !Arc::ptr_eq(current, &layout) && !current.matches_layout_signature(layout.as_ref())
+        });
+        self.layout_history.insert(0, layout);
+        self.layout_history
+            .truncate(MAX_VIRTUAL_VIEW_LAYOUT_HISTORY);
     }
 }
 
@@ -1078,8 +1089,8 @@ mod tests {
             range,
             ..VirtualViewCache::default()
         };
-        cache.update_layout_signature(
-            compact_item_view_layout(
+        cache.update_layout_signature_arc(
+            Arc::new(ItemViewLayoutEngine::from(compact_item_view_layout(
                 250.0,
                 names.iter().map(String::as_str),
                 4,
@@ -1090,8 +1101,7 @@ mod tests {
                 1.0,
                 0.0,
                 1.0,
-            )
-            .into(),
+            ))),
             thumbnail_size_px,
         );
         cache
@@ -1126,10 +1136,53 @@ mod tests {
         let source = include_str!("pane.rs");
         let body = source
             .split_once("pub(crate) fn matches_layout_arc(")
-            .and_then(|(_, rest)| rest.split_once("pub(crate) fn update_layout_signature("))
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn update_layout_signature_arc("))
             .map(|(body, _)| body)
             .expect("matches_layout_arc body should be present");
         assert!(body.contains("Arc::ptr_eq(current, layout)"));
+    }
+
+    #[test]
+    fn virtual_view_cache_keeps_recent_previous_layouts() {
+        let first = Arc::new(ItemViewLayoutEngine::from(compact_item_view_layout(
+            250.0,
+            ["alpha", "beta"],
+            4,
+            100.0,
+            90.0,
+            10.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        )));
+        let second = Arc::new(ItemViewLayoutEngine::from(compact_item_view_layout(
+            250.0,
+            ["alpha", "beta"],
+            3,
+            120.0,
+            110.0,
+            10.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        )));
+        let mut cache = VirtualViewCache::default();
+
+        cache.update_layout_signature_arc(Arc::clone(&first), 64);
+        assert!(cache.layout_history.is_empty());
+
+        cache.update_layout_signature_arc(Arc::clone(&second), 64);
+        assert_eq!(cache.layout_history.len(), 1);
+        assert!(Arc::ptr_eq(&cache.layout_history[0], &first));
+
+        cache.update_layout_signature_arc(Arc::clone(&first), 64);
+        assert_eq!(cache.layout_history.len(), 1);
+        assert!(Arc::ptr_eq(&cache.layout_history[0], &second));
+
+        cache.clear();
+        assert!(cache.layout_history.is_empty());
     }
 
     fn test_raster_signature(
