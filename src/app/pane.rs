@@ -1,4 +1,6 @@
-use crate::app::geometry::{ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter};
+use crate::app::geometry::{
+    ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter, compact_text_width_units,
+};
 use crate::app::item_view::ItemViewInputState;
 #[cfg(test)]
 use crate::app::item_view_renderer::ItemViewMediaSource;
@@ -213,6 +215,7 @@ fn clone_item_view_row_tokens_without_selection(
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PaneEntrySnapshot {
     pub(crate) name: String,
+    pub(crate) name_width_units: f32,
     pub(crate) path: String,
     pub(crate) group: String,
     pub(crate) location: String,
@@ -226,8 +229,10 @@ pub(crate) struct PaneEntrySnapshot {
 
 impl PaneEntrySnapshot {
     pub(crate) fn from_entry(entry: &FileEntry) -> Self {
+        let name = entry.name.to_string();
         Self {
-            name: entry.name.to_string(),
+            name_width_units: compact_text_width_units(&name),
+            name,
             path: entry.path.to_string(),
             group: entry.group.to_string(),
             location: entry.location.to_string(),
@@ -241,17 +246,30 @@ impl PaneEntrySnapshot {
     }
 
     pub(crate) fn from_raw(entry: RawFileEntry) -> Self {
+        let RawFileEntry {
+            name,
+            path,
+            group,
+            location,
+            kind,
+            size,
+            size_bytes,
+            modified,
+            modified_age_days,
+            is_dir,
+        } = entry;
         Self {
-            name: entry.name,
-            path: entry.path,
-            group: entry.group,
-            location: entry.location,
-            kind: entry.kind,
-            size: entry.size,
-            size_bytes: entry.size_bytes as f32,
-            modified: entry.modified,
-            modified_age_days: entry.modified_age_days,
-            is_dir: entry.is_dir,
+            name_width_units: compact_text_width_units(&name),
+            name,
+            path,
+            group,
+            location,
+            kind,
+            size,
+            size_bytes: size_bytes as f32,
+            modified,
+            modified_age_days,
+            is_dir,
         }
     }
 
@@ -1011,6 +1029,7 @@ mod tests {
                 visible_count_override: None,
                 cache: VirtualViewCache::default(),
                 entries: Arc::from([PaneEntrySnapshot {
+                    name_width_units: compact_text_width_units("item.txt"),
                     name: "item.txt".to_string(),
                     path: "/tmp/item.txt".to_string(),
                     group: String::new(),

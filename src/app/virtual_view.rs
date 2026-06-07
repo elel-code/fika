@@ -45,10 +45,10 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     let visible_count = input
         .visible_count_override
         .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-    let visible_names = snapshot_visible_entry_names(&input, visible_count);
+    let visible_name_widths = snapshot_visible_entry_name_width_units(&input, visible_count);
     let compact_item_view = input
         .layout
-        .compact_item_view_from_names(visible_names.iter().map(String::as_str));
+        .compact_item_view_from_text_width_units(visible_name_widths);
     let item_view_layout = ItemViewLayoutEngine::from(compact_item_view.clone());
     let plan =
         compact_item_view.virtual_plan(input.requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
@@ -131,22 +131,22 @@ fn snapshot_visible_entry_count(input: &VirtualViewSnapshotInput) -> usize {
         .count()
 }
 
-fn snapshot_visible_entry_names(
+fn snapshot_visible_entry_name_width_units(
     input: &VirtualViewSnapshotInput,
     visible_count: usize,
-) -> Vec<String> {
-    let mut names = if let Some(indices) = input.visible_entry_indices.as_ref() {
+) -> Vec<f32> {
+    let mut widths = if let Some(indices) = input.visible_entry_indices.as_ref() {
         indices
             .iter()
             .take(visible_count)
-            .filter_map(|&index| input.entries.get(index).map(|entry| entry.name.clone()))
+            .filter_map(|&index| input.entries.get(index).map(|entry| entry.name_width_units))
             .collect::<Vec<_>>()
     } else if snapshot_filters_are_identity(input) {
         input
             .entries
             .iter()
             .take(visible_count)
-            .map(|entry| entry.name.clone())
+            .map(|entry| entry.name_width_units)
             .collect::<Vec<_>>()
     } else {
         input
@@ -154,12 +154,12 @@ fn snapshot_visible_entry_names(
             .iter()
             .filter(|entry| snapshot_matches_entry_filters(entry, input))
             .take(visible_count)
-            .map(|entry| entry.name.clone())
+            .map(|entry| entry.name_width_units)
             .collect::<Vec<_>>()
     };
 
-    names.resize(visible_count, String::new());
-    names
+    widths.resize(visible_count, 0.0);
+    widths
 }
 
 fn snapshot_entries_range(
@@ -404,8 +404,10 @@ mod tests {
     }
 
     fn snapshot_test_entry(index: usize, location: &str) -> PaneEntrySnapshot {
+        let name = format!("item-{index}.txt");
         PaneEntrySnapshot {
-            name: format!("item-{index}.txt"),
+            name_width_units: crate::app::geometry::compact_text_width_units(&name),
+            name,
             path: format!("/tmp/item-{index}.txt"),
             group: String::new(),
             location: location.to_string(),

@@ -229,13 +229,34 @@ impl MainItemViewLayout {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn compact_item_view_from_names(
         self,
         names: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> CompactItemViewLayout {
-        compact_item_view_layout(
+        compact_item_view_layout_from_text_width_units(
             self.viewport_width,
-            names,
+            names
+                .into_iter()
+                .map(|name| compact_text_width_units(name.as_ref())),
+            self.rows_per_column,
+            self.cell_width,
+            self.row_height,
+            self.padding,
+            self.item_padding,
+            self.media_width,
+            self.media_text_gap,
+            self.title_font_size,
+        )
+    }
+
+    pub(crate) fn compact_item_view_from_text_width_units(
+        self,
+        text_width_units: impl IntoIterator<Item = f32>,
+    ) -> CompactItemViewLayout {
+        compact_item_view_layout_from_text_width_units(
+            self.viewport_width,
+            text_width_units,
             self.rows_per_column,
             self.cell_width,
             self.row_height,
@@ -817,9 +838,38 @@ pub(crate) fn main_pane_bounds(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn compact_item_view_layout(
     viewport_width: f32,
     names: impl IntoIterator<Item = impl AsRef<str>>,
+    rows_per_column: usize,
+    cell_width: f32,
+    row_height: f32,
+    padding: f32,
+    item_padding: f32,
+    media_width: f32,
+    media_text_gap: f32,
+    title_font_size: f32,
+) -> CompactItemViewLayout {
+    compact_item_view_layout_from_text_width_units(
+        viewport_width,
+        names
+            .into_iter()
+            .map(|name| compact_text_width_units(name.as_ref())),
+        rows_per_column,
+        cell_width,
+        row_height,
+        padding,
+        item_padding,
+        media_width,
+        media_text_gap,
+        title_font_size,
+    )
+}
+
+fn compact_item_view_layout_from_text_width_units(
+    viewport_width: f32,
+    text_width_units: impl IntoIterator<Item = f32>,
     rows_per_column: usize,
     cell_width: f32,
     row_height: f32,
@@ -843,11 +893,11 @@ pub(crate) fn compact_item_view_layout(
     // Dolphin CompactLayout scrolls horizontally: rows fill the physical height,
     // then each completed column advances on the X axis by that column's
     // maximum item width. This mirrors Dolphin's size-hint layouter.
-    let item_widths = names
+    let item_widths = text_width_units
         .into_iter()
-        .map(|name| {
-            compact_item_view_item_width(
-                name.as_ref(),
+        .map(|text_width_units| {
+            compact_item_view_item_width_from_text_width_units(
+                text_width_units,
                 cell_width,
                 item_padding,
                 media_width,
@@ -897,36 +947,41 @@ pub(crate) fn compact_item_view_layout(
     }
 }
 
-fn compact_item_view_item_width(
-    name: &str,
+fn compact_item_view_item_width_from_text_width_units(
+    text_width_units: f32,
     cell_width: f32,
     item_padding: f32,
     media_width: f32,
     media_text_gap: f32,
     title_font_size: f32,
 ) -> f32 {
-    let text_width = compact_text_width_estimate(name, title_font_size);
+    let text_width = compact_text_width_estimate_from_units(text_width_units, title_font_size);
     let required = item_padding * 2.0 + media_width + media_text_gap + text_width;
     required.max(cell_width).max(1.0)
 }
 
-pub(crate) fn compact_text_width_estimate(text: &str, font_size: f32) -> f32 {
+pub(crate) fn compact_text_width_estimate_from_units(units: f32, font_size: f32) -> f32 {
     let font_size = font_size.max(1.0);
-    let width = text.chars().fold(0.0, |acc, ch| {
-        let factor = if ch.is_whitespace() {
-            0.35
-        } else if ch.is_ascii() {
-            match ch {
-                'i' | 'l' | 'I' | '!' | '|' | '.' | ',' | ':' | ';' | '\'' | '`' => 0.32,
-                'm' | 'w' | 'M' | 'W' | '@' | '#' | '%' | '&' => 0.82,
-                _ => 0.58,
-            }
-        } else {
-            1.0
-        };
-        acc + font_size * factor
-    });
+    let width = units.max(0.0) * font_size;
     width.ceil().max(font_size)
+}
+
+pub(crate) fn compact_text_width_units(text: &str) -> f32 {
+    text.chars().map(compact_text_width_unit).sum()
+}
+
+fn compact_text_width_unit(ch: char) -> f32 {
+    if ch.is_whitespace() {
+        0.35
+    } else if ch.is_ascii() {
+        match ch {
+            'i' | 'l' | 'I' | '!' | '|' | '.' | ',' | ':' | ';' | '\'' | '`' => 0.32,
+            'm' | 'w' | 'M' | 'W' | '@' | '#' | '%' | '&' => 0.82,
+            _ => 0.58,
+        }
+    } else {
+        1.0
+    }
 }
 
 fn compact_item_view_column_offsets(column_widths: &[f32]) -> Vec<f32> {

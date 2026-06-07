@@ -296,8 +296,10 @@ mod tests {
     }
 
     fn test_entry(index: usize) -> PaneEntrySnapshot {
+        let name = format!("file-{index}");
         PaneEntrySnapshot {
-            name: format!("file-{index}"),
+            name_width_units: crate::app::geometry::compact_text_width_units(&name),
+            name,
             path: format!("/tmp/file-{index}"),
             group: String::new(),
             location: String::new(),

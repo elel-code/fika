@@ -227,6 +227,7 @@ mod tests {
             entries
                 .into_iter()
                 .map(|(name, path)| PaneEntrySnapshot {
+                    name_width_units: crate::app::geometry::compact_text_width_units(name),
                     name: name.to_string(),
                     path: path.to_string(),
                     group: String::new(),

@@ -3739,8 +3739,8 @@ fn sync_virtual_entries_for_slot_with_count(
             let range_hint = if pane.show_item_locations() {
                 None
             } else {
-                zoom_range_visible_names(pane, visible_count_override, &chooser_patterns).and_then(
-                    |visible_names| {
+                zoom_range_visible_name_width_units(pane, visible_count_override, &chooser_patterns)
+                    .and_then(|visible_name_width_units| {
                         icon_zoom_range_hint(
                             ui,
                             viewport_width,
@@ -3748,10 +3748,9 @@ fn sync_virtual_entries_for_slot_with_count(
                             text_line_count,
                             zoom_level,
                             requested_viewport_x,
-                            &visible_names,
+                            &visible_name_width_units,
                         )
-                    },
-                )
+                    })
             };
             let request = VirtualViewPrepareRequest {
                 pane_id: pane.id,
@@ -3949,27 +3948,27 @@ fn same_layout_metric(left: f32, right: f32) -> bool {
     (left - right).abs() <= 0.5
 }
 
-fn zoom_range_visible_names(
+fn zoom_range_visible_name_width_units(
     pane: &PaneState,
     visible_count_override: Option<usize>,
     chooser_patterns: &[String],
-) -> Option<Vec<String>> {
+) -> Option<Vec<f32>> {
     if let Some(visible_count) = visible_count_override {
-        let mut names = pane
+        let mut widths = pane
             .entries
             .iter()
             .take(visible_count)
-            .map(|entry| entry.name.clone())
+            .map(|entry| entry.name_width_units)
             .collect::<Vec<_>>();
-        names.resize(visible_count, String::new());
-        return Some(names);
+        widths.resize(visible_count, 0.0);
+        return Some(widths);
     }
 
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return Some(
             indices
                 .iter()
-                .filter_map(|&index| pane.entries.get(index).map(|entry| entry.name.clone()))
+                .filter_map(|&index| pane.entries.get(index).map(|entry| entry.name_width_units))
                 .collect(),
         );
     }
@@ -3982,7 +3981,7 @@ fn zoom_range_visible_names(
     .then(|| {
         pane.entries
             .iter()
-            .map(|entry| entry.name.clone())
+            .map(|entry| entry.name_width_units)
             .collect()
     })
 }
@@ -3994,9 +3993,9 @@ fn icon_zoom_range_hint(
     text_line_count: usize,
     current_zoom_level: i32,
     requested_viewport_x: f32,
-    visible_names: &[String],
+    visible_name_width_units: &[f32],
 ) -> Option<Range<usize>> {
-    let visible_count = visible_names.len();
+    let visible_count = visible_name_width_units.len();
     if visible_count == 0 {
         return None;
     }
@@ -4011,7 +4010,7 @@ fn icon_zoom_range_hint(
             text_line_count,
         );
         let plan = layout
-            .compact_item_view_from_names(visible_names.iter().map(String::as_str))
+            .compact_item_view_from_text_width_units(visible_name_width_units.iter().copied())
             .virtual_plan(
                 requested_viewport_x,
                 if zoom_level == current_zoom_level {
@@ -4958,10 +4957,11 @@ fn try_relayout_cached_pane_icon_zoom_layout(
             return false;
         }
 
-        let Some(visible_names) = zoom_range_visible_names(pane, None, &[]) else {
+        let Some(visible_name_width_units) = zoom_range_visible_name_width_units(pane, None, &[])
+        else {
             return false;
         };
-        let entry_count = visible_names.len();
+        let entry_count = visible_name_width_units.len();
         if entry_count == 0 {
             return false;
         }
@@ -4969,7 +4969,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         let requested_viewport_x = pane.view.viewport_x;
         layout.viewport_x = requested_viewport_x;
         let compact_item_view =
-            layout.compact_item_view_from_names(visible_names.iter().map(String::as_str));
+            layout.compact_item_view_from_text_width_units(visible_name_width_units);
         let plan = compact_item_view.virtual_plan(requested_viewport_x, ITEM_VIEW_OVERSCAN_COLUMNS);
         let current_range = pane.view.virtual_view.range.clone();
         let Some(relayout_range) =
