@@ -2,6 +2,7 @@ use crate::app::item_view_metrics::{COMPACT_COLUMN_MARGIN_WIDTH, CompactItemVisu
 use crate::{AppWindow, MenuGeometry};
 use slint::ComponentHandle;
 use std::ops::Range;
+use std::sync::Arc;
 
 const SHELL_HEADER_HEIGHT: f32 = 56.0;
 pub(crate) const PATH_BAR_HEIGHT: f32 = 56.0;
@@ -35,10 +36,10 @@ pub(crate) struct CompactItemViewLayout {
     pub(crate) padding: f32,
     pub(crate) content_width: f32,
     pub(crate) scroll_max_x: f32,
-    pub(crate) item_widths: Vec<f32>,
-    pub(crate) item_text_widths: Vec<f32>,
-    pub(crate) column_widths: Vec<f32>,
-    pub(crate) column_offsets: Vec<f32>,
+    text_width_reserved: f32,
+    pub(crate) item_widths: Arc<[f32]>,
+    pub(crate) column_widths: Arc<[f32]>,
+    pub(crate) column_offsets: Arc<[f32]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -277,10 +278,10 @@ impl CompactItemViewLayout {
             padding: 0.0,
             content_width: 1.0,
             scroll_max_x: 0.0,
-            item_widths: Vec::new(),
-            item_text_widths: Vec::new(),
-            column_widths: Vec::new(),
-            column_offsets: Vec::new(),
+            text_width_reserved: 0.0,
+            item_widths: Arc::from([]),
+            column_widths: Arc::from([]),
+            column_offsets: Arc::from([]),
         }
     }
 }
@@ -322,8 +323,8 @@ impl ItemViewLayouter for CompactItemViewLayout {
             && same_layout_metric(self.padding, other.padding)
             && same_layout_metric(self.content_width, other.content_width)
             && same_layout_metric(self.scroll_max_x, other.scroll_max_x)
+            && same_layout_metric(self.text_width_reserved, other.text_width_reserved)
             && same_layout_vec(&self.item_widths, &other.item_widths)
-            && same_layout_vec(&self.item_text_widths, &other.item_text_widths)
             && same_layout_vec(&self.column_widths, &other.column_widths)
             && same_layout_vec(&self.column_offsets, &other.column_offsets)
     }
@@ -439,7 +440,7 @@ impl ItemViewLayouter for CompactItemViewLayout {
                 .copied()
                 .unwrap_or(self.cell_width),
             cross_extent: self.row_height.max(1.0),
-            text_main_extent: self.item_text_widths.get(index).copied().unwrap_or(1.0),
+            text_main_extent: self.item_text_width_for_index(index),
         })
     }
 
@@ -642,6 +643,13 @@ impl CompactItemViewLayout {
     fn row_y_for_index(&self, index: usize) -> f32 {
         let rows_per_column = self.rows_per_column.max(1);
         (index % rows_per_column) as f32 * self.row_height.max(1.0)
+    }
+
+    fn item_text_width_for_index(&self, index: usize) -> f32 {
+        self.item_widths
+            .get(index)
+            .map(|width| (*width - self.text_width_reserved).max(1.0))
+            .unwrap_or(1.0)
     }
 
     fn virtual_entry_ranges(
@@ -886,6 +894,7 @@ fn compact_item_view_layout_from_text_width_units(
     let media_text_gap = media_text_gap.max(0.0);
     let title_font_size = title_font_size.max(1.0);
     let text_x = item_padding + media_width + media_text_gap;
+    let text_width_reserved = text_x + item_padding;
 
     // Dolphin CompactLayout scrolls horizontally: rows fill the physical height,
     // then each completed column advances on the X axis by that column's
@@ -904,10 +913,6 @@ fn compact_item_view_layout_from_text_width_units(
         })
         .collect::<Vec<_>>();
     let entry_count = item_widths.len();
-    let item_text_widths = item_widths
-        .iter()
-        .map(|width| (*width - text_x - item_padding).max(1.0))
-        .collect::<Vec<_>>();
     let column_count = entry_count.div_ceil(rows_per_column).max(1);
     let mut column_widths = Vec::with_capacity(column_count);
     for column in 0..column_count {
@@ -937,10 +942,10 @@ fn compact_item_view_layout_from_text_width_units(
         padding,
         content_width,
         scroll_max_x,
-        item_widths,
-        item_text_widths,
-        column_widths,
-        column_offsets,
+        text_width_reserved,
+        item_widths: Arc::from(item_widths),
+        column_widths: Arc::from(column_widths),
+        column_offsets: Arc::from(column_offsets),
     }
 }
 
@@ -1911,6 +1916,7 @@ mod tests {
         search_panel_height,
     };
     use crate::app::item_view_metrics::{compact_cell_width, compact_row_height};
+    use std::sync::Arc;
 
     const MENU_ITEM_HEIGHT: f32 = 38.0;
     const MENU_SEPARATOR_HEIGHT: f32 = 8.0;
@@ -4032,12 +4038,12 @@ mod tests {
         let layout = compact_test_layout(300.0, 12, 4, 100.0, 100.0, 10.0);
         let mut same = layout.clone();
         same.scroll_max_x += 0.005;
-        same.column_offsets[1] += 0.005;
+        Arc::make_mut(&mut same.column_offsets)[1] += 0.005;
 
         assert!(layout.matches_layout_signature(&same));
 
         let mut changed = layout.clone();
-        changed.column_widths[1] += 1.0;
+        Arc::make_mut(&mut changed.column_widths)[1] += 1.0;
 
         assert!(!layout.matches_layout_signature(&changed));
     }
