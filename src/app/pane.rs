@@ -577,6 +577,7 @@ pub(crate) struct PaneView {
     raster_revision: u64,
     raster_cache: RefCell<Option<ItemViewRasterCache>>,
     virtual_refresh_state: VirtualViewRefreshState,
+    layout_prewarm_generation: Option<u64>,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
     state_cache: HashMap<PathBuf, DirectoryViewState>,
     state_cache_order: VecDeque<PathBuf>,
@@ -650,6 +651,7 @@ impl PaneView {
     pub(crate) fn invalidate_virtual_view(&mut self) {
         self.virtual_view.invalidate();
         self.virtual_generation.next();
+        self.layout_prewarm_generation = None;
         self.bump_raster_revision();
         self.clear_raster_cache();
         self.cancel_virtual_prepare_queue();
@@ -658,6 +660,7 @@ impl PaneView {
     pub(crate) fn clear_virtual_view(&mut self) {
         self.virtual_view.clear();
         self.virtual_generation.next();
+        self.layout_prewarm_generation = None;
         self.bump_raster_revision();
         self.clear_raster_cache();
         self.cancel_virtual_prepare_queue();
@@ -681,6 +684,20 @@ impl PaneView {
 
     pub(crate) fn cancel_virtual_prepare_queue(&mut self) {
         self.virtual_refresh_state.cancel();
+    }
+
+    pub(crate) fn has_layout_prewarm_in_flight(&self, generation: u64) -> bool {
+        self.layout_prewarm_generation == Some(generation)
+    }
+
+    pub(crate) fn mark_layout_prewarm_started(&mut self, generation: u64) {
+        self.layout_prewarm_generation = Some(generation);
+    }
+
+    pub(crate) fn finish_layout_prewarm(&mut self, generation: u64) {
+        if self.layout_prewarm_generation == Some(generation) {
+            self.layout_prewarm_generation = None;
+        }
     }
 
     pub(crate) fn tile_frame_raster_layer(
@@ -945,6 +962,15 @@ impl VirtualViewCache {
         self.thumbnail_size_px = thumbnail_size_px;
     }
 
+    pub(crate) fn store_recent_layout(&mut self, layout: Arc<ItemViewLayoutEngine>) {
+        if self.layout.as_ref().is_some_and(|current| {
+            Arc::ptr_eq(current, &layout) || current.matches_layout_signature(layout.as_ref())
+        }) {
+            return;
+        }
+        self.store_layout_history(layout);
+    }
+
     fn store_layout_history(&mut self, layout: Arc<ItemViewLayoutEngine>) {
         self.layout_history.retain(|current| {
             !Arc::ptr_eq(current, &layout) && !current.matches_layout_signature(layout.as_ref())
@@ -1171,6 +1197,8 @@ mod tests {
         let mut cache = VirtualViewCache::default();
 
         cache.update_layout_signature_arc(Arc::clone(&first), 64);
+        assert!(cache.layout_history.is_empty());
+        cache.store_recent_layout(Arc::clone(&first));
         assert!(cache.layout_history.is_empty());
 
         cache.update_layout_signature_arc(Arc::clone(&second), 64);

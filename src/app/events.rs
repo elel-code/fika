@@ -1,4 +1,5 @@
 use crate::DeviceEntry;
+use crate::app::geometry::ItemViewLayoutEngine;
 use crate::app::item_view_renderer::ItemViewRenderMetrics;
 use crate::app::pane::PreparedDirectoryEntries;
 use crate::app::virtual_view::VirtualViewSnapshotUpdate;
@@ -6,6 +7,7 @@ use crate::desktop::{clipboard, open_with, service_menu, systemd_launch};
 use crate::fs::{file_actions, file_ops, privilege, search, thumbnails};
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub(crate) const EXTERNAL_EDIT_SAVE_OPERATION: &str = "Admin Save";
 pub(crate) const EXTERNAL_EDIT_DISCARD_OPERATION: &str = "Discard";
@@ -132,6 +134,13 @@ pub(crate) struct VirtualViewResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct VirtualViewLayoutPrewarmResult {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) layouts: Vec<Arc<ItemViewLayoutEngine>>,
+}
+
+#[derive(Debug)]
 pub(crate) struct ServiceMenuActionLaunchResult {
     pub(crate) pane_id: u64,
     pub(crate) action_name: String,
@@ -164,6 +173,7 @@ pub(crate) enum AsyncEvent {
     ClipboardLoaded(ClipboardLoadResult),
     ClipboardPasteLoaded(ClipboardPasteLoadResult),
     VirtualViewPrepared(VirtualViewResult),
+    VirtualViewLayoutsPrewarmed(VirtualViewLayoutPrewarmResult),
     VirtualViewPrepareFailed {
         pane_id: u64,
         generation: u64,
