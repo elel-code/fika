@@ -582,6 +582,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     pub(crate) virtual_start_index: usize,
     drop_target_slice_index: Option<usize>,
+    raster_revision: u64,
     raster_cache: RefCell<Option<ItemViewRasterCache>>,
     virtual_refresh_state: VirtualViewRefreshState,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
@@ -598,9 +599,7 @@ struct ItemViewRasterCache {
 #[derive(Clone, Debug, PartialEq)]
 struct ItemViewRasterCacheSignature {
     input: ItemViewTileFrameRasterInput,
-    tokens: Vec<ItemViewRowToken>,
-    bounds: Vec<ItemViewItemBounds>,
-    media_tokens: Vec<ItemViewMediaToken>,
+    revision: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -659,6 +658,7 @@ impl PaneView {
     pub(crate) fn invalidate_virtual_view(&mut self) {
         self.virtual_view.invalidate();
         self.virtual_generation.next();
+        self.bump_raster_revision();
         self.clear_raster_cache();
         self.cancel_virtual_prepare_queue();
     }
@@ -666,6 +666,7 @@ impl PaneView {
     pub(crate) fn clear_virtual_view(&mut self) {
         self.virtual_view.clear();
         self.virtual_generation.next();
+        self.bump_raster_revision();
         self.clear_raster_cache();
         self.cancel_virtual_prepare_queue();
     }
@@ -695,16 +696,14 @@ impl PaneView {
         mut input: ItemViewTileFrameRasterInput,
     ) -> ItemViewTileFrameRaster {
         input.drop_target_slice_index = self.drop_target_slice_index_i32();
-        let bounds_entries = self.current_virtual_bounds_entries();
         let signature = ItemViewRasterCacheSignature {
             input,
-            tokens: self.virtual_entry_tokens.clone(),
-            bounds: bounds_entries.clone(),
-            media_tokens: self.virtual_media_tokens.clone(),
+            revision: self.raster_revision,
         };
         if let Some(raster) = self.cached_raster(&signature) {
             return raster;
         }
+        let bounds_entries = self.current_virtual_bounds_entries();
         let raster = ItemViewTileFrameBatch::from_bounded_entries(
             &self.virtual_entry_tokens,
             &bounds_entries,
@@ -722,6 +721,7 @@ impl PaneView {
             return false;
         }
         self.drop_target_slice_index = next;
+        self.bump_raster_revision();
         true
     }
 
@@ -733,6 +733,10 @@ impl PaneView {
 
     pub(crate) fn clear_raster_cache(&self) {
         *self.raster_cache.borrow_mut() = None;
+    }
+
+    pub(crate) fn bump_raster_revision(&mut self) {
+        self.raster_revision = self.raster_revision.wrapping_add(1);
     }
 
     fn cached_raster(
@@ -760,6 +764,14 @@ impl PaneView {
             .borrow()
             .as_ref()
             .map(|cache| cache.signature.input.drop_target_slice_index)
+    }
+
+    #[cfg(test)]
+    fn raster_cache_revision(&self) -> Option<u64> {
+        self.raster_cache
+            .borrow()
+            .as_ref()
+            .map(|cache| cache.signature.revision)
     }
 
     fn current_virtual_bounds_entries(&self) -> Vec<ItemViewItemBounds> {
@@ -1085,12 +1097,9 @@ mod tests {
         mut input: ItemViewTileFrameRasterInput,
     ) -> ItemViewRasterCacheSignature {
         input.drop_target_slice_index = view.drop_target_slice_index_i32();
-        let bounds = view.current_virtual_bounds_entries();
         ItemViewRasterCacheSignature {
             input,
-            tokens: view.virtual_entry_tokens.clone(),
-            bounds,
-            media_tokens: view.virtual_media_tokens.clone(),
+            revision: view.raster_revision,
         }
     }
 
@@ -1633,9 +1642,10 @@ mod tests {
     }
 
     #[test]
-    fn pane_view_tile_raster_cache_reuses_exact_signature_and_invalidates_on_view_clear() {
+    fn pane_view_tile_raster_cache_uses_revision_signature_and_invalidates_on_view_clear() {
         let snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
         let mut view = PaneView::default();
+        let initial_revision = view.raster_revision;
         update_pane_item_view_entries_model(
             &mut view,
             0,
@@ -1651,6 +1661,8 @@ mod tests {
             Vec::new(),
             &[],
         );
+        assert!(view.raster_revision > initial_revision);
+        let rendered_revision = view.raster_revision;
         let input = ItemViewTileFrameRasterInput {
             width: 64,
             height: 48,
@@ -1668,15 +1680,18 @@ mod tests {
         let first = view.tile_frame_raster_layer(input);
         assert_eq!(first.width, 64);
         assert_eq!(view.raster_cache_drop_target_slice_index(), Some(-1));
+        assert_eq!(view.raster_cache_revision(), Some(rendered_revision));
         let current_signature = test_raster_signature(&view, input);
         assert!(view.cached_raster(&current_signature).is_some());
 
         assert!(view.set_drop_target_slice_index(0));
+        assert!(view.raster_revision > rendered_revision);
         let drop_target_signature = test_raster_signature(&view, input);
         assert!(view.cached_raster(&drop_target_signature).is_none());
         let with_drop_target = view.tile_frame_raster_layer(input);
         assert_eq!(with_drop_target.width, 64);
         assert_eq!(view.raster_cache_drop_target_slice_index(), Some(0));
+        assert_eq!(view.raster_cache_revision(), Some(view.raster_revision));
         assert!(view.cached_raster(&drop_target_signature).is_some());
 
         view.invalidate_virtual_view();

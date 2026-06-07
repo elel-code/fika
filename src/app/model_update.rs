@@ -563,6 +563,7 @@ pub(crate) fn update_pane_item_view_entries_model(
     }
     update_item_view_highlight_model(view);
     view.virtual_start_index = start_index;
+    view.bump_raster_revision();
 }
 
 pub(crate) fn relayout_pane_item_view_entries_model(
@@ -642,6 +643,7 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         highlight_entries,
     );
     view.virtual_start_index = range.start;
+    view.bump_raster_revision();
     true
 }
 
@@ -696,6 +698,7 @@ pub(crate) fn update_pane_item_view_selection_model(
     let changed = update_item_view_selection_tokens(&mut view.virtual_entry_tokens, selected_paths);
     if changed {
         update_item_view_highlight_model(view);
+        view.bump_raster_revision();
     }
     changed
 }
