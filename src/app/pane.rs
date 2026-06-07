@@ -18,6 +18,7 @@ use crate::{FileEntry, ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry}
 #[cfg(test)]
 use slint::Image;
 use slint::{Model, ModelRc, VecModel};
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -133,6 +134,7 @@ impl PaneState {
         self.view.virtual_media_tokens.clear();
         self.view.virtual_metadata_entries = ModelRc::default();
         self.view.drop_target_slice_index = None;
+        self.view.clear_raster_cache();
         self.view.virtual_start_index = 0;
         self.view.clear_virtual_view();
     }
@@ -580,10 +582,25 @@ pub(crate) struct PaneView {
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     pub(crate) virtual_start_index: usize,
     drop_target_slice_index: Option<usize>,
+    raster_cache: RefCell<Option<ItemViewRasterCache>>,
     virtual_refresh_state: VirtualViewRefreshState,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
     state_cache: HashMap<PathBuf, DirectoryViewState>,
     state_cache_order: VecDeque<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct ItemViewRasterCache {
+    signature: ItemViewRasterCacheSignature,
+    raster: ItemViewTileFrameRaster,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ItemViewRasterCacheSignature {
+    input: ItemViewTileFrameRasterInput,
+    tokens: Vec<ItemViewRowToken>,
+    bounds: Vec<ItemViewItemBounds>,
+    media_tokens: Vec<ItemViewMediaToken>,
 }
 
 #[derive(Clone, Debug)]
@@ -642,12 +659,14 @@ impl PaneView {
     pub(crate) fn invalidate_virtual_view(&mut self) {
         self.virtual_view.invalidate();
         self.virtual_generation.next();
+        self.clear_raster_cache();
         self.cancel_virtual_prepare_queue();
     }
 
     pub(crate) fn clear_virtual_view(&mut self) {
         self.virtual_view.clear();
         self.virtual_generation.next();
+        self.clear_raster_cache();
         self.cancel_virtual_prepare_queue();
     }
 
@@ -677,8 +696,22 @@ impl PaneView {
     ) -> ItemViewTileFrameRaster {
         input.drop_target_slice_index = self.drop_target_slice_index_i32();
         let bounds_entries = self.current_virtual_bounds_entries();
-        ItemViewTileFrameBatch::from_bounded_entries(&self.virtual_entry_tokens, &bounds_entries)
-            .render_raster_layer(input, &self.virtual_media_entries)
+        let signature = ItemViewRasterCacheSignature {
+            input,
+            tokens: self.virtual_entry_tokens.clone(),
+            bounds: bounds_entries.clone(),
+            media_tokens: self.virtual_media_tokens.clone(),
+        };
+        if let Some(raster) = self.cached_raster(&signature) {
+            return raster;
+        }
+        let raster = ItemViewTileFrameBatch::from_bounded_entries(
+            &self.virtual_entry_tokens,
+            &bounds_entries,
+        )
+        .render_raster_layer(input, &self.virtual_media_entries);
+        self.store_raster_cache(signature, raster.clone());
+        raster
     }
 
     pub(crate) fn set_drop_target_slice_index(&mut self, slice_index: i32) -> bool {
@@ -696,6 +729,37 @@ impl PaneView {
         self.drop_target_slice_index
             .and_then(|index| i32::try_from(index).ok())
             .unwrap_or(-1)
+    }
+
+    pub(crate) fn clear_raster_cache(&self) {
+        *self.raster_cache.borrow_mut() = None;
+    }
+
+    fn cached_raster(
+        &self,
+        signature: &ItemViewRasterCacheSignature,
+    ) -> Option<ItemViewTileFrameRaster> {
+        let cache = self.raster_cache.borrow();
+        cache
+            .as_ref()
+            .filter(|cache| cache.signature == *signature)
+            .map(|cache| cache.raster.clone())
+    }
+
+    fn store_raster_cache(
+        &self,
+        signature: ItemViewRasterCacheSignature,
+        raster: ItemViewTileFrameRaster,
+    ) {
+        *self.raster_cache.borrow_mut() = Some(ItemViewRasterCache { signature, raster });
+    }
+
+    #[cfg(test)]
+    fn raster_cache_drop_target_slice_index(&self) -> Option<i32> {
+        self.raster_cache
+            .borrow()
+            .as_ref()
+            .map(|cache| cache.signature.input.drop_target_slice_index)
     }
 
     fn current_virtual_bounds_entries(&self) -> Vec<ItemViewItemBounds> {
@@ -1014,6 +1078,20 @@ mod tests {
             thumbnail_size_px,
         );
         cache
+    }
+
+    fn test_raster_signature(
+        view: &PaneView,
+        mut input: ItemViewTileFrameRasterInput,
+    ) -> ItemViewRasterCacheSignature {
+        input.drop_target_slice_index = view.drop_target_slice_index_i32();
+        let bounds = view.current_virtual_bounds_entries();
+        ItemViewRasterCacheSignature {
+            input,
+            tokens: view.virtual_entry_tokens.clone(),
+            bounds,
+            media_tokens: view.virtual_media_tokens.clone(),
+        }
     }
 
     #[test]
@@ -1552,6 +1630,58 @@ mod tests {
         assert_eq!(pane.view.virtual_paint_entries.row_count(), 0);
         assert!(pane.view.virtual_media_entries.is_empty());
         assert!(pane.view.virtual_media_tokens.is_empty());
+    }
+
+    #[test]
+    fn pane_view_tile_raster_cache_reuses_exact_signature_and_invalidates_on_view_clear() {
+        let snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            vec![snapshot.to_item_view_entry()],
+            vec![ItemViewItemBounds {
+                slice_index: 0,
+                x: 4.0,
+                y: 6.0,
+                width: 40.0,
+                text_width: 24.0,
+            }],
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+        let input = ItemViewTileFrameRasterInput {
+            width: 64,
+            height: 48,
+            content_origin_x: 0.0,
+            drop_target_slice_index: -1,
+            dark: false,
+            tile_height: 20.0,
+            media_x: 2.0,
+            media_y: 2.0,
+            media_width: 12.0,
+            media_height: 12.0,
+        };
+
+        assert!(view.raster_cache_drop_target_slice_index().is_none());
+        let first = view.tile_frame_raster_layer(input);
+        assert_eq!(first.width, 64);
+        assert_eq!(view.raster_cache_drop_target_slice_index(), Some(-1));
+        let current_signature = test_raster_signature(&view, input);
+        assert!(view.cached_raster(&current_signature).is_some());
+
+        assert!(view.set_drop_target_slice_index(0));
+        let drop_target_signature = test_raster_signature(&view, input);
+        assert!(view.cached_raster(&drop_target_signature).is_none());
+        let with_drop_target = view.tile_frame_raster_layer(input);
+        assert_eq!(with_drop_target.width, 64);
+        assert_eq!(view.raster_cache_drop_target_slice_index(), Some(0));
+        assert!(view.cached_raster(&drop_target_signature).is_some());
+
+        view.invalidate_virtual_view();
+
+        assert!(view.raster_cache_drop_target_slice_index().is_none());
     }
 
     #[test]
