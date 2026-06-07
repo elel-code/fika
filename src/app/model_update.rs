@@ -260,19 +260,6 @@ fn project_media_entries_with_bounds(
         .collect()
 }
 
-fn item_view_media_tokens(
-    batch: &ItemViewTileFrameBatch,
-    media_entries: &[ItemViewMediaSource],
-) -> Vec<ItemViewMediaToken> {
-    media_entries
-        .iter()
-        .map(|media| ItemViewMediaToken {
-            slice_index: media.slice_index,
-            media_token: batch.media_token_for_slice_index(media.slice_index),
-        })
-        .collect()
-}
-
 fn update_item_view_media_entries_model(
     current: &mut Vec<ItemViewRasterMediaEntry>,
     current_tokens: &mut Vec<ItemViewMediaToken>,
@@ -348,7 +335,7 @@ pub(crate) fn update_pane_item_view_entries_model(
     let old_start = view.virtual_start_index;
     let frame_batch =
         ItemViewTileFrameBatch::from_entries_and_bounds(&entries, &bounds_entries, selected_paths);
-    let media_tokens = item_view_media_tokens(&frame_batch, &media_entries);
+    let media_tokens = frame_batch.media_tokens_for_sources(&media_entries);
     let media_entries = project_media_entries_with_bounds(media_entries, &bounds_entries);
     let metadata_entries = project_metadata_entries_with_bounds(metadata_entries, &bounds_entries);
     let paint_entries = frame_batch.paint_entries();
@@ -906,10 +893,8 @@ mod tests {
             &["/tmp/item-1".to_string()],
         );
         let paint = frame_batch.paint_entries();
-        let projected_media_tokens = item_view_media_tokens(
-            &frame_batch,
-            &[media_source(1, Rgba8Pixel::new(255, 0, 0, 255))],
-        );
+        let media_sources = [media_source(1, Rgba8Pixel::new(255, 0, 0, 255))];
+        let projected_media_tokens = frame_batch.media_tokens_for_sources(&media_sources);
 
         assert_eq!(frame_batch.sources().len(), 3);
         assert_eq!(paint.len(), 3);

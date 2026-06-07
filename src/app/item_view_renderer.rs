@@ -354,6 +354,19 @@ impl ItemViewTileFrameBatch {
             .map_or(0, |source| source.media_token)
     }
 
+    pub(crate) fn media_tokens_for_sources(
+        &self,
+        media_entries: &[ItemViewMediaSource],
+    ) -> Vec<ItemViewMediaToken> {
+        media_entries
+            .iter()
+            .map(|media| ItemViewMediaToken {
+                slice_index: media.slice_index,
+                media_token: self.media_token_for_slice_index(media.slice_index),
+            })
+            .collect()
+    }
+
     pub(crate) fn render_raster_layer(
         &self,
         input: ItemViewTileFrameRasterInput,
@@ -1104,6 +1117,33 @@ mod tests {
         assert_eq!(batch.media_token_for_slice_index(1), 42);
         assert_eq!(batch.media_token_for_slice_index(-1), 0);
         assert_eq!(batch.media_token_for_slice_index(2), 0);
+        let media_tokens = batch.media_tokens_for_sources(&[
+            ItemViewMediaSource {
+                slice_index: 0,
+                media: Image::default(),
+                x: 0.0,
+                y: 0.0,
+            },
+            ItemViewMediaSource {
+                slice_index: 1,
+                media: Image::default(),
+                x: 0.0,
+                y: 0.0,
+            },
+            ItemViewMediaSource {
+                slice_index: 4,
+                media: Image::default(),
+                x: 0.0,
+                y: 0.0,
+            },
+        ]);
+        assert_eq!(
+            media_tokens
+                .iter()
+                .map(|token| (token.slice_index, token.media_token))
+                .collect::<Vec<_>>(),
+            vec![(0, 21), (1, 42), (4, 0)]
+        );
     }
 
     #[test]
