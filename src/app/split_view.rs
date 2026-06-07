@@ -144,6 +144,23 @@ fn sync_pane_slots_model(ui: &AppWindow, slots: Vec<PaneSlotData>) {
 }
 
 pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    sync_pane_view_ui_with_raster_policy(ui, state, slot, false);
+}
+
+pub(crate) fn sync_pane_view_ui_defer_raster(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+) {
+    sync_pane_view_ui_with_raster_policy(ui, state, slot, true);
+}
+
+fn sync_pane_view_ui_with_raster_policy(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    defer_raster: bool,
+) {
     let current = ui.get_pane_views();
     for row in 0..current.row_count() {
         let Some(current_view) = current.row_data(row) else {
@@ -152,13 +169,24 @@ pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
         if current_view.slot == slot {
             let next = {
                 let state_ref = state.borrow();
-                pane_view_data(ui, slot, &state_ref)
+                pane_view_data_with_raster_reuse(
+                    ui,
+                    slot,
+                    &state_ref,
+                    defer_raster.then_some(&current_view),
+                )
             };
             let rebind_surface = pane_view_requires_surface_rebind(&current_view, &next);
             if current_view != next {
                 current.set_row_data(row, next);
             }
-            sync_pane_surface_ui_with_rebind(ui, state, slot, rebind_surface);
+            sync_pane_surface_ui_with_rebind_and_raster_policy(
+                ui,
+                state,
+                slot,
+                rebind_surface,
+                defer_raster,
+            );
             return;
         }
     }
@@ -244,6 +272,16 @@ fn sync_pane_surface_ui_with_rebind(
     slot: i32,
     rebind: bool,
 ) {
+    sync_pane_surface_ui_with_rebind_and_raster_policy(ui, state, slot, rebind, false);
+}
+
+fn sync_pane_surface_ui_with_rebind_and_raster_policy(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    slot: i32,
+    rebind: bool,
+    defer_raster: bool,
+) {
     let current = ui.get_pane_surfaces();
     for row in 0..current.row_count() {
         let Some(current_surface) = current.row_data(row) else {
@@ -259,7 +297,12 @@ fn sync_pane_surface_ui_with_rebind(
                 PaneSurfaceData {
                     slot,
                     pane: pane_slot_data(ui, slot, &state_ref),
-                    view: pane_view_data(ui, slot, &state_ref),
+                    view: pane_view_data_with_raster_reuse(
+                        ui,
+                        slot,
+                        &state_ref,
+                        defer_raster.then_some(&current_surface.view),
+                    ),
                 }
             };
             if current_surface != next {
@@ -350,6 +393,15 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
 }
 
 fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
+    pane_view_data_with_raster_reuse(ui, slot, state, None)
+}
+
+fn pane_view_data_with_raster_reuse(
+    ui: &AppWindow,
+    slot: i32,
+    state: &AppState,
+    reuse_raster_from: Option<&PaneViewData>,
+) -> PaneViewData {
     let is_focused = slot == state.panes.focused_slot();
     let search = state
         .panes
@@ -360,13 +412,21 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
     let item_view_render_geometry =
         pane_slot_item_view_render_geometry(ui, slot, state, item_view_metrics.cell_width);
     let (item_view_raster_layer, item_view_raster_width, item_view_raster_height) =
-        pane_slot_tile_frame_raster(
-            ui,
-            slot,
-            state,
-            item_view_metrics,
-            item_view_render_geometry,
-        );
+        if let Some(current) = reuse_raster_from {
+            (
+                current.item_view_raster_layer.clone(),
+                current.item_view_raster_width,
+                current.item_view_raster_height,
+            )
+        } else {
+            pane_slot_tile_frame_raster(
+                ui,
+                slot,
+                state,
+                item_view_metrics,
+                item_view_render_geometry,
+            )
+        };
 
     PaneViewData {
         slot,

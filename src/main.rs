@@ -95,7 +95,7 @@ use app::settings_save::{SettingsSaveScheduler, save_settings_latest};
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui, sync_focus_navigation_ui,
     sync_navigation_ui, sync_pane_slot_ui, sync_pane_slots_ui, sync_pane_view_ui,
-    toggle_split_view,
+    sync_pane_view_ui_defer_raster, toggle_split_view,
 };
 #[cfg(test)]
 use app::state::PaneExternalEdit;
@@ -145,6 +145,7 @@ pub(crate) struct FileEntry {
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
 const ICON_ZOOM_THUMBNAIL_COALESCE: Duration = Duration::from_millis(300);
+const ICON_ZOOM_RASTER_COALESCE: Duration = ICON_ZOOM_THUMBNAIL_COALESCE;
 const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = 4096;
 const ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT: usize = 128;
 
@@ -194,6 +195,7 @@ struct PaneLayoutSyncScheduler {
     bridge: AsyncBridge,
     pane_view_sync: Rc<PaneViewSyncScheduler>,
     pending_icon_zoom_thumbnails: Rc<Cell<bool>>,
+    pending_icon_zoom_rasters: Rc<Cell<bool>>,
 }
 
 impl PaneLayoutSyncScheduler {
@@ -209,16 +211,24 @@ impl PaneLayoutSyncScheduler {
         let timer_bridge = bridge.clone();
         let pending_icon_zoom_thumbnails = Rc::new(Cell::new(false));
         let timer_pending_icon_zoom_thumbnails = Rc::clone(&pending_icon_zoom_thumbnails);
+        let pending_icon_zoom_rasters = Rc::new(Cell::new(false));
+        let timer_pending_icon_zoom_rasters = Rc::clone(&pending_icon_zoom_rasters);
 
         timer.start(
             TimerMode::SingleShot,
-            ICON_ZOOM_THUMBNAIL_COALESCE,
+            ICON_ZOOM_RASTER_COALESCE,
             move || {
-                timer_pending_icon_zoom_thumbnails.set(false);
+                let flush_icon_zoom_rasters = timer_pending_icon_zoom_rasters.replace(false);
+                let flush_icon_zoom_thumbnails = timer_pending_icon_zoom_thumbnails.replace(false);
                 let Some(ui) = timer_ui.upgrade() else {
                     return;
                 };
-                schedule_visible_thumbnails_for_visible_panes(&ui, &timer_state, &timer_bridge);
+                if flush_icon_zoom_rasters {
+                    refresh_visible_pane_tile_frame_rasters(&ui, &timer_state);
+                }
+                if flush_icon_zoom_thumbnails {
+                    schedule_visible_thumbnails_for_visible_panes(&ui, &timer_state, &timer_bridge);
+                }
             },
         );
         timer.stop();
@@ -230,11 +240,13 @@ impl PaneLayoutSyncScheduler {
             bridge,
             pane_view_sync,
             pending_icon_zoom_thumbnails,
+            pending_icon_zoom_rasters,
         }
     }
 
     fn sync_now(&self) {
         let flush_icon_zoom_thumbnails = self.pending_icon_zoom_thumbnails.replace(false);
+        self.pending_icon_zoom_rasters.set(false);
         self.timer.stop();
         let Some(ui) = self.ui.upgrade() else {
             return;
@@ -252,6 +264,7 @@ impl PaneLayoutSyncScheduler {
         };
         self.pane_view_sync.flush_all();
         sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);
+        self.pending_icon_zoom_rasters.set(true);
         self.pending_icon_zoom_thumbnails.set(true);
         self.timer.restart();
     }
@@ -5186,7 +5199,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
             ui.set_entry_count(entry_count as i32);
         }
         schedule_zoom_layout_prewarm(ui, state, bridge, slot);
-        sync_pane_view_ui(ui, state, slot);
+        sync_pane_view_ui_defer_raster(ui, state, slot);
     }
     applied
 }
@@ -7438,6 +7451,8 @@ mod tests {
         assert!(
             source.contains(
                 "const ICON_ZOOM_THUMBNAIL_COALESCE: Duration = Duration::from_millis(300);"
+            ) && source.contains(
+                "const ICON_ZOOM_RASTER_COALESCE: Duration = ICON_ZOOM_THUMBNAIL_COALESCE;"
             ) && app.contains("callback icon_zoom_layout_changed();")
                 && app.contains(
                     "changed icon_zoom_level => {\n        root.icon_zoom_layout_changed();\n    }"
@@ -7454,7 +7469,9 @@ mod tests {
         );
         assert!(
             scheduler_body.contains("TimerMode::SingleShot")
-                && scheduler_body.contains("ICON_ZOOM_THUMBNAIL_COALESCE")
+                && scheduler_body.contains("ICON_ZOOM_RASTER_COALESCE")
+                && scheduler_body.contains("pending_icon_zoom_rasters")
+                && scheduler_body.contains("refresh_visible_pane_tile_frame_rasters(&ui, &timer_state);")
                 && scheduler_body.contains("fn sync_icon_zoom_now(&self)")
                 && scheduler_body
                     .contains("sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);")
@@ -7500,7 +7517,8 @@ mod tests {
                 && fast_path_body.contains("cached_zoom_relayout_range(")
                 && fast_path_body.contains("&plan.visible_range")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
-                && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);")
+                && fast_path_body.contains("sync_pane_view_ui_defer_raster(ui, state, slot);")
+                && !fast_path_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && fast_path_body
                     .contains("schedule_zoom_layout_prewarm(ui, state, bridge, slot);")
                 && source.contains("fn zoom_layout_prewarm_levels(current_zoom: i32)")
