@@ -694,8 +694,14 @@ impl PaneView {
         self.layout_prewarm_generation = Some(generation);
     }
 
-    pub(crate) fn finish_layout_prewarm(&mut self) {
+    pub(crate) fn cancel_layout_prewarm(&mut self) {
         self.layout_prewarm_generation = None;
+    }
+
+    pub(crate) fn finish_layout_prewarm(&mut self, generation: u64) {
+        if self.layout_prewarm_generation == Some(generation) {
+            self.layout_prewarm_generation = None;
+        }
     }
 
     pub(crate) fn tile_frame_raster_layer(
@@ -1212,16 +1218,20 @@ mod tests {
     }
 
     #[test]
-    fn pane_view_layout_prewarm_is_single_flight_across_generations() {
+    fn pane_view_layout_prewarm_finish_is_generation_scoped() {
         let mut view = PaneView::default();
         let first_generation = view.virtual_generation.next();
         view.mark_layout_prewarm_started(first_generation);
         assert!(view.has_layout_prewarm_in_flight());
 
-        view.virtual_generation.next();
-        assert!(view.has_layout_prewarm_in_flight());
+        let second_generation = view.virtual_generation.next();
+        view.cancel_layout_prewarm();
+        assert!(!view.has_layout_prewarm_in_flight());
+        view.mark_layout_prewarm_started(second_generation);
 
-        view.finish_layout_prewarm();
+        view.finish_layout_prewarm(first_generation);
+        assert!(view.has_layout_prewarm_in_flight());
+        view.finish_layout_prewarm(second_generation);
         assert!(!view.has_layout_prewarm_in_flight());
     }
 

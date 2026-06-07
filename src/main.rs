@@ -144,8 +144,8 @@ pub(crate) struct FileEntry {
 
 const THUMBNAIL_FLUSH_COALESCE: Duration = Duration::from_millis(16);
 const ICON_ZOOM_THUMBNAIL_COALESCE: Duration = Duration::from_millis(300);
-const ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT: usize = 4096;
-const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT;
+const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = 4096;
+const ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT: usize = 128;
 
 #[derive(Debug)]
 struct VirtualLayoutPrewarmRequest {
@@ -3742,6 +3742,7 @@ fn sync_virtual_entries_for_slot_with_count(
             &chooser_patterns,
         ) {
             pane.view.virtual_generation.next();
+            pane.view.cancel_layout_prewarm();
             pane.view.clear_pending_virtual_prepare();
             Some(VirtualViewSyncRequest::Cached {
                 viewport_x,
@@ -3750,6 +3751,7 @@ fn sync_virtual_entries_for_slot_with_count(
             })
         } else {
             let generation = pane.view.virtual_generation.next();
+            pane.view.cancel_layout_prewarm();
             let query = pane.search.query.to_ascii_lowercase();
             let request = VirtualViewPrepareRequest {
                 pane_id: pane.id,
@@ -3880,7 +3882,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
     });
 }
 
-fn schedule_adjacent_zoom_layout_prewarm(
+fn schedule_zoom_layout_prewarm(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
@@ -3931,7 +3933,7 @@ fn schedule_adjacent_zoom_layout_prewarm(
         let pane_id = pane.id;
 
         let mut inputs = Vec::new();
-        for zoom_level in adjacent_zoom_levels(current_zoom) {
+        for zoom_level in zoom_layout_prewarm_levels(current_zoom) {
             let mut layout = MainItemViewLayout::from_ui_for_pane_width_with_zoom_and_text_lines(
                 ui,
                 viewport_width,
@@ -3979,10 +3981,13 @@ fn schedule_adjacent_zoom_layout_prewarm(
     }
 }
 
-fn adjacent_zoom_levels(current_zoom: i32) -> impl Iterator<Item = i32> {
-    [current_zoom - 1, current_zoom + 1]
+fn zoom_layout_prewarm_levels(current_zoom: i32) -> impl Iterator<Item = i32> {
+    [-1, 1, -2, 2, -3, 3, -4, 4]
         .into_iter()
-        .filter(|zoom| (0..=4).contains(zoom))
+        .filter_map(move |delta| {
+            let zoom = current_zoom + delta;
+            (0..=4).contains(&zoom).then_some(zoom)
+        })
 }
 
 fn virtual_layout_signature_cached(
@@ -4098,6 +4103,7 @@ fn zoom_item_view_layout_engine(
     layout: MainItemViewLayout,
     visible_count: usize,
     chooser_patterns: &[String],
+    allow_uncached_layout: bool,
 ) -> Option<Arc<ItemViewLayoutEngine>> {
     if let Some(cached) = pane
         .view
@@ -4112,6 +4118,10 @@ fn zoom_item_view_layout_engine(
         })
     {
         return Some(Arc::clone(cached));
+    }
+
+    if !allow_uncached_layout {
+        return None;
     }
 
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
@@ -4320,8 +4330,8 @@ fn apply_virtual_view_result(
         update.range.end.saturating_sub(update.range.start),
         update.entry_count
     ));
+    schedule_zoom_layout_prewarm(ui, state, bridge, slot);
     sync_pane_view_ui(ui, state, slot);
-    schedule_adjacent_zoom_layout_prewarm(ui, state, bridge, slot);
 }
 
 fn apply_virtual_layout_prewarm_result(
@@ -4332,7 +4342,7 @@ fn apply_virtual_layout_prewarm_result(
     let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
         return;
     };
-    pane.view.finish_layout_prewarm();
+    pane.view.finish_layout_prewarm(result.generation);
     if !pane.view.virtual_generation.is_current(result.generation) {
         return;
     }
@@ -5091,13 +5101,15 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         let Some(entry_count) = pane_visible_entry_count_for_virtual_cache(pane, &[]) else {
             return false;
         };
-        if entry_count == 0 || entry_count > ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT {
+        if entry_count == 0 {
             return false;
         }
 
         let requested_viewport_x = pane.view.viewport_x;
         layout.viewport_x = requested_viewport_x;
-        let Some(item_view_layout) = zoom_item_view_layout_engine(pane, layout, entry_count, &[])
+        let allow_uncached_layout = entry_count <= ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT;
+        let Some(item_view_layout) =
+            zoom_item_view_layout_engine(pane, layout, entry_count, &[], allow_uncached_layout)
         else {
             return false;
         };
@@ -5125,6 +5137,7 @@ fn try_relayout_cached_pane_icon_zoom_layout(
         }
         pane.view.cancel_virtual_prepare_queue();
         pane.view.virtual_generation.next();
+        pane.view.cancel_layout_prewarm();
         pane.view.viewport_x = plan.viewport_x;
         pane.view.virtual_view.range = relayout_range;
         pane.view
@@ -5145,8 +5158,8 @@ fn try_relayout_cached_pane_icon_zoom_layout(
                 .unwrap_or_default();
             ui.set_entry_count(entry_count as i32);
         }
+        schedule_zoom_layout_prewarm(ui, state, bridge, slot);
         sync_pane_view_ui(ui, state, slot);
-        schedule_adjacent_zoom_layout_prewarm(ui, state, bridge, slot);
     }
     applied
 }
@@ -7406,15 +7419,18 @@ mod tests {
                     "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, false, true);"
                 )
                 && fast_path_body.contains("relayout_pane_item_view_entries_model(")
+                && source.contains("const ICON_ZOOM_LAYOUT_PREWARM_ENTRY_LIMIT: usize = 4096;")
                 && source.contains(
-                    "const ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT: usize = 4096;"
+                    "const ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT: usize = 128;"
                 )
                 && fast_path_body.contains(
                     "pane_visible_entry_count_for_virtual_cache(pane, &[])"
                 )
-                && fast_path_body.contains("entry_count > ICON_ZOOM_SYNC_RELAYOUT_ENTRY_LIMIT")
                 && fast_path_body.contains(
-                    "zoom_item_view_layout_engine(pane, layout, entry_count, &[])"
+                    "entry_count <= ICON_ZOOM_SYNC_UNCACHED_RELAYOUT_ENTRY_LIMIT"
+                )
+                && fast_path_body.contains(
+                    "zoom_item_view_layout_engine(pane, layout, entry_count, &[], allow_uncached_layout)"
                 )
                 && fast_path_body.contains("update_layout_signature_arc(item_view_layout, size_px)")
                 && !source.contains(&removed_zoom_width_function)
@@ -7425,9 +7441,27 @@ mod tests {
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
                 && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && fast_path_body
-                    .contains("schedule_adjacent_zoom_layout_prewarm(ui, state, bridge, slot);")
+                    .contains("schedule_zoom_layout_prewarm(ui, state, bridge, slot);")
+                && source.contains("fn zoom_layout_prewarm_levels(current_zoom: i32)")
+                && source.contains("[-1, 1, -2, 2, -3, 3, -4, 4]")
                 && source.contains(&layout_prewarm_call),
-            "icon zoom should first apply Dolphin-style visible widget style updates, reuse the current virtual slice synchronously when possible, prewarm adjacent layouts off-thread, and move cache-miss snapshot rebuilds off the input event"
+            "icon zoom should first apply Dolphin-style visible widget style updates, reuse the current virtual slice synchronously when possible, prewarm zoom layouts off-thread, and move cache-miss snapshot rebuilds off the input event"
+        );
+    }
+
+    #[test]
+    fn zoom_layout_prewarm_levels_cover_all_other_levels_by_distance() {
+        assert_eq!(
+            zoom_layout_prewarm_levels(2).collect::<Vec<_>>(),
+            vec![1, 3, 0, 4]
+        );
+        assert_eq!(
+            zoom_layout_prewarm_levels(0).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            zoom_layout_prewarm_levels(4).collect::<Vec<_>>(),
+            vec![3, 2, 1, 0]
         );
     }
 

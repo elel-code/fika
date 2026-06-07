@@ -899,34 +899,30 @@ fn compact_item_view_layout_from_text_width_units(
     // Dolphin CompactLayout scrolls horizontally: rows fill the physical height,
     // then each completed column advances on the X axis by that column's
     // maximum item width. This mirrors Dolphin's size-hint layouter.
-    let item_widths = text_width_units
-        .into_iter()
-        .map(|text_width_units| {
-            compact_item_view_item_width_from_text_width_units(
-                text_width_units,
-                cell_width,
-                item_padding,
-                media_width,
-                media_text_gap,
-                title_font_size,
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut item_widths = Vec::new();
+    let mut column_widths = Vec::new();
+    let mut current_column_width = cell_width;
+    for text_width_units in text_width_units {
+        let item_width = compact_item_view_item_width_from_text_width_units(
+            text_width_units,
+            cell_width,
+            item_padding,
+            media_width,
+            media_text_gap,
+            title_font_size,
+        );
+        current_column_width = current_column_width.max(item_width);
+        item_widths.push(item_width);
+        if item_widths.len() % rows_per_column == 0 {
+            column_widths.push(current_column_width.max(1.0));
+            current_column_width = cell_width;
+        }
+    }
     let entry_count = item_widths.len();
-    let column_count = entry_count.div_ceil(rows_per_column).max(1);
-    let mut column_widths = Vec::with_capacity(column_count);
-    for column in 0..column_count {
-        let start = column * rows_per_column;
-        let end = (start + rows_per_column).min(entry_count);
-        let width = if start < end {
-            item_widths[start..end]
-                .iter()
-                .copied()
-                .fold(cell_width, f32::max)
-        } else {
-            cell_width
-        };
-        column_widths.push(width.max(1.0));
+    if entry_count == 0 {
+        column_widths.push(cell_width);
+    } else if entry_count % rows_per_column != 0 {
+        column_widths.push(current_column_width.max(1.0));
     }
     let column_offsets = compact_item_view_column_offsets(&column_widths);
     let content_width =
