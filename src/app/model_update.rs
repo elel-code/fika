@@ -179,20 +179,6 @@ pub(crate) fn new_item_view_paint_model(
     ModelRc::new(Rc::new(VecModel::from(paint_entries)))
 }
 
-fn item_view_paint_entries(batch: &ItemViewTileFrameBatch) -> Vec<ItemViewPaintEntry> {
-    batch
-        .plans()
-        .iter()
-        .map(|plan| ItemViewPaintEntry {
-            name: plan.text.name.clone(),
-            x: plan.text.x,
-            y: plan.text.y,
-            width: plan.text.width,
-            text_width: plan.text.text_width,
-        })
-        .collect()
-}
-
 fn update_item_view_paint_entries_model(
     current: &mut ModelRc<ItemViewPaintEntry>,
     old_start: usize,
@@ -397,7 +383,7 @@ pub(crate) fn update_pane_item_view_entries_model(
     let media_tokens = item_view_media_tokens(&frame_batch, &media_entries);
     let media_entries = project_media_entries_with_bounds(media_entries, &bounds_entries);
     let metadata_entries = project_metadata_entries_with_bounds(metadata_entries, &bounds_entries);
-    let paint_entries = item_view_paint_entries(&frame_batch);
+    let paint_entries = frame_batch.paint_entries();
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
@@ -473,7 +459,7 @@ pub(crate) fn relayout_pane_item_view_entries_model(
 
     let frame_batch =
         ItemViewTileFrameBatch::from_bounded_entries(&view.virtual_entry_tokens, &bounds_entries);
-    let paint_entries = item_view_paint_entries(&frame_batch);
+    let paint_entries = frame_batch.paint_entries();
     trim_item_view_media_entries_model(
         &mut view.virtual_media_entries,
         &mut view.virtual_media_tokens,
@@ -951,27 +937,17 @@ mod tests {
             &bounds,
             &["/tmp/item-1".to_string()],
         );
-        let paint = item_view_paint_entries(&frame_batch);
+        let paint = frame_batch.paint_entries();
         let projected_media_tokens = item_view_media_tokens(
             &frame_batch,
             &[media_source(1, Rgba8Pixel::new(255, 0, 0, 255))],
         );
 
         assert_eq!(frame_batch.sources().len(), 3);
-        assert_eq!(frame_batch.plans().len(), 3);
+        assert_eq!(paint.len(), 3);
         assert_eq!(paint[1].name, "item-1");
         assert_eq!(paint[1].x, 110.0);
         assert_eq!(paint[1].text_width, 56.0);
-        assert!(frame_batch.plans()[0].fallback_media.is_dir);
-        assert!(!frame_batch.plans()[1].fallback_media.is_dir);
-        assert!(!frame_batch.plans()[2].fallback_media.is_dir);
-        let highlight = frame_batch.plans()[1]
-            .highlight
-            .expect("selected row should carry raster highlight geometry");
-        assert_eq!(
-            (highlight.x, highlight.y, highlight.width),
-            (110.0, 2.0, 101.0)
-        );
         assert_eq!(media_tokens(&projected_media_tokens), vec![(1, 77)]);
     }
 
@@ -988,6 +964,15 @@ mod tests {
         assert!(frame.selected);
         assert_eq!(frame.x, 50.0);
         assert_eq!(frame.text_width, 50.0);
+    }
+
+    #[test]
+    fn renderer_batch_owns_paint_entry_projection() {
+        let source = include_str!("model_update.rs");
+        let obsolete_helper = ["fn item_view_", "paint_entries("].concat();
+
+        assert!(!source.contains(&obsolete_helper));
+        assert!(source.contains("frame_batch.paint_entries()"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
-use crate::ItemViewEntry;
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
 use crate::app::model_update::{ItemViewMetadataOverlaySource, ItemViewRasterMediaEntry};
+use crate::{ItemViewEntry, ItemViewPaintEntry};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::collections::HashSet;
 use std::path::Path;
@@ -295,8 +295,22 @@ impl ItemViewTileFrameBatch {
         &self.sources
     }
 
+    #[cfg(test)]
     pub(crate) fn plans(&self) -> &[ItemViewTileFramePlan] {
         &self.plans
+    }
+
+    pub(crate) fn paint_entries(&self) -> Vec<ItemViewPaintEntry> {
+        self.plans
+            .iter()
+            .map(|plan| ItemViewPaintEntry {
+                name: plan.text.name.clone(),
+                x: plan.text.x,
+                y: plan.text.y,
+                width: plan.text.width,
+                text_width: plan.text.text_width,
+            })
+            .collect()
     }
 
     pub(crate) fn media_token_for_slice_index(&self, slice_index: i32) -> i32 {
@@ -1031,6 +1045,13 @@ mod tests {
                 width: 180.0,
             })
         );
+        let paint = batch.paint_entries();
+        assert_eq!(paint.len(), 1);
+        assert_eq!(paint[0].name, "Report");
+        assert_eq!(paint[0].x, 120.0);
+        assert_eq!(paint[0].y, 40.0);
+        assert_eq!(paint[0].width, 180.0);
+        assert_eq!(paint[0].text_width, 96.0);
     }
 
     #[test]
