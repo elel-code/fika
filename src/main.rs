@@ -4819,7 +4819,22 @@ fn sync_pane_icon_zoom_layout_for_slot(
     if try_relayout_cached_pane_icon_zoom_layout(ui, state, slot) {
         return;
     }
+    sync_pane_icon_zoom_style_for_slot(ui, state, slot);
     prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);
+}
+
+fn sync_pane_icon_zoom_style_for_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
+    let can_refresh_visible_style = {
+        let state_ref = state.borrow();
+        state_ref.panes.pane_for_slot(slot).is_some_and(|pane| {
+            !pane.show_item_locations()
+                && pane.view.virtual_metadata_entries.row_count() == 0
+                && pane.view.has_renderable_virtual_entries()
+        })
+    };
+    if can_refresh_visible_style {
+        sync_pane_view_ui(ui, state, slot);
+    }
 }
 
 fn prepare_pane_icon_zoom_layout_for_slot(
@@ -7117,9 +7132,14 @@ mod tests {
             .expect("pane layout scheduler body should be present");
         let icon_zoom_body = source
             .split_once("fn sync_pane_icon_zoom_layout_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("fn try_relayout_cached_pane_icon_zoom_layout("))
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_icon_zoom_style_for_slot("))
             .map(|(body, _)| body)
             .expect("icon zoom layout body should be present");
+        let icon_zoom_style_body = source
+            .split_once("fn sync_pane_icon_zoom_style_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn prepare_pane_icon_zoom_layout_for_slot("))
+            .map(|(body, _)| body)
+            .expect("icon zoom visible style body should be present");
         let visible_icon_zoom_body = source
             .split_once("fn sync_visible_pane_icon_zoom_layouts(")
             .and_then(|(_, rest)| rest.split_once("fn sync_pane_icon_zoom_layout_for_slot("))
@@ -7170,7 +7190,11 @@ mod tests {
         );
         assert!(
             icon_zoom_body.contains("try_relayout_cached_pane_icon_zoom_layout(ui, state, slot)")
+                && icon_zoom_body.contains("sync_pane_icon_zoom_style_for_slot(ui, state, slot);")
                 && icon_zoom_body.contains("prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);")
+                && icon_zoom_style_body.contains("pane.view.has_renderable_virtual_entries()")
+                && icon_zoom_style_body.contains("pane.view.virtual_metadata_entries.row_count() == 0")
+                && icon_zoom_style_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && visible_icon_zoom_body
                     .contains("if slots.row_count() == 0 {\n        return;\n    }")
                 && !visible_icon_zoom_body
@@ -7192,7 +7216,7 @@ mod tests {
                 && fast_path_body.contains("&plan.visible_range")
                 && fast_path_body.contains("pane.view.cancel_virtual_prepare_queue();")
                 && fast_path_body.contains("sync_pane_view_ui(ui, state, slot);"),
-            "icon zoom should reuse the current virtual slice synchronously when it covers the new Dolphin-style visible range, and move cache-miss snapshot rebuilds off the input event"
+            "icon zoom should first apply Dolphin-style visible widget style updates, reuse the current virtual slice synchronously when possible, and move cache-miss snapshot rebuilds off the input event"
         );
     }
 
