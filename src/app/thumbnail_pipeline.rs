@@ -409,6 +409,7 @@ mod tests {
     use crate::FileEntry;
     use crate::app::state::AppState;
     use std::io;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -1023,7 +1024,7 @@ mod tests {
             business_entry("beta.png", "/tmp/beta.png"),
             business_entry("gamma.png", "/tmp/gamma.png"),
         ]);
-        state.panes.focused_mut().search.visible_entry_indices = Some(vec![0, 2, 3]);
+        state.panes.focused_mut().search.visible_entry_indices = Some(Arc::from([0, 2, 3]));
         state.panes.focused_mut().view.virtual_view.range = 1..3;
 
         assert!(path_is_in_virtual_range(&state, "/tmp/beta.png"));

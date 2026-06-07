@@ -3,6 +3,7 @@ use crate::app::item_view::SelectionRect;
 use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneState};
 use crate::app::state::AppState;
 use std::ops::Range;
+use std::sync::Arc;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct FilteredEntrySummary {
@@ -179,7 +180,7 @@ pub(crate) fn rebuild_visible_entry_index_for_slot(
         if summary.has_locations {
             let groups =
                 location_group_labels(pane.entries.iter().map(|entry| entry.location.as_str()));
-            pane.search.visible_location_groups = Some(groups);
+            pane.search.visible_location_groups = Some(Arc::from(groups));
         }
         return summary;
     }
@@ -211,11 +212,11 @@ pub(crate) fn rebuild_visible_entry_index_for_slot(
         indices.push(index);
     }
 
-    pane.search.visible_entry_indices = Some(indices);
+    pane.search.visible_entry_indices = Some(Arc::from(indices));
     pane.search.visible_entries_have_locations = summary.has_locations;
     pane.search.visible_location_groups = summary
         .has_locations
-        .then(|| location_group_labels(locations.iter().map(String::as_str)));
+        .then(|| Arc::from(location_group_labels(locations.iter().map(String::as_str))));
     summary
 }
 

@@ -106,7 +106,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         state.panes.focused_mut().search.query = "report".to_string();
         set_search_filters_for_slot(&mut state, 0, 1, 2, 3);
-        state.panes.focused_mut().search.visible_entry_indices = Some(vec![0, 2, 4]);
+        state.panes.focused_mut().search.visible_entry_indices = Some(Arc::from([0, 2, 4]));
         state.panes.focused_mut().view.virtual_view.range = 1..3;
 
         reset_search_state_for_slot(&mut state, 0);

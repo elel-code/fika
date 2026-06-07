@@ -3077,7 +3077,7 @@ fn start_recursive_search_for_slot(
         pane.search_progress = search::SearchProgress::default();
         pane.search.loading = true;
         pane.search.recursive = true;
-        pane.search.visible_entry_indices = Some(Vec::new());
+        pane.search.visible_entry_indices = Some(Arc::from([]));
         pane.search.visible_entries_have_locations = false;
         pane.search.visible_location_groups = None;
         pane.selection.clear();

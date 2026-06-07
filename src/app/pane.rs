@@ -525,9 +525,9 @@ pub(crate) struct PaneSearch {
     pub(crate) kind_filter: i32,
     pub(crate) modified_filter: i32,
     pub(crate) size_filter: i32,
-    pub(crate) visible_entry_indices: Option<Vec<usize>>,
+    pub(crate) visible_entry_indices: Option<Arc<[usize]>>,
     pub(crate) visible_entries_have_locations: bool,
-    pub(crate) visible_location_groups: Option<Vec<String>>,
+    pub(crate) visible_location_groups: Option<Arc<[String]>>,
 }
 
 impl PaneSearch {
@@ -1177,7 +1177,7 @@ mod tests {
             kind_filter: 1,
             modified_filter: 2,
             size_filter: 3,
-            visible_entry_indices: Some(vec![0, 2, 4]),
+            visible_entry_indices: Some(Arc::from([0, 2, 4])),
             visible_entries_have_locations: true,
             visible_location_groups: None,
         };
@@ -1199,9 +1199,9 @@ mod tests {
         let mut pane = PaneState::new(PathBuf::from("/tmp"));
         pane.search.query = "report".to_string();
         pane.search.kind_filter = 2;
-        pane.search.visible_entry_indices = Some(vec![0, 2, 4]);
+        pane.search.visible_entry_indices = Some(Arc::from([0, 2, 4]));
         pane.search.visible_entries_have_locations = true;
-        pane.search.visible_location_groups = Some(vec!["docs".to_string()]);
+        pane.search.visible_location_groups = Some(Arc::from(["docs".to_string()]));
 
         pane.set_file_entries(vec![test_entry("report.txt", "/tmp/report.txt")]);
 
@@ -1442,7 +1442,7 @@ mod tests {
             kind_filter: 2,
             modified_filter: 1,
             size_filter: 3,
-            visible_entry_indices: Some(vec![0]),
+            visible_entry_indices: Some(Arc::from([0])),
             visible_entries_have_locations: true,
             visible_location_groups: None,
             ..Default::default()

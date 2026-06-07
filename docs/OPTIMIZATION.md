@@ -284,7 +284,7 @@ changed viewport-x => {
 
 **收益**：彻底解除 UI 线程的计算负担，在高刷显示器上保证帧率。
 
-**实际实现**（✅ 已完成）：采用快照模式而非锁迁移——`PaneEntrySnapshot`（不含 `Image` 的轻量结构体，`Arc<[PaneEntrySnapshot]>` 零拷贝共享）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）。UI 线程按 pane slot 构建 snapshot 输入后通过 `tokio::spawn_blocking` 在后台执行 `prepare_virtual_view_snapshot_update`（纯函数），结果通过 `AsyncEvent::VirtualViewPrepared` 回传。`virtual_generation` 独立于 `load_generation` 做 staleness 检测，async virtual refresh 的 in-flight/pending 请求现在由 pane-local `VirtualViewRefreshState` 持有，`apply_virtual_view_result` 先在 `borrow_mut` 块内写 state 再 drop 后写 Slint model，无 RefCell 跨线程风险。所有可见 pane 都走同一条 slot 驱动虚拟视图管线，旧的 preview/副 pane 专用路径已删除。全局过滤/搜索/监控刷新仍未统一成完整 pending→commit 状态机。
+**实际实现**（✅ 已完成）：采用快照模式而非锁迁移——`PaneEntrySnapshot`（不含 `Image` 的轻量结构体，`Arc<[PaneEntrySnapshot]>` 零拷贝共享）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）。UI 线程按 pane slot 构建 snapshot 输入后通过 `tokio::spawn_blocking` 在后台执行 `prepare_virtual_view_snapshot_update`（纯函数），结果通过 `AsyncEvent::VirtualViewPrepared` 回传。搜索/过滤产生的 pane-local `visible_entry_indices` 和 `visible_location_groups` 也以 `Arc<[usize]>` / `Arc<[String]>` 保存并传入 snapshot input，滚动或 cache-miss 请求只 clone 引用，不复制整个过滤结果缓存。`virtual_generation` 独立于 `load_generation` 做 staleness 检测，async virtual refresh 的 in-flight/pending 请求现在由 pane-local `VirtualViewRefreshState` 持有，`apply_virtual_view_result` 先在 `borrow_mut` 块内写 state 再 drop 后写 Slint model，无 RefCell 跨线程风险。所有可见 pane 都走同一条 slot 驱动虚拟视图管线，旧的 preview/副 pane 专用路径已删除。全局过滤/搜索/监控刷新仍未统一成完整 pending→commit 状态机。
 
 ---
 
@@ -654,7 +654,7 @@ indices[range.start..end]
     .collect()
 ```
 
-该直接索引路径不只用于 `filtered_entries_range`，也用于可见路径收集、单项读取、可见 range 迭代、虚拟视图后台 snapshot，以及缩略图可见范围判断。`PaneState::set_entries` / `clear_entries` 会清空旧的 `visible_entry_indices` 和 `visible_location_groups`，目录加载路径使用 `set_entries_with_location_state(entries, has_locations)` 复用已有 location 统计，避免为了失效缓存额外扫描大目录。
+该直接索引路径不只用于 `filtered_entries_range`，也用于可见路径收集、单项读取、可见 range 迭代、虚拟视图后台 snapshot，以及缩略图可见范围判断。`PaneState::set_entries` / `clear_entries` 会清空旧的 `visible_entry_indices` 和 `visible_location_groups`，目录加载路径使用 `set_entries_with_location_state(entries, has_locations)` 复用已有 location 统计，避免为了失效缓存额外扫描大目录。`visible_entry_indices` / `visible_location_groups` 现在作为 `Arc` slice 保存在 pane 上并传给 `VirtualViewSnapshotInput`，搜索后滚动不会在每次 snapshot request 构造时复制整张可见索引表或 group 表。
 
 **安全性**：`visible_entry_indices` 只由 `rebuild_visible_entry_index` 从当前 pane entries 枚举生成；条目集替换或清空时会立即失效索引缓存，保留 query/filter 条件等待下一次过滤重建。因此直接索引不会使用过期 index。
 
@@ -680,7 +680,7 @@ indices[range.start..end]
 - `src/app/selection.rs:247-295` — `annotate_visible_location_groups`
 - `src/app/virtual_view.rs` — `VirtualViewSnapshotInput.visible_location_groups`
 
-**实际实现**（✅ 已完成）：不维护易过期的局部 `(start_visible_index, previous_location, annotations)` 滚动缓存，而是在过滤/search 重建可见索引时一次性生成 pane-local `visible_location_groups`。`VirtualViewSnapshotInput` 将该缓存随条目快照传入后台 `prepare_virtual_view_snapshot_update`，虚拟切片标注直接按 `start_visible_index + offset` 读取预计算 group；只有缺少缓存时才回退到按 slice 边界推断。
+**实际实现**（✅ 已完成）：不维护易过期的局部 `(start_visible_index, previous_location, annotations)` 滚动缓存，而是在过滤/search 重建可见索引时一次性生成 pane-local `visible_location_groups`。`VirtualViewSnapshotInput` 将该缓存作为 `Arc<[String]>` 随条目快照传入后台 `prepare_virtual_view_snapshot_update`，虚拟切片标注直接按 `start_visible_index + offset` 读取预计算 group；只有缺少缓存时才回退到按 slice 边界推断。
 
 **收益**：递归搜索场景下滚动不再为每个虚拟切片重新查找前一条 location 边界，也不在后台 snapshot 路径重复推断 group 标签。
 
@@ -859,7 +859,7 @@ if (root.pan-target-viewport-x != root.viewport-x) {
 - **Phase 2**: 旧 `PaneViewSyncScheduler` 8ms timer 已删除；当前 scheduler 同步调用 `sync_pane_viewport_for_slot` 并只保留重入保护，layout/viewport 变化立即重建当前 visible slice
 - **Phase 3**: 新模块 `src/app/model_update.rs` — `VecModel::downcast_ref` 增量更新，支持前/后滑动 + `set_row_data` 逐行脏检查；当前重叠 row 复用通过 pane-local `ItemViewRowToken` sidecar 判断，避免为了比较而读取并克隆 Slint row data
 - **Phase 4**: `ThumbnailFlushScheduler` (16ms) — 缩略图结果入队批量写入，`AsyncEvent::ThumbnailLoaded` 不再逐张触发 `sync_virtual_entries`
-- **Phase 5**: `PaneEntrySnapshot`（不含 `Image` 的轻量快照, `Arc` 零拷贝共享，并缓存 `name_width_units`）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）— 虚拟视图的条目过滤/切片/clone/location 标注全部在 `tokio::spawn_blocking` 中完成，UI 线程只做 generation staleness 检查 + Slint 模型写入 + 缩略图缓存装饰。Dolphin compact size-hint 所需的文件名估宽在 entry 进入 pane 时完成，virtual layout/cached zoom relayout 只按当前 font size 缩放宽度单位；cached layout、snapshot result 和 pane cache commit 都通过 `Arc<ItemViewLayoutEngine>` 共享 compact offset 数组。`virtual_generation` 独立于 `load_generation`，目录切换时自动推进；virtual refresh in-flight/pending bookkeeping 已收敛进 `VirtualViewRefreshState`，为后续完整 two-phase pending→commit view refresh 留出 pane-local 状态边界。`apply_virtual_view_result` 先在 `borrow_mut` 内写 state 再 drop 后写 Slint，避免 RefCell 跨线程风险。所有可见 pane 走同一条 slot-aware 虚拟视图管线。
+- **Phase 5**: `PaneEntrySnapshot`（不含 `Image` 的轻量快照, `Arc` 零拷贝共享，并缓存 `name_width_units`）+ `VirtualViewSnapshotInput`（完全 owned 的纯函数输入）— 虚拟视图的条目过滤/切片/clone/location 标注全部在 `tokio::spawn_blocking` 中完成，UI 线程只做 generation staleness 检查 + Slint 模型写入 + 缩略图缓存装饰。Dolphin compact size-hint 所需的文件名估宽在 entry 进入 pane 时完成，virtual layout/cached zoom relayout 只按当前 font size 缩放宽度单位；cached layout、snapshot result 和 pane cache commit 都通过 `Arc<ItemViewLayoutEngine>` 共享 compact offset 数组，搜索/过滤可见索引和 location group 缓存也通过 `Arc` slice 共享到 snapshot input。`virtual_generation` 独立于 `load_generation`，目录切换时自动推进；virtual refresh in-flight/pending bookkeeping 已收敛进 `VirtualViewRefreshState`，为后续完整 two-phase pending→commit view refresh 留出 pane-local 状态边界。`apply_virtual_view_result` 先在 `borrow_mut` 内写 state 再 drop 后写 Slint，避免 RefCell 跨线程风险。所有可见 pane 走同一条 slot-aware 虚拟视图管线。
 - **Phase 6**: zoom 派生尺寸/字体 token、tile size、media/text rect 和 group/title/location line 坐标迁到 Rust item-view render plan；slice-local tile x/y 改由 Rust-projected bounds/paint sidecar 提供，避免滑动窗口时重叠条目因局部坐标变化触发 row-data 写入；可见 tile primitive 内联到 `SplitPaneView`，且不再为每个 item 使用 Slint layout 容器
 - **Phase 7**: logical `viewport-x` 继续立即驱动 scrollbar、Rust visible slice、hit-test 和 selection；新增 `paint-viewport-x` 只用于绘制 offset，普通滚轮在当前 virtual slice 覆盖旧/新可见窗口时平滑追随，scrollbar drag、relayout、slice 几何变化、`scroll-max-x` 变化和外部 viewport 写入立即同步，贴近 Dolphin `KItemListSmoothScroller` 的 target/animated offset 分层
 
