@@ -6,10 +6,7 @@ use crate::app::item_view_renderer::{
 };
 #[cfg(test)]
 use crate::app::model_update::ItemViewMediaSource;
-use crate::app::model_update::{
-    ItemViewFallbackMediaEntry, ItemViewHighlightEntry, ItemViewMediaToken,
-    ItemViewRasterMediaEntry, ItemViewRowToken,
-};
+use crate::app::model_update::{ItemViewMediaToken, ItemViewRasterMediaEntry, ItemViewRowToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
@@ -86,13 +83,8 @@ impl PaneState {
             clone_item_view_bounds_model(&self.view.virtual_bounds_entries);
         pane.view.virtual_paint_entries =
             clone_item_view_paint_model(&self.view.virtual_paint_entries);
-        pane.view.virtual_folder_media_entries =
-            clone_item_view_fallback_media_model(&self.view.virtual_folder_media_entries);
-        pane.view.virtual_file_media_entries =
-            clone_item_view_fallback_media_model(&self.view.virtual_file_media_entries);
         pane.view.virtual_entry_tokens =
             clone_item_view_row_tokens_without_selection(&self.view.virtual_entry_tokens);
-        pane.view.virtual_highlight_entries = ModelRc::default();
         pane.view.virtual_media_entries = self.view.virtual_media_entries.clone();
         pane.view.virtual_media_tokens = self.view.virtual_media_tokens.clone();
         pane.view.virtual_metadata_entries =
@@ -126,10 +118,7 @@ impl PaneState {
         self.view.virtual_entries = ModelRc::default();
         self.view.virtual_bounds_entries = ModelRc::default();
         self.view.virtual_paint_entries = ModelRc::default();
-        self.view.virtual_folder_media_entries = ModelRc::default();
-        self.view.virtual_file_media_entries = ModelRc::default();
         self.view.virtual_entry_tokens.clear();
-        self.view.virtual_highlight_entries = ModelRc::default();
         self.view.virtual_media_entries.clear();
         self.view.virtual_media_tokens.clear();
         self.view.virtual_metadata_entries = ModelRc::default();
@@ -185,19 +174,6 @@ fn clone_item_view_bounds_model(
 }
 
 fn clone_item_view_paint_model(model: &ModelRc<ItemViewPaintEntry>) -> ModelRc<ItemViewPaintEntry> {
-    let entries = (0..model.row_count())
-        .filter_map(|row| model.row_data(row))
-        .collect::<Vec<_>>();
-    if entries.is_empty() {
-        ModelRc::default()
-    } else {
-        ModelRc::new(Rc::new(VecModel::from(entries)))
-    }
-}
-
-fn clone_item_view_fallback_media_model(
-    model: &ModelRc<ItemViewFallbackMediaEntry>,
-) -> ModelRc<ItemViewFallbackMediaEntry> {
     let entries = (0..model.row_count())
         .filter_map(|row| model.row_data(row))
         .collect::<Vec<_>>();
@@ -573,10 +549,7 @@ pub(crate) struct PaneView {
     pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
     pub(crate) virtual_bounds_entries: ModelRc<ItemViewItemBounds>,
     pub(crate) virtual_paint_entries: ModelRc<ItemViewPaintEntry>,
-    pub(crate) virtual_folder_media_entries: ModelRc<ItemViewFallbackMediaEntry>,
-    pub(crate) virtual_file_media_entries: ModelRc<ItemViewFallbackMediaEntry>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
-    pub(crate) virtual_highlight_entries: ModelRc<ItemViewHighlightEntry>,
     pub(crate) virtual_media_entries: Vec<ItemViewRasterMediaEntry>,
     pub(crate) virtual_media_tokens: Vec<ItemViewMediaToken>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
@@ -1514,7 +1487,6 @@ mod tests {
                 .iter()
                 .all(|token| !token.selected())
         );
-        assert_eq!(inactive.view.virtual_highlight_entries.row_count(), 0);
         assert_eq!(
             inactive
                 .view

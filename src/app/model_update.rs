@@ -7,19 +7,6 @@ use std::ops::Range;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ItemViewFallbackMediaEntry {
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ItemViewHighlightEntry {
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-    pub(crate) width: f32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewRowToken {
     name: SharedString,
     path: SharedString,
@@ -192,16 +179,6 @@ pub(crate) fn new_item_view_paint_model(
     ModelRc::new(Rc::new(VecModel::from(paint_entries)))
 }
 
-pub(crate) fn new_item_view_fallback_media_model(
-    fallback_entries: Vec<ItemViewFallbackMediaEntry>,
-) -> ModelRc<ItemViewFallbackMediaEntry> {
-    if fallback_entries.is_empty() {
-        return ModelRc::default();
-    }
-
-    ModelRc::new(Rc::new(VecModel::from(fallback_entries)))
-}
-
 fn item_view_paint_entries(batch: &ItemViewTileFrameBatch) -> Vec<ItemViewPaintEntry> {
     batch
         .plans()
@@ -239,45 +216,6 @@ fn update_item_view_paint_entries_model(
     };
 
     update_sliding_vec_model(model, old_start, new_start, paint_entries)
-}
-
-fn item_view_fallback_media_entries(
-    batch: &ItemViewTileFrameBatch,
-    is_dir: bool,
-) -> Vec<ItemViewFallbackMediaEntry> {
-    batch
-        .plans()
-        .iter()
-        .filter_map(|plan| {
-            (plan.fallback_media.is_dir == is_dir).then_some(ItemViewFallbackMediaEntry {
-                x: plan.fallback_media.x,
-                y: plan.fallback_media.y,
-            })
-        })
-        .collect()
-}
-
-fn update_item_view_fallback_media_entries_model(
-    current: &mut ModelRc<ItemViewFallbackMediaEntry>,
-    fallback_entries: Vec<ItemViewFallbackMediaEntry>,
-) -> bool {
-    if fallback_entries.is_empty() {
-        if current.row_count() == 0 {
-            return false;
-        }
-        *current = ModelRc::default();
-        return true;
-    }
-
-    let Some(model) = current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewFallbackMediaEntry>>()
-    else {
-        *current = new_item_view_fallback_media_model(fallback_entries);
-        return true;
-    };
-
-    update_sparse_vec_model(model, fallback_entries)
 }
 
 pub(crate) fn new_item_view_metadata_model(
@@ -401,67 +339,6 @@ fn update_item_view_media_entries_model(
     changed
 }
 
-fn item_view_highlight_entries(batch: &ItemViewTileFrameBatch) -> Vec<ItemViewHighlightEntry> {
-    batch
-        .plans()
-        .iter()
-        .filter_map(|plan| plan.highlight)
-        .map(|highlight| ItemViewHighlightEntry {
-            x: highlight.x,
-            y: highlight.y,
-            width: highlight.width,
-        })
-        .collect()
-}
-
-fn current_item_view_bounds_entries(view: &PaneView) -> Vec<ItemViewItemBounds> {
-    (0..view.virtual_bounds_entries.row_count())
-        .filter_map(|row| view.virtual_bounds_entries.row_data(row))
-        .collect()
-}
-
-fn update_item_view_highlight_entries_model(
-    current: &mut ModelRc<ItemViewHighlightEntry>,
-    highlights: Vec<ItemViewHighlightEntry>,
-) -> bool {
-    let Some(model) = current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewHighlightEntry>>()
-    else {
-        if highlights.is_empty() {
-            if current.row_count() == 0 {
-                return false;
-            }
-            *current = ModelRc::default();
-        } else {
-            *current = ModelRc::new(Rc::new(VecModel::from(highlights)));
-        }
-        return true;
-    };
-
-    let unchanged = model.row_count() == highlights.len()
-        && highlights
-            .iter()
-            .enumerate()
-            .all(|(row, next)| model.row_data(row).as_ref() == Some(next));
-    if unchanged {
-        return false;
-    }
-
-    model.set_vec(highlights);
-    true
-}
-
-pub(crate) fn update_item_view_highlight_model(view: &mut PaneView) -> bool {
-    let bounds_entries = current_item_view_bounds_entries(view);
-    let frame_batch =
-        ItemViewTileFrameBatch::from_bounded_entries(&view.virtual_entry_tokens, &bounds_entries);
-    update_item_view_highlight_entries_model(
-        &mut view.virtual_highlight_entries,
-        item_view_highlight_entries(&frame_batch),
-    )
-}
-
 fn item_view_row_tokens(
     entries: &[ItemViewEntry],
     selected_paths: &[String],
@@ -521,8 +398,6 @@ pub(crate) fn update_pane_item_view_entries_model(
     let media_entries = project_media_entries_with_bounds(media_entries, &bounds_entries);
     let metadata_entries = project_metadata_entries_with_bounds(metadata_entries, &bounds_entries);
     let paint_entries = item_view_paint_entries(&frame_batch);
-    let folder_media_entries = item_view_fallback_media_entries(&frame_batch, true);
-    let file_media_entries = item_view_fallback_media_entries(&frame_batch, false);
     update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
@@ -534,14 +409,6 @@ pub(crate) fn update_pane_item_view_entries_model(
         old_start,
         start_index,
         paint_entries,
-    );
-    update_item_view_fallback_media_entries_model(
-        &mut view.virtual_folder_media_entries,
-        folder_media_entries,
-    );
-    update_item_view_fallback_media_entries_model(
-        &mut view.virtual_file_media_entries,
-        file_media_entries,
     );
     update_item_view_media_entries_model(
         &mut view.virtual_media_entries,
@@ -561,7 +428,6 @@ pub(crate) fn update_pane_item_view_entries_model(
     ) {
         view.virtual_entries = model;
     }
-    update_item_view_highlight_model(view);
     view.virtual_start_index = start_index;
     view.bump_raster_revision();
 }
@@ -608,9 +474,6 @@ pub(crate) fn relayout_pane_item_view_entries_model(
     let frame_batch =
         ItemViewTileFrameBatch::from_bounded_entries(&view.virtual_entry_tokens, &bounds_entries);
     let paint_entries = item_view_paint_entries(&frame_batch);
-    let folder_media_entries = item_view_fallback_media_entries(&frame_batch, true);
-    let file_media_entries = item_view_fallback_media_entries(&frame_batch, false);
-    let highlight_entries = item_view_highlight_entries(&frame_batch);
     trim_item_view_media_entries_model(
         &mut view.virtual_media_entries,
         &mut view.virtual_media_tokens,
@@ -629,18 +492,6 @@ pub(crate) fn relayout_pane_item_view_entries_model(
         old_start,
         range.start,
         paint_entries,
-    );
-    update_item_view_fallback_media_entries_model(
-        &mut view.virtual_folder_media_entries,
-        folder_media_entries,
-    );
-    update_item_view_fallback_media_entries_model(
-        &mut view.virtual_file_media_entries,
-        file_media_entries,
-    );
-    let _ = update_item_view_highlight_entries_model(
-        &mut view.virtual_highlight_entries,
-        highlight_entries,
     );
     view.virtual_start_index = range.start;
     view.bump_raster_revision();
@@ -697,7 +548,6 @@ pub(crate) fn update_pane_item_view_selection_model(
 ) -> bool {
     let changed = update_item_view_selection_tokens(&mut view.virtual_entry_tokens, selected_paths);
     if changed {
-        update_item_view_highlight_model(view);
         view.bump_raster_revision();
     }
     changed
@@ -929,20 +779,6 @@ mod tests {
             .collect()
     }
 
-    fn highlight_rows(model: &ModelRc<ItemViewHighlightEntry>) -> Vec<(f32, f32, f32)> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.x, entry.y, entry.width))
-            .collect()
-    }
-
-    fn highlight_geometry_rows(model: &ModelRc<ItemViewHighlightEntry>) -> Vec<(f32, f32, f32)> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.x, entry.y, entry.width))
-            .collect()
-    }
-
     fn bounds_row_x(model: &ModelRc<ItemViewItemBounds>) -> Vec<f32> {
         (0..model.row_count())
             .filter_map(|row| model.row_data(row))
@@ -987,13 +823,6 @@ mod tests {
         tokens
             .iter()
             .map(|token| (token.slice_index, token.media_token))
-            .collect()
-    }
-
-    fn fallback_rows(model: &ModelRc<ItemViewFallbackMediaEntry>) -> Vec<(f32, f32)> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.x, entry.y))
             .collect()
     }
 
@@ -1101,10 +930,6 @@ mod tests {
         );
 
         assert_eq!(
-            highlight_geometry_rows(&view.virtual_highlight_entries),
-            vec![(210.0, 2.0, 111.0)]
-        );
-        assert_eq!(
             media_geometry_rows(&view.virtual_media_entries),
             vec![(210.0, 2.0)]
         );
@@ -1127,9 +952,6 @@ mod tests {
             &["/tmp/item-1".to_string()],
         );
         let paint = item_view_paint_entries(&frame_batch);
-        let folder_fallback = item_view_fallback_media_entries(&frame_batch, true);
-        let file_fallback = item_view_fallback_media_entries(&frame_batch, false);
-        let highlights = item_view_highlight_entries(&frame_batch);
         let projected_media_tokens = item_view_media_tokens(
             &frame_batch,
             &[media_source(1, Rgba8Pixel::new(255, 0, 0, 255))],
@@ -1140,24 +962,15 @@ mod tests {
         assert_eq!(paint[1].name, "item-1");
         assert_eq!(paint[1].x, 110.0);
         assert_eq!(paint[1].text_width, 56.0);
+        assert!(frame_batch.plans()[0].fallback_media.is_dir);
+        assert!(!frame_batch.plans()[1].fallback_media.is_dir);
+        assert!(!frame_batch.plans()[2].fallback_media.is_dir);
+        let highlight = frame_batch.plans()[1]
+            .highlight
+            .expect("selected row should carry raster highlight geometry");
         assert_eq!(
-            folder_fallback,
-            vec![ItemViewFallbackMediaEntry { x: 100.0, y: 0.0 }]
-        );
-        assert_eq!(
-            file_fallback,
-            vec![
-                ItemViewFallbackMediaEntry { x: 110.0, y: 2.0 },
-                ItemViewFallbackMediaEntry { x: 120.0, y: 4.0 },
-            ]
-        );
-        assert_eq!(
-            highlights,
-            vec![ItemViewHighlightEntry {
-                x: 110.0,
-                y: 2.0,
-                width: 101.0
-            }]
+            (highlight.x, highlight.y, highlight.width),
+            (110.0, 2.0, 101.0)
         );
         assert_eq!(media_tokens(&projected_media_tokens), vec![(1, 77)]);
     }
@@ -1420,22 +1233,13 @@ mod tests {
             selected_token_rows(&view.virtual_entry_tokens),
             vec!["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         );
-        assert_eq!(
-            highlight_rows(&view.virtual_highlight_entries),
-            vec![(10.0, 2.0, 91.0), (30.0, 6.0, 93.0)]
-        );
-
-        let selected_highlights = view.virtual_highlight_entries.clone();
         assert!(!update_pane_item_view_selection_model(
             &mut view,
             &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
         ));
-        assert_eq!(view.virtual_highlight_entries, selected_highlights);
 
         assert!(update_pane_item_view_selection_model(&mut view, &[]));
         assert!(selected_token_rows(&view.virtual_entry_tokens).is_empty());
-        assert_eq!(view.virtual_highlight_entries, selected_highlights);
-        assert!(highlight_rows(&view.virtual_highlight_entries).is_empty());
     }
 
     #[test]
@@ -1704,96 +1508,6 @@ mod tests {
     }
 
     #[test]
-    fn fallback_media_model_uses_sparse_updates_not_continuous_range_sliding() {
-        let source = include_str!("model_update.rs");
-        let body = source
-            .split_once("fn update_item_view_fallback_media_entries_model(")
-            .and_then(|(_, rest)| rest.split_once("pub(crate) fn new_item_view_metadata_model"))
-            .map(|(body, _)| body)
-            .expect("fallback media update helper should be present");
-
-        assert!(body.contains("update_sparse_vec_model(model, fallback_entries)"));
-        assert!(!body.contains("update_sliding_vec_model"));
-    }
-
-    #[test]
-    fn pane_item_view_fallback_media_model_reuses_sparse_rows_for_mixed_kinds() {
-        let mut initial_entries = entries_with_tile_metrics(4);
-        initial_entries[0].is_dir = true;
-        initial_entries[2].is_dir = true;
-        let mut view = PaneView::default();
-
-        update_pane_item_view_entries_model(
-            &mut view,
-            0,
-            initial_entries,
-            bounds_entries(0, 4),
-            Vec::new(),
-            Vec::new(),
-            &[],
-        );
-        let original_folder = view.virtual_folder_media_entries.clone();
-        let original_file = view.virtual_file_media_entries.clone();
-
-        let mut next_entries = entries_with_tile_metrics(4);
-        next_entries[0].is_dir = false;
-        next_entries[1].is_dir = true;
-        next_entries[2].is_dir = false;
-        next_entries[3].is_dir = true;
-        update_pane_item_view_entries_model(
-            &mut view,
-            1,
-            next_entries,
-            bounds_entries(1, 4),
-            Vec::new(),
-            Vec::new(),
-            &[],
-        );
-
-        assert_eq!(view.virtual_folder_media_entries, original_folder);
-        assert_eq!(view.virtual_file_media_entries, original_file);
-        assert_eq!(
-            fallback_rows(&view.virtual_folder_media_entries),
-            vec![(20.0, 2.0), (40.0, 6.0)]
-        );
-        assert_eq!(
-            fallback_rows(&view.virtual_file_media_entries),
-            vec![(10.0, 0.0), (30.0, 4.0)]
-        );
-    }
-
-    #[test]
-    fn pane_item_view_highlight_model_reuses_vec_model_when_selection_shape_changes() {
-        let mut view = PaneView::default();
-        update_pane_item_view_entries_model(
-            &mut view,
-            0,
-            entries_with_tile_metrics(4),
-            bounds_entries(0, 4),
-            Vec::new(),
-            Vec::new(),
-            &[],
-        );
-
-        assert!(update_pane_item_view_selection_model(
-            &mut view,
-            &["/tmp/item-1".to_string(), "/tmp/item-3".to_string()]
-        ));
-        let original_highlights = view.virtual_highlight_entries.clone();
-
-        assert!(update_pane_item_view_selection_model(
-            &mut view,
-            &["/tmp/item-2".to_string()]
-        ));
-
-        assert_eq!(view.virtual_highlight_entries, original_highlights);
-        assert_eq!(
-            highlight_rows(&view.virtual_highlight_entries),
-            vec![(20.0, 4.0, 92.0)]
-        );
-    }
-
-    #[test]
     fn pane_item_view_cached_relayout_reuses_vec_model_and_selection() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
@@ -1837,10 +1551,6 @@ mod tests {
         assert_eq!(
             selected_token_rows(&view.virtual_entry_tokens),
             vec!["/tmp/item-2".to_string()]
-        );
-        assert_eq!(
-            highlight_rows(&view.virtual_highlight_entries),
-            vec![(120.0, 2.0, 102.0)]
         );
     }
 
