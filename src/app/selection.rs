@@ -1,5 +1,9 @@
 use crate::FileEntry;
 use crate::app::item_view::SelectionRect;
+use crate::app::item_view_model::{
+    item_view_entry_matches_chooser_patterns, item_view_entry_matches_filters,
+    item_view_filters_are_identity,
+};
 use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneState};
 use crate::app::state::AppState;
 use std::ops::Range;
@@ -433,11 +437,13 @@ fn location_group_labels<'a>(locations: impl IntoIterator<Item = &'a str>) -> Ve
 }
 
 fn filters_are_identity(search: &PaneSearch, chooser_patterns: &[String]) -> bool {
-    search.query.is_empty()
-        && search.kind_filter == 0
-        && search.modified_filter == 0
-        && search.size_filter == 0
-        && chooser_patterns.is_empty()
+    item_view_filters_are_identity(
+        search.query.as_str(),
+        search.kind_filter,
+        search.modified_filter,
+        search.size_filter,
+        chooser_patterns,
+    )
 }
 
 fn active_chooser_patterns(state: &AppState) -> Vec<String> {
@@ -454,117 +460,19 @@ fn matches_entry_filters(
     chooser_patterns: &[String],
     query: &str,
 ) -> bool {
-    matches_search_query(entry, query)
-        && matches_kind_filter(entry, search.kind_filter)
-        && matches_modified_filter(entry, search.modified_filter)
-        && matches_size_filter(entry, search.size_filter)
-        && matches_chooser_patterns(entry, chooser_patterns)
-}
-
-fn matches_search_query(entry: &PaneEntrySnapshot, query: &str) -> bool {
-    query.is_empty()
-        || entry.name.to_ascii_lowercase().contains(query)
-        || entry.path.to_ascii_lowercase().contains(query)
-}
-
-fn matches_kind_filter(entry: &PaneEntrySnapshot, filter: i32) -> bool {
-    match filter {
-        1 => entry.is_dir,
-        2 => !entry.is_dir,
-        3 => !entry.is_dir && is_image_path(entry.path.as_str()),
-        _ => true,
-    }
-}
-
-fn matches_modified_filter(entry: &PaneEntrySnapshot, filter: i32) -> bool {
-    match filter {
-        1 => entry.modified_age_days == 0,
-        2 => entry.modified_age_days >= 0 && entry.modified_age_days <= 7,
-        3 => entry.modified_age_days >= 0 && entry.modified_age_days <= 30,
-        _ => true,
-    }
-}
-
-fn matches_size_filter(entry: &PaneEntrySnapshot, filter: i32) -> bool {
-    if entry.is_dir {
-        return filter == 0;
-    }
-
-    match filter {
-        1 => entry.size_bytes < 1_048_576.0,
-        2 => entry.size_bytes >= 1_048_576.0 && entry.size_bytes <= 104_857_600.0,
-        3 => entry.size_bytes > 104_857_600.0,
-        _ => true,
-    }
+    item_view_entry_matches_filters(
+        entry,
+        query,
+        search.kind_filter,
+        search.modified_filter,
+        search.size_filter,
+        chooser_patterns,
+    )
 }
 
 #[allow(dead_code)]
 pub(crate) fn matches_chooser_filter(entry: &FileEntry, state: &AppState) -> bool {
-    matches_chooser_patterns(
-        &PaneEntrySnapshot::from_entry(entry),
-        &active_chooser_patterns(state),
-    )
-}
-
-fn matches_chooser_patterns(entry: &PaneEntrySnapshot, patterns: &[String]) -> bool {
-    if entry.is_dir || patterns.is_empty() {
-        return true;
-    }
-
-    patterns
-        .iter()
-        .any(|pattern| glob_matches(pattern, entry.name.as_str()))
-}
-
-fn is_image_path(path: &str) -> bool {
-    let Some(extension) = std::path::Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-    else {
-        return false;
-    };
-
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "avif" | "bmp" | "gif" | "heic" | "heif" | "jpeg" | "jpg" | "png" | "svg" | "webp"
-    )
-}
-
-fn glob_matches(pattern: &str, text: &str) -> bool {
-    let pattern = pattern.to_ascii_lowercase();
-    let text = text.to_ascii_lowercase();
-    glob_matches_bytes(pattern.as_bytes(), text.as_bytes())
-}
-
-fn glob_matches_bytes(pattern: &[u8], text: &[u8]) -> bool {
-    let (mut pattern_index, mut text_index) = (0usize, 0usize);
-    let mut star_index = None;
-    let mut star_text_index = 0usize;
-
-    while text_index < text.len() {
-        if pattern_index < pattern.len()
-            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == text[text_index])
-        {
-            pattern_index += 1;
-            text_index += 1;
-        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-            star_index = Some(pattern_index);
-            pattern_index += 1;
-            star_text_index = text_index;
-        } else if let Some(star) = star_index {
-            pattern_index = star + 1;
-            star_text_index += 1;
-            text_index = star_text_index;
-        } else {
-            return false;
-        }
-    }
-
-    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-        pattern_index += 1;
-    }
-
-    pattern_index == pattern.len()
+    item_view_entry_matches_chooser_patterns(entry, &active_chooser_patterns(state))
 }
 
 #[cfg(test)]

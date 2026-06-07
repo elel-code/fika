@@ -111,7 +111,7 @@ use app::transfer::{
     start_transfer_operation,
 };
 use app::virtual_view::{
-    VirtualViewSnapshotInput, prepare_virtual_view_layout_prewarm,
+    VirtualViewSnapshotInput, prepare_virtual_view_layout_prewarm_input,
     prepare_virtual_view_snapshot_update,
 };
 use config::args::{Args, Mode};
@@ -4015,19 +4015,26 @@ fn start_virtual_layout_prewarm(bridge: &AsyncBridge, request: VirtualLayoutPrew
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {
-        let layouts =
-            tokio::task::spawn_blocking(move || prepare_virtual_view_layout_prewarm(inputs))
-                .await
-                .unwrap_or_default();
-        send_async_event(
-            async_tx,
-            notify_ui,
-            AsyncEvent::VirtualViewLayoutsPrewarmed(VirtualViewLayoutPrewarmResult {
-                pane_id,
-                generation,
-                layouts,
-            }),
-        );
+        let input_count = inputs.len();
+        for (index, input) in inputs.into_iter().enumerate() {
+            let layout = tokio::task::spawn_blocking(move || {
+                prepare_virtual_view_layout_prewarm_input(input)
+            })
+            .await
+            .ok()
+            .flatten();
+            let layouts = layout.into_iter().collect();
+            send_async_event(
+                async_tx.clone(),
+                notify_ui.clone(),
+                AsyncEvent::VirtualViewLayoutsPrewarmed(VirtualViewLayoutPrewarmResult {
+                    pane_id,
+                    generation,
+                    layouts,
+                    finished: index + 1 == input_count,
+                }),
+            );
+        }
     });
 }
 
@@ -4342,7 +4349,9 @@ fn apply_virtual_layout_prewarm_result(
     let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
         return;
     };
-    pane.view.finish_layout_prewarm(result.generation);
+    if result.finished {
+        pane.view.finish_layout_prewarm(result.generation);
+    }
     if !pane.view.virtual_generation.is_current(result.generation) {
         return;
     }
@@ -5029,22 +5038,7 @@ fn sync_pane_icon_zoom_layout_for_slot(
     if try_relayout_cached_pane_icon_zoom_layout(ui, state, bridge, slot) {
         return;
     }
-    sync_pane_icon_zoom_style_for_slot(ui, state, slot);
     prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);
-}
-
-fn sync_pane_icon_zoom_style_for_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
-    let can_refresh_visible_style = {
-        let state_ref = state.borrow();
-        state_ref.panes.pane_for_slot(slot).is_some_and(|pane| {
-            !pane.show_item_locations()
-                && pane.view.virtual_metadata_entries.row_count() == 0
-                && pane.view.has_renderable_virtual_entries()
-        })
-    };
-    if can_refresh_visible_style {
-        sync_pane_view_ui(ui, state, slot);
-    }
 }
 
 fn prepare_pane_icon_zoom_layout_for_slot(
@@ -7343,14 +7337,9 @@ mod tests {
             .expect("pane layout scheduler body should be present");
         let icon_zoom_body = source
             .split_once("fn sync_pane_icon_zoom_layout_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_icon_zoom_style_for_slot("))
-            .map(|(body, _)| body)
-            .expect("icon zoom layout body should be present");
-        let icon_zoom_style_body = source
-            .split_once("fn sync_pane_icon_zoom_style_for_slot(")
             .and_then(|(_, rest)| rest.split_once("fn prepare_pane_icon_zoom_layout_for_slot("))
             .map(|(body, _)| body)
-            .expect("icon zoom visible style body should be present");
+            .expect("icon zoom layout body should be present");
         let visible_icon_zoom_body = source
             .split_once("fn sync_visible_pane_icon_zoom_layouts(")
             .and_then(|(_, rest)| rest.split_once("fn sync_pane_icon_zoom_layout_for_slot("))
@@ -7366,11 +7355,23 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
             .map(|(body, _)| body)
             .expect("icon zoom cached relayout body should be present");
+        let prewarm_body = source
+            .split_once("fn start_virtual_layout_prewarm(")
+            .and_then(|(_, rest)| rest.split_once("fn cached_virtual_viewport_sync("))
+            .map(|(body, _)| body)
+            .expect("zoom layout prewarm body should be present");
+        let apply_prewarm_body = source
+            .split_once("fn apply_virtual_layout_prewarm_result(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_virtual_view_prepare_failure("))
+            .map(|(body, _)| body)
+            .expect("zoom layout prewarm apply body should be present");
         let removed_zoom_range_hint_function = ["fn ", "icon_zoom_range_hint("].concat();
+        let removed_zoom_style_function =
+            ["fn ", "sync_pane_icon_zoom", "_style_for_slot("].concat();
         let removed_zoom_width_function =
             ["zoom", "_range", "_visible", "_name", "_width", "_units"].concat();
         let removed_zoom_width_vec = ["visible", "_name", "_width", "_units"].concat();
-        let layout_prewarm_call = ["prepare_virtual_view_layout", "_prewarm(inputs)"].concat();
+        let layout_prewarm_call = ["prepare_virtual_view_layout", "_prewarm_input(input)"].concat();
 
         assert!(
             source.contains(
@@ -7405,11 +7406,9 @@ mod tests {
         );
         assert!(
             icon_zoom_body.contains("try_relayout_cached_pane_icon_zoom_layout(ui, state, bridge, slot)")
-                && icon_zoom_body.contains("sync_pane_icon_zoom_style_for_slot(ui, state, slot);")
                 && icon_zoom_body.contains("prepare_pane_icon_zoom_layout_for_slot(ui, state, bridge, slot);")
-                && icon_zoom_style_body.contains("pane.view.has_renderable_virtual_entries()")
-                && icon_zoom_style_body.contains("pane.view.virtual_metadata_entries.row_count() == 0")
-                && icon_zoom_style_body.contains("sync_pane_view_ui(ui, state, slot);")
+                && !source.contains(&removed_zoom_style_function)
+                && !icon_zoom_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && visible_icon_zoom_body
                     .contains("if slots.row_count() == 0 {\n        return;\n    }")
                 && !visible_icon_zoom_body
@@ -7444,8 +7443,12 @@ mod tests {
                     .contains("schedule_zoom_layout_prewarm(ui, state, bridge, slot);")
                 && source.contains("fn zoom_layout_prewarm_levels(current_zoom: i32)")
                 && source.contains("[-1, 1, -2, 2, -3, 3, -4, 4]")
-                && source.contains(&layout_prewarm_call),
-            "icon zoom should first apply Dolphin-style visible widget style updates, reuse the current virtual slice synchronously when possible, prewarm zoom layouts off-thread, and move cache-miss snapshot rebuilds off the input event"
+                && source.contains(&layout_prewarm_call)
+                && prewarm_body.contains("for (index, input) in inputs.into_iter().enumerate()")
+                && prewarm_body.contains("finished: index + 1 == input_count")
+                && apply_prewarm_body.contains("if result.finished")
+                && apply_prewarm_body.contains("pane.view.finish_layout_prewarm(result.generation);"),
+            "icon zoom should synchronously reuse cached/prewarmed layouts only, keep cache-miss relayout and raster rebuilds off the input event, and commit prewarmed zoom layouts incrementally by distance"
         );
     }
 

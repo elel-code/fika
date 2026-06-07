@@ -138,6 +138,7 @@ pub(crate) struct VirtualViewLayoutPrewarmResult {
     pub(crate) pane_id: u64,
     pub(crate) generation: u64,
     pub(crate) layouts: Vec<Arc<ItemViewLayoutEngine>>,
+    pub(crate) finished: bool,
 }
 
 #[derive(Debug)]

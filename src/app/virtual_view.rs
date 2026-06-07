@@ -2,6 +2,9 @@ use crate::app::geometry::{
     CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewLayoutEngine, ItemViewLayouter,
     MainItemViewLayout, VirtualItemViewPlan,
 };
+use crate::app::item_view_model::{
+    ItemViewModelEntry, item_view_entry_matches_filters, item_view_filters_are_identity,
+};
 use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
 use std::ops::Range;
 use std::sync::Arc;
@@ -95,27 +98,32 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_virtual_view_layout_prewarm(
     inputs: Vec<VirtualViewSnapshotInput>,
 ) -> Vec<Arc<ItemViewLayoutEngine>> {
     inputs
         .into_iter()
-        .filter_map(|input| {
-            let visible_count = input
-                .visible_count_override
-                .unwrap_or_else(|| snapshot_visible_entry_count(&input));
-            if visible_count == 0 {
-                return None;
-            }
-            Some(
-                cached_snapshot_layout(&input, visible_count).unwrap_or_else(|| {
-                    Arc::new(ItemViewLayoutEngine::from(
-                        snapshot_compact_item_view_layout(&input, visible_count),
-                    ))
-                }),
-            )
-        })
+        .filter_map(prepare_virtual_view_layout_prewarm_input)
         .collect()
+}
+
+pub(crate) fn prepare_virtual_view_layout_prewarm_input(
+    input: VirtualViewSnapshotInput,
+) -> Option<Arc<ItemViewLayoutEngine>> {
+    let visible_count = input
+        .visible_count_override
+        .unwrap_or_else(|| snapshot_visible_entry_count(&input));
+    if visible_count == 0 {
+        return None;
+    }
+    Some(
+        cached_snapshot_layout(&input, visible_count).unwrap_or_else(|| {
+            Arc::new(ItemViewLayoutEngine::from(
+                snapshot_compact_item_view_layout(&input, visible_count),
+            ))
+        }),
+    )
 }
 
 fn cached_snapshot_layout(
@@ -199,7 +207,7 @@ fn snapshot_compact_item_view_layout(
                 input
                     .entries
                     .get(index)
-                    .map(|entry| entry.name_width_units)
+                    .map(ItemViewModelEntry::model_name_width_units)
                     .unwrap_or_default()
             })
             .chain(std::iter::repeat(0.0))
@@ -210,7 +218,7 @@ fn snapshot_compact_item_view_layout(
             .entries
             .iter()
             .take(visible_count)
-            .map(|entry| entry.name_width_units)
+            .map(ItemViewModelEntry::model_name_width_units)
             .chain(std::iter::repeat(0.0))
             .take(visible_count);
         input.layout.compact_item_view_from_text_width_units(widths)
@@ -220,7 +228,7 @@ fn snapshot_compact_item_view_layout(
             .iter()
             .filter(|entry| snapshot_matches_entry_filters(entry, input))
             .take(visible_count)
-            .map(|entry| entry.name_width_units)
+            .map(ItemViewModelEntry::model_name_width_units)
             .chain(std::iter::repeat(0.0))
             .take(visible_count);
         input.layout.compact_item_view_from_text_width_units(widths)
@@ -330,118 +338,27 @@ fn search_group_label(location: &str) -> String {
 }
 
 fn snapshot_filters_are_identity(input: &VirtualViewSnapshotInput) -> bool {
-    input.query.is_empty()
-        && input.kind_filter == 0
-        && input.modified_filter == 0
-        && input.size_filter == 0
-        && input.chooser_patterns.is_empty()
+    item_view_filters_are_identity(
+        input.query.as_str(),
+        input.kind_filter,
+        input.modified_filter,
+        input.size_filter,
+        &input.chooser_patterns,
+    )
 }
 
 fn snapshot_matches_entry_filters(
     entry: &PaneEntrySnapshot,
     input: &VirtualViewSnapshotInput,
 ) -> bool {
-    snapshot_matches_search_query(entry, input.query.as_str())
-        && snapshot_matches_kind_filter(entry, input.kind_filter)
-        && snapshot_matches_modified_filter(entry, input.modified_filter)
-        && snapshot_matches_size_filter(entry, input.size_filter)
-        && snapshot_matches_chooser_filter(entry, &input.chooser_patterns)
-}
-
-fn snapshot_matches_search_query(entry: &PaneEntrySnapshot, query: &str) -> bool {
-    query.is_empty()
-        || entry.name.to_ascii_lowercase().contains(query)
-        || entry.path.to_ascii_lowercase().contains(query)
-}
-
-fn snapshot_matches_kind_filter(entry: &PaneEntrySnapshot, filter: i32) -> bool {
-    match filter {
-        1 => entry.is_dir,
-        2 => !entry.is_dir,
-        3 => !entry.is_dir && snapshot_is_image_path(entry.path.as_str()),
-        _ => true,
-    }
-}
-
-fn snapshot_matches_modified_filter(entry: &PaneEntrySnapshot, filter: i32) -> bool {
-    match filter {
-        1 => entry.modified_age_days == 0,
-        2 => entry.modified_age_days >= 0 && entry.modified_age_days <= 7,
-        3 => entry.modified_age_days >= 0 && entry.modified_age_days <= 30,
-        _ => true,
-    }
-}
-
-fn snapshot_matches_size_filter(entry: &PaneEntrySnapshot, filter: i32) -> bool {
-    if entry.is_dir {
-        return filter == 0;
-    }
-
-    match filter {
-        1 => entry.size_bytes < 1_048_576.0,
-        2 => entry.size_bytes >= 1_048_576.0 && entry.size_bytes <= 104_857_600.0,
-        3 => entry.size_bytes > 104_857_600.0,
-        _ => true,
-    }
-}
-
-fn snapshot_matches_chooser_filter(entry: &PaneEntrySnapshot, patterns: &[String]) -> bool {
-    entry.is_dir
-        || patterns.is_empty()
-        || patterns
-            .iter()
-            .any(|pattern| snapshot_glob_matches(pattern, entry.name.as_str()))
-}
-
-fn snapshot_is_image_path(path: &str) -> bool {
-    let Some(extension) = std::path::Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-    else {
-        return false;
-    };
-
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "avif" | "bmp" | "gif" | "heic" | "heif" | "jpeg" | "jpg" | "png" | "svg" | "webp"
+    item_view_entry_matches_filters(
+        entry,
+        input.query.as_str(),
+        input.kind_filter,
+        input.modified_filter,
+        input.size_filter,
+        &input.chooser_patterns,
     )
-}
-
-fn snapshot_glob_matches(pattern: &str, text: &str) -> bool {
-    let pattern = pattern.to_ascii_lowercase();
-    let text = text.to_ascii_lowercase();
-    snapshot_glob_matches_bytes(pattern.as_bytes(), text.as_bytes())
-}
-
-fn snapshot_glob_matches_bytes(pattern: &[u8], text: &[u8]) -> bool {
-    let (mut pattern_index, mut text_index) = (0usize, 0usize);
-    let mut star_index = None;
-    let mut star_text_index = 0usize;
-
-    while text_index < text.len() {
-        if pattern_index < pattern.len()
-            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == text[text_index])
-        {
-            pattern_index += 1;
-            text_index += 1;
-        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-            star_index = Some(pattern_index);
-            pattern_index += 1;
-            star_text_index = text_index;
-        } else if let Some(star) = star_index {
-            pattern_index = star + 1;
-            star_text_index += 1;
-            text_index = star_text_index;
-        } else {
-            return false;
-        }
-    }
-
-    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-        pattern_index += 1;
-    }
-
-    pattern_index == pattern.len()
 }
 
 #[cfg(test)]

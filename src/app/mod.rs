@@ -9,6 +9,7 @@ pub(crate) mod file_clipboard;
 pub(crate) mod geometry;
 pub(crate) mod item_view;
 pub(crate) mod item_view_metrics;
+pub(crate) mod item_view_model;
 pub(crate) mod item_view_renderer;
 pub(crate) mod model_update;
 pub(crate) mod operation_controller;

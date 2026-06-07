@@ -229,6 +229,7 @@ pub(crate) struct PaneEntrySnapshot {
 }
 
 impl PaneEntrySnapshot {
+    #[cfg(test)]
     pub(crate) fn from_entry(entry: &FileEntry) -> Self {
         let name = entry.name.to_string();
         Self {
