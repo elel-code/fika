@@ -62,7 +62,7 @@ Rectangle viewport shell (clip: true)
 |------|------|------|
 | 虚拟化：Slint 只接收可见范围条目 | `virtual_view.rs` | 大目录不实例化全部 tile |
 | 缓存命中免重建：`should_rebuild_virtual_model` | `virtual_view.rs:180` | 同范围内滚动零模型更新 |
-| 缩略图优先可见列 | `thumbnail_pipeline.rs:40` | 减少首屏缩略图延迟 |
+| 缩略图优先可见列 | `thumbnail_pipeline.rs:40` | 减少首屏缩略图延迟；优先级顺序用三段 slice iterator 流式消费，不再为每次 virtual sync 分配 `Vec<&T>` |
 | 自管 viewport clamp/round | `split_pane.slint` | 避免 ScrollView/Flickable viewport 回写和子像素漂移触发同步 |
 | Dolphin-style smooth paint viewport | `split_pane.slint` / `split_view.rs` | 滚轮滚动时 scrollbar/Rust visible slice 立即跟随 logical `viewport-x`，绘制层用 `paint-viewport-x` 平滑追随；只有当前 virtual slice 覆盖旧/新可见窗口时才动画，scrollbar drag、resize clamp 和外部 viewport 恢复立即同步 |
 | 普通滚轮不重复请求焦点 | `split_pane.slint:78` | 减少 FFI 调用 |
@@ -213,7 +213,7 @@ changed viewport-x => {
 - `CompactItemVisualMetrics` 只让 media/icon size 随 zoom 改变，title/metadata font metrics 保持稳定，贴近 Dolphin 的 `styleOption.fontMetrics` 用法，减少 Slint 首次 zoom 时的 Text 字体冷启动。
 - `PaneEntrySnapshot` 在目录加载/缓存写入阶段预计算文件名宽度单位；`prepare_virtual_view_snapshot_update()` 和 `try_relayout_cached_pane_icon_zoom_layout()` 都直接消费这些 `f32` 宽度单位生成 compact layout。后台 snapshot cache miss 通过 `snapshot_compact_item_view_layout()` 按当前 visible source 直接把宽度 iterator 交给 layouter，不再先 materialize 整目录 `visible_name_width_units` 中间 `Vec`。这样 Dolphin-style 每列取最长文件名、每项高亮宽度不同的语义不变，但目录第一次 zoom、cache miss 后台 layout 和目录切换热路径不再重复分配 `Vec<String>`、逐字符估宽或额外的宽度中间表。
 - Folder/file fallback glyph 已画入当前 virtual slice 的 tile raster base layer；目录/滚动 snapshot、theme refresh 和 zoom fast path 只重新生成当前可见 raster。zoom 改变 pane-level media 目标几何和当前 slice 底图，不再把新的 folder/file fallback `Image` source 下发给 Slint，贴近 Dolphin 的可见区 pixmap/cache 思路并降低 `/etc` 这类 fallback-heavy 目录的首次 zoom 卡顿。
-- `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 300ms 合并连续 zoom 后的缩略图调度；timer flush 时从当前可见 virtual slice 调用 `schedule_visible_thumbnails_for_visible_panes()`。该路径从 pane-local `ItemViewRowToken` sidecar 派生轻量 `ThumbnailScheduleEntry`，不再从 Slint `VecModel<ItemViewEntry>` 读取 row；临时 path 使用 `SharedString`，只有真正入队的缩略图任务才转成 owned `PathBuf`。
+- `PaneLayoutSyncScheduler` 使用 `TimerMode::SingleShot` 以 300ms 合并连续 zoom 后的缩略图调度；timer flush 时从当前可见 virtual slice 调用 `schedule_visible_thumbnails_for_visible_panes()`。该路径从 pane-local `ItemViewRowToken` sidecar 派生轻量 `ThumbnailScheduleEntry`，不再从 Slint `VecModel<ItemViewEntry>` 读取 row；缩略图优先级按“真实可见区、前置 overscan、后置 overscan”三段 slice iterator 流式调度，不再为每次滚动/virtual sync 构造 `Vec<&T>`；临时 path 使用 `SharedString`，只有真正入队的缩略图任务才转成 owned `PathBuf`。
 - 普通非缩略图候选文件会在首次 virtual slice 装饰时写入 `THUMBNAIL_STATE_NOT_CANDIDATE`，该状态随 `ItemViewRowToken` 复用；zoom 后的延迟缩略图调度看到该 token 会直接跳过，不再重复构造 `PathBuf`、判断扩展名或查询 thumbnailer。`is_thumbnail_candidate()` 也会先用扩展名 MIME 映射预筛，`.conf`、无扩展等文件不会初始化 XDG thumbnailer registry。
 - thumbnail 调度按当前 size 的 media token 判断已加载状态；旧 zoom size 的 thumbnail 不会阻塞新 size 的延迟任务。
 - 普通 `pane_layout_changed()` 仍调用 `sync_now()`，会停止 pending zoom thumbnail timer 并立即刷新；窗口大小、sidebar、split ratio、pane 宽度变化不等待 timer。

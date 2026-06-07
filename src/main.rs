@@ -4109,7 +4109,7 @@ fn apply_virtual_view_result(
             state,
             bridge,
             result.pane_id,
-            &thumbnail_entries,
+            thumbnail_entries,
             result.thumbnail_size_px,
             false,
         );
@@ -4566,15 +4566,18 @@ fn clear_selection(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     clear_selection_for_slot(ui, state, slot);
 }
 
-fn schedule_visible_thumbnails<T: ThumbnailScheduleRow + ?Sized>(
+fn schedule_visible_thumbnails<'a, T, I>(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     pane_id: u64,
-    entries: &[&T],
+    entries: I,
     size_px: u32,
     announce: bool,
-) {
+) where
+    T: ThumbnailScheduleRow + ?Sized + 'a,
+    I: IntoIterator<Item = &'a T>,
+{
     let (generation, paths) = {
         let mut state = state.borrow_mut();
         let Some(pane) = state.panes.pane_by_id(pane_id) else {
@@ -4725,7 +4728,7 @@ fn schedule_visible_thumbnails_for_slot(
         state,
         bridge,
         pane_id,
-        &thumbnail_entries,
+        thumbnail_entries,
         size_px,
         false,
     );

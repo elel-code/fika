@@ -139,7 +139,7 @@ pub(crate) fn prioritize_thumbnail_entries<T: ThumbnailScheduleRow>(
     entries: &[T],
     virtual_start_index: usize,
     visible_range: Range<usize>,
-) -> Vec<&T> {
+) -> impl Iterator<Item = &T> {
     let visible_start = visible_range
         .start
         .saturating_sub(virtual_start_index)
@@ -149,11 +149,11 @@ pub(crate) fn prioritize_thumbnail_entries<T: ThumbnailScheduleRow>(
         .saturating_sub(virtual_start_index)
         .min(entries.len())
         .max(visible_start);
-    let mut prioritized = Vec::with_capacity(entries.len());
-    prioritized.extend(entries[visible_start..visible_end].iter());
-    prioritized.extend(entries[..visible_start].iter());
-    prioritized.extend(entries[visible_end..].iter());
-    prioritized
+
+    entries[visible_start..visible_end]
+        .iter()
+        .chain(entries[..visible_start].iter())
+        .chain(entries[visible_end..].iter())
 }
 
 #[cfg(test)]
@@ -245,27 +245,35 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane<T: ThumbnailScheduleRow + ?S
 }
 
 #[cfg(test)]
-pub(crate) fn thumbnail_schedule_batch<T: ThumbnailScheduleRow + ?Sized>(
+pub(crate) fn thumbnail_schedule_batch<'a, T, I>(
     state: &mut AppState,
-    entries: &[&T],
+    entries: I,
     size_px: u32,
-) -> Vec<PathBuf> {
-    thumbnail_schedule_batch_for_pane(state, state.panes.focused().id, entries, size_px)
+) -> Vec<PathBuf>
+where
+    T: ThumbnailScheduleRow + ?Sized + 'a,
+    I: IntoIterator<Item = &'a T>,
+{
+    let pane_id = state.panes.focused().id;
+    thumbnail_schedule_batch_for_pane(state, pane_id, entries, size_px)
 }
 
-pub(crate) fn thumbnail_schedule_batch_for_pane<T: ThumbnailScheduleRow + ?Sized>(
+pub(crate) fn thumbnail_schedule_batch_for_pane<'a, T, I>(
     state: &mut AppState,
     pane_id: u64,
-    entries: &[&T],
+    entries: I,
     size_px: u32,
-) -> Vec<PathBuf> {
+) -> Vec<PathBuf>
+where
+    T: ThumbnailScheduleRow + ?Sized + 'a,
+    I: IntoIterator<Item = &'a T>,
+{
     let mut paths = Vec::new();
     for entry in entries {
         if paths.len() >= MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC {
             break;
         }
 
-        let entry = *entry;
         let Some((path, key)) =
             thumbnail_schedule_candidate_for_pane(state, pane_id, entry, size_px)
         else {
@@ -775,7 +783,6 @@ mod tests {
 
         let prioritized = prioritize_thumbnail_entries(&tokens, 0, 2..4);
         let prioritized_paths = prioritized
-            .iter()
             .map(|entry| entry.path().to_string())
             .collect::<Vec<_>>();
         assert_eq!(
@@ -791,7 +798,8 @@ mod tests {
         );
 
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        let paths = thumbnail_schedule_batch(&mut state, &prioritized, 64);
+        let prioritized = prioritize_thumbnail_entries(&tokens, 0, 2..4);
+        let paths = thumbnail_schedule_batch(&mut state, prioritized, 64);
         assert_eq!(paths[0], temp_dir.join("item-2.png"));
         assert_eq!(paths[1], temp_dir.join("item-3.png"));
         assert!(
@@ -823,9 +831,10 @@ mod tests {
 
         let token = ItemViewRowToken::from_entry(&entries[0]);
         let schedule_entry = ThumbnailScheduleEntry::from_row_token(&token);
-        let prioritized = vec![&schedule_entry];
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
-        assert!(thumbnail_schedule_batch(&mut state, &prioritized, 64).is_empty());
+        assert!(
+            thumbnail_schedule_batch(&mut state, std::iter::once(&schedule_entry), 64).is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -864,7 +873,7 @@ mod tests {
 
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let prioritized = prioritize_thumbnail_entries(&entries, 0, 4..8);
-        let paths = thumbnail_schedule_batch(&mut state, &prioritized, 64);
+        let paths = thumbnail_schedule_batch(&mut state, prioritized, 64);
 
         assert_eq!(paths.len(), MAX_THUMBNAIL_JOBS_PER_VIEW_SYNC);
         assert_eq!(paths[0], temp_dir.join("item-4.png"));
@@ -939,8 +948,7 @@ mod tests {
             dir_entry,
             test_entry("ready.png", ready_path.to_str().unwrap()),
         ];
-        let prioritized = entries.iter().collect::<Vec<_>>();
-        let paths = thumbnail_schedule_batch(&mut state, &prioritized, 64);
+        let paths = thumbnail_schedule_batch(&mut state, entries.iter(), 64);
 
         assert_eq!(paths, vec![ready_path.clone()]);
         assert!(
