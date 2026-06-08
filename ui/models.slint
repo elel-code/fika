@@ -1,37 +1,22 @@
-export struct ItemViewEntry {
+export struct ItemViewSlotEntry {
+    active: bool,
     name: string,
-    path: string,
-    is_dir: bool,
-    thumbnail_state: int,
-    media_token: int,
-}
-
-export struct ItemViewPaintEntry {
-    name: string,
-    thumbnail_state: int,
     media_kind: int,
+    has_thumbnail: bool,
+    thumbnail: image,
+    has_metadata_group: bool,
+    metadata_group: string,
+    has_metadata_location: bool,
+    metadata_location: string,
+    metadata_text_x: float,
+    metadata_text_width: float,
+    metadata_group_y: float,
+    metadata_location_y: float,
+    metadata_line_height: float,
+    metadata_font_size: float,
     x: float,
     y: float,
-    width: float,
     text_width: float,
-}
-
-export struct ItemViewMetadataEntry {
-    text: string,
-    item_x: float,
-    item_y: float,
-    text_x: float,
-    text_width: float,
-    y: float,
-    line_height: float,
-    font_size: float,
-    is_group: bool,
-}
-
-export struct ItemViewThumbnailEntry {
-    media: image,
-    x: float,
-    y: float,
 }
 
 export struct PlaceEntry {
@@ -93,7 +78,7 @@ export struct ChooserChoice {
 
 export struct PaneViewData {
     slot: int,
-    paint: [ItemViewPaintEntry],
+    item_view_slots: [ItemViewSlotEntry],
     item_view_raster_layer: image,
     item_view_raster_width: float,
     item_view_raster_height: float,
@@ -107,8 +92,6 @@ export struct PaneViewData {
     item_view_text_icon: image,
     item_view_code_icon: image,
     item_view_executable_icon: image,
-    thumbnails: [ItemViewThumbnailEntry],
-    metadata: [ItemViewMetadataEntry],
     entry_count: int,
     virtual_start_column: int,
     virtual_start_row: int,

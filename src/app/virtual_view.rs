@@ -3,9 +3,10 @@ use crate::app::geometry::{
     MainItemViewLayout, VirtualItemViewPlan,
 };
 use crate::app::item_view_model::{
-    ItemViewModelEntry, item_view_entry_matches_filters, item_view_filters_are_identity,
+    ItemViewModelEntry, ItemViewModelEntryArc, item_view_entry_matches_filters,
+    item_view_filters_are_identity, item_view_model_entry_with_group,
 };
-use crate::app::pane::{PaneEntryModel, PaneEntrySnapshot, VirtualViewCache};
+use crate::app::pane::{PaneEntryModel, VirtualViewCache};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -84,8 +85,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         };
     }
 
-    let mut entries = snapshot_entries_range(&input, range.clone());
-    annotate_snapshot_location_groups(&input, range.start, &mut entries);
+    let entries = snapshot_entries_range(&input, range.clone());
 
     VirtualViewSnapshotUpdate {
         entry_count: visible_count,
@@ -95,7 +95,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         range,
         visible_range: plan.visible_range,
         start_column,
-        entries: PaneEntryModel::from(entries),
+        entries,
         rebuild_model: true,
     }
 }
@@ -211,71 +211,102 @@ fn snapshot_compact_item_view_layout(
     }
 }
 
-fn snapshot_entries_range(
-    input: &VirtualViewSnapshotInput,
-    range: Range<usize>,
-) -> Vec<PaneEntrySnapshot> {
+fn snapshot_entries_range(input: &VirtualViewSnapshotInput, range: Range<usize>) -> PaneEntryModel {
     if range.is_empty() {
-        return Vec::new();
+        return PaneEntryModel::default();
     }
 
+    let mut previous_location =
+        if input.visible_entries_have_locations && input.visible_location_groups.is_none() {
+            snapshot_previous_visible_entry_location(input, range.start)
+        } else {
+            None
+        };
+    let mut snapshot_entries = Vec::with_capacity(range.end.saturating_sub(range.start));
+
     if let Some(indices) = input.visible_entry_indices.as_ref() {
-        return indices
+        for (offset, &index) in indices
             .get(range.start..range.end.min(indices.len()))
             .unwrap_or(&[])
             .iter()
-            .map(|&index| input.entries[index].clone())
-            .collect();
+            .enumerate()
+        {
+            snapshot_entries.push(snapshot_owned_entry(
+                input,
+                range.start + offset,
+                &mut previous_location,
+                input
+                    .entries
+                    .entry_arc(index)
+                    .expect("visible entry index should reference a pane entry"),
+            ));
+        }
+        return PaneEntryModel::new(snapshot_entries);
     }
 
     if !snapshot_filters_are_identity(input) {
-        return input
+        for (offset, entry) in input
             .entries
-            .iter()
+            .entry_arcs_range(0..input.entries.len())
             .filter(|entry| snapshot_matches_entry_filters(entry, input))
             .skip(range.start)
             .take(range.end.saturating_sub(range.start))
-            .cloned()
-            .collect();
+            .enumerate()
+        {
+            snapshot_entries.push(snapshot_owned_entry(
+                input,
+                range.start + offset,
+                &mut previous_location,
+                entry,
+            ));
+        }
+        return PaneEntryModel::new(snapshot_entries);
     }
 
-    input
+    for (offset, entry) in input
         .entries
-        .get(range.start..range.end.min(input.entries.len()))
-        .unwrap_or(&[])
-        .to_vec()
+        .entry_arcs_range(range.start..range.end)
+        .enumerate()
+    {
+        snapshot_entries.push(snapshot_owned_entry(
+            input,
+            range.start + offset,
+            &mut previous_location,
+            entry,
+        ));
+    }
+
+    PaneEntryModel::new(snapshot_entries)
 }
 
-fn annotate_snapshot_location_groups(
+fn snapshot_previous_visible_entry_location(
     input: &VirtualViewSnapshotInput,
     start_visible_index: usize,
-    entries: &mut [PaneEntrySnapshot],
-) {
-    if !input.visible_entries_have_locations {
-        return;
-    }
-
-    if let Some(groups) = input.visible_location_groups.as_ref() {
-        for (offset, entry) in entries.iter_mut().enumerate() {
-            entry.group = groups
-                .get(start_visible_index + offset)
-                .cloned()
-                .unwrap_or_default();
-        }
-        return;
-    }
-
-    let mut previous_location = start_visible_index
+) -> Option<String> {
+    start_visible_index
         .checked_sub(1)
-        .and_then(|index| snapshot_visible_entry_location_at(input, index));
-    for entry in entries {
-        if previous_location.as_deref() != Some(entry.model_location()) {
-            entry.group = search_group_label(entry.model_location());
-        } else {
-            entry.group.clear();
-        }
-        previous_location = Some(entry.model_location().to_string());
+        .and_then(|index| snapshot_visible_entry_location_at(input, index))
+}
+
+fn snapshot_owned_entry(
+    input: &VirtualViewSnapshotInput,
+    visible_index: usize,
+    previous_location: &mut Option<String>,
+    entry: ItemViewModelEntryArc,
+) -> ItemViewModelEntryArc {
+    if !input.visible_entries_have_locations {
+        return entry;
     }
+
+    let group = if let Some(groups) = input.visible_location_groups.as_ref() {
+        groups.get(visible_index).cloned().unwrap_or_default()
+    } else if previous_location.as_deref() != Some(entry.model_location()) {
+        search_group_label(entry.model_location())
+    } else {
+        String::new()
+    };
+    *previous_location = Some(entry.model_location().to_string());
+    item_view_model_entry_with_group(entry, group)
 }
 
 fn snapshot_visible_entry_location_at(
@@ -340,6 +371,7 @@ fn snapshot_matches_entry_filters(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FileEntry;
     use crate::app::item_view_renderer::{
         ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
         decorate_render_plan,
@@ -361,25 +393,24 @@ mod tests {
         }
     }
 
-    fn snapshot_test_entry(index: usize, location: &str) -> PaneEntrySnapshot {
+    fn snapshot_test_entry(index: usize, location: &str) -> FileEntry {
         let name = format!("item-{index}.txt");
-        PaneEntrySnapshot {
-            name_width_units: crate::app::geometry::compact_text_width_units(&name),
-            name,
-            path: format!("/tmp/item-{index}.txt"),
-            group: String::new(),
-            location: location.to_string(),
-            kind: "File".to_string(),
-            size: "1 KB".to_string(),
+        FileEntry {
+            name: name.into(),
+            path: format!("/tmp/item-{index}.txt").into(),
+            group: "".into(),
+            location: location.into(),
+            kind: "File".into(),
+            size: "1 KB".into(),
             size_bytes: 1024.0,
-            modified: "Today".to_string(),
+            modified: "Today".into(),
             modified_age_days: 0,
             is_dir: false,
         }
     }
 
     fn snapshot_entries(count: usize) -> PaneEntryModel {
-        PaneEntryModel::from(
+        PaneEntryModel::from_entries(
             (0..count)
                 .map(|index| snapshot_test_entry(index, ""))
                 .collect::<Vec<_>>(),
@@ -640,7 +671,7 @@ mod tests {
             force_rebuild_model: false,
             visible_count_override: None,
             cache: VirtualViewCache::default(),
-            entries: PaneEntryModel::from(entries),
+            entries: PaneEntryModel::from_entries(entries),
             visible_entry_indices: None,
             visible_entries_have_locations: true,
             visible_location_groups: Some(Arc::from(groups)),
@@ -653,9 +684,9 @@ mod tests {
 
         assert!(update.rebuild_model);
         assert_eq!(update.range.start, 4);
-        assert_eq!(update.entries[0].group, "cached-group-4");
-        assert_eq!(update.entries[1].group, "cached-group-5");
-        assert_eq!(update.entries[4].group, "cached-group-8");
-        assert_ne!(update.entries[0].group, "/search/location-a");
+        assert_eq!(update.entries[0].model_group(), "cached-group-4");
+        assert_eq!(update.entries[1].model_group(), "cached-group-5");
+        assert_eq!(update.entries[4].model_group(), "cached-group-8");
+        assert_ne!(update.entries[0].model_group(), "/search/location-a");
     }
 }

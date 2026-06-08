@@ -1,11 +1,12 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_renderer::{
-    ItemViewFrameEntry, ItemViewMediaSource, ItemViewMediaToken, ItemViewMetadataOverlaySource,
-    ItemViewTileFrameBatch, metadata_entries_with_bounds,
+    ItemViewFrameEntry, ItemViewMediaSource, ItemViewMetadataOverlaySource, ItemViewSlotProjection,
+    ItemViewTileFrameBatch,
 };
 use crate::app::pane::PaneView;
-use crate::{ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry};
-use slint::{Model, ModelRc, SharedString, VecModel};
+use crate::{ItemViewEntry, ItemViewSlotEntry};
+use slint::{Image, Model, ModelRc, SharedString, VecModel};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -16,6 +17,59 @@ pub(crate) struct ItemViewRowToken {
     selected: bool,
     thumbnail_state: i32,
     media_token: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ItemViewSlotKey {
+    path: String,
+    occurrence: usize,
+}
+
+fn item_view_slot_keys(projections: &[ItemViewSlotProjection]) -> Vec<Option<ItemViewSlotKey>> {
+    let mut occurrences = HashMap::new();
+    projections
+        .iter()
+        .map(|projection| {
+            if !projection.entry.active {
+                return None;
+            }
+            let path = projection.path.to_string();
+            let occurrence = occurrences.entry(path.clone()).or_insert(0);
+            let key = ItemViewSlotKey {
+                path,
+                occurrence: *occurrence,
+            };
+            *occurrence += 1;
+            Some(key)
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewSlotToken {
+    key: Option<ItemViewSlotKey>,
+    absolute_index: i32,
+    thumbnail_token: i32,
+}
+
+impl Default for ItemViewSlotToken {
+    fn default() -> Self {
+        Self {
+            key: None,
+            absolute_index: -1,
+            thumbnail_token: 0,
+        }
+    }
+}
+
+impl ItemViewSlotToken {
+    pub(crate) fn absolute_index(&self) -> Option<i32> {
+        self.key.as_ref().map(|_| self.absolute_index)
+    }
+
+    pub(crate) fn thumbnail_token(&self) -> i32 {
+        self.thumbnail_token
+    }
 }
 
 impl ItemViewRowToken {
@@ -62,14 +116,6 @@ impl ItemViewRowToken {
         self.selected = selected;
     }
 
-    pub(crate) fn row_equals_ignoring_selection(&self, other: &Self) -> bool {
-        let mut current = self.clone();
-        let mut next = other.clone();
-        current.selected = false;
-        next.selected = false;
-        current == next
-    }
-
     pub(crate) fn has_renderable_title(&self) -> bool {
         !self.name.as_str().trim().is_empty()
     }
@@ -101,213 +147,329 @@ impl ItemViewFrameEntry for ItemViewRowToken {
     }
 }
 
-pub(crate) fn new_item_view_entries_model(entries: Vec<ItemViewEntry>) -> ModelRc<ItemViewEntry> {
-    ModelRc::new(Rc::new(VecModel::from(entries)))
-}
-
-pub(crate) fn new_item_view_bounds_model(
-    bounds_entries: Vec<ItemViewItemBounds>,
-) -> ModelRc<ItemViewItemBounds> {
-    if bounds_entries.is_empty() {
+pub(crate) fn new_item_view_slot_model(
+    slot_entries: Vec<ItemViewSlotEntry>,
+) -> ModelRc<ItemViewSlotEntry> {
+    if slot_entries.is_empty() {
         return ModelRc::default();
     }
 
-    ModelRc::new(Rc::new(VecModel::from(bounds_entries)))
+    ModelRc::new(Rc::new(VecModel::from(slot_entries)))
 }
 
-fn update_item_view_bounds_entries_model(
-    current: &mut ModelRc<ItemViewItemBounds>,
-    old_start: usize,
-    new_start: usize,
-    bounds_entries: Vec<ItemViewItemBounds>,
-) -> bool {
-    if bounds_entries.is_empty() {
-        if current.row_count() == 0 {
-            return false;
-        }
-        *current = ModelRc::default();
-        return true;
+fn inactive_item_view_slot_entry() -> ItemViewSlotEntry {
+    ItemViewSlotEntry {
+        active: false,
+        name: SharedString::new(),
+        media_kind: 0,
+        has_thumbnail: false,
+        thumbnail: Image::default(),
+        has_metadata_group: false,
+        metadata_group: SharedString::new(),
+        has_metadata_location: false,
+        metadata_location: SharedString::new(),
+        metadata_text_x: 0.0,
+        metadata_text_width: 0.0,
+        metadata_group_y: 0.0,
+        metadata_location_y: 0.0,
+        metadata_line_height: 0.0,
+        metadata_font_size: 0.0,
+        x: 0.0,
+        y: 0.0,
+        text_width: 0.0,
     }
-
-    let Some(model) = current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewItemBounds>>()
-    else {
-        *current = new_item_view_bounds_model(bounds_entries);
-        return true;
-    };
-
-    update_sliding_vec_model(model, old_start, new_start, bounds_entries)
 }
 
-pub(crate) fn new_item_view_paint_model(
-    paint_entries: Vec<ItemViewPaintEntry>,
-) -> ModelRc<ItemViewPaintEntry> {
-    if paint_entries.is_empty() {
-        return ModelRc::default();
-    }
-
-    ModelRc::new(Rc::new(VecModel::from(paint_entries)))
+struct ItemViewSlotThumbnail {
+    media: Image,
+    token: i32,
 }
 
-fn update_item_view_paint_entries_model(
-    current: &mut ModelRc<ItemViewPaintEntry>,
-    old_start: usize,
-    new_start: usize,
-    paint_entries: Vec<ItemViewPaintEntry>,
-) -> bool {
-    if paint_entries.is_empty() {
-        if current.row_count() == 0 {
-            return false;
-        }
-        *current = ModelRc::default();
-        return true;
-    }
-
-    let Some(model) = current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewPaintEntry>>()
-    else {
-        *current = new_item_view_paint_model(paint_entries);
-        return true;
-    };
-
-    update_sliding_vec_model(model, old_start, new_start, paint_entries)
+#[derive(Clone, Debug, Default)]
+struct ItemViewSlotMetadata {
+    group: SharedString,
+    location: SharedString,
+    text_x: f32,
+    text_width: f32,
+    group_y: f32,
+    location_y: f32,
+    line_height: f32,
+    font_size: f32,
 }
 
-pub(crate) fn new_item_view_metadata_model(
-    metadata: Vec<ItemViewMetadataEntry>,
-) -> ModelRc<ItemViewMetadataEntry> {
-    if metadata.is_empty() {
-        return ModelRc::default();
-    }
-
-    ModelRc::new(Rc::new(VecModel::from(metadata)))
-}
-
-fn update_item_view_metadata_entries_model(
-    current: &mut ModelRc<ItemViewMetadataEntry>,
-    metadata: Vec<ItemViewMetadataEntry>,
-) -> bool {
-    if metadata.is_empty() {
-        if current.row_count() == 0 {
-            return false;
-        }
-        *current = ModelRc::default();
-        return true;
-    }
-
-    let Some(model) = current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewMetadataEntry>>()
-    else {
-        *current = new_item_view_metadata_model(metadata);
-        return true;
-    };
-
-    update_sparse_vec_model(model, metadata)
-}
-
-fn bounds_for_slice_index(
-    bounds_entries: &[ItemViewItemBounds],
-    slice_index: i32,
-) -> Option<&ItemViewItemBounds> {
+fn absolute_index_for_slice_index(start_index: usize, slice_index: i32) -> Option<i32> {
     let slice_index = usize::try_from(slice_index).ok()?;
-    bounds_entries
-        .get(slice_index)
-        .filter(|bounds| bounds.slice_index == slice_index)
-        .or_else(|| {
-            bounds_entries
-                .iter()
-                .find(|bounds| bounds.slice_index == slice_index)
-        })
+    Some(start_index.saturating_add(slice_index) as i32)
 }
 
-fn project_thumbnail_entries_with_bounds(
+fn item_view_slot_projections_with_thumbnails(
+    mut slot_projections: Vec<ItemViewSlotProjection>,
+    start_index: usize,
+    frame_batch: &ItemViewTileFrameBatch,
     media_entries: Vec<ItemViewMediaSource>,
-    bounds_entries: &[ItemViewItemBounds],
-) -> Vec<ItemViewThumbnailEntry> {
-    media_entries
-        .into_iter()
-        .map(|media| {
-            let bounds = bounds_for_slice_index(bounds_entries, media.slice_index);
-            ItemViewThumbnailEntry {
+) -> Vec<ItemViewSlotProjection> {
+    let mut thumbnails = HashMap::with_capacity(media_entries.len());
+    for media in media_entries {
+        let Some(absolute_index) = absolute_index_for_slice_index(start_index, media.slice_index)
+        else {
+            continue;
+        };
+        thumbnails.insert(
+            absolute_index,
+            ItemViewSlotThumbnail {
+                token: frame_batch.media_token_for_slice_index(media.slice_index),
                 media: media.media,
-                x: bounds.map_or(media.x, |b| b.x),
-                y: bounds.map_or(media.y, |b| b.y),
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn new_item_view_thumbnail_model(
-    thumbnails: Vec<ItemViewThumbnailEntry>,
-) -> ModelRc<ItemViewThumbnailEntry> {
-    if thumbnails.is_empty() {
-        return ModelRc::default();
+            },
+        );
     }
 
-    ModelRc::new(Rc::new(VecModel::from(thumbnails)))
+    for projection in &mut slot_projections {
+        if let Some(thumbnail) = thumbnails.remove(&projection.absolute_index) {
+            projection.entry.has_thumbnail = true;
+            projection.thumbnail_token = thumbnail.token;
+            projection.entry.thumbnail = thumbnail.media;
+        }
+    }
+
+    slot_projections
 }
 
-fn update_item_view_thumbnail_entries_model(
-    current: &mut ModelRc<ItemViewThumbnailEntry>,
-    current_tokens: &mut Vec<ItemViewMediaToken>,
-    thumbnails: Vec<ItemViewThumbnailEntry>,
-    next_tokens: Vec<ItemViewMediaToken>,
+fn item_view_slot_projections_with_metadata(
+    mut slot_projections: Vec<ItemViewSlotProjection>,
+    start_index: usize,
+    metadata_entries: Vec<ItemViewMetadataOverlaySource>,
+) -> Vec<ItemViewSlotProjection> {
+    let mut metadata_by_index = HashMap::<i32, ItemViewSlotMetadata>::new();
+    for metadata in metadata_entries {
+        let Some(absolute_index) =
+            absolute_index_for_slice_index(start_index, metadata.slice_index)
+        else {
+            continue;
+        };
+        let slot_metadata = metadata_by_index.entry(absolute_index).or_default();
+        slot_metadata.text_x = metadata.text_x;
+        slot_metadata.text_width = metadata.text_width;
+        slot_metadata.line_height = metadata.line_height;
+        slot_metadata.font_size = metadata.font_size;
+        if metadata.is_group {
+            slot_metadata.group = metadata.text;
+            slot_metadata.group_y = metadata.y;
+        } else {
+            slot_metadata.location = metadata.text;
+            slot_metadata.location_y = metadata.y;
+        }
+    }
+
+    for projection in &mut slot_projections {
+        if let Some(metadata) = metadata_by_index.remove(&projection.absolute_index) {
+            projection.entry.has_metadata_group = !metadata.group.is_empty();
+            projection.entry.metadata_group = metadata.group;
+            projection.entry.has_metadata_location = !metadata.location.is_empty();
+            projection.entry.metadata_location = metadata.location;
+            projection.entry.metadata_text_x = metadata.text_x;
+            projection.entry.metadata_text_width = metadata.text_width;
+            projection.entry.metadata_group_y = metadata.group_y;
+            projection.entry.metadata_location_y = metadata.location_y;
+            projection.entry.metadata_line_height = metadata.line_height;
+            projection.entry.metadata_font_size = metadata.font_size;
+        }
+    }
+
+    slot_projections
+}
+
+fn item_view_slot_entry_matches_without_thumbnail_image(
+    current: &ItemViewSlotEntry,
+    next: &ItemViewSlotEntry,
 ) -> bool {
-    if thumbnails.is_empty() {
-        let changed = current.row_count() != 0 || !current_tokens.is_empty();
-        if changed {
-            *current = ModelRc::default();
-            current_tokens.clear();
+    current.active == next.active
+        && current.name == next.name
+        && current.media_kind == next.media_kind
+        && current.has_thumbnail == next.has_thumbnail
+        && current.has_metadata_group == next.has_metadata_group
+        && current.metadata_group == next.metadata_group
+        && current.has_metadata_location == next.has_metadata_location
+        && current.metadata_location == next.metadata_location
+        && current.metadata_text_x == next.metadata_text_x
+        && current.metadata_text_width == next.metadata_text_width
+        && current.metadata_group_y == next.metadata_group_y
+        && current.metadata_location_y == next.metadata_location_y
+        && current.metadata_line_height == next.metadata_line_height
+        && current.metadata_font_size == next.metadata_font_size
+        && current.x == next.x
+        && current.y == next.y
+        && current.text_width == next.text_width
+}
+
+fn update_item_view_slot_entries_model(
+    view: &mut PaneView,
+    slot_projections: Vec<ItemViewSlotProjection>,
+) -> bool {
+    if view.virtual_slot_entries.len() != view.virtual_slot_tokens.len() {
+        view.virtual_slot_tokens =
+            vec![ItemViewSlotToken::default(); view.virtual_slot_entries.len()];
+    }
+
+    let current_model = view.virtual_item_slots.clone();
+    let model = current_model
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewSlotEntry>>();
+
+    if slot_projections.is_empty() {
+        view.virtual_slot_keys.clear();
+        let mut changed = false;
+        for row in 0..view.virtual_slot_entries.len() {
+            if !view.virtual_slot_entries[row].active {
+                view.virtual_slot_tokens[row] = ItemViewSlotToken::default();
+                continue;
+            }
+            let inactive = inactive_item_view_slot_entry();
+            view.virtual_slot_entries[row] = inactive.clone();
+            view.virtual_slot_tokens[row] = ItemViewSlotToken::default();
+            if let Some(model) = model {
+                model.set_row_data(row, inactive);
+            }
+            changed = true;
+        }
+        if model.is_none() && !view.virtual_slot_entries.is_empty() {
+            view.virtual_item_slots = new_item_view_slot_model(view.virtual_slot_entries.clone());
+            changed = true;
         }
         return changed;
     }
 
-    let Some(model) = current
-        .as_any()
-        .downcast_ref::<VecModel<ItemViewThumbnailEntry>>()
-    else {
-        *current = new_item_view_thumbnail_model(thumbnails);
-        *current_tokens = next_tokens;
-        return true;
-    };
-
-    let mut changed = false;
-    let overlap_len = model.row_count().min(thumbnails.len());
-    for (row, thumbnail) in thumbnails.iter().enumerate().take(overlap_len) {
-        match (
-            model.row_data(row),
-            current_tokens.get(row),
-            next_tokens.get(row),
-        ) {
-            (Some(current), Some(current_token), Some(next_token))
-                if current.x == thumbnail.x
-                    && current.y == thumbnail.y
-                    && current_token == next_token => {}
-            _ => {
-                model.set_row_data(row, thumbnail.clone());
-                changed = true;
-            }
+    let mut old_slot_by_key = HashMap::with_capacity(view.virtual_slot_keys.len());
+    for (key, &slot) in view.virtual_slot_keys.iter() {
+        if slot < view.virtual_slot_entries.len() {
+            old_slot_by_key.insert(key.clone(), slot);
         }
     }
 
-    while model.row_count() > thumbnails.len() {
-        model.remove(model.row_count() - 1);
+    let mut assigned_slots = vec![None; slot_projections.len()];
+    let mut used_slots = vec![false; view.virtual_slot_entries.len()];
+    let next_slot_keys = item_view_slot_keys(&slot_projections);
+    for (row, key) in next_slot_keys.iter().enumerate() {
+        let Some(key) = key else {
+            continue;
+        };
+        if let Some(&slot) = old_slot_by_key.get(&key)
+            && slot < used_slots.len()
+            && !used_slots[slot]
+        {
+            assigned_slots[row] = Some(slot);
+            used_slots[slot] = true;
+        }
+    }
+
+    let mut free_slots = used_slots
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, used)| (!*used).then_some(slot))
+        .collect::<Vec<_>>();
+    for assigned in assigned_slots.iter_mut() {
+        if assigned.is_some() {
+            continue;
+        }
+        if let Some(slot) = free_slots.pop() {
+            *assigned = Some(slot);
+            used_slots[slot] = true;
+        } else {
+            let slot = view.virtual_slot_entries.len();
+            view.virtual_slot_entries
+                .push(inactive_item_view_slot_entry());
+            view.virtual_slot_tokens.push(ItemViewSlotToken::default());
+            used_slots.push(true);
+            *assigned = Some(slot);
+        }
+    }
+
+    let old_len = model.map_or(0, Model::row_count);
+    let mut changed = false;
+    let mut next_keys = HashMap::with_capacity(slot_projections.len());
+    for ((projection, key), slot) in slot_projections
+        .into_iter()
+        .zip(next_slot_keys.into_iter())
+        .zip(assigned_slots.into_iter())
+    {
+        let Some(slot) = slot else {
+            continue;
+        };
+        let Some(key) = key else {
+            continue;
+        };
+        let mut slot_entry = projection.entry;
+        let thumbnail_token = if slot_entry.has_thumbnail {
+            projection.thumbnail_token
+        } else {
+            0
+        };
+        let reuses_existing_thumbnail = slot_entry.has_thumbnail
+            && view
+                .virtual_slot_entries
+                .get(slot)
+                .is_some_and(|current| current.has_thumbnail)
+            && view.virtual_slot_tokens.get(slot).is_some_and(|token| {
+                token.key.as_ref() == Some(&key) && token.thumbnail_token == thumbnail_token
+            });
+        if reuses_existing_thumbnail && let Some(current) = view.virtual_slot_entries.get(slot) {
+            slot_entry.thumbnail = current.thumbnail.clone();
+        }
+        let thumbnail_image_changed = slot_entry.has_thumbnail && !reuses_existing_thumbnail;
+        if thumbnail_image_changed
+            || !view.virtual_slot_entries.get(slot).is_some_and(|current| {
+                item_view_slot_entry_matches_without_thumbnail_image(current, &slot_entry)
+            })
+        {
+            view.virtual_slot_entries[slot] = slot_entry.clone();
+            if slot < old_len
+                && let Some(model) = model
+            {
+                model.set_row_data(slot, slot_entry);
+            }
+            changed = true;
+        }
+        view.virtual_slot_tokens[slot] = ItemViewSlotToken {
+            key: Some(key.clone()),
+            absolute_index: projection.absolute_index,
+            thumbnail_token,
+        };
+        next_keys.insert(key, slot);
+    }
+
+    for (slot, used) in used_slots.iter().enumerate() {
+        if *used {
+            continue;
+        }
+        if view
+            .virtual_slot_entries
+            .get(slot)
+            .is_some_and(|entry| entry.active)
+        {
+            let inactive = inactive_item_view_slot_entry();
+            view.virtual_slot_entries[slot] = inactive.clone();
+            if slot < old_len
+                && let Some(model) = model
+            {
+                model.set_row_data(slot, inactive);
+            }
+            changed = true;
+        }
+        if let Some(token) = view.virtual_slot_tokens.get_mut(slot) {
+            *token = ItemViewSlotToken::default();
+        }
+    }
+
+    view.virtual_slot_keys = next_keys;
+    if let Some(model) = model {
+        if old_len < view.virtual_slot_entries.len() {
+            model.extend(view.virtual_slot_entries[old_len..].iter().cloned());
+            changed = true;
+        }
+    } else {
+        view.virtual_item_slots = new_item_view_slot_model(view.virtual_slot_entries.clone());
         changed = true;
     }
 
-    let current_len = model.row_count();
-    if current_len < thumbnails.len() {
-        model.extend(thumbnails[current_len..].iter().cloned());
-        changed = true;
-    }
-
-    if changed || *current_tokens != next_tokens {
-        *current_tokens = next_tokens;
-        changed = true;
-    }
     changed
 }
 
@@ -329,31 +491,6 @@ fn item_view_row_tokens(
         .collect()
 }
 
-pub(crate) fn update_item_view_entries_model(
-    current: &ModelRc<ItemViewEntry>,
-    old_start: usize,
-    new_start: usize,
-    current_tokens: &mut Vec<ItemViewRowToken>,
-    entries: Vec<ItemViewEntry>,
-    selected_paths: &[String],
-) -> Option<ModelRc<ItemViewEntry>> {
-    let mut next_tokens = item_view_row_tokens(&entries, selected_paths);
-    let Some(model) = current.as_any().downcast_ref::<VecModel<ItemViewEntry>>() else {
-        *current_tokens = next_tokens;
-        return Some(new_item_view_entries_model(entries));
-    };
-
-    update_vec_model(
-        model,
-        old_start,
-        new_start,
-        current_tokens,
-        &mut next_tokens,
-        entries,
-    );
-    None
-}
-
 pub(crate) fn update_pane_item_view_entries_model(
     view: &mut PaneView,
     start_index: usize,
@@ -363,45 +500,23 @@ pub(crate) fn update_pane_item_view_entries_model(
     metadata_entries: Vec<ItemViewMetadataOverlaySource>,
     selected_paths: &[String],
 ) {
-    let old_start = view.virtual_start_index;
     let raster_tokens_changed =
         item_view_raster_tokens_changed(&view.virtual_entry_tokens, &entries, selected_paths);
     let frame_batch =
         ItemViewTileFrameBatch::from_entries_and_bounds(&entries, &bounds_entries, selected_paths);
-    let media_tokens = frame_batch.media_tokens_for_sources(&media_entries);
-    let thumbnails = project_thumbnail_entries_with_bounds(media_entries, &bounds_entries);
-    let metadata_entries = metadata_entries_with_bounds(metadata_entries, &bounds_entries);
-    let paint_entries = frame_batch.paint_entries();
-    let bounds_changed = update_item_view_bounds_entries_model(
-        &mut view.virtual_bounds_entries,
-        old_start,
+    let slot_projections = item_view_slot_projections_with_thumbnails(
+        frame_batch.slot_projections(start_index),
         start_index,
-        bounds_entries,
+        &frame_batch,
+        media_entries,
     );
-    update_item_view_paint_entries_model(
-        &mut view.virtual_paint_entries,
-        old_start,
-        start_index,
-        paint_entries,
-    );
-    update_item_view_thumbnail_entries_model(
-        &mut view.virtual_thumbnail_entries,
-        &mut view.virtual_media_tokens,
-        thumbnails,
-        media_tokens,
-    );
-    update_item_view_metadata_entries_model(&mut view.virtual_metadata_entries, metadata_entries);
-    let current = view.virtual_entries.clone();
-    if let Some(model) = update_item_view_entries_model(
-        &current,
-        old_start,
-        start_index,
-        &mut view.virtual_entry_tokens,
-        entries,
-        selected_paths,
-    ) {
-        view.virtual_entries = model;
-    }
+    let slot_projections =
+        item_view_slot_projections_with_metadata(slot_projections, start_index, metadata_entries);
+    let bounds_changed = view.virtual_bounds_entries != bounds_entries;
+    update_item_view_slot_entries_model(view, slot_projections);
+    view.virtual_entry_tokens = item_view_row_tokens(&entries, selected_paths);
+    view.virtual_entries = entries;
+    view.virtual_bounds_entries = bounds_entries;
     view.virtual_start_index = start_index;
     if bounds_changed || raster_tokens_changed {
         view.bump_raster_revision();
@@ -476,170 +591,6 @@ fn selected_token_rows(current_tokens: &[ItemViewRowToken]) -> Vec<String> {
         .collect()
 }
 
-fn update_vec_model(
-    model: &VecModel<ItemViewEntry>,
-    old_start: usize,
-    new_start: usize,
-    current_tokens: &mut Vec<ItemViewRowToken>,
-    next_tokens: &mut Vec<ItemViewRowToken>,
-    entries: Vec<ItemViewEntry>,
-) {
-    let old_len = model.row_count();
-    if old_len == 0 || entries.is_empty() {
-        model.set_vec(entries);
-        *current_tokens = std::mem::take(next_tokens);
-        return;
-    }
-
-    let old_end = old_start.saturating_add(old_len);
-    let new_end = new_start.saturating_add(entries.len());
-    let overlap_start = old_start.max(new_start);
-    let overlap_end = old_end.min(new_end);
-
-    if overlap_start >= overlap_end {
-        model.set_vec(entries);
-        *current_tokens = std::mem::take(next_tokens);
-        return;
-    }
-
-    if new_start > old_start {
-        let remove_count = (new_start - old_start).min(model.row_count());
-        for _ in 0..remove_count {
-            model.remove(0);
-        }
-        current_tokens.drain(0..remove_count.min(current_tokens.len()));
-    } else if new_start < old_start {
-        let prefix_len = (old_start - new_start).min(entries.len());
-        for entry in entries[..prefix_len].iter().rev() {
-            model.insert(0, entry.clone());
-        }
-        current_tokens.splice(0..0, next_tokens[..prefix_len].iter().cloned());
-    }
-
-    let overlap_rows = overlap_start - new_start..overlap_end - new_start;
-    for row in overlap_rows {
-        let rows_differ = current_tokens
-            .get(row)
-            .zip(next_tokens.get(row))
-            .is_none_or(|(current, next)| !current.row_equals_ignoring_selection(next));
-        if rows_differ {
-            model.set_row_data(row, entries[row].clone());
-        }
-    }
-
-    while model.row_count() > entries.len() {
-        model.remove(model.row_count() - 1);
-    }
-
-    let current_len = model.row_count();
-    if current_len < entries.len() {
-        model.extend(entries[current_len..].iter().cloned());
-    }
-    *current_tokens = std::mem::take(next_tokens);
-}
-
-fn update_sliding_vec_model<T>(
-    model: &VecModel<T>,
-    old_start: usize,
-    new_start: usize,
-    entries: Vec<T>,
-) -> bool
-where
-    T: Clone + PartialEq + 'static,
-{
-    let old_len = model.row_count();
-    if old_len == 0 || entries.is_empty() {
-        let changed = old_len != entries.len()
-            || entries
-                .iter()
-                .enumerate()
-                .any(|(row, entry)| model.row_data(row).as_ref() != Some(entry));
-        if changed {
-            model.set_vec(entries);
-        }
-        return changed;
-    }
-
-    let old_end = old_start.saturating_add(old_len);
-    let new_end = new_start.saturating_add(entries.len());
-    let overlap_start = old_start.max(new_start);
-    let overlap_end = old_end.min(new_end);
-
-    if overlap_start >= overlap_end {
-        let changed = old_len != entries.len()
-            || entries
-                .iter()
-                .enumerate()
-                .any(|(row, entry)| model.row_data(row).as_ref() != Some(entry));
-        if changed {
-            model.set_vec(entries);
-        }
-        return changed;
-    }
-
-    let mut changed = false;
-    if new_start > old_start {
-        let remove_count = (new_start - old_start).min(model.row_count());
-        for _ in 0..remove_count {
-            model.remove(0);
-            changed = true;
-        }
-    } else if new_start < old_start {
-        let prefix_len = (old_start - new_start).min(entries.len());
-        for entry in entries[..prefix_len].iter().rev() {
-            model.insert(0, entry.clone());
-            changed = true;
-        }
-    }
-
-    let overlap_rows = overlap_start - new_start..overlap_end - new_start;
-    for row in overlap_rows {
-        if model.row_data(row).as_ref() != Some(&entries[row]) {
-            model.set_row_data(row, entries[row].clone());
-            changed = true;
-        }
-    }
-
-    while model.row_count() > entries.len() {
-        model.remove(model.row_count() - 1);
-        changed = true;
-    }
-
-    let current_len = model.row_count();
-    if current_len < entries.len() {
-        model.extend(entries[current_len..].iter().cloned());
-        changed = true;
-    }
-    changed
-}
-
-fn update_sparse_vec_model<T>(model: &VecModel<T>, entries: Vec<T>) -> bool
-where
-    T: Clone + PartialEq + 'static,
-{
-    let mut changed = false;
-    let overlap_len = model.row_count().min(entries.len());
-    for (row, entry) in entries.iter().enumerate().take(overlap_len) {
-        if model.row_data(row).as_ref() != Some(entry) {
-            model.set_row_data(row, entry.clone());
-            changed = true;
-        }
-    }
-
-    while model.row_count() > entries.len() {
-        model.remove(model.row_count() - 1);
-        changed = true;
-    }
-
-    let current_len = model.row_count();
-    if current_len < entries.len() {
-        model.extend(entries[current_len..].iter().cloned());
-        changed = true;
-    }
-
-    changed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,24 +607,18 @@ mod tests {
         }
     }
 
-    fn rows(model: &ModelRc<ItemViewEntry>) -> Vec<String> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| entry.path.to_string())
-            .collect()
+    fn rows(entries: &[ItemViewEntry]) -> Vec<String> {
+        entries.iter().map(|entry| entry.path.to_string()).collect()
     }
 
-    fn bounds_row_x(model: &ModelRc<ItemViewItemBounds>) -> Vec<f32> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| entry.x)
-            .collect()
+    fn bounds_row_x(entries: &[ItemViewItemBounds]) -> Vec<f32> {
+        entries.iter().map(|entry| entry.x).collect()
     }
 
-    fn paint_rows(model: &ModelRc<ItemViewPaintEntry>) -> Vec<(String, f32, f32)> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.name.to_string(), entry.x, entry.text_width))
+    fn token_rows(tokens: &[ItemViewRowToken]) -> Vec<String> {
+        tokens
+            .iter()
+            .map(|token| token.path().to_string())
             .collect()
     }
 
@@ -692,39 +637,137 @@ mod tests {
             .collect()
     }
 
-    fn media_tokens(tokens: &[ItemViewMediaToken]) -> Vec<(i32, i32)> {
-        tokens
+    fn active_slot_rows(view: &PaneView) -> Vec<(String, f32, f32)> {
+        let mut rows = view
+            .virtual_slot_entries
             .iter()
-            .map(|token| (token.slice_index, token.media_token))
+            .filter(|entry| entry.active)
+            .map(|entry| (entry.name.to_string(), entry.x, entry.text_width))
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.1.total_cmp(&right.1));
+        rows
+    }
+
+    fn active_published_slot_rows(model: &ModelRc<ItemViewSlotEntry>) -> Vec<(String, f32, f32)> {
+        let mut rows = (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .filter(|entry| entry.active)
+            .map(|entry| (entry.name.to_string(), entry.x, entry.text_width))
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.1.total_cmp(&right.1));
+        rows
+    }
+
+    fn slot_index_for_path(view: &PaneView, path: &str) -> Option<usize> {
+        view.virtual_slot_entries
+            .iter()
+            .zip(view.virtual_slot_tokens.iter())
+            .position(|(entry, token)| {
+                entry.active
+                    && token
+                        .key
+                        .as_ref()
+                        .is_some_and(|key| key.path.as_str() == path)
+            })
+    }
+
+    fn slot_index_for_name(view: &PaneView, name: &str) -> Option<usize> {
+        view.virtual_slot_entries
+            .iter()
+            .position(|entry| entry.active && entry.name == name)
+    }
+
+    fn slot_slice_index(view: &PaneView, slot: usize) -> i32 {
+        view.virtual_slot_tokens
+            .get(slot)
+            .and_then(ItemViewSlotToken::absolute_index)
+            .unwrap_or(-1)
+            .saturating_sub(view.virtual_start_index as i32)
+    }
+
+    fn thumbnail_slot_rows(view: &PaneView) -> Vec<Rgba8Pixel> {
+        let mut rows = view
+            .virtual_slot_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.active && entry.has_thumbnail)
+            .map(|(slot, entry)| (slot_slice_index(view, slot), first_pixel(&entry.thumbnail)))
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|row| row.0);
+        rows.into_iter().map(|(_, pixel)| pixel).collect()
+    }
+
+    fn thumbnail_slot_geometry_rows(view: &PaneView) -> Vec<(f32, f32)> {
+        let mut rows = view
+            .virtual_slot_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.active && entry.has_thumbnail)
+            .map(|(slot, entry)| (slot_slice_index(view, slot), entry.x, entry.y))
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|row| row.0);
+        rows.into_iter().map(|(_, x, y)| (x, y)).collect()
+    }
+
+    fn thumbnail_slot_tokens(view: &PaneView) -> Vec<(i32, i32)> {
+        let mut rows = view
+            .virtual_slot_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.active && entry.has_thumbnail)
+            .map(|(slot, _)| {
+                (
+                    slot_slice_index(view, slot),
+                    view.virtual_slot_tokens
+                        .get(slot)
+                        .map_or(0, ItemViewSlotToken::thumbnail_token),
+                )
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|row| row.0);
+        rows
+    }
+
+    fn metadata_slot_rows(view: &PaneView) -> Vec<(String, bool)> {
+        let mut rows = Vec::new();
+        for (slot, entry) in view
+            .virtual_slot_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.active)
+        {
+            let slice_index = slot_slice_index(view, slot);
+            if entry.has_metadata_group {
+                rows.push((slice_index, 0, entry.metadata_group.to_string(), true));
+            }
+            if entry.has_metadata_location {
+                rows.push((slice_index, 1, entry.metadata_location.to_string(), false));
+            }
+        }
+        rows.sort_by_key(|row| (row.0, row.1));
+        rows.into_iter()
+            .map(|(_, _, text, is_group)| (text, is_group))
             .collect()
     }
 
-    fn thumbnail_rows(model: &ModelRc<ItemViewThumbnailEntry>) -> Vec<Rgba8Pixel> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| first_pixel(&entry.media))
-            .collect()
-    }
-
-    fn thumbnail_geometry_rows(model: &ModelRc<ItemViewThumbnailEntry>) -> Vec<(f32, f32)> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.x, entry.y))
-            .collect()
-    }
-
-    fn metadata_rows(model: &ModelRc<ItemViewMetadataEntry>) -> Vec<(String, bool)> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.text.to_string(), entry.is_group))
-            .collect()
-    }
-
-    fn metadata_geometry_rows(model: &ModelRc<ItemViewMetadataEntry>) -> Vec<(f32, f32)> {
-        (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| (entry.item_x, entry.item_y))
-            .collect()
+    fn metadata_slot_geometry_rows(view: &PaneView) -> Vec<(f32, f32)> {
+        let mut rows = Vec::new();
+        for (slot, entry) in view
+            .virtual_slot_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.active)
+        {
+            let slice_index = slot_slice_index(view, slot);
+            if entry.has_metadata_group {
+                rows.push((slice_index, 0, entry.x, entry.y));
+            }
+            if entry.has_metadata_location {
+                rows.push((slice_index, 1, entry.x, entry.y));
+            }
+        }
+        rows.sort_by_key(|row| (row.0, row.1));
+        rows.into_iter().map(|(_, _, x, y)| (x, y)).collect()
     }
 
     fn metadata_entries(start: usize, count: usize) -> Vec<ItemViewMetadataOverlaySource> {
@@ -765,8 +808,6 @@ mod tests {
         ItemViewMediaSource {
             slice_index,
             media: colored_image(pixel),
-            x: 0.0,
-            y: 0.0,
         }
     }
 
@@ -788,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_overlay_models_carry_projected_item_bounds() {
+    fn slot_overlays_carry_projected_item_bounds() {
         let mut entries = entries_with_tile_metrics(3);
         entries[1].thumbnail_state = 2;
         entries[1].media_token = 101;
@@ -816,14 +857,9 @@ mod tests {
             &["/tmp/item-1".to_string()],
         );
 
-        assert_eq!(
-            thumbnail_geometry_rows(&view.virtual_thumbnail_entries),
-            vec![(210.0, 2.0)]
-        );
-        assert_eq!(
-            metadata_geometry_rows(&view.virtual_metadata_entries),
-            vec![(210.0, 2.0)]
-        );
+        assert_eq!(thumbnail_slot_geometry_rows(&view), vec![(210.0, 2.0)]);
+        assert_eq!(metadata_slot_geometry_rows(&view), vec![(210.0, 2.0)]);
+        assert_eq!(metadata_slot_rows(&view), vec![("Group".to_string(), true)]);
     }
 
     #[test]
@@ -838,16 +874,16 @@ mod tests {
             &bounds,
             &["/tmp/item-1".to_string()],
         );
-        let paint = frame_batch.paint_entries();
-        let media_sources = [media_source(1, Rgba8Pixel::new(255, 0, 0, 255))];
-        let projected_media_tokens = frame_batch.media_tokens_for_sources(&media_sources);
+        let projections = frame_batch.slot_projections(10);
 
         assert_eq!(frame_batch.sources().len(), 3);
-        assert_eq!(paint.len(), 3);
-        assert_eq!(paint[1].name, "item-1");
-        assert_eq!(paint[1].x, 110.0);
-        assert_eq!(paint[1].text_width, 56.0);
-        assert_eq!(media_tokens(&projected_media_tokens), vec![(1, 77)]);
+        assert_eq!(projections.len(), 3);
+        assert_eq!(projections[1].absolute_index, 11);
+        assert_eq!(projections[1].path, "/tmp/item-1");
+        assert_eq!(projections[1].entry.name, "item-1");
+        assert_eq!(projections[1].entry.x, 110.0);
+        assert_eq!(projections[1].entry.text_width, 56.0);
+        assert_eq!(frame_batch.media_token_for_slice_index(1), 77);
     }
 
     #[test]
@@ -866,26 +902,28 @@ mod tests {
     }
 
     #[test]
-    fn renderer_batch_owns_paint_entry_projection() {
+    fn renderer_batch_owns_slot_entry_projection() {
         let source = include_str!("model_update.rs");
         let obsolete_helper = ["fn item_view_", "paint_entries("].concat();
 
         assert!(!source.contains(&obsolete_helper));
-        assert!(source.contains("frame_batch.paint_entries()"));
+        assert!(source.contains("frame_batch.slot_projections(start_index)"));
     }
 
     #[test]
     fn renderer_owns_metadata_text_projection() {
         let source = include_str!("model_update.rs");
         let obsolete_helper = ["fn project_metadata_", "entries_with_bounds("].concat();
-        let renderer_projection_call = [
-            "metadata_entries_",
-            "with_bounds(metadata_entries, &bounds_entries)",
-        ]
-        .concat();
+        let obsolete_renderer_projection = ["metadata_entries_", "with_bounds"].concat();
 
         assert!(!source.contains(&obsolete_helper));
-        assert!(source.contains(&renderer_projection_call));
+        assert!(!source.contains(&obsolete_renderer_projection));
+        assert!(
+            source.contains(
+                "item_view_slot_entries_with_metadata(slot_entries, start_index, metadata_entries)"
+            ),
+            "metadata projection should attach renderer-owned source rows to stable item slots"
+        );
     }
 
     #[test]
@@ -902,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_item_view_entry_model_updates_each_view_independently() {
+    fn pane_item_view_entry_sidecar_updates_each_view_independently() {
         let mut left = PaneView::default();
         let mut right = PaneView::default();
 
@@ -960,169 +998,122 @@ mod tests {
     }
 
     #[test]
-    fn item_view_entry_model_reuses_vec_model_when_range_slides_forward() {
-        let initial_entries = (0..6).map(entry).collect::<Vec<_>>();
-        let mut tokens = item_view_row_tokens(&initial_entries, &[]);
-        let model = new_item_view_entries_model(initial_entries);
-        let original = model.clone();
-
-        assert!(
-            update_item_view_entries_model(
-                &model,
-                0,
-                2,
-                &mut tokens,
-                (2..8).map(entry).collect(),
-                &[]
-            )
-            .is_none()
+    fn pane_item_view_entry_sidecar_replaces_slice_when_range_slides() {
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            (0..6).map(entry).collect(),
+            bounds_entries(0, 6),
+            Vec::new(),
+            Vec::new(),
+            &[],
         );
 
-        assert_eq!(model, original);
-        assert_eq!(tokens.len(), 6);
+        assert_eq!(view.virtual_start_index, 0);
         assert_eq!(
-            rows(&model),
+            rows(&view.virtual_entries),
+            (0..6)
+                .map(|index| format!("/tmp/item-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            token_rows(&view.virtual_entry_tokens),
+            rows(&view.virtual_entries)
+        );
+        assert_eq!(
+            bounds_row_x(&view.virtual_bounds_entries),
+            vec![0.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+        );
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            2,
+            (2..8).map(entry).collect(),
+            bounds_entries(2, 6),
+            Vec::new(),
+            Vec::new(),
+            &["/tmp/item-4".to_string()],
+        );
+
+        assert_eq!(view.virtual_start_index, 2);
+        assert_eq!(
+            rows(&view.virtual_entries),
             (2..8)
                 .map(|index| format!("/tmp/item-{index}"))
                 .collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn item_view_entry_model_reuses_vec_model_when_range_slides_backward() {
-        let initial_entries = (4..10).map(entry).collect::<Vec<_>>();
-        let mut tokens = item_view_row_tokens(&initial_entries, &[]);
-        let model = new_item_view_entries_model(initial_entries);
-        let original = model.clone();
-
-        assert!(
-            update_item_view_entries_model(
-                &model,
-                4,
-                2,
-                &mut tokens,
-                (2..8).map(entry).collect(),
-                &[]
-            )
-            .is_none()
-        );
-
-        assert_eq!(model, original);
-        assert_eq!(tokens.len(), 6);
         assert_eq!(
-            rows(&model),
-            (2..8)
-                .map(|index| format!("/tmp/item-{index}"))
-                .collect::<Vec<_>>()
+            token_rows(&view.virtual_entry_tokens),
+            rows(&view.virtual_entries)
         );
-    }
-
-    #[test]
-    fn item_view_entry_model_resets_same_vec_model_without_overlap() {
-        let initial_entries = (0..3).map(entry).collect::<Vec<_>>();
-        let mut tokens = item_view_row_tokens(&initial_entries, &[]);
-        let model = new_item_view_entries_model(initial_entries);
-        let original = model.clone();
-
-        assert!(
-            update_item_view_entries_model(
-                &model,
-                0,
-                20,
-                &mut tokens,
-                (20..23).map(entry).collect(),
-                &[]
-            )
-            .is_none()
-        );
-
-        assert_eq!(model, original);
-        assert_eq!(tokens.len(), 3);
         assert_eq!(
-            rows(&model),
+            selected_token_rows(&view.virtual_entry_tokens),
+            vec!["/tmp/item-4".to_string()]
+        );
+        assert_eq!(
+            bounds_row_x(&view.virtual_bounds_entries),
+            vec![20.0, 30.0, 40.0, 50.0, 60.0, 70.0]
+        );
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            20,
+            (20..23).map(entry).collect(),
+            bounds_entries(20, 3),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.virtual_start_index, 20);
+        assert_eq!(
+            rows(&view.virtual_entries),
             (20..23)
                 .map(|index| format!("/tmp/item-{index}"))
                 .collect::<Vec<_>>()
         );
+        assert_eq!(view.virtual_entry_tokens.len(), 3);
     }
 
     #[test]
-    fn item_view_entry_model_repairs_missing_sidecar_tokens_after_update() {
-        let initial_entries = (0..6).map(entry).collect::<Vec<_>>();
-        let mut tokens = Vec::new();
-        let model = new_item_view_entries_model(initial_entries);
-
-        assert!(
-            update_item_view_entries_model(
-                &model,
-                0,
-                2,
-                &mut tokens,
-                (2..8).map(entry).collect(),
-                &[]
-            )
-            .is_none()
-        );
-
-        assert_eq!(tokens.len(), 6);
-        assert_eq!(
-            rows(&model),
-            (2..8)
-                .map(|index| format!("/tmp/item-{index}"))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn item_view_entry_model_ignores_pane_level_layout_for_same_row() {
-        let initial = entry(0);
-        let mut tokens = item_view_row_tokens(&[initial.clone()], &[]);
-        let model = new_item_view_entries_model(vec![initial]);
-        let original = model.clone();
-
-        assert!(
-            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![entry(0)], &[])
-                .is_none()
-        );
-
-        assert_eq!(model, original);
-        let updated = model.row_data(0).expect("row should remain present");
-        assert_eq!(updated.name, "item-0");
-    }
-
-    #[test]
-    fn item_view_entry_model_uses_media_token_without_row_images() {
+    fn pane_item_view_entry_sidecar_updates_media_token_without_row_image_model() {
+        let mut view = PaneView::default();
         let mut old_entry = entry(0);
+        old_entry.thumbnail_state = 2;
         old_entry.media_token = 42;
-        let initial_entries = vec![old_entry];
-        let mut tokens = item_view_row_tokens(&initial_entries, &[]);
-        let model = new_item_view_entries_model(initial_entries);
-        let original = model.clone();
-
-        let mut same_token_entry = entry(0);
-        same_token_entry.media_token = 42;
-        assert!(
-            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![same_token_entry], &[])
-                .is_none()
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            vec![old_entry],
+            bounds_entries(0, 1),
+            Vec::new(),
+            Vec::new(),
+            &[],
         );
 
-        assert_eq!(model, original);
-        let unchanged = model.row_data(0).expect("row should remain present");
-        assert_eq!(unchanged.media_token, 42);
+        assert_eq!(view.virtual_entries[0].media_token, 42);
+        assert_eq!(view.virtual_entry_tokens[0].media_token(), 42);
 
-        let mut new_token_entry = entry(0);
-        new_token_entry.media_token = 43;
-        assert!(
-            update_item_view_entries_model(&model, 0, 0, &mut tokens, vec![new_token_entry], &[])
-                .is_none()
+        let mut new_entry = entry(0);
+        new_entry.thumbnail_state = 2;
+        new_entry.media_token = 43;
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            vec![new_entry],
+            bounds_entries(0, 1),
+            Vec::new(),
+            Vec::new(),
+            &[],
         );
 
-        let updated = model.row_data(0).expect("row should remain present");
-        assert_eq!(updated.media_token, 43);
+        assert_eq!(view.virtual_entries[0].media_token, 43);
+        assert_eq!(view.virtual_entry_tokens[0].media_token(), 43);
     }
 
     #[test]
-    fn pane_item_view_entry_model_updates_selection_sidecar_without_replacing_entries() {
+    fn pane_item_view_entry_sidecar_updates_selection_tokens_without_replacing_entries() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
             &mut view,
@@ -1154,7 +1145,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_item_view_bounds_model_reuses_vec_model_when_range_slides() {
+    fn pane_item_view_bounds_sidecar_updates_without_slint_model() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
             &mut view,
@@ -1166,6 +1157,7 @@ mod tests {
             &[],
         );
         let original_bounds = view.virtual_bounds_entries.clone();
+        let original_revision = view.raster_revision_for_test();
 
         update_pane_item_view_entries_model(
             &mut view,
@@ -1177,11 +1169,25 @@ mod tests {
             &[],
         );
 
-        assert_eq!(view.virtual_bounds_entries, original_bounds);
+        assert_ne!(view.virtual_bounds_entries, original_bounds);
         assert_eq!(
             bounds_row_x(&view.virtual_bounds_entries),
             vec![20.0, 30.0, 40.0, 50.0]
         );
+        let updated_revision = view.raster_revision_for_test();
+        assert!(updated_revision > original_revision);
+
+        update_pane_item_view_entries_model(
+            &mut view,
+            2,
+            (2..6).map(entry).collect(),
+            bounds_entries(2, 4),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(view.raster_revision_for_test(), updated_revision);
 
         update_pane_item_view_entries_model(
             &mut view,
@@ -1193,7 +1199,6 @@ mod tests {
             &[],
         );
 
-        assert_eq!(view.virtual_bounds_entries, original_bounds);
         assert_eq!(
             bounds_row_x(&view.virtual_bounds_entries),
             vec![10.0, 20.0, 30.0, 40.0]
@@ -1201,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_item_view_paint_model_reuses_vec_model_when_range_slides() {
+    fn pane_item_view_slot_model_reuses_vec_model_when_range_slides() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
             &mut view,
@@ -1212,7 +1217,7 @@ mod tests {
             Vec::new(),
             &[],
         );
-        let original_paint = view.virtual_paint_entries.clone();
+        let original_slots = view.virtual_item_slots.clone();
 
         update_pane_item_view_entries_model(
             &mut view,
@@ -1224,9 +1229,9 @@ mod tests {
             &[],
         );
 
-        assert_eq!(view.virtual_paint_entries, original_paint);
+        assert_eq!(view.virtual_item_slots, original_slots);
         assert_eq!(
-            paint_rows(&view.virtual_paint_entries),
+            active_slot_rows(&view),
             vec![
                 ("item-2".to_string(), 20.0, 47.0),
                 ("item-3".to_string(), 30.0, 48.0),
@@ -1234,6 +1239,14 @@ mod tests {
                 ("item-5".to_string(), 50.0, 50.0),
             ]
         );
+        assert_eq!(
+            active_published_slot_rows(&view.virtual_item_slots),
+            active_slot_rows(&view)
+        );
+        let item_2_slot = slot_index_for_path(&view, "/tmp/item-2")
+            .expect("item-2 should remain visible after forward slide");
+        let item_3_slot = slot_index_for_path(&view, "/tmp/item-3")
+            .expect("item-3 should remain visible after forward slide");
 
         update_pane_item_view_entries_model(
             &mut view,
@@ -1245,9 +1258,9 @@ mod tests {
             &[],
         );
 
-        assert_eq!(view.virtual_paint_entries, original_paint);
+        assert_eq!(view.virtual_item_slots, original_slots);
         assert_eq!(
-            paint_rows(&view.virtual_paint_entries),
+            active_slot_rows(&view),
             vec![
                 ("item-1".to_string(), 10.0, 46.0),
                 ("item-2".to_string(), 20.0, 47.0),
@@ -1255,35 +1268,82 @@ mod tests {
                 ("item-4".to_string(), 40.0, 49.0),
             ]
         );
+        assert_eq!(slot_index_for_path(&view, "/tmp/item-2"), Some(item_2_slot));
+        assert_eq!(slot_index_for_path(&view, "/tmp/item-3"), Some(item_3_slot));
     }
 
     #[test]
-    fn pane_item_view_metadata_model_reuses_vec_model_for_sparse_updates() {
+    fn pane_item_view_slot_keys_keep_duplicate_paths_distinct() {
+        let mut entries = vec![entry(0), entry(1)];
+        entries[0].name = "duplicate-a".into();
+        entries[0].path = "/tmp/duplicate".into();
+        entries[1].name = "duplicate-b".into();
+        entries[1].path = "/tmp/duplicate".into();
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            entries.clone(),
+            bounds_entries(0, 2),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+        let duplicate_a_slot =
+            slot_index_for_name(&view, "duplicate-a").expect("first duplicate should have a slot");
+        let duplicate_b_slot =
+            slot_index_for_name(&view, "duplicate-b").expect("second duplicate should have a slot");
+
+        entries[0].media_token = 11;
+        entries[1].media_token = 22;
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            entries,
+            bounds_entries(0, 2),
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        assert_eq!(
+            slot_index_for_name(&view, "duplicate-a"),
+            Some(duplicate_a_slot)
+        );
+        assert_eq!(
+            slot_index_for_name(&view, "duplicate-b"),
+            Some(duplicate_b_slot)
+        );
+        assert_ne!(duplicate_a_slot, duplicate_b_slot);
+    }
+
+    #[test]
+    fn pane_item_view_slot_metadata_reuses_slot_model_for_updates() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
             &mut view,
             0,
             entries_with_tile_metrics(3),
-            Vec::new(),
+            bounds_entries(0, 3),
             Vec::new(),
             metadata_entries(0, 3),
             &[],
         );
-        let original_metadata = view.virtual_metadata_entries.clone();
+        let original_slots = view.virtual_item_slots.clone();
 
         update_pane_item_view_entries_model(
             &mut view,
             2,
             (2..5).map(entry).collect(),
-            Vec::new(),
+            bounds_entries(2, 3),
             Vec::new(),
             metadata_entries(2, 3),
             &[],
         );
 
-        assert_eq!(view.virtual_metadata_entries, original_metadata);
+        assert_eq!(view.virtual_item_slots, original_slots);
         assert_eq!(
-            metadata_rows(&view.virtual_metadata_entries),
+            metadata_slot_rows(&view),
             vec![
                 ("Group 2".to_string(), true),
                 ("/tmp/group-2".to_string(), false),
@@ -1298,40 +1358,49 @@ mod tests {
             &mut view,
             2,
             (2..5).map(entry).collect(),
-            Vec::new(),
+            bounds_entries(2, 3),
             Vec::new(),
             metadata_entries(2, 3),
             &[],
         );
 
-        assert_eq!(view.virtual_metadata_entries, original_metadata);
+        assert_eq!(view.virtual_item_slots, original_slots);
     }
 
     #[test]
-    fn pane_item_view_metadata_model_clears_sparse_rows_without_stale_text() {
+    fn pane_item_view_slot_metadata_clears_rows_without_stale_text() {
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
             &mut view,
             0,
             entries_with_tile_metrics(2),
-            Vec::new(),
+            bounds_entries(0, 2),
             Vec::new(),
             metadata_entries(0, 2),
             &[],
         );
-        assert_eq!(view.virtual_metadata_entries.row_count(), 4);
+        assert_eq!(metadata_slot_rows(&view).len(), 4);
 
         update_pane_item_view_entries_model(
             &mut view,
             0,
             entries_with_tile_metrics(2),
-            Vec::new(),
+            bounds_entries(0, 2),
             Vec::new(),
             Vec::new(),
             &[],
         );
 
-        assert_eq!(view.virtual_metadata_entries.row_count(), 0);
+        assert!(metadata_slot_rows(&view).is_empty());
+        assert!(
+            view.virtual_slot_entries
+                .iter()
+                .filter(|entry| entry.active)
+                .all(|entry| !entry.has_metadata_group
+                    && entry.metadata_group.is_empty()
+                    && !entry.has_metadata_location
+                    && entry.metadata_location.is_empty())
+        );
     }
 
     #[test]
@@ -1347,7 +1416,7 @@ mod tests {
             &mut view,
             0,
             entries,
-            Vec::new(),
+            bounds_entries(0, 4),
             vec![
                 media_source(1, Rgba8Pixel::new(255, 0, 0, 255)),
                 media_source(3, Rgba8Pixel::new(0, 0, 255, 255)),
@@ -1358,7 +1427,7 @@ mod tests {
         let layout_raster_revision = view.raster_revision_for_test();
         assert!(layout_raster_revision > initial_raster_revision);
         assert_eq!(
-            thumbnail_rows(&view.virtual_thumbnail_entries),
+            thumbnail_slot_rows(&view),
             vec![
                 Rgba8Pixel::new(255, 0, 0, 255),
                 Rgba8Pixel::new(0, 0, 255, 255),
@@ -1374,7 +1443,7 @@ mod tests {
             &mut view,
             0,
             same_token_entries,
-            Vec::new(),
+            bounds_entries(0, 4),
             vec![
                 media_source(1, Rgba8Pixel::new(0, 255, 0, 255)),
                 media_source(3, Rgba8Pixel::new(255, 255, 0, 255)),
@@ -1384,7 +1453,7 @@ mod tests {
         );
         assert_eq!(view.raster_revision_for_test(), layout_raster_revision);
         assert_eq!(
-            thumbnail_rows(&view.virtual_thumbnail_entries),
+            thumbnail_slot_rows(&view),
             vec![
                 Rgba8Pixel::new(255, 0, 0, 255),
                 Rgba8Pixel::new(0, 0, 255, 255),
@@ -1400,7 +1469,7 @@ mod tests {
             &mut view,
             0,
             updated_entries,
-            Vec::new(),
+            bounds_entries(0, 4),
             vec![
                 media_source(1, Rgba8Pixel::new(0, 255, 0, 255)),
                 media_source(3, Rgba8Pixel::new(255, 255, 0, 255)),
@@ -1411,115 +1480,91 @@ mod tests {
 
         assert_eq!(view.raster_revision_for_test(), layout_raster_revision);
         assert_eq!(
-            thumbnail_rows(&view.virtual_thumbnail_entries),
+            thumbnail_slot_rows(&view),
             vec![
                 Rgba8Pixel::new(0, 255, 0, 255),
                 Rgba8Pixel::new(255, 255, 0, 255),
             ]
         );
-        assert_eq!(
-            media_tokens(&view.virtual_media_tokens),
-            vec![(1, 201), (3, 203)]
-        );
+        assert_eq!(thumbnail_slot_tokens(&view), vec![(1, 201), (3, 203)]);
     }
 
     #[test]
-    fn virtual_row_reuse_ignores_selection_sidecar_changes() {
-        let initial_entries = (0..3).map(entry).collect::<Vec<_>>();
-        let mut tokens = item_view_row_tokens(&initial_entries, &["/tmp/item-1".to_string()]);
-        let model = new_item_view_entries_model(initial_entries);
-        let original = model.clone();
-
-        assert!(
-            update_item_view_entries_model(
-                &model,
-                0,
-                0,
-                &mut tokens,
-                (0..3).map(entry).collect(),
-                &["/tmp/item-2".to_string()]
-            )
-            .is_none()
-        );
-
-        assert_eq!(model, original);
-        assert_eq!(
-            selected_token_rows(&tokens),
-            vec!["/tmp/item-2".to_string()]
-        );
-    }
-
-    #[test]
-    fn virtual_row_reuse_compares_tokens_without_cloning_existing_rows() {
+    fn item_view_entry_and_bounds_sidecars_do_not_publish_slint_models() {
         let source = include_str!("model_update.rs");
-        let body = source
-            .split_once("fn update_vec_model(")
-            .and_then(|(_, rest)| rest.split_once("#[cfg(test)]"))
+        let production_source = source
+            .split_once("#[cfg(test)]\nmod tests")
             .map(|(body, _)| body)
-            .expect("update_vec_model body should be present");
-        let overlap_body = body
-            .split_once("for row in overlap_rows {")
-            .and_then(|(_, rest)| rest.split_once("while model.row_count() > entries.len()"))
-            .map(|(body, _)| body)
-            .expect("overlap loop should be present");
+            .expect("model_update.rs should contain tests after production code");
 
+        for obsolete in [
+            "fn new_item_view_entries_model(",
+            "fn new_item_view_bounds_model(",
+            "fn update_item_view_entries_model(",
+            "fn update_item_view_bounds_entries_model(",
+            "fn update_vec_model(",
+            "fn update_sliding_vec_model(",
+        ] {
+            assert!(
+                !production_source.contains(obsolete),
+                "{obsolete} should not exist on the item-view hot path"
+            );
+        }
+        assert!(production_source.contains("view.virtual_entries = entries;"));
+        assert!(production_source.contains("view.virtual_bounds_entries = bounds_entries;"));
         assert!(
-            overlap_body.contains("!current.row_equals_ignoring_selection(next)")
-                && overlap_body.contains("model.set_row_data(row, entries[row].clone());")
-                && !overlap_body.contains(".row_data("),
-            "overlap row reuse should compare the Rust sidecar token instead of cloning current ItemViewEntry rows from Slint"
+            production_source
+                .contains("update_item_view_slot_entries_model(view, slot_projections);")
         );
     }
 
     #[test]
-    fn metadata_model_uses_preprojected_sparse_rows() {
-        let hidden = new_item_view_metadata_model(Vec::new());
-        assert_eq!(hidden.row_count(), 0);
-
-        let model = new_item_view_metadata_model(vec![
-            ItemViewMetadataEntry {
-                text: "Documents".into(),
-                item_x: 0.0,
-                item_y: 0.0,
-                text_x: 52.0,
-                text_width: 75.0,
-                y: 2.0,
-                line_height: 14.0,
-                font_size: 11.0,
-                is_group: true,
-            },
-            ItemViewMetadataEntry {
-                text: "/home/user/Documents".into(),
-                item_x: 0.0,
-                item_y: 0.0,
-                text_x: 52.0,
-                text_width: 75.0,
-                y: 41.0,
-                line_height: 14.0,
-                font_size: 11.0,
-                is_group: false,
-            },
-        ]);
-
-        assert_eq!(model.row_count(), 2);
-        let rows = (0..model.row_count())
-            .filter_map(|row| model.row_data(row))
-            .map(|entry| {
-                (
-                    entry.text.to_string(),
-                    entry.y,
-                    entry.line_height,
-                    entry.font_size,
-                    entry.is_group,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            rows,
+    fn slot_metadata_uses_preprojected_source_rows() {
+        let entries = entries_with_tile_metrics(1);
+        let bounds = bounds_entries(0, 1);
+        let frame_batch = ItemViewTileFrameBatch::from_entries_and_bounds(&entries, &bounds, &[]);
+        let projections = item_view_slot_projections_with_metadata(
+            frame_batch.slot_projections(0),
+            0,
             vec![
-                ("Documents".to_string(), 2.0, 14.0, 11.0, true),
-                ("/home/user/Documents".to_string(), 41.0, 14.0, 11.0, false,),
-            ]
+                ItemViewMetadataOverlaySource {
+                    slice_index: 0,
+                    text: "Documents".into(),
+                    item_x: 0.0,
+                    item_y: 0.0,
+                    text_x: 52.0,
+                    text_width: 75.0,
+                    y: 2.0,
+                    line_height: 14.0,
+                    font_size: 11.0,
+                    is_group: true,
+                },
+                ItemViewMetadataOverlaySource {
+                    slice_index: 0,
+                    text: "/home/user/Documents".into(),
+                    item_x: 0.0,
+                    item_y: 0.0,
+                    text_x: 52.0,
+                    text_width: 75.0,
+                    y: 41.0,
+                    line_height: 14.0,
+                    font_size: 11.0,
+                    is_group: false,
+                },
+            ],
         );
+
+        assert_eq!(projections.len(), 1);
+        let slot = &projections[0].entry;
+        assert!(slot.has_metadata_group);
+        assert_eq!(slot.metadata_group, "Documents");
+        assert!(slot.has_metadata_location);
+        assert_eq!(slot.metadata_location, "/home/user/Documents");
+        assert_eq!(slot.metadata_text_x, 52.0);
+        assert_eq!(slot.metadata_text_width, 75.0);
+        assert_eq!(slot.metadata_group_y, 2.0);
+        assert_eq!(slot.metadata_location_y, 41.0);
+        assert_eq!(slot.metadata_line_height, 14.0);
+        assert_eq!(slot.metadata_font_size, 11.0);
     }
 }

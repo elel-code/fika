@@ -1,6 +1,6 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_metrics::CompactItemVisualMetrics;
-use crate::{ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
+use crate::{ItemViewEntry, ItemViewSlotEntry};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::collections::HashSet;
 use std::path::Path;
@@ -56,17 +56,9 @@ pub(crate) struct ItemViewMetadataSource {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ItemViewMediaToken {
-    pub(crate) slice_index: i32,
-    pub(crate) media_token: i32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewMediaSource {
     pub(crate) slice_index: i32,
     pub(crate) media: Image,
-    pub(crate) x: f32,
-    pub(crate) y: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +105,14 @@ pub(crate) struct ItemViewTileFramePlan {
 pub(crate) struct ItemViewTileFrameBatch {
     sources: Vec<ItemViewTileFrameSource>,
     plans: Vec<ItemViewTileFramePlan>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewSlotProjection {
+    pub(crate) absolute_index: i32,
+    pub(crate) path: SharedString,
+    pub(crate) thumbnail_token: i32,
+    pub(crate) entry: ItemViewSlotEntry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -365,39 +365,56 @@ impl ItemViewTileFrameBatch {
         &self.plans
     }
 
-    pub(crate) fn paint_entries(&self) -> Vec<ItemViewPaintEntry> {
+    pub(crate) fn slot_projections(&self, start_index: usize) -> Vec<ItemViewSlotProjection> {
         self.plans
             .iter()
-            .map(|plan| ItemViewPaintEntry {
-                name: plan.text.name.clone(),
-                thumbnail_state: plan.thumbnail_state,
-                media_kind: plan.fallback_media.media_kind,
-                x: plan.text.x,
-                y: plan.text.y,
-                width: plan.text.width,
-                text_width: plan.text.text_width,
+            .filter_map(|plan| {
+                let source = self.source_for_slice_index(plan.slice_index)?;
+                Some(ItemViewSlotProjection {
+                    absolute_index: start_index.saturating_add(plan.slice_index) as i32,
+                    path: source.path.clone(),
+                    thumbnail_token: 0,
+                    entry: ItemViewSlotEntry {
+                        active: true,
+                        name: plan.text.name.clone(),
+                        media_kind: plan.fallback_media.media_kind,
+                        has_thumbnail: false,
+                        thumbnail: Image::default(),
+                        has_metadata_group: false,
+                        metadata_group: SharedString::new(),
+                        has_metadata_location: false,
+                        metadata_location: SharedString::new(),
+                        metadata_text_x: 0.0,
+                        metadata_text_width: 0.0,
+                        metadata_group_y: 0.0,
+                        metadata_location_y: 0.0,
+                        metadata_line_height: 0.0,
+                        metadata_font_size: 0.0,
+                        x: plan.text.x,
+                        y: plan.text.y,
+                        text_width: plan.text.text_width,
+                    },
+                })
             })
             .collect()
+    }
+
+    fn source_for_slice_index(&self, slice_index: usize) -> Option<&ItemViewTileFrameSource> {
+        self.sources
+            .get(slice_index)
+            .filter(|source| source.slice_index == slice_index)
+            .or_else(|| {
+                self.sources
+                    .iter()
+                    .find(|source| source.slice_index == slice_index)
+            })
     }
 
     pub(crate) fn media_token_for_slice_index(&self, slice_index: i32) -> i32 {
         usize::try_from(slice_index)
             .ok()
-            .and_then(|row| self.sources.get(row))
+            .and_then(|row| self.source_for_slice_index(row))
             .map_or(0, |source| source.media_token)
-    }
-
-    pub(crate) fn media_tokens_for_sources(
-        &self,
-        media_entries: &[ItemViewMediaSource],
-    ) -> Vec<ItemViewMediaToken> {
-        media_entries
-            .iter()
-            .map(|media| ItemViewMediaToken {
-                slice_index: media.slice_index,
-                media_token: self.media_token_for_slice_index(media.slice_index),
-            })
-            .collect()
     }
 
     pub(crate) fn render_raster_layer(
@@ -503,44 +520,6 @@ impl ItemViewRenderGeometry {
             title_font_size: render_metrics.title_font_size,
         }
     }
-}
-
-pub(crate) fn metadata_entries_with_bounds(
-    metadata: Vec<ItemViewMetadataOverlaySource>,
-    bounds_entries: &[ItemViewItemBounds],
-) -> Vec<ItemViewMetadataEntry> {
-    metadata
-        .into_iter()
-        .map(|metadata| {
-            let bounds = bounds_for_slice_index(bounds_entries, metadata.slice_index);
-            ItemViewMetadataEntry {
-                text: metadata.text,
-                item_x: bounds.map_or(metadata.item_x, |bounds| bounds.x),
-                item_y: bounds.map_or(metadata.item_y, |bounds| bounds.y),
-                text_x: metadata.text_x,
-                text_width: metadata.text_width,
-                y: metadata.y,
-                line_height: metadata.line_height,
-                font_size: metadata.font_size,
-                is_group: metadata.is_group,
-            }
-        })
-        .collect()
-}
-
-fn bounds_for_slice_index(
-    bounds_entries: &[ItemViewItemBounds],
-    slice_index: i32,
-) -> Option<&ItemViewItemBounds> {
-    let slice_index = usize::try_from(slice_index).ok()?;
-    bounds_entries
-        .get(slice_index)
-        .filter(|bounds| bounds.slice_index == slice_index)
-        .or_else(|| {
-            bounds_entries
-                .iter()
-                .find(|bounds| bounds.slice_index == slice_index)
-        })
 }
 
 #[cfg(test)]
@@ -1327,13 +1306,44 @@ mod tests {
                 width: 180.0,
             })
         );
-        let paint = batch.paint_entries();
-        assert_eq!(paint.len(), 1);
-        assert_eq!(paint[0].name, "Report");
-        assert_eq!(paint[0].x, 120.0);
-        assert_eq!(paint[0].y, 40.0);
-        assert_eq!(paint[0].width, 180.0);
-        assert_eq!(paint[0].text_width, 96.0);
+        let projections = batch.slot_projections(10);
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].absolute_index, 10);
+        assert_eq!(projections[0].path, "/tmp/report.txt");
+        assert!(projections[0].entry.active);
+        assert_eq!(projections[0].entry.name, "Report");
+        assert_eq!(projections[0].entry.x, 120.0);
+        assert_eq!(projections[0].entry.y, 40.0);
+        assert_eq!(batch.plans()[0].text.width, 180.0);
+        assert_eq!(projections[0].entry.text_width, 96.0);
+    }
+
+    #[test]
+    fn tile_frame_batch_projects_sparse_sources_by_slice_index() {
+        let entry = ItemViewEntry {
+            name: "Sparse".into(),
+            path: "/tmp/sparse.txt".into(),
+            is_dir: false,
+            thumbnail_state: 1,
+            media_token: 73,
+        };
+        let bounds = ItemViewItemBounds {
+            slice_index: 3,
+            x: 90.0,
+            y: 12.0,
+            width: 160.0,
+            text_width: 88.0,
+        };
+        let source = ItemViewTileFrameSource::from_entry_and_bounds(&entry, &bounds, false);
+        let batch = ItemViewTileFrameBatch::from_sources(vec![source]);
+
+        let projections = batch.slot_projections(20);
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].absolute_index, 23);
+        assert_eq!(projections[0].path, "/tmp/sparse.txt");
+        assert_eq!(projections[0].entry.x, 90.0);
+        assert_eq!(batch.media_token_for_slice_index(3), 73);
     }
 
     #[test]
@@ -1392,90 +1402,33 @@ mod tests {
         assert_eq!(batch.media_token_for_slice_index(1), 42);
         assert_eq!(batch.media_token_for_slice_index(-1), 0);
         assert_eq!(batch.media_token_for_slice_index(2), 0);
-        let media_tokens = batch.media_tokens_for_sources(&[
-            ItemViewMediaSource {
-                slice_index: 0,
-                media: Image::default(),
-                x: 0.0,
-                y: 0.0,
-            },
-            ItemViewMediaSource {
-                slice_index: 1,
-                media: Image::default(),
-                x: 0.0,
-                y: 0.0,
-            },
-            ItemViewMediaSource {
-                slice_index: 4,
-                media: Image::default(),
-                x: 0.0,
-                y: 0.0,
-            },
-        ]);
-        assert_eq!(
-            media_tokens
-                .iter()
-                .map(|token| (token.slice_index, token.media_token))
-                .collect::<Vec<_>>(),
-            vec![(0, 21), (1, 42), (4, 0)]
-        );
     }
 
     #[test]
-    fn renderer_projects_metadata_overlay_bounds_for_text_backend() {
-        let bounds = vec![
-            ItemViewItemBounds {
-                slice_index: 0,
-                x: 10.0,
-                y: 20.0,
-                width: 100.0,
-                text_width: 50.0,
-            },
-            ItemViewItemBounds {
-                slice_index: 1,
-                x: 30.0,
-                y: 40.0,
-                width: 120.0,
-                text_width: 60.0,
-            },
-        ];
+    fn renderer_keeps_metadata_overlay_slice_identity_for_slot_attachment() {
+        let mut entries = vec![test_entry(0), test_entry(1)];
         let metadata = vec![
-            ItemViewMetadataOverlaySource {
-                slice_index: 1,
-                text: "Documents".into(),
-                item_x: 0.0,
-                item_y: 0.0,
-                text_x: 52.0,
-                text_width: 75.0,
-                y: 2.0,
-                line_height: 14.0,
-                font_size: 11.0,
-                is_group: true,
-            },
-            ItemViewMetadataOverlaySource {
-                slice_index: 9,
-                text: "/tmp/missing".into(),
-                item_x: 90.0,
-                item_y: 100.0,
-                text_x: 52.0,
-                text_width: 75.0,
-                y: 41.0,
-                line_height: 14.0,
-                font_size: 11.0,
-                is_group: false,
-            },
+            ItemViewMetadataSource::new("", ""),
+            ItemViewMetadataSource::new("Documents", "/home/user/Documents"),
         ];
+        let input = ItemViewRenderPlanInput {
+            cell_width: 129.0,
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 3),
+            show_location: true,
+        };
 
-        let entries = metadata_entries_with_bounds(metadata, &bounds);
+        let metadata_entries = decorate_render_plan_with_metadata(&mut entries, input, &metadata);
 
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].text, "Documents");
-        assert_eq!((entries[0].item_x, entries[0].item_y), (30.0, 40.0));
-        assert_eq!(entries[0].text_width, 75.0);
-        assert!(entries[0].is_group);
-        assert_eq!(entries[1].text, "/tmp/missing");
-        assert_eq!((entries[1].item_x, entries[1].item_y), (90.0, 100.0));
-        assert!(!entries[1].is_group);
+        assert_eq!(metadata_entries.len(), 2);
+        assert!(metadata_entries.iter().all(|entry| entry.slice_index == 1));
+        assert_eq!(metadata_entries[0].text, "Documents");
+        assert!(metadata_entries[0].is_group);
+        assert_eq!(metadata_entries[1].text, "/home/user/Documents");
+        assert!(!metadata_entries[1].is_group);
+        assert_eq!(
+            (metadata_entries[0].item_x, metadata_entries[0].item_y),
+            (0.0, 0.0)
+        );
     }
 
     #[test]

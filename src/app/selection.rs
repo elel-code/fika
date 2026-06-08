@@ -288,9 +288,9 @@ pub(crate) fn filtered_entries_range_for_slot(
             .collect()
     } else if filters_are_identity(&pane.search, &chooser_patterns) {
         pane.entries
-            .get(range.start..range.end.min(pane.entries.len()))
-            .unwrap_or(&[])
             .iter()
+            .skip(range.start)
+            .take(range.end.saturating_sub(range.start))
             .map(ItemViewModelEntry::model_to_file_entry)
             .collect()
     } else {
@@ -600,17 +600,9 @@ fn visible_entries_range_iter_for_slot(
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         let start = range.start.min(indices.len());
         let end = range.end.min(indices.len());
-        return Box::new(
-            indices[start..end]
-                .iter()
-                .enumerate()
-                .map(move |(offset, &index)| {
-                    (
-                        start + offset,
-                        &pane.entries[index] as &dyn ItemViewModelEntry,
-                    )
-                }),
-        );
+        return Box::new(indices[start..end].iter().enumerate().filter_map(
+            move |(offset, &index)| pane.entries.get(index).map(|entry| (start + offset, entry)),
+        ));
     }
 
     let chooser_patterns = active_chooser_patterns(state);
@@ -618,10 +610,12 @@ fn visible_entries_range_iter_for_slot(
         let start = range.start.min(pane.entries.len());
         let end = range.end.min(pane.entries.len());
         return Box::new(
-            pane.entries[start..end]
+            pane.entries
                 .iter()
+                .skip(start)
+                .take(end.saturating_sub(start))
                 .enumerate()
-                .map(move |(offset, entry)| (start + offset, entry as &dyn ItemViewModelEntry)),
+                .map(move |(offset, entry)| (start + offset, entry)),
         );
     }
 
@@ -653,20 +647,12 @@ fn visible_entry_iter_for_slot(
     };
 
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
-        return Box::new(
-            indices
-                .iter()
-                .map(|&index| &pane.entries[index] as &dyn ItemViewModelEntry),
-        );
+        return Box::new(indices.iter().filter_map(|&index| pane.entries.get(index)));
     }
 
     let chooser_patterns = active_chooser_patterns(state);
     if filters_are_identity(&pane.search, &chooser_patterns) {
-        return Box::new(
-            pane.entries
-                .iter()
-                .map(|entry| entry as &dyn ItemViewModelEntry),
-        );
+        return Box::new(pane.entries.iter());
     }
 
     let query = pane.search.query.to_ascii_lowercase();

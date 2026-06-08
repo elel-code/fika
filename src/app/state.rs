@@ -209,7 +209,8 @@ pub(crate) struct FileUndoItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::pane::PaneEntrySnapshot;
+    use crate::app::item_view_model::ItemViewModelEntry;
+    use crate::fs::entries::RawFileEntry;
 
     #[test]
     fn directory_cache_evicts_oldest_entries() {
@@ -243,7 +244,7 @@ mod tests {
                 entries
                     .entries
                     .iter()
-                    .map(|entry| entry.path.clone())
+                    .map(ItemViewModelEntry::model_path_string)
                     .collect::<Vec<_>>()
             }),
             Some(vec!["/tmp/file-1".to_string()])
@@ -258,7 +259,7 @@ mod tests {
         let path = PathBuf::from("/tmp/search");
         state.insert_directory_cache(
             path.clone(),
-            PreparedDirectoryEntries::new(vec![PaneEntrySnapshot {
+            PreparedDirectoryEntries::new(vec![RawFileEntry {
                 location: "docs".to_string(),
                 ..test_entry(1)
             }]),
@@ -271,7 +272,7 @@ mod tests {
                     entries
                         .entries
                         .iter()
-                        .map(|entry| entry.location.clone())
+                        .map(|entry| entry.model_location().to_string())
                         .collect::<Vec<_>>(),
                 )
             }),
@@ -295,9 +296,9 @@ mod tests {
         PreparedDirectoryEntries::new(vec![test_entry(index)])
     }
 
-    fn test_entry(index: usize) -> PaneEntrySnapshot {
+    fn test_entry(index: usize) -> RawFileEntry {
         let name = format!("file-{index}");
-        PaneEntrySnapshot {
+        RawFileEntry {
             name_width_units: crate::app::geometry::compact_text_width_units(&name),
             name,
             path: format!("/tmp/file-{index}"),
@@ -305,7 +306,7 @@ mod tests {
             location: String::new(),
             kind: "File".to_string(),
             size: "1 KB".to_string(),
-            size_bytes: 1024.0,
+            size_bytes: 1024,
             modified: "Today".to_string(),
             modified_age_days: 0,
             is_dir: false,

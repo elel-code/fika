@@ -1,5 +1,4 @@
 use crate::ItemViewEntry;
-use crate::app::item_view_model::ItemViewModelEntry;
 use crate::app::item_view_renderer::ItemViewMediaSource;
 use crate::app::model_update::ItemViewRowToken;
 use crate::app::state::AppState;
@@ -121,8 +120,6 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
             media_entries.push(ItemViewMediaSource {
                 slice_index: row as i32,
                 media: image_from_thumbnail(data),
-                x: 0.0,
-                y: 0.0,
             });
             entry.media_token = key.item_view_media_token();
             entry.thumbnail_state = THUMBNAIL_STATE_LOADED;
@@ -172,8 +169,10 @@ pub(crate) fn path_is_in_virtual_range_for_pane(
         return false;
     }
 
-    pane.entries[start..end]
+    pane.entries
         .iter()
+        .skip(start)
+        .take(end.saturating_sub(start))
         .any(|entry| entry.model_path() == path_text)
 }
 
@@ -631,7 +630,7 @@ mod tests {
         assert!(!state.panes.focused().view.has_thumbnail_pending(path));
         assert!(state.thumbnail_cache.contains_key(&key));
         assert!(!state.thumbnail_failures.contains_key(&key));
-        assert_eq!(state.panes.focused().entries[0].path, path);
+        assert_eq!(state.panes.focused().entries[0].model_path(), path);
         assert_eq!(
             state.panes.focused().entries[0].model_to_file_entry(),
             business_entry("photo.png", path)
@@ -671,7 +670,7 @@ mod tests {
         assert!(should_refresh);
         assert!(!state.panes.focused().view.has_thumbnail_pending(path));
         assert!(state.thumbnail_failures.contains_key(&key));
-        assert_eq!(state.panes.focused().entries[0].path, path);
+        assert_eq!(state.panes.focused().entries[0].model_path(), path);
         assert_eq!(
             state.panes.focused().entries[0].model_to_file_entry(),
             business_entry("photo.png", path)

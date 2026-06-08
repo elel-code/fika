@@ -3162,7 +3162,7 @@ mod tests {
                 )
                 && !pane_slot_surface.contains("entries: root.view.entries;")
                 && !pane_slot_surface.contains("bounds: root.view.bounds;")
-                && pane_slot_surface.contains("paint: root.view.paint;")
+                && pane_slot_surface.contains("item-view-slots: root.view.item_view_slots;")
                 && pane_slot_surface
                     .contains("item-view-raster-layer: root.view.item_view_raster_layer;")
                 && pane_slot_surface
@@ -3171,7 +3171,7 @@ mod tests {
                     .contains("item-view-raster-height: root.view.item_view_raster_height;")
                 && !pane_slot_surface.contains("highlights: root.view.highlights;")
                 && !pane_slot_surface.contains(legacy_surface_media_binding)
-                && pane_slot_surface.contains("metadata: root.view.metadata;")
+                && !pane_slot_surface.contains("metadata: root.view.metadata;")
                 && pane_slot_surface.contains("callback viewport_changed(int, float);")
                 && pane_slot_surface.contains(
                     "viewport_changed(slot, viewport-x) => {\n            root.viewport_changed(slot, viewport-x);\n        }"
@@ -3483,42 +3483,57 @@ mod tests {
         );
         let widgets = include_str!("../../ui/widgets.slint");
         let models = include_str!("../../ui/models.slint");
-        let item_view_entry = models
-            .split_once("export struct ItemViewEntry")
-            .and_then(|(_, rest)| rest.split_once("export struct ItemViewPaintEntry"))
+        let main_rs = include_str!("../main.rs");
+        let item_view_entry = main_rs
+            .split_once("pub(crate) struct ItemViewEntry")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) struct FileEntry"))
             .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewEntry before ItemViewPaintEntry");
-        let paint_entry = models
-            .split_once("export struct ItemViewPaintEntry")
-            .and_then(|(_, rest)| rest.split_once("export struct ItemViewMetadataEntry"))
+            .expect("main.rs should define Rust-native ItemViewEntry before FileEntry");
+        let slot_entry = models
+            .split_once("export struct ItemViewSlotEntry")
+            .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
             .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewPaintEntry before ItemViewMetadataEntry");
+            .expect("models.slint should define ItemViewSlotEntry before PlaceEntry");
         let pane_view_data = models
             .split_once("export struct PaneViewData")
             .and_then(|(_, rest)| rest.split_once("export struct PaneSlotData"))
             .map(|(body, _)| body)
             .expect("models.slint should define PaneViewData before PaneSlotData");
-        let metadata_entry = models
-            .split_once("export struct ItemViewMetadataEntry")
-            .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
-            .map(|(body, _)| body)
-            .expect("models.slint should define ItemViewMetadataEntry before PlaceEntry");
         let raster_layer = split_pane
             .split_once("slice-layer := Rectangle")
             .and_then(|(_, rest)| rest.split_once("Image {"))
-            .and_then(|(_, rest)| rest.split_once("for paint[index] in root.paint: Text"))
+            .and_then(|(_, rest)| rest.split_once("for slot[index] in root.item-view-slots: Text"))
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should draw a tile raster layer before overlays");
         let base_text_loop = split_pane
-            .split_once("for paint[index] in root.paint: Text")
-            .and_then(|(_, rest)| rest.split_once("for metadata[index] in root.metadata: Text"))
+            .split_once(
+                "for slot[index] in root.item-view-slots: Text {\n                    visible: slot.active;",
+            )
+            .and_then(|(_, rest)| {
+                rest.split_once(
+                    "for slot[index] in root.item-view-slots: Text {\n                    visible: slot.active && slot.has_metadata_group;",
+                )
+            })
             .map(|(loop_body, _)| loop_body)
             .expect("SplitPaneView should have an unconditional base text primitive loop");
-        let metadata_tile_loop = split_pane
-            .split_once("for metadata[index] in root.metadata: Text")
+        let metadata_group_loop = split_pane
+            .split_once(
+                "for slot[index] in root.item-view-slots: Text {\n                    visible: slot.active && slot.has_metadata_group;",
+            )
+            .and_then(|(_, rest)| {
+                rest.split_once(
+                    "for slot[index] in root.item-view-slots: Text {\n                    visible: slot.active && slot.has_metadata_location;",
+                )
+            })
+            .map(|(loop_body, _)| loop_body)
+            .expect("SplitPaneView should have a slot metadata group loop");
+        let metadata_location_loop = split_pane
+            .split_once(
+                "for slot[index] in root.item-view-slots: Text {\n                    visible: slot.active && slot.has_metadata_location;",
+            )
             .and_then(|(_, rest)| rest.split_once("if (root.selection-rect-active): Rectangle"))
             .map(|(loop_body, _)| loop_body)
-            .expect("SplitPaneView should have a sparse metadata overlay loop");
+            .expect("SplitPaneView should have a slot metadata location loop");
         let main_touch_moved_body = split_pane
             .split_once("moved => {")
             .and_then(|(_, rest)| rest.split_once("scroll-event(event)"))
@@ -3528,14 +3543,23 @@ mod tests {
         let legacy_media_entry = concat!("ItemView", "MediaEntry");
         let legacy_media_property = format!("in property <[{legacy_media_entry}]> media");
         let legacy_media_struct = format!("export struct {legacy_media_entry}");
+        let legacy_thumbnail_entry = concat!("ItemView", "ThumbnailEntry");
+        let legacy_thumbnail_struct = format!("export struct {legacy_thumbnail_entry}");
+        let legacy_thumbnail_property =
+            format!("in property <[{legacy_thumbnail_entry}]> thumbnails");
         assert!(
             split_pane.contains("source: root.item-view-raster-layer;")
                 && split_pane.contains("in property <float> item-view-raster-width: 1;")
                 && split_pane.contains("in property <float> item-view-raster-height: 1;")
-                && split_pane.contains("for paint[index] in root.paint: Text")
+                && split_pane.contains("in property <[ItemViewSlotEntry]> item-view-slots;")
+                && split_pane.contains("for slot[index] in root.item-view-slots: Image")
+                && split_pane.contains("for slot[index] in root.item-view-slots: Text")
+                && split_pane.contains("visible: slot.active && slot.has_thumbnail;")
+                && split_pane.contains("source: slot.thumbnail;")
                 && split_pane.contains("in property <int> virtual-start-row;")
                 && !split_pane.contains("bounds;")
                 && !split_pane.contains("ItemViewBounds")
+                && !split_pane.contains(&legacy_thumbnail_property)
                 && !split_pane.contains("for fallback[index] in root.folder-media: Image")
                 && !split_pane.contains("for fallback[index] in root.file-media: Image")
                 && !split_pane.contains(legacy_media_loop)
@@ -3551,13 +3575,14 @@ mod tests {
                 && !split_pane.contains("root.item-view-folder-media")
                 && !split_pane.contains("root.item-view-file-media")
                 && base_text_loop
-                    .contains("x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.text-x;")
+                    .contains("x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + root.text-x;")
                 && base_text_loop.contains(
-                    "y: root.preview-padding + paint.y * 1px + root.title-y;"
+                    "y: root.preview-padding + slot.y * 1px + root.title-y;"
                 )
-                && base_text_loop.contains("width: max(1px, paint.text_width * 1px);")
+                && base_text_loop.contains("width: max(1px, slot.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
-                && base_text_loop.contains("text: paint.name;")
+                && base_text_loop.contains("text: slot.name;")
+                && split_pane.contains("visible: slot.active;")
                 && !base_text_loop.contains("metadata_line_height")
                 && !base_text_loop.contains("tile-index:")
                 && !base_text_loop.contains("tile-row:")
@@ -3576,18 +3601,40 @@ mod tests {
                 && !split_pane.contains("selected: item.selected;")
                 && !split_pane.contains("drag-data-source:")
                 && !models.contains("export struct FileEntry")
+                && !models.contains("export struct ItemViewEntry")
                 && !models.contains("export struct ItemViewBounds")
                 && !models.contains("selection_revision")
                 && !item_view_entry.contains("selected: bool")
-                && item_view_entry.contains("thumbnail_state: int")
-                && item_view_entry.contains("media_token: int")
+                && item_view_entry.contains("thumbnail_state: i32")
+                && item_view_entry.contains("media_token: i32")
                 && !item_view_entry.contains("media: image")
                 && !models.contains(&legacy_media_struct)
-                && paint_entry.contains("name: string")
-                && paint_entry.contains("x: float")
-                && paint_entry.contains("text_width: float")
-                && !paint_entry.contains("is_dir")
-                && !paint_entry.contains("slice_index")
+                && !models.contains(&legacy_thumbnail_struct)
+                && !models.contains("export struct ItemViewPaintEntry")
+                && slot_entry.contains("active: bool")
+                && slot_entry.contains("name: string")
+                && slot_entry.contains("has_thumbnail: bool")
+                && slot_entry.contains("thumbnail: image")
+                && !slot_entry.contains("absolute_index")
+                && !slot_entry.contains("path: string")
+                && !slot_entry.contains("thumbnail_token")
+                && slot_entry.contains("has_metadata_group: bool")
+                && slot_entry.contains("metadata_group: string")
+                && slot_entry.contains("has_metadata_location: bool")
+                && slot_entry.contains("metadata_location: string")
+                && slot_entry.contains("metadata_text_x: float")
+                && slot_entry.contains("metadata_text_width: float")
+                && slot_entry.contains("metadata_group_y: float")
+                && slot_entry.contains("metadata_location_y: float")
+                && slot_entry.contains("metadata_line_height: float")
+                && slot_entry.contains("metadata_font_size: float")
+                && slot_entry.contains("x: float")
+                && !slot_entry.contains("thumbnail_state")
+                && !slot_entry.contains("\n    width: float")
+                && slot_entry.contains("text_width: float")
+                && !slot_entry.contains("is_dir")
+                && !slot_entry.contains("slice_index")
+                && !models.contains("export struct ItemViewMetadataEntry")
                 && !models.contains("export struct ItemViewHighlightEntry")
                 && !models.contains("export struct ItemViewFallbackMediaEntry")
                 && !item_view_entry.contains("tile_width: float")
@@ -3597,11 +3644,14 @@ mod tests {
                 && !item_view_entry.contains("text_x: float")
                 && !item_view_entry.contains("title_line_height: float")
                 && !pane_view_data.contains("bounds:")
-                && pane_view_data.contains("paint: [ItemViewPaintEntry]")
+                && !pane_view_data.contains("paint:")
+                && !pane_view_data.contains("metadata:")
+                && pane_view_data.contains("item_view_slots: [ItemViewSlotEntry]")
                 && pane_view_data.contains("item_view_raster_layer: image")
                 && pane_view_data.contains("item_view_raster_width: float")
                 && pane_view_data.contains("item_view_raster_height: float")
                 && !pane_view_data.contains("media: [")
+                && !pane_view_data.contains("thumbnails:")
                 && pane_view_data.contains("item_view_virtual_slice_start_x: float")
                 && pane_view_data.contains("item_view_media_x: float")
                 && pane_view_data.contains("item_view_media_width: float")
@@ -3609,16 +3659,7 @@ mod tests {
                 && pane_view_data.contains("item_view_title_line_height: float")
                 && !pane_view_data.contains("item_view_folder_media: image")
                 && !pane_view_data.contains("item_view_file_media: image")
-                && !metadata_entry.contains("slice_index")
-                && metadata_entry.contains("text: string")
-                && metadata_entry.contains("item_x: float")
-                && metadata_entry.contains("item_y: float")
-                && metadata_entry.contains("text_x: float")
-                && metadata_entry.contains("text_width: float")
-                && metadata_entry.contains("line_height: float")
-                && metadata_entry.contains("font_size: float")
-                && metadata_entry.contains("is_group: bool")
-                && !item_view_entry.contains("thumbnail: image")
+                && !item_view_entry.contains("thumbnail: Image")
                 && !item_view_entry.contains("glyph_doc_font_size")
                 && !item_view_entry.contains("tile_x")
                 && !item_view_entry.contains("tile_y")
@@ -3644,22 +3685,26 @@ mod tests {
                 && !split_pane.contains("private property <length> thumbnail-width:")
                 && !split_pane.contains("tile-height: root.tile-height;")
                 && !split_pane.contains("zoom-level: root.zoom-level;")
-                && split_pane.contains(
+                && !split_pane.contains(
                     "color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;"
                 )
+                && metadata_group_loop.contains("color: root.metadata-group-color;")
+                && metadata_location_loop.contains("color: root.metadata-location-color;")
                 && raster_layer.contains("width: max(1px, root.item-view-raster-width * 1px);")
                 && raster_layer.contains("height: max(1px, root.item-view-raster-height * 1px);")
                 && base_text_loop.contains("font-size: root.title-font-size;")
                 && base_text_loop.contains("root.text-x")
                 && base_text_loop.contains("root.title-y")
-                && base_text_loop.contains("width: max(1px, paint.text_width * 1px);")
+                && base_text_loop.contains("width: max(1px, slot.text_width * 1px);")
                 && base_text_loop.contains("height: root.title-line-height;")
-                && base_text_loop.contains("text: paint.name;")
+                && base_text_loop.contains("text: slot.name;")
                 && base_text_loop.contains("horizontal-alignment: left;")
                 && !base_text_loop.contains("overflow: elide")
                 && !split_pane.contains("parent.height - max(16px, item.title_line_height")
                 && !split_pane.contains("parent.width - 12px")
-                && split_pane.contains("height: metadata.line_height * 1px;")
+                && !split_pane.contains("height: metadata.line_height * 1px;")
+                && metadata_group_loop.contains("height: slot.metadata_line_height * 1px;")
+                && metadata_location_loop.contains("height: slot.metadata_line_height * 1px;")
                 && !split_pane.contains("item.thumbnail_width")
                 && !split_pane.contains("doc-font-size:")
                 && !split_pane.contains("item.tile_padding_x")
@@ -3703,7 +3748,7 @@ mod tests {
         );
         assert!(split_pane.contains("scroll-event(event)"));
         assert!(split_pane.contains("source: root.item-view-raster-layer;"));
-        assert!(split_pane.contains("for paint[index] in root.paint: Text"));
+        assert!(split_pane.contains("for slot[index] in root.item-view-slots: Text"));
         assert!(
             split_pane.contains("item-drag-area := DragArea")
                 && split_pane.contains("enabled: root.interactive;")
@@ -3748,29 +3793,41 @@ mod tests {
             "main-view item drags should feed the shared DragOverlayLayer with a visible floating label instead of relying only on the compositor action badge"
         );
         assert!(
-            split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
-                && split_pane.contains("for metadata[index] in root.metadata: Text")
-                && metadata_tile_loop
-                    .contains("x: root.preview-padding + metadata.item_x * 1px - root.paint-viewport-x * 1px + metadata.text_x * 1px;")
-                && metadata_tile_loop.contains(
-                    "y: root.preview-padding + metadata.item_y * 1px + metadata.y * 1px;"
+            !split_pane.contains("in property <[ItemViewMetadataEntry]> metadata;")
+                && !split_pane.contains("for metadata[index] in root.metadata: Text")
+                && split_pane.contains("visible: slot.active && slot.has_metadata_group;")
+                && split_pane.contains("visible: slot.active && slot.has_metadata_location;")
+                && metadata_group_loop
+                    .contains("x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + slot.metadata_text_x * 1px;")
+                && metadata_group_loop.contains(
+                    "y: root.preview-padding + slot.y * 1px + slot.metadata_group_y * 1px;"
                 )
-                && !metadata_tile_loop.contains("root.bounds[metadata.slice_index]")
-                && metadata_tile_loop.contains("height: metadata.line_height * 1px;")
-                && metadata_tile_loop.contains("text: metadata.text;")
-                && metadata_tile_loop.contains(
-                    "color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;"
+                && metadata_group_loop.contains("width: slot.metadata_text_width * 1px;")
+                && metadata_group_loop.contains("height: slot.metadata_line_height * 1px;")
+                && metadata_group_loop.contains("text: slot.metadata_group;")
+                && metadata_group_loop.contains("color: root.metadata-group-color;")
+                && metadata_group_loop.contains("font-size: slot.metadata_font_size * 1px;")
+                && metadata_group_loop.contains("font-weight: 700;")
+                && metadata_location_loop
+                    .contains("x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + slot.metadata_text_x * 1px;")
+                && metadata_location_loop.contains(
+                    "y: root.preview-padding + slot.y * 1px + slot.metadata_location_y * 1px;"
                 )
-                && metadata_tile_loop.contains("font-size: metadata.font_size * 1px;")
-                && metadata_tile_loop.contains("font-weight: metadata.is_group ? 700 : 400;")
-                && !metadata_tile_loop.contains("visible:")
-                && !metadata_tile_loop.contains("tile-index:")
-                && !metadata_tile_loop.contains("tile-row:")
-                && !metadata_tile_loop.contains("item.group")
-                && !metadata_tile_loop.contains("item.location")
-                && !metadata_tile_loop.contains("source: item.media;")
-                && !metadata_tile_loop.contains("text: item.name;"),
-            "ordinary compact items should always render icon/name in the base loop, while group/location metadata comes from a pane-local sparse overlay model"
+                && metadata_location_loop.contains("width: slot.metadata_text_width * 1px;")
+                && metadata_location_loop.contains("height: slot.metadata_line_height * 1px;")
+                && metadata_location_loop.contains("text: slot.metadata_location;")
+                && metadata_location_loop.contains("color: root.metadata-location-color;")
+                && metadata_location_loop.contains("font-size: slot.metadata_font_size * 1px;")
+                && metadata_location_loop.contains("font-weight: 400;")
+                && !metadata_group_loop.contains("tile-index:")
+                && !metadata_group_loop.contains("tile-row:")
+                && !metadata_location_loop.contains("tile-index:")
+                && !metadata_location_loop.contains("tile-row:")
+                && !metadata_group_loop.contains("item.group")
+                && !metadata_location_loop.contains("item.location")
+                && !metadata_group_loop.contains("source: item.media;")
+                && !metadata_location_loop.contains("text: item.name;"),
+            "ordinary compact items should always render icon/name in the base loop, while group/location metadata comes from stable slot rows"
         );
         assert!(!split_pane.contains("root.request_context_menu("));
         assert!(
@@ -3842,9 +3899,9 @@ mod tests {
                 && split_pane.contains("x: 0px;")
                 && split_pane.contains("width: parent.width;")
                 && split_pane.contains(
-                    "x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.text-x;"
+                    "x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + root.text-x;"
                 )
-                && split_pane.contains("y: root.preview-padding + paint.y * 1px + root.title-y;")
+                && split_pane.contains("y: root.preview-padding + slot.y * 1px + root.title-y;")
                 && base_text_loop.contains("height: root.title-line-height;")
                 && !split_pane.contains("private property <int> tile-index:")
                 && !split_pane.contains("private property <int> tile-row:")

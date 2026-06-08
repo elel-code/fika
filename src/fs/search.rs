@@ -172,6 +172,7 @@ mod tests {
         let mut results = vec![
             RawFileEntry {
                 name: "alpha".to_string(),
+                name_width_units: 2.9,
                 path: "/tmp/root/alpha".to_string(),
                 group: String::new(),
                 location: ".".to_string(),
@@ -184,6 +185,7 @@ mod tests {
             },
             RawFileEntry {
                 name: "beta".to_string(),
+                name_width_units: 2.32,
                 path: "/tmp/root/beta".to_string(),
                 group: String::new(),
                 location: ".".to_string(),
@@ -196,6 +198,7 @@ mod tests {
             },
             RawFileEntry {
                 name: "gamma".to_string(),
+                name_width_units: 2.9,
                 path: "/tmp/root/docs/gamma".to_string(),
                 group: String::new(),
                 location: "docs".to_string(),

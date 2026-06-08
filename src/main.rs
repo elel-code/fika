@@ -73,12 +73,12 @@ use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
     affected_directory_pane_ids, cleanup_file_undo_backup,
 };
+#[cfg(test)]
+use app::pane::PaneHistory;
 use app::pane::{
     DirectoryViewState, PaneState, PaneTarget, PreparedDirectoryEntries, VirtualViewCache,
     VirtualViewPrepareRequest,
 };
-#[cfg(test)]
-use app::pane::{PaneEntrySnapshot, PaneHistory};
 use app::pane_controller::PaneController;
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
@@ -128,6 +128,15 @@ use fs::places::default_places;
 use fs::{file_actions, privilege, search, thumbnails};
 
 slint::include_modules!();
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ItemViewEntry {
+    pub(crate) name: SharedString,
+    pub(crate) path: SharedString,
+    pub(crate) is_dir: bool,
+    pub(crate) thumbnail_state: i32,
+    pub(crate) media_token: i32,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FileEntry {
@@ -2663,7 +2672,7 @@ fn load_prepared_pane_directory(
     bridge.handle.spawn(async move {
         let result = read_entries_async(&current_dir)
             .await
-            .map(PreparedDirectoryEntries::from_raw_entries);
+            .map(PreparedDirectoryEntries::new);
         send_async_event(
             async_tx,
             notify_ui,
@@ -2693,7 +2702,7 @@ fn prefetch_sidebar_locations_async(state: &Rc<RefCell<AppState>>, bridge: &Asyn
             }
             let result = read_entries_async(&path)
                 .await
-                .map(PreparedDirectoryEntries::from_raw_entries);
+                .map(PreparedDirectoryEntries::new);
             send_async_event(
                 async_tx,
                 notify_ui,
@@ -2925,7 +2934,7 @@ fn watch_current_directory(path: &Path, pane_id: u64, generation: u64, bridge: &
 
             let result = read_entries_async(&reload_path)
                 .await
-                .map(PreparedDirectoryEntries::from_raw_entries);
+                .map(PreparedDirectoryEntries::new);
             send_async_event(
                 async_tx,
                 notify_ui,
@@ -3586,7 +3595,7 @@ fn start_recursive_search_for_slot(
                 );
             })
             .await
-            .map(PreparedDirectoryEntries::from_raw_entries);
+            .map(PreparedDirectoryEntries::new);
         send_async_event(
             async_tx,
             notify_ui,
@@ -4649,8 +4658,6 @@ fn preserve_current_thumbnail_roles_for_deferred_icon_size_update(
                 media_entries.push(ItemViewMediaSource {
                     slice_index: row as i32,
                     media,
-                    x: 0.0,
-                    y: 0.0,
                 });
             }
         }
@@ -4663,20 +4670,33 @@ fn thumbnail_media_for_token(
     current_slice_index: i32,
     media_token: i32,
 ) -> Option<slint::Image> {
+    let current_absolute_index = usize::try_from(current_slice_index)
+        .ok()
+        .map(|slice_index| pane.view.virtual_start_index.saturating_add(slice_index) as i32);
     pane.view
-        .virtual_media_tokens
+        .virtual_slot_entries
         .iter()
-        .position(|token| {
-            token.slice_index == current_slice_index && token.media_token == media_token
+        .zip(pane.view.virtual_slot_tokens.iter())
+        .find(|(slot, token)| {
+            slot.active
+                && slot.has_thumbnail
+                && token.thumbnail_token() == media_token
+                && current_absolute_index.is_some_and(|absolute_index| {
+                    token
+                        .absolute_index()
+                        .is_some_and(|slot_index| slot_index == absolute_index)
+                })
         })
         .or_else(|| {
             pane.view
-                .virtual_media_tokens
+                .virtual_slot_entries
                 .iter()
-                .position(|token| token.media_token == media_token)
+                .zip(pane.view.virtual_slot_tokens.iter())
+                .find(|(slot, token)| {
+                    slot.active && slot.has_thumbnail && token.thumbnail_token() == media_token
+                })
         })
-        .and_then(|row| pane.view.virtual_thumbnail_entries.row_data(row))
-        .map(|entry| entry.media)
+        .map(|(slot, _)| slot.thumbnail.clone())
 }
 
 fn apply_virtual_view_prepare_failure(
@@ -5321,7 +5341,7 @@ fn pane_drop_target_slice_index_for_slot(
         return -1;
     }
     let slice_index = global_index - pane.view.virtual_start_index;
-    let Some(entry) = pane.view.virtual_entries.row_data(slice_index) else {
+    let Some(entry) = pane.view.virtual_entries.get(slice_index) else {
         return -1;
     };
     if entry.path.as_str() != target_path {
@@ -6041,9 +6061,7 @@ mod tests {
         pane.view.virtual_view.range = 0..0;
         pane.view.virtual_view.thumbnail_size_px = 64;
 
-        let entries = PreparedDirectoryEntries::new(vec![PaneEntrySnapshot::from_entry(
-            &test_entry("new", "/tmp/new"),
-        )]);
+        let entries = PreparedDirectoryEntries::new(vec![test_entry("new", "/tmp/new")]);
         pane.set_entries_with_location_state(entries.entries.clone(), entries.has_locations);
 
         assert_eq!(
@@ -7000,19 +7018,46 @@ mod tests {
         let legacy_pane_view_media_field = format!("media: [{legacy_media_entry}]");
         let legacy_surface_media_binding = concat!("media: root.view.", "media;");
         let legacy_slot_binding = concat!("media: pane_slot_", "media(slot, state)");
+        let legacy_thumbnail_entry = concat!("ItemView", "ThumbnailEntry");
+        let legacy_thumbnail_struct = format!("export struct {legacy_thumbnail_entry}");
+        let slot_entry = models
+            .split_once("export struct ItemViewSlotEntry")
+            .and_then(|(_, rest)| rest.split_once("export struct PlaceEntry"))
+            .map(|(body, _)| body)
+            .expect("models.slint should define ItemViewSlotEntry before PlaceEntry");
 
         assert!(
             !pane_view_data.contains("entries: [ItemViewEntry]")
                 && !pane_view_data.contains("bounds:")
-                && pane_view_data.contains("paint: [ItemViewPaintEntry]")
+                && !pane_view_data.contains("paint:")
+                && !pane_view_data.contains("thumbnails:")
+                && pane_view_data.contains("item_view_slots: [ItemViewSlotEntry]")
                 && pane_view_data.contains("item_view_raster_layer: image")
                 && pane_view_data.contains("item_view_raster_width: float")
                 && pane_view_data.contains("item_view_raster_height: float")
                 && !pane_view_data.contains("highlights:")
                 && !pane_view_data.contains(&legacy_pane_view_media_field)
-                && pane_view_data.contains("metadata: [ItemViewMetadataEntry]")
+                && !pane_view_data.contains("metadata:")
                 && !app.contains("ItemViewBounds")
+                && !app.contains("thumbnails: root.view.thumbnails;")
                 && !models.contains("ItemViewBounds")
+                && !models.contains("export struct ItemViewMetadataEntry")
+                && !models.contains(&legacy_thumbnail_struct)
+                && slot_entry.contains("has_thumbnail: bool")
+                && slot_entry.contains("thumbnail: image")
+                && !slot_entry.contains("absolute_index")
+                && !slot_entry.contains("path: string")
+                && !slot_entry.contains("thumbnail_token")
+                && slot_entry.contains("has_metadata_group: bool")
+                && slot_entry.contains("metadata_group: string")
+                && slot_entry.contains("has_metadata_location: bool")
+                && slot_entry.contains("metadata_location: string")
+                && slot_entry.contains("metadata_text_x: float")
+                && slot_entry.contains("metadata_text_width: float")
+                && slot_entry.contains("metadata_group_y: float")
+                && slot_entry.contains("metadata_location_y: float")
+                && slot_entry.contains("metadata_line_height: float")
+                && slot_entry.contains("metadata_font_size: float")
                 && !app.contains("pane_slot_0_entries")
                 && !app.contains("pane_slot_1_entries")
                 && !app.contains("pane_slot_0_bounds")
@@ -7026,7 +7071,7 @@ mod tests {
                 && !split_view.contains("fn sync_pane_metadata_ui(")
                 && !surface_body.contains("entries: root.view.entries;")
                 && !surface_body.contains("bounds: root.view.bounds;")
-                && surface_body.contains("paint: root.view.paint;")
+                && surface_body.contains("item-view-slots: root.view.item_view_slots;")
                 && surface_body
                     .contains("item-view-raster-layer: root.view.item_view_raster_layer;")
                 && surface_body
@@ -7035,15 +7080,16 @@ mod tests {
                     .contains("item-view-raster-height: root.view.item_view_raster_height;")
                 && !surface_body.contains("highlights: root.view.highlights;")
                 && !surface_body.contains(legacy_surface_media_binding)
-                && surface_body.contains("metadata: root.view.metadata;")
+                && !surface_body.contains("metadata: root.view.metadata;")
                 && !view_data_body.contains("entries: pane_slot_entries(slot, state)")
                 && !view_data_body.contains("bounds: pane_slot_bounds(slot, state)")
-                && view_data_body.contains("paint: pane_slot_paint(slot, state)")
+                && view_data_body
+                    .contains("item_view_slots: pane_slot_item_view_slots(slot, state)")
                 && view_data_body.contains("item_view_raster_layer")
                 && !view_data_body.contains("pane_slot_highlights(slot, state)")
                 && !view_data_body.contains(legacy_slot_binding)
-                && view_data_body.contains("metadata: pane_slot_metadata(slot, state)"),
-            "visible paint, tile raster, raster thumbnail input, and metadata should be pane-local data on PaneViewData instead of fixed slot sidecars, while business entries and bounds stay Rust-side"
+                && !view_data_body.contains("metadata: pane_slot_metadata(slot, state)"),
+            "visible paint, tile raster, slotized thumbnails, and metadata should be pane-local slot data on PaneViewData instead of fixed slot sidecars, while business entries and bounds stay Rust-side"
         );
     }
 
@@ -8279,9 +8325,7 @@ mod tests {
         ];
         state.insert_directory_cache(
             PathBuf::from("/tmp/cached"),
-            PreparedDirectoryEntries::new(vec![PaneEntrySnapshot::from_entry(&test_entry(
-                "a", "/tmp/a",
-            ))]),
+            PreparedDirectoryEntries::new(vec![test_entry("a", "/tmp/a")]),
         );
 
         let expected = vec![

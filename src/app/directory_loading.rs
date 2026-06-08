@@ -58,13 +58,13 @@ pub(crate) fn directory_entries_match(
     current_entries: &PaneEntryModel,
     incoming_entries: &PreparedDirectoryEntries,
 ) -> bool {
-    current_entries.as_ref() == incoming_entries.entries.as_ref()
+    current_entries == &incoming_entries.entries
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::pane::PaneEntrySnapshot;
+    use crate::fs::entries::RawFileEntry;
     use crate::fs::thumbnails;
     use std::path::Path;
 
@@ -227,7 +227,7 @@ mod tests {
         PreparedDirectoryEntries::new(
             entries
                 .into_iter()
-                .map(|(name, path)| PaneEntrySnapshot {
+                .map(|(name, path)| RawFileEntry {
                     name_width_units: crate::app::geometry::compact_text_width_units(name),
                     name: name.to_string(),
                     path: path.to_string(),
@@ -235,7 +235,7 @@ mod tests {
                     location: String::new(),
                     kind: "File".to_string(),
                     size: "1 KB".to_string(),
-                    size_bytes: 1024.0,
+                    size_bytes: 1024,
                     modified: "Today".to_string(),
                     modified_age_days: 0,
                     is_dir: false,

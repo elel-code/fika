@@ -1,9 +1,9 @@
-import { ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry } from "models.slint";
+import { ItemViewSlotEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
     in property <int> entry-count;
-    in property <[ItemViewPaintEntry]> paint;
+    in property <[ItemViewSlotEntry]> item-view-slots;
     in property <image> item-view-raster-layer;
     in property <float> item-view-raster-width: 1;
     in property <float> item-view-raster-height: 1;
@@ -17,8 +17,6 @@ export component SplitPaneView inherits Rectangle {
     in property <image> item-view-text-icon;
     in property <image> item-view-code-icon;
     in property <image> item-view-executable-icon;
-    in property <[ItemViewThumbnailEntry]> thumbnails;
-    in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
     in property <int> virtual-start-row;
     in-out property <float> viewport-x;
@@ -434,46 +432,63 @@ export component SplitPaneView inherits Rectangle {
                     source: root.item-view-raster-layer;
                 }
 
-                for paint[index] in root.paint: Image {
-                    visible: paint.thumbnail_state != 2;
-                    x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.media-x;
-                    y: root.preview-padding + paint.y * 1px + root.media-y;
+                for slot[index] in root.item-view-slots: Image {
+                    visible: slot.active && !slot.has_thumbnail;
+                    x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + root.media-x;
+                    y: root.preview-padding + slot.y * 1px + root.media-y;
                     width: root.media-width;
                     height: root.media-height;
-                    source: root.fallback-icon-source(paint.media_kind);
+                    source: root.fallback-icon-source(slot.media_kind);
                     image-fit: contain;
                 }
 
-                for thumbnail[index] in root.thumbnails: Image {
-                    x: root.preview-padding + thumbnail.x * 1px - root.paint-viewport-x * 1px + root.media-x;
-                    y: root.preview-padding + thumbnail.y * 1px + root.media-y;
+                for slot[index] in root.item-view-slots: Image {
+                    visible: slot.active && slot.has_thumbnail;
+                    x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + root.media-x;
+                    y: root.preview-padding + slot.y * 1px + root.media-y;
                     width: root.media-width;
                     height: root.media-height;
-                    source: thumbnail.media;
+                    source: slot.thumbnail;
                     image-fit: contain;
                 }
 
-                for paint[index] in root.paint: Text {
-                    x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.text-x;
-                    y: root.preview-padding + paint.y * 1px + root.title-y;
-                    width: max(1px, paint.text_width * 1px);
+                for slot[index] in root.item-view-slots: Text {
+                    visible: slot.active;
+                    x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + root.text-x;
+                    y: root.preview-padding + slot.y * 1px + root.title-y;
+                    width: max(1px, slot.text_width * 1px);
                     height: root.title-line-height;
-                    text: paint.name;
+                    text: slot.name;
                     color: root.title-color;
                     font-size: root.title-font-size;
                     horizontal-alignment: left;
                     vertical-alignment: center;
                 }
 
-                for metadata[index] in root.metadata: Text {
-                    x: root.preview-padding + metadata.item_x * 1px - root.paint-viewport-x * 1px + metadata.text_x * 1px;
-                    y: root.preview-padding + metadata.item_y * 1px + metadata.y * 1px;
-                    width: metadata.text_width * 1px;
-                    height: metadata.line_height * 1px;
-                    text: metadata.text;
-                    color: metadata.is_group ? root.metadata-group-color : root.metadata-location-color;
-                    font-size: metadata.font_size * 1px;
-                    font-weight: metadata.is_group ? 700 : 400;
+                for slot[index] in root.item-view-slots: Text {
+                    visible: slot.active && slot.has_metadata_group;
+                    x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + slot.metadata_text_x * 1px;
+                    y: root.preview-padding + slot.y * 1px + slot.metadata_group_y * 1px;
+                    width: slot.metadata_text_width * 1px;
+                    height: slot.metadata_line_height * 1px;
+                    text: slot.metadata_group;
+                    color: root.metadata-group-color;
+                    font-size: slot.metadata_font_size * 1px;
+                    font-weight: 700;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                for slot[index] in root.item-view-slots: Text {
+                    visible: slot.active && slot.has_metadata_location;
+                    x: root.preview-padding + slot.x * 1px - root.paint-viewport-x * 1px + slot.metadata_text_x * 1px;
+                    y: root.preview-padding + slot.y * 1px + slot.metadata_location_y * 1px;
+                    width: slot.metadata_text_width * 1px;
+                    height: slot.metadata_line_height * 1px;
+                    text: slot.metadata_location;
+                    color: root.metadata-location-color;
+                    font-size: slot.metadata_font_size * 1px;
+                    font-weight: 400;
                     overflow: elide;
                     vertical-alignment: center;
                 }

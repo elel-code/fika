@@ -10,8 +10,8 @@ use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry, PaneSlotData,
-    PaneSurfaceData, PaneViewData, set_status, sync_virtual_entries_for_slot,
+    AppWindow, ItemViewSlotEntry, PaneSlotData, PaneSurfaceData, PaneViewData, set_status,
+    sync_virtual_entries_for_slot,
 };
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -291,7 +291,7 @@ fn replace_pane_surfaces_model(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 fn pane_view_requires_surface_rebind(current: &PaneViewData, next: &PaneViewData) -> bool {
     (current.entry_count == 0) != (next.entry_count == 0)
-        || (current.paint.row_count() == 0) != (next.paint.row_count() == 0)
+        || (current.item_view_slots.row_count() == 0) != (next.item_view_slots.row_count() == 0)
 }
 
 fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
@@ -373,7 +373,7 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
 
     PaneViewData {
         slot,
-        paint: pane_slot_paint(slot, state),
+        item_view_slots: pane_slot_item_view_slots(slot, state),
         item_view_raster_layer,
         item_view_raster_width,
         item_view_raster_height,
@@ -387,8 +387,6 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         item_view_text_icon: item_view_fallback_icons.text,
         item_view_code_icon: item_view_fallback_icons.code,
         item_view_executable_icon: item_view_fallback_icons.executable,
-        thumbnails: pane_slot_thumbnails(slot, state),
-        metadata: pane_slot_metadata(slot, state),
         entry_count: item_view_metrics.entry_count,
         virtual_start_column: item_view_metrics.virtual_start_column,
         virtual_start_row: item_view_metrics.virtual_start_row,
@@ -462,9 +460,7 @@ fn pane_slot_tile_frame_raster(
     let Some(pane) = state.panes.pane_for_slot(slot) else {
         return (Image::default(), 1.0, 1.0);
     };
-    if pane.view.virtual_entry_tokens.is_empty()
-        || pane.view.virtual_bounds_entries.row_count() == 0
-    {
+    if pane.view.virtual_entry_tokens.is_empty() || pane.view.virtual_bounds_entries.is_empty() {
         return (Image::default(), 1.0, 1.0);
     }
 
@@ -497,7 +493,12 @@ fn pane_slot_fallback_icon_images(
     let Some(pane) = state.panes.pane_for_slot(slot) else {
         return ItemViewFallbackIconImages::default();
     };
-    if pane.view.virtual_paint_entries.row_count() == 0 {
+    if !pane
+        .view
+        .virtual_slot_entries
+        .iter()
+        .any(|slot| slot.active)
+    {
         return ItemViewFallbackIconImages::default();
     }
     pane.view.fallback_icon_images(
@@ -544,7 +545,7 @@ fn pane_slot_item_view_metrics(
                     .layout
                     .clone()
                     .unwrap_or_else(|| ItemViewLayoutEngine::empty_compact().into()),
-                pane.view.virtual_entries.row_count(),
+                pane.view.virtual_entries.len(),
                 pane.view.virtual_start_index,
             )
         })
@@ -606,27 +607,11 @@ fn pane_slot_can_go_forward(state: &AppState, slot: i32) -> bool {
         .is_some_and(|pane| pane.history.forward_len() > 0)
 }
 
-fn pane_slot_paint(slot: i32, state: &AppState) -> ModelRc<ItemViewPaintEntry> {
+fn pane_slot_item_view_slots(slot: i32, state: &AppState) -> ModelRc<ItemViewSlotEntry> {
     state
         .panes
         .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_paint_entries.clone())
-        .unwrap_or_default()
-}
-
-fn pane_slot_metadata(slot: i32, state: &AppState) -> ModelRc<ItemViewMetadataEntry> {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_metadata_entries.clone())
-        .unwrap_or_default()
-}
-
-fn pane_slot_thumbnails(slot: i32, state: &AppState) -> ModelRc<ItemViewThumbnailEntry> {
-    state
-        .panes
-        .pane_for_slot(slot)
-        .map(|pane| pane.view.virtual_thumbnail_entries.clone())
+        .map(|pane| pane.view.virtual_item_slots.clone())
         .unwrap_or_default()
 }
 
@@ -958,18 +943,29 @@ mod tests {
     fn pane_view(entry_count: i32, visible_rows: usize) -> PaneViewData {
         PaneViewData {
             slot: 0,
-            paint: if visible_rows == 0 {
+            item_view_slots: if visible_rows == 0 {
                 ModelRc::default()
             } else {
                 ModelRc::new(Rc::new(VecModel::from(
                     (0..visible_rows)
-                        .map(|index| ItemViewPaintEntry {
+                        .map(|index| ItemViewSlotEntry {
+                            active: true,
                             name: format!("item-{index}").into(),
-                            thumbnail_state: 0,
                             media_kind: 0,
+                            has_thumbnail: false,
+                            thumbnail: Image::default(),
+                            has_metadata_group: false,
+                            metadata_group: SharedString::new(),
+                            has_metadata_location: false,
+                            metadata_location: SharedString::new(),
+                            metadata_text_x: 0.0,
+                            metadata_text_width: 0.0,
+                            metadata_group_y: 0.0,
+                            metadata_location_y: 0.0,
+                            metadata_line_height: 0.0,
+                            metadata_font_size: 0.0,
                             x: index as f32 * 10.0,
                             y: 0.0,
-                            width: 80.0,
                             text_width: 64.0,
                         })
                         .collect::<Vec<_>>(),
@@ -988,8 +984,6 @@ mod tests {
             item_view_text_icon: Image::default(),
             item_view_code_icon: Image::default(),
             item_view_executable_icon: Image::default(),
-            thumbnails: ModelRc::default(),
-            metadata: ModelRc::default(),
             entry_count,
             virtual_start_column: 0,
             virtual_start_row: 0,

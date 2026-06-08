@@ -1,0 +1,327 @@
+# Scroll and Zoom Performance Plan
+
+## Scope
+
+用户体感问题集中在主文件视图的滚动和 zoom，不是目录刷新。当前 Dolphin-style slot reuse
+架构已经收尾，但还没有真实性能基线；本计划先建立可重复测量，再按数据处理热点。
+
+## Current Hot Paths
+
+### Scroll
+
+滚轮路径：
+
+```text
+SplitPaneView.handle-scroll()
+  -> pan-horizontal()
+  -> set-viewport-x(raw, smooth=true)
+  -> view_changed()
+  -> PaneViewSyncScheduler::request()
+  -> sync_pane_viewport_for_slot()
+  -> sync_virtual_entries_for_slot_with_count_and_cache_policy()
+```
+
+当前设计让 logical viewport 立即驱动 scrollbar、hit-test 和 visible slice；`paint-viewport-x`
+只负责平滑绘制偏移。即使当前 virtual slice 覆盖目标可见范围，Rust 仍会收到
+`view_changed()`，然后通过 cached viewport path 退出。
+
+### Zoom
+
+Ctrl+wheel / toolbar zoom 路径：
+
+```text
+SplitPaneView.handle-scroll(control=true)
+  -> zoom_in()/zoom_out()
+  -> AppWindow.icon_zoom_level changed
+  -> icon_zoom_layout_changed()
+  -> PaneLayoutSyncScheduler::set_icon_zoom_level_now()
+  -> apply_visible_pane_zoom_style_options()
+  -> apply_pane_zoom_style_option_for_slot()
+  -> sync_virtual_entries_for_slot_with_count(... schedule_thumbnails=false, immediate=true)
+  -> prepare_virtual_view_snapshot_update()
+  -> apply_virtual_view_result()
+  -> set_pane_virtual_entries()
+  -> sync_pane_view_ui()
+```
+
+thumbnail/preview role 调度已用 300ms `IconSizeUpdateScheduler` 合并，但 zoom 的 layout、
+slot geometry、fallback icon image、tile raster 和 Slint primitive 更新目前是每个 zoom
+level 同步执行。
+
+## Dolphin Source Notes
+
+对照源码来自本地 `/home/yk/Code/dolphin`，commit `2a72145eb`。这些点是本计划的边界：
+
+- `KItemListView::setScrollOffset()` 会 clamp 负 offset，offset 未变直接返回；offset 变化后同时
+  更新 layouter 和 animation，然后无条件同步 `doLayout(NoAnimation)`。源码注释明确说 scroll
+  offset 必须同步 layout，否则 smooth scrolling 会抖。
+  - `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:167`
+- `KItemListViewLayouter::setScrollOffset()` 只设置 `m_visibleIndexesDirty = true`；
+  `updateVisibleIndexes()` 用 row offsets 二分计算 first/last visible index。也就是说 Dolphin
+  scroll 是同步进入 layout，但 hot work 收敛到 visible-index 更新和 widget reuse，不是重建全模型。
+  - `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp:149`
+  - `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp:543`
+- `KItemListView::doLayout()` 在 scroll 时拿 first/last visible index，回收完全不可见的
+  `KItemListWidget`，对仍可见 widget 只更新 position/size/icon size。`KItemListViewLayouter::itemRect()`
+  在 horizontal orientation 下把逻辑垂直方向转置成物理横向滚动，并直接从 item rect 里减
+  `m_scrollOffset`。
+  - `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:1861`
+  - `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp:220`
+- `KItemListSmoothScroller::scrollContentsBy()` 动画的是目标对象的 `scrollOffset` property；
+  连续 wheel 会调整新的 animation start/end，scrollbar press/release 和 maximum 变化会影响动画状态。
+  Fika 的 `paint-viewport-x` 只是 Slint 适配层；Rust logical viewport 不能长期落后。
+  - `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistsmoothscroller.cpp:81`
+  - `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistsmoothscroller.cpp:160`
+- `KItemListSmoothScroller::requestScrollBarUpdate()` 在 animation running 且 maximum 未变时不更新
+  scrollbar；maximum 改变说明内容变化，会停止动画并立即更新。Fika 的 `scroll-max-x`、slice
+  geometry 或 relayout 变化也必须停止 smooth paint offset。
+  - `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistsmoothscroller.cpp:142`
+- `DolphinItemListView::setZoomLevel()` clamp level 后立即 `updateGridSize()`；
+  compact layout 的公式是 `itemWidth = padding * 4 + iconSize + fontMetrics.height() * 5`，
+  `itemHeight = padding * 2 + max(iconSize, textLines * lineSpacing)`，并用
+  `beginTransaction(); setStyleOption(option); setItemSize(...); endTransaction();` 合并成一次 layout。
+  - `/home/yk/Code/dolphin/src/views/dolphinitemlistview.cpp:34`
+  - `/home/yk/Code/dolphin/src/views/dolphinitemlistview.cpp:176`
+  - `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:665`
+- `KItemListView::setStyleOption()` 会更新所有 visible widgets 的 style、清 size-hint cache、
+  mark layouter dirty 并 layout；`setItemSize()` 会清 size-hint cache 并 layout。由于
+  Dolphin 用 transaction 包住 zoom 的 style + size 变更，最终只在 `endTransaction()` 做一次 layout。
+  - `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:874`
+  - `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:916`
+- `KFileItemModelRolesUpdater::setIconSize()` 在 preview shown 时清 finished items 并
+  `startUpdating()`；`startUpdating()` 先同步更新 visible icons，再按 `indexesToResolve()`
+  启动 preview job 或 0ms async role resolving。`indexesToResolve()` 顺序是可见文件、可见目录、
+  向后 read-ahead、向前 read-ahead、末页、首页，再补到 `ResolveAllItemsLimit`。
+  - `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp:142`
+  - `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp:181`
+  - `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp:887`
+  - `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp:1430`
+
+结论：Fika 的 scroll 和 zoom 都不能走长延迟。scroll 应对齐 Dolphin 的 synchronous
+scroll-offset boundary：logical viewport 立即进入 Rust，hot work 只更新 visible range、
+slot position 和必要的新入/离开 slots。zoom 应对齐 Dolphin 的 transaction boundary：
+style/layout 立即提交，但单次提交内只做 visible slice 必需工作；preview/thumbnail role
+更新继续独立合并和按 visible range 排序。
+
+## Concrete Source Mapping
+
+| Area | Dolphin source | Dolphin behavior | Fika source | Fika constraint / planned check |
+|------|----------------|------------------|-------------|----------------------------------|
+| Scroll input to offset | `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:167-185` | `setScrollOffset()` clamps, exits if unchanged, updates layouter + animation, then synchronously `doLayout(NoAnimation)` | `ui/split_pane.slint:111-121`, `src/main.rs:181-199`, `src/main.rs:5220-5246` | Keep logical viewport synchronous. Instrument no-op/clamped scroll, cached scroll, prepare scroll; do not move scroll layout to a timer. |
+| Scroll dirty state | `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp:149-154` | `setScrollOffset()` only changes `m_scrollOffset` and marks `m_visibleIndexesDirty` | `src/main.rs:4397-4430`, `src/main.rs:4518-4527` | Cached scroll should only update viewport state or focused `entry_count` if required; no raster/fallback icon/slot model work on cache hit. |
+| Visible range calculation | `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp:543-600` | `updateVisibleIndexes()` returns early if not dirty and uses row offsets binary search for first/last visible item | `src/main.rs:4206-4213`, `src/main.rs:4420-4422` | Measure `virtual_plan()` and cache-cover checks separately; if p95 is high, optimize visible range math before touching rendering. |
+| Horizontal compact projection | `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistviewlayouter.cpp:220-234` | horizontal orientation transposes logical vertical flow and subtracts `m_scrollOffset` in item rect | `ui/split_pane.slint:172-182`, `ui/split_pane.slint:428-484` | `paint-viewport-x` may animate visual offset, but Rust viewport and item hit-test coordinates must stay logical and current. |
+| Visible widget reuse | `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:1861-1922` | `doLayout()` uses first/last visible index, recycles invisible widgets, and creates only missing visible widgets | `src/app/model_update.rs:304-473`, `src/app/model_update.rs:494-523` | Slot allocator stats must report reused slots, inactive slots, extended slots and changed rows. Still-visible items must keep slot id on scroll. |
+| Smooth scroll animation | `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistsmoothscroller.cpp:81-128` | animation changes target `scrollOffset`; interrupted wheel adjusts start/end to avoid skipped range | `ui/split_pane.slint:109-130`, `ui/split_pane.slint:180-182` | Keep `paint-viewport-x` as visual-only adaptation. Do not let Rust logical viewport lag behind smooth paint animation. |
+| Scrollbar maximum changes | `/home/yk/Code/dolphin/src/kitemviews/private/kitemlistsmoothscroller.cpp:142-150` | if maximum changes during animation, content changed; stop animation and update immediately | `ui/split_pane.slint:231-265`, `ui/split_pane.slint:267-269` | `scroll-max-x`, rows-per-column, width, virtual slice geometry and relayout must stop smooth paint and commit current slice. |
+| Zoom level input | `/home/yk/Code/dolphin/src/views/dolphinitemlistview.cpp:34-66` | `setZoomLevel()` clamps level, exits if unchanged, updates icon/preview size, calls `updateGridSize()` immediately | `ui/split_pane.slint:189-198`, `ui/app.slint:1367-1369`, `src/main.rs:301-306` | Keep zoom layout immediate. Instrument repeated same-level zoom no-op and event count. |
+| Compact zoom geometry | `/home/yk/Code/dolphin/src/views/dolphinitemlistview.cpp:176-254` | compact item size uses padding/icon/font metrics; style option + item size are applied together | `src/app/item_view_metrics.rs:23-50`, `src/app/split_view.rs:432-450`, `src/main.rs:5157-5180` | Single zoom event should compute render/layout metrics once per visible pane and commit once. |
+| Zoom transaction | `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:665-684` | `beginTransaction()` suppresses intermediate layouts; `endTransaction()` runs one final `doLayout()` | `src/main.rs:5157-5180`, `src/main.rs:4175-4350`, `src/main.rs:4474-4625` | Phase 2 must verify one zoom event -> one `sync_virtual_entries_for_slot...` and one `sync_pane_view_ui()` per visible pane. |
+| Style/item size side effects | `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:874-912`, `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:916-953` | `setItemSize()` and `setStyleOption()` clear size-hint cache, update visible widgets, mark layouter dirty and layout | `src/app/split_view.rs:353-429`, `src/app/split_view.rs:453-505` | Zoom-side `PaneViewData` construction must be measured: metrics, raster, fallback icons and slot model separately. |
+| Icon-size roles update | `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp:142-153`, `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp:887-970` | icon size change clears finished previews, synchronously updates visible icons under timeout, then starts preview/role work | `src/main.rs:206-238`, `src/main.rs:5183-5217`, `src/app/file_item_roles_updater.rs:19-21`, `src/app/file_item_roles_updater.rs:37-49`, `src/app/file_item_roles_updater.rs:123-143` | Keep 300ms `IconSizeUpdateScheduler` limited to thumbnail/preview roles. It must not gate layout. |
+
+## Measurement First
+
+不要先猜。新增 `FIKA_PERF_ITEM_VIEW=1` 后输出结构化单行日志，并在 1s 窗口或退出时打印
+summary。所有日志必须可关闭，默认零成本或接近零成本。
+
+需要记录：
+
+- input: scroll event count、zoom event count、slot、zoom level、viewport-x、window width。
+- sync entry: `PaneViewSyncScheduler::request()` 次数、re-entrant skip 次数。
+- virtual sync: cached hit / prepare / deferred / stale result 次数，immediate vs async。
+- prepare: `prepare_virtual_view_snapshot_update()` 总耗时，拆分 layout/cache/snapshot/metadata。
+- apply: `apply_virtual_view_result()` 总耗时，拆分 entry projection、thumbnail decoration、
+  metadata projection、bounds generation、`set_pane_virtual_entries()`、`sync_pane_view_ui()`。
+- slot pool: active slot 数、patched rows、inactive rows、extended rows、thumbnail image reuse /
+  replace 次数、`set_row_data()` 次数。
+- raster: cache hit / miss、render time、raster width/height/pixels、revision bump reason。
+- fallback icons: cache hit / miss、rendered icon kind count、render time。
+- thumbnail flush: flush batch size、触发 `sync_virtual_entries_for_slot(... schedule=false)` 次数，
+  与 zoom pending 重叠次数。
+- Slint model writes: pane slot/view/surface row writes、item slot row writes、model extend/remove。
+
+输出示例：
+
+```text
+[fika perf] zoom slot=0 level=7 panes=1 prepare_ms=3.4 apply_ms=5.8 raster_ms=1.1 slot_rows=84 patched=84 icons=10 model_writes=87
+[fika perf] scroll slot=0 cached=true viewport=1840 range=72..168 sync_ms=0.18 model_writes=0
+```
+
+## Test Workloads
+
+1. `10k-flat`: `/tmp/fika-perf-10k`，10000 个普通文件，无 thumbnail。
+2. `mixed-icons`: 10000 个混合扩展名文件，覆盖 file/image/video/audio/archive/pdf/text/code/executable
+   fallback kind。
+3. `photos`: 500-2000 张图片，thumbnail cache 冷/热各跑一次。
+4. `recursive-search`: 500+ 带 group/location 的搜索结果，打开 show-location metadata。
+5. `split-view`: 左右 pane 都可见，分别测试 focused-only scroll 和全局 zoom。
+6. `end-boundary`: 大目录末尾快速滚动、快速 zoom，确认没有空白和重复重建。
+
+每个 workload 记录 debug build 和 release build。体感判断必须绑定日志：描述卡顿时同时给出
+对应的 p95、max 和热点 breakdown。
+
+## Phase 0: Instrumentation
+
+目标：一轮工作内拿到可信 baseline。
+
+- 增加 `src/app/item_view_perf.rs` 或等价模块，提供轻量 timer/counter。
+- 在 scroll 和 zoom 入口生成 event id，贯穿 Rust hot path。
+- 给 `model_update.rs` 的 slot allocator 返回统计，而不是只返回 bool。
+- 给 `PaneView::tile_frame_raster_layer()` 记录 cache hit/miss 和 render time。
+- 给 fallback icon cache 记录 miss 时实际渲染的 icon kind 数。
+- 给 thumbnail flush 记录是否发生在 icon-size timer pending 期间。
+- 增加结构测试，确保 perf 开关默认不打印、不改变 hot path 语义。
+
+验收：
+
+- `FIKA_PERF_ITEM_VIEW=1 target/debug/fika <dir>` 能输出 scroll/zoom breakdown。
+- 无开关时 `cargo test` 不依赖时间，也不产生 stderr 噪声。
+
+## Phase 1: Dolphin Scroll Offset Boundary
+
+假设：滚动卡顿不是因为同步进入 Rust 本身，而是 Fika 的 synchronous scroll path 做了超过
+Dolphin `setScrollOffset() + updateVisibleIndexes() + widget reuse` 边界的工作，例如完整
+`PaneViewData` 构造、raster/fallback icon 路径、slot row patch 或 Slint model write。
+
+方案：
+
+- 保留 logical viewport 同步进入 Rust，不把滚动 layout 延迟到 timer。
+- 仪表化 `sync_pane_viewport_for_slot()`，把 scroll 分成 Dolphin 对应的几类：
+  - offset unchanged / clamped no-op。
+  - current virtual slice covers visible window：只更新 viewport state，不构造 `PaneViewData`，不碰
+    raster/fallback icon/slot model。
+  - visible range changed but overlap 高：只复用/patch changed slots，仍可见 slots 保持 slot id。
+  - range jump / relayout / scroll-max changed：停止 smooth paint offset，完整提交当前 slice。
+- 审计 cached scroll path，确保命中缓存时不调用 `sync_pane_view_ui()`，不生成
+  `pane_slot_tile_frame_raster()`，不渲染 fallback icons。
+- 如果高频 cached scroll 的 FFI/state 开销仍是主因，再评估把 Slint 回调拆成
+  `viewport_changed(slot, viewport_x)` 和 `view_slice_changed(slot)`；这个拆分只能作为 no-op
+  fast path，不能让 Rust logical viewport 长期落后。
+- `scroll-max-x`、virtual slice 起点/宽度、rows-per-column 或 pane width 变化时必须调用
+  `stop-smooth-scroll()`，对齐 Dolphin maximum 改变时停止 animation 的处理。
+
+验收：
+
+- 当前 slice 覆盖范围内连续滚动时，`prepare_virtual_view_snapshot_update()` 次数为 0，
+  `sync_pane_view_ui()` 次数为 0，raster/icon cache miss 为 0。
+- visible range 只滑动一列时，仍可见 item 保持 slot id，只 patch 新入/离开和必要坐标 slots。
+- cached scroll p95 明显低于 baseline，且 hit-test、选择框、右键命中坐标不回归。
+
+## Phase 2: Dolphin Zoom Transaction Boundary
+
+假设：zoom 卡顿主要来自 Fika 在一次 zoom level 变更中做了超过 Dolphin transaction boundary
+需要的工作，例如重复 view sync、重复 raster/icon cache miss、thumbnail flush 插入、或 split
+view 两个 pane 同帧全量提交。
+
+方案：
+
+- 对齐 Dolphin `beginTransaction()/endTransaction()`：一次 zoom 只允许一次 visible layout commit。
+- 审计 `icon_zoom_layout_changed()` 到 `sync_pane_view_ui()`，确认没有在同一 zoom event 中重复
+  `sync_virtual_entries_for_slot_with_count()` 或重复完整 `PaneViewData` 构造。
+- 保留 zoom layout 立即提交；不能把 layout 延迟到 300ms thumbnail timer。
+- 如果连续 Ctrl+wheel 仍在一帧内产生多次 layout 且 perf breakdown 证明它是主因，再评估
+  0ms event-loop post 或 8-16ms single-shot latest-only `ZoomLayoutScheduler`。该 scheduler
+  只能合并同一帧内的 latest zoom，不能引入可感知延迟。
+- split view 下先测 focused pane 和 inactive pane 各自成本；只有 inactive pane 明确超预算时，
+  才考虑把 inactive pane 的 zoom commit 延到下一帧。
+- 300ms `IconSizeUpdateScheduler` 继续只负责 thumbnail/preview roles，不提前调度。
+
+验收：
+
+- 单次 zoom event 中每个 visible pane 最多一次 layout commit 和一次 `sync_pane_view_ui()`。
+- 单次 zoom 立即可见；不能恢复旧的长延迟空白。
+- 连续 Ctrl+wheel 的 latest-only 合并只有在 baseline 证明需要时才启用，且 focused pane p95
+  优于 baseline。
+
+## Phase 3: Zoom Raster and Fallback Icon Cost
+
+假设：zoom 每档都会改变 raster/input signature 和 fallback icon size，导致 tile raster miss 和一次性
+渲染 10 种 fallback icon。
+
+方案：
+
+- fallback icon cache 从 single-entry 改为小 LRU，key 为 `(width, height, dark, kind)` 或
+  `(width, height, dark)` 多签名。
+- 只渲染当前 active slots 实际使用的 media kinds；普通目录通常不需要一次渲染 10 种 icon。
+- zoom 正在连续输入时，评估使用 `PaneView::set_raster_updates_deferred(true)` 复用上一张 selection/drop
+  raster；zoom idle 后重建最终 raster。
+- raster defer 只能影响 selection/drop base layer，不能影响 title/fallback/thumbnail 的最终位置。
+
+验收：
+
+- zoom 期间 fallback icon miss 的 render kind count 从固定 10 降为实际使用 kind 数。
+- raster render time 在连续 zoom 中不再成为 p95 主因，且选中背景/drop target 不出现长期错位。
+
+## Phase 4: Slot Patch and Projection Cost
+
+假设：zoom 时 visible item 内容没变，但 geometry 变了，导致所有 active slots `set_row_data()`；
+同时 Rust 侧存在重复 token/projection 构造成本。
+
+候选改动：
+
+- `update_pane_item_view_entries_model()` 只构造一次 `ItemViewRowToken`，同时用于 raster token
+  diff 和最终 `view.virtual_entry_tokens`。
+- 记录 `bounds_changed` 的原因，避免在可证明 range/layout 未变时做整 Vec bounds 比较。
+- 如果 `set_row_data()` 成为 zoom 主成本，评估把 slot row 拆成 content row + geometry row，或把
+  zoom 派生几何进一步移到 pane-level 公式，只保留真正 per-item 的 `x/text_width`。
+- 不为了理论清晰引入复杂拆分；只有 perf breakdown 证明 Slint row patch 是主因才执行。
+
+验收：
+
+- slot allocator 日志能区分 content patch、geometry-only patch、thumbnail patch。
+- zoom geometry-only patch p95 低于 baseline；thumbnail image 不因 zoom 重复替换。
+
+## Phase 5: Thumbnail Isolation During Zoom
+
+假设：图片目录 zoom 卡顿可能来自 thumbnail flush 与 zoom layout 同时发生，flush 又触发
+`sync_virtual_entries_for_slot(... schedule=false)`。
+
+方案：
+
+- icon-size timer pending 或 zoom layout pending 时，thumbnail results 先写 Rust cache/pending state，
+  UI slot patch 延后到当前 zoom frame 结束。
+- flush scheduler 仍保留 16ms batch，但需要记录被 zoom gate 合并的数量。
+- zoom idle 后按 latest visible slice patch thumbnails；离屏结果只进 cache，不触发 view sync。
+
+验收：
+
+- `photos` workload 中连续 zoom 时 thumbnail flush 不再插入额外 visible sync。
+- zoom 停止后 thumbnail 能在下一批 flush 正常出现。
+
+## Phase 6: Verification and Closeout
+
+每个 phase 完成后更新本文档的结果表：
+
+| Workload | Baseline p95 | After p95 | Max | Main Hotspot Before | Main Hotspot After |
+|----------|--------------|-----------|-----|---------------------|--------------------|
+| 10k-flat scroll | TBD | TBD | TBD | TBD | TBD |
+| 10k-flat zoom | TBD | TBD | TBD | TBD | TBD |
+| mixed-icons zoom | TBD | TBD | TBD | TBD | TBD |
+| photos zoom cold | TBD | TBD | TBD | TBD | TBD |
+| split-view zoom | TBD | TBD | TBD | TBD | TBD |
+
+必须跑：
+
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test app::model_update`
+- `cargo test app::geometry`
+- 全量 `cargo test`
+- 至少一次 release build 手工滚动/zoom smoke test
+
+## Risks
+
+- 过度 coalesce zoom 会让 UI 变得迟钝；frame-level latest-only 可以接受，300ms layout 延迟不可接受。
+- scroll callback split 不能让 Rust viewport 状态长期滞后，否则 hit-test、selection rectangle、context menu
+  会错位。
+- raster defer 只能作为连续 zoom 的短暂策略；最终 raster 必须按最新 revision 重建。
+- fallback icon LRU 不能无界增长，zoom level 0..16、dark/light 和 media kind 已足够限制 key 空间。
+- 如果 Slint `Text` primitive 本身是 zoom p95 主因，文字 raster 只能作为实测后的独立实验，不纳入
+  默认路径。
+
+## Non-goals
+
+- 不重做 Details/Icons layout。
+- 不恢复旧 Slint-facing item/bounds/thumbnail model。
+- 不用主观体感替代 baseline；性能结论必须能从日志或 profiler 复现。

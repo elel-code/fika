@@ -1,30 +1,33 @@
-use crate::app::geometry::{
-    ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter, compact_text_width_units,
-};
+#[cfg(test)]
+use crate::FileEntry;
+#[cfg(test)]
+use crate::app::geometry::compact_text_width_units;
+use crate::app::geometry::{ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter};
 use crate::app::item_view::ItemViewInputState;
-use crate::app::item_view_model::ItemViewModelEntry;
+use crate::app::item_view_model::{
+    ItemViewModelEntry, ItemViewModelEntryArc, item_view_model_entries_equal,
+};
 #[cfg(test)]
 use crate::app::item_view_renderer::ItemViewMediaSource;
 use crate::app::item_view_renderer::{
     ITEM_VIEW_MEDIA_KIND_ARCHIVE, ITEM_VIEW_MEDIA_KIND_AUDIO, ITEM_VIEW_MEDIA_KIND_CODE,
     ITEM_VIEW_MEDIA_KIND_EXECUTABLE, ITEM_VIEW_MEDIA_KIND_FILE, ITEM_VIEW_MEDIA_KIND_FOLDER,
     ITEM_VIEW_MEDIA_KIND_IMAGE, ITEM_VIEW_MEDIA_KIND_PDF, ITEM_VIEW_MEDIA_KIND_TEXT,
-    ITEM_VIEW_MEDIA_KIND_VIDEO, ItemViewMediaToken, ItemViewRenderMetrics, ItemViewTileFrameBatch,
+    ITEM_VIEW_MEDIA_KIND_VIDEO, ItemViewRenderMetrics, ItemViewTileFrameBatch,
     ItemViewTileFrameRaster, ItemViewTileFrameRasterInput, render_fallback_media_icon,
 };
-use crate::app::model_update::ItemViewRowToken;
+use crate::app::model_update::{ItemViewRowToken, ItemViewSlotKey, ItemViewSlotToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
+#[cfg(test)]
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
-use crate::{
-    FileEntry, ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry,
-};
+use crate::{ItemViewEntry, ItemViewSlotEntry};
 use slint::{Image, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::ops::Deref;
-use std::ops::Range;
+use std::fmt;
+use std::ops::{Index, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -85,18 +88,15 @@ impl PaneState {
         pane.search = self.search.clone();
         pane.view.viewport_x = self.view.viewport_x;
         pane.view.virtual_view = self.view.virtual_view.clone();
-        pane.view.virtual_entries = clone_item_view_entries_model(&self.view.virtual_entries);
-        pane.view.virtual_bounds_entries =
-            clone_item_view_bounds_model(&self.view.virtual_bounds_entries);
-        pane.view.virtual_paint_entries =
-            clone_item_view_paint_model(&self.view.virtual_paint_entries);
+        pane.view.virtual_entries = self.view.virtual_entries.clone();
+        pane.view.virtual_bounds_entries = self.view.virtual_bounds_entries.clone();
+        pane.view.virtual_item_slots = clone_item_view_slot_model(&self.view.virtual_item_slots);
+        pane.view.virtual_slot_entries = self.view.virtual_slot_entries.clone();
+        pane.view.virtual_slot_tokens =
+            clone_item_view_slot_tokens_without_selection(&self.view.virtual_slot_tokens);
+        pane.view.virtual_slot_keys = self.view.virtual_slot_keys.clone();
         pane.view.virtual_entry_tokens =
             clone_item_view_row_tokens_without_selection(&self.view.virtual_entry_tokens);
-        pane.view.virtual_thumbnail_entries =
-            clone_item_view_thumbnail_model(&self.view.virtual_thumbnail_entries);
-        pane.view.virtual_media_tokens = self.view.virtual_media_tokens.clone();
-        pane.view.virtual_metadata_entries =
-            clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
         pane.view.virtual_start_index = self.view.virtual_start_index;
         pane.view.raster_updates_deferred = self.view.raster_updates_deferred;
         pane
@@ -124,13 +124,13 @@ impl PaneState {
         self.search.visible_entry_indices = None;
         self.search.visible_entries_have_locations = false;
         self.search.visible_location_groups = None;
-        self.view.virtual_entries = ModelRc::default();
-        self.view.virtual_bounds_entries = ModelRc::default();
-        self.view.virtual_paint_entries = ModelRc::default();
+        self.view.virtual_entries.clear();
+        self.view.virtual_bounds_entries.clear();
+        self.view.virtual_item_slots = ModelRc::default();
+        self.view.virtual_slot_entries.clear();
+        self.view.virtual_slot_tokens.clear();
+        self.view.virtual_slot_keys.clear();
         self.view.virtual_entry_tokens.clear();
-        self.view.virtual_thumbnail_entries = ModelRc::default();
-        self.view.virtual_media_tokens.clear();
-        self.view.virtual_metadata_entries = ModelRc::default();
         self.view.drop_target_slice_index = None;
         self.view.clear_raster_cache();
         self.view.virtual_start_index = 0;
@@ -152,63 +152,11 @@ impl PaneState {
 
     #[cfg(test)]
     pub(crate) fn set_file_entries(&mut self, entries: Vec<FileEntry>) {
-        self.set_entries(
-            entries
-                .iter()
-                .map(PaneEntrySnapshot::from_entry)
-                .collect::<Vec<_>>()
-                .into(),
-        );
+        self.set_entries(PaneEntryModel::from_entries(entries));
     }
 }
 
-fn clone_item_view_entries_model(model: &ModelRc<ItemViewEntry>) -> ModelRc<ItemViewEntry> {
-    let entries = (0..model.row_count())
-        .filter_map(|row| model.row_data(row))
-        .collect::<Vec<_>>();
-    ModelRc::new(Rc::new(VecModel::from(entries)))
-}
-
-fn clone_item_view_bounds_model(
-    model: &ModelRc<ItemViewItemBounds>,
-) -> ModelRc<ItemViewItemBounds> {
-    let entries = (0..model.row_count())
-        .filter_map(|row| model.row_data(row))
-        .collect::<Vec<_>>();
-    if entries.is_empty() {
-        ModelRc::default()
-    } else {
-        ModelRc::new(Rc::new(VecModel::from(entries)))
-    }
-}
-
-fn clone_item_view_paint_model(model: &ModelRc<ItemViewPaintEntry>) -> ModelRc<ItemViewPaintEntry> {
-    let entries = (0..model.row_count())
-        .filter_map(|row| model.row_data(row))
-        .collect::<Vec<_>>();
-    if entries.is_empty() {
-        ModelRc::default()
-    } else {
-        ModelRc::new(Rc::new(VecModel::from(entries)))
-    }
-}
-
-fn clone_item_view_metadata_model(
-    model: &ModelRc<ItemViewMetadataEntry>,
-) -> ModelRc<ItemViewMetadataEntry> {
-    let entries = (0..model.row_count())
-        .filter_map(|row| model.row_data(row))
-        .collect::<Vec<_>>();
-    if entries.is_empty() {
-        ModelRc::default()
-    } else {
-        ModelRc::new(Rc::new(VecModel::from(entries)))
-    }
-}
-
-fn clone_item_view_thumbnail_model(
-    model: &ModelRc<ItemViewThumbnailEntry>,
-) -> ModelRc<ItemViewThumbnailEntry> {
+fn clone_item_view_slot_model(model: &ModelRc<ItemViewSlotEntry>) -> ModelRc<ItemViewSlotEntry> {
     let entries = (0..model.row_count())
         .filter_map(|row| model.row_data(row))
         .collect::<Vec<_>>();
@@ -232,82 +180,101 @@ fn clone_item_view_row_tokens_without_selection(
         .collect()
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PaneEntrySnapshot {
-    pub(crate) name: String,
-    pub(crate) name_width_units: f32,
-    pub(crate) path: String,
-    pub(crate) group: String,
-    pub(crate) location: String,
-    pub(crate) kind: String,
-    pub(crate) size: String,
-    pub(crate) size_bytes: f32,
-    pub(crate) modified: String,
-    pub(crate) modified_age_days: i32,
-    pub(crate) is_dir: bool,
+fn clone_item_view_slot_tokens_without_selection(
+    tokens: &[ItemViewSlotToken],
+) -> Vec<ItemViewSlotToken> {
+    tokens.to_vec()
 }
 
-impl PaneEntrySnapshot {
-    #[cfg(test)]
-    pub(crate) fn from_entry(entry: &FileEntry) -> Self {
-        Self::from_model(entry)
-    }
-
-    pub(crate) fn from_model(entry: &impl ItemViewModelEntry) -> Self {
-        Self {
-            name_width_units: entry.model_name_width_units(),
-            name: entry.model_name().to_string(),
-            path: entry.model_path().to_string(),
-            group: entry.model_group().to_string(),
-            location: entry.model_location().to_string(),
-            kind: entry.model_kind().to_string(),
-            size: entry.model_size().to_string(),
-            size_bytes: entry.model_size_bytes(),
-            modified: entry.model_modified().to_string(),
-            modified_age_days: entry.model_modified_age_days(),
-            is_dir: entry.model_is_dir(),
-        }
-    }
-
-    pub(crate) fn from_raw(entry: RawFileEntry) -> Self {
-        Self::from_model(&entry)
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Default)]
 pub(crate) struct PaneEntryModel {
-    entries: Arc<[PaneEntrySnapshot]>,
+    entries: Arc<[ItemViewModelEntryArc]>,
 }
 
 impl PaneEntryModel {
-    pub(crate) fn new(entries: Vec<PaneEntrySnapshot>) -> Self {
+    pub(crate) fn new(entries: Vec<ItemViewModelEntryArc>) -> Self {
         Self {
             entries: Arc::from(entries),
         }
     }
 
-    pub(crate) fn as_slice(&self) -> &[PaneEntrySnapshot] {
-        self.entries.as_ref()
+    pub(crate) fn from_entries<T>(entries: impl IntoIterator<Item = T>) -> Self
+    where
+        T: ItemViewModelEntry + Send + Sync + 'static,
+    {
+        Self::new(
+            entries
+                .into_iter()
+                .map(|entry| Arc::new(entry) as ItemViewModelEntryArc)
+                .collect(),
+        )
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &dyn ItemViewModelEntry> + '_ {
+        self.entries
+            .iter()
+            .map(|entry| entry.as_ref() as &dyn ItemViewModelEntry)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&dyn ItemViewModelEntry> {
+        self.entries
+            .get(index)
+            .map(|entry| entry.as_ref() as &dyn ItemViewModelEntry)
+    }
+
+    pub(crate) fn entry_arc(&self, index: usize) -> Option<ItemViewModelEntryArc> {
+        self.entries.get(index).cloned()
+    }
+
+    pub(crate) fn entry_arcs_range(
+        &self,
+        range: Range<usize>,
+    ) -> impl Iterator<Item = ItemViewModelEntryArc> + '_ {
+        let start = range.start.min(self.entries.len());
+        let end = range.end.min(self.entries.len());
+        self.entries[start..end].iter().cloned()
     }
 }
 
-impl From<Vec<PaneEntrySnapshot>> for PaneEntryModel {
-    fn from(entries: Vec<PaneEntrySnapshot>) -> Self {
+impl From<Vec<ItemViewModelEntryArc>> for PaneEntryModel {
+    fn from(entries: Vec<ItemViewModelEntryArc>) -> Self {
         Self::new(entries)
     }
 }
 
-impl Deref for PaneEntryModel {
-    type Target = [PaneEntrySnapshot];
+impl Index<usize> for PaneEntryModel {
+    type Output = dyn ItemViewModelEntry + Send + Sync;
 
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
+    fn index(&self, index: usize) -> &Self::Output {
+        self.entries[index].as_ref()
     }
 }
 
-impl AsRef<[PaneEntrySnapshot]> for PaneEntryModel {
-    fn as_ref(&self) -> &[PaneEntrySnapshot] {
-        self.as_slice()
+impl fmt::Debug for PaneEntryModel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PaneEntryModel")
+            .field("len", &self.entries.len())
+            .finish()
+    }
+}
+
+impl PartialEq for PaneEntryModel {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries.len() == other.entries.len()
+            && self
+                .iter()
+                .zip(other.iter())
+                .all(|(left, right)| item_view_model_entries_equal(left, right))
     }
 }
 
@@ -318,21 +285,15 @@ pub(crate) struct PreparedDirectoryEntries {
 }
 
 impl PreparedDirectoryEntries {
-    pub(crate) fn new(entries: Vec<PaneEntrySnapshot>) -> Self {
+    pub(crate) fn new<T>(entries: Vec<T>) -> Self
+    where
+        T: ItemViewModelEntry + Send + Sync + 'static,
+    {
         let has_locations = entries.iter().any(ItemViewModelEntry::model_has_location);
         Self {
-            entries: entries.into(),
+            entries: PaneEntryModel::from_entries(entries),
             has_locations,
         }
-    }
-
-    pub(crate) fn from_raw_entries(entries: Vec<RawFileEntry>) -> Self {
-        Self::new(
-            entries
-                .into_iter()
-                .map(PaneEntrySnapshot::from_raw)
-                .collect(),
-        )
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -576,13 +537,13 @@ pub(crate) struct PaneView {
     pub(crate) input: ItemViewInputState,
     pub(crate) virtual_view: VirtualViewCache,
     pub(crate) virtual_generation: GenerationCounter,
-    pub(crate) virtual_entries: ModelRc<ItemViewEntry>,
-    pub(crate) virtual_bounds_entries: ModelRc<ItemViewItemBounds>,
-    pub(crate) virtual_paint_entries: ModelRc<ItemViewPaintEntry>,
+    pub(crate) virtual_entries: Vec<ItemViewEntry>,
+    pub(crate) virtual_bounds_entries: Vec<ItemViewItemBounds>,
+    pub(crate) virtual_item_slots: ModelRc<ItemViewSlotEntry>,
+    pub(crate) virtual_slot_entries: Vec<ItemViewSlotEntry>,
+    pub(crate) virtual_slot_tokens: Vec<ItemViewSlotToken>,
+    pub(crate) virtual_slot_keys: HashMap<ItemViewSlotKey, usize>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
-    pub(crate) virtual_thumbnail_entries: ModelRc<ItemViewThumbnailEntry>,
-    pub(crate) virtual_media_tokens: Vec<ItemViewMediaToken>,
-    pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     pub(crate) virtual_start_index: usize,
     raster_updates_deferred: bool,
     drop_target_slice_index: Option<usize>,
@@ -744,10 +705,9 @@ impl PaneView {
         if let Some(raster) = self.cached_raster(&signature) {
             return raster;
         }
-        let bounds_entries = self.current_virtual_bounds_entries();
         let raster = ItemViewTileFrameBatch::from_bounded_entries(
             &self.virtual_entry_tokens,
-            &bounds_entries,
+            &self.virtual_bounds_entries,
         )
         .render_raster_layer(input);
         self.store_raster_cache(signature, raster.clone());
@@ -847,7 +807,7 @@ impl PaneView {
     pub(crate) fn set_drop_target_slice_index(&mut self, slice_index: i32) -> bool {
         let next = usize::try_from(slice_index)
             .ok()
-            .filter(|index| *index < self.virtual_entries.row_count());
+            .filter(|index| *index < self.virtual_entries.len());
         if self.drop_target_slice_index == next {
             return false;
         }
@@ -921,14 +881,8 @@ impl PaneView {
         self.raster_revision
     }
 
-    fn current_virtual_bounds_entries(&self) -> Vec<ItemViewItemBounds> {
-        (0..self.virtual_bounds_entries.row_count())
-            .filter_map(|row| self.virtual_bounds_entries.row_data(row))
-            .collect()
-    }
-
     pub(crate) fn has_renderable_virtual_entries(&self) -> bool {
-        let row_count = self.virtual_entries.row_count();
+        let row_count = self.virtual_entries.len();
         if row_count == 0 {
             return self.virtual_view.range.is_empty() && self.virtual_entry_tokens.is_empty();
         }
@@ -1191,7 +1145,7 @@ mod tests {
                 force_rebuild_model: false,
                 visible_count_override: None,
                 cache: VirtualViewCache::default(),
-                entries: PaneEntryModel::from(vec![PaneEntrySnapshot {
+                entries: PaneEntryModel::from_entries(vec![RawFileEntry {
                     name_width_units: compact_text_width_units("item.txt"),
                     name: "item.txt".to_string(),
                     path: "/tmp/item.txt".to_string(),
@@ -1199,7 +1153,7 @@ mod tests {
                     location: String::new(),
                     kind: "File".to_string(),
                     size: "1 KB".to_string(),
-                    size_bytes: 1024.0,
+                    size_bytes: 1024,
                     modified: "Today".to_string(),
                     modified_age_days: 0,
                     is_dir: false,
@@ -1727,7 +1681,7 @@ mod tests {
             inactive
                 .entries
                 .iter()
-                .map(|entry| (entry.name.as_str(), entry.path.as_str()))
+                .map(|entry| (entry.model_name(), entry.model_path()))
                 .collect::<Vec<_>>(),
             vec![
                 ("one.txt", "/tmp/active/one.txt"),
@@ -1750,7 +1704,7 @@ mod tests {
         assert_eq!(inactive_metrics.row_height, 90.0);
         assert_eq!(inactive.view.virtual_view.thumbnail_size_px, 80);
         assert_eq!(inactive.view.virtual_start_index, 4);
-        assert_eq!(inactive.view.virtual_entries.row_count(), 2);
+        assert_eq!(inactive.view.virtual_entries.len(), 2);
         assert_eq!(inactive.view.virtual_entry_tokens.len(), 2);
         assert!(
             inactive
@@ -1763,7 +1717,7 @@ mod tests {
             inactive
                 .view
                 .virtual_entries
-                .row_data(0)
+                .first()
                 .expect("inactive row")
                 .name
                 .as_str(),
@@ -1774,25 +1728,20 @@ mod tests {
         assert_eq!(inactive.history.back_len(), 0);
         assert_eq!(inactive.history.forward_len(), 0);
 
-        let mut focused_row = panes
-            .focused()
-            .view
-            .virtual_entries
-            .row_data(0)
-            .expect("focused row");
-        focused_row.name = "changed.txt".into();
         panes
-            .focused()
+            .focused_mut()
             .view
             .virtual_entries
-            .set_row_data(0, focused_row);
+            .first_mut()
+            .expect("focused row")
+            .name = "changed.txt".into();
         assert_eq!(
             panes
                 .pane_for_slot(1)
                 .expect("inactive pane")
                 .view
                 .virtual_entries
-                .row_data(0)
+                .first()
                 .expect("inactive row")
                 .name
                 .as_str(),
@@ -1866,8 +1815,6 @@ mod tests {
             vec![ItemViewMediaSource {
                 slice_index: 0,
                 media: Image::default(),
-                x: 0.0,
-                y: 0.0,
             }],
             Vec::new(),
             &[],
@@ -1879,15 +1826,14 @@ mod tests {
         assert!(pane.view.virtual_view.range.is_empty());
         assert!(pane.view.virtual_view.layout.is_none());
         assert_eq!(pane.view.virtual_view.thumbnail_size_px, 0);
-        assert_eq!(pane.view.virtual_entries.row_count(), 0);
-        assert_eq!(pane.view.virtual_paint_entries.row_count(), 0);
-        assert_eq!(pane.view.virtual_thumbnail_entries.row_count(), 0);
-        assert!(pane.view.virtual_media_tokens.is_empty());
+        assert_eq!(pane.view.virtual_entries.len(), 0);
+        assert_eq!(pane.view.virtual_item_slots.row_count(), 0);
+        assert!(pane.view.virtual_slot_entries.is_empty());
     }
 
     #[test]
     fn pane_view_tile_raster_cache_uses_revision_signature_and_invalidates_on_view_clear() {
-        let snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
+        let snapshot = test_entry("one.txt", "/tmp/one.txt");
         let mut view = PaneView::default();
         let initial_revision = view.raster_revision;
         update_pane_item_view_entries_model(
@@ -1945,7 +1891,7 @@ mod tests {
 
     #[test]
     fn pane_view_can_defer_raster_rebuilds_during_icon_size_updates() {
-        let snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
+        let snapshot = test_entry("one.txt", "/tmp/one.txt");
         let mut view = PaneView::default();
         update_pane_item_view_entries_model(
             &mut view,
@@ -2063,8 +2009,8 @@ mod tests {
 
     #[test]
     fn pane_view_rejects_cached_rows_without_renderable_names() {
-        let mut snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
-        snapshot.name = String::new();
+        let mut snapshot = test_entry("one.txt", "/tmp/one.txt");
+        snapshot.name = String::new().into();
         let mut view = PaneView {
             virtual_view: cache_for_layout(0..1, 1, 64),
             ..PaneView::default()

@@ -1,7 +1,7 @@
 use crate::app::item_view_renderer::ItemViewMetadataSource;
-use crate::app::pane::PaneEntrySnapshot;
 use crate::fs::entries::RawFileEntry;
 use crate::{FileEntry, ItemViewEntry};
+use std::sync::Arc;
 
 pub(crate) trait ItemViewModelEntry {
     fn model_name(&self) -> &str;
@@ -52,6 +52,83 @@ pub(crate) trait ItemViewModelEntry {
     fn model_metadata_source(&self) -> ItemViewMetadataSource {
         ItemViewMetadataSource::new(self.model_group(), self.model_location())
     }
+}
+
+pub(crate) type ItemViewModelEntryArc = Arc<dyn ItemViewModelEntry + Send + Sync>;
+
+pub(crate) fn item_view_model_entry_with_group(
+    entry: ItemViewModelEntryArc,
+    group: String,
+) -> ItemViewModelEntryArc {
+    Arc::new(ItemViewModelEntryGroupOverride { entry, group })
+}
+
+struct ItemViewModelEntryGroupOverride {
+    entry: ItemViewModelEntryArc,
+    group: String,
+}
+
+impl ItemViewModelEntry for ItemViewModelEntryGroupOverride {
+    fn model_name(&self) -> &str {
+        self.entry.model_name()
+    }
+
+    fn model_path(&self) -> &str {
+        self.entry.model_path()
+    }
+
+    fn model_group(&self) -> &str {
+        self.group.as_str()
+    }
+
+    fn model_location(&self) -> &str {
+        self.entry.model_location()
+    }
+
+    fn model_kind(&self) -> &str {
+        self.entry.model_kind()
+    }
+
+    fn model_size(&self) -> &str {
+        self.entry.model_size()
+    }
+
+    fn model_is_dir(&self) -> bool {
+        self.entry.model_is_dir()
+    }
+
+    fn model_size_bytes(&self) -> f32 {
+        self.entry.model_size_bytes()
+    }
+
+    fn model_modified(&self) -> &str {
+        self.entry.model_modified()
+    }
+
+    fn model_modified_age_days(&self) -> i32 {
+        self.entry.model_modified_age_days()
+    }
+
+    fn model_name_width_units(&self) -> f32 {
+        self.entry.model_name_width_units()
+    }
+}
+
+pub(crate) fn item_view_model_entries_equal(
+    left: &(impl ItemViewModelEntry + ?Sized),
+    right: &(impl ItemViewModelEntry + ?Sized),
+) -> bool {
+    left.model_name() == right.model_name()
+        && left.model_path() == right.model_path()
+        && left.model_group() == right.model_group()
+        && left.model_location() == right.model_location()
+        && left.model_kind() == right.model_kind()
+        && left.model_size() == right.model_size()
+        && left.model_is_dir() == right.model_is_dir()
+        && left.model_size_bytes() == right.model_size_bytes()
+        && left.model_modified() == right.model_modified()
+        && left.model_modified_age_days() == right.model_modified_age_days()
+        && left.model_name_width_units() == right.model_name_width_units()
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -154,49 +231,52 @@ where
     }
 }
 
-impl ItemViewModelEntry for PaneEntrySnapshot {
+impl<T> ItemViewModelEntry for Arc<T>
+where
+    T: ItemViewModelEntry + ?Sized,
+{
     fn model_name(&self) -> &str {
-        self.name.as_str()
+        (**self).model_name()
     }
 
     fn model_path(&self) -> &str {
-        self.path.as_str()
+        (**self).model_path()
     }
 
     fn model_group(&self) -> &str {
-        self.group.as_str()
+        (**self).model_group()
     }
 
     fn model_location(&self) -> &str {
-        self.location.as_str()
+        (**self).model_location()
     }
 
     fn model_kind(&self) -> &str {
-        self.kind.as_str()
+        (**self).model_kind()
     }
 
     fn model_size(&self) -> &str {
-        self.size.as_str()
+        (**self).model_size()
     }
 
     fn model_is_dir(&self) -> bool {
-        self.is_dir
+        (**self).model_is_dir()
     }
 
     fn model_size_bytes(&self) -> f32 {
-        self.size_bytes
+        (**self).model_size_bytes()
     }
 
     fn model_modified(&self) -> &str {
-        self.modified.as_str()
+        (**self).model_modified()
     }
 
     fn model_modified_age_days(&self) -> i32 {
-        self.modified_age_days
+        (**self).model_modified_age_days()
     }
 
     fn model_name_width_units(&self) -> f32 {
-        self.name_width_units
+        (**self).model_name_width_units()
     }
 }
 
@@ -288,7 +368,7 @@ impl ItemViewModelEntry for RawFileEntry {
     }
 
     fn model_name_width_units(&self) -> f32 {
-        crate::app::geometry::compact_text_width_units(self.name.as_str())
+        self.name_width_units
     }
 }
 
@@ -436,6 +516,7 @@ fn item_view_glob_matches_bytes(pattern: &[u8], text: &[u8]) -> bool {
 mod tests {
     use super::*;
     use slint::SharedString;
+    use std::sync::Arc;
 
     fn file_entry(name: &str, path: &str, is_dir: bool) -> FileEntry {
         FileEntry {
@@ -455,6 +536,7 @@ mod tests {
     fn raw_entry(name: &str, path: &str, location: &str) -> RawFileEntry {
         RawFileEntry {
             name: name.to_string(),
+            name_width_units: crate::app::geometry::compact_text_width_units(name),
             path: path.to_string(),
             group: "Current folder".to_string(),
             location: location.to_string(),
@@ -470,23 +552,26 @@ mod tests {
     #[test]
     fn item_view_model_trait_projects_complete_entry_rows() {
         let raw = raw_entry("draft.md", "/tmp/docs/draft.md", "docs");
-        let snapshot = PaneEntrySnapshot::from_model(&raw);
-        let file = snapshot.model_to_file_entry();
+        let file = raw.model_to_file_entry();
         let item = raw.model_to_item_view_entry();
-        let metadata = snapshot.model_metadata_source();
+        let grouped = item_view_model_entry_with_group(
+            Arc::new(raw.clone()) as ItemViewModelEntryArc,
+            "Search result".to_string(),
+        );
+        let metadata = raw.model_metadata_source();
 
-        assert_eq!(snapshot.model_name(), "draft.md");
-        assert_eq!(snapshot.model_path(), "/tmp/docs/draft.md");
-        assert_eq!(snapshot.model_group(), "Current folder");
-        assert_eq!(snapshot.model_location(), "docs");
-        assert_eq!(snapshot.model_kind(), "File");
-        assert_eq!(snapshot.model_size(), "2 KB");
-        assert_eq!(snapshot.model_size_bytes(), 2048.0);
-        assert_eq!(snapshot.model_modified(), "Yesterday");
-        assert_eq!(snapshot.model_modified_age_days(), 1);
-        assert!(!snapshot.model_is_dir());
+        assert_eq!(raw.model_name(), "draft.md");
+        assert_eq!(raw.model_path(), "/tmp/docs/draft.md");
+        assert_eq!(raw.model_group(), "Current folder");
+        assert_eq!(raw.model_location(), "docs");
+        assert_eq!(raw.model_kind(), "File");
+        assert_eq!(raw.model_size(), "2 KB");
+        assert_eq!(raw.model_size_bytes(), 2048.0);
+        assert_eq!(raw.model_modified(), "Yesterday");
+        assert_eq!(raw.model_modified_age_days(), 1);
+        assert!(!raw.model_is_dir());
         assert_eq!(
-            snapshot.model_name_width_units(),
+            grouped.model_name_width_units(),
             raw.model_name_width_units()
         );
 
@@ -501,6 +586,11 @@ mod tests {
         assert!(!item.is_dir);
         assert_eq!(item.thumbnail_state, 0);
         assert_eq!(item.media_token, 0);
+        assert_eq!(grouped.model_name(), "draft.md");
+        assert_eq!(grouped.model_path(), "/tmp/docs/draft.md");
+        assert_eq!(grouped.model_group(), "Search result");
+        assert_eq!(grouped.model_location(), "docs");
+        assert_eq!(grouped.model_size_bytes(), 2048.0);
         assert_eq!(metadata.group, "Current folder");
         assert_eq!(metadata.location, "docs");
     }
@@ -512,10 +602,7 @@ mod tests {
             raw_entry("draft.md", "/tmp/docs/draft.md", "docs"),
             raw_entry("notes.txt", "/tmp/docs/notes.txt", "docs"),
         ];
-        let mut entries = entries
-            .iter()
-            .map(PaneEntrySnapshot::from_model)
-            .collect::<Vec<_>>();
+        let mut entries = entries.to_vec();
         entries[0].is_dir = true;
 
         let summary = item_view_model_entry_summary(entries.iter(), true, true);
@@ -598,27 +685,46 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_row_projection_uses_model_trait_defaults() {
+    fn model_store_uses_trait_object_backing_without_concrete_row() {
+        let model = include_str!("item_view_model.rs");
         let pane = include_str!("pane.rs");
         let selection = include_str!("selection.rs");
         let main = include_str!("../main.rs");
+        let row_type_name = ["ItemView", "ModelRow"].concat();
+        let concrete_row_decl = format!("pub(crate) struct {row_type_name}");
+        let owned_method = ["model_to", "_owned_entry"].concat();
+        let borrowed_constructor = ["from_model", "_entries"].concat();
+        let raw_constructor = ["from_raw", "_entries"].concat();
 
         assert!(
             !pane.contains("fn to_file_entry")
                 && !pane.contains("fn to_item_view_entry")
-                && pane.contains("fn from_model(entry: &impl ItemViewModelEntry) -> Self")
+                && !pane.contains(concrete_row_decl.as_str())
+                && !model.contains(concrete_row_decl.as_str())
+                && !model.contains(owned_method.as_str())
+                && !pane.contains(owned_method.as_str())
+                && !pane.contains(borrowed_constructor.as_str())
+                && !pane.contains(raw_constructor.as_str())
+                && model.contains("pub(crate) type ItemViewModelEntryArc")
+                && pane.contains("Arc<[ItemViewModelEntryArc]>")
+                && pane.contains("from_entries<T>")
+                && pane.contains("entry_arc")
+                && pane.contains("entry_arcs_range")
                 && selection.contains("model_to_file_entry")
                 && main.contains("model_metadata_source")
                 && main.contains("model_to_item_view_entry"),
-            "PaneEntrySnapshot should not own concrete Slint row projection; callers should use ItemViewModelEntry defaults"
+            "Pane entry storage should use model trait objects and ItemViewModelEntry defaults without a concrete row compatibility type"
         );
     }
 
     #[test]
-    fn pane_entry_model_store_hides_snapshot_container_from_consumers() {
+    fn pane_entry_model_store_hides_concrete_row_container_from_consumers() {
         let pane = include_str!("pane.rs");
         let selection = include_str!("selection.rs");
         let virtual_view = include_str!("virtual_view.rs");
+        let row_type_name = ["ItemView", "ModelRow"].concat();
+        let deref_impl = ["impl Deref", " for PaneEntryModel"].concat();
+        let as_ref_impl = ["impl AsRef", "<[ItemViewModelEntryArc]>"].concat();
 
         assert!(
             pane.contains("pub(crate) struct PaneEntryModel")
@@ -626,11 +732,16 @@ mod tests {
                 && pane.contains("pub(crate) entries: PaneEntryModel")
                 && virtual_view.contains("pub(crate) entries: PaneEntryModel")
                 && virtual_view.contains("VirtualViewSnapshotUpdate")
-                && !virtual_view.contains("pub(crate) entries: Vec<PaneEntrySnapshot>")
-                && !virtual_view.contains("pub(crate) entries: Arc<[PaneEntrySnapshot]>")
-                && !selection.contains("Iterator<Item = &PaneEntrySnapshot>")
-                && !selection.contains("Iterator<Item = (usize, &PaneEntrySnapshot)>"),
-            "Pane entry storage should be exposed through PaneEntryModel and model-trait iterators, not concrete snapshot containers"
+                && !pane.contains(deref_impl.as_str())
+                && !pane.contains(as_ref_impl.as_str())
+                && !virtual_view
+                    .contains(format!("pub(crate) entries: Vec<{row_type_name}>").as_str())
+                && !virtual_view
+                    .contains(format!("pub(crate) entries: Arc<[{row_type_name}]>").as_str())
+                && !selection.contains(format!("Iterator<Item = &{row_type_name}>").as_str())
+                && !selection
+                    .contains(format!("Iterator<Item = (usize, &{row_type_name})>").as_str()),
+            "Pane entry storage should be exposed through PaneEntryModel and model-trait iterators, not concrete row containers"
         );
     }
 }

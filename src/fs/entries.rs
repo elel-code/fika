@@ -7,9 +7,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RawFileEntry {
     pub name: String,
+    pub name_width_units: f32,
     pub path: String,
     pub group: String,
     pub location: String,
@@ -160,6 +161,7 @@ pub(crate) fn to_raw_file_entry(
     let modified = metadata.modified().ok();
 
     RawFileEntry {
+        name_width_units: raw_name_width_units(&name),
         name,
         path: path.display().to_string(),
         group: String::new(),
@@ -216,6 +218,24 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
     let m = mp + if mp < 10 { 3 } else { -9 };
     let year = y + if m <= 2 { 1 } else { 0 };
     (year, m as u32, d as u32)
+}
+
+fn raw_name_width_units(text: &str) -> f32 {
+    text.chars()
+        .map(|ch| {
+            if ch.is_whitespace() {
+                0.35
+            } else if ch.is_ascii() {
+                match ch {
+                    'i' | 'l' | 'I' | '!' | '|' | '.' | ',' | ':' | ';' | '\'' | '`' => 0.32,
+                    'm' | 'w' | 'M' | 'W' | '@' | '#' | '%' | '&' => 0.82,
+                    _ => 0.58,
+                }
+            } else {
+                1.0
+            }
+        })
+        .sum()
 }
 
 #[cfg(test)]
@@ -310,6 +330,7 @@ mod tests {
     fn test_entry(name: &str, is_dir: bool, group: &str, modified: &str) -> RawFileEntry {
         RawFileEntry {
             name: name.to_string(),
+            name_width_units: raw_name_width_units(name),
             path: format!("/tmp/{name}"),
             group: group.to_string(),
             location: String::new(),
