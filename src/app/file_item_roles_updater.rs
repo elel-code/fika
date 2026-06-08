@@ -121,6 +121,32 @@ pub(crate) fn schedule_thumbnail_roles_for_entries<T>(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn schedule_visible_thumbnail_roles_for_entries<T>(
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    pane_id: u64,
+    entries: &[T],
+    virtual_start_index: usize,
+    visible_range: Range<usize>,
+    maximum_visible_items: usize,
+    size_px: u32,
+) where
+    T: ThumbnailScheduleRow,
+{
+    schedule_thumbnail_roles_for_entries_with_scope(
+        state,
+        bridge,
+        pane_id,
+        entries,
+        virtual_start_index,
+        visible_range,
+        maximum_visible_items,
+        size_px,
+        ThumbnailScheduleScope::VisibleOnly,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 fn schedule_thumbnail_roles_for_entries_with_scope<T>(
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,

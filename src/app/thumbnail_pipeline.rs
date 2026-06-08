@@ -14,12 +14,29 @@ pub(crate) const THUMBNAIL_STATE_EMPTY: i32 = 0;
 pub(crate) const THUMBNAIL_STATE_PENDING: i32 = 1;
 pub(crate) const THUMBNAIL_STATE_LOADED: i32 = 2;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PreparedThumbnailKey {
+    Candidate(thumbnails::ThumbnailKey),
+    NotCandidate,
+    Unavailable,
+}
+
+impl PreparedThumbnailKey {
+    pub(crate) fn candidate_key(&self) -> Option<&thumbnails::ThumbnailKey> {
+        match self {
+            Self::Candidate(key) => Some(key),
+            Self::NotCandidate | Self::Unavailable => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ThumbnailScheduleEntry {
     path: SharedString,
     is_dir: bool,
     thumbnail_state: i32,
     media_token: i32,
+    prepared_key: Option<thumbnails::ThumbnailKey>,
 }
 
 impl ThumbnailScheduleEntry {
@@ -29,6 +46,22 @@ impl ThumbnailScheduleEntry {
             is_dir: token.is_dir(),
             thumbnail_state: token.thumbnail_state(),
             media_token: token.media_token(),
+            prepared_key: None,
+        }
+    }
+
+    pub(crate) fn from_entry_with_prepared_key(
+        entry: &ItemViewEntry,
+        prepared_key: Option<&PreparedThumbnailKey>,
+    ) -> Self {
+        Self {
+            path: entry.path.clone(),
+            is_dir: entry.is_dir,
+            thumbnail_state: entry.thumbnail_state,
+            media_token: entry.media_token,
+            prepared_key: prepared_key
+                .and_then(PreparedThumbnailKey::candidate_key)
+                .cloned(),
         }
     }
 }
@@ -38,6 +71,10 @@ pub(crate) trait ThumbnailScheduleRow {
     fn is_dir(&self) -> bool;
     fn thumbnail_state(&self) -> i32;
     fn media_token(&self) -> i32;
+
+    fn prepared_thumbnail_key(&self) -> Option<&thumbnails::ThumbnailKey> {
+        None
+    }
 }
 
 impl ThumbnailScheduleRow for ItemViewEntry {
@@ -92,15 +129,45 @@ impl ThumbnailScheduleRow for ThumbnailScheduleEntry {
     fn media_token(&self) -> i32 {
         self.media_token
     }
+
+    fn prepared_thumbnail_key(&self) -> Option<&thumbnails::ThumbnailKey> {
+        self.prepared_key.as_ref()
+    }
 }
 
+pub(crate) fn prepare_thumbnail_keys_for_entries(
+    entries: &[ItemViewEntry],
+    size_px: u32,
+) -> Vec<PreparedThumbnailKey> {
+    entries
+        .iter()
+        .map(|entry| prepare_thumbnail_key_for_entry(entry, size_px))
+        .collect()
+}
+
+fn prepare_thumbnail_key_for_entry(entry: &ItemViewEntry, size_px: u32) -> PreparedThumbnailKey {
+    if entry.is_dir {
+        return PreparedThumbnailKey::NotCandidate;
+    }
+
+    let path = Path::new(entry.path.as_str());
+    if !thumbnails::is_thumbnail_candidate(path) {
+        return PreparedThumbnailKey::NotCandidate;
+    }
+
+    thumbnails::key_for(path, size_px)
+        .map(PreparedThumbnailKey::Candidate)
+        .unwrap_or(PreparedThumbnailKey::Unavailable)
+}
+
+#[cfg(test)]
 pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
-    state: &AppState,
+    state: &mut AppState,
     pane_id: u64,
     entries: &mut [ItemViewEntry],
     size_px: u32,
 ) -> Vec<ItemViewMediaSource> {
-    let Some(pane) = state.panes.pane_by_id(pane_id) else {
+    if state.panes.pane_by_id(pane_id).is_none() {
         return Vec::new();
     };
 
@@ -116,20 +183,82 @@ pub(crate) fn decorate_entries_with_cached_thumbnails_for_pane(
         let Ok(key) = thumbnails::key_for(Path::new(entry.path.as_str()), size_px) else {
             continue;
         };
-        if let Some(data) = state.thumbnail_cache.get(&key) {
+        if let Some(media) = cached_thumbnail_image_for_key(state, &key) {
             media_entries.push(ItemViewMediaSource {
                 slice_index: row as i32,
-                media: image_from_thumbnail(data),
+                media,
             });
             entry.media_token = key.item_view_media_token();
             entry.thumbnail_state = THUMBNAIL_STATE_LOADED;
         } else if state.thumbnail_failures.contains_key(&key) {
             entry.thumbnail_state = THUMBNAIL_STATE_EMPTY;
-        } else if pane.view.has_thumbnail_pending(entry.path.as_str()) {
+        } else if state
+            .panes
+            .pane_by_id(pane_id)
+            .is_some_and(|pane| pane.view.has_thumbnail_pending(entry.path.as_str()))
+        {
             entry.thumbnail_state = THUMBNAIL_STATE_PENDING;
         }
     }
     media_entries
+}
+
+pub(crate) fn decorate_entries_with_prepared_thumbnail_keys_for_pane(
+    state: &mut AppState,
+    pane_id: u64,
+    entries: &mut [ItemViewEntry],
+    prepared_keys: &[PreparedThumbnailKey],
+) -> Vec<ItemViewMediaSource> {
+    if state.panes.pane_by_id(pane_id).is_none() {
+        return Vec::new();
+    };
+
+    let mut media_entries = Vec::new();
+    for (row, entry) in entries.iter_mut().enumerate() {
+        if entry.is_dir {
+            continue;
+        }
+        match prepared_keys.get(row) {
+            Some(PreparedThumbnailKey::Candidate(key)) => {
+                if let Some(media) = cached_thumbnail_image_for_key(state, key) {
+                    media_entries.push(ItemViewMediaSource {
+                        slice_index: row as i32,
+                        media,
+                    });
+                    entry.media_token = key.item_view_media_token();
+                    entry.thumbnail_state = THUMBNAIL_STATE_LOADED;
+                } else if state.thumbnail_failures.contains_key(key) {
+                    entry.thumbnail_state = THUMBNAIL_STATE_EMPTY;
+                } else if state
+                    .panes
+                    .pane_by_id(pane_id)
+                    .is_some_and(|pane| pane.view.has_thumbnail_pending(entry.path.as_str()))
+                {
+                    entry.thumbnail_state = THUMBNAIL_STATE_PENDING;
+                }
+            }
+            Some(PreparedThumbnailKey::NotCandidate) => {
+                entry.thumbnail_state = THUMBNAIL_STATE_NOT_CANDIDATE;
+            }
+            Some(PreparedThumbnailKey::Unavailable) | None => {}
+        }
+    }
+    media_entries
+}
+
+fn cached_thumbnail_image_for_key(
+    state: &mut AppState,
+    key: &thumbnails::ThumbnailKey,
+) -> Option<Image> {
+    if let Some(image) = state.thumbnail_image_cache.get(key).cloned() {
+        return Some(image);
+    }
+
+    let image = image_from_thumbnail(state.thumbnail_cache.get(key)?);
+    state
+        .thumbnail_image_cache
+        .insert(key.clone(), image.clone());
+    Some(image)
 }
 
 #[cfg(test)]
@@ -199,12 +328,16 @@ pub(crate) fn thumbnail_schedule_candidate_for_pane<T: ThumbnailScheduleRow + ?S
     }
 
     let path = PathBuf::from(entry.path());
-    if !thumbnails::is_thumbnail_candidate(&path) {
-        return None;
-    }
-
-    let Ok(key) = thumbnails::key_for(&path, size_px) else {
-        return None;
+    let key = if let Some(key) = entry.prepared_thumbnail_key() {
+        key.clone()
+    } else {
+        if !thumbnails::is_thumbnail_candidate(&path) {
+            return None;
+        }
+        let Ok(key) = thumbnails::key_for(&path, size_px) else {
+            return None;
+        };
+        key
     };
     if entry.thumbnail_state() == THUMBNAIL_STATE_LOADED
         && entry.media_token() == key.item_view_media_token()
@@ -356,11 +489,13 @@ pub(crate) fn insert_thumbnail_cache_with_limit(
 ) {
     state.thumbnail_cache_order.retain(|cached| cached != &key);
     state.thumbnail_cache.insert(key.clone(), data);
+    state.thumbnail_image_cache.remove(&key);
     state.thumbnail_cache_order.push_back(key);
 
     while state.thumbnail_cache_order.len() > MAX_THUMBNAIL_CACHE_ENTRIES {
         if let Some(oldest) = state.thumbnail_cache_order.pop_front() {
             state.thumbnail_cache.remove(&oldest);
+            state.thumbnail_image_cache.remove(&oldest);
         }
     }
 }
@@ -466,6 +601,52 @@ mod tests {
                 .thumbnail_cache
                 .contains_key(&thumbnails::fallback_key(Path::new("/tmp/3.png"), 64))
         );
+    }
+
+    #[test]
+    fn thumbnail_image_cache_is_reused_and_evicted_with_raw_cache() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let key = thumbnails::fallback_key(Path::new("/tmp/photo.png"), 64);
+        insert_thumbnail_cache_with_limit(
+            &mut state,
+            key.clone(),
+            thumbnails::ThumbnailData {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 0, 0, 255],
+            },
+        );
+
+        assert!(cached_thumbnail_image_for_key(&mut state, &key).is_some());
+        assert_eq!(state.thumbnail_image_cache.len(), 1);
+        assert!(cached_thumbnail_image_for_key(&mut state, &key).is_some());
+        assert_eq!(state.thumbnail_image_cache.len(), 1);
+
+        insert_thumbnail_cache_with_limit(
+            &mut state,
+            key.clone(),
+            thumbnails::ThumbnailData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 255, 0, 255],
+            },
+        );
+        assert!(!state.thumbnail_image_cache.contains_key(&key));
+
+        assert!(cached_thumbnail_image_for_key(&mut state, &key).is_some());
+        for index in 0..MAX_THUMBNAIL_CACHE_ENTRIES {
+            insert_thumbnail_cache_with_limit(
+                &mut state,
+                thumbnails::fallback_key(Path::new(&format!("/tmp/evict-{index}.png")), 64),
+                thumbnails::ThumbnailData {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![0, 0, 0, 0],
+                },
+            );
+        }
+        assert!(!state.thumbnail_cache.contains_key(&key));
+        assert!(!state.thumbnail_image_cache.contains_key(&key));
     }
 
     #[test]
@@ -766,12 +947,12 @@ mod tests {
         let config_path = temp_dir.join("sysctl.conf");
         std::fs::write(&config_path, b"kernel.pid_max = 4194304").unwrap();
 
-        let state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let pane_id = state.panes.focused().id;
         let mut entries = vec![test_entry("sysctl.conf", config_path.to_str().unwrap())];
 
         let media_entries =
-            decorate_entries_with_cached_thumbnails_for_pane(&state, pane_id, &mut entries, 64);
+            decorate_entries_with_cached_thumbnails_for_pane(&mut state, pane_id, &mut entries, 64);
 
         assert!(media_entries.is_empty());
         assert_eq!(entries[0].thumbnail_state, THUMBNAIL_STATE_NOT_CANDIDATE);

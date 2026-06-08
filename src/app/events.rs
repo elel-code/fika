@@ -1,6 +1,9 @@
 use crate::DeviceEntry;
-use crate::app::item_view_renderer::ItemViewRenderMetrics;
+use crate::ItemViewEntry;
+use crate::app::geometry::ItemViewItemBounds;
+use crate::app::model_update::PreparedItemViewSlotProjection;
 use crate::app::pane::PreparedDirectoryEntries;
+use crate::app::thumbnail_pipeline::PreparedThumbnailKey;
 use crate::app::virtual_view::VirtualViewSnapshotUpdate;
 use crate::desktop::{clipboard, open_with, service_menu, systemd_launch};
 use crate::fs::{file_actions, file_ops, privilege, search, thumbnails};
@@ -127,9 +130,17 @@ pub(crate) struct VirtualViewResult {
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
     pub(crate) schedule_visible_thumbnail_roles_after_apply: bool,
-    pub(crate) cell_width: f32,
-    pub(crate) render_metrics: ItemViewRenderMetrics,
     pub(crate) update: VirtualViewSnapshotUpdate,
+    pub(crate) projection: Option<VirtualViewProjection>,
+}
+
+#[derive(Debug)]
+pub(crate) struct VirtualViewProjection {
+    pub(crate) entries: Vec<ItemViewEntry>,
+    pub(crate) bounds_entries: Vec<ItemViewItemBounds>,
+    pub(crate) slot_projections: Vec<PreparedItemViewSlotProjection>,
+    pub(crate) thumbnail_keys: Vec<PreparedThumbnailKey>,
+    pub(crate) metadata_rows: usize,
 }
 
 #[derive(Debug)]

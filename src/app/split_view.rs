@@ -55,28 +55,6 @@ fn sync_pane_view_viewport_ui(
     slot: i32,
     viewport_x: f32,
 ) {
-    let current = ui.get_pane_views();
-    for row in 0..current.row_count() {
-        let Some(mut current_view) = current.row_data(row) else {
-            continue;
-        };
-        if current_view.slot == slot {
-            if (current_view.viewport_x - viewport_x).abs() > f32::EPSILON {
-                current_view.viewport_x = viewport_x;
-                current.set_row_data(row, current_view);
-            }
-            if sync_pane_surface_viewport_ui(ui, slot, viewport_x) {
-                return;
-            }
-            sync_pane_view_ui(ui, state, slot);
-            return;
-        }
-    }
-
-    sync_pane_view_ui(ui, state, slot);
-}
-
-fn sync_pane_surface_viewport_ui(ui: &AppWindow, slot: i32, viewport_x: f32) -> bool {
     let current = ui.get_pane_surfaces();
     for row in 0..current.row_count() {
         let Some(mut current_surface) = current.row_data(row) else {
@@ -87,18 +65,18 @@ fn sync_pane_surface_viewport_ui(ui: &AppWindow, slot: i32, viewport_x: f32) -> 
                 current_surface.view.viewport_x = viewport_x;
                 current.set_row_data(row, current_surface);
             }
-            return true;
+            return;
         }
     }
-    false
+
+    sync_pane_view_ui(ui, state, slot);
 }
 
 pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let visible_slots = visible_pane_slots(ui);
-    let (slots, views, surfaces) = {
+    let (slots, surfaces) = {
         let state_ref = state.borrow();
         let mut slots = Vec::with_capacity(visible_slots.len());
-        let mut views = Vec::with_capacity(visible_slots.len());
         let mut surfaces = Vec::with_capacity(visible_slots.len());
         for slot in visible_slots.iter().copied() {
             let pane = pane_slot_data(ui, slot, &state_ref);
@@ -106,22 +84,14 @@ pub(crate) fn sync_pane_slots_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>) 
             surfaces.push(PaneSurfaceData {
                 slot,
                 pane: pane.clone(),
-                view: view.clone(),
+                view,
             });
             slots.push(pane);
-            views.push(view);
         }
-        (slots, views, surfaces)
+        (slots, surfaces)
     };
-    if ui.get_pane_slots().row_count() > slots.len() {
-        sync_pane_slots_model(ui, slots);
-        sync_pane_views_model(ui, views);
-        sync_pane_surfaces_model(ui, surfaces);
-    } else {
-        sync_pane_views_model(ui, views);
-        sync_pane_slots_model(ui, slots);
-        sync_pane_surfaces_model(ui, surfaces);
-    }
+    sync_pane_slots_model(ui, slots);
+    sync_pane_surfaces_model(ui, surfaces);
 }
 
 fn sync_pane_slots_model(ui: &AppWindow, slots: Vec<PaneSlotData>) {
@@ -145,21 +115,38 @@ fn sync_pane_slots_model(ui: &AppWindow, slots: Vec<PaneSlotData>) {
 }
 
 pub(crate) fn sync_pane_view_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
-    let current = ui.get_pane_views();
+    let current = ui.get_pane_surfaces();
     for row in 0..current.row_count() {
-        let Some(current_view) = current.row_data(row) else {
+        let Some(mut current_surface) = current.row_data(row) else {
             continue;
         };
-        if current_view.slot == slot {
-            let next = {
+        if current_surface.slot == slot {
+            let current_view = current_surface.view.clone();
+            let (next, visual_payload_reused) = {
                 let state_ref = state.borrow();
-                pane_view_data(ui, slot, &state_ref)
+                let visual_payload_reused =
+                    pane_view_can_reuse_visual_fields(&state_ref, slot, &current_view);
+                (
+                    pane_view_data_with_visual_reuse(
+                        ui,
+                        slot,
+                        &state_ref,
+                        visual_payload_reused.then_some(&current_view),
+                    ),
+                    visual_payload_reused,
+                )
             };
             let rebind_surface = pane_view_requires_surface_rebind(&current_view, &next);
-            if current_view != next {
-                current.set_row_data(row, next);
+            let view_changed =
+                pane_view_data_needs_row_update(&current_view, &next, visual_payload_reused);
+            if rebind_surface {
+                replace_pane_surfaces_model_with_view(ui, state, slot, next);
+                return;
             }
-            sync_pane_surface_ui_with_rebind(ui, state, slot, rebind_surface);
+            if view_changed {
+                current_surface.view = next;
+                current.set_row_data(row, current_surface);
+            }
             return;
         }
     }
@@ -179,9 +166,9 @@ pub(crate) fn sync_pane_slot_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, s
                 pane_slot_data(ui, slot, &state_ref)
             };
             if current_slot != next {
-                current.set_row_data(row, next);
+                current.set_row_data(row, next.clone());
             }
-            sync_pane_surface_ui(ui, state, slot);
+            sync_pane_surface_pane_ui(ui, state, slot, next);
             return;
         }
     }
@@ -195,26 +182,6 @@ fn visible_pane_slots(ui: &AppWindow) -> Vec<i32> {
     slots
 }
 
-fn sync_pane_views_model(ui: &AppWindow, views: Vec<PaneViewData>) {
-    let current = ui.get_pane_views();
-    let same_slots = current.row_count() == views.len()
-        && views.iter().enumerate().all(|(row, view)| {
-            current
-                .row_data(row)
-                .is_some_and(|current| current.slot == view.slot)
-        });
-    if same_slots {
-        for (row, view) in views.into_iter().enumerate() {
-            if current.row_data(row).as_ref() != Some(&view) {
-                current.set_row_data(row, view);
-            }
-        }
-        return;
-    }
-
-    ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));
-}
-
 fn sync_pane_surfaces_model(ui: &AppWindow, surfaces: Vec<PaneSurfaceData>) {
     let current = ui.get_pane_surfaces();
     let same_slots = current.row_count() == surfaces.len()
@@ -225,8 +192,12 @@ fn sync_pane_surfaces_model(ui: &AppWindow, surfaces: Vec<PaneSurfaceData>) {
         });
     if same_slots {
         for (row, surface) in surfaces.into_iter().enumerate() {
-            if current.row_data(row).as_ref() != Some(&surface) {
-                current.set_row_data(row, surface);
+            if let Some(current_surface) = current.row_data(row) {
+                if current_surface.pane != surface.pane
+                    || pane_view_data_needs_row_update(&current_surface.view, &surface.view, false)
+                {
+                    current.set_row_data(row, surface);
+                }
             }
         }
         return;
@@ -235,36 +206,21 @@ fn sync_pane_surfaces_model(ui: &AppWindow, surfaces: Vec<PaneSurfaceData>) {
     ui.set_pane_surfaces(ModelRc::new(Rc::new(VecModel::from(surfaces))));
 }
 
-fn sync_pane_surface_ui(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
-    sync_pane_surface_ui_with_rebind(ui, state, slot, false);
-}
-
-fn sync_pane_surface_ui_with_rebind(
+fn sync_pane_surface_pane_ui(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     slot: i32,
-    rebind: bool,
+    pane: PaneSlotData,
 ) {
     let current = ui.get_pane_surfaces();
     for row in 0..current.row_count() {
-        let Some(current_surface) = current.row_data(row) else {
+        let Some(mut current_surface) = current.row_data(row) else {
             continue;
         };
         if current_surface.slot == slot {
-            if rebind {
-                replace_pane_surfaces_model(ui, state);
-                return;
-            }
-            let next = {
-                let state_ref = state.borrow();
-                PaneSurfaceData {
-                    slot,
-                    pane: pane_slot_data(ui, slot, &state_ref),
-                    view: pane_view_data(ui, slot, &state_ref),
-                }
-            };
-            if current_surface != next {
-                current.set_row_data(row, next);
+            if current_surface.pane != pane {
+                current_surface.pane = pane;
+                current.set_row_data(row, current_surface);
             }
             return;
         }
@@ -273,16 +229,28 @@ fn sync_pane_surface_ui_with_rebind(
     sync_pane_slots_ui(ui, state);
 }
 
-fn replace_pane_surfaces_model(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+fn replace_pane_surfaces_model_with_view(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    target_slot: i32,
+    target_view: PaneViewData,
+) {
     let visible_slots = visible_pane_slots(ui);
     let surfaces = {
         let state_ref = state.borrow();
         visible_slots
             .into_iter()
-            .map(|slot| PaneSurfaceData {
-                slot,
-                pane: pane_slot_data(ui, slot, &state_ref),
-                view: pane_view_data(ui, slot, &state_ref),
+            .map(|slot| {
+                let view = if slot == target_slot {
+                    target_view.clone()
+                } else {
+                    pane_view_data(ui, slot, &state_ref)
+                };
+                PaneSurfaceData {
+                    slot,
+                    pane: pane_slot_data(ui, slot, &state_ref),
+                    view,
+                }
             })
             .collect::<Vec<_>>()
     };
@@ -292,6 +260,48 @@ fn replace_pane_surfaces_model(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 fn pane_view_requires_surface_rebind(current: &PaneViewData, next: &PaneViewData) -> bool {
     (current.entry_count == 0) != (next.entry_count == 0)
         || (current.item_view_slots.row_count() == 0) != (next.item_view_slots.row_count() == 0)
+}
+
+fn pane_view_data_needs_row_update(
+    current: &PaneViewData,
+    next: &PaneViewData,
+    visual_payload_reused: bool,
+) -> bool {
+    !pane_view_lightweight_fields_match(current, next) || !visual_payload_reused
+}
+
+fn pane_view_lightweight_fields_match(current: &PaneViewData, next: &PaneViewData) -> bool {
+    current.slot == next.slot
+        && current.item_view_slots.row_count() == next.item_view_slots.row_count()
+        && current.item_view_raster_width == next.item_view_raster_width
+        && current.item_view_raster_height == next.item_view_raster_height
+        && current.entry_count == next.entry_count
+        && current.virtual_start_column == next.virtual_start_column
+        && current.virtual_start_row == next.virtual_start_row
+        && current.viewport_x == next.viewport_x
+        && current.item_view_rows_per_column == next.item_view_rows_per_column
+        && current.item_view_cell_width == next.item_view_cell_width
+        && current.item_view_row_height == next.item_view_row_height
+        && current.item_view_padding == next.item_view_padding
+        && current.item_view_content_width == next.item_view_content_width
+        && current.item_view_virtual_slice_start_x == next.item_view_virtual_slice_start_x
+        && current.item_view_virtual_slice_width == next.item_view_virtual_slice_width
+        && current.item_view_scroll_max_x == next.item_view_scroll_max_x
+        && current.item_view_media_x == next.item_view_media_x
+        && current.item_view_media_y == next.item_view_media_y
+        && current.item_view_media_width == next.item_view_media_width
+        && current.item_view_media_height == next.item_view_media_height
+        && current.item_view_text_x == next.item_view_text_x
+        && current.item_view_text_width == next.item_view_text_width
+        && current.item_view_title_y == next.item_view_title_y
+        && current.item_view_title_line_height == next.item_view_title_line_height
+        && current.item_view_title_font_size == next.item_view_title_font_size
+        && current.show_location == next.show_location
+        && current.content_interactive == next.content_interactive
+        && current.drop_ready == next.drop_ready
+        && current.empty_message_visible == next.empty_message_visible
+        && current.empty_title == next.empty_title
+        && current.empty_subtitle == next.empty_subtitle
 }
 
 fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
@@ -351,6 +361,15 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
 }
 
 fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
+    pane_view_data_with_visual_reuse(ui, slot, state, None)
+}
+
+fn pane_view_data_with_visual_reuse(
+    ui: &AppWindow,
+    slot: i32,
+    state: &AppState,
+    visual_reuse: Option<&PaneViewData>,
+) -> PaneViewData {
     let is_focused = slot == state.panes.focused_slot();
     let search = state
         .panes
@@ -360,16 +379,29 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
     let item_view_metrics = pane_slot_item_view_metrics(ui, slot, state);
     let item_view_render_geometry =
         pane_slot_item_view_render_geometry(ui, slot, state, item_view_metrics.cell_width);
-    let (item_view_raster_layer, item_view_raster_width, item_view_raster_height) =
-        pane_slot_tile_frame_raster(
-            ui,
-            slot,
-            state,
-            item_view_metrics,
-            item_view_render_geometry,
+    let (item_view_raster_layer, item_view_raster_width, item_view_raster_height) = visual_reuse
+        .map_or_else(
+            || {
+                pane_slot_tile_frame_raster(
+                    ui,
+                    slot,
+                    state,
+                    item_view_metrics,
+                    item_view_render_geometry,
+                )
+            },
+            |current| {
+                (
+                    current.item_view_raster_layer.clone(),
+                    current.item_view_raster_width,
+                    current.item_view_raster_height,
+                )
+            },
         );
-    let item_view_fallback_icons =
-        pane_slot_fallback_icon_images(ui, slot, state, item_view_render_geometry);
+    let item_view_fallback_icons = visual_reuse.map_or_else(
+        || pane_slot_fallback_icon_images(ui, slot, state, item_view_render_geometry),
+        pane_view_fallback_icons_from_current,
+    );
 
     PaneViewData {
         slot,
@@ -426,6 +458,29 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         },
         empty_title: empty_title_for_search(&search),
         empty_subtitle: empty_subtitle_for_search(&search),
+    }
+}
+
+fn pane_view_can_reuse_visual_fields(state: &AppState, slot: i32, current: &PaneViewData) -> bool {
+    current.slot == slot
+        && state
+            .panes
+            .pane_for_slot(slot)
+            .is_some_and(|pane| pane.view.raster_updates_deferred())
+}
+
+fn pane_view_fallback_icons_from_current(current: &PaneViewData) -> ItemViewFallbackIconImages {
+    ItemViewFallbackIconImages {
+        file: current.item_view_file_icon.clone(),
+        folder: current.item_view_folder_icon.clone(),
+        image: current.item_view_image_icon.clone(),
+        video: current.item_view_video_icon.clone(),
+        audio: current.item_view_audio_icon.clone(),
+        archive: current.item_view_archive_icon.clone(),
+        pdf: current.item_view_pdf_icon.clone(),
+        text: current.item_view_text_icon.clone(),
+        code: current.item_view_code_icon.clone(),
+        executable: current.item_view_executable_icon.clone(),
     }
 }
 
@@ -493,18 +548,21 @@ fn pane_slot_fallback_icon_images(
     let Some(pane) = state.panes.pane_for_slot(slot) else {
         return ItemViewFallbackIconImages::default();
     };
-    if !pane
+    let fallback_kinds = pane
         .view
         .virtual_slot_entries
         .iter()
-        .any(|slot| slot.active)
-    {
+        .filter(|slot| slot.active && !slot.has_thumbnail)
+        .map(|slot| slot.media_kind)
+        .collect::<Vec<_>>();
+    if fallback_kinds.is_empty() {
         return ItemViewFallbackIconImages::default();
     }
-    pane.view.fallback_icon_images(
+    pane.view.fallback_icon_images_for_kinds_with_policy(
         raster_dimension_px(render_geometry.media_width),
         raster_dimension_px(render_geometry.media_height),
         ui.get_dark_mode(),
+        &fallback_kinds,
     )
 }
 

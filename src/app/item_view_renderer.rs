@@ -410,6 +410,7 @@ impl ItemViewTileFrameBatch {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn media_token_for_slice_index(&self, slice_index: i32) -> i32 {
         usize::try_from(slice_index)
             .ok()

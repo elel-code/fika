@@ -25,6 +25,101 @@ pub(crate) struct ItemViewSlotKey {
     occurrence: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PreparedItemViewSlotProjection {
+    key: Option<ItemViewSlotKey>,
+    absolute_index: i32,
+    path: SharedString,
+    name: SharedString,
+    media_kind: i32,
+    has_metadata_group: bool,
+    metadata_group: SharedString,
+    has_metadata_location: bool,
+    metadata_location: SharedString,
+    metadata_text_x: f32,
+    metadata_text_width: f32,
+    metadata_group_y: f32,
+    metadata_location_y: f32,
+    metadata_line_height: f32,
+    metadata_font_size: f32,
+    x: f32,
+    y: f32,
+    text_width: f32,
+}
+
+impl PreparedItemViewSlotProjection {
+    fn from_projection_and_key(
+        projection: ItemViewSlotProjection,
+        key: Option<ItemViewSlotKey>,
+    ) -> Self {
+        let entry = projection.entry;
+        Self {
+            key,
+            absolute_index: projection.absolute_index,
+            path: projection.path,
+            name: entry.name,
+            media_kind: entry.media_kind,
+            has_metadata_group: entry.has_metadata_group,
+            metadata_group: entry.metadata_group,
+            has_metadata_location: entry.has_metadata_location,
+            metadata_location: entry.metadata_location,
+            metadata_text_x: entry.metadata_text_x,
+            metadata_text_width: entry.metadata_text_width,
+            metadata_group_y: entry.metadata_group_y,
+            metadata_location_y: entry.metadata_location_y,
+            metadata_line_height: entry.metadata_line_height,
+            metadata_font_size: entry.metadata_font_size,
+            x: entry.x,
+            y: entry.y,
+            text_width: entry.text_width,
+        }
+    }
+
+    fn into_slot_projection_and_key(self) -> (ItemViewSlotProjection, Option<ItemViewSlotKey>) {
+        let key = self.key;
+        (
+            ItemViewSlotProjection {
+                absolute_index: self.absolute_index,
+                path: self.path,
+                thumbnail_token: 0,
+                entry: ItemViewSlotEntry {
+                    active: true,
+                    name: self.name,
+                    media_kind: self.media_kind,
+                    has_thumbnail: false,
+                    thumbnail: Image::default(),
+                    has_metadata_group: self.has_metadata_group,
+                    metadata_group: self.metadata_group,
+                    has_metadata_location: self.has_metadata_location,
+                    metadata_location: self.metadata_location,
+                    metadata_text_x: self.metadata_text_x,
+                    metadata_text_width: self.metadata_text_width,
+                    metadata_group_y: self.metadata_group_y,
+                    metadata_location_y: self.metadata_location_y,
+                    metadata_line_height: self.metadata_line_height,
+                    metadata_font_size: self.metadata_font_size,
+                    x: self.x,
+                    y: self.y,
+                    text_width: self.text_width,
+                },
+            },
+            key,
+        )
+    }
+}
+
+impl From<ItemViewSlotProjection> for PreparedItemViewSlotProjection {
+    fn from(projection: ItemViewSlotProjection) -> Self {
+        Self::from_projection_and_key(projection, None)
+    }
+}
+
+impl From<PreparedItemViewSlotProjection> for ItemViewSlotProjection {
+    fn from(projection: PreparedItemViewSlotProjection) -> Self {
+        projection.into_slot_projection_and_key().0
+    }
+}
+
 fn item_view_slot_keys(projections: &[ItemViewSlotProjection]) -> Vec<Option<ItemViewSlotKey>> {
     let mut occurrences = HashMap::new();
     projections
@@ -50,6 +145,35 @@ pub(crate) struct ItemViewSlotToken {
     key: Option<ItemViewSlotKey>,
     absolute_index: i32,
     thumbnail_token: i32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ItemViewSlotUpdateStats {
+    pub(crate) active_rows: usize,
+    pub(crate) inactive_rows: usize,
+    pub(crate) reused_slots: usize,
+    pub(crate) extended_slots: usize,
+    pub(crate) patched_rows: usize,
+    pub(crate) content_patched_rows: usize,
+    pub(crate) geometry_patched_rows: usize,
+    pub(crate) thumbnail_patched_rows: usize,
+    pub(crate) thumbnail_image_reused: usize,
+    pub(crate) thumbnail_image_replaced: usize,
+    pub(crate) set_row_data: usize,
+    pub(crate) model_extend_rows: usize,
+    pub(crate) model_rebuilt_rows: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ItemViewModelUpdateStats {
+    pub(crate) slot: ItemViewSlotUpdateStats,
+    pub(crate) entry_rows: usize,
+    pub(crate) bounds_rows: usize,
+    pub(crate) media_rows: usize,
+    pub(crate) metadata_rows: usize,
+    pub(crate) bounds_changed: bool,
+    pub(crate) raster_tokens_changed: bool,
+    pub(crate) raster_revision_bumped: bool,
 }
 
 impl Default for ItemViewSlotToken {
@@ -203,27 +327,37 @@ fn absolute_index_for_slice_index(start_index: usize, slice_index: i32) -> Optio
 }
 
 fn item_view_slot_projections_with_thumbnails(
-    mut slot_projections: Vec<ItemViewSlotProjection>,
+    slot_projections: Vec<PreparedItemViewSlotProjection>,
     start_index: usize,
-    frame_batch: &ItemViewTileFrameBatch,
+    entries: &[ItemViewEntry],
     media_entries: Vec<ItemViewMediaSource>,
-) -> Vec<ItemViewSlotProjection> {
+) -> Vec<(ItemViewSlotProjection, Option<ItemViewSlotKey>)> {
+    let mut slot_projections = slot_projections
+        .into_iter()
+        .map(PreparedItemViewSlotProjection::into_slot_projection_and_key)
+        .collect::<Vec<_>>();
     let mut thumbnails = HashMap::with_capacity(media_entries.len());
     for media in media_entries {
+        let Some(slice_index) = usize::try_from(media.slice_index).ok() else {
+            continue;
+        };
         let Some(absolute_index) = absolute_index_for_slice_index(start_index, media.slice_index)
         else {
             continue;
         };
+        let thumbnail_token = entries
+            .get(slice_index)
+            .map_or(0, |entry| entry.media_token);
         thumbnails.insert(
             absolute_index,
             ItemViewSlotThumbnail {
-                token: frame_batch.media_token_for_slice_index(media.slice_index),
+                token: thumbnail_token,
                 media: media.media,
             },
         );
     }
 
-    for projection in &mut slot_projections {
+    for (projection, _) in &mut slot_projections {
         if let Some(thumbnail) = thumbnails.remove(&projection.absolute_index) {
             projection.entry.has_thumbnail = true;
             projection.thumbnail_token = thumbnail.token;
@@ -278,7 +412,37 @@ fn item_view_slot_projections_with_metadata(
     slot_projections
 }
 
+pub(crate) fn item_view_slot_projections_for_entries(
+    start_index: usize,
+    entries: &[ItemViewEntry],
+    bounds_entries: &[ItemViewItemBounds],
+    metadata_entries: Vec<ItemViewMetadataOverlaySource>,
+) -> Vec<PreparedItemViewSlotProjection> {
+    let frame_batch = ItemViewTileFrameBatch::from_entries_and_bounds(entries, bounds_entries, &[]);
+    let slot_projections = item_view_slot_projections_with_metadata(
+        frame_batch.slot_projections(start_index),
+        start_index,
+        metadata_entries,
+    );
+    let slot_keys = item_view_slot_keys(&slot_projections);
+    slot_projections
+        .into_iter()
+        .zip(slot_keys)
+        .map(|(projection, key)| {
+            PreparedItemViewSlotProjection::from_projection_and_key(projection, key)
+        })
+        .collect()
+}
+
 fn item_view_slot_entry_matches_without_thumbnail_image(
+    current: &ItemViewSlotEntry,
+    next: &ItemViewSlotEntry,
+) -> bool {
+    item_view_slot_entry_content_matches_without_thumbnail_image(current, next)
+        && item_view_slot_entry_geometry_matches(current, next)
+}
+
+fn item_view_slot_entry_content_matches_without_thumbnail_image(
     current: &ItemViewSlotEntry,
     next: &ItemViewSlotEntry,
 ) -> bool {
@@ -290,6 +454,13 @@ fn item_view_slot_entry_matches_without_thumbnail_image(
         && current.metadata_group == next.metadata_group
         && current.has_metadata_location == next.has_metadata_location
         && current.metadata_location == next.metadata_location
+}
+
+fn item_view_slot_entry_geometry_matches(
+    current: &ItemViewSlotEntry,
+    next: &ItemViewSlotEntry,
+) -> bool {
+    current.metadata_location == next.metadata_location
         && current.metadata_text_x == next.metadata_text_x
         && current.metadata_text_width == next.metadata_text_width
         && current.metadata_group_y == next.metadata_group_y
@@ -303,8 +474,9 @@ fn item_view_slot_entry_matches_without_thumbnail_image(
 
 fn update_item_view_slot_entries_model(
     view: &mut PaneView,
-    slot_projections: Vec<ItemViewSlotProjection>,
-) -> bool {
+    slot_projections: Vec<(ItemViewSlotProjection, Option<ItemViewSlotKey>)>,
+) -> ItemViewSlotUpdateStats {
+    let mut stats = ItemViewSlotUpdateStats::default();
     if view.virtual_slot_entries.len() != view.virtual_slot_tokens.len() {
         view.virtual_slot_tokens =
             vec![ItemViewSlotToken::default(); view.virtual_slot_entries.len()];
@@ -317,7 +489,6 @@ fn update_item_view_slot_entries_model(
 
     if slot_projections.is_empty() {
         view.virtual_slot_keys.clear();
-        let mut changed = false;
         for row in 0..view.virtual_slot_entries.len() {
             if !view.virtual_slot_entries[row].active {
                 view.virtual_slot_tokens[row] = ItemViewSlotToken::default();
@@ -328,14 +499,25 @@ fn update_item_view_slot_entries_model(
             view.virtual_slot_tokens[row] = ItemViewSlotToken::default();
             if let Some(model) = model {
                 model.set_row_data(row, inactive);
+                stats.set_row_data += 1;
             }
-            changed = true;
+            stats.patched_rows += 1;
+            stats.content_patched_rows += 1;
         }
         if model.is_none() && !view.virtual_slot_entries.is_empty() {
             view.virtual_item_slots = new_item_view_slot_model(view.virtual_slot_entries.clone());
-            changed = true;
+            stats.model_rebuilt_rows = view.virtual_slot_entries.len();
         }
-        return changed;
+        stats.active_rows = view
+            .virtual_slot_entries
+            .iter()
+            .filter(|entry| entry.active)
+            .count();
+        stats.inactive_rows = view
+            .virtual_slot_entries
+            .len()
+            .saturating_sub(stats.active_rows);
+        return stats;
     }
 
     let mut old_slot_by_key = HashMap::with_capacity(view.virtual_slot_keys.len());
@@ -347,17 +529,17 @@ fn update_item_view_slot_entries_model(
 
     let mut assigned_slots = vec![None; slot_projections.len()];
     let mut used_slots = vec![false; view.virtual_slot_entries.len()];
-    let next_slot_keys = item_view_slot_keys(&slot_projections);
-    for (row, key) in next_slot_keys.iter().enumerate() {
-        let Some(key) = key else {
+    for (row, (_, key)) in slot_projections.iter().enumerate() {
+        let Some(key) = key.as_ref() else {
             continue;
         };
-        if let Some(&slot) = old_slot_by_key.get(&key)
+        if let Some(&slot) = old_slot_by_key.get(key)
             && slot < used_slots.len()
             && !used_slots[slot]
         {
             assigned_slots[row] = Some(slot);
             used_slots[slot] = true;
+            stats.reused_slots += 1;
         }
     }
 
@@ -379,18 +561,14 @@ fn update_item_view_slot_entries_model(
                 .push(inactive_item_view_slot_entry());
             view.virtual_slot_tokens.push(ItemViewSlotToken::default());
             used_slots.push(true);
+            stats.extended_slots += 1;
             *assigned = Some(slot);
         }
     }
 
     let old_len = model.map_or(0, Model::row_count);
-    let mut changed = false;
     let mut next_keys = HashMap::with_capacity(slot_projections.len());
-    for ((projection, key), slot) in slot_projections
-        .into_iter()
-        .zip(next_slot_keys.into_iter())
-        .zip(assigned_slots.into_iter())
-    {
+    for ((projection, key), slot) in slot_projections.into_iter().zip(assigned_slots.into_iter()) {
         let Some(slot) = slot else {
             continue;
         };
@@ -413,8 +591,17 @@ fn update_item_view_slot_entries_model(
             });
         if reuses_existing_thumbnail && let Some(current) = view.virtual_slot_entries.get(slot) {
             slot_entry.thumbnail = current.thumbnail.clone();
+            stats.thumbnail_image_reused += 1;
         }
         let thumbnail_image_changed = slot_entry.has_thumbnail && !reuses_existing_thumbnail;
+        let content_changed = !view.virtual_slot_entries.get(slot).is_some_and(|current| {
+            item_view_slot_entry_content_matches_without_thumbnail_image(current, &slot_entry)
+        });
+        let geometry_changed = !content_changed
+            && !view
+                .virtual_slot_entries
+                .get(slot)
+                .is_some_and(|current| item_view_slot_entry_geometry_matches(current, &slot_entry));
         if thumbnail_image_changed
             || !view.virtual_slot_entries.get(slot).is_some_and(|current| {
                 item_view_slot_entry_matches_without_thumbnail_image(current, &slot_entry)
@@ -425,8 +612,18 @@ fn update_item_view_slot_entries_model(
                 && let Some(model) = model
             {
                 model.set_row_data(slot, slot_entry);
+                stats.set_row_data += 1;
             }
-            changed = true;
+            stats.patched_rows += 1;
+            if thumbnail_image_changed {
+                stats.thumbnail_patched_rows += 1;
+                stats.thumbnail_image_replaced += 1;
+            }
+            if content_changed {
+                stats.content_patched_rows += 1;
+            } else if geometry_changed {
+                stats.geometry_patched_rows += 1;
+            }
         }
         view.virtual_slot_tokens[slot] = ItemViewSlotToken {
             key: Some(key.clone()),
@@ -451,8 +648,10 @@ fn update_item_view_slot_entries_model(
                 && let Some(model) = model
             {
                 model.set_row_data(slot, inactive);
+                stats.set_row_data += 1;
             }
-            changed = true;
+            stats.patched_rows += 1;
+            stats.content_patched_rows += 1;
         }
         if let Some(token) = view.virtual_slot_tokens.get_mut(slot) {
             *token = ItemViewSlotToken::default();
@@ -463,20 +662,33 @@ fn update_item_view_slot_entries_model(
     if let Some(model) = model {
         if old_len < view.virtual_slot_entries.len() {
             model.extend(view.virtual_slot_entries[old_len..].iter().cloned());
-            changed = true;
+            stats.model_extend_rows = view.virtual_slot_entries.len() - old_len;
         }
     } else {
         view.virtual_item_slots = new_item_view_slot_model(view.virtual_slot_entries.clone());
-        changed = true;
+        stats.model_rebuilt_rows = view.virtual_slot_entries.len();
     }
 
-    changed
+    stats.active_rows = view
+        .virtual_slot_entries
+        .iter()
+        .filter(|entry| entry.active)
+        .count();
+    stats.inactive_rows = view
+        .virtual_slot_entries
+        .len()
+        .saturating_sub(stats.active_rows);
+    stats
 }
 
 fn item_view_row_tokens(
     entries: &[ItemViewEntry],
     selected_paths: &[String],
 ) -> Vec<ItemViewRowToken> {
+    if selected_paths.is_empty() {
+        return entries.iter().map(ItemViewRowToken::from_entry).collect();
+    }
+
     let selected = selected_paths
         .iter()
         .map(String::as_str)
@@ -491,6 +703,7 @@ fn item_view_row_tokens(
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn update_pane_item_view_entries_model(
     view: &mut PaneView,
     start_index: usize,
@@ -499,36 +712,74 @@ pub(crate) fn update_pane_item_view_entries_model(
     media_entries: Vec<ItemViewMediaSource>,
     metadata_entries: Vec<ItemViewMetadataOverlaySource>,
     selected_paths: &[String],
-) {
-    let raster_tokens_changed =
-        item_view_raster_tokens_changed(&view.virtual_entry_tokens, &entries, selected_paths);
-    let frame_batch =
-        ItemViewTileFrameBatch::from_entries_and_bounds(&entries, &bounds_entries, selected_paths);
-    let slot_projections = item_view_slot_projections_with_thumbnails(
-        frame_batch.slot_projections(start_index),
+) -> ItemViewModelUpdateStats {
+    let metadata_rows = metadata_entries.len();
+    let slot_projections = item_view_slot_projections_for_entries(
         start_index,
-        &frame_batch,
+        &entries,
+        &bounds_entries,
+        metadata_entries,
+    );
+    update_pane_item_view_entries_model_with_slot_projections(
+        view,
+        start_index,
+        entries,
+        bounds_entries,
+        slot_projections,
+        media_entries,
+        metadata_rows,
+        selected_paths,
+    )
+}
+
+pub(crate) fn update_pane_item_view_entries_model_with_slot_projections(
+    view: &mut PaneView,
+    start_index: usize,
+    entries: Vec<ItemViewEntry>,
+    bounds_entries: Vec<ItemViewItemBounds>,
+    slot_projections: Vec<PreparedItemViewSlotProjection>,
+    media_entries: Vec<ItemViewMediaSource>,
+    metadata_rows: usize,
+    selected_paths: &[String],
+) -> ItemViewModelUpdateStats {
+    let entry_rows = entries.len();
+    let bounds_rows = bounds_entries.len();
+    let media_rows = media_entries.len();
+    let next_entry_tokens = item_view_row_tokens(&entries, selected_paths);
+    let raster_tokens_changed =
+        item_view_raster_tokens_changed(&view.virtual_entry_tokens, &next_entry_tokens);
+    let slot_projections = item_view_slot_projections_with_thumbnails(
+        slot_projections,
+        start_index,
+        &entries,
         media_entries,
     );
-    let slot_projections =
-        item_view_slot_projections_with_metadata(slot_projections, start_index, metadata_entries);
     let bounds_changed = view.virtual_bounds_entries != bounds_entries;
-    update_item_view_slot_entries_model(view, slot_projections);
-    view.virtual_entry_tokens = item_view_row_tokens(&entries, selected_paths);
+    let slot = update_item_view_slot_entries_model(view, slot_projections);
+    view.virtual_entry_tokens = next_entry_tokens;
     view.virtual_entries = entries;
     view.virtual_bounds_entries = bounds_entries;
     view.virtual_start_index = start_index;
+    let raster_revision_bumped = bounds_changed || raster_tokens_changed;
     if bounds_changed || raster_tokens_changed {
         view.bump_raster_revision();
+    }
+    ItemViewModelUpdateStats {
+        slot,
+        entry_rows,
+        bounds_rows,
+        media_rows,
+        metadata_rows,
+        bounds_changed,
+        raster_tokens_changed,
+        raster_revision_bumped,
     }
 }
 
 fn item_view_raster_tokens_changed(
     current: &[ItemViewRowToken],
-    entries: &[ItemViewEntry],
-    selected_paths: &[String],
+    next: &[ItemViewRowToken],
 ) -> bool {
-    let next = item_view_row_tokens(entries, selected_paths);
     current.len() != next.len()
         || current.iter().zip(next.iter()).any(|(current, next)| {
             match (
@@ -919,10 +1170,9 @@ mod tests {
         assert!(!source.contains(&obsolete_helper));
         assert!(!source.contains(&obsolete_renderer_projection));
         assert!(
-            source.contains(
-                "item_view_slot_entries_with_metadata(slot_entries, start_index, metadata_entries)"
-            ),
-            "metadata projection should attach renderer-owned source rows to stable item slots"
+            source.contains("item_view_slot_projections_with_metadata(")
+                && source.contains("PreparedItemViewSlotProjection"),
+            "metadata projection should attach renderer-owned source rows to stable item slots before UI-thread model patching"
         );
     }
 

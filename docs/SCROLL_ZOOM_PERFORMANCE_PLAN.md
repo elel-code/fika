@@ -5,6 +5,61 @@
 用户体感问题集中在主文件视图的滚动和 zoom，不是目录刷新。当前 Dolphin-style slot reuse
 架构已经收尾，但还没有真实性能基线；本计划先建立可重复测量，再按数据处理热点。
 
+## Implementation Status
+
+截至本轮实现，代码级优化已落地，真实 workload p95 仍待 GUI 交互采样，不能用主观结论替代。
+
+已完成：
+
+- `src/app/item_view_perf.rs` 增加 `FIKA_PERF_ITEM_VIEW=1` 可关闭日志，默认无输出。
+- scroll hot path 保留 Dolphin 同步 scroll-offset boundary；cached viewport 命中时只更新 viewport
+  state/range，不进入 `prepare_virtual_view_snapshot_update()`、`sync_pane_view_ui()`、raster 或
+  fallback icon。
+- zoom hot path 保留 Dolphin transaction 的同步请求边界：zoom level 变化立即推进 pane generation
+  和 latest-only prepare request，但 `prepare_virtual_view_snapshot_update()`、entry projection、bounds、
+  metadata projection、slot projection 都在 `spawn_blocking` 中完成；UI 线程只 apply 最新 prepared
+  result、合并当前 selection/thumbnail cache，并执行必要的 Slint model writes。
+- `apply_virtual_view_result()` 不再有 UI 线程 projection fallback；prepared result 缺 projection
+  会被记录并丢弃，避免回归成同步投影。
+- `split_view.rs` 的 pane chrome 更新和 item-view 更新已拆开：`sync_pane_slot_ui()` 只 patch
+  `PaneSurfaceData.pane`，`sync_pane_view_ui()` 只构造一次 `PaneViewData` 并复用到 surface，不再因为
+  状态栏、路径栏、focus 等普通 UI 更新重新构造 item-view/raster/fallback icon。
+- `ui/app.slint`/`split_view.rs` 移除重复的 `pane_views` model；`PaneViewData` 只嵌在
+  `PaneSurfaceData` 中维护，viewport-only 和 view apply 都直接 patch `pane_surfaces`，连续 zoom
+  视觉资源复用时用轻量标量字段判断替代 `PaneViewData`/`Image`/`ModelRc` 整结构比较。
+- `model_update.rs` slot allocator 返回统计，能记录 reused/extended/inactive rows、content/geometry/
+  thumbnail patch、thumbnail image reuse/replace、`set_row_data()` 和 model extend/rebuild；生产 apply
+  路径改用后台生成的 `PreparedItemViewSlotProjection`，不再在 UI 线程重建 frame batch/slot projection。
+- `PaneView::tile_frame_raster_layer()` 记录 raster cache hit/miss、尺寸、像素数、revision 和 render time；
+  没有选中项/drop target 时直接返回 1x1 empty raster，连续 zoom 的 immediate commit 复用旧 raster。
+- fallback icon cache 改为小 LRU，key 为 `(width, height, dark, kind)`；`split_view.rs` 只请求当前
+  active non-thumbnail slots 实际需要的 media kind，不再每个 zoom level 固定渲染 10 种 icon；raster
+  deferred 时只复用缓存 icon，不在 UI 线程渲染新尺寸。
+- thumbnail flush 保留 16ms batch；icon-size timer pending 时只把结果写入 Rust state/cache，不插入
+  `sync_virtual_entries_for_slot(... schedule=false)`，等 icon-size timer 后按 latest visible slice 刷新。
+- thumbnail key 计算随 virtual projection 在 `spawn_blocking` 中完成，UI apply 只用 prepared key 合并
+  当前 cache/pending/failure 状态；cached thumbnail 的 RGBA -> `slint::Image` 转换增加 UI-side image
+  cache，避免滚动/zoom/flush 重复像素拷贝。
+- 已补结构测试覆盖 scroll/zoom 同步边界、thumbnail flush gate、fallback icon lazy kinds、slot stats
+  热路径形态。
+
+已通过验证：
+
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test app::model_update`
+- `cargo test app::geometry`
+- 全量 `cargo test`
+- `cargo build --release`
+
+仍待完成：
+
+- 在真实 GUI 中跑 `10k-flat`、`mixed-icons`、`photos`、`split-view` 等 workload，采集 debug/release
+  p95、max 和 hotspot breakdown。
+- 根据采样结果判断是否需要继续做 frame-level latest-only zoom coalescing、inactive pane 下一帧提交
+  或更深的 Slint row 拆分。
+- 更新本文档 Phase 6 表格中的实测 p95；当前不得填入猜测值。
+
 ## Current Hot Paths
 
 ### Scroll
@@ -38,15 +93,19 @@ SplitPaneView.handle-scroll(control=true)
   -> apply_visible_pane_zoom_style_options()
   -> apply_pane_zoom_style_option_for_slot()
   -> sync_virtual_entries_for_slot_with_count(... schedule_thumbnails=false, immediate=true)
-  -> prepare_virtual_view_snapshot_update()
+  -> start_virtual_view_prepare()
+  -> tokio::task::spawn_blocking(snapshot + entry/bounds/metadata/slot projection)
+  -> AsyncEvent::VirtualViewPrepared
   -> apply_virtual_view_result()
   -> set_pane_virtual_entries()
   -> sync_pane_view_ui()
 ```
 
-thumbnail/preview role 调度已用 300ms `IconSizeUpdateScheduler` 合并，但 zoom 的 layout、
-slot geometry、fallback icon image、tile raster 和 Slint primitive 更新目前是每个 zoom
-level 同步执行。
+thumbnail/preview role 调度已用 300ms `IconSizeUpdateScheduler` 合并。zoom 的 request/generation
+仍同步进入 Rust，但 snapshot、layout projection、metadata projection、bounds projection 和 slot
+projection 不在 UI 线程执行；UI 线程 apply 阶段只做 latest result 检查、当前 selection/thumbnail
+cache 合并、slot reuse/patch 和 Slint model writes。连续 zoom 的 immediate commit 会 defer tile
+raster 和 fallback icon 新尺寸渲染，等 icon-size timer 的最终 refresh 再重建。
 
 ## Dolphin Source Notes
 
@@ -99,9 +158,11 @@ level 同步执行。
 
 结论：Fika 的 scroll 和 zoom 都不能走长延迟。scroll 应对齐 Dolphin 的 synchronous
 scroll-offset boundary：logical viewport 立即进入 Rust，hot work 只更新 visible range、
-slot position 和必要的新入/离开 slots。zoom 应对齐 Dolphin 的 transaction boundary：
-style/layout 立即提交，但单次提交内只做 visible slice 必需工作；preview/thumbnail role
-更新继续独立合并和按 visible range 排序。
+slot position 和必要的新入/离开 slots。zoom 应对齐 Dolphin 的 transaction boundary，但要注意
+Dolphin 同步 `doLayout()` 的主体是 visible widget reuse/position update，不是重新做完整模型投影、
+raster 或 icon 渲染。Fika 保留同步 request/generation 边界，heavy snapshot/projection/slot projection
+走 latest-only 后台 prepare；UI 线程只 apply 最新 visible slice、合并当前 thumbnail/selection 状态并
+执行 Slint row writes。preview/thumbnail role 更新继续独立合并并按 visible range 排序。
 
 ## Concrete Source Mapping
 
@@ -260,8 +321,9 @@ view 两个 pane 同帧全量提交。
 
 候选改动：
 
-- `update_pane_item_view_entries_model()` 只构造一次 `ItemViewRowToken`，同时用于 raster token
-  diff 和最终 `view.virtual_entry_tokens`。
+- 生产路径已把 frame batch/slot projection 放到后台 prepare；后续若数据证明仍有问题，再让
+  `update_pane_item_view_entries_model_with_slot_projections()` 只构造一次 `ItemViewRowToken`，同时用于
+  raster token diff 和最终 `view.virtual_entry_tokens`。
 - 记录 `bounds_changed` 的原因，避免在可证明 range/layout 未变时做整 Vec bounds 比较。
 - 如果 `set_row_data()` 成为 zoom 主成本，评估把 slot row 拆成 content row + geometry row，或把
   zoom 派生几何进一步移到 pane-level 公式，只保留真正 per-item 的 `x/text_width`。

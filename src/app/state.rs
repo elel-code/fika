@@ -6,6 +6,7 @@ use crate::fs::privilege::{ExternalEditSession, PrivilegedCommand};
 use crate::fs::thumbnails;
 use crate::support::generation::GenerationCounter;
 use crate::{DesktopApp, DeviceEntry, PlaceEntry};
+use slint::Image;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -36,6 +37,7 @@ pub(crate) struct AppState {
     pub(crate) directory_cache_order: VecDeque<PathBuf>,
     pub(crate) directory_prefetch_pending: HashSet<PathBuf>,
     pub(crate) thumbnail_cache: HashMap<thumbnails::ThumbnailKey, thumbnails::ThumbnailData>,
+    pub(crate) thumbnail_image_cache: HashMap<thumbnails::ThumbnailKey, Image>,
     pub(crate) thumbnail_cache_order: VecDeque<thumbnails::ThumbnailKey>,
     pub(crate) thumbnail_failures: HashMap<thumbnails::ThumbnailKey, String>,
     pub(crate) thumbnail_failure_order: VecDeque<thumbnails::ThumbnailKey>,
@@ -89,6 +91,7 @@ impl AppState {
             directory_cache_order: VecDeque::new(),
             directory_prefetch_pending: HashSet::new(),
             thumbnail_cache: HashMap::new(),
+            thumbnail_image_cache: HashMap::new(),
             thumbnail_cache_order: VecDeque::new(),
             thumbnail_failures: HashMap::new(),
             thumbnail_failure_order: VecDeque::new(),

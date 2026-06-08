@@ -41,7 +41,7 @@ use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
     EXTERNAL_EDIT_DISCARD_OPERATION, EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult,
     FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult, FileUndoResult,
-    RecursiveSearchProgress, RecursiveSearchResult, VirtualViewResult,
+    RecursiveSearchProgress, RecursiveSearchResult, VirtualViewProjection, VirtualViewResult,
 };
 use app::file_clipboard::{
     apply_clipboard_load_result, apply_clipboard_paste_load_result,
@@ -49,7 +49,8 @@ use app::file_clipboard::{
 };
 use app::file_item_roles_updater::{
     ICON_SIZE_UPDATE_INTERVAL, schedule_thumbnail_roles_for_entries,
-    schedule_visible_thumbnail_roles_for_slot, thumbnail_size_px,
+    schedule_visible_thumbnail_roles_for_entries, schedule_visible_thumbnail_roles_for_slot,
+    thumbnail_size_px,
 };
 use app::geometry::{
     CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayouter,
@@ -62,12 +63,16 @@ use app::item_view::{
     move_blank_for_slot, press_blank_for_slot, press_entry_at_pane_point, release_blank_for_slot,
 };
 use app::item_view_model::ItemViewModelEntry;
+use app::item_view_perf::{self, PerfTimer};
 use app::item_view_renderer::{
-    ItemViewMediaSource, ItemViewMetadataOverlaySource, ItemViewRenderMetrics,
-    ItemViewRenderPlanInput, decorate_render_plan_with_metadata,
+    ItemViewMediaSource, ItemViewRenderMetrics, ItemViewRenderPlanInput,
+    decorate_render_plan_with_metadata,
 };
 use app::model_update::{
-    update_pane_item_view_entries_model, update_pane_item_view_selection_model,
+    ItemViewModelUpdateStats, PreparedItemViewSlotProjection,
+    item_view_slot_projections_for_entries,
+    update_pane_item_view_entries_model_with_slot_projections,
+    update_pane_item_view_selection_model,
 };
 use app::operation_controller::{
     ExternalEditStartDecision, FileUndoRegistrationSummary, FileUndoStartDecision, FileUndoUiState,
@@ -104,8 +109,8 @@ use app::split_view::{
 use app::state::PaneExternalEdit;
 use app::state::{AppState, DeviceAction};
 use app::thumbnail_pipeline::{
-    THUMBNAIL_STATE_LOADED, apply_thumbnail_load_to_state_for_pane,
-    decorate_entries_with_cached_thumbnails_for_pane,
+    THUMBNAIL_STATE_LOADED, ThumbnailScheduleEntry, apply_thumbnail_load_to_state_for_pane,
+    decorate_entries_with_prepared_thumbnail_keys_for_pane, prepare_thumbnail_keys_for_entries,
 };
 use app::transfer::{
     cancel_queued_operations, pane_drop_allowed, pane_drop_target_path, place_drop_allowed,
@@ -179,14 +184,21 @@ impl PaneViewSyncScheduler {
     }
 
     fn request(&self, slot: i32) {
+        let timer = PerfTimer::start();
         if self.syncing.get() {
+            item_view_perf::log(format_args!(
+                "view_sync_request slot={} reentrant_skip=true",
+                slot
+            ));
             return;
         }
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
         self.syncing.set(true);
+        let icon_size_update_pending;
         if self.icon_size_update_pending.get() {
+            icon_size_update_pending = true;
             sync_pane_viewport_for_slot_with_thumbnail_scheduling(
                 &ui,
                 &self.state,
@@ -195,9 +207,16 @@ impl PaneViewSyncScheduler {
                 false,
             );
         } else {
+            icon_size_update_pending = false;
             sync_pane_viewport_for_slot(&ui, &self.state, &self.bridge, slot);
         }
         self.syncing.set(false);
+        item_view_perf::log(format_args!(
+            "view_sync_request slot={} reentrant_skip=false icon_size_pending={} sync_ms={:.3}",
+            slot,
+            icon_size_update_pending,
+            timer.elapsed_ms()
+        ));
     }
 
     fn flush_all(&self) {}
@@ -302,9 +321,18 @@ impl PaneLayoutSyncScheduler {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        let timer = PerfTimer::start();
+        let pane_count = ui.get_pane_slots().row_count();
+        let zoom_level = ui.get_icon_zoom_level();
         self.pane_view_sync.flush_all();
         apply_visible_pane_zoom_style_options(&ui, &self.state, &self.bridge);
         self.icon_size_update.trigger_icon_size_update();
+        item_view_perf::log(format_args!(
+            "zoom level={} panes={} layout_ms={:.3} icon_size_timer_pending=true",
+            zoom_level,
+            pane_count,
+            timer.elapsed_ms()
+        ));
     }
 }
 
@@ -318,16 +346,29 @@ type ThumbnailPendingQueue = Rc<RefCell<VecDeque<ThumbnailPendingLoad>>>;
 
 enum VirtualViewSyncRequest {
     Cached {
-        viewport_x: f32,
-        publish_viewport: bool,
+        sync: CachedVirtualViewportSync,
         publish_layout: bool,
     },
     Deferred,
     Prepare(VirtualViewPrepareRequest),
 }
 
+#[derive(Debug, PartialEq)]
+struct CachedVirtualViewportSync {
+    viewport_x: f32,
+    publish_viewport: bool,
+    cached_range: std::ops::Range<usize>,
+    visible_range: std::ops::Range<usize>,
+    entry_count: usize,
+}
+
 impl ThumbnailFlushScheduler {
-    fn new(ui: slint::Weak<AppWindow>, state: Rc<RefCell<AppState>>, bridge: AsyncBridge) -> Self {
+    fn new(
+        ui: slint::Weak<AppWindow>,
+        state: Rc<RefCell<AppState>>,
+        bridge: AsyncBridge,
+        icon_size_update_pending: Rc<Cell<bool>>,
+    ) -> Self {
         let timer = Timer::default();
         let pending = Rc::new(RefCell::new(VecDeque::<(
             u64,
@@ -340,7 +381,13 @@ impl ThumbnailFlushScheduler {
             let Some(ui) = ui.upgrade() else {
                 return;
             };
-            flush_thumbnail_results(&ui, &state, &bridge, &timer_pending);
+            flush_thumbnail_results(
+                &ui,
+                &state,
+                &bridge,
+                &timer_pending,
+                icon_size_update_pending.get(),
+            );
         });
         timer.stop();
 
@@ -1667,12 +1714,13 @@ fn main() -> Result<(), slint::PlatformError> {
         Rc::clone(&state),
         bridge.clone(),
         Rc::clone(&pane_view_sync),
-        icon_size_update_pending,
+        Rc::clone(&icon_size_update_pending),
     ));
     let thumbnail_flush = Rc::new(ThumbnailFlushScheduler::new(
         ui.as_weak(),
         Rc::clone(&state),
         bridge.clone(),
+        Rc::clone(&icon_size_update_pending),
     ));
     let settings_save = Rc::new(SettingsSaveScheduler::new(async_handle.clone()));
 
@@ -2527,9 +2575,6 @@ fn set_current_location_ui(ui: &AppWindow, path: &Path) {
 }
 
 fn clear_pane_models_ui(ui: &AppWindow) {
-    ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(
-        Vec::<PaneViewData>::new(),
-    ))));
     ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(
         Vec::<PaneSlotData>::new(),
     ))));
@@ -4185,6 +4230,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
     force_rebuild_model: bool,
     schedule_visible_thumbnail_roles_after_apply: bool,
 ) {
+    let sync_timer = PerfTimer::start();
     let size_px = thumbnail_size_px(ui);
     let zoom_level = ui.get_icon_zoom_level();
     let window_size = ui.window().size().to_logical(ui.window().scale_factor());
@@ -4222,16 +4268,14 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
             return;
         };
         let requested_viewport_x = pane.view.viewport_x;
+        let show_location = pane.show_item_locations();
         layout.viewport_x = requested_viewport_x;
         if !pane.view.has_renderable_virtual_entries() {
             pane.view.virtual_view.invalidate();
         }
-        if immediate {
-            pane.view.cancel_virtual_prepare_queue();
-        }
         if !force_uncached_prepare
             && !force_rebuild_model
-            && let Some((viewport_x, publish_viewport)) = cached_virtual_viewport_sync(
+            && let Some(sync) = cached_virtual_viewport_sync(
                 pane,
                 &layout,
                 requested_viewport_x,
@@ -4244,8 +4288,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
             pane.view.virtual_generation.next();
             pane.view.clear_pending_virtual_prepare();
             Some(VirtualViewSyncRequest::Cached {
-                viewport_x,
-                publish_viewport,
+                sync,
                 publish_layout: publish_layout_on_cache,
             })
         } else {
@@ -4259,6 +4302,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
                 schedule_visible_thumbnail_roles_after_apply,
                 cell_width: layout.cell_width,
                 render_metrics,
+                show_location,
                 input: Box::new(VirtualViewSnapshotInput {
                     layout,
                     requested_viewport_x,
@@ -4283,13 +4327,11 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
                     chooser_patterns,
                 }),
             };
-            if !immediate && pane.view.has_virtual_prepare_in_flight() {
+            if pane.view.has_virtual_prepare_in_flight() {
                 pane.view.defer_virtual_prepare(request);
                 Some(VirtualViewSyncRequest::Deferred)
             } else {
-                if !immediate {
-                    pane.view.mark_virtual_prepare_started(generation);
-                }
+                pane.view.mark_virtual_prepare_started(generation);
                 Some(VirtualViewSyncRequest::Prepare(request))
             }
         }
@@ -4299,53 +4341,43 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
 
     let request = match request {
         VirtualViewSyncRequest::Cached {
-            viewport_x,
-            publish_viewport,
+            sync,
             publish_layout,
         } => {
             if publish_layout {
                 sync_pane_view_ui(ui, state, slot);
-            } else if publish_viewport {
-                set_pane_viewport_ui(ui, slot, viewport_x, state);
+            } else if sync.publish_viewport {
+                set_pane_viewport_ui(ui, slot, sync.viewport_x, state);
             }
+            item_view_perf::log(format_args!(
+                "scroll slot={} cached=true viewport={:.0} range={}..{} visible={}..{} entry_count={} publish_viewport={} publish_layout={} sync_ms={:.3} model_writes=0",
+                slot,
+                sync.viewport_x,
+                sync.cached_range.start,
+                sync.cached_range.end,
+                sync.visible_range.start,
+                sync.visible_range.end,
+                sync.entry_count,
+                sync.publish_viewport,
+                publish_layout,
+                sync_timer.elapsed_ms()
+            ));
             if schedule_visible_thumbnail_roles_after_apply {
                 schedule_visible_thumbnail_roles_for_slot(ui, state, bridge, slot);
             }
             return;
         }
-        VirtualViewSyncRequest::Deferred => return,
+        VirtualViewSyncRequest::Deferred => {
+            item_view_perf::log(format_args!(
+                "virtual_sync slot={} deferred=true immediate={} sync_ms={:.3}",
+                slot,
+                immediate,
+                sync_timer.elapsed_ms()
+            ));
+            return;
+        }
         VirtualViewSyncRequest::Prepare(request) => request,
     };
-
-    if immediate {
-        let VirtualViewPrepareRequest {
-            pane_id,
-            generation,
-            thumbnail_size_px,
-            schedule_thumbnails,
-            schedule_visible_thumbnail_roles_after_apply,
-            cell_width,
-            render_metrics,
-            input,
-        } = request;
-        let update = prepare_virtual_view_snapshot_update(*input);
-        apply_virtual_view_result(
-            ui,
-            state,
-            bridge,
-            VirtualViewResult {
-                pane_id,
-                generation,
-                thumbnail_size_px,
-                schedule_thumbnails,
-                schedule_visible_thumbnail_roles_after_apply,
-                cell_width,
-                render_metrics,
-                update,
-            },
-        );
-        return;
-    }
 
     start_virtual_view_prepare(bridge, request);
 }
@@ -4359,28 +4391,56 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
         schedule_visible_thumbnail_roles_after_apply,
         cell_width,
         render_metrics,
+        show_location,
         input,
     } = request;
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     bridge.handle.spawn(async move {
-        match tokio::task::spawn_blocking(move || prepare_virtual_view_snapshot_update(*input))
-            .await
+        match tokio::task::spawn_blocking(move || {
+            let prepare_timer = PerfTimer::start();
+            let update = prepare_virtual_view_snapshot_update(*input);
+            let prepare_ms = prepare_timer.elapsed_ms();
+            let projection_timer = PerfTimer::start();
+            let projection = prepare_virtual_view_projection(
+                &update,
+                cell_width,
+                render_metrics,
+                show_location,
+                thumbnail_size_px,
+                schedule_thumbnails,
+            );
+            (update, projection, prepare_ms, projection_timer.elapsed_ms())
+        })
+        .await
         {
-            Ok(update) => send_async_event(
-                async_tx,
-                notify_ui,
-                AsyncEvent::VirtualViewPrepared(VirtualViewResult {
+            Ok((update, projection, prepare_ms, projection_ms)) => {
+                item_view_perf::log(format_args!(
+                    "prepare pane_id={} generation={} immediate=false rebuild={} range={}..{} visible={}..{} prepare_ms={:.3} projection_ms={:.3}",
                     pane_id,
                     generation,
-                    thumbnail_size_px,
-                    schedule_thumbnails,
-                    schedule_visible_thumbnail_roles_after_apply,
-                    cell_width,
-                    render_metrics,
-                    update,
-                }),
-            ),
+                    update.rebuild_model,
+                    update.range.start,
+                    update.range.end,
+                    update.visible_range.start,
+                    update.visible_range.end,
+                    prepare_ms,
+                    projection_ms
+                ));
+                send_async_event(
+                    async_tx,
+                    notify_ui,
+                    AsyncEvent::VirtualViewPrepared(VirtualViewResult {
+                        pane_id,
+                        generation,
+                        thumbnail_size_px,
+                        schedule_thumbnails,
+                        schedule_visible_thumbnail_roles_after_apply,
+                        update,
+                        projection,
+                    }),
+                )
+            }
             Err(_) => send_async_event(
                 async_tx,
                 notify_ui,
@@ -4393,6 +4453,65 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
     });
 }
 
+fn prepare_virtual_view_projection(
+    update: &app::virtual_view::VirtualViewSnapshotUpdate,
+    cell_width: f32,
+    render_metrics: ItemViewRenderMetrics,
+    show_location: bool,
+    thumbnail_size_px: u32,
+    schedule_thumbnails: bool,
+) -> Option<VirtualViewProjection> {
+    if !update.rebuild_model {
+        return None;
+    }
+
+    let metadata_sources = if show_location {
+        update
+            .entries
+            .iter()
+            .map(ItemViewModelEntry::model_metadata_source)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mut entries = update
+        .entries
+        .iter()
+        .map(ItemViewModelEntry::model_to_item_view_entry)
+        .collect::<Vec<_>>();
+    let metadata_entries = decorate_render_plan_with_metadata(
+        &mut entries,
+        ItemViewRenderPlanInput {
+            cell_width,
+            render_metrics,
+            show_location,
+        },
+        &metadata_sources,
+    );
+    let bounds_entries =
+        item_view_bounds_entries(update.layout.as_ref(), update.range.start, entries.len());
+    let metadata_rows = metadata_entries.len();
+    let slot_projections = item_view_slot_projections_for_entries(
+        update.range.start,
+        &entries,
+        &bounds_entries,
+        metadata_entries,
+    );
+    let thumbnail_keys = if schedule_thumbnails {
+        prepare_thumbnail_keys_for_entries(&entries, thumbnail_size_px)
+    } else {
+        Vec::new()
+    };
+
+    Some(VirtualViewProjection {
+        entries,
+        bounds_entries,
+        slot_projections,
+        thumbnail_keys,
+        metadata_rows,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cached_virtual_viewport_sync(
     pane: &mut PaneState,
@@ -4402,7 +4521,7 @@ fn cached_virtual_viewport_sync(
     schedule_thumbnails: bool,
     visible_count_override: Option<usize>,
     chooser_patterns: &[String],
-) -> Option<(f32, bool)> {
+) -> Option<CachedVirtualViewportSync> {
     if !schedule_thumbnails || visible_count_override.is_some() {
         return None;
     }
@@ -4423,10 +4542,13 @@ fn cached_virtual_viewport_sync(
     }
 
     pane.view.viewport_x = plan.viewport_x;
-    Some((
-        plan.viewport_x,
-        (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON,
-    ))
+    Some(CachedVirtualViewportSync {
+        viewport_x: plan.viewport_x,
+        publish_viewport: (plan.viewport_x - requested_viewport_x).abs() > f32::EPSILON,
+        cached_range: pane.view.virtual_view.range.clone(),
+        visible_range: plan.visible_range,
+        entry_count: current_entry_count,
+    })
 }
 
 fn pane_visible_entry_count_for_virtual_cache(
@@ -4477,29 +4599,36 @@ fn apply_virtual_view_result(
     bridge: &AsyncBridge,
     result: VirtualViewResult,
 ) {
+    let apply_timer = PerfTimer::start();
+    let pane_id = result.pane_id;
+    let generation = result.generation;
+    let thumbnail_size_px = result.thumbnail_size_px;
+    let schedule_thumbnails = result.schedule_thumbnails;
+    let schedule_visible_thumbnail_roles_after_apply =
+        result.schedule_visible_thumbnail_roles_after_apply;
+    let projection = result.projection;
     let update = result.update;
     let slot;
     let follow_up_request;
     let result_is_current;
     {
         let mut state_ref = state.borrow_mut();
-        slot = match state_ref.panes.slot_for_id(result.pane_id) {
+        slot = match state_ref.panes.slot_for_id(pane_id) {
             Some(s) => s,
             None => return,
         };
-        let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
+        let Some(pane) = state_ref.panes.pane_mut_by_id(pane_id) else {
             return;
         };
-        follow_up_request = pane.view.finish_virtual_prepare(result.generation);
-        result_is_current = pane.view.virtual_generation.is_current(result.generation);
+        follow_up_request = pane.view.finish_virtual_prepare(generation);
+        result_is_current = pane.view.virtual_generation.is_current(generation);
         if result_is_current {
             pane.view.viewport_x = update.viewport_x;
             if update.rebuild_model {
                 pane.view.virtual_view.range = update.range.clone();
-                pane.view.virtual_view.update_layout_signature_arc(
-                    Arc::clone(&update.layout),
-                    result.thumbnail_size_px,
-                );
+                pane.view
+                    .virtual_view
+                    .update_layout_signature_arc(Arc::clone(&update.layout), thumbnail_size_px);
             }
         }
     }
@@ -4510,7 +4639,13 @@ fn apply_virtual_view_result(
     if !result_is_current {
         debug_log(&format!(
             "virtual_view_result stale pane_id={} generation={}",
-            result.pane_id, result.generation
+            pane_id, generation
+        ));
+        item_view_perf::log(format_args!(
+            "virtual_apply pane_id={} generation={} stale=true apply_ms={:.3}",
+            pane_id,
+            generation,
+            apply_timer.elapsed_ms()
         ));
         return;
     }
@@ -4524,53 +4659,50 @@ fn apply_virtual_view_result(
             ui.set_entry_count(update.entry_count as i32);
             sync_pane_view_ui(ui, state, slot);
         }
+        item_view_perf::log(format_args!(
+            "virtual_apply slot={} pane_id={} generation={} rebuild=false clamped={} entry_count={} apply_ms={:.3}",
+            slot,
+            pane_id,
+            generation,
+            update.viewport_clamped,
+            update.entry_count,
+            apply_timer.elapsed_ms()
+        ));
         return;
     }
 
-    let show_location = {
-        let state_ref = state.borrow();
-        state_ref
-            .panes
-            .pane_by_id(result.pane_id)
-            .is_some_and(|pane| pane.show_item_locations())
+    let Some(VirtualViewProjection {
+        mut entries,
+        bounds_entries,
+        slot_projections,
+        thumbnail_keys,
+        metadata_rows,
+    }) = projection
+    else {
+        item_view_perf::log(format_args!(
+            "virtual_apply slot={} pane_id={} generation={} missing_projection=true apply_ms={:.3}",
+            slot,
+            pane_id,
+            generation,
+            apply_timer.elapsed_ms()
+        ));
+        return;
     };
-    let snapshots = update.entries;
-    let metadata_sources = if show_location {
-        snapshots
-            .iter()
-            .map(ItemViewModelEntry::model_metadata_source)
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let mut entries = snapshots
-        .iter()
-        .map(ItemViewModelEntry::model_to_item_view_entry)
-        .collect::<Vec<_>>();
-    let metadata_entries = decorate_render_plan_with_metadata(
-        &mut entries,
-        ItemViewRenderPlanInput {
-            cell_width: result.cell_width,
-            render_metrics: result.render_metrics,
-            show_location,
-        },
-        &metadata_sources,
-    );
     let (selected_paths, media_entries) = {
-        let state_ref = state.borrow();
+        let mut state_ref = state.borrow_mut();
         let selected_paths = state_ref
             .panes
-            .pane_by_id(result.pane_id)
+            .pane_by_id(pane_id)
             .map(|pane| pane.selection.paths.clone())
             .unwrap_or_default();
-        let media_entries = if result.schedule_thumbnails {
-            decorate_entries_with_cached_thumbnails_for_pane(
-                &state_ref,
-                result.pane_id,
+        let media_entries = if schedule_thumbnails {
+            decorate_entries_with_prepared_thumbnail_keys_for_pane(
+                &mut state_ref,
+                pane_id,
                 &mut entries,
-                result.thumbnail_size_px,
+                &thumbnail_keys,
             )
-        } else if let Some(pane) = state_ref.panes.pane_by_id(result.pane_id) {
+        } else if let Some(pane) = state_ref.panes.pane_by_id(pane_id) {
             preserve_current_thumbnail_roles_for_deferred_icon_size_update(
                 pane,
                 update.range.start,
@@ -4579,57 +4711,116 @@ fn apply_virtual_view_result(
         } else {
             Vec::new()
         };
-        if state_ref.panes.pane_by_id(result.pane_id).is_none() {
+        if state_ref.panes.pane_by_id(pane_id).is_none() {
             return;
         }
         (selected_paths, media_entries)
     };
+    let thumbnail_schedule_entries = if schedule_thumbnails {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(row, entry)| {
+                ThumbnailScheduleEntry::from_entry_with_prepared_key(entry, thumbnail_keys.get(row))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
 
-    if result.schedule_thumbnails && !result.schedule_visible_thumbnail_roles_after_apply {
+    if schedule_thumbnails {
         let maximum_visible_items = update
             .visible_range
             .end
             .saturating_sub(update.visible_range.start)
             .max(1);
-        schedule_thumbnail_roles_for_entries(
-            state,
-            bridge,
-            result.pane_id,
-            &entries,
-            update.range.start,
-            update.visible_range,
-            maximum_visible_items,
-            result.thumbnail_size_px,
-        );
+        if schedule_visible_thumbnail_roles_after_apply {
+            schedule_visible_thumbnail_roles_for_entries(
+                state,
+                bridge,
+                pane_id,
+                &thumbnail_schedule_entries,
+                update.range.start,
+                update.visible_range.clone(),
+                maximum_visible_items,
+                thumbnail_size_px,
+            );
+        } else {
+            schedule_thumbnail_roles_for_entries(
+                state,
+                bridge,
+                pane_id,
+                &thumbnail_schedule_entries,
+                update.range.start,
+                update.visible_range.clone(),
+                maximum_visible_items,
+                thumbnail_size_px,
+            );
+        }
     }
-    let bounds_entries =
-        item_view_bounds_entries(update.layout.as_ref(), update.range.start, entries.len());
-    set_pane_virtual_entries(
+    let model_timer = PerfTimer::start();
+    let model_stats = set_pane_virtual_entries(
         state,
         slot,
         update.range.start,
         entries,
         bounds_entries,
+        slot_projections,
         media_entries,
-        metadata_entries,
+        metadata_rows,
         &selected_paths,
-        !result.schedule_thumbnails,
+        !schedule_thumbnails,
     );
+    let model_ms = model_timer.elapsed_ms();
     if target_is_focused {
         ui.set_entry_count(update.entry_count as i32);
     }
     debug_log(&format!(
         "virtual_view_result applied pane_id={} generation={} range={}..{} entries={} entry_count={}",
-        result.pane_id,
-        result.generation,
+        pane_id,
+        generation,
         update.range.start,
         update.range.end,
         update.range.end.saturating_sub(update.range.start),
         update.entry_count
     ));
+    let sync_ui_timer = PerfTimer::start();
     sync_pane_view_ui(ui, state, slot);
-    if result.schedule_visible_thumbnail_roles_after_apply {
-        schedule_visible_thumbnail_roles_for_slot(ui, state, bridge, slot);
+    let sync_ui_ms = sync_ui_timer.elapsed_ms();
+    if let Some(stats) = model_stats {
+        let slot_stats = stats.slot;
+        item_view_perf::log(format_args!(
+            "virtual_apply slot={} pane_id={} generation={} rebuild=true schedule_thumbnails={} range={}..{} visible={}..{} entries={} bounds={} media={} metadata={} active_slots={} inactive_slots={} reused_slots={} extended_slots={} patched={} content_patched={} geometry_patched={} thumbnail_patched={} thumbnail_reuse={} thumbnail_replace={} set_row_data={} model_extend={} model_rebuild={} raster_bumped={} model_ms={:.3} sync_ui_ms={:.3} apply_ms={:.3}",
+            slot,
+            pane_id,
+            generation,
+            schedule_thumbnails,
+            update.range.start,
+            update.range.end,
+            update.visible_range.start,
+            update.visible_range.end,
+            stats.entry_rows,
+            stats.bounds_rows,
+            stats.media_rows,
+            stats.metadata_rows,
+            slot_stats.active_rows,
+            slot_stats.inactive_rows,
+            slot_stats.reused_slots,
+            slot_stats.extended_slots,
+            slot_stats.patched_rows,
+            slot_stats.content_patched_rows,
+            slot_stats.geometry_patched_rows,
+            slot_stats.thumbnail_patched_rows,
+            slot_stats.thumbnail_image_reused,
+            slot_stats.thumbnail_image_replaced,
+            slot_stats.set_row_data,
+            slot_stats.model_extend_rows,
+            slot_stats.model_rebuilt_rows,
+            stats.raster_revision_bumped,
+            model_ms,
+            sync_ui_ms,
+            apply_timer.elapsed_ms()
+        ));
     }
 }
 
@@ -4726,23 +4917,29 @@ fn set_pane_virtual_entries(
     start_index: usize,
     entries: Vec<ItemViewEntry>,
     bounds_entries: Vec<ItemViewItemBounds>,
+    slot_projections: Vec<PreparedItemViewSlotProjection>,
     media_entries: Vec<ItemViewMediaSource>,
-    metadata_entries: Vec<ItemViewMetadataOverlaySource>,
+    metadata_rows: usize,
     selected_paths: &[String],
     defer_raster_update: bool,
-) {
-    if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
-        pane.view.set_raster_updates_deferred(defer_raster_update);
-        update_pane_item_view_entries_model(
-            &mut pane.view,
-            start_index,
-            entries,
-            bounds_entries,
-            media_entries,
-            metadata_entries,
-            selected_paths,
-        );
-    }
+) -> Option<ItemViewModelUpdateStats> {
+    state
+        .borrow_mut()
+        .panes
+        .pane_mut_for_slot(slot)
+        .map(|pane| {
+            pane.view.set_raster_updates_deferred(defer_raster_update);
+            update_pane_item_view_entries_model_with_slot_projections(
+                &mut pane.view,
+                start_index,
+                entries,
+                bounds_entries,
+                slot_projections,
+                media_entries,
+                metadata_rows,
+                selected_paths,
+            )
+        })
 }
 
 fn item_view_bounds_entries(
@@ -5080,28 +5277,49 @@ fn flush_thumbnail_results(
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     pending: &ThumbnailPendingQueue,
+    icon_size_update_pending: bool,
 ) {
-    let refresh_pane_ids = {
+    let timer = PerfTimer::start();
+    let (refresh_pane_ids, batch_size, applied_count) = {
         let mut state = state.borrow_mut();
         let mut refresh_pane_ids = Vec::new();
         let mut pending = pending.borrow_mut();
+        let mut batch_size = 0;
+        let mut applied_count = 0;
         while let Some((pane_id, generation, load)) = pending.pop_front() {
+            batch_size += 1;
             let path_text = load.path.display().to_string();
             if apply_thumbnail_load_to_state_for_pane(
                 &mut state, pane_id, generation, &path_text, load,
-            ) && !refresh_pane_ids.contains(&pane_id)
-            {
-                refresh_pane_ids.push(pane_id);
+            ) {
+                applied_count += 1;
+                if !refresh_pane_ids.contains(&pane_id) {
+                    refresh_pane_ids.push(pane_id);
+                }
             }
         }
-        refresh_pane_ids
+        (refresh_pane_ids, batch_size, applied_count)
     };
-    for pane_id in refresh_pane_ids {
-        let slot = { state.borrow().panes.slot_for_id(pane_id) };
-        if let Some(slot) = slot {
-            sync_virtual_entries_for_slot(ui, state, bridge, slot, false);
+    let refresh_count = refresh_pane_ids.len();
+    let mut visible_syncs = 0;
+    if !icon_size_update_pending {
+        for pane_id in refresh_pane_ids {
+            let slot = { state.borrow().panes.slot_for_id(pane_id) };
+            if let Some(slot) = slot {
+                visible_syncs += 1;
+                sync_virtual_entries_for_slot(ui, state, bridge, slot, false);
+            }
         }
     }
+    item_view_perf::log(format_args!(
+        "thumbnail_flush batch={} applied={} affected_panes={} visible_syncs={} gated_by_icon_size={} flush_ms={:.3}",
+        batch_size,
+        applied_count,
+        refresh_count,
+        visible_syncs,
+        icon_size_update_pending,
+        timer.elapsed_ms()
+    ));
 }
 
 fn refresh_visible_pane_tile_frame_rasters(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -5177,6 +5395,11 @@ fn apply_pane_zoom_style_option_for_slot(
     bridge: &AsyncBridge,
     slot: i32,
 ) {
+    item_view_perf::log(format_args!(
+        "zoom slot={} level={} schedule_thumbnails=false immediate=true",
+        slot,
+        ui.get_icon_zoom_level()
+    ));
     sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, true, true);
 }
 
@@ -5406,7 +5629,7 @@ fn update_selection_ui_for_slot(
 }
 
 fn pane_view_row_exists(ui: &AppWindow, slot: i32) -> bool {
-    let current = ui.get_pane_views();
+    let current = ui.get_pane_surfaces();
     (0..current.row_count()).any(|row| {
         current
             .row_data(row)
@@ -6930,35 +7153,34 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_view_ui("))
             .map(|(body, _)| body)
             .expect("sync_pane_slots_model body should be present");
-        let views_model_body = body
-            .split_once("fn sync_pane_views_model(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surfaces_model("))
-            .map(|(body, _)| body)
-            .unwrap_or_else(|| {
-                source
-                    .split_once("fn sync_pane_views_model(")
-                    .and_then(|(_, rest)| rest.split_once("fn sync_pane_surfaces_model("))
-                    .map(|(body, _)| body)
-                    .expect("sync_pane_views_model body should be present")
-            });
         let surfaces_model_body = source
             .split_once("fn sync_pane_surfaces_model(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surface_ui("))
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surface_pane_ui("))
             .map(|(body, _)| body)
             .expect("sync_pane_surfaces_model body should be present");
 
         assert!(
             body.contains("let visible_slots = visible_pane_slots(ui);")
+                && body.contains("let (slots, surfaces) = {")
                 && body.contains("let mut slots = Vec::with_capacity(visible_slots.len());")
-                && body.contains("let mut views = Vec::with_capacity(visible_slots.len());")
+                && !body.contains("let mut views = Vec::with_capacity(visible_slots.len());")
                 && body.contains("let mut surfaces = Vec::with_capacity(visible_slots.len());")
                 && body.contains("for slot in visible_slots.iter().copied()")
                 && body.contains("let pane = pane_slot_data(ui, slot, &state_ref);")
                 && body.contains("let view = pane_view_data(ui, slot, &state_ref);")
-                && body.contains("PaneSurfaceData {\n                slot,\n                pane: pane.clone(),\n                view: view.clone(),\n            }")
-                && body.contains("sync_pane_views_model(ui, views);")
+                && body.contains(
+                    "PaneSurfaceData {\n                slot,\n                pane: pane.clone(),\n                view,\n            }"
+                )
+                && !body.contains("sync_pane_views_model(ui, views);")
                 && body.contains("sync_pane_slots_model(ui, slots);")
                 && body.contains("sync_pane_surfaces_model(ui, surfaces);")
+                && source.contains("fn pane_view_data_needs_row_update(")
+                && source.contains("fn pane_view_lightweight_fields_match(")
+                && !source.contains("fn sync_pane_views_model(")
+                && !source.contains("get_pane_views")
+                && !source.contains("set_pane_views")
+                && !source.contains("current_view != next")
+                && !source.contains("current_surface.view != view")
                 && !body.contains("sync_pane_entries_ui(ui, entries);")
                 && !body.contains("sync_pane_media_ui(ui, media);")
                 && !body.contains("sync_pane_metadata_ui(ui, metadata);")
@@ -6970,22 +7192,18 @@ mod tests {
                 && slots_model_body
                     .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));")
                 && !slots_model_body.contains("state.borrow()")
-                && views_model_body.contains("let current = ui.get_pane_views();")
-                && views_model_body.contains("let same_slots = current.row_count() == views.len()")
-                && views_model_body.contains(".is_some_and(|current| current.slot == view.slot)")
-                && views_model_body.contains("if current.row_data(row).as_ref() != Some(&view)")
-                && views_model_body.contains("current.set_row_data(row, view);")
-                && views_model_body
-                    .contains("ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));")
-                && !views_model_body.contains("state.borrow()")
                 && surfaces_model_body.contains("let current = ui.get_pane_surfaces();")
                 && surfaces_model_body
                     .contains("let same_slots = current.row_count() == surfaces.len()")
                 && surfaces_model_body
                     .contains(".is_some_and(|current| current.slot == surface.slot)")
                 && surfaces_model_body
-                    .contains("if current.row_data(row).as_ref() != Some(&surface)")
+                    .contains("if let Some(current_surface) = current.row_data(row)")
+                && surfaces_model_body.contains("current_surface.pane != surface.pane")
+                && surfaces_model_body.contains("pane_view_data_needs_row_update(")
                 && surfaces_model_body.contains("current.set_row_data(row, surface);")
+                && !surfaces_model_body
+                    .contains("current.row_data(row).as_ref() != Some(&surface)")
                 && surfaces_model_body.contains(
                     "ui.set_pane_surfaces(ModelRc::new(Rc::new(VecModel::from(surfaces))));"
                 )
@@ -7101,6 +7319,16 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn visible_pane_slots("))
             .map(|(body, _)| body)
             .expect("sync_pane_slot_ui body should be present");
+        let surface_pane_body = source
+            .split_once("fn sync_pane_surface_pane_ui(")
+            .and_then(|(_, rest)| rest.split_once("fn replace_pane_surfaces_model_with_view("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_surface_pane_ui body should be present");
+        let view_body = source
+            .split_once("pub(crate) fn sync_pane_view_ui(")
+            .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_slot_ui("))
+            .map(|(body, _)| body)
+            .expect("sync_pane_view_ui body should be present");
 
         assert!(
             body.contains("if current_slot.slot == slot")
@@ -7108,9 +7336,22 @@ mod tests {
                     "let next = {\n                let state_ref = state.borrow();\n                pane_slot_data(ui, slot, &state_ref)\n            };"
                 )
                 && body.contains("if current_slot != next")
-                && body.contains("current.set_row_data(row, next);")
+                && body.contains("current.set_row_data(row, next.clone());")
+                && body.contains("sync_pane_surface_pane_ui(ui, state, slot, next);")
+                && !body.contains("pane_view_data(")
                 && !body.contains("sync_pane_slots_ui(ui, state);"),
-            "single-pane refreshes should update the affected pane row without creating missing pane surfaces"
+            "single-pane refreshes should update the affected pane row without rebuilding item-view data"
+        );
+        assert!(
+            surface_pane_body.contains("current_surface.pane = pane;")
+                && !surface_pane_body.contains("pane_view_data(")
+                && view_body.contains("let current = ui.get_pane_surfaces();")
+                && view_body.contains("let current_view = current_surface.view.clone();")
+                && view_body.contains("pane_view_data_with_visual_reuse(")
+                && view_body.contains("current_surface.view = next;")
+                && !view_body.contains("get_pane_views")
+                && !view_body.contains("pane_slot_data("),
+            "PaneSurfaceData pane/view patches should not rebuild unrelated surface data on the UI thread"
         );
     }
 
@@ -7135,17 +7376,15 @@ mod tests {
             "viewport writes should not rebuild full PaneSlotData just to publish viewport_x"
         );
         assert!(
-            viewport_body.contains("let current = ui.get_pane_views();")
-                && viewport_body.contains("let Some(mut current_view) = current.row_data(row)")
-                && viewport_body.contains("if current_view.slot == slot")
-                && viewport_body.contains("current_view.viewport_x = viewport_x;")
-                && viewport_body.contains("current.set_row_data(row, current_view);")
-                && viewport_body.contains("sync_pane_surface_viewport_ui(ui, slot, viewport_x)")
+            viewport_body.contains("let current = ui.get_pane_surfaces();")
+                && viewport_body.contains("let Some(mut current_surface) = current.row_data(row)")
+                && viewport_body.contains("if current_surface.slot == slot")
                 && viewport_body.contains("current_surface.view.viewport_x = viewport_x;")
+                && viewport_body.contains("current.set_row_data(row, current_surface);")
                 && viewport_body.contains("sync_pane_view_ui(ui, state, slot);")
-                && !viewport_body.contains("sync_pane_surface_ui(ui, state, slot);")
+                && !viewport_body.contains("get_pane_views")
                 && !viewport_body.contains("pane_slot_data(ui"),
-            "viewport-only row sync should patch only viewport fields on PaneViewData/PaneSurfaceData and use hot view sync as a missing-row fallback"
+            "viewport-only row sync should patch only viewport fields on PaneSurfaceData and use hot view sync as a missing-row fallback"
         );
     }
 
@@ -7168,8 +7407,8 @@ mod tests {
             .expect("main production body should be present");
 
         assert!(
-            sync_body.contains("VirtualViewSyncRequest::Cached {\n            viewport_x,\n            publish_viewport,")
-                && sync_body.contains("if publish_viewport {\n                set_pane_viewport_ui(ui, slot, viewport_x, state);")
+            sync_body.contains("VirtualViewSyncRequest::Cached {\n            sync,\n            publish_layout,")
+                && sync_body.contains("if sync.publish_viewport {\n                set_pane_viewport_ui(ui, slot, sync.viewport_x, state);")
                 && result_body.contains("if update.viewport_clamped {\n            set_pane_viewport_ui(ui, slot, update.viewport_x, state);")
                 && result_body.contains("sync_pane_view_ui(ui, state, slot);")
                 && !result_body.contains("sync_pane_slot_ui(ui, state, slot);")
@@ -7218,14 +7457,9 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("pub(crate) fn sync_pane_view_ui("))
             .map(|(body, _)| body)
             .expect("sync_pane_slots_model body should be present");
-        let views_model_body = source
-            .split_once("fn sync_pane_views_model(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surfaces_model("))
-            .map(|(body, _)| body)
-            .expect("sync_pane_views_model body should be present");
         let surfaces_model_body = source
             .split_once("fn sync_pane_surfaces_model(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surface_ui("))
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_surface_pane_ui("))
             .map(|(body, _)| body)
             .expect("sync_pane_surfaces_model body should be present");
         let slot_body = source
@@ -7242,10 +7476,9 @@ mod tests {
                 && slots_model_body.contains("current.set_row_data(row, slot);")
                 && slots_model_body
                     .contains("ui.set_pane_slots(ModelRc::new(Rc::new(VecModel::from(slots))));")
-                && !views_model_body.contains("state.borrow()")
-                && views_model_body.contains("current.set_row_data(row, view);")
-                && views_model_body
-                    .contains("ui.set_pane_views(ModelRc::new(Rc::new(VecModel::from(views))));")
+                && !source.contains("fn sync_pane_views_model(")
+                && !source.contains("get_pane_views")
+                && !source.contains("set_pane_views")
                 && !surfaces_model_body.contains("state.borrow()")
                 && surfaces_model_body.contains("current.set_row_data(row, surface);")
                 && surfaces_model_body.contains(
@@ -7255,7 +7488,7 @@ mod tests {
         );
         assert!(
             !slot_update_body.contains("state.borrow()")
-                && slot_update_body.contains("current.set_row_data(row, next);"),
+                && slot_update_body.contains("current.set_row_data(row, next.clone());"),
             "single-row pane sync must release AppState borrow before Slint model setters"
         );
     }
@@ -7449,7 +7682,7 @@ mod tests {
     }
 
     #[test]
-    fn icon_zoom_layout_is_immediate_and_thumbnail_updates_are_coalesced() {
+    fn icon_zoom_layout_is_latest_only_and_thumbnail_updates_are_coalesced() {
         let source = include_str!("main.rs");
         let production_source = source
             .split_once("#[cfg(test)]\nmod tests")
@@ -7509,6 +7742,21 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("fn apply_virtual_view_prepare_failure("))
             .map(|(body, _)| body)
             .expect("virtual view result body should be present");
+        let virtual_sync_body = source
+            .split_once("fn sync_virtual_entries_for_slot_with_count_and_cache_policy(")
+            .and_then(|(_, rest)| rest.split_once("fn start_virtual_view_prepare("))
+            .map(|(body, _)| body)
+            .expect("virtual sync body should be present");
+        let start_prepare_body = source
+            .split_once("fn start_virtual_view_prepare(")
+            .and_then(|(_, rest)| rest.split_once("fn prepare_virtual_view_projection("))
+            .map(|(body, _)| body)
+            .expect("virtual prepare body should be present");
+        let prepare_projection_body = source
+            .split_once("fn prepare_virtual_view_projection(")
+            .and_then(|(_, rest)| rest.split_once("#[allow(clippy::too_many_arguments)]"))
+            .map(|(body, _)| body)
+            .expect("virtual projection body should be present");
         let removed_zoom_range_hint_function = ["fn ", "icon_zoom_range_hint("].concat();
         let removed_zoom_width_function =
             ["zoom", "_range", "_visible", "_name", "_width", "_units"].concat();
@@ -7529,7 +7777,10 @@ mod tests {
         assert!(
             main_body.contains("let icon_size_update_pending = Rc::new(Cell::new(false));")
                 && main_body.contains("Rc::clone(&icon_size_update_pending)")
-                && main_body.contains("icon_size_update_pending,")
+                && main_body
+                    .matches("Rc::clone(&icon_size_update_pending)")
+                    .count()
+                    >= 2
                 && callback_body.contains(
                     "ui.on_icon_zoom_layout_changed(move || bus.emit(UiSignal::IconZoomLayoutChanged));"
                 )
@@ -7537,7 +7788,7 @@ mod tests {
                     "UiSignal::IconZoomLayoutChanged => self.pane_layout_sync.set_icon_zoom_level_now(),"
                 )
                 && !callback_body.contains("pane_layout_sync.set_icon_zoom_level_now();"),
-            "icon zoom callbacks should emit a bus signal; the bus dispatch should synchronously refresh layout"
+            "icon zoom callbacks should emit a bus signal; the bus dispatch should synchronously request the latest layout"
         );
         assert!(
             icon_size_scheduler_body.contains("TimerMode::SingleShot")
@@ -7580,7 +7831,7 @@ mod tests {
                 && scheduler_body.contains("false,")
                 && !scheduler_body.contains("self.timer.stop();")
                 && !scheduler_body.contains("pending_icon_zoom_thumbnails"),
-            "zoom should apply layout immediately but keep roles updater paused until the icon-size timer fires"
+            "zoom should request layout immediately but keep roles updater paused until the icon-size timer fires"
         );
         assert!(
             icon_zoom_body.contains("sync_virtual_entries_for_slot_with_count(")
@@ -7594,18 +7845,37 @@ mod tests {
                     "ui, state, bridge, slot, true, None, false, true, false, true, true,"
                 )
                 && apply_virtual_view_result_body
-                    .contains("let media_entries = if result.schedule_thumbnails")
+                    .contains("let media_entries = if schedule_thumbnails")
                 && apply_virtual_view_result_body
-                    .contains("decorate_entries_with_cached_thumbnails_for_pane(")
+                    .contains("decorate_entries_with_prepared_thumbnail_keys_for_pane(")
                 && apply_virtual_view_result_body
                     .contains("preserve_current_thumbnail_roles_for_deferred_icon_size_update(")
-                && apply_virtual_view_result_body.contains(
-                    "result.schedule_thumbnails && !result.schedule_visible_thumbnail_roles_after_apply"
-                )
+                && apply_virtual_view_result_body.contains("if schedule_thumbnails")
                 && apply_virtual_view_result_body
-                    .contains("result.schedule_visible_thumbnail_roles_after_apply")
+                    .contains("if schedule_visible_thumbnail_roles_after_apply")
                 && apply_virtual_view_result_body
+                    .contains("ThumbnailScheduleEntry::from_entry_with_prepared_key(")
+                && apply_virtual_view_result_body
+                    .contains("schedule_visible_thumbnail_roles_for_entries(")
+                && !apply_virtual_view_result_body
                     .contains("schedule_visible_thumbnail_roles_for_slot(ui, state, bridge, slot);")
+                && !apply_virtual_view_result_body
+                    .contains("decorate_entries_with_cached_thumbnails_for_pane(")
+                && apply_virtual_view_result_body.contains("missing_projection=true")
+                && !apply_virtual_view_result_body.contains("prepare_virtual_view_projection(")
+                && apply_virtual_view_result_body.contains("slot_projections,")
+                && apply_virtual_view_result_body.contains("thumbnail_keys,")
+                && apply_virtual_view_result_body.contains("metadata_rows,")
+                && !apply_virtual_view_result_body.contains("item_view_slot_projections_for_entries(")
+                && virtual_sync_body.contains("pane.view.defer_virtual_prepare(request);")
+                && virtual_sync_body.contains("pane.view.mark_virtual_prepare_started(generation);")
+                && !virtual_sync_body.contains("prepare_virtual_view_snapshot_update(*input)")
+                && start_prepare_body.contains("tokio::task::spawn_blocking")
+                && start_prepare_body.contains("prepare_virtual_view_snapshot_update(*input)")
+                && start_prepare_body.contains("prepare_virtual_view_projection(")
+                && start_prepare_body.contains("projection_ms")
+                && prepare_projection_body.contains("item_view_slot_projections_for_entries(")
+                && prepare_projection_body.contains("prepare_thumbnail_keys_for_entries(")
                 && visible_icon_zoom_body
                     .contains("if slots.row_count() == 0 {\n        return;\n    }")
                 && !visible_icon_zoom_body
@@ -7628,7 +7898,7 @@ mod tests {
                 && !production_source.contains("layout_history")
                 && !production_source.contains("sync_pane_view_ui_defer_raster")
                 && !production_source.contains("ICON_ZOOM_RASTER_COALESCE"),
-            "icon zoom should follow Dolphin: style/layout updates are synchronous; thumbnail/preview roles alone are coalesced through the 300ms updater timer"
+            "icon zoom should keep Dolphin's immediate request boundary, but heavy snapshot/projection work must stay off the UI thread and thumbnail/preview roles must stay coalesced through the 300ms updater timer"
         );
     }
 
@@ -7779,10 +8049,13 @@ mod tests {
             flush_body
                 .contains("while let Some((pane_id, generation, load)) = pending.pop_front()")
                 && flush_body.contains("refresh_pane_ids.push(pane_id);")
+                && flush_body.contains("icon_size_update_pending: bool")
+                && flush_body.contains("if !icon_size_update_pending")
+                && flush_body.contains("visible_syncs += 1;")
                 && flush_body
                     .contains("sync_virtual_entries_for_slot(ui, state, bridge, slot, false);")
                 && !flush_body.contains("sync_virtual_entries(ui, state, bridge, false);"),
-            "thumbnail flush should apply pending loads and refresh each affected pane slot once"
+            "thumbnail flush should apply pending loads, refresh affected pane slots once when zoom is idle, and gate UI sync while Dolphin's icon-size timer is pending"
         );
     }
 
