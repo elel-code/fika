@@ -414,7 +414,7 @@ Key routing abstractions:
 | `dark_mode` | `bool` | 暗色模式 |
 | `sidebar_width_px` | `f32` | 侧栏宽度（像素） |
 | `split_pane_ratio` | `f32` | 分屏比例 |
-| `icon_zoom_level` | `i32` | 图标缩放级别（0-4） |
+| `icon_zoom_level` | `i32` | 图标缩放级别（0-16） |
 | `window_width_px` | `f32` | 窗口宽度 |
 | `window_height_px` | `f32` | 窗口高度 |
 | `last_dir` | `PathBuf` | 上次打开的目录 |
@@ -428,7 +428,7 @@ Key routing abstractions:
 | `dark_mode` | `bool` | Dark mode |
 | `sidebar_width_px` | `f32` | Sidebar width (pixels) |
 | `split_pane_ratio` | `f32` | Split pane ratio |
-| `icon_zoom_level` | `i32` | Icon zoom level (0-4) |
+| `icon_zoom_level` | `i32` | Icon zoom level (0-16) |
 | `window_width_px` | `f32` | Window width |
 | `window_height_px` | `f32` | Window height |
 | `last_dir` | `PathBuf` | Last opened directory |

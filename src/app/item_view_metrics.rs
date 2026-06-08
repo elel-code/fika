@@ -1,3 +1,5 @@
+use crate::app::zoom::icon_size_for_zoom_level;
+
 pub(crate) const COMPACT_ITEM_PADDING: f32 = 2.0;
 pub(crate) const COMPACT_MEDIA_TEXT_GAP: f32 = COMPACT_ITEM_PADDING * 2.0;
 pub(crate) const COMPACT_COLUMN_MARGIN_WIDTH: f32 = 8.0;
@@ -60,13 +62,7 @@ pub(crate) fn compact_row_height(zoom_level: i32, text_line_count: usize) -> f32
 }
 
 fn compact_media_size(zoom_level: i32) -> f32 {
-    match zoom_level {
-        0 => 28.0,
-        1 => 36.0,
-        2 => 46.0,
-        3 => 58.0,
-        _ => 72.0,
-    }
+    icon_size_for_zoom_level(zoom_level) as f32
 }
 
 fn compact_title_font_size(_zoom_level: i32) -> f32 {
@@ -107,26 +103,31 @@ mod tests {
     #[test]
     fn compact_visual_metrics_follow_dolphin_compact_formula() {
         let mid = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(2, 3);
-        assert_eq!(mid.cell_width, 129.0);
+        assert_eq!(mid.cell_width, 115.0);
         assert_eq!(mid.row_height, 57.0);
-        assert_eq!(mid.media_size, 46.0);
+        assert_eq!(mid.media_size, 32.0);
         assert_eq!(mid.title_font_size, 15.0);
         assert_eq!(mid.title_line_height, 21.0);
         assert_eq!(mid.metadata_font_size, 11.0);
         assert_eq!(mid.metadata_line_height, 14.0);
 
-        let max = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(4, 1);
-        assert_eq!(max.cell_width, 155.0);
-        assert_eq!(max.row_height, 76.0);
-        assert_eq!(max.media_size, 72.0);
-        assert_eq!(max.title_font_size, 15.0);
-        assert_eq!(max.title_line_height, 21.0);
+        let huge = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(4, 1);
+        assert_eq!(huge.cell_width, 147.0);
+        assert_eq!(huge.row_height, 68.0);
+        assert_eq!(huge.media_size, 64.0);
+        assert_eq!(huge.title_font_size, 15.0);
+        assert_eq!(huge.title_line_height, 21.0);
+
+        let max = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(16, 1);
+        assert_eq!(max.cell_width, 339.0);
+        assert_eq!(max.row_height, 260.0);
+        assert_eq!(max.media_size, 256.0);
     }
 
     #[test]
     fn compact_text_metrics_stay_stable_across_icon_zoom() {
         let small = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(0, 1);
-        let large = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(4, 1);
+        let large = CompactItemVisualMetrics::from_zoom_level_with_text_line_count(16, 1);
 
         assert_ne!(small.media_size, large.media_size);
         assert_eq!(small.title_font_size, large.title_font_size);

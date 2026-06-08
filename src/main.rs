@@ -49,7 +49,7 @@ use app::file_clipboard::{
 };
 use app::file_item_roles_updater::{
     ICON_SIZE_UPDATE_INTERVAL, schedule_thumbnail_roles_for_entries,
-    schedule_thumbnail_roles_for_visible_panes, thumbnail_size_px,
+    schedule_visible_thumbnail_roles_for_slot, thumbnail_size_px,
 };
 use app::geometry::{
     CompactItemViewLayout, ITEM_VIEW_OVERSCAN_COLUMNS, ItemViewItemBounds, ItemViewLayouter,
@@ -57,7 +57,7 @@ use app::geometry::{
     place_drop_geometry, register_menu_geometry_callbacks,
 };
 use app::item_view::{
-    ItemViewControllerAction, SelectionRect, activate_entry_at_pane_point, cancel_blank_for_slot,
+    SelectionRect, activate_entry_at_pane_point, cancel_blank_for_slot,
     context_menu_entry_at_pane_point, entry_at_pane_point, item_index_at_pane_point,
     move_blank_for_slot, press_blank_for_slot, press_entry_at_pane_point, release_blank_for_slot,
 };
@@ -78,6 +78,7 @@ use app::pane::{
 };
 #[cfg(test)]
 use app::pane::{PaneEntrySnapshot, PaneHistory};
+use app::pane_controller::PaneController;
 use app::places::{
     add_place, add_place_at_slot, contains_place_path, open_place_new_window, remove_place,
     rename_place, reorder_place_path, restore_default_places, sync_places,
@@ -102,7 +103,8 @@ use app::split_view::{
 use app::state::PaneExternalEdit;
 use app::state::{AppState, DeviceAction};
 use app::thumbnail_pipeline::{
-    apply_thumbnail_load_to_state_for_pane, decorate_entries_with_cached_thumbnails_for_pane,
+    THUMBNAIL_STATE_LOADED, apply_thumbnail_load_to_state_for_pane,
+    decorate_entries_with_cached_thumbnails_for_pane,
 };
 use app::transfer::{
     cancel_queued_operations, pane_drop_allowed, pane_drop_target_path, place_drop_allowed,
@@ -111,6 +113,7 @@ use app::transfer::{
     start_transfer_operation,
 };
 use app::virtual_view::{VirtualViewSnapshotInput, prepare_virtual_view_snapshot_update};
+use app::zoom::clamp_zoom_level;
 use config::args::{Args, Mode};
 use config::paths::{expand_user_path, home_dir, normalize_start_dir};
 use config::service_menu_policy::load_service_menu_policy;
@@ -145,15 +148,22 @@ struct PaneViewSyncScheduler {
     ui: slint::Weak<AppWindow>,
     state: Rc<RefCell<AppState>>,
     bridge: AsyncBridge,
+    icon_size_update_pending: Rc<Cell<bool>>,
     syncing: Cell<bool>,
 }
 
 impl PaneViewSyncScheduler {
-    fn new(ui: slint::Weak<AppWindow>, state: Rc<RefCell<AppState>>, bridge: AsyncBridge) -> Self {
+    fn new(
+        ui: slint::Weak<AppWindow>,
+        state: Rc<RefCell<AppState>>,
+        bridge: AsyncBridge,
+        icon_size_update_pending: Rc<Cell<bool>>,
+    ) -> Self {
         Self {
             ui,
             state,
             bridge,
+            icon_size_update_pending,
             syncing: Cell::new(false),
         }
     }
@@ -166,20 +176,75 @@ impl PaneViewSyncScheduler {
             return;
         };
         self.syncing.set(true);
-        sync_pane_viewport_for_slot(&ui, &self.state, &self.bridge, slot);
+        if self.icon_size_update_pending.get() {
+            sync_pane_viewport_for_slot_with_thumbnail_scheduling(
+                &ui,
+                &self.state,
+                &self.bridge,
+                slot,
+                false,
+            );
+        } else {
+            sync_pane_viewport_for_slot(&ui, &self.state, &self.bridge, slot);
+        }
         self.syncing.set(false);
     }
 
     fn flush_all(&self) {}
 }
 
-struct PaneLayoutSyncScheduler {
+struct IconSizeUpdateScheduler {
     timer: Timer,
+    pending: Rc<Cell<bool>>,
+}
+
+impl IconSizeUpdateScheduler {
+    fn new(
+        ui: slint::Weak<AppWindow>,
+        state: Rc<RefCell<AppState>>,
+        bridge: AsyncBridge,
+        pending: Rc<Cell<bool>>,
+    ) -> Self {
+        let timer = Timer::default();
+        let timer_ui = ui;
+        let timer_state = Rc::clone(&state);
+        let timer_bridge = bridge;
+        let timer_pending = Rc::clone(&pending);
+
+        timer.start(
+            TimerMode::SingleShot,
+            ICON_SIZE_UPDATE_INTERVAL,
+            move || {
+                if !timer_pending.replace(false) {
+                    return;
+                }
+                let Some(ui) = timer_ui.upgrade() else {
+                    return;
+                };
+                update_icon_size_for_visible_panes(&ui, &timer_state, &timer_bridge);
+            },
+        );
+        timer.stop();
+
+        Self { timer, pending }
+    }
+
+    fn trigger_icon_size_update(&self) {
+        self.pending.set(true);
+        self.timer.restart();
+    }
+
+    fn visible_index_range_updates_enabled(&self) -> bool {
+        !self.pending.get()
+    }
+}
+
+struct PaneLayoutSyncScheduler {
     ui: slint::Weak<AppWindow>,
     state: Rc<RefCell<AppState>>,
     bridge: AsyncBridge,
     pane_view_sync: Rc<PaneViewSyncScheduler>,
-    pending_icon_zoom_thumbnails: Rc<Cell<bool>>,
+    icon_size_update: IconSizeUpdateScheduler,
 }
 
 impl PaneLayoutSyncScheduler {
@@ -188,60 +253,48 @@ impl PaneLayoutSyncScheduler {
         state: Rc<RefCell<AppState>>,
         bridge: AsyncBridge,
         pane_view_sync: Rc<PaneViewSyncScheduler>,
+        icon_size_update_pending: Rc<Cell<bool>>,
     ) -> Self {
-        let timer = Timer::default();
-        let timer_ui = ui.clone();
-        let timer_state = Rc::clone(&state);
-        let timer_bridge = bridge.clone();
-        let pending_icon_zoom_thumbnails = Rc::new(Cell::new(false));
-        let timer_pending_icon_zoom_thumbnails = Rc::clone(&pending_icon_zoom_thumbnails);
-
-        timer.start(
-            TimerMode::SingleShot,
-            ICON_SIZE_UPDATE_INTERVAL,
-            move || {
-                let flush_icon_zoom_thumbnails = timer_pending_icon_zoom_thumbnails.replace(false);
-                let Some(ui) = timer_ui.upgrade() else {
-                    return;
-                };
-                if flush_icon_zoom_thumbnails {
-                    schedule_thumbnail_roles_for_visible_panes(&ui, &timer_state, &timer_bridge);
-                }
-            },
+        let icon_size_update = IconSizeUpdateScheduler::new(
+            ui.clone(),
+            Rc::clone(&state),
+            bridge.clone(),
+            icon_size_update_pending,
         );
-        timer.stop();
 
         Self {
-            timer,
             ui,
             state,
             bridge,
             pane_view_sync,
-            pending_icon_zoom_thumbnails,
+            icon_size_update,
         }
     }
 
     fn sync_now(&self) {
-        let flush_icon_zoom_thumbnails = self.pending_icon_zoom_thumbnails.replace(false);
-        self.timer.stop();
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
         self.pane_view_sync.flush_all();
-        sync_visible_pane_layouts(&ui, &self.state, &self.bridge);
-        if flush_icon_zoom_thumbnails {
-            schedule_thumbnail_roles_for_visible_panes(&ui, &self.state, &self.bridge);
+        if self.icon_size_update.visible_index_range_updates_enabled() {
+            sync_visible_pane_layouts(&ui, &self.state, &self.bridge);
+        } else {
+            sync_visible_pane_layouts_with_thumbnail_scheduling(
+                &ui,
+                &self.state,
+                &self.bridge,
+                false,
+            );
         }
     }
 
-    fn sync_icon_zoom_now(&self) {
+    fn set_icon_zoom_level_now(&self) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
         self.pane_view_sync.flush_all();
-        sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);
-        self.pending_icon_zoom_thumbnails.set(true);
-        self.timer.restart();
+        apply_visible_pane_zoom_style_options(&ui, &self.state, &self.bridge);
+        self.icon_size_update.trigger_icon_size_update();
     }
 }
 
@@ -289,6 +342,1054 @@ impl ThumbnailFlushScheduler {
             .borrow_mut()
             .push_back((pane_id, generation, load));
         self.timer.restart();
+    }
+}
+
+enum UiSignal {
+    AsyncResultsReady,
+    PaneViewChanged(i32),
+    PaneLayoutChanged,
+    IconZoomLayoutChanged,
+    PaneSlotsRefreshRequested,
+    PanePathTextChanged(i32, String),
+    PanePathFocusChanged(i32, bool),
+    PaneSlotRefreshRequested(i32),
+    PaneViewportChanged(i32, f32),
+    Refresh,
+    GoHome,
+    GoParent,
+    GoRoot,
+    PanePathSubmitted(i32, String),
+    OpenPlace(String),
+    OpenDevice(String, bool),
+    UnmountDevice(String, String),
+    EjectDevice(String, String),
+    OpenSearch,
+    OpenSearchForSlot(i32),
+    SearchSubmitted(i32, String, bool),
+    CancelSearch(i32),
+    SearchFiltersChanged(i32, i32, i32, i32),
+    SearchCloseRequested(i32),
+    OpenPath(String),
+    ContextServiceAction(i32),
+    PrepareContextServiceSubmenu(String),
+    ContextServiceActionEnabled(String, bool),
+    ContextServicePolicyModeChanged(i32),
+    ChooserAccept(String),
+    ChooserSelectFilter(i32),
+    ChooserSelectChoice(i32, i32),
+    GoBack,
+    GoForward,
+    PaneGoBack(i32),
+    PaneGoForward(i32),
+    PaneFocus(i32),
+    ToggleSplitView,
+    PaneItemViewItemActivated(i32, f32, f32),
+    PaneItemViewBlankPressed(i32, f32, f32, bool),
+    PaneItemViewBlankReleased(i32, f32, f32),
+    PaneItemViewBlankCancelled(i32),
+    PaneClearSelection(i32),
+    ClearSelection,
+    SelectAllVisible,
+    AddPlace(String),
+    AddPlaceAtSlot(String, i32),
+    RenamePlace(i32, String),
+    RemovePlace(i32),
+    RestoreDefaultPlaces,
+    OpenPlaceNewWindow(i32),
+    PaneDropTargetChanged(i32, i32),
+    TracePlacesDrop {
+        phase: String,
+        mime_type: String,
+        payload: String,
+        x: f32,
+        y: f32,
+        slot: i32,
+        target: i32,
+        over_gap: bool,
+        over_item: bool,
+    },
+    TraceMainDrop {
+        phase: String,
+        mime_type: String,
+        payload: String,
+        x: f32,
+        y: f32,
+        rejected: bool,
+        target_path: String,
+    },
+    TransferOperation(String, String, String),
+    TransferConflictChoice(String),
+    PrivilegedPromptAccept,
+    PrivilegedPromptDismiss,
+    CommitExternalEdit(i32),
+    DiscardExternalEdit(i32),
+    UndoLastOperation,
+    CancelQueuedOperations,
+    ReorderPlacePath(String, i32),
+    PersistUiState,
+    DarkModeChanged,
+}
+
+struct UiSignalBus {
+    ui: slint::Weak<AppWindow>,
+    state: Rc<RefCell<AppState>>,
+    bridge: AsyncBridge,
+    pane_view_sync: Rc<PaneViewSyncScheduler>,
+    pane_layout_sync: Rc<PaneLayoutSyncScheduler>,
+    thumbnail_flush: Rc<ThumbnailFlushScheduler>,
+    settings_save: Rc<SettingsSaveScheduler>,
+    async_rx: Rc<RefCell<mpsc::Receiver<AsyncEvent>>>,
+    chooser_save_files: Vec<String>,
+    chooser_mode: bool,
+}
+
+struct UiSignalBusInput {
+    ui: slint::Weak<AppWindow>,
+    state: Rc<RefCell<AppState>>,
+    bridge: AsyncBridge,
+    pane_view_sync: Rc<PaneViewSyncScheduler>,
+    pane_layout_sync: Rc<PaneLayoutSyncScheduler>,
+    thumbnail_flush: Rc<ThumbnailFlushScheduler>,
+    settings_save: Rc<SettingsSaveScheduler>,
+    async_rx: Rc<RefCell<mpsc::Receiver<AsyncEvent>>>,
+    chooser_save_files: Vec<String>,
+    chooser_mode: bool,
+}
+
+impl UiSignalBus {
+    fn new(input: UiSignalBusInput) -> Self {
+        Self {
+            ui: input.ui,
+            state: input.state,
+            bridge: input.bridge,
+            pane_view_sync: input.pane_view_sync,
+            pane_layout_sync: input.pane_layout_sync,
+            thumbnail_flush: input.thumbnail_flush,
+            settings_save: input.settings_save,
+            async_rx: input.async_rx,
+            chooser_save_files: input.chooser_save_files,
+            chooser_mode: input.chooser_mode,
+        }
+    }
+
+    fn emit(&self, signal: UiSignal) {
+        match signal {
+            UiSignal::AsyncResultsReady => self.drain_async_results(),
+            UiSignal::PaneViewChanged(slot) => self.pane_view_sync.request(slot),
+            UiSignal::PaneLayoutChanged => self.pane_layout_sync.sync_now(),
+            UiSignal::IconZoomLayoutChanged => self.pane_layout_sync.set_icon_zoom_level_now(),
+            UiSignal::PaneSlotsRefreshRequested => {
+                if let Some(ui) = self.ui.upgrade() {
+                    sync_pane_slots_ui(&ui, &self.state);
+                }
+            }
+            UiSignal::PanePathTextChanged(slot, text) => {
+                if let Some(pane) = self.state.borrow_mut().panes.pane_mut_for_slot(slot) {
+                    pane.path_input_text = text;
+                }
+                if let Some(ui) = self.ui.upgrade() {
+                    sync_pane_slot_ui(&ui, &self.state, slot);
+                }
+            }
+            UiSignal::PanePathFocusChanged(slot, focused) => {
+                if let Some(pane) = self.state.borrow_mut().panes.pane_mut_for_slot(slot) {
+                    pane.path_focused = focused;
+                }
+                if let Some(ui) = self.ui.upgrade() {
+                    if focused {
+                        focus_pane_slot(&ui, &self.state, slot);
+                    }
+                    sync_pane_slot_ui(&ui, &self.state, slot);
+                }
+            }
+            UiSignal::PaneSlotRefreshRequested(slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    sync_pane_slot_ui(&ui, &self.state, slot);
+                }
+            }
+            UiSignal::PaneViewportChanged(slot, viewport_x) => {
+                if let Some(pane) = self.state.borrow_mut().panes.pane_mut_for_slot(slot) {
+                    pane.view.viewport_x = viewport_x;
+                }
+            }
+            UiSignal::Refresh => {
+                if let Some(ui) = self.ui.upgrade() {
+                    refresh_focused_directory(&ui, &self.state, &self.bridge);
+                }
+            }
+            UiSignal::GoHome => {
+                if let Some(ui) = self.ui.upgrade() {
+                    navigate_focused_to(&ui, &self.state, &self.bridge, home_dir());
+                }
+            }
+            UiSignal::GoParent => {
+                if let Some(ui) = self.ui.upgrade() {
+                    go_parent(&ui, &self.state, &self.bridge);
+                }
+            }
+            UiSignal::GoRoot => {
+                if let Some(ui) = self.ui.upgrade() {
+                    navigate_focused_to(&ui, &self.state, &self.bridge, PathBuf::from("/"));
+                }
+            }
+            UiSignal::PanePathSubmitted(slot, path) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    focus_pane_slot(&ui, &self.state, slot);
+                    let requested = expand_user_path(path.as_str());
+                    if !requested.is_dir() {
+                        reset_pane_path_input_for_slot(&ui, slot);
+                        set_status(&ui, &self.state, "Path is not a readable directory");
+                    } else {
+                        navigate_pane_to_slot(&ui, &self.state, &self.bridge, slot, requested);
+                    }
+                }
+            }
+            UiSignal::OpenPlace(path) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    let slot = focus_current_ui_pane_slot(&ui, &self.state);
+                    let requested = expand_user_path(path.as_str());
+                    if fs::file_ops::is_trash_files_dir(&requested) {
+                        match fs::file_ops::ensure_trash_dirs() {
+                            Ok(()) => navigate_pane_to_slot(
+                                &ui,
+                                &self.state,
+                                &self.bridge,
+                                slot,
+                                requested,
+                            ),
+                            Err(err) => set_status(
+                                &ui,
+                                &self.state,
+                                &format!("Trash is not available: {err}"),
+                            ),
+                        }
+                    } else if requested.is_dir() {
+                        navigate_pane_to_slot(&ui, &self.state, &self.bridge, slot, requested);
+                    } else {
+                        set_status(&ui, &self.state, "Place is not available");
+                    }
+                }
+            }
+            UiSignal::OpenDevice(path, mounted) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    if !mounted {
+                        if register_pending_device_action(&self.state, &path, "mount") {
+                            set_status(&ui, &self.state, "Mounting device...");
+                            mount_device_async(&self.bridge, path);
+                        } else {
+                            set_status(&ui, &self.state, "Device action already in progress");
+                        }
+                        return;
+                    }
+                    let requested = expand_user_path(path.as_str());
+                    if requested.is_dir() {
+                        let slot = focus_current_ui_pane_slot(&ui, &self.state);
+                        navigate_pane_to_slot(&ui, &self.state, &self.bridge, slot, requested);
+                    } else {
+                        set_status(&ui, &self.state, "Device is not available");
+                    }
+                }
+            }
+            UiSignal::UnmountDevice(device_path, mount_path) => {
+                self.start_device_action("unmount", device_path, mount_path);
+            }
+            UiSignal::EjectDevice(device_path, mount_path) => {
+                self.start_device_action("eject", device_path, mount_path);
+            }
+            UiSignal::OpenSearch => {
+                if let Some(ui) = self.ui.upgrade() {
+                    open_search(&ui, &self.state, &self.bridge);
+                }
+            }
+            UiSignal::OpenSearchForSlot(slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    open_search_for_slot(&ui, &self.state, &self.bridge, slot);
+                }
+            }
+            UiSignal::SearchSubmitted(slot, query, recursive) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    submit_search_for_slot(
+                        &ui,
+                        &self.state,
+                        &self.bridge,
+                        slot,
+                        query.as_str(),
+                        recursive,
+                    );
+                }
+            }
+            UiSignal::CancelSearch(slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    cancel_recursive_search_for_slot(&ui, &self.state, &self.bridge, slot);
+                }
+            }
+            UiSignal::SearchFiltersChanged(slot, kind, modified, size) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    update_search_filters_for_slot(
+                        &ui,
+                        &self.state,
+                        &self.bridge,
+                        slot,
+                        kind,
+                        modified,
+                        size,
+                    );
+                }
+            }
+            UiSignal::SearchCloseRequested(slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    close_search_for_slot(&ui, &self.state, &self.bridge, slot);
+                }
+            }
+            UiSignal::OpenPath(path) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    open_path(&ui, &self.state, path.as_str(), &self.bridge);
+                }
+            }
+            UiSignal::ContextServiceAction(index) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    context_service_menu::launch_action_async(
+                        &ui,
+                        &self.state,
+                        &self.bridge,
+                        index,
+                    );
+                }
+            }
+            UiSignal::PrepareContextServiceSubmenu(group) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    context_service_menu::prepare_submenu_actions(&ui, &self.state, group.as_str());
+                }
+            }
+            UiSignal::ContextServiceActionEnabled(id, enabled) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    context_service_menu::set_action_enabled(
+                        &ui,
+                        &self.state,
+                        id.as_str(),
+                        enabled,
+                    );
+                }
+            }
+            UiSignal::ContextServicePolicyModeChanged(mode) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    context_service_menu::set_policy_mode(&ui, &self.state, mode);
+                }
+            }
+            UiSignal::ChooserAccept(name) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    chooser_accept(&ui, &self.state, name.as_str(), &self.chooser_save_files);
+                }
+            }
+            UiSignal::ChooserSelectFilter(filter_index) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    select_chooser_filter(&ui, &self.state, &self.bridge, filter_index);
+                }
+            }
+            UiSignal::ChooserSelectChoice(choice_index, option_index) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    select_chooser_choice(&ui, &self.state, choice_index, option_index);
+                }
+            }
+            UiSignal::GoBack => {
+                if let Some(ui) = self.ui.upgrade() {
+                    go_back(&ui, &self.state, &self.bridge);
+                }
+            }
+            UiSignal::GoForward => {
+                if let Some(ui) = self.ui.upgrade() {
+                    go_forward(&ui, &self.state, &self.bridge);
+                }
+            }
+            UiSignal::PaneGoBack(slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    go_pane_back_slot(&ui, &self.state, &self.bridge, slot);
+                }
+            }
+            UiSignal::PaneGoForward(slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    go_pane_forward_slot(&ui, &self.state, &self.bridge, slot);
+                }
+            }
+            UiSignal::PaneFocus(slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    focus_pane_slot(&ui, &self.state, slot);
+                }
+            }
+            UiSignal::ToggleSplitView => {
+                if let Some(ui) = self.ui.upgrade() {
+                    toggle_split_view(&ui, &self.state, &self.bridge);
+                }
+            }
+            UiSignal::PaneItemViewItemActivated(slot, x, y) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    activate_item_view_entry_at_point_for_slot(
+                        &ui,
+                        &self.state,
+                        slot,
+                        x,
+                        y,
+                        &self.bridge,
+                    );
+                }
+            }
+            UiSignal::PaneItemViewBlankPressed(slot, x, y, toggle) => {
+                press_item_view_blank_for_slot(&self.state, slot, x, y, toggle);
+            }
+            UiSignal::PaneItemViewBlankReleased(slot, x, y) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    release_item_view_blank_for_slot(&ui, &self.state, &self.bridge, slot, x, y);
+                }
+            }
+            UiSignal::PaneItemViewBlankCancelled(slot) => {
+                cancel_item_view_blank_for_slot(&self.state, slot);
+            }
+            UiSignal::PaneClearSelection(slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    clear_selection_for_slot(&ui, &self.state, slot);
+                }
+            }
+            UiSignal::ClearSelection => {
+                if let Some(ui) = self.ui.upgrade() {
+                    clear_selection(&ui, &self.state);
+                }
+            }
+            UiSignal::SelectAllVisible => {
+                if let Some(ui) = self.ui.upgrade() {
+                    select_all_visible(&ui, &self.state);
+                }
+            }
+            UiSignal::AddPlace(path) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    add_place(&ui, &self.state, PathBuf::from(path.as_str()));
+                    prefetch_sidebar_locations_async(&self.state, &self.bridge);
+                }
+            }
+            UiSignal::AddPlaceAtSlot(path, slot) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    add_place_at_slot(&ui, &self.state, PathBuf::from(path.as_str()), slot);
+                    prefetch_sidebar_locations_async(&self.state, &self.bridge);
+                }
+            }
+            UiSignal::RenamePlace(index, label) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    rename_place(&ui, &self.state, index, label.as_str());
+                }
+            }
+            UiSignal::RemovePlace(index) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    remove_place(&ui, &self.state, index);
+                    prefetch_sidebar_locations_async(&self.state, &self.bridge);
+                }
+            }
+            UiSignal::RestoreDefaultPlaces => {
+                if let Some(ui) = self.ui.upgrade() {
+                    restore_default_places(&ui, &self.state);
+                    prefetch_sidebar_locations_async(&self.state, &self.bridge);
+                }
+            }
+            UiSignal::OpenPlaceNewWindow(index) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    open_place_new_window(&ui, &self.state, index);
+                }
+            }
+            UiSignal::PaneDropTargetChanged(slot, slice_index) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    set_pane_drop_target_slice_index_ui(&ui, &self.state, slot, slice_index);
+                }
+            }
+            UiSignal::TracePlacesDrop {
+                phase,
+                mime_type,
+                payload,
+                x,
+                y,
+                slot,
+                target,
+                over_gap,
+                over_item,
+            } => dnd_log_places_event(PlacesDndTrace {
+                backend: SLINT_DROPAREA_BACKEND_SOURCE,
+                phase: phase.as_str(),
+                mime_type: mime_type.as_str(),
+                payload: payload.as_str(),
+                x,
+                y,
+                slot,
+                target,
+                over_gap,
+                over_item,
+            }),
+            UiSignal::TraceMainDrop {
+                phase,
+                mime_type,
+                payload,
+                x,
+                y,
+                rejected,
+                target_path,
+            } => dnd_log_main_event(MainDndTrace {
+                backend: SLINT_DROPAREA_BACKEND_SOURCE,
+                phase: phase.as_str(),
+                mime_type: mime_type.as_str(),
+                payload: payload.as_str(),
+                x,
+                y,
+                rejected,
+                target_path: target_path.as_str(),
+            }),
+            UiSignal::TransferOperation(operation, source, target) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    start_transfer_operation(
+                        &ui,
+                        &self.state,
+                        &self.bridge,
+                        operation.as_str(),
+                        source.as_str(),
+                        target.as_str(),
+                    );
+                }
+            }
+            UiSignal::TransferConflictChoice(decision) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    resolve_transfer_conflict(&ui, &self.state, &self.bridge, decision.as_str());
+                }
+            }
+            UiSignal::PrivilegedPromptAccept => {
+                if let Some(ui) = self.ui.upgrade() {
+                    let command = self.state.borrow_mut().pending_privileged_command.take();
+                    ui.set_privileged_prompt_open(false);
+                    if let Some(command) = command {
+                        start_privileged_operation(&ui, &self.state, &self.bridge, command);
+                    }
+                }
+            }
+            UiSignal::PrivilegedPromptDismiss => {
+                self.state.borrow_mut().pending_privileged_command = None;
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_privileged_prompt_open(false);
+                    set_status(&ui, &self.state, "Administrator operation cancelled");
+                }
+            }
+            UiSignal::CommitExternalEdit(slot) => {
+                self.start_external_edit_resolution(slot, EXTERNAL_EDIT_SAVE_OPERATION);
+            }
+            UiSignal::DiscardExternalEdit(slot) => {
+                self.start_external_edit_resolution(slot, EXTERNAL_EDIT_DISCARD_OPERATION);
+            }
+            UiSignal::UndoLastOperation => {
+                if let Some(ui) = self.ui.upgrade() {
+                    start_file_undo(&ui, &self.state, &self.bridge);
+                }
+            }
+            UiSignal::CancelQueuedOperations => {
+                if let Some(ui) = self.ui.upgrade() {
+                    cancel_queued_operations(&ui, &self.state);
+                }
+            }
+            UiSignal::ReorderPlacePath(path, to) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    reorder_place_path(&ui, &self.state, path.as_str(), to);
+                    prefetch_sidebar_locations_async(&self.state, &self.bridge);
+                }
+            }
+            UiSignal::PersistUiState => {
+                if let Some(ui) = self.ui.upgrade() {
+                    self.settings_save
+                        .schedule(current_settings(&ui, &self.state));
+                }
+            }
+            UiSignal::DarkModeChanged => {
+                if let Some(ui) = self.ui.upgrade() {
+                    refresh_visible_pane_tile_frame_rasters(&ui, &self.state);
+                }
+            }
+        }
+    }
+
+    fn drain_async_results(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        while let Ok(event) = self.async_rx.borrow_mut().try_recv() {
+            apply_async_event(&ui, &self.state, &self.bridge, &self.thumbnail_flush, event);
+        }
+    }
+
+    fn start_device_action(&self, action: &'static str, device_path: String, mount_path: String) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let mount_path = mounted_device_path(mount_path.as_str());
+        if register_pending_device_action(&self.state, &device_path, action) {
+            set_status(
+                &ui,
+                &self.state,
+                &format!("{} device...", device_action_label(action)),
+            );
+            device_action_async(&self.bridge, action, device_path, mount_path);
+        } else {
+            set_status(&ui, &self.state, "Device action already in progress");
+        }
+    }
+
+    fn start_external_edit_resolution(&self, slot: i32, operation: &'static str) {
+        if let Some(ui) = self.ui.upgrade() {
+            start_external_edit_resolution(&ui, &self.state, &self.bridge, slot, operation);
+        }
+    }
+
+    fn query_clear_focused_search(&self) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| clear_focused_search(&ui, &self.state, &self.bridge))
+    }
+
+    fn query_item_view_item_pressed(
+        &self,
+        slot: i32,
+        x: f32,
+        y: f32,
+        toggle: bool,
+        range: bool,
+    ) -> bool {
+        self.ui.upgrade().is_some_and(|ui| {
+            press_item_view_entry_at_point_for_slot(
+                &ui,
+                &self.state,
+                &self.bridge,
+                slot,
+                x,
+                y,
+                toggle,
+                range,
+            )
+        })
+    }
+
+    fn query_item_view_item_context_menu(
+        &self,
+        slot: i32,
+        x: f32,
+        y: f32,
+        abs_x: f32,
+        abs_y: f32,
+    ) -> bool {
+        self.ui.upgrade().is_some_and(|ui| {
+            request_item_view_entry_context_menu_at_point_for_slot(
+                &ui,
+                &self.state,
+                &self.bridge,
+                ItemViewContextMenuRequest {
+                    slot,
+                    x,
+                    y,
+                    abs_x,
+                    abs_y,
+                },
+            )
+        })
+    }
+
+    fn query_item_view_blank_moved(&self, slot: i32, x: f32, y: f32) -> bool {
+        move_item_view_blank_for_slot(&self.state, slot, x, y)
+    }
+
+    fn query_is_place(&self, path: &str) -> bool {
+        contains_place_path(&self.state.borrow(), path)
+    }
+
+    fn query_prepare_place_transfer(
+        &self,
+        source: &str,
+        target_index: i32,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| prepare_place_transfer(&ui, &self.state, source, target_index, x, y))
+    }
+
+    fn query_prepare_entry_transfer(
+        &self,
+        source: &str,
+        target_index: i32,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| prepare_entry_transfer(&ui, &self.state, source, target_index, x, y))
+    }
+
+    fn query_prepare_current_dir_transfer(
+        &self,
+        source: &str,
+        label: &str,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| prepare_current_dir_transfer(&ui, &self.state, source, label, x, y))
+    }
+
+    fn query_pane_prepare_transfer(&self, slot: i32, source: &str, x: f32, y: f32) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| prepare_pane_transfer_for_slot(&ui, &self.state, slot, source, x, y))
+    }
+
+    fn query_pane_drop_target_path(&self, slot: i32, x: f32, y: f32, source: &str) -> SharedString {
+        let Some(ui) = self.ui.upgrade() else {
+            return SharedString::new();
+        };
+        let state = self.state.borrow();
+        pane_drop_target_path_for_slot(&ui, &state, slot, x, y, Path::new(source))
+            .map_or_else(SharedString::new, Into::into)
+    }
+
+    fn query_pane_drop_target_slice_index(&self, slot: i32, x: f32, y: f32, source: &str) -> i32 {
+        let Some(ui) = self.ui.upgrade() else {
+            return -1;
+        };
+        let state = self.state.borrow();
+        pane_drop_target_slice_index_for_slot(&ui, &state, slot, x, y, Path::new(source))
+    }
+
+    fn query_pane_drop_allowed(&self, slot: i32, x: f32, y: f32, source: &str) -> bool {
+        let Some(ui) = self.ui.upgrade() else {
+            return false;
+        };
+        let state = self.state.borrow();
+        pane_drop_allowed_for_slot(&ui, &state, slot, x, y, Path::new(source))
+    }
+
+    fn query_place_drop_allowed(&self, source: &str, target_index: i32) -> bool {
+        let state = self.state.borrow();
+        place_drop_allowed(&state, Path::new(source), target_index)
+    }
+
+    fn query_place_drop_target(&self, y: f32) -> i32 {
+        self.place_drop_geometry_for_y(y)
+            .map_or(-1, |geometry| geometry.target_index)
+    }
+
+    fn query_place_drop_slot(&self, y: f32) -> i32 {
+        self.place_drop_geometry_for_y(y)
+            .map_or(0, |geometry| geometry.slot)
+    }
+
+    fn query_place_drop_over_gap(&self, y: f32) -> bool {
+        self.place_drop_geometry_for_y(y)
+            .is_some_and(|geometry| geometry.over_gap)
+    }
+
+    fn query_place_drop_over_item(&self, y: f32) -> bool {
+        self.place_drop_geometry_for_y(y)
+            .is_some_and(|geometry| geometry.over_item)
+    }
+
+    fn place_drop_geometry_for_y(&self, y: f32) -> Option<app::geometry::PlaceDropGeometry> {
+        let ui = self.ui.upgrade()?;
+        let state = self.state.borrow();
+        Some(place_drop_geometry(
+            y,
+            state.places.len(),
+            ui.get_places_list_y_px(),
+            ui.get_places_row_stride_px(),
+        ))
+    }
+
+    fn close_requested(&self) -> CloseRequestResponse {
+        if let Some(ui) = self.ui.upgrade() {
+            self.settings_save
+                .save_now(current_settings(&ui, &self.state));
+        }
+        if self.chooser_mode {
+            std::process::exit(support::chooser::CHOOSER_CANCEL_EXIT_CODE);
+        }
+        CloseRequestResponse::HideWindow
+    }
+
+    fn route_focus(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_focus(slot);
+        }
+    }
+
+    fn route_path_submitted(&self, slot: i32, path: SharedString) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_path_submitted(slot, path);
+        }
+    }
+
+    fn route_go_back(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_go_back(slot);
+        }
+    }
+
+    fn route_go_forward(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_go_forward(slot);
+        }
+    }
+
+    fn route_search_open(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_search_open(slot);
+        }
+    }
+
+    fn route_search_submitted(&self, slot: i32, query: SharedString, recursive: bool) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_search_submitted(slot, query, recursive);
+        }
+    }
+
+    fn route_cancel_search(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_cancel_search(slot);
+        }
+    }
+
+    fn route_search_filters_changed(&self, slot: i32, kind: i32, modified: i32, size: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_search_filters_changed(slot, kind, modified, size);
+        }
+    }
+
+    fn route_search_filter_menu_requested(
+        &self,
+        slot: i32,
+        x: f32,
+        y: f32,
+        kind: i32,
+        modified: i32,
+        size: i32,
+        selector: i32,
+    ) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_search_filter_menu_requested(
+                slot, x, y, kind, modified, size, selector,
+            );
+        }
+    }
+
+    fn route_search_close_requested(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_search_close_requested(slot);
+        }
+    }
+
+    fn route_search_focus_changed(&self, slot: i32, focused: bool) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_search_focus_changed(slot, focused);
+        }
+    }
+
+    fn route_view_changed(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_view_changed(slot);
+        }
+    }
+
+    fn route_item_view_item_pressed(
+        &self,
+        slot: i32,
+        x: f32,
+        y: f32,
+        toggle: bool,
+        range: bool,
+    ) -> bool {
+        self.ui.upgrade().is_some_and(|ui| {
+            ui.invoke_route_pane_item_view_item_pressed(slot, x, y, toggle, range)
+        })
+    }
+
+    fn route_item_view_item_activated(&self, slot: i32, x: f32, y: f32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_item_view_item_activated(slot, x, y);
+        }
+    }
+
+    fn route_item_view_item_context_menu(
+        &self,
+        slot: i32,
+        x: f32,
+        y: f32,
+        abs_x: f32,
+        abs_y: f32,
+    ) -> bool {
+        self.ui.upgrade().is_some_and(|ui| {
+            ui.invoke_route_pane_item_view_item_context_menu(slot, x, y, abs_x, abs_y)
+        })
+    }
+
+    fn route_item_view_blank_pressed(&self, slot: i32, x: f32, y: f32, toggle: bool) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_item_view_blank_pressed(slot, x, y, toggle);
+        }
+    }
+
+    fn route_item_view_blank_moved(&self, slot: i32, x: f32, y: f32) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| ui.invoke_route_pane_item_view_blank_moved(slot, x, y))
+    }
+
+    fn route_item_view_blank_released(&self, slot: i32, x: f32, y: f32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_item_view_blank_released(slot, x, y);
+        }
+    }
+
+    fn route_item_view_blank_cancelled(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_item_view_blank_cancelled(slot);
+        }
+    }
+
+    fn route_request_blank_context_menu(&self, slot: i32, x: f32, y: f32) {
+        if let Some(ui) = self.ui.upgrade() {
+            let service_menu_paths = context_service_menu::blank_paths(&self.state, slot);
+            context_service_menu::refresh_actions_async(
+                &ui,
+                &self.state,
+                &self.bridge,
+                slot,
+                service_menu_paths,
+            );
+            ui.invoke_route_pane_request_blank_context_menu(slot, x, y);
+        }
+    }
+
+    fn route_zoom_in(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_zoom_in(slot);
+        }
+    }
+
+    fn route_zoom_out(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_zoom_out(slot);
+        }
+    }
+
+    fn route_drop_target_path(
+        &self,
+        slot: i32,
+        x: f32,
+        y: f32,
+        source: SharedString,
+    ) -> SharedString {
+        self.ui.upgrade().map_or_else(SharedString::new, |ui| {
+            ui.invoke_route_pane_drop_target_path(slot, x, y, source)
+        })
+    }
+
+    fn route_drop_target_slice_index(
+        &self,
+        slot: i32,
+        x: f32,
+        y: f32,
+        source: SharedString,
+    ) -> i32 {
+        self.ui.upgrade().map_or(-1, |ui| {
+            ui.invoke_route_pane_drop_target_slice_index(slot, x, y, source)
+        })
+    }
+
+    fn route_drop_target_changed(&self, slot: i32, slice_index: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_drop_target_changed(slot, slice_index);
+        }
+    }
+
+    fn route_drop_allowed(&self, slot: i32, x: f32, y: f32, source: SharedString) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| ui.invoke_route_pane_drop_allowed(slot, x, y, source))
+    }
+
+    fn route_prepare_transfer(&self, slot: i32, source: SharedString, x: f32, y: f32) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| ui.invoke_route_pane_prepare_transfer(slot, source, x, y))
+    }
+
+    fn route_transfer_menu_requested(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_transfer_menu_requested(slot);
+        }
+    }
+
+    fn route_trace_drop(
+        &self,
+        action: SharedString,
+        kind: SharedString,
+        path: SharedString,
+        x: f32,
+        y: f32,
+        rejected: bool,
+        target: SharedString,
+    ) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_trace_main_drop(action, kind, path, x, y, rejected, target);
+        }
+    }
+
+    fn route_save_focus_changed(&self, slot: i32, focused: bool) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_save_focus_changed(slot, focused);
+        }
+    }
+
+    fn route_commit_external_edit(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_commit_external_edit(slot);
+        }
+    }
+
+    fn route_discard_external_edit(&self, slot: i32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_discard_external_edit(slot);
+        }
+    }
+
+    fn route_undo_last_operation(&self) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_undo_last_operation();
+        }
+    }
+
+    fn route_chooser_accept(&self, value: SharedString) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_chooser_accept(value);
+        }
+    }
+
+    fn route_chooser_filter_requested(&self, slot: i32, x: f32, y: f32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_chooser_filter_requested(slot, x, y);
+        }
+    }
+
+    fn route_chooser_choice_requested(&self, slot: i32, index: i32, x: f32, y: f32) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_route_pane_chooser_choice_requested(slot, index, x, y);
+        }
+    }
+}
+
+fn device_action_label(action: &str) -> &'static str {
+    match action {
+        "unmount" => "Unmounting",
+        "eject" => "Ejecting",
+        _ => "Updating",
     }
 }
 
@@ -522,7 +1623,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_split_pane_ratio(clamped_split_pane_ratio(split_pane_ratio));
     }
     if let Some(icon_zoom_level) = settings.icon_zoom_level {
-        ui.set_icon_zoom_level(icon_zoom_level.clamp(0, 4));
+        ui.set_icon_zoom_level(clamp_zoom_level(icon_zoom_level));
     }
     if let (Some(width), Some(height)) = (settings.window_width_px, settings.window_height_px) {
         ui.window().set_size(LogicalSize::new(
@@ -540,21 +1641,23 @@ fn main() -> Result<(), slint::PlatformError> {
         directory_watch_debounce: Arc::new(AtomicU64::new(0)),
         device_watch_debounce: Arc::new(AtomicU64::new(0)),
     };
-    register_pane_routing_callbacks(&ui, &state, &bridge);
     sync_devices(&ui, &state);
     refresh_devices_async(&state, &bridge);
     refresh_clipboard_availability_async(&state, &bridge);
     start_device_monitor(&bridge);
+    let icon_size_update_pending = Rc::new(Cell::new(false));
     let pane_view_sync = Rc::new(PaneViewSyncScheduler::new(
         ui.as_weak(),
         Rc::clone(&state),
         bridge.clone(),
+        Rc::clone(&icon_size_update_pending),
     ));
     let pane_layout_sync = Rc::new(PaneLayoutSyncScheduler::new(
         ui.as_weak(),
         Rc::clone(&state),
         bridge.clone(),
         Rc::clone(&pane_view_sync),
+        icon_size_update_pending,
     ));
     let thumbnail_flush = Rc::new(ThumbnailFlushScheduler::new(
         ui.as_weak(),
@@ -564,1376 +1667,745 @@ fn main() -> Result<(), slint::PlatformError> {
     let settings_save = Rc::new(SettingsSaveScheduler::new(async_handle.clone()));
 
     let async_rx = Rc::new(RefCell::new(async_rx));
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let async_rx = Rc::clone(&async_rx);
-        let bridge = bridge.clone();
-        let thumbnail_flush = Rc::clone(&thumbnail_flush);
-        ui.on_async_results_ready(move || {
-            let Some(ui) = ui_weak.upgrade() else {
-                return;
-            };
+    let ui_signals = Rc::new(UiSignalBus::new(UiSignalBusInput {
+        ui: ui.as_weak(),
+        state: Rc::clone(&state),
+        bridge: bridge.clone(),
+        pane_view_sync: Rc::clone(&pane_view_sync),
+        pane_layout_sync: Rc::clone(&pane_layout_sync),
+        thumbnail_flush: Rc::clone(&thumbnail_flush),
+        settings_save: Rc::clone(&settings_save),
+        async_rx: Rc::clone(&async_rx),
+        chooser_save_files: args.chooser_save_files.clone(),
+        chooser_mode: matches!(args.mode, Mode::Chooser),
+    }));
 
-            while let Ok(event) = async_rx.borrow_mut().try_recv() {
-                apply_async_event(&ui, &state, &bridge, &thumbnail_flush, event);
-            }
-        });
-    }
-
-    {
-        let pane_view_sync = Rc::clone(&pane_view_sync);
-        ui.on_pane_view_changed(move |slot| {
-            pane_view_sync.request(slot);
-        });
-    }
-
-    {
-        let pane_layout_sync = Rc::clone(&pane_layout_sync);
-        ui.on_pane_layout_changed(move || {
-            pane_layout_sync.sync_now();
-        });
-    }
-
-    {
-        let pane_layout_sync = Rc::clone(&pane_layout_sync);
-        ui.on_icon_zoom_layout_changed(move || {
-            pane_layout_sync.sync_icon_zoom_now();
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_slots_refresh_requested(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                sync_pane_slots_ui(&ui, &state);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_path_text_changed(move |slot, text| {
-            if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
-                pane.path_input_text = text.to_string();
-            }
-            if let Some(ui) = ui_weak.upgrade() {
-                sync_pane_slot_ui(&ui, &state, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_path_focus_changed(move |slot, focused| {
-            if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
-                pane.path_focused = focused;
-            }
-            if let Some(ui) = ui_weak.upgrade() {
-                if focused {
-                    focus_pane_slot(&ui, &state, slot);
-                }
-                sync_pane_slot_ui(&ui, &state, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_slot_refresh_requested(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                sync_pane_slot_ui(&ui, &state, slot);
-            }
-        });
-    }
-
-    {
-        let state = Rc::clone(&state);
-        ui.on_pane_viewport_changed(move |slot, viewport_x| {
-            if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
-                pane.view.viewport_x = viewport_x;
-            }
-        });
-    }
+    register_ui_signal_callbacks(&ui, Rc::clone(&ui_signals));
+    register_pane_routing_callbacks(&ui, Rc::clone(&ui_signals));
+    register_menu_geometry_callbacks(&ui);
+    open_with::register_callbacks(&ui, &state, &bridge);
+    app::file_clipboard::register_callbacks(&ui, &state, &bridge);
+    file_actions::register_callbacks(&ui, &state, &bridge);
 
     clear_pane_models_ui(&ui);
     load_directory(&ui, &state, &bridge);
     prefetch_sidebar_locations_async(&state, &bridge);
 
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_refresh(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                refresh_focused_directory(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_go_home(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                navigate_focused_to(&ui, &state, &bridge, home_dir());
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_go_parent(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                go_parent(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_go_root(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                navigate_focused_to(&ui, &state, &bridge, PathBuf::from("/"));
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_pane_path_submitted(move |slot, path| {
-            if let Some(ui) = ui_weak.upgrade() {
-                focus_pane_slot(&ui, &state, slot);
-                let requested = expand_user_path(path.as_str());
-                if !requested.is_dir() {
-                    reset_pane_path_input_for_slot(&ui, slot);
-                    set_status(&ui, &state, "Path is not a readable directory");
-                    return;
-                }
-                navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_open_place(move |path| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let slot = focus_current_ui_pane_slot(&ui, &state);
-                let requested = expand_user_path(path.as_str());
-                if fs::file_ops::is_trash_files_dir(&requested) {
-                    match fs::file_ops::ensure_trash_dirs() {
-                        Ok(()) => navigate_pane_to_slot(&ui, &state, &bridge, slot, requested),
-                        Err(err) => {
-                            set_status(&ui, &state, &format!("Trash is not available: {err}"))
-                        }
-                    }
-                } else if requested.is_dir() {
-                    navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
-                } else {
-                    set_status(&ui, &state, "Place is not available");
-                }
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_open_device(move |path, mounted| {
-            if let Some(ui) = ui_weak.upgrade() {
-                if !mounted {
-                    let device_path = path.to_string();
-                    if register_pending_device_action(&state, &device_path, "mount") {
-                        set_status(&ui, &state, "Mounting device...");
-                        mount_device_async(&bridge, device_path);
-                    } else {
-                        set_status(&ui, &state, "Device action already in progress");
-                    }
-                    return;
-                }
-                let requested = expand_user_path(path.as_str());
-                if requested.is_dir() {
-                    let slot = focus_current_ui_pane_slot(&ui, &state);
-                    navigate_pane_to_slot(&ui, &state, &bridge, slot, requested);
-                } else {
-                    set_status(&ui, &state, "Device is not available");
-                }
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_unmount_device(move |device_path, mount_path| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let device_path = device_path.to_string();
-                let mount_path = mounted_device_path(mount_path.as_str());
-                if register_pending_device_action(&state, &device_path, "unmount") {
-                    set_status(&ui, &state, "Unmounting device...");
-                    device_action_async(&bridge, "unmount", device_path, mount_path);
-                } else {
-                    set_status(&ui, &state, "Device action already in progress");
-                }
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_eject_device(move |device_path, mount_path| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let device_path = device_path.to_string();
-                let mount_path = mounted_device_path(mount_path.as_str());
-                if register_pending_device_action(&state, &device_path, "eject") {
-                    set_status(&ui, &state, "Ejecting device...");
-                    device_action_async(&bridge, "eject", device_path, mount_path);
-                } else {
-                    set_status(&ui, &state, "Device action already in progress");
-                }
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_open_search(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                open_search(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_open_search_for_slot(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                open_search_for_slot(&ui, &state, &bridge, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_clear_focused_search(move || {
-            ui_weak
-                .upgrade()
-                .is_some_and(|ui| clear_focused_search(&ui, &state, &bridge))
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_search_submitted(move |slot, query, recursive| {
-            if let Some(ui) = ui_weak.upgrade() {
-                submit_search_for_slot(&ui, &state, &bridge, slot, query.as_str(), recursive);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_cancel_search(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                cancel_recursive_search_for_slot(&ui, &state, &bridge, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_search_filters_changed(move |slot, kind, modified, size| {
-            if let Some(ui) = ui_weak.upgrade() {
-                update_search_filters_for_slot(&ui, &state, &bridge, slot, kind, modified, size);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_search_close_requested(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                close_search_for_slot(&ui, &state, &bridge, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_open_path(move |path| {
-            if let Some(ui) = ui_weak.upgrade() {
-                open_path(&ui, &state, path.as_str(), &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_context_service_action(move |index| {
-            if let Some(ui) = ui_weak.upgrade() {
-                context_service_menu::launch_action_async(&ui, &state, &bridge, index);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_prepare_context_service_submenu(move |group| {
-            if let Some(ui) = ui_weak.upgrade() {
-                context_service_menu::prepare_submenu_actions(&ui, &state, group.as_str());
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_context_service_action_enabled(move |id, enabled| {
-            if let Some(ui) = ui_weak.upgrade() {
-                context_service_menu::set_action_enabled(&ui, &state, id.as_str(), enabled);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_context_service_policy_mode_changed(move |mode| {
-            if let Some(ui) = ui_weak.upgrade() {
-                context_service_menu::set_policy_mode(&ui, &state, mode);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let save_files = args.chooser_save_files.clone();
-        ui.on_chooser_accept(move |name| {
-            if let Some(ui) = ui_weak.upgrade() {
-                chooser_accept(&ui, &state, name.as_str(), &save_files);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_chooser_select_filter(move |filter_index| {
-            if let Some(ui) = ui_weak.upgrade() {
-                select_chooser_filter(&ui, &state, &bridge, filter_index);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_chooser_select_choice(move |choice_index, option_index| {
-            if let Some(ui) = ui_weak.upgrade() {
-                select_chooser_choice(&ui, &state, choice_index, option_index);
-            }
-        });
-    }
-
-    open_with::register_callbacks(&ui, &state, &bridge);
-    app::file_clipboard::register_callbacks(&ui, &state, &bridge);
-    file_actions::register_callbacks(&ui, &state, &bridge);
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_go_back(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                go_back(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_go_forward(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                go_forward(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_pane_go_back(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                go_pane_back_slot(&ui, &state, &bridge, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_pane_go_forward(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                go_pane_forward_slot(&ui, &state, &bridge, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_focus(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                focus_pane_slot(&ui, &state, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_toggle_split_view(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                toggle_split_view(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_pane_item_view_item_pressed(move |slot, x, y, toggle, range| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                press_item_view_entry_at_point_for_slot(
-                    &ui, &state, &bridge, slot, x, y, toggle, range,
-                )
-            })
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_pane_item_view_item_activated(move |slot, x, y| {
-            if let Some(ui) = ui_weak.upgrade() {
-                activate_item_view_entry_at_point_for_slot(&ui, &state, slot, x, y, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_pane_item_view_item_context_menu(move |slot, x, y, abs_x, abs_y| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                request_item_view_entry_context_menu_at_point_for_slot(
-                    &ui,
-                    &state,
-                    &bridge,
-                    ItemViewContextMenuRequest {
-                        slot,
-                        x,
-                        y,
-                        abs_x,
-                        abs_y,
-                    },
-                )
-            })
-        });
-    }
-
-    {
-        let state = Rc::clone(&state);
-        ui.on_pane_item_view_blank_pressed(move |slot, x, y, toggle| {
-            press_item_view_blank_for_slot(&state, slot, x, y, toggle);
-        });
-    }
-
-    {
-        let state = Rc::clone(&state);
-        ui.on_pane_item_view_blank_moved(move |slot, x, y| {
-            move_item_view_blank_for_slot(&state, slot, x, y)
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_pane_item_view_blank_released(move |slot, x, y| {
-            if let Some(ui) = ui_weak.upgrade() {
-                release_item_view_blank_for_slot(&ui, &state, &bridge, slot, x, y);
-            }
-        });
-    }
-
-    {
-        let state = Rc::clone(&state);
-        ui.on_pane_item_view_blank_cancelled(move |slot| {
-            cancel_item_view_blank_for_slot(&state, slot);
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_clear_selection(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                clear_selection_for_slot(&ui, &state, slot);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_clear_selection(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                clear_selection(&ui, &state);
-            }
-        });
-    }
-
-    {
-        let state = Rc::clone(&state);
-        ui.on_is_place(move |path| contains_place_path(&state.borrow(), path.as_str()));
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_select_all_visible(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                select_all_visible(&ui, &state);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_add_place(move |path| {
-            if let Some(ui) = ui_weak.upgrade() {
-                add_place(&ui, &state, PathBuf::from(path.as_str()));
-                prefetch_sidebar_locations_async(&state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_add_place_at_slot(move |path, slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                add_place_at_slot(&ui, &state, PathBuf::from(path.as_str()), slot);
-                prefetch_sidebar_locations_async(&state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_rename_place(move |index, label| {
-            if let Some(ui) = ui_weak.upgrade() {
-                rename_place(&ui, &state, index, label.as_str());
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_remove_place(move |index| {
-            if let Some(ui) = ui_weak.upgrade() {
-                remove_place(&ui, &state, index);
-                prefetch_sidebar_locations_async(&state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_restore_default_places(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                restore_default_places(&ui, &state);
-                prefetch_sidebar_locations_async(&state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_open_place_new_window(move |index| {
-            if let Some(ui) = ui_weak.upgrade() {
-                open_place_new_window(&ui, &state, index);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_prepare_place_transfer(move |source, target_index, x, y| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                prepare_place_transfer(&ui, &state, source.as_str(), target_index, x, y)
-            })
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_prepare_entry_transfer(move |source, target_index, x, y| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                prepare_entry_transfer(&ui, &state, source.as_str(), target_index, x, y)
-            })
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_prepare_current_dir_transfer(move |source, label, x, y| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                prepare_current_dir_transfer(&ui, &state, source.as_str(), label.as_str(), x, y)
-            })
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_prepare_transfer(move |slot, source, x, y| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                prepare_pane_transfer_for_slot(&ui, &state, slot, source.as_str(), x, y)
-            })
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_drop_target_path(move |slot, x, y, source| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return SharedString::new();
-            };
-            let state = state.borrow();
-            pane_drop_target_path_for_slot(&ui, &state, slot, x, y, Path::new(source.as_str()))
-                .map_or_else(SharedString::new, Into::into)
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_drop_target_slice_index(move |slot, x, y, source| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return -1;
-            };
-            let state = state.borrow();
-            pane_drop_target_slice_index_for_slot(
-                &ui,
-                &state,
-                slot,
-                x,
-                y,
-                Path::new(source.as_str()),
-            )
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_drop_target_changed(move |slot, slice_index| {
-            if let Some(ui) = ui_weak.upgrade() {
-                set_pane_drop_target_slice_index_ui(&ui, &state, slot, slice_index);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_pane_drop_allowed(move |slot, x, y, source| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return false;
-            };
-            let state = state.borrow();
-            pane_drop_allowed_for_slot(&ui, &state, slot, x, y, Path::new(source.as_str()))
-        });
-    }
-
-    {
-        let state = Rc::clone(&state);
-        ui.on_place_drop_allowed(move |source, target_index| {
-            let state = state.borrow();
-            place_drop_allowed(&state, Path::new(source.as_str()), target_index)
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_place_drop_target(move |y| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return -1;
-            };
-            let state = state.borrow();
-            place_drop_geometry(
-                y,
-                state.places.len(),
-                ui.get_places_list_y_px(),
-                ui.get_places_row_stride_px(),
-            )
-            .target_index
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_place_drop_slot(move |y| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return 0;
-            };
-            let state = state.borrow();
-            place_drop_geometry(
-                y,
-                state.places.len(),
-                ui.get_places_list_y_px(),
-                ui.get_places_row_stride_px(),
-            )
-            .slot
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_place_drop_over_gap(move |y| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return false;
-            };
-            let state = state.borrow();
-            place_drop_geometry(
-                y,
-                state.places.len(),
-                ui.get_places_list_y_px(),
-                ui.get_places_row_stride_px(),
-            )
-            .over_gap
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_place_drop_over_item(move |y| {
-            let Some(ui) = ui_weak.upgrade() else {
-                return false;
-            };
-            let state = state.borrow();
-            place_drop_geometry(
-                y,
-                state.places.len(),
-                ui.get_places_list_y_px(),
-                ui.get_places_row_stride_px(),
-            )
-            .over_item
-        });
-    }
-
-    ui.on_trace_places_drop(
-        |phase, mime_type, payload, x, y, slot, target, over_gap, over_item| {
-            dnd_log_places_event(PlacesDndTrace {
-                backend: SLINT_DROPAREA_BACKEND_SOURCE,
-                phase: phase.as_str(),
-                mime_type: mime_type.as_str(),
-                payload: payload.as_str(),
-                x,
-                y,
-                slot,
-                target,
-                over_gap,
-                over_item,
-            });
-        },
-    );
-    ui.on_trace_main_drop(|phase, mime_type, payload, x, y, rejected, target_path| {
-        dnd_log_main_event(MainDndTrace {
-            backend: SLINT_DROPAREA_BACKEND_SOURCE,
-            phase: phase.as_str(),
-            mime_type: mime_type.as_str(),
-            payload: payload.as_str(),
-            x,
-            y,
-            rejected,
-            target_path: target_path.as_str(),
-        });
-    });
-
-    register_menu_geometry_callbacks(&ui);
-
-    {
-        let ui_weak = ui.as_weak();
-        let bridge = bridge.clone();
-        let state = Rc::clone(&state);
-        ui.on_transfer_operation(move |operation, source, target| {
-            if let Some(ui) = ui_weak.upgrade() {
-                start_transfer_operation(
-                    &ui,
-                    &state,
-                    &bridge,
-                    operation.as_str(),
-                    source.as_str(),
-                    target.as_str(),
-                );
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_transfer_conflict_choice(move |decision| {
-            if let Some(ui) = ui_weak.upgrade() {
-                resolve_transfer_conflict(&ui, &state, &bridge, decision.as_str());
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_privileged_prompt_accept(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let command = state.borrow_mut().pending_privileged_command.take();
-                ui.set_privileged_prompt_open(false);
-                if let Some(command) = command {
-                    start_privileged_operation(&ui, &state, &bridge, command);
-                }
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_privileged_prompt_dismiss(move || {
-            state.borrow_mut().pending_privileged_command = None;
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_privileged_prompt_open(false);
-                set_status(&ui, &state, "Administrator operation cancelled");
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_commit_external_edit(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                start_external_edit_resolution(
-                    &ui,
-                    &state,
-                    &bridge,
-                    slot,
-                    EXTERNAL_EDIT_SAVE_OPERATION,
-                );
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_discard_external_edit(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                start_external_edit_resolution(
-                    &ui,
-                    &state,
-                    &bridge,
-                    slot,
-                    EXTERNAL_EDIT_DISCARD_OPERATION,
-                );
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_undo_last_operation(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                start_file_undo(&ui, &state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_cancel_queued_operations(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                cancel_queued_operations(&ui, &state);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let bridge = bridge.clone();
-        ui.on_reorder_place_path(move |path, to| {
-            if let Some(ui) = ui_weak.upgrade() {
-                reorder_place_path(&ui, &state, path.as_str(), to);
-                prefetch_sidebar_locations_async(&state, &bridge);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let settings_save = Rc::clone(&settings_save);
-        ui.on_persist_ui_state(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                settings_save.schedule(current_settings(&ui, &state));
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        ui.on_dark_mode_changed(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                refresh_visible_pane_tile_frame_rasters(&ui, &state);
-            }
-        });
-    }
-
-    {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(&state);
-        let settings_save = Rc::clone(&settings_save);
-        let chooser_mode = matches!(args.mode, Mode::Chooser);
-        ui.window().on_close_requested(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                settings_save.save_now(current_settings(&ui, &state));
-            }
-            if chooser_mode {
-                std::process::exit(support::chooser::CHOOSER_CANCEL_EXIT_CODE);
-            }
-            CloseRequestResponse::HideWindow
-        });
-    }
-
     ui.run()
 }
 
-fn register_pane_routing_callbacks(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-) {
+fn register_ui_signal_callbacks(ui: &AppWindow, bus: Rc<UiSignalBus>) {
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_async_results_ready(move || bus.emit(UiSignal::AsyncResultsReady));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_view_changed(move |slot| bus.emit(UiSignal::PaneViewChanged(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_layout_changed(move || bus.emit(UiSignal::PaneLayoutChanged));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_icon_zoom_layout_changed(move || bus.emit(UiSignal::IconZoomLayoutChanged));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_slots_refresh_requested(move || {
+            bus.emit(UiSignal::PaneSlotsRefreshRequested);
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_path_text_changed(move |slot, text| {
+            bus.emit(UiSignal::PanePathTextChanged(slot, text.to_string()));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_path_focus_changed(move |slot, focused| {
+            bus.emit(UiSignal::PanePathFocusChanged(slot, focused));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_slot_refresh_requested(move |slot| {
+            bus.emit(UiSignal::PaneSlotRefreshRequested(slot));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_viewport_changed(move |slot, viewport_x| {
+            bus.emit(UiSignal::PaneViewportChanged(slot, viewport_x));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_refresh(move || bus.emit(UiSignal::Refresh));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_go_home(move || bus.emit(UiSignal::GoHome));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_go_parent(move || bus.emit(UiSignal::GoParent));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_go_root(move || bus.emit(UiSignal::GoRoot));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_path_submitted(move |slot, path| {
+            bus.emit(UiSignal::PanePathSubmitted(slot, path.to_string()));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_open_place(move |path| bus.emit(UiSignal::OpenPlace(path.to_string())));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_open_device(move |path, mounted| {
+            bus.emit(UiSignal::OpenDevice(path.to_string(), mounted));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_unmount_device(move |device_path, mount_path| {
+            bus.emit(UiSignal::UnmountDevice(
+                device_path.to_string(),
+                mount_path.to_string(),
+            ));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_eject_device(move |device_path, mount_path| {
+            bus.emit(UiSignal::EjectDevice(
+                device_path.to_string(),
+                mount_path.to_string(),
+            ));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_open_search(move || bus.emit(UiSignal::OpenSearch));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_open_search_for_slot(move |slot| bus.emit(UiSignal::OpenSearchForSlot(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_clear_focused_search(move || bus.query_clear_focused_search());
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_search_submitted(move |slot, query, recursive| {
+            bus.emit(UiSignal::SearchSubmitted(
+                slot,
+                query.to_string(),
+                recursive,
+            ));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_cancel_search(move |slot| bus.emit(UiSignal::CancelSearch(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_search_filters_changed(move |slot, kind, modified, size| {
+            bus.emit(UiSignal::SearchFiltersChanged(slot, kind, modified, size));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_search_close_requested(move |slot| {
+            bus.emit(UiSignal::SearchCloseRequested(slot));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_open_path(move |path| bus.emit(UiSignal::OpenPath(path.to_string())));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_context_service_action(move |index| {
+            bus.emit(UiSignal::ContextServiceAction(index));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_prepare_context_service_submenu(move |group| {
+            bus.emit(UiSignal::PrepareContextServiceSubmenu(group.to_string()));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_context_service_action_enabled(move |id, enabled| {
+            bus.emit(UiSignal::ContextServiceActionEnabled(
+                id.to_string(),
+                enabled,
+            ));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_context_service_policy_mode_changed(move |mode| {
+            bus.emit(UiSignal::ContextServicePolicyModeChanged(mode));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_chooser_accept(move |name| bus.emit(UiSignal::ChooserAccept(name.to_string())));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_chooser_select_filter(move |filter_index| {
+            bus.emit(UiSignal::ChooserSelectFilter(filter_index));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_chooser_select_choice(move |choice_index, option_index| {
+            bus.emit(UiSignal::ChooserSelectChoice(choice_index, option_index));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_go_back(move || bus.emit(UiSignal::GoBack));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_go_forward(move || bus.emit(UiSignal::GoForward));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_go_back(move |slot| bus.emit(UiSignal::PaneGoBack(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_go_forward(move |slot| bus.emit(UiSignal::PaneGoForward(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_focus(move |slot| bus.emit(UiSignal::PaneFocus(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_toggle_split_view(move || bus.emit(UiSignal::ToggleSplitView));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_item_view_item_pressed(move |slot, x, y, toggle, range| {
+            bus.query_item_view_item_pressed(slot, x, y, toggle, range)
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_item_view_item_activated(move |slot, x, y| {
+            bus.emit(UiSignal::PaneItemViewItemActivated(slot, x, y));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_item_view_item_context_menu(move |slot, x, y, abs_x, abs_y| {
+            bus.query_item_view_item_context_menu(slot, x, y, abs_x, abs_y)
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_item_view_blank_pressed(move |slot, x, y, toggle| {
+            bus.emit(UiSignal::PaneItemViewBlankPressed(slot, x, y, toggle));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_item_view_blank_moved(move |slot, x, y| {
+            bus.query_item_view_blank_moved(slot, x, y)
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_item_view_blank_released(move |slot, x, y| {
+            bus.emit(UiSignal::PaneItemViewBlankReleased(slot, x, y));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_item_view_blank_cancelled(move |slot| {
+            bus.emit(UiSignal::PaneItemViewBlankCancelled(slot));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_clear_selection(move |slot| bus.emit(UiSignal::PaneClearSelection(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_clear_selection(move || bus.emit(UiSignal::ClearSelection));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_is_place(move |path| bus.query_is_place(path.as_str()));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_select_all_visible(move || bus.emit(UiSignal::SelectAllVisible));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_add_place(move |path| bus.emit(UiSignal::AddPlace(path.to_string())));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_add_place_at_slot(move |path, slot| {
+            bus.emit(UiSignal::AddPlaceAtSlot(path.to_string(), slot));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_rename_place(move |index, label| {
+            bus.emit(UiSignal::RenamePlace(index, label.to_string()));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_remove_place(move |index| bus.emit(UiSignal::RemovePlace(index)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_restore_default_places(move || bus.emit(UiSignal::RestoreDefaultPlaces));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_open_place_new_window(move |index| {
+            bus.emit(UiSignal::OpenPlaceNewWindow(index));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_prepare_place_transfer(move |source, target_index, x, y| {
+            bus.query_prepare_place_transfer(source.as_str(), target_index, x, y)
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_prepare_entry_transfer(move |source, target_index, x, y| {
+            bus.query_prepare_entry_transfer(source.as_str(), target_index, x, y)
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_prepare_current_dir_transfer(move |source, label, x, y| {
+            bus.query_prepare_current_dir_transfer(source.as_str(), label.as_str(), x, y)
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_prepare_transfer(move |slot, source, x, y| {
+            bus.query_pane_prepare_transfer(slot, source.as_str(), x, y)
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_drop_target_path(move |slot, x, y, source| {
+            bus.query_pane_drop_target_path(slot, x, y, source.as_str())
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_drop_target_slice_index(move |slot, x, y, source| {
+            bus.query_pane_drop_target_slice_index(slot, x, y, source.as_str())
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_drop_target_changed(move |slot, slice_index| {
+            bus.emit(UiSignal::PaneDropTargetChanged(slot, slice_index));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_pane_drop_allowed(move |slot, x, y, source| {
+            bus.query_pane_drop_allowed(slot, x, y, source.as_str())
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_place_drop_allowed(move |source, target_index| {
+            bus.query_place_drop_allowed(source.as_str(), target_index)
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_place_drop_target(move |y| bus.query_place_drop_target(y));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_place_drop_slot(move |y| bus.query_place_drop_slot(y));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_place_drop_over_gap(move |y| bus.query_place_drop_over_gap(y));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_place_drop_over_item(move |y| bus.query_place_drop_over_item(y));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_trace_places_drop(
+            move |phase, mime_type, payload, x, y, slot, target, over_gap, over_item| {
+                bus.emit(UiSignal::TracePlacesDrop {
+                    phase: phase.to_string(),
+                    mime_type: mime_type.to_string(),
+                    payload: payload.to_string(),
+                    x,
+                    y,
+                    slot,
+                    target,
+                    over_gap,
+                    over_item,
+                });
+            },
+        );
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_trace_main_drop(
+            move |phase, mime_type, payload, x, y, rejected, target_path| {
+                bus.emit(UiSignal::TraceMainDrop {
+                    phase: phase.to_string(),
+                    mime_type: mime_type.to_string(),
+                    payload: payload.to_string(),
+                    x,
+                    y,
+                    rejected,
+                    target_path: target_path.to_string(),
+                });
+            },
+        );
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_transfer_operation(move |operation, source, target| {
+            bus.emit(UiSignal::TransferOperation(
+                operation.to_string(),
+                source.to_string(),
+                target.to_string(),
+            ));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_transfer_conflict_choice(move |decision| {
+            bus.emit(UiSignal::TransferConflictChoice(decision.to_string()));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_privileged_prompt_accept(move || bus.emit(UiSignal::PrivilegedPromptAccept));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_privileged_prompt_dismiss(move || bus.emit(UiSignal::PrivilegedPromptDismiss));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_commit_external_edit(move |slot| bus.emit(UiSignal::CommitExternalEdit(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_discard_external_edit(move |slot| bus.emit(UiSignal::DiscardExternalEdit(slot)));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_undo_last_operation(move || bus.emit(UiSignal::UndoLastOperation));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_cancel_queued_operations(move || bus.emit(UiSignal::CancelQueuedOperations));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_reorder_place_path(move |path, to| {
+            bus.emit(UiSignal::ReorderPlacePath(path.to_string(), to));
+        });
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_persist_ui_state(move || bus.emit(UiSignal::PersistUiState));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.on_dark_mode_changed(move || bus.emit(UiSignal::DarkModeChanged));
+    }
+    {
+        let bus = Rc::clone(&bus);
+        ui.window()
+            .on_close_requested(move || bus.close_requested());
+    }
+}
+
+fn register_pane_routing_callbacks(ui: &AppWindow, bus: Rc<UiSignalBus>) {
     let routing = ui.global::<PaneRouting>();
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_focus(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_focus(slot);
-            }
+            bus.route_focus(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_path_submitted(move |slot, path| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_path_submitted(slot, path);
-            }
+            bus.route_path_submitted(slot, path);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_go_back(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_go_back(slot);
-            }
+            bus.route_go_back(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_go_forward(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_go_forward(slot);
-            }
+            bus.route_go_forward(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_search_open(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_search_open(slot);
-            }
+            bus.route_search_open(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_search_submitted(move |slot, query, recursive| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_search_submitted(slot, query, recursive);
-            }
+            bus.route_search_submitted(slot, query, recursive);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_cancel_search(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_cancel_search(slot);
-            }
+            bus.route_cancel_search(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_search_filters_changed(move |slot, kind, modified, size| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_search_filters_changed(slot, kind, modified, size);
-            }
+            bus.route_search_filters_changed(slot, kind, modified, size);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_search_filter_menu_requested(
             move |slot, x, y, kind, modified, size, selector| {
-                if let Some(ui) = ui_weak.upgrade() {
-                    ui.invoke_route_pane_search_filter_menu_requested(
-                        slot, x, y, kind, modified, size, selector,
-                    );
-                }
+                bus.route_search_filter_menu_requested(slot, x, y, kind, modified, size, selector);
             },
         );
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_search_close_requested(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_search_close_requested(slot);
-            }
+            bus.route_search_close_requested(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_search_focus_changed(move |slot, focused| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_search_focus_changed(slot, focused);
-            }
+            bus.route_search_focus_changed(slot, focused);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_view_changed(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_view_changed(slot);
-            }
+            bus.route_view_changed(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_item_view_item_pressed(move |slot, x, y, toggle, range| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                ui.invoke_route_pane_item_view_item_pressed(slot, x, y, toggle, range)
-            })
+            bus.route_item_view_item_pressed(slot, x, y, toggle, range)
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_item_view_item_activated(move |slot, x, y| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_item_view_item_activated(slot, x, y);
-            }
+            bus.route_item_view_item_activated(slot, x, y);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_item_view_item_context_menu(move |slot, x, y, abs_x, abs_y| {
-            ui_weak.upgrade().is_some_and(|ui| {
-                ui.invoke_route_pane_item_view_item_context_menu(slot, x, y, abs_x, abs_y)
-            })
+            bus.route_item_view_item_context_menu(slot, x, y, abs_x, abs_y)
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_item_view_blank_pressed(move |slot, x, y, toggle| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_item_view_blank_pressed(slot, x, y, toggle);
-            }
+            bus.route_item_view_blank_pressed(slot, x, y, toggle);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_item_view_blank_moved(move |slot, x, y| {
-            ui_weak
-                .upgrade()
-                .is_some_and(|ui| ui.invoke_route_pane_item_view_blank_moved(slot, x, y))
+            bus.route_item_view_blank_moved(slot, x, y)
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_item_view_blank_released(move |slot, x, y| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_item_view_blank_released(slot, x, y);
-            }
+            bus.route_item_view_blank_released(slot, x, y);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_item_view_blank_cancelled(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_item_view_blank_cancelled(slot);
-            }
+            bus.route_item_view_blank_cancelled(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
-        let state = Rc::clone(state);
-        let bridge = bridge.clone();
+        let bus = Rc::clone(&bus);
         routing.on_request_blank_context_menu(move |slot, x, y| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let service_menu_paths = context_service_menu::blank_paths(&state, slot);
-                context_service_menu::refresh_actions_async(
-                    &ui,
-                    &state,
-                    &bridge,
-                    slot,
-                    service_menu_paths,
-                );
-                ui.invoke_route_pane_request_blank_context_menu(slot, x, y);
-            }
+            bus.route_request_blank_context_menu(slot, x, y);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_zoom_in(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_zoom_in(slot);
-            }
+            bus.route_zoom_in(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_zoom_out(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_zoom_out(slot);
-            }
+            bus.route_zoom_out(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_drop_target_path(move |slot, x, y, source| {
-            ui_weak.upgrade().map_or_else(SharedString::new, |ui| {
-                ui.invoke_route_pane_drop_target_path(slot, x, y, source)
-            })
+            bus.route_drop_target_path(slot, x, y, source)
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_drop_target_slice_index(move |slot, x, y, source| {
-            ui_weak.upgrade().map_or(-1, |ui| {
-                ui.invoke_route_pane_drop_target_slice_index(slot, x, y, source)
-            })
+            bus.route_drop_target_slice_index(slot, x, y, source)
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_drop_target_changed(move |slot, slice_index| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_drop_target_changed(slot, slice_index);
-            }
+            bus.route_drop_target_changed(slot, slice_index);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
-        routing.on_drop_allowed(move |slot, x, y, source| {
-            ui_weak
-                .upgrade()
-                .is_some_and(|ui| ui.invoke_route_pane_drop_allowed(slot, x, y, source))
-        });
+        let bus = Rc::clone(&bus);
+        routing
+            .on_drop_allowed(move |slot, x, y, source| bus.route_drop_allowed(slot, x, y, source));
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_prepare_transfer(move |slot, source, x, y| {
-            ui_weak
-                .upgrade()
-                .is_some_and(|ui| ui.invoke_route_pane_prepare_transfer(slot, source, x, y))
+            bus.route_prepare_transfer(slot, source, x, y)
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_transfer_menu_requested(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_transfer_menu_requested(slot);
-            }
+            bus.route_transfer_menu_requested(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_trace_drop(move |action, kind, path, x, y, rejected, target| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_trace_main_drop(action, kind, path, x, y, rejected, target);
-            }
+            bus.route_trace_drop(action, kind, path, x, y, rejected, target);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_save_focus_changed(move |slot, focused| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_save_focus_changed(slot, focused);
-            }
+            bus.route_save_focus_changed(slot, focused);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_commit_external_edit(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_commit_external_edit(slot);
-            }
+            bus.route_commit_external_edit(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_discard_external_edit(move |slot| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_discard_external_edit(slot);
-            }
+            bus.route_discard_external_edit(slot);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_undo_last_operation(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_undo_last_operation();
-            }
+            bus.route_undo_last_operation();
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_chooser_accept(move |value| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_chooser_accept(value);
-            }
+            bus.route_chooser_accept(value);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_chooser_filter_requested(move |slot, x, y| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_chooser_filter_requested(slot, x, y);
-            }
+            bus.route_chooser_filter_requested(slot, x, y);
         });
     }
 
     {
-        let ui_weak = ui.as_weak();
+        let bus = Rc::clone(&bus);
         routing.on_chooser_choice_requested(move |slot, index, x, y| {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.invoke_route_pane_chooser_choice_requested(slot, index, x, y);
-            }
+            bus.route_chooser_choice_requested(slot, index, x, y);
         });
     }
 }
@@ -3684,6 +4156,8 @@ fn sync_virtual_entries_for_slot_with_count(
         immediate,
         publish_layout_on_cache,
         false,
+        false,
+        false,
     );
 }
 
@@ -3698,6 +4172,8 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
     immediate: bool,
     publish_layout_on_cache: bool,
     force_uncached_prepare: bool,
+    force_rebuild_model: bool,
+    schedule_visible_thumbnail_roles_after_apply: bool,
 ) {
     let size_px = thumbnail_size_px(ui);
     let zoom_level = ui.get_icon_zoom_level();
@@ -3744,6 +4220,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
             pane.view.cancel_virtual_prepare_queue();
         }
         if !force_uncached_prepare
+            && !force_rebuild_model
             && let Some((viewport_x, publish_viewport)) = cached_virtual_viewport_sync(
                 pane,
                 &layout,
@@ -3769,6 +4246,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
                 generation,
                 thumbnail_size_px: size_px,
                 schedule_thumbnails,
+                schedule_visible_thumbnail_roles_after_apply,
                 cell_width: layout.cell_width,
                 render_metrics,
                 input: Box::new(VirtualViewSnapshotInput {
@@ -3777,6 +4255,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
                     range_hint: None,
                     thumbnail_size_px: size_px,
                     schedule_thumbnails,
+                    force_rebuild_model,
                     visible_count_override,
                     cache: if force_uncached_prepare {
                         VirtualViewCache::default()
@@ -3819,6 +4298,9 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
             } else if publish_viewport {
                 set_pane_viewport_ui(ui, slot, viewport_x, state);
             }
+            if schedule_visible_thumbnail_roles_after_apply {
+                schedule_visible_thumbnail_roles_for_slot(ui, state, bridge, slot);
+            }
             return;
         }
         VirtualViewSyncRequest::Deferred => return,
@@ -3831,6 +4313,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
             generation,
             thumbnail_size_px,
             schedule_thumbnails,
+            schedule_visible_thumbnail_roles_after_apply,
             cell_width,
             render_metrics,
             input,
@@ -3845,6 +4328,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
                 generation,
                 thumbnail_size_px,
                 schedule_thumbnails,
+                schedule_visible_thumbnail_roles_after_apply,
                 cell_width,
                 render_metrics,
                 update,
@@ -3862,6 +4346,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
         generation,
         thumbnail_size_px,
         schedule_thumbnails,
+        schedule_visible_thumbnail_roles_after_apply,
         cell_width,
         render_metrics,
         input,
@@ -3880,6 +4365,7 @@ fn start_virtual_view_prepare(bridge: &AsyncBridge, request: VirtualViewPrepareR
                     generation,
                     thumbnail_size_px,
                     schedule_thumbnails,
+                    schedule_visible_thumbnail_roles_after_apply,
                     cell_width,
                     render_metrics,
                     update,
@@ -4067,19 +4553,29 @@ fn apply_virtual_view_result(
             .pane_by_id(result.pane_id)
             .map(|pane| pane.selection.paths.clone())
             .unwrap_or_default();
-        let media_entries = decorate_entries_with_cached_thumbnails_for_pane(
-            &state_ref,
-            result.pane_id,
-            &mut entries,
-            result.thumbnail_size_px,
-        );
+        let media_entries = if result.schedule_thumbnails {
+            decorate_entries_with_cached_thumbnails_for_pane(
+                &state_ref,
+                result.pane_id,
+                &mut entries,
+                result.thumbnail_size_px,
+            )
+        } else if let Some(pane) = state_ref.panes.pane_by_id(result.pane_id) {
+            preserve_current_thumbnail_roles_for_deferred_icon_size_update(
+                pane,
+                update.range.start,
+                &mut entries,
+            )
+        } else {
+            Vec::new()
+        };
         if state_ref.panes.pane_by_id(result.pane_id).is_none() {
             return;
         }
         (selected_paths, media_entries)
     };
 
-    if result.schedule_thumbnails {
+    if result.schedule_thumbnails && !result.schedule_visible_thumbnail_roles_after_apply {
         let maximum_visible_items = update
             .visible_range
             .end
@@ -4107,6 +4603,7 @@ fn apply_virtual_view_result(
         media_entries,
         metadata_entries,
         &selected_paths,
+        !result.schedule_thumbnails,
     );
     if target_is_focused {
         ui.set_entry_count(update.entry_count as i32);
@@ -4121,6 +4618,64 @@ fn apply_virtual_view_result(
         update.entry_count
     ));
     sync_pane_view_ui(ui, state, slot);
+    if result.schedule_visible_thumbnail_roles_after_apply {
+        schedule_visible_thumbnail_roles_for_slot(ui, state, bridge, slot);
+    }
+}
+
+fn preserve_current_thumbnail_roles_for_deferred_icon_size_update(
+    pane: &PaneState,
+    range_start: usize,
+    entries: &mut [ItemViewEntry],
+) -> Vec<ItemViewMediaSource> {
+    let mut media_entries = Vec::new();
+    let current_start = pane.view.virtual_start_index;
+    for (row, entry) in entries.iter_mut().enumerate() {
+        let absolute_index = range_start.saturating_add(row);
+        let Some(current_row) = absolute_index.checked_sub(current_start) else {
+            continue;
+        };
+        let Some(token) = pane.view.virtual_entry_tokens.get(current_row) else {
+            continue;
+        };
+        if token.path() == entry.path.as_str() {
+            entry.thumbnail_state = token.thumbnail_state();
+            entry.media_token = token.media_token();
+            if token.thumbnail_state() == THUMBNAIL_STATE_LOADED
+                && let Some(media) =
+                    thumbnail_media_for_token(pane, current_row as i32, token.media_token())
+            {
+                media_entries.push(ItemViewMediaSource {
+                    slice_index: row as i32,
+                    media,
+                    x: 0.0,
+                    y: 0.0,
+                });
+            }
+        }
+    }
+    media_entries
+}
+
+fn thumbnail_media_for_token(
+    pane: &PaneState,
+    current_slice_index: i32,
+    media_token: i32,
+) -> Option<slint::Image> {
+    pane.view
+        .virtual_media_tokens
+        .iter()
+        .position(|token| {
+            token.slice_index == current_slice_index && token.media_token == media_token
+        })
+        .or_else(|| {
+            pane.view
+                .virtual_media_tokens
+                .iter()
+                .position(|token| token.media_token == media_token)
+        })
+        .and_then(|row| pane.view.virtual_thumbnail_entries.row_data(row))
+        .map(|entry| entry.media)
 }
 
 fn apply_virtual_view_prepare_failure(
@@ -4153,8 +4708,10 @@ fn set_pane_virtual_entries(
     media_entries: Vec<ItemViewMediaSource>,
     metadata_entries: Vec<ItemViewMetadataOverlaySource>,
     selected_paths: &[String],
+    defer_raster_update: bool,
 ) {
     if let Some(pane) = state.borrow_mut().panes.pane_mut_for_slot(slot) {
+        pane.view.set_raster_updates_deferred(defer_raster_update);
         update_pane_item_view_entries_model(
             &mut pane.view,
             start_index,
@@ -4205,6 +4762,8 @@ fn apply_filter_for_slot(
         false,
         false,
         true,
+        false,
+        false,
     );
     if preserve_selection {
         let empty_paths = Vec::new();
@@ -4345,7 +4904,7 @@ fn press_item_view_entry_at_point_for_slot(
         };
         action
     };
-    apply_item_view_controller_action(ui, state, bridge, slot, action);
+    PaneController::new(ui, state, bridge).apply_item_view_controller_action(slot, action);
     true
 }
 
@@ -4364,7 +4923,7 @@ fn activate_item_view_entry_at_point_for_slot(
         };
         action
     };
-    apply_item_view_controller_action(ui, state, bridge, slot, action);
+    PaneController::new(ui, state, bridge).apply_item_view_controller_action(slot, action);
 }
 
 #[derive(Clone, Copy)]
@@ -4397,7 +4956,7 @@ fn request_item_view_entry_context_menu_at_point_for_slot(
         };
         action
     };
-    apply_item_view_controller_action(ui, state, bridge, request.slot, action);
+    PaneController::new(ui, state, bridge).apply_item_view_controller_action(request.slot, action);
     true
 }
 
@@ -4473,61 +5032,7 @@ fn release_item_view_blank_for_slot(
         action
     };
 
-    apply_item_view_controller_action(ui, state, bridge, slot, action);
-}
-
-fn apply_item_view_controller_action(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-    slot: i32,
-    action: ItemViewControllerAction,
-) {
-    match action {
-        ItemViewControllerAction::None => {}
-        ItemViewControllerAction::ActivatePath { path } => {
-            open_path_for_slot(ui, state, slot, path.as_str(), bridge);
-        }
-        ItemViewControllerAction::RequestContextMenu {
-            entry,
-            select_path,
-            abs_x,
-            abs_y,
-        } => {
-            if let Some(path) = select_path.as_deref() {
-                select_path_for_slot(ui, state, slot, path, false, false);
-            }
-
-            let service_menu_paths =
-                context_service_menu::item_paths(state, slot, entry.path.as_str());
-            context_service_menu::refresh_actions_async(
-                ui,
-                state,
-                bridge,
-                slot,
-                service_menu_paths,
-            );
-            ui.invoke_route_pane_request_context_menu(
-                slot,
-                entry.path,
-                entry.name,
-                entry.size,
-                entry.modified,
-                entry.is_dir,
-                abs_x,
-                abs_y,
-            );
-        }
-        ItemViewControllerAction::ClearSelection => clear_selection_for_slot(ui, state, slot),
-        ItemViewControllerAction::SelectPath {
-            path,
-            toggle,
-            range,
-        } => select_path_for_slot(ui, state, slot, path.as_str(), toggle, range),
-        ItemViewControllerAction::SelectRect { rect, toggle } => {
-            select_rect_for_slot(ui, state, slot, rect, toggle);
-        }
-    }
+    PaneController::new(ui, state, bridge).apply_item_view_controller_action(slot, action);
 }
 
 fn cancel_item_view_blank_for_slot(state: &Rc<RefCell<AppState>>, slot: i32) {
@@ -4628,7 +5133,7 @@ fn sync_visible_pane_layouts_with_thumbnail_scheduling(
     }
 }
 
-fn sync_visible_pane_icon_zoom_layouts(
+fn apply_visible_pane_zoom_style_options(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
@@ -4640,12 +5145,12 @@ fn sync_visible_pane_icon_zoom_layouts(
 
     for row in 0..slots.row_count() {
         if let Some(pane) = slots.row_data(row) {
-            sync_pane_icon_zoom_layout_for_slot(ui, state, bridge, pane.slot);
+            apply_pane_zoom_style_option_for_slot(ui, state, bridge, pane.slot);
         }
     }
 }
 
-fn sync_pane_icon_zoom_layout_for_slot(
+fn apply_pane_zoom_style_option_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
@@ -4654,13 +5159,69 @@ fn sync_pane_icon_zoom_layout_for_slot(
     sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, true, true);
 }
 
+fn update_icon_size_for_visible_panes(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+) {
+    refresh_icon_size_models_for_visible_panes(ui, state, bridge);
+}
+
+fn refresh_icon_size_models_for_visible_panes(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+) {
+    let slots = ui.get_pane_slots();
+    if slots.row_count() == 0 {
+        refresh_icon_size_model_for_slot(ui, state, bridge, 0);
+        return;
+    }
+
+    for row in 0..slots.row_count() {
+        if let Some(pane) = slots.row_data(row) {
+            refresh_icon_size_model_for_slot(ui, state, bridge, pane.slot);
+        }
+    }
+}
+
+fn refresh_icon_size_model_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    sync_virtual_entries_for_slot_with_count_and_cache_policy(
+        ui, state, bridge, slot, true, None, false, true, false, true, true,
+    );
+}
+
 fn sync_pane_viewport_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     slot: i32,
 ) {
-    sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true, false);
+    sync_pane_viewport_for_slot_with_thumbnail_scheduling(ui, state, bridge, slot, true);
+}
+
+fn sync_pane_viewport_for_slot_with_thumbnail_scheduling(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+    schedule_thumbnails: bool,
+) {
+    sync_virtual_entries_for_slot_with_count(
+        ui,
+        state,
+        bridge,
+        slot,
+        schedule_thumbnails,
+        None,
+        true,
+        false,
+    );
 }
 
 fn sync_pane_layout_for_slot_with_thumbnail_scheduling(
@@ -6259,7 +6820,7 @@ mod tests {
             .find("press_entry_at_pane_point(ui, &mut state_ref, slot, x, y, toggle, range)")
             .expect("item press hit-test and input update should route through the pane-local item-view controller");
         let action_execution = press_body
-            .find("apply_item_view_controller_action(ui, state, bridge, slot, action);")
+            .find("PaneController::new(ui, state, bridge).apply_item_view_controller_action(slot, action);")
             .expect("item press should execute the controller action after recording press state");
 
         assert!(dnd_block.contains("Pending(i32)"));
@@ -6297,13 +6858,11 @@ mod tests {
 
         assert!(
             body.contains("activate_entry_at_pane_point(ui, &state_ref, slot, x, y)")
-                && body.contains(
-                    "apply_item_view_controller_action(ui, state, bridge, slot, action);"
-                )
+                && body.contains("PaneController::new(ui, state, bridge).apply_item_view_controller_action(slot, action);")
                 && !body.contains("item_view_entry_at_point_for_slot(ui, state, slot, x, y)")
                 && !body
                     .contains("open_path_for_slot(ui, state, slot, entry.path.as_str(), bridge);"),
-            "item activation should route hit-test through item_view.rs and leave main.rs to execute the returned controller action"
+            "item activation should route hit-test through item_view.rs and leave PaneController to execute the returned controller action"
         );
     }
 
@@ -6597,9 +7156,11 @@ mod tests {
                 && filter_body
                     .contains("sync_virtual_entries_for_slot_with_count_and_cache_policy(")
                 && filter_body.contains("Some(summary.count),")
-                && filter_body.contains("true,\n    );")
+                && filter_body.contains("true,\n        false,\n        false,\n    );")
                 && sync_body.contains("force_uncached_prepare: bool")
+                && sync_body.contains("force_rebuild_model: bool")
                 && sync_body.contains("if !force_uncached_prepare")
+                && sync_body.contains("&& !force_rebuild_model")
                 && sync_body.contains("VirtualViewCache::default()"),
             "filter/search refresh should keep the old visible view alive, force an uncached background prepare for the new filter model, and commit atomically when the virtual result returns"
         );
@@ -6709,38 +7270,63 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("load_directory(&ui, &state, &bridge);"))
             .map(|(body, _)| body)
             .expect("main setup body should be present");
+        let callback_body = source
+            .split_once("fn register_ui_signal_callbacks(")
+            .and_then(|(_, rest)| rest.split_once("fn register_pane_routing_callbacks("))
+            .map(|(body, _)| body)
+            .expect("signal callback registration body should be present");
+        let emit_body = source
+            .split_once("fn emit(&self, signal: UiSignal)")
+            .and_then(|(_, rest)| rest.split_once("fn drain_async_results"))
+            .map(|(body, _)| body)
+            .expect("signal bus emit body should be present");
         let scheduler_body = source
             .split_once("struct PaneViewSyncScheduler")
-            .and_then(|(_, rest)| rest.split_once("struct PaneLayoutSyncScheduler"))
+            .and_then(|(_, rest)| rest.split_once("struct IconSizeUpdateScheduler"))
             .map(|(body, _)| body)
             .expect("pane view scheduler body should be present");
 
         assert!(
-            main_body.contains("let pane_view_sync = Rc::new(PaneViewSyncScheduler::new(")
-                && main_body.contains("ui.on_pane_view_changed(move |slot|")
-                && main_body.contains("pane_view_sync.request(slot);")
+            main_body.contains("let ui_signals = Rc::new(UiSignalBus::new(UiSignalBusInput {")
+                && main_body.contains("register_ui_signal_callbacks(&ui, Rc::clone(&ui_signals));")
+                && callback_body.contains(
+                    "ui.on_pane_view_changed(move |slot| bus.emit(UiSignal::PaneViewChanged(slot)));"
+                )
+                && emit_body
+                    .contains("UiSignal::PaneViewChanged(slot) => self.pane_view_sync.request(slot),")
+                && !callback_body.contains("pane_view_sync.request(slot);")
                 && !main_body.contains("sync_pane_view_for_slot(&ui, &state, &bridge, slot);"),
-            "pane view-changed callbacks should route through the pane view scheduler"
+            "pane view-changed callbacks should emit a bus signal, with synchronous scheduler dispatch centralized in UiSignalBus"
         );
         assert!(
             scheduler_body.contains("syncing: Cell<bool>")
                 && scheduler_body.contains("if self.syncing.get()")
+                && scheduler_body.contains("icon_size_update_pending: Rc<Cell<bool>>")
+                && scheduler_body.contains("if self.icon_size_update_pending.get()")
+                && scheduler_body
+                    .contains("sync_pane_viewport_for_slot_with_thumbnail_scheduling(")
+                && scheduler_body.contains("false,")
                 && scheduler_body
                     .contains("sync_pane_viewport_for_slot(&ui, &self.state, &self.bridge, slot);")
                 && !scheduler_body.contains("TimerMode::SingleShot")
                 && !scheduler_body.contains("pending_slots"),
-            "pane view scheduler should synchronously rebuild the current visible slice instead of delaying scroll layout behind a timer"
+            "pane view scheduler should synchronously rebuild the current visible slice while deferring roles updates during Dolphin's icon-size timer"
         );
     }
 
     #[test]
     fn layout_changes_rebuild_the_visible_slice_immediately() {
         let source = include_str!("main.rs");
-        let main_body = source
-            .split_once("ui.on_pane_layout_changed(move ||")
-            .and_then(|(_, rest)| rest.split_once("ui.on_pane_slots_refresh_requested"))
+        let callback_body = source
+            .split_once("fn register_ui_signal_callbacks(")
+            .and_then(|(_, rest)| rest.split_once("fn register_pane_routing_callbacks("))
             .map(|(body, _)| body)
-            .expect("pane layout callback body should be present");
+            .expect("signal callback registration body should be present");
+        let emit_body = source
+            .split_once("fn emit(&self, signal: UiSignal)")
+            .and_then(|(_, rest)| rest.split_once("fn drain_async_results"))
+            .map(|(body, _)| body)
+            .expect("signal bus emit body should be present");
         let viewport_body = source
             .split_once("fn sync_pane_viewport_for_slot(")
             .and_then(|(_, rest)| {
@@ -6757,7 +7343,7 @@ mod tests {
             .expect("visible pane layout body should be present");
         let visible_layout_with_thumbnail_body = source
             .split_once("fn sync_visible_pane_layouts_with_thumbnail_scheduling(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_visible_pane_icon_zoom_layouts("))
+            .and_then(|(_, rest)| rest.split_once("fn apply_visible_pane_zoom_style_options("))
             .map(|(body, _)| body)
             .expect("visible pane layout with thumbnails body should be present");
         let layout_with_thumbnail_body = source
@@ -6772,22 +7358,29 @@ mod tests {
             .expect("pane layout scheduler body should be present");
 
         assert!(
-            main_body.contains("pane_layout_sync.sync_now();")
-                && !main_body.contains("sync_pane_view_for_slot"),
-            "ordinary layout changes should route through the immediate layout scheduler path"
+            callback_body.contains(
+                "ui.on_pane_layout_changed(move || bus.emit(UiSignal::PaneLayoutChanged));"
+            ) && emit_body
+                .contains("UiSignal::PaneLayoutChanged => self.pane_layout_sync.sync_now(),")
+                && !callback_body.contains("pane_layout_sync.sync_now();")
+                && !callback_body.contains("sync_pane_view_for_slot"),
+            "ordinary layout changes should enter the signal bus before the immediate layout scheduler path runs"
         );
         assert!(
             layout_scheduler_body.contains("fn sync_now(&self)")
-                && layout_scheduler_body.contains("self.timer.stop();")
                 && layout_scheduler_body.contains("self.pane_view_sync.flush_all();")
                 && layout_scheduler_body
-                    .contains("sync_visible_pane_layouts(&ui, &self.state, &self.bridge);"),
-            "ordinary layout changes should flush pending zoom work and rebuild visible pane slices immediately"
+                    .contains("if self.icon_size_update.visible_index_range_updates_enabled()")
+                && layout_scheduler_body
+                    .contains("sync_visible_pane_layouts(&ui, &self.state, &self.bridge);")
+                && layout_scheduler_body
+                    .contains("sync_visible_pane_layouts_with_thumbnail_scheduling(")
+                && layout_scheduler_body.contains("false,"),
+            "ordinary layout changes should rebuild visible pane slices immediately and defer roles updates while Dolphin's icon-size timer is pending"
         );
         assert!(
-            viewport_body.contains(
-                "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, true, None, true, false);"
-            )
+            viewport_body.contains("sync_pane_viewport_for_slot_with_thumbnail_scheduling")
+                && viewport_body.contains("true);")
                 && !viewport_body.contains("sync_pane_slot_preview")
                 && !viewport_body.contains("sync_virtual_entries(ui, state, bridge, true);")
                 && !viewport_body.contains("filtered_entry_count_for_slot")
@@ -6820,29 +7413,59 @@ mod tests {
             .expect("main.rs should contain tests after production code");
         let app = include_str!("../ui/app.slint");
         let roles_updater_source = include_str!("app/file_item_roles_updater.rs");
-        let setup_body = source
-            .split_once("let pane_layout_sync = Rc::new(PaneLayoutSyncScheduler::new(")
-            .and_then(|(_, rest)| rest.split_once("ui.on_pane_slots_refresh_requested"))
+        let main_body = source
+            .split_once("fn main()")
+            .and_then(|(_, rest)| {
+                rest.split_once("let async_rx = Rc::new(RefCell::new(async_rx));")
+            })
             .map(|(body, _)| body)
             .expect("pane layout scheduler setup should be present");
+        let callback_body = source
+            .split_once("fn register_ui_signal_callbacks(")
+            .and_then(|(_, rest)| rest.split_once("fn register_pane_routing_callbacks("))
+            .map(|(body, _)| body)
+            .expect("signal callback registration body should be present");
+        let emit_body = source
+            .split_once("fn emit(&self, signal: UiSignal)")
+            .and_then(|(_, rest)| rest.split_once("fn drain_async_results"))
+            .map(|(body, _)| body)
+            .expect("signal bus emit body should be present");
+        let pane_view_scheduler_body = source
+            .split_once("struct PaneViewSyncScheduler")
+            .and_then(|(_, rest)| rest.split_once("struct IconSizeUpdateScheduler"))
+            .map(|(body, _)| body)
+            .expect("pane view scheduler body should be present");
+        let icon_size_scheduler_body = source
+            .split_once("struct IconSizeUpdateScheduler")
+            .and_then(|(_, rest)| rest.split_once("struct PaneLayoutSyncScheduler"))
+            .map(|(body, _)| body)
+            .expect("icon size update scheduler body should be present");
         let scheduler_body = source
             .split_once("struct PaneLayoutSyncScheduler")
             .and_then(|(_, rest)| rest.split_once("struct ThumbnailFlushScheduler"))
             .map(|(body, _)| body)
             .expect("pane layout scheduler body should be present");
         let icon_zoom_body = source
-            .split_once("fn sync_pane_icon_zoom_layout_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
+            .split_once("fn apply_pane_zoom_style_option_for_slot(")
+            .and_then(|(_, rest)| rest.split_once("fn update_icon_size_for_visible_panes("))
             .map(|(body, _)| body)
             .expect("icon zoom layout body should be present");
         let visible_icon_zoom_body = source
-            .split_once("fn sync_visible_pane_icon_zoom_layouts(")
-            .and_then(|(_, rest)| rest.split_once("fn sync_pane_icon_zoom_layout_for_slot("))
+            .split_once("fn apply_visible_pane_zoom_style_options(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_pane_zoom_style_option_for_slot("))
             .map(|(body, _)| body)
             .expect("visible icon zoom layout body should be present");
+        let update_icon_size_body = source
+            .split_once("fn update_icon_size_for_visible_panes(")
+            .and_then(|(_, rest)| rest.split_once("fn sync_pane_viewport_for_slot("))
+            .map(|(body, _)| body)
+            .expect("icon size update body should be present");
+        let apply_virtual_view_result_body = source
+            .split_once("fn apply_virtual_view_result(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_virtual_view_prepare_failure("))
+            .map(|(body, _)| body)
+            .expect("virtual view result body should be present");
         let removed_zoom_range_hint_function = ["fn ", "icon_zoom_range_hint("].concat();
-        let removed_zoom_style_function =
-            ["fn ", "sync_pane_icon_zoom", "_style_for_slot("].concat();
         let removed_zoom_width_function =
             ["zoom", "_range", "_visible", "_name", "_width", "_units"].concat();
         let removed_zoom_width_vec = ["visible", "_name", "_width", "_units"].concat();
@@ -6860,39 +7483,89 @@ mod tests {
             "icon zoom should use a dedicated callback instead of the ordinary immediate layout callback"
         );
         assert!(
-            setup_body.contains("ui.on_icon_zoom_layout_changed(move ||")
-                && setup_body.contains("pane_layout_sync.sync_icon_zoom_now();"),
-            "icon zoom callback should synchronously refresh layout"
+            main_body.contains("let icon_size_update_pending = Rc::new(Cell::new(false));")
+                && main_body.contains("Rc::clone(&icon_size_update_pending)")
+                && main_body.contains("icon_size_update_pending,")
+                && callback_body.contains(
+                    "ui.on_icon_zoom_layout_changed(move || bus.emit(UiSignal::IconZoomLayoutChanged));"
+                )
+                && emit_body.contains(
+                    "UiSignal::IconZoomLayoutChanged => self.pane_layout_sync.set_icon_zoom_level_now(),"
+                )
+                && !callback_body.contains("pane_layout_sync.set_icon_zoom_level_now();"),
+            "icon zoom callbacks should emit a bus signal; the bus dispatch should synchronously refresh layout"
         );
         assert!(
-            scheduler_body.contains("TimerMode::SingleShot")
-                && scheduler_body.contains("ICON_SIZE_UPDATE_INTERVAL")
-                && !scheduler_body.contains("pending_icon_zoom_rasters")
-                && !scheduler_body
-                    .contains("refresh_visible_pane_tile_frame_rasters(&ui, &timer_state);")
-                && scheduler_body.contains("fn sync_icon_zoom_now(&self)")
-                && scheduler_body.contains(
-                    "sync_visible_pane_icon_zoom_layouts(&ui, &self.state, &self.bridge);"
+            icon_size_scheduler_body.contains("TimerMode::SingleShot")
+                && icon_size_scheduler_body.contains("ICON_SIZE_UPDATE_INTERVAL")
+                && icon_size_scheduler_body.contains("fn trigger_icon_size_update(&self)")
+                && icon_size_scheduler_body.contains("self.pending.set(true);")
+                && icon_size_scheduler_body.contains("self.timer.restart();")
+                && icon_size_scheduler_body
+                    .contains("fn visible_index_range_updates_enabled(&self)")
+                && icon_size_scheduler_body.contains("!self.pending.get()")
+                && icon_size_scheduler_body.contains("timer_pending.replace(false)")
+                && icon_size_scheduler_body.contains(
+                    "update_icon_size_for_visible_panes(&ui, &timer_state, &timer_bridge);"
                 )
-                && scheduler_body.contains("pending_icon_zoom_thumbnails")
-                && scheduler_body.contains("self.timer.restart();")
-                && scheduler_body.contains("fn sync_now(&self)")
-                && scheduler_body.contains("self.timer.stop();")
+                && !icon_size_scheduler_body.contains("refresh_visible_pane_tile_frame_rasters")
+                && !icon_size_scheduler_body.contains("pending_icon_zoom_rasters"),
+            "icon-size changes should use Dolphin's triggerIconSizeUpdate/updateIconSize split"
+        );
+        assert!(
+            pane_view_scheduler_body.contains("icon_size_update_pending: Rc<Cell<bool>>")
+                && pane_view_scheduler_body.contains("if self.icon_size_update_pending.get()")
+                && pane_view_scheduler_body
+                    .contains("sync_pane_viewport_for_slot_with_thumbnail_scheduling(")
+                && pane_view_scheduler_body.contains("false,")
+                && pane_view_scheduler_body
+                    .contains("sync_pane_viewport_for_slot(&ui, &self.state, &self.bridge, slot);"),
+            "viewport range changes should not run roles updates while Dolphin's icon-size timer is pending"
+        );
+        assert!(
+            scheduler_body.contains("fn set_icon_zoom_level_now(&self)")
                 && scheduler_body.contains(
-                    "schedule_thumbnail_roles_for_visible_panes(&ui, &timer_state, &timer_bridge);"
-                ),
-            "continuous zoom should refresh item layout immediately while coalescing thumbnail/preview roles like Dolphin's KFileItemModelRolesUpdater"
+                    "apply_visible_pane_zoom_style_options(&ui, &self.state, &self.bridge);"
+                )
+                && scheduler_body.contains("self.icon_size_update.trigger_icon_size_update();")
+                && scheduler_body.contains("fn sync_now(&self)")
+                && scheduler_body.contains("visible_index_range_updates_enabled()")
+                && scheduler_body
+                    .contains("sync_visible_pane_layouts(&ui, &self.state, &self.bridge);")
+                && scheduler_body.contains("sync_visible_pane_layouts_with_thumbnail_scheduling(")
+                && scheduler_body.contains("false,")
+                && !scheduler_body.contains("self.timer.stop();")
+                && !scheduler_body.contains("pending_icon_zoom_thumbnails"),
+            "zoom should apply layout immediately but keep roles updater paused until the icon-size timer fires"
         );
         assert!(
             icon_zoom_body.contains("sync_virtual_entries_for_slot_with_count(")
                 && icon_zoom_body.contains(
                     "sync_virtual_entries_for_slot_with_count(ui, state, bridge, slot, false, None, true, true);"
                 )
-                && !production_source.contains(&removed_zoom_style_function)
+                && update_icon_size_body
+                    .contains("refresh_icon_size_models_for_visible_panes(ui, state, bridge);")
+                && !update_icon_size_body.contains("schedule_thumbnail_roles_for_visible_panes")
+                && update_icon_size_body.contains(
+                    "ui, state, bridge, slot, true, None, false, true, false, true, true,"
+                )
+                && apply_virtual_view_result_body
+                    .contains("let media_entries = if result.schedule_thumbnails")
+                && apply_virtual_view_result_body
+                    .contains("decorate_entries_with_cached_thumbnails_for_pane(")
+                && apply_virtual_view_result_body
+                    .contains("preserve_current_thumbnail_roles_for_deferred_icon_size_update(")
+                && apply_virtual_view_result_body.contains(
+                    "result.schedule_thumbnails && !result.schedule_visible_thumbnail_roles_after_apply"
+                )
+                && apply_virtual_view_result_body
+                    .contains("result.schedule_visible_thumbnail_roles_after_apply")
+                && apply_virtual_view_result_body
+                    .contains("schedule_visible_thumbnail_roles_for_slot(ui, state, bridge, slot);")
                 && visible_icon_zoom_body
                     .contains("if slots.row_count() == 0 {\n        return;\n    }")
                 && !visible_icon_zoom_body
-                    .contains("sync_pane_icon_zoom_layout_for_slot(ui, state, bridge, 0);")
+                    .contains("apply_pane_zoom_style_option_for_slot(ui, state, bridge, 0);")
                 && !icon_zoom_body.contains("sync_pane_layout_for_slot_with_thumbnail_scheduling")
                 && !production_source.contains(&removed_zoom_width_function)
                 && !production_source.contains(&removed_zoom_width_vec)
@@ -6918,23 +7591,30 @@ mod tests {
     #[test]
     fn persist_ui_state_does_not_rebuild_virtual_views() {
         let source = include_str!("main.rs");
-        let persist_body = source
-            .split_once("ui.on_persist_ui_state(move ||")
-            .and_then(|(_, rest)| {
-                rest.split_once("let chooser_mode = matches!(args.mode, Mode::Chooser);")
-            })
+        let callback_body = source
+            .split_once("fn register_ui_signal_callbacks(")
+            .and_then(|(_, rest)| rest.split_once("fn register_pane_routing_callbacks("))
             .map(|(body, _)| body)
-            .expect("persist ui callback body should be present");
+            .expect("signal callback registration body should be present");
+        let persist_arm = source
+            .split_once("UiSignal::PersistUiState => {")
+            .and_then(|(_, rest)| rest.split_once("UiSignal::DarkModeChanged"))
+            .map(|(body, _)| body)
+            .expect("persist ui signal arm should be present");
 
         assert!(
-            persist_body.contains("settings_save.schedule(current_settings(&ui, &state));")
-                && !persist_body.contains("save_current_settings")
-                && !persist_body.contains("save_settings")
-                && !persist_body.contains("sync_visible_pane_layouts")
-                && !persist_body.contains("sync_pane_layout_for_slot")
-                && !persist_body.contains("invalidate_virtual_view")
-                && !persist_body.contains("bridge"),
-            "interactive settings persistence should schedule a coalesced save instead of blocking zoom/layout on virtual refresh or disk writes"
+            callback_body
+                .contains("ui.on_persist_ui_state(move || bus.emit(UiSignal::PersistUiState));")
+                && persist_arm.contains("self.settings_save")
+                && persist_arm.contains(".schedule(current_settings(&ui, &self.state));")
+                && !callback_body.contains("settings_save.schedule")
+                && !persist_arm.contains("save_current_settings")
+                && !persist_arm.contains("save_settings")
+                && !persist_arm.contains("sync_visible_pane_layouts")
+                && !persist_arm.contains("sync_pane_layout_for_slot")
+                && !persist_arm.contains("invalidate_virtual_view")
+                && !persist_arm.contains("bridge"),
+            "interactive settings persistence should emit through the bus and schedule a coalesced save without blocking zoom/layout on virtual refresh or disk writes"
         );
     }
 
@@ -6947,11 +7627,16 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("}"))
             .map(|(body, _)| body)
             .expect("TopBar dark_toggled handler should be present");
-        let dark_handler_body = source
+        let callback_body = source
             .split_once("ui.on_dark_mode_changed(move ||")
             .and_then(|(_, rest)| rest.split_once("ui.window().on_close_requested"))
             .map(|(body, _)| body)
             .expect("dark mode changed handler should be present");
+        let dark_signal_arm = source
+            .split_once("UiSignal::DarkModeChanged => {")
+            .and_then(|(_, rest)| rest.split_once("fn drain_async_results"))
+            .map(|(body, _)| body)
+            .expect("dark mode signal arm should be present");
         let refresh_body = source
             .split_once("fn refresh_visible_pane_tile_frame_rasters(")
             .and_then(|(_, rest)| rest.split_once("fn selection_status_text("))
@@ -6966,12 +7651,14 @@ mod tests {
             "theme toggles should notify Rust before saving settings so tile frame rasters can match the new theme"
         );
         assert!(
-            dark_handler_body.contains("refresh_visible_pane_tile_frame_rasters(&ui, &state);")
+            callback_body.contains("bus.emit(UiSignal::DarkModeChanged)")
+                && dark_signal_arm
+                    .contains("refresh_visible_pane_tile_frame_rasters(&ui, &self.state);")
                 && refresh_body.contains("sync_pane_view_ui(ui, state, 0);")
                 && refresh_body.contains("sync_pane_view_ui(ui, state, pane.slot);")
                 && !refresh_body.contains("sync_pane_layout_for_slot")
                 && !refresh_body.contains("sync_virtual_entries_for_slot"),
-            "dark-mode raster refresh should regenerate visible tile frame images without rebuilding the directory snapshot"
+            "dark-mode signal dispatch should regenerate visible tile frame images without rebuilding the directory snapshot"
         );
     }
 
@@ -6989,10 +7676,15 @@ mod tests {
             .map(|(body, _)| body)
             .expect("settings save scheduler body should be present");
         let close_body = main_source
-            .split_once("ui.window().on_close_requested(move ||")
-            .and_then(|(_, rest)| rest.split_once("CloseRequestResponse::HideWindow"))
+            .split_once("fn close_requested(&self) -> CloseRequestResponse")
+            .and_then(|(_, rest)| rest.split_once("fn route_focus"))
             .map(|(body, _)| body)
-            .expect("close callback body should be present");
+            .expect("signal bus close-request body should be present");
+        let callback_body = main_source
+            .split_once("fn register_ui_signal_callbacks(")
+            .and_then(|(_, rest)| rest.split_once("fn register_pane_routing_callbacks("))
+            .map(|(body, _)| body)
+            .expect("signal callback registration body should be present");
 
         assert!(
             production_main_source
@@ -7009,7 +7701,9 @@ mod tests {
                 && scheduler_body.contains("spawn_settings_save(async_handle.clone(), generation, settings);")
                 && scheduler_body.contains("save_settings_latest(settings);")
                 && scheduler_source.contains("tokio::task::spawn_blocking(move || save_settings_if_latest(generation, settings))")
-                && close_body.contains("settings_save.save_now(current_settings(&ui, &state));"),
+                && callback_body.contains(".on_close_requested(move || bus.close_requested());")
+                && close_body.contains("self.settings_save")
+                && close_body.contains(".save_now(current_settings(&ui, &self.state));"),
             "zoom/sidebar persistence should coalesce latest settings and write them in the background, while close keeps a synchronous final save"
         );
     }
@@ -7057,22 +7751,34 @@ mod tests {
             .expect("main.rs should contain tests after production code");
         let roles_updater_source = include_str!("app/file_item_roles_updater.rs");
         let schedule_body = roles_updater_source
-            .split_once("pub(crate) fn schedule_thumbnail_roles_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("#[allow(clippy::too_many_arguments)]"))
+            .split_once("pub(crate) fn schedule_visible_thumbnail_roles_for_slot(")
+            .and_then(|(_, rest)| {
+                rest.split_once("fn schedule_thumbnail_roles_for_slot_with_scope(")
+            })
             .map(|(body, _)| body)
             .expect("visible thumbnail roles scheduling body should be present");
+        let slot_schedule_body = roles_updater_source
+            .split_once("fn schedule_thumbnail_roles_for_slot_with_scope(")
+            .and_then(|(_, rest)| rest.split_once("#[allow(clippy::too_many_arguments)]"))
+            .map(|(body, _)| body)
+            .expect("slot thumbnail roles scheduling body should be present");
 
         assert!(
             production_source.contains("schedule_thumbnail_roles_for_entries(")
                 && !production_source.contains("fn schedule_visible_thumbnails(")
-                && schedule_body.contains(".virtual_entry_tokens")
-                && schedule_body.contains(".map(ThumbnailScheduleEntry::from_row_token)")
+                && slot_schedule_body.contains(".virtual_entry_tokens")
+                && slot_schedule_body.contains(".map(ThumbnailScheduleEntry::from_row_token)")
+                && schedule_body.contains("ThumbnailScheduleScope::VisibleOnly")
+                && roles_updater_source.contains("ThumbnailScheduleScope::VisibleAndReadAhead")
+                && roles_updater_source.contains("visible_indexes_to_resolve_for_slice(")
                 && roles_updater_source.contains("indexes_to_resolve_for_slice(")
                 && roles_updater_source.contains("READ_AHEAD_PAGES")
                 && roles_updater_source.contains("RESOLVE_ALL_ITEMS_LIMIT")
                 && !roles_updater_source.contains("prioritize_thumbnail_entries(")
-                && !schedule_body.contains(".virtual_entries")
-                && !schedule_body.contains("row_data("),
+                && !slot_schedule_body.contains(".virtual_entries")
+                && !slot_schedule_body.contains("row_data(")
+                && roles_updater_source.contains("match scope")
+                && roles_updater_source.contains("match entry.is_dir()"),
             "coalesced zoom thumbnail/preview roles should live in the Dolphin-style roles updater and use Rust row tokens instead of touching the Slint row model"
         );
     }
@@ -7318,43 +8024,57 @@ mod tests {
     #[test]
     fn context_service_menu_actions_are_pane_routed_and_model_backed() {
         let source = include_str!("main.rs");
+        let production_source = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(body, _)| body)
+            .expect("main.rs should contain tests after production code");
+        let controller_source = include_str!("app/pane_controller.rs");
         let item_route = source
             .split_once("fn request_item_view_entry_context_menu_at_point_for_slot(")
             .and_then(|(_, rest)| rest.split_once("fn select_all_visible("))
             .map(|(body, _)| body)
             .expect("item context menu routing body should be present");
-        let action_body = source
-            .split_once("fn apply_item_view_controller_action(")
-            .and_then(|(_, rest)| rest.split_once("fn cancel_item_view_blank_for_slot("))
-            .map(|(body, _)| body)
-            .expect("item-view controller action body should be present");
-        let blank_route = source
+        let blank_route_callback = source
             .split_once("routing.on_request_blank_context_menu")
             .and_then(|(_, rest)| rest.split_once("routing.on_zoom_in"))
             .map(|(body, _)| body)
             .expect("blank context menu routing body should be present");
+        let blank_route = source
+            .split_once("fn route_request_blank_context_menu")
+            .and_then(|(_, rest)| rest.split_once("fn route_zoom_in"))
+            .map(|(body, _)| body)
+            .expect("blank context menu signal route body should be present");
 
         assert!(
             item_route.contains(
                 "context_menu_entry_at_pane_point(\n            ui,\n            &state_ref,\n            request.slot,"
             )
-                && item_route.contains(
-                    "apply_item_view_controller_action(ui, state, bridge, request.slot, action);"
+                && item_route.contains("PaneController::new(ui, state, bridge)")
+                && item_route.contains(".apply_item_view_controller_action(request.slot, action);")
+                && controller_source.contains("pub(crate) struct PaneController")
+                && controller_source
+                    .contains("pub(crate) fn apply_item_view_controller_action(")
+                && controller_source.contains("ItemViewControllerAction::RequestContextMenu")
+                && controller_source.contains(
+                    "select_path_for_slot(self.ui, self.state, slot, path, false, false);"
                 )
-                && action_body.contains("ItemViewControllerAction::RequestContextMenu")
-                && action_body.contains("select_path_for_slot(ui, state, slot, path, false, false);")
-                && action_body.contains(
-                    "context_service_menu::item_paths(state, slot, entry.path.as_str())"
+                && controller_source.contains(
+                    "context_service_menu::item_paths(self.state, slot, entry.path.as_str())"
                 )
-                && action_body.contains("context_service_menu::refresh_actions_async(")
-                && action_body.contains("ui.invoke_route_pane_request_context_menu("),
-            "item service menu discovery should be driven by the item-view controller action for the pane slot that opened the context menu"
+                && controller_source.contains("context_service_menu::refresh_actions_async(")
+                && controller_source.contains("self.ui.invoke_route_pane_request_context_menu(")
+                && !production_source.contains("fn apply_item_view_controller_action("),
+            "item service menu discovery should be driven by PaneController for the pane slot that opened the context menu"
         );
         assert!(
-            blank_route.contains("context_service_menu::blank_paths(&state, slot)")
+            blank_route_callback.contains("bus.route_request_blank_context_menu(slot, x, y);")
+                && blank_route.contains("context_service_menu::blank_paths(&self.state, slot)")
                 && blank_route.contains("context_service_menu::refresh_actions_async(")
-                && blank_route.contains("&ui,\n                    &state,\n                    &bridge,\n                    slot,"),
-            "blank-area service menu discovery should be routed through the pane slot that opened the context menu"
+                && blank_route.contains("&ui,")
+                && blank_route.contains("&self.state,")
+                && blank_route.contains("&self.bridge,")
+                && blank_route.contains("slot,\n                service_menu_paths,"),
+            "blank-area service menu discovery should enter the signal bus route and use the pane slot that opened the context menu"
         );
     }
 

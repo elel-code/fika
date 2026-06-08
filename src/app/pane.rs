@@ -5,18 +5,21 @@ use crate::app::item_view::ItemViewInputState;
 #[cfg(test)]
 use crate::app::item_view_renderer::ItemViewMediaSource;
 use crate::app::item_view_renderer::{
-    ItemViewMediaToken, ItemViewRasterMediaEntry, ItemViewRenderMetrics, ItemViewTileFrameBatch,
-    ItemViewTileFrameRaster, ItemViewTileFrameRasterInput,
+    ITEM_VIEW_MEDIA_KIND_ARCHIVE, ITEM_VIEW_MEDIA_KIND_AUDIO, ITEM_VIEW_MEDIA_KIND_CODE,
+    ITEM_VIEW_MEDIA_KIND_EXECUTABLE, ITEM_VIEW_MEDIA_KIND_FILE, ITEM_VIEW_MEDIA_KIND_FOLDER,
+    ITEM_VIEW_MEDIA_KIND_IMAGE, ITEM_VIEW_MEDIA_KIND_PDF, ITEM_VIEW_MEDIA_KIND_TEXT,
+    ITEM_VIEW_MEDIA_KIND_VIDEO, ItemViewMediaToken, ItemViewRenderMetrics, ItemViewTileFrameBatch,
+    ItemViewTileFrameRaster, ItemViewTileFrameRasterInput, render_fallback_media_icon,
 };
 use crate::app::model_update::ItemViewRowToken;
 use crate::app::virtual_view::VirtualViewSnapshotInput;
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
-use crate::{FileEntry, ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
-#[cfg(test)]
-use slint::Image;
-use slint::{Model, ModelRc, VecModel};
+use crate::{
+    FileEntry, ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry,
+};
+use slint::{Image, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -87,11 +90,13 @@ impl PaneState {
             clone_item_view_paint_model(&self.view.virtual_paint_entries);
         pane.view.virtual_entry_tokens =
             clone_item_view_row_tokens_without_selection(&self.view.virtual_entry_tokens);
-        pane.view.virtual_media_entries = self.view.virtual_media_entries.clone();
+        pane.view.virtual_thumbnail_entries =
+            clone_item_view_thumbnail_model(&self.view.virtual_thumbnail_entries);
         pane.view.virtual_media_tokens = self.view.virtual_media_tokens.clone();
         pane.view.virtual_metadata_entries =
             clone_item_view_metadata_model(&self.view.virtual_metadata_entries);
         pane.view.virtual_start_index = self.view.virtual_start_index;
+        pane.view.raster_updates_deferred = self.view.raster_updates_deferred;
         pane
     }
 
@@ -121,7 +126,7 @@ impl PaneState {
         self.view.virtual_bounds_entries = ModelRc::default();
         self.view.virtual_paint_entries = ModelRc::default();
         self.view.virtual_entry_tokens.clear();
-        self.view.virtual_media_entries.clear();
+        self.view.virtual_thumbnail_entries = ModelRc::default();
         self.view.virtual_media_tokens.clear();
         self.view.virtual_metadata_entries = ModelRc::default();
         self.view.drop_target_slice_index = None;
@@ -189,6 +194,19 @@ fn clone_item_view_paint_model(model: &ModelRc<ItemViewPaintEntry>) -> ModelRc<I
 fn clone_item_view_metadata_model(
     model: &ModelRc<ItemViewMetadataEntry>,
 ) -> ModelRc<ItemViewMetadataEntry> {
+    let entries = (0..model.row_count())
+        .filter_map(|row| model.row_data(row))
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        ModelRc::default()
+    } else {
+        ModelRc::new(Rc::new(VecModel::from(entries)))
+    }
+}
+
+fn clone_item_view_thumbnail_model(
+    model: &ModelRc<ItemViewThumbnailEntry>,
+) -> ModelRc<ItemViewThumbnailEntry> {
     let entries = (0..model.row_count())
         .filter_map(|row| model.row_data(row))
         .collect::<Vec<_>>();
@@ -569,13 +587,15 @@ pub(crate) struct PaneView {
     pub(crate) virtual_bounds_entries: ModelRc<ItemViewItemBounds>,
     pub(crate) virtual_paint_entries: ModelRc<ItemViewPaintEntry>,
     pub(crate) virtual_entry_tokens: Vec<ItemViewRowToken>,
-    pub(crate) virtual_media_entries: Vec<ItemViewRasterMediaEntry>,
+    pub(crate) virtual_thumbnail_entries: ModelRc<ItemViewThumbnailEntry>,
     pub(crate) virtual_media_tokens: Vec<ItemViewMediaToken>,
     pub(crate) virtual_metadata_entries: ModelRc<ItemViewMetadataEntry>,
     pub(crate) virtual_start_index: usize,
+    raster_updates_deferred: bool,
     drop_target_slice_index: Option<usize>,
     raster_revision: u64,
     raster_cache: RefCell<Option<ItemViewRasterCache>>,
+    fallback_icon_cache: RefCell<Option<ItemViewFallbackIconCache>>,
     virtual_refresh_state: VirtualViewRefreshState,
     thumbnail_pending: HashMap<String, thumbnails::ThumbnailKey>,
     state_cache: HashMap<PathBuf, DirectoryViewState>,
@@ -588,10 +608,37 @@ struct ItemViewRasterCache {
     raster: ItemViewTileFrameRaster,
 }
 
+#[derive(Clone, Debug)]
+struct ItemViewFallbackIconCache {
+    signature: ItemViewFallbackIconCacheSignature,
+    icons: ItemViewFallbackIconImages,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ItemViewFallbackIconImages {
+    pub(crate) file: Image,
+    pub(crate) folder: Image,
+    pub(crate) image: Image,
+    pub(crate) video: Image,
+    pub(crate) audio: Image,
+    pub(crate) archive: Image,
+    pub(crate) pdf: Image,
+    pub(crate) text: Image,
+    pub(crate) code: Image,
+    pub(crate) executable: Image,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct ItemViewRasterCacheSignature {
     input: ItemViewTileFrameRasterInput,
     revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ItemViewFallbackIconCacheSignature {
+    width: u32,
+    height: u32,
+    dark: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -600,6 +647,7 @@ pub(crate) struct VirtualViewPrepareRequest {
     pub(crate) generation: u64,
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
+    pub(crate) schedule_visible_thumbnail_roles_after_apply: bool,
     pub(crate) cell_width: f32,
     pub(crate) render_metrics: ItemViewRenderMetrics,
     pub(crate) input: Box<VirtualViewSnapshotInput>,
@@ -649,6 +697,7 @@ impl VirtualViewRefreshState {
 impl PaneView {
     pub(crate) fn invalidate_virtual_view(&mut self) {
         self.virtual_view.invalidate();
+        self.raster_updates_deferred = false;
         self.virtual_generation.next();
         self.bump_raster_revision();
         self.clear_raster_cache();
@@ -657,6 +706,7 @@ impl PaneView {
 
     pub(crate) fn clear_virtual_view(&mut self) {
         self.virtual_view.clear();
+        self.raster_updates_deferred = false;
         self.virtual_generation.next();
         self.bump_raster_revision();
         self.clear_raster_cache();
@@ -687,6 +737,12 @@ impl PaneView {
         &self,
         mut input: ItemViewTileFrameRasterInput,
     ) -> ItemViewTileFrameRaster {
+        if self.raster_updates_deferred {
+            return self
+                .last_raster()
+                .unwrap_or_else(ItemViewTileFrameRaster::default);
+        }
+
         input.drop_target_slice_index = self.drop_target_slice_index_i32();
         let signature = ItemViewRasterCacheSignature {
             input,
@@ -700,9 +756,99 @@ impl PaneView {
             &self.virtual_entry_tokens,
             &bounds_entries,
         )
-        .render_raster_layer(input, &self.virtual_media_entries);
+        .render_raster_layer(input);
         self.store_raster_cache(signature, raster.clone());
         raster
+    }
+
+    pub(crate) fn fallback_icon_images(
+        &self,
+        width: u32,
+        height: u32,
+        dark: bool,
+    ) -> ItemViewFallbackIconImages {
+        let signature = ItemViewFallbackIconCacheSignature {
+            width: width.max(1),
+            height: height.max(1),
+            dark,
+        };
+        if let Some(cache) = self
+            .fallback_icon_cache
+            .borrow()
+            .as_ref()
+            .filter(|cache| cache.signature == signature)
+        {
+            return cache.icons.clone();
+        }
+
+        let cache = ItemViewFallbackIconCache {
+            signature,
+            icons: ItemViewFallbackIconImages {
+                file: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_FILE,
+                ),
+                folder: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_FOLDER,
+                ),
+                image: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_IMAGE,
+                ),
+                video: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_VIDEO,
+                ),
+                audio: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_AUDIO,
+                ),
+                archive: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_ARCHIVE,
+                ),
+                pdf: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_PDF,
+                ),
+                text: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_TEXT,
+                ),
+                code: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_CODE,
+                ),
+                executable: render_fallback_media_icon(
+                    signature.width,
+                    signature.height,
+                    dark,
+                    ITEM_VIEW_MEDIA_KIND_EXECUTABLE,
+                ),
+            },
+        };
+        let icons = cache.icons.clone();
+        *self.fallback_icon_cache.borrow_mut() = Some(cache);
+        icons
     }
 
     pub(crate) fn set_drop_target_slice_index(&mut self, slice_index: i32) -> bool {
@@ -725,6 +871,10 @@ impl PaneView {
 
     pub(crate) fn clear_raster_cache(&self) {
         *self.raster_cache.borrow_mut() = None;
+    }
+
+    pub(crate) fn set_raster_updates_deferred(&mut self, deferred: bool) {
+        self.raster_updates_deferred = deferred;
     }
 
     pub(crate) fn bump_raster_revision(&mut self) {
@@ -750,6 +900,13 @@ impl PaneView {
         *self.raster_cache.borrow_mut() = Some(ItemViewRasterCache { signature, raster });
     }
 
+    fn last_raster(&self) -> Option<ItemViewTileFrameRaster> {
+        self.raster_cache
+            .borrow()
+            .as_ref()
+            .map(|cache| cache.raster.clone())
+    }
+
     #[cfg(test)]
     fn raster_cache_drop_target_slice_index(&self) -> Option<i32> {
         self.raster_cache
@@ -764,6 +921,11 @@ impl PaneView {
             .borrow()
             .as_ref()
             .map(|cache| cache.signature.revision)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn raster_revision_for_test(&self) -> u64 {
+        self.raster_revision
     }
 
     fn current_virtual_bounds_entries(&self) -> Vec<ItemViewItemBounds> {
@@ -1013,6 +1175,7 @@ mod tests {
             generation,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
+            schedule_visible_thumbnail_roles_after_apply: false,
             cell_width: 100.0,
             render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(1, 1),
             input: Box::new(VirtualViewSnapshotInput {
@@ -1032,6 +1195,7 @@ mod tests {
                 range_hint: None,
                 thumbnail_size_px: 64,
                 schedule_thumbnails: true,
+                force_rebuild_model: false,
                 visible_count_override: None,
                 cache: VirtualViewCache::default(),
                 entries: Arc::from([PaneEntrySnapshot {
@@ -1724,7 +1888,7 @@ mod tests {
         assert_eq!(pane.view.virtual_view.thumbnail_size_px, 0);
         assert_eq!(pane.view.virtual_entries.row_count(), 0);
         assert_eq!(pane.view.virtual_paint_entries.row_count(), 0);
-        assert!(pane.view.virtual_media_entries.is_empty());
+        assert_eq!(pane.view.virtual_thumbnail_entries.row_count(), 0);
         assert!(pane.view.virtual_media_tokens.is_empty());
     }
 
@@ -1784,6 +1948,124 @@ mod tests {
         view.invalidate_virtual_view();
 
         assert!(view.raster_cache_drop_target_slice_index().is_none());
+    }
+
+    #[test]
+    fn pane_view_can_defer_raster_rebuilds_during_icon_size_updates() {
+        let snapshot = PaneEntrySnapshot::from_entry(&test_entry("one.txt", "/tmp/one.txt"));
+        let mut view = PaneView::default();
+        update_pane_item_view_entries_model(
+            &mut view,
+            0,
+            vec![snapshot.to_item_view_entry()],
+            vec![ItemViewItemBounds {
+                slice_index: 0,
+                x: 4.0,
+                y: 6.0,
+                width: 40.0,
+                text_width: 24.0,
+            }],
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+        let input = ItemViewTileFrameRasterInput {
+            width: 64,
+            height: 48,
+            content_origin_x: 0.0,
+            drop_target_slice_index: -1,
+            dark: false,
+            tile_height: 20.0,
+            media_x: 2.0,
+            media_y: 2.0,
+            media_width: 12.0,
+            media_height: 12.0,
+        };
+        let initial = view.tile_frame_raster_layer(input);
+        assert_eq!(initial.width, 64);
+        assert_eq!(view.raster_cache_drop_target_slice_index(), Some(-1));
+        let cached_revision = view.raster_cache_revision();
+
+        view.set_raster_updates_deferred(true);
+        assert!(view.set_drop_target_slice_index(0));
+        let deferred = view.tile_frame_raster_layer(input);
+
+        assert_eq!(deferred.width, initial.width);
+        assert_eq!(view.raster_cache_drop_target_slice_index(), Some(-1));
+        assert_eq!(view.raster_cache_revision(), cached_revision);
+
+        view.set_raster_updates_deferred(false);
+        let refreshed = view.tile_frame_raster_layer(input);
+        assert_eq!(refreshed.width, 64);
+        assert_eq!(view.raster_cache_drop_target_slice_index(), Some(0));
+        assert_eq!(view.raster_cache_revision(), Some(view.raster_revision));
+    }
+
+    #[test]
+    fn pane_view_caches_fallback_icons_by_size_and_theme_outside_tile_raster() {
+        let view = PaneView::default();
+
+        let icons = view.fallback_icon_images(32, 32, false);
+        let file_buffer = icons
+            .file
+            .to_rgba8()
+            .expect("file fallback icon should be rasterized");
+        let folder_buffer = icons
+            .folder
+            .to_rgba8()
+            .expect("folder fallback icon should be rasterized");
+        let image_buffer = icons
+            .image
+            .to_rgba8()
+            .expect("image fallback icon should be rasterized");
+        let pdf_buffer = icons
+            .pdf
+            .to_rgba8()
+            .expect("pdf fallback icon should be rasterized");
+        assert_eq!(file_buffer.width(), 32);
+        assert_eq!(folder_buffer.height(), 32);
+        assert_ne!(file_buffer.as_slice(), folder_buffer.as_slice());
+        assert_ne!(file_buffer.as_slice(), image_buffer.as_slice());
+        assert_ne!(image_buffer.as_slice(), pdf_buffer.as_slice());
+        assert_eq!(
+            view.fallback_icon_cache
+                .borrow()
+                .as_ref()
+                .map(|cache| cache.signature),
+            Some(ItemViewFallbackIconCacheSignature {
+                width: 32,
+                height: 32,
+                dark: false,
+            })
+        );
+
+        let _ = view.fallback_icon_images(32, 32, false);
+        assert_eq!(
+            view.fallback_icon_cache
+                .borrow()
+                .as_ref()
+                .map(|cache| cache.signature),
+            Some(ItemViewFallbackIconCacheSignature {
+                width: 32,
+                height: 32,
+                dark: false,
+            })
+        );
+        assert!(view.raster_cache.borrow().is_none());
+
+        let _ = view.fallback_icon_images(48, 48, true);
+        assert_eq!(
+            view.fallback_icon_cache
+                .borrow()
+                .as_ref()
+                .map(|cache| cache.signature),
+            Some(ItemViewFallbackIconCacheSignature {
+                width: 48,
+                height: 48,
+                dark: true,
+            })
+        );
+        assert!(view.raster_cache.borrow().is_none());
     }
 
     #[test]

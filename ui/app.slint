@@ -63,7 +63,7 @@ import {
     SidebarAction,
     SidebarSection,
 } from "widgets.slint";
-import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
+import { ChooserChoice, ChooserChoiceOption, ContextServiceAction, ContextServicePolicyAction, DesktopApp, DeviceEntry, ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry, PaneSlotData, PaneSurfaceData, PaneViewData, PlaceEntry } from "models.slint";
 import { DragOverlayLayer } from "dnd_overlay.slint";
 import { SearchFilterPopup, SearchPanel } from "search_panel.slint";
 import { SplitPaneView } from "split_pane.slint";
@@ -104,6 +104,17 @@ component FilePane inherits Rectangle {
     in property <image> item-view-raster-layer;
     in property <float> item-view-raster-width: 1;
     in property <float> item-view-raster-height: 1;
+    in property <image> item-view-file-icon;
+    in property <image> item-view-folder-icon;
+    in property <image> item-view-image-icon;
+    in property <image> item-view-video-icon;
+    in property <image> item-view-audio-icon;
+    in property <image> item-view-archive-icon;
+    in property <image> item-view-pdf-icon;
+    in property <image> item-view-text-icon;
+    in property <image> item-view-code-icon;
+    in property <image> item-view-executable-icon;
+    in property <[ItemViewThumbnailEntry]> thumbnails;
     in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
     in property <int> virtual-start-row;
@@ -330,6 +341,17 @@ component FilePane inherits Rectangle {
                 item-view-raster-layer: root.item-view-raster-layer;
                 item-view-raster-width: root.item-view-raster-width;
                 item-view-raster-height: root.item-view-raster-height;
+                item-view-file-icon: root.item-view-file-icon;
+                item-view-folder-icon: root.item-view-folder-icon;
+                item-view-image-icon: root.item-view-image-icon;
+                item-view-video-icon: root.item-view-video-icon;
+                item-view-audio-icon: root.item-view-audio-icon;
+                item-view-archive-icon: root.item-view-archive-icon;
+                item-view-pdf-icon: root.item-view-pdf-icon;
+                item-view-text-icon: root.item-view-text-icon;
+                item-view-code-icon: root.item-view-code-icon;
+                item-view-executable-icon: root.item-view-executable-icon;
+                thumbnails: root.thumbnails;
                 metadata: root.metadata;
                 virtual-start-column: root.virtual-start-column;
                 virtual-start-row: root.virtual-start-row;
@@ -602,6 +624,17 @@ component PaneSlotSurface inherits Rectangle {
         item-view-raster-layer: root.view.item_view_raster_layer;
         item-view-raster-width: root.view.item_view_raster_width;
         item-view-raster-height: root.view.item_view_raster_height;
+        item-view-file-icon: root.view.item_view_file_icon;
+        item-view-folder-icon: root.view.item_view_folder_icon;
+        item-view-image-icon: root.view.item_view_image_icon;
+        item-view-video-icon: root.view.item_view_video_icon;
+        item-view-audio-icon: root.view.item_view_audio_icon;
+        item-view-archive-icon: root.view.item_view_archive_icon;
+        item-view-pdf-icon: root.view.item_view_pdf_icon;
+        item-view-text-icon: root.view.item_view_text_icon;
+        item-view-code-icon: root.view.item_view_code_icon;
+        item-view-executable-icon: root.view.item_view_executable_icon;
+        thumbnails: root.view.thumbnails;
         metadata: root.view.metadata;
         virtual-start-column: root.view.virtual_start_column;
         virtual-start-row: root.view.virtual_start_row;
@@ -1087,7 +1120,7 @@ export component AppWindow inherits Window {
     }
 
     function zoom-main-in() {
-        root.icon_zoom_level = min(4, root.icon_zoom_level + 1);
+        root.icon_zoom_level = min(16, root.icon_zoom_level + 1);
         root.persist_ui_state();
     }
 

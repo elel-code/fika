@@ -110,12 +110,12 @@ Fika 主视图以 Dolphin 的五层 `KItemListView` 架构
 
 | 层级 | Dolphin 对应 | 状态 |
 |------|-------------|------|
-| **平滑滚动器** | `kitemlistsmoothscroller` | ❌ 未开始 — viewport 直接跳变，无插值动画 |
-| **多态 Layouter** | `kitemlistviewlayouter` | 🟡 仅 Compact — 无 trait、无逻辑→物理转置、无 Details/Icons |
-| **自渲染 Tile** | `kstandarditemlistwidget` | 🟡 Slint primitive 已深度优化（sidecar/sparse-overlay）；`SharedPixelBuffer` 自渲染未开始 |
-| **Model Trait** | `kfileitemmodel` | ❌ 未开始 — 具体 `FileEntry`/`PaneEntrySnapshot` 类型，无 trait 抽象 |
-| **Controller 总线** | `kitemlistcontroller` | 🟡 `ItemViewInputState` 已抽到 `item_view.rs`；无信号总线，仍耦合 `AppState` |
-| **两阶段刷新** | `kitemlistview` | 🟡 uncached 导航保留旧视图已实现；无正式 pending→commit 状态机 |
+| **平滑滚动器** | `kitemlistsmoothscroller` | ✅ 已完成 — 逻辑 `viewport-x` + 动画 `paint-viewport-x` 分离；当前虚拟切片范围内 120ms ease-out；用户交互时停止 |
+| **多态 Layouter** | `kitemlistviewlayouter` | 🟡 `ItemViewLayouter` trait 已完成（`layout_mode`、`scroll_axis`、`logical_item_rect`→物理投影）；`ItemViewLayoutEngine` dispatch 就绪；缺 Details/Icons 实现 |
+| **自渲染 Tile** | `kstandarditemlistwidget` | 🟡 Raster 底图已覆盖选中、fallback glyph、缩略图、drop target，通过 `ItemViewTileFrameBatch`→`SharedPixelBuffer` 产出；标题/metadata 文字仍为 Slint `Text` primitive |
+| **Model Trait** | `kfileitemmodel` | 🟡 窄接口初现：`ItemViewFrameEntry`（renderer 输入）、`ItemViewHitEntry`（controller 输出）；完整 `FileEntry`→layouter/selection 抽象未开始 |
+| **Controller 总线** | `kitemlistcontroller` | 🟡 Controller helpers 返回 `ItemViewControllerAction` 枚举；`main.rs` 执行 action 而非直接操作手势状态；无信号总线 |
+| **两阶段刷新** | `kitemlistview` | 🟡 异步刷新簿记已收敛至 `VirtualViewRefreshState`；无覆盖所有刷新类型的统一 pending→commit 状态机 |
 
 详见 [docs/TODO.md](docs/TODO.md) "Spike Dolphin-style self-managed main viewport" 项。
 
@@ -285,8 +285,6 @@ GUI 进程故意非特权化。受保护的文件操作通过系统总线 D-Bus 
 - [docs/TODO.md](docs/TODO.md) — 实现路线图与验收标准
 - [docs/REFERENCE.md](docs/REFERENCE.md) — 中英文详细参考文档
 - [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) — 性能优化方向
-- [docs/COSMIC_REFERENCE.md](docs/COSMIC_REFERENCE.md) — COSMIC Files 参考
-- [docs/DOLPHIN_REFERENCE.md](docs/DOLPHIN_REFERENCE.md) — Dolphin 参考
 
 ## 许可证
 

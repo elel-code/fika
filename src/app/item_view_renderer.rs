@@ -5,6 +5,17 @@ use slint::{Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::collections::HashSet;
 use std::path::Path;
 
+pub(crate) const ITEM_VIEW_MEDIA_KIND_FILE: i32 = 0;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_FOLDER: i32 = 1;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_IMAGE: i32 = 2;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_VIDEO: i32 = 3;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_AUDIO: i32 = 4;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_ARCHIVE: i32 = 5;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_PDF: i32 = 6;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_TEXT: i32 = 7;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_CODE: i32 = 8;
+pub(crate) const ITEM_VIEW_MEDIA_KIND_EXECUTABLE: i32 = 9;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewRenderMetrics {
     pub(crate) tile_height: f32,
@@ -58,13 +69,6 @@ pub(crate) struct ItemViewMediaSource {
     pub(crate) y: f32,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ItemViewRasterMediaEntry {
-    pub(crate) media: Image,
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewMetadataOverlaySource {
     pub(crate) slice_index: i32,
@@ -83,8 +87,10 @@ pub(crate) struct ItemViewMetadataOverlaySource {
 pub(crate) struct ItemViewTileFrameSource {
     pub(crate) slice_index: usize,
     pub(crate) name: SharedString,
+    pub(crate) path: SharedString,
     pub(crate) is_dir: bool,
     pub(crate) selected: bool,
+    pub(crate) thumbnail_state: i32,
     pub(crate) media_token: i32,
     pub(crate) has_bounds: bool,
     pub(crate) x: f32,
@@ -99,6 +105,7 @@ pub(crate) struct ItemViewTileFramePlan {
     pub(crate) text: ItemViewTileTextFrame,
     pub(crate) fallback_media: ItemViewTileFallbackMediaFrame,
     pub(crate) highlight: Option<ItemViewTileHighlightFrame>,
+    pub(crate) thumbnail_state: i32,
     pub(crate) media_token: i32,
 }
 
@@ -129,6 +136,16 @@ pub(crate) struct ItemViewTileFrameRaster {
     pub(crate) height: u32,
 }
 
+impl Default for ItemViewTileFrameRaster {
+    fn default() -> Self {
+        Self {
+            image: Image::default(),
+            width: 1,
+            height: 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ItemViewTileTextFrame {
     pub(crate) name: SharedString,
@@ -140,7 +157,7 @@ pub(crate) struct ItemViewTileTextFrame {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemViewTileFallbackMediaFrame {
-    pub(crate) is_dir: bool,
+    pub(crate) media_kind: i32,
     pub(crate) x: f32,
     pub(crate) y: f32,
 }
@@ -156,6 +173,7 @@ pub(crate) trait ItemViewFrameEntry {
     fn frame_name(&self) -> SharedString;
     fn frame_path(&self) -> &str;
     fn frame_is_dir(&self) -> bool;
+    fn frame_thumbnail_state(&self) -> i32;
     fn frame_media_token(&self) -> i32;
     fn frame_selected(&self) -> bool {
         false
@@ -184,6 +202,10 @@ impl ItemViewFrameEntry for ItemViewEntry {
         self.is_dir
     }
 
+    fn frame_thumbnail_state(&self) -> i32 {
+        self.thumbnail_state
+    }
+
     fn frame_media_token(&self) -> i32 {
         self.media_token
     }
@@ -198,8 +220,10 @@ impl ItemViewTileFrameSource {
         Self {
             slice_index: bounds.slice_index,
             name: entry.frame_name(),
+            path: entry.frame_path().into(),
             is_dir: entry.frame_is_dir(),
             selected,
+            thumbnail_state: entry.frame_thumbnail_state(),
             media_token: entry.frame_media_token(),
             has_bounds: true,
             x: bounds.x,
@@ -217,8 +241,10 @@ impl ItemViewTileFrameSource {
         Self {
             slice_index,
             name: entry.frame_name(),
+            path: entry.frame_path().into(),
             is_dir: entry.frame_is_dir(),
             selected,
+            thumbnail_state: entry.frame_thumbnail_state(),
             media_token: entry.frame_media_token(),
             has_bounds: false,
             x: 0.0,
@@ -241,7 +267,11 @@ impl ItemViewTileFramePlan {
                 text_width: source.text_width,
             },
             fallback_media: ItemViewTileFallbackMediaFrame {
-                is_dir: source.is_dir,
+                media_kind: media_kind_for_path(
+                    source.is_dir,
+                    source.name.as_str(),
+                    source.path.as_str(),
+                ),
                 x: source.x,
                 y: source.y,
             },
@@ -250,6 +280,7 @@ impl ItemViewTileFramePlan {
                 y: source.y,
                 width: source.width,
             }),
+            thumbnail_state: source.thumbnail_state,
             media_token: source.media_token,
         })
     }
@@ -339,6 +370,8 @@ impl ItemViewTileFrameBatch {
             .iter()
             .map(|plan| ItemViewPaintEntry {
                 name: plan.text.name.clone(),
+                thumbnail_state: plan.thumbnail_state,
+                media_kind: plan.fallback_media.media_kind,
                 x: plan.text.x,
                 y: plan.text.y,
                 width: plan.text.width,
@@ -370,9 +403,8 @@ impl ItemViewTileFrameBatch {
     pub(crate) fn render_raster_layer(
         &self,
         input: ItemViewTileFrameRasterInput,
-        media_entries: &[ItemViewRasterMediaEntry],
     ) -> ItemViewTileFrameRaster {
-        let buffer = self.render_raster_buffer(input, media_entries);
+        let buffer = self.render_raster_buffer(input);
         ItemViewTileFrameRaster {
             image: Image::from_rgba8(buffer),
             width: input.width,
@@ -383,7 +415,6 @@ impl ItemViewTileFrameBatch {
     fn render_raster_buffer(
         &self,
         input: ItemViewTileFrameRasterInput,
-        media_entries: &[ItemViewRasterMediaEntry],
     ) -> SharedPixelBuffer<Rgba8Pixel> {
         let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(input.width, input.height);
         buffer
@@ -401,25 +432,6 @@ impl ItemViewTileFrameBatch {
                     input.dark,
                 );
             }
-            draw_fallback_media_glyph_at(
-                &mut buffer,
-                plan.fallback_media.is_dir,
-                input.dark,
-                plan.fallback_media.x - input.content_origin_x + input.media_x,
-                plan.fallback_media.y + input.media_y,
-                input.media_width,
-                input.media_height,
-            );
-        }
-        for media in media_entries {
-            draw_image_contain_at(
-                &mut buffer,
-                &media.media,
-                media.x - input.content_origin_x + input.media_x,
-                media.y + input.media_y,
-                input.media_width,
-                input.media_height,
-            );
         }
         if input.drop_target_slice_index >= 0 {
             let drop_target_slice_index = input.drop_target_slice_index as usize;
@@ -608,6 +620,47 @@ fn ensure_renderable_entry_name(entry: &mut ItemViewEntry) {
     entry.name = fallback.into();
 }
 
+pub(crate) fn media_kind_for_path(is_dir: bool, name: &str, path: &str) -> i32 {
+    if is_dir {
+        return ITEM_VIEW_MEDIA_KIND_FOLDER;
+    }
+
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .or_else(|| {
+            Path::new(name)
+                .extension()
+                .and_then(|extension| extension.to_str())
+        })
+        .map(|extension| extension.to_ascii_lowercase());
+    let Some(extension) = extension.as_deref() else {
+        return ITEM_VIEW_MEDIA_KIND_FILE;
+    };
+
+    match extension {
+        "avif" | "bmp" | "gif" | "heic" | "heif" | "jpeg" | "jpg" | "jpe" | "png" | "svg"
+        | "svgz" | "webp" => ITEM_VIEW_MEDIA_KIND_IMAGE,
+        "3gp" | "avi" | "flv" | "m4v" | "mkv" | "mov" | "mp4" | "mpeg" | "mpg" | "ogv" | "webm"
+        | "wmv" => ITEM_VIEW_MEDIA_KIND_VIDEO,
+        "aac" | "flac" | "m4a" | "mid" | "midi" | "mp3" | "oga" | "ogg" | "opus" | "wav"
+        | "weba" | "wma" => ITEM_VIEW_MEDIA_KIND_AUDIO,
+        "7z" | "bz2" | "deb" | "gz" | "iso" | "rar" | "rpm" | "tar" | "tgz" | "txz" | "xz"
+        | "zip" | "zst" => ITEM_VIEW_MEDIA_KIND_ARCHIVE,
+        "pdf" => ITEM_VIEW_MEDIA_KIND_PDF,
+        "c" | "cc" | "cpp" | "cs" | "css" | "go" | "h" | "hpp" | "html" | "java" | "js" | "jsx"
+        | "kt" | "lua" | "php" | "py" | "rb" | "rs" | "sh" | "sql" | "swift" | "ts" | "tsx" => {
+            ITEM_VIEW_MEDIA_KIND_CODE
+        }
+        "appimage" | "bat" | "bin" | "cmd" | "com" | "desktop" | "exe" | "msi" | "run" => {
+            ITEM_VIEW_MEDIA_KIND_EXECUTABLE
+        }
+        "conf" | "csv" | "ini" | "json" | "log" | "md" | "rst" | "text" | "toml" | "txt"
+        | "xml" | "yaml" | "yml" => ITEM_VIEW_MEDIA_KIND_TEXT,
+        _ => ITEM_VIEW_MEDIA_KIND_FILE,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ItemTextRenderPlan {
     group_y: f32,
@@ -725,103 +778,6 @@ fn draw_drop_target(
     draw_rounded_rect(buffer, x, y, width, height, 7.0, background, border, 1.0);
 }
 
-fn draw_fallback_media_glyph_at(
-    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
-    is_dir: bool,
-    dark: bool,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-) {
-    if is_dir {
-        draw_folder_glyph_at(buffer, dark, x, y, width, height);
-    } else {
-        draw_file_glyph_at(buffer, dark, x, y, width, height);
-    }
-}
-
-fn draw_folder_glyph_at(
-    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
-    dark: bool,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-) {
-    let tab = if dark {
-        GlyphColor::rgba(59, 102, 139, 255)
-    } else {
-        GlyphColor::rgba(114, 174, 230, 255)
-    };
-    let body = if dark {
-        GlyphColor::rgba(63, 111, 152, 255)
-    } else {
-        GlyphColor::rgba(96, 159, 224, 255)
-    };
-    let highlight = if dark {
-        GlyphColor::rgba(169, 184, 196, 255)
-    } else {
-        GlyphColor::rgba(237, 244, 250, 255)
-    };
-    draw_relative_rect(buffer, x, y, width, height, 0.0, 0.14, 0.48, 0.26, tab);
-    draw_relative_rect(buffer, x, y, width, height, 0.0, 0.29, 1.0, 0.69, body);
-    draw_relative_rect(
-        buffer, x, y, width, height, 0.08, 0.37, 0.82, 0.10, highlight,
-    );
-}
-
-fn draw_file_glyph_at(
-    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
-    dark: bool,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-) {
-    let body = if dark {
-        GlyphColor::rgba(139, 145, 151, 255)
-    } else {
-        GlyphColor::rgba(174, 180, 186, 255)
-    };
-    let shade = if dark {
-        GlyphColor::rgba(113, 119, 126, 255)
-    } else {
-        GlyphColor::rgba(151, 158, 165, 255)
-    };
-    let line = if dark {
-        GlyphColor::rgba(48, 48, 48, 255)
-    } else {
-        GlyphColor::rgba(85, 85, 85, 255)
-    };
-    draw_relative_rect(buffer, x, y, width, height, 0.18, 0.10, 0.64, 0.82, body);
-    draw_relative_rect(buffer, x, y, width, height, 0.58, 0.10, 0.24, 0.24, shade);
-    draw_relative_rect(buffer, x, y, width, height, 0.30, 0.52, 0.40, 0.06, line);
-    draw_relative_rect(buffer, x, y, width, height, 0.30, 0.66, 0.32, 0.06, line);
-}
-
-fn draw_relative_rect(
-    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
-    origin_x: f32,
-    origin_y: f32,
-    origin_width: f32,
-    origin_height: f32,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: GlyphColor,
-) {
-    draw_absolute_rect(
-        buffer,
-        origin_x + x * origin_width,
-        origin_y + y * origin_height,
-        width * origin_width,
-        height * origin_height,
-        color,
-    );
-}
-
 fn draw_rounded_rect(
     buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
     x: f32,
@@ -917,76 +873,314 @@ fn point_in_rounded_rect(
     dx * dx + dy * dy <= radius * radius
 }
 
-fn draw_image_contain_at(
+pub(crate) fn render_fallback_media_icon(
+    width: u32,
+    height: u32,
+    dark: bool,
+    media_kind: i32,
+) -> Image {
+    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width.max(1), height.max(1));
+    buffer
+        .make_mut_slice()
+        .fill(GlyphColor::rgba(0, 0, 0, 0).pixel());
+    match media_kind {
+        ITEM_VIEW_MEDIA_KIND_FOLDER => draw_folder_fallback_icon(&mut buffer, dark),
+        ITEM_VIEW_MEDIA_KIND_IMAGE => draw_image_fallback_icon(&mut buffer, dark),
+        ITEM_VIEW_MEDIA_KIND_VIDEO => draw_video_fallback_icon(&mut buffer, dark),
+        ITEM_VIEW_MEDIA_KIND_AUDIO => draw_audio_fallback_icon(&mut buffer, dark),
+        ITEM_VIEW_MEDIA_KIND_ARCHIVE => draw_archive_fallback_icon(&mut buffer, dark),
+        ITEM_VIEW_MEDIA_KIND_PDF => draw_pdf_fallback_icon(&mut buffer, dark),
+        ITEM_VIEW_MEDIA_KIND_TEXT => draw_text_fallback_icon(&mut buffer, dark),
+        ITEM_VIEW_MEDIA_KIND_CODE => draw_code_fallback_icon(&mut buffer, dark),
+        ITEM_VIEW_MEDIA_KIND_EXECUTABLE => draw_executable_fallback_icon(&mut buffer, dark),
+        _ => draw_file_fallback_icon(&mut buffer, dark),
+    }
+    Image::from_rgba8(buffer)
+}
+
+fn draw_folder_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    let width = buffer.width() as f32;
+    let height = buffer.height() as f32;
+    let tab = if dark {
+        GlyphColor::rgba(59, 102, 139, 255)
+    } else {
+        GlyphColor::rgba(114, 174, 230, 255)
+    };
+    let body = if dark {
+        GlyphColor::rgba(63, 111, 152, 255)
+    } else {
+        GlyphColor::rgba(96, 159, 224, 255)
+    };
+    let ridge = if dark {
+        GlyphColor::rgba(169, 184, 196, 255)
+    } else {
+        GlyphColor::rgba(237, 244, 250, 255)
+    };
+    draw_absolute_rect(buffer, 0.0, height * 0.14, width * 0.48, height * 0.26, tab);
+    draw_absolute_rect(buffer, 0.0, height * 0.29, width, height * 0.69, body);
+    draw_absolute_rect(
+        buffer,
+        width * 0.08,
+        height * 0.37,
+        width * 0.82,
+        height * 0.10,
+        ridge,
+    );
+}
+
+fn draw_file_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    let width = buffer.width() as f32;
+    let height = buffer.height() as f32;
+    let body = if dark {
+        GlyphColor::rgba(139, 145, 151, 255)
+    } else {
+        GlyphColor::rgba(174, 180, 186, 255)
+    };
+    let fold = if dark {
+        GlyphColor::rgba(113, 119, 126, 255)
+    } else {
+        GlyphColor::rgba(151, 158, 165, 255)
+    };
+    let line = if dark {
+        GlyphColor::rgba(48, 48, 48, 255)
+    } else {
+        GlyphColor::rgba(85, 85, 85, 255)
+    };
+    draw_absolute_rect(
+        buffer,
+        width * 0.18,
+        height * 0.10,
+        width * 0.64,
+        height * 0.82,
+        body,
+    );
+    draw_absolute_rect(
+        buffer,
+        width * 0.58,
+        height * 0.10,
+        width * 0.24,
+        height * 0.24,
+        fold,
+    );
+    draw_absolute_rect(
+        buffer,
+        width * 0.30,
+        height * 0.52,
+        width * 0.40,
+        (height * 0.06).max(1.0),
+        line,
+    );
+    draw_absolute_rect(
+        buffer,
+        width * 0.30,
+        height * 0.66,
+        width * 0.32,
+        (height * 0.06).max(1.0),
+        line,
+    );
+}
+
+fn draw_image_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    draw_document_base(
+        buffer,
+        dark,
+        GlyphColor::rgba(78, 154, 104, 255),
+        GlyphColor::rgba(48, 118, 78, 255),
+    );
+    let sky = if dark {
+        GlyphColor::rgba(163, 197, 219, 255)
+    } else {
+        GlyphColor::rgba(218, 239, 250, 255)
+    };
+    let hill = if dark {
+        GlyphColor::rgba(47, 92, 64, 255)
+    } else {
+        GlyphColor::rgba(90, 157, 101, 255)
+    };
+    draw_icon_rect(buffer, 0.28, 0.34, 0.44, 0.28, sky);
+    draw_icon_rect(buffer, 0.30, 0.52, 0.20, 0.10, hill);
+    draw_icon_rect(buffer, 0.48, 0.46, 0.22, 0.16, hill);
+}
+
+fn draw_video_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    let body = if dark {
+        GlyphColor::rgba(89, 78, 137, 255)
+    } else {
+        GlyphColor::rgba(132, 112, 190, 255)
+    };
+    let strip = if dark {
+        GlyphColor::rgba(42, 38, 67, 255)
+    } else {
+        GlyphColor::rgba(67, 58, 103, 255)
+    };
+    let mark = if dark {
+        GlyphColor::rgba(230, 224, 248, 255)
+    } else {
+        GlyphColor::rgba(248, 246, 255, 255)
+    };
+    draw_icon_rect(buffer, 0.16, 0.18, 0.68, 0.64, body);
+    draw_icon_rect(buffer, 0.18, 0.22, 0.10, 0.56, strip);
+    draw_icon_rect(buffer, 0.72, 0.22, 0.10, 0.56, strip);
+    draw_icon_rect(buffer, 0.38, 0.36, 0.12, 0.28, mark);
+    draw_icon_rect(buffer, 0.50, 0.42, 0.10, 0.16, mark);
+}
+
+fn draw_audio_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    draw_document_base(
+        buffer,
+        dark,
+        GlyphColor::rgba(64, 142, 150, 255),
+        GlyphColor::rgba(45, 104, 112, 255),
+    );
+    let note = if dark {
+        GlyphColor::rgba(220, 245, 247, 255)
+    } else {
+        GlyphColor::rgba(239, 252, 253, 255)
+    };
+    draw_icon_rect(buffer, 0.42, 0.30, 0.08, 0.38, note);
+    draw_icon_rect(buffer, 0.50, 0.30, 0.20, 0.08, note);
+    draw_icon_rect(buffer, 0.62, 0.38, 0.08, 0.32, note);
+    draw_icon_rect(buffer, 0.30, 0.62, 0.18, 0.12, note);
+    draw_icon_rect(buffer, 0.54, 0.66, 0.18, 0.12, note);
+}
+
+fn draw_archive_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    let body = if dark {
+        GlyphColor::rgba(126, 96, 61, 255)
+    } else {
+        GlyphColor::rgba(190, 151, 92, 255)
+    };
+    let top = if dark {
+        GlyphColor::rgba(157, 122, 76, 255)
+    } else {
+        GlyphColor::rgba(216, 177, 112, 255)
+    };
+    let zip = if dark {
+        GlyphColor::rgba(52, 45, 38, 255)
+    } else {
+        GlyphColor::rgba(87, 72, 53, 255)
+    };
+    draw_icon_rect(buffer, 0.18, 0.28, 0.64, 0.60, body);
+    draw_icon_rect(buffer, 0.18, 0.18, 0.64, 0.20, top);
+    draw_icon_rect(buffer, 0.46, 0.20, 0.08, 0.66, zip);
+    draw_icon_rect(buffer, 0.54, 0.28, 0.06, 0.08, zip);
+    draw_icon_rect(buffer, 0.40, 0.40, 0.06, 0.08, zip);
+    draw_icon_rect(buffer, 0.54, 0.52, 0.06, 0.08, zip);
+    draw_icon_rect(buffer, 0.40, 0.64, 0.06, 0.08, zip);
+}
+
+fn draw_pdf_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    draw_document_base(
+        buffer,
+        dark,
+        GlyphColor::rgba(174, 67, 67, 255),
+        GlyphColor::rgba(128, 44, 44, 255),
+    );
+    let mark = if dark {
+        GlyphColor::rgba(255, 236, 236, 255)
+    } else {
+        GlyphColor::rgba(255, 247, 247, 255)
+    };
+    draw_icon_rect(buffer, 0.30, 0.42, 0.40, 0.08, mark);
+    draw_icon_rect(buffer, 0.30, 0.56, 0.34, 0.08, mark);
+    draw_icon_rect(buffer, 0.30, 0.70, 0.28, 0.08, mark);
+}
+
+fn draw_text_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    draw_document_base(
+        buffer,
+        dark,
+        GlyphColor::rgba(126, 135, 143, 255),
+        GlyphColor::rgba(90, 99, 107, 255),
+    );
+    let line = if dark {
+        GlyphColor::rgba(236, 240, 244, 255)
+    } else {
+        GlyphColor::rgba(248, 250, 252, 255)
+    };
+    draw_icon_rect(buffer, 0.30, 0.34, 0.40, 0.06, line);
+    draw_icon_rect(buffer, 0.30, 0.48, 0.36, 0.06, line);
+    draw_icon_rect(buffer, 0.30, 0.62, 0.42, 0.06, line);
+    draw_icon_rect(buffer, 0.30, 0.76, 0.30, 0.06, line);
+}
+
+fn draw_code_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    draw_document_base(
+        buffer,
+        dark,
+        GlyphColor::rgba(68, 105, 164, 255),
+        GlyphColor::rgba(45, 72, 119, 255),
+    );
+    let mark = if dark {
+        GlyphColor::rgba(224, 236, 255, 255)
+    } else {
+        GlyphColor::rgba(240, 246, 255, 255)
+    };
+    draw_icon_rect(buffer, 0.30, 0.46, 0.08, 0.08, mark);
+    draw_icon_rect(buffer, 0.38, 0.38, 0.08, 0.08, mark);
+    draw_icon_rect(buffer, 0.38, 0.54, 0.08, 0.08, mark);
+    draw_icon_rect(buffer, 0.62, 0.38, 0.08, 0.08, mark);
+    draw_icon_rect(buffer, 0.70, 0.46, 0.08, 0.08, mark);
+    draw_icon_rect(buffer, 0.62, 0.54, 0.08, 0.08, mark);
+    draw_icon_rect(buffer, 0.48, 0.66, 0.18, 0.06, mark);
+}
+
+fn draw_executable_fallback_icon(buffer: &mut SharedPixelBuffer<Rgba8Pixel>, dark: bool) {
+    let body = if dark {
+        GlyphColor::rgba(38, 45, 51, 255)
+    } else {
+        GlyphColor::rgba(65, 75, 85, 255)
+    };
+    let top = if dark {
+        GlyphColor::rgba(84, 95, 106, 255)
+    } else {
+        GlyphColor::rgba(122, 135, 148, 255)
+    };
+    let prompt = if dark {
+        GlyphColor::rgba(112, 214, 132, 255)
+    } else {
+        GlyphColor::rgba(126, 229, 145, 255)
+    };
+    draw_icon_rect(buffer, 0.16, 0.22, 0.68, 0.62, body);
+    draw_icon_rect(buffer, 0.16, 0.22, 0.68, 0.14, top);
+    draw_icon_rect(buffer, 0.28, 0.50, 0.14, 0.08, prompt);
+    draw_icon_rect(buffer, 0.42, 0.58, 0.20, 0.06, prompt);
+}
+
+fn draw_document_base(
     buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
-    image: &Image,
+    dark: bool,
+    body: GlyphColor,
+    fold: GlyphColor,
+) {
+    let shadow = if dark {
+        GlyphColor::rgba(41, 45, 49, 255)
+    } else {
+        GlyphColor::rgba(118, 126, 134, 255)
+    };
+    draw_icon_rect(buffer, 0.18, 0.10, 0.64, 0.82, body);
+    draw_icon_rect(buffer, 0.58, 0.10, 0.24, 0.24, fold);
+    draw_icon_rect(buffer, 0.22, 0.88, 0.58, 0.04, shadow);
+}
+
+fn draw_icon_rect(
+    buffer: &mut SharedPixelBuffer<Rgba8Pixel>,
     x: f32,
     y: f32,
     width: f32,
     height: f32,
+    color: GlyphColor,
 ) {
-    let Some(source) = image.to_rgba8() else {
-        return;
-    };
-    let source_width = source.width();
-    let source_height = source.height();
-    if source_width == 0 || source_height == 0 || width <= 0.0 || height <= 0.0 {
-        return;
-    }
-
-    let scale = (width / source_width as f32).min(height / source_height as f32);
-    if !scale.is_finite() || scale <= 0.0 {
-        return;
-    }
-    let draw_width = (source_width as f32 * scale).max(1.0);
-    let draw_height = (source_height as f32 * scale).max(1.0);
-    let draw_x = x + (width - draw_width) / 2.0;
-    let draw_y = y + (height - draw_height) / 2.0;
-    let dest_left = draw_x.floor().max(0.0) as u32;
-    let dest_top = draw_y.floor().max(0.0) as u32;
-    let dest_right = (draw_x + draw_width).ceil().min(buffer.width() as f32) as u32;
-    let dest_bottom = (draw_y + draw_height).ceil().min(buffer.height() as f32) as u32;
-    if dest_left >= dest_right || dest_top >= dest_bottom {
-        return;
-    }
-
-    let source_pixels = source.as_slice();
-    let dest_width = buffer.width() as usize;
-    let dest_pixels = buffer.make_mut_slice();
-    for dest_y in dest_top..dest_bottom {
-        let local_y = ((dest_y as f32 + 0.5 - draw_y) / scale)
-            .floor()
-            .clamp(0.0, (source_height - 1) as f32) as u32;
-        for dest_x in dest_left..dest_right {
-            let local_x = ((dest_x as f32 + 0.5 - draw_x) / scale)
-                .floor()
-                .clamp(0.0, (source_width - 1) as f32) as u32;
-            let source_pixel = source_pixels[(local_y * source_width + local_x) as usize];
-            let dest_index = dest_y as usize * dest_width + dest_x as usize;
-            dest_pixels[dest_index] = alpha_blend(source_pixel, dest_pixels[dest_index]);
-        }
-    }
-}
-
-fn alpha_blend(source: Rgba8Pixel, dest: Rgba8Pixel) -> Rgba8Pixel {
-    let alpha = source.a as u32;
-    if alpha == 255 {
-        return source;
-    }
-    if alpha == 0 {
-        return dest;
-    }
-    let inv_alpha = 255 - alpha;
-    let out_alpha = alpha + (dest.a as u32 * inv_alpha + 127) / 255;
-    let blend = |source_channel: u8, dest_channel: u8| -> u8 {
-        ((source_channel as u32 * alpha + dest_channel as u32 * inv_alpha + 127) / 255) as u8
-    };
-    Rgba8Pixel::new(
-        blend(source.r, dest.r),
-        blend(source.g, dest.g),
-        blend(source.b, dest.b),
-        out_alpha as u8,
-    )
+    let buffer_width = buffer.width() as f32;
+    let buffer_height = buffer.height() as f32;
+    draw_absolute_rect(
+        buffer,
+        x * buffer_width,
+        y * buffer_height,
+        width * buffer_width,
+        height * buffer_height,
+        color,
+    );
 }
 
 fn draw_absolute_rect(
@@ -1037,7 +1231,7 @@ mod tests {
     fn render_geometry_keeps_compact_pane_tokens_stable() {
         let mut entries = (4..9).map(test_entry).collect::<Vec<_>>();
         let input = ItemViewRenderPlanInput {
-            cell_width: 129.0,
+            cell_width: 115.0,
             render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
             show_location: false,
         };
@@ -1050,12 +1244,12 @@ mod tests {
             ItemViewRenderGeometry {
                 media_x: 2.0,
                 media_y: 2.0,
-                media_width: 46.0,
-                media_height: 46.0,
-                text_x: 52.0,
+                media_width: 32.0,
+                media_height: 32.0,
+                text_x: 38.0,
                 text_width: 75.0,
                 title_y: 0.0,
-                title_line_height: 50.0,
+                title_line_height: 36.0,
                 title_font_size: 15.0,
             }
         );
@@ -1120,7 +1314,10 @@ mod tests {
         assert_eq!(batch.plans().len(), 1);
         assert_eq!(batch.plans()[0].text.name, "Report");
         assert_eq!(batch.plans()[0].text.x, 120.0);
-        assert!(batch.plans()[0].fallback_media.is_dir);
+        assert_eq!(
+            batch.plans()[0].fallback_media.media_kind,
+            ITEM_VIEW_MEDIA_KIND_FOLDER
+        );
         assert_eq!(batch.plans()[0].media_token, 42);
         assert_eq!(
             batch.plans()[0].highlight,
@@ -1137,6 +1334,46 @@ mod tests {
         assert_eq!(paint[0].y, 40.0);
         assert_eq!(paint[0].width, 180.0);
         assert_eq!(paint[0].text_width, 96.0);
+    }
+
+    #[test]
+    fn media_kind_for_path_uses_directory_and_extension_categories() {
+        assert_eq!(
+            media_kind_for_path(true, "notes.txt", "/tmp/notes.txt"),
+            ITEM_VIEW_MEDIA_KIND_FOLDER
+        );
+        assert_eq!(
+            media_kind_for_path(false, "photo.JPG", "/tmp/photo.JPG"),
+            ITEM_VIEW_MEDIA_KIND_IMAGE
+        );
+        assert_eq!(
+            media_kind_for_path(false, "clip.webm", "/tmp/clip.webm"),
+            ITEM_VIEW_MEDIA_KIND_VIDEO
+        );
+        assert_eq!(
+            media_kind_for_path(false, "song.flac", "/tmp/song.flac"),
+            ITEM_VIEW_MEDIA_KIND_AUDIO
+        );
+        assert_eq!(
+            media_kind_for_path(false, "backup.tar.gz", "/tmp/backup.tar.gz"),
+            ITEM_VIEW_MEDIA_KIND_ARCHIVE
+        );
+        assert_eq!(
+            media_kind_for_path(false, "manual.pdf", "/tmp/manual.pdf"),
+            ITEM_VIEW_MEDIA_KIND_PDF
+        );
+        assert_eq!(
+            media_kind_for_path(false, "main.rs", "/tmp/main.rs"),
+            ITEM_VIEW_MEDIA_KIND_CODE
+        );
+        assert_eq!(
+            media_kind_for_path(false, "readme.md", "/tmp/readme.md"),
+            ITEM_VIEW_MEDIA_KIND_TEXT
+        );
+        assert_eq!(
+            media_kind_for_path(false, "tool.AppImage", "/tmp/tool.AppImage"),
+            ITEM_VIEW_MEDIA_KIND_EXECUTABLE
+        );
     }
 
     #[test]
@@ -1242,7 +1479,7 @@ mod tests {
     }
 
     #[test]
-    fn tile_frame_batch_renders_raster_layer_for_highlight_and_fallback_media() {
+    fn tile_frame_batch_renders_raster_layer_for_highlight_without_fallback_media() {
         let mut folder = test_entry(0);
         folder.is_dir = true;
         let mut file = test_entry(1);
@@ -1269,21 +1506,18 @@ mod tests {
             &["/tmp/item-0".to_string()],
         );
 
-        let buffer = batch.render_raster_buffer(
-            ItemViewTileFrameRasterInput {
-                width: 64,
-                height: 64,
-                content_origin_x: 0.0,
-                drop_target_slice_index: -1,
-                dark: false,
-                tile_height: 20.0,
-                media_x: 2.0,
-                media_y: 2.0,
-                media_width: 8.0,
-                media_height: 8.0,
-            },
-            &[],
-        );
+        let buffer = batch.render_raster_buffer(ItemViewTileFrameRasterInput {
+            width: 64,
+            height: 64,
+            content_origin_x: 0.0,
+            drop_target_slice_index: -1,
+            dark: false,
+            tile_height: 20.0,
+            media_x: 2.0,
+            media_y: 2.0,
+            media_width: 8.0,
+            media_height: 8.0,
+        });
 
         assert_eq!(
             pixel_at(&buffer, 43, 6),
@@ -1291,12 +1525,9 @@ mod tests {
         );
         assert_eq!(
             pixel_at(&buffer, 11, 11),
-            Rgba8Pixel::new(96, 159, 224, 255)
+            Rgba8Pixel::new(228, 240, 248, 255)
         );
-        assert_eq!(
-            pixel_at(&buffer, 9, 34),
-            Rgba8Pixel::new(174, 180, 186, 255)
-        );
+        assert_eq!(pixel_at(&buffer, 9, 34), Rgba8Pixel::new(0, 0, 0, 0));
     }
 
     #[test]
@@ -1321,21 +1552,18 @@ mod tests {
         ];
         let batch = ItemViewTileFrameBatch::from_entries_and_bounds(&[first, second], &bounds, &[]);
 
-        let buffer = batch.render_raster_buffer(
-            ItemViewTileFrameRasterInput {
-                width: 64,
-                height: 64,
-                content_origin_x: 0.0,
-                drop_target_slice_index: 1,
-                dark: false,
-                tile_height: 20.0,
-                media_x: 2.0,
-                media_y: 2.0,
-                media_width: 8.0,
-                media_height: 8.0,
-            },
-            &[],
-        );
+        let buffer = batch.render_raster_buffer(ItemViewTileFrameRasterInput {
+            width: 64,
+            height: 64,
+            content_origin_x: 0.0,
+            drop_target_slice_index: 1,
+            dark: false,
+            tile_height: 20.0,
+            media_x: 2.0,
+            media_y: 2.0,
+            media_width: 8.0,
+            media_height: 8.0,
+        });
 
         assert_eq!(pixel_at(&buffer, 5, 40), Rgba8Pixel::new(217, 119, 6, 255));
         assert_eq!(
@@ -1347,10 +1575,10 @@ mod tests {
     #[test]
     fn fallback_media_source_is_stable_across_zoom_metrics() {
         let small = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(0, 1);
-        let large = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1);
+        let large = ItemViewRenderMetrics::from_zoom_level_with_text_line_count(16, 1);
 
         assert_ne!(small.media_width, large.media_width);
-        assert_eq!(large.media_width, 72.0);
+        assert_eq!(large.media_width, 256.0);
     }
 
     #[test]
@@ -1371,9 +1599,9 @@ mod tests {
 
         let geometry = ItemViewRenderGeometry::from_plan_input(input);
         assert_eq!(geometry.media_x, 2.0);
-        assert_eq!(geometry.media_y, 5.5);
-        assert_eq!(geometry.text_x, 52.0);
-        assert_eq!(geometry.text_width, 75.0);
+        assert_eq!(geometry.media_y, 12.5);
+        assert_eq!(geometry.text_x, 38.0);
+        assert_eq!(geometry.text_width, 89.0);
         assert_eq!(geometry.title_line_height, 21.0);
         assert_eq!(geometry.title_y, 18.0);
         assert_eq!(
@@ -1384,8 +1612,8 @@ mod tests {
                     text: "Documents".into(),
                     item_x: 0.0,
                     item_y: 0.0,
-                    text_x: 52.0,
-                    text_width: 75.0,
+                    text_x: 38.0,
+                    text_width: 89.0,
                     y: 2.0,
                     line_height: 14.0,
                     font_size: 11.0,
@@ -1396,8 +1624,8 @@ mod tests {
                     text: "/home/user/Documents".into(),
                     item_x: 0.0,
                     item_y: 0.0,
-                    text_x: 52.0,
-                    text_width: 75.0,
+                    text_x: 38.0,
+                    text_width: 89.0,
                     y: 41.0,
                     line_height: 14.0,
                     font_size: 11.0,
@@ -1420,8 +1648,8 @@ mod tests {
 
         let geometry = ItemViewRenderGeometry::from_plan_input(input);
         assert_eq!(geometry.media_x, 2.0);
-        assert_eq!(geometry.text_x, 52.0);
-        assert_eq!(geometry.text_width, 75.0);
+        assert_eq!(geometry.text_x, 38.0);
+        assert_eq!(geometry.text_width, 89.0);
         assert_eq!(geometry.title_y, 18.0);
         assert_eq!(geometry.title_line_height, 21.0);
         assert!(entries.iter().all(|entry| !entry.name.is_empty()));
@@ -1451,7 +1679,7 @@ mod tests {
             render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(2, 1),
             show_location: false,
         });
-        assert_eq!(geometry.text_x, 52.0);
+        assert_eq!(geometry.text_x, 38.0);
         assert_eq!(geometry.text_width, 75.0);
     }
 
@@ -1463,22 +1691,22 @@ mod tests {
             &mut entries,
             ItemViewRenderPlanInput {
                 cell_width: 0.0,
-                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1),
+                render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(16, 1),
                 show_location: false,
             },
         );
 
         let geometry = ItemViewRenderGeometry::from_plan_input(ItemViewRenderPlanInput {
             cell_width: 0.0,
-            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(4, 1),
+            render_metrics: ItemViewRenderMetrics::from_zoom_level_with_text_line_count(16, 1),
             show_location: false,
         });
-        assert_eq!(geometry.media_width, 72.0);
-        assert_eq!(geometry.media_height, 72.0);
-        assert_eq!(geometry.text_x, 78.0);
+        assert_eq!(geometry.media_width, 256.0);
+        assert_eq!(geometry.media_height, 256.0);
+        assert_eq!(geometry.text_x, 262.0);
         assert_eq!(geometry.text_width, 75.0);
         assert_eq!(geometry.title_y, 0.0);
-        assert_eq!(geometry.title_line_height, 76.0);
+        assert_eq!(geometry.title_line_height, 260.0);
         assert!(entries.iter().all(|entry| !entry.name.is_empty()));
     }
 

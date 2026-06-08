@@ -112,12 +112,12 @@ Current alignment status:
 
 | Layer | Dolphin Equivalent | Status |
 |-------|-------------------|--------|
-| **Smooth Scroller** | `kitemlistsmoothscroller` | ❌ Not started — viewport jumps directly, no interpolation |
-| **Polymorphic Layouter** | `kitemlistviewlayouter` | 🟡 Compact-only — no trait, no logical→physical transpose, no Details/Icons |
-| **Self-rendered Tiles** | `kstandarditemlistwidget` | 🟡 Slint primitives optimized with sidecar/sparse-overlay models; `SharedPixelBuffer` self-rendering not started |
-| **Model Trait** | `kfileitemmodel` | ❌ Not started — concrete `FileEntry`/`PaneEntrySnapshot` types, no trait abstraction |
-| **Controller Bus** | `kitemlistcontroller` | 🟡 `ItemViewInputState` extracted to `item_view.rs`; no signal bus, still coupled to `AppState` |
-| **Two-phase Refresh** | `kitemlistview` | 🟡 Old view preserved on uncached navigation; no formal pending→commit state machine |
+| **Smooth Scroller** | `kitemlistsmoothscroller` | ✅ Done — logical `viewport-x` + animated `paint-viewport-x` split; 120ms ease-out within current virtual slice; stops on user interaction |
+| **Polymorphic Layouter** | `kitemlistviewlayouter` | 🟡 `ItemViewLayouter` trait done (`layout_mode`, `scroll_axis`, `logical_item_rect`→physical projection); `ItemViewLayoutEngine` dispatch ready; Details/Icons implementations missing |
+| **Self-rendered Tiles** | `kstandarditemlistwidget` | 🟡 Raster base layer covers selection, fallback glyphs, thumbnails, drop targets via `ItemViewTileFrameBatch`→`SharedPixelBuffer`; title/metadata text still Slint `Text` primitive |
+| **Model Trait** | `kfileitemmodel` | 🟡 Narrow interfaces emerging: `ItemViewFrameEntry` for renderer input, `ItemViewHitEntry` for controller output; full `FileEntry`→layouter/selection abstraction not started |
+| **Controller Bus** | `kitemlistcontroller` | 🟡 Controller helpers return `ItemViewControllerAction` enum; `main.rs` executes actions instead of mutating gesture state; no signal bus yet |
+| **Two-phase Refresh** | `kitemlistview` | 🟡 Async refresh bookkeeping consolidated into `VirtualViewRefreshState`; no unified pending→commit state machine across all refresh types |
 
 See [docs/TODO.md](docs/TODO.md) § "Spike Dolphin-style self-managed main viewport" for details.
 
@@ -304,8 +304,6 @@ Detailed design documents:
 - [docs/TODO.md](docs/TODO.md) — Implementation roadmap and acceptance criteria
 - [docs/REFERENCE.md](docs/REFERENCE.md) — Detailed bilingual (zh/en) reference
 - [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) — Performance optimization notes
-- [docs/COSMIC_REFERENCE.md](docs/COSMIC_REFERENCE.md) — COSMIC Files reference
-- [docs/DOLPHIN_REFERENCE.md](docs/DOLPHIN_REFERENCE.md) — Dolphin reference
 
 ## License
 

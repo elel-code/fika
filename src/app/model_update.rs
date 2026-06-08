@@ -1,10 +1,10 @@
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::item_view_renderer::{
     ItemViewFrameEntry, ItemViewMediaSource, ItemViewMediaToken, ItemViewMetadataOverlaySource,
-    ItemViewRasterMediaEntry, ItemViewTileFrameBatch, metadata_entries_with_bounds,
+    ItemViewTileFrameBatch, metadata_entries_with_bounds,
 };
 use crate::app::pane::PaneView;
-use crate::{ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry};
+use crate::{ItemViewEntry, ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry};
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
@@ -86,6 +86,10 @@ impl ItemViewFrameEntry for ItemViewRowToken {
 
     fn frame_is_dir(&self) -> bool {
         self.is_dir()
+    }
+
+    fn frame_thumbnail_state(&self) -> i32 {
+        self.thumbnail_state()
     }
 
     fn frame_media_token(&self) -> i32 {
@@ -219,15 +223,15 @@ fn bounds_for_slice_index(
         })
 }
 
-fn project_media_entries_with_bounds(
+fn project_thumbnail_entries_with_bounds(
     media_entries: Vec<ItemViewMediaSource>,
     bounds_entries: &[ItemViewItemBounds],
-) -> Vec<ItemViewRasterMediaEntry> {
+) -> Vec<ItemViewThumbnailEntry> {
     media_entries
         .into_iter()
         .map(|media| {
             let bounds = bounds_for_slice_index(bounds_entries, media.slice_index);
-            ItemViewRasterMediaEntry {
+            ItemViewThumbnailEntry {
                 media: media.media,
                 x: bounds.map_or(media.x, |b| b.x),
                 y: bounds.map_or(media.y, |b| b.y),
@@ -236,22 +240,73 @@ fn project_media_entries_with_bounds(
         .collect()
 }
 
-fn update_item_view_media_entries_model(
-    current: &mut Vec<ItemViewRasterMediaEntry>,
+pub(crate) fn new_item_view_thumbnail_model(
+    thumbnails: Vec<ItemViewThumbnailEntry>,
+) -> ModelRc<ItemViewThumbnailEntry> {
+    if thumbnails.is_empty() {
+        return ModelRc::default();
+    }
+
+    ModelRc::new(Rc::new(VecModel::from(thumbnails)))
+}
+
+fn update_item_view_thumbnail_entries_model(
+    current: &mut ModelRc<ItemViewThumbnailEntry>,
     current_tokens: &mut Vec<ItemViewMediaToken>,
-    media_entries: Vec<ItemViewRasterMediaEntry>,
+    thumbnails: Vec<ItemViewThumbnailEntry>,
     next_tokens: Vec<ItemViewMediaToken>,
 ) -> bool {
-    let geometry_changed = current.len() != media_entries.len()
-        || current
-            .iter()
-            .zip(media_entries.iter())
-            .any(|(current, next)| current.x != next.x || current.y != next.y);
-    let tokens_changed = *current_tokens != next_tokens;
-    let changed = geometry_changed || tokens_changed;
-    if changed {
-        *current = media_entries;
+    if thumbnails.is_empty() {
+        let changed = current.row_count() != 0 || !current_tokens.is_empty();
+        if changed {
+            *current = ModelRc::default();
+            current_tokens.clear();
+        }
+        return changed;
+    }
+
+    let Some(model) = current
+        .as_any()
+        .downcast_ref::<VecModel<ItemViewThumbnailEntry>>()
+    else {
+        *current = new_item_view_thumbnail_model(thumbnails);
         *current_tokens = next_tokens;
+        return true;
+    };
+
+    let mut changed = false;
+    let overlap_len = model.row_count().min(thumbnails.len());
+    for (row, thumbnail) in thumbnails.iter().enumerate().take(overlap_len) {
+        match (
+            model.row_data(row),
+            current_tokens.get(row),
+            next_tokens.get(row),
+        ) {
+            (Some(current), Some(current_token), Some(next_token))
+                if current.x == thumbnail.x
+                    && current.y == thumbnail.y
+                    && current_token == next_token => {}
+            _ => {
+                model.set_row_data(row, thumbnail.clone());
+                changed = true;
+            }
+        }
+    }
+
+    while model.row_count() > thumbnails.len() {
+        model.remove(model.row_count() - 1);
+        changed = true;
+    }
+
+    let current_len = model.row_count();
+    if current_len < thumbnails.len() {
+        model.extend(thumbnails[current_len..].iter().cloned());
+        changed = true;
+    }
+
+    if changed || *current_tokens != next_tokens {
+        *current_tokens = next_tokens;
+        changed = true;
     }
     changed
 }
@@ -309,13 +364,15 @@ pub(crate) fn update_pane_item_view_entries_model(
     selected_paths: &[String],
 ) {
     let old_start = view.virtual_start_index;
+    let raster_tokens_changed =
+        item_view_raster_tokens_changed(&view.virtual_entry_tokens, &entries, selected_paths);
     let frame_batch =
         ItemViewTileFrameBatch::from_entries_and_bounds(&entries, &bounds_entries, selected_paths);
     let media_tokens = frame_batch.media_tokens_for_sources(&media_entries);
-    let media_entries = project_media_entries_with_bounds(media_entries, &bounds_entries);
+    let thumbnails = project_thumbnail_entries_with_bounds(media_entries, &bounds_entries);
     let metadata_entries = metadata_entries_with_bounds(metadata_entries, &bounds_entries);
     let paint_entries = frame_batch.paint_entries();
-    update_item_view_bounds_entries_model(
+    let bounds_changed = update_item_view_bounds_entries_model(
         &mut view.virtual_bounds_entries,
         old_start,
         start_index,
@@ -327,10 +384,10 @@ pub(crate) fn update_pane_item_view_entries_model(
         start_index,
         paint_entries,
     );
-    update_item_view_media_entries_model(
-        &mut view.virtual_media_entries,
+    update_item_view_thumbnail_entries_model(
+        &mut view.virtual_thumbnail_entries,
         &mut view.virtual_media_tokens,
-        media_entries,
+        thumbnails,
         media_tokens,
     );
     update_item_view_metadata_entries_model(&mut view.virtual_metadata_entries, metadata_entries);
@@ -346,7 +403,27 @@ pub(crate) fn update_pane_item_view_entries_model(
         view.virtual_entries = model;
     }
     view.virtual_start_index = start_index;
-    view.bump_raster_revision();
+    if bounds_changed || raster_tokens_changed {
+        view.bump_raster_revision();
+    }
+}
+
+fn item_view_raster_tokens_changed(
+    current: &[ItemViewRowToken],
+    entries: &[ItemViewEntry],
+    selected_paths: &[String],
+) -> bool {
+    let next = item_view_row_tokens(entries, selected_paths);
+    current.len() != next.len()
+        || current.iter().zip(next.iter()).any(|(current, next)| {
+            match (
+                current.path() == next.path(),
+                current.selected() == next.selected(),
+            ) {
+                (true, true) => false,
+                _ => true,
+            }
+        })
 }
 
 pub(crate) fn update_pane_item_view_selection_model(
@@ -615,21 +692,24 @@ mod tests {
             .collect()
     }
 
-    fn media_rows(entries: &[ItemViewRasterMediaEntry]) -> Vec<Rgba8Pixel> {
-        entries
-            .iter()
-            .map(|entry| first_pixel(&entry.media))
-            .collect()
-    }
-
-    fn media_geometry_rows(entries: &[ItemViewRasterMediaEntry]) -> Vec<(f32, f32)> {
-        entries.iter().map(|entry| (entry.x, entry.y)).collect()
-    }
-
     fn media_tokens(tokens: &[ItemViewMediaToken]) -> Vec<(i32, i32)> {
         tokens
             .iter()
             .map(|token| (token.slice_index, token.media_token))
+            .collect()
+    }
+
+    fn thumbnail_rows(model: &ModelRc<ItemViewThumbnailEntry>) -> Vec<Rgba8Pixel> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| first_pixel(&entry.media))
+            .collect()
+    }
+
+    fn thumbnail_geometry_rows(model: &ModelRc<ItemViewThumbnailEntry>) -> Vec<(f32, f32)> {
+        (0..model.row_count())
+            .filter_map(|row| model.row_data(row))
+            .map(|entry| (entry.x, entry.y))
             .collect()
     }
 
@@ -737,7 +817,7 @@ mod tests {
         );
 
         assert_eq!(
-            media_geometry_rows(&view.virtual_media_entries),
+            thumbnail_geometry_rows(&view.virtual_thumbnail_entries),
             vec![(210.0, 2.0)]
         );
         assert_eq!(
@@ -1255,13 +1335,14 @@ mod tests {
     }
 
     #[test]
-    fn pane_item_view_raster_media_uses_tokens_without_image_comparison() {
+    fn pane_item_view_thumbnail_overlay_uses_tokens_without_image_comparison_or_raster_bump() {
         let mut entries = entries_with_tile_metrics(4);
         entries[1].thumbnail_state = 2;
         entries[1].media_token = 101;
         entries[3].thumbnail_state = 2;
         entries[3].media_token = 103;
         let mut view = PaneView::default();
+        let initial_raster_revision = view.raster_revision_for_test();
         update_pane_item_view_entries_model(
             &mut view,
             0,
@@ -1274,8 +1355,10 @@ mod tests {
             Vec::new(),
             &[],
         );
+        let layout_raster_revision = view.raster_revision_for_test();
+        assert!(layout_raster_revision > initial_raster_revision);
         assert_eq!(
-            media_rows(&view.virtual_media_entries),
+            thumbnail_rows(&view.virtual_thumbnail_entries),
             vec![
                 Rgba8Pixel::new(255, 0, 0, 255),
                 Rgba8Pixel::new(0, 0, 255, 255),
@@ -1299,8 +1382,9 @@ mod tests {
             Vec::new(),
             &[],
         );
+        assert_eq!(view.raster_revision_for_test(), layout_raster_revision);
         assert_eq!(
-            media_rows(&view.virtual_media_entries),
+            thumbnail_rows(&view.virtual_thumbnail_entries),
             vec![
                 Rgba8Pixel::new(255, 0, 0, 255),
                 Rgba8Pixel::new(0, 0, 255, 255),
@@ -1325,8 +1409,9 @@ mod tests {
             &[],
         );
 
+        assert_eq!(view.raster_revision_for_test(), layout_raster_revision);
         assert_eq!(
-            media_rows(&view.virtual_media_entries),
+            thumbnail_rows(&view.virtual_thumbnail_entries),
             vec![
                 Rgba8Pixel::new(0, 255, 0, 255),
                 Rgba8Pixel::new(255, 255, 0, 255),

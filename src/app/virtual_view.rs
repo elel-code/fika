@@ -29,6 +29,7 @@ pub(crate) struct VirtualViewSnapshotInput {
     pub(crate) range_hint: Option<Range<usize>>,
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
+    pub(crate) force_rebuild_model: bool,
     pub(crate) visible_count_override: Option<usize>,
     pub(crate) cache: VirtualViewCache,
     pub(crate) entries: Arc<[PaneEntrySnapshot]>,
@@ -60,7 +61,8 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         .expand_virtual_range_to_hint(plan.range.clone(), input.range_hint.as_ref());
     let start_column = compact_item_view.range_anchor(range.start).start_column;
     let viewport_clamped = (plan.viewport_x - input.requested_viewport_x).abs() > f32::EPSILON;
-    let rebuild_model = !input.schedule_thumbnails
+    let rebuild_model = input.force_rebuild_model
+        || !input.schedule_thumbnails
         || should_rebuild_virtual_cache(
             &input.cache,
             &plan,
@@ -102,16 +104,19 @@ fn cached_snapshot_layout(
     input: &VirtualViewSnapshotInput,
     visible_count: usize,
 ) -> Option<Arc<ItemViewLayoutEngine>> {
-    input
-        .cache
-        .layout
-        .as_ref()
-        .filter(|cached| {
-            let compact = cached.as_compact();
-            compact.entry_count == visible_count
-                && main_layout_matches_cached_layout(&input.layout, compact)
-        })
-        .map(Arc::clone)
+    let cached = input.cache.layout.as_ref()?;
+    let compact = cached.as_compact();
+    if compact.entry_count != visible_count {
+        return None;
+    }
+
+    if main_layout_matches_cached_layout(&input.layout, compact) {
+        return Some(Arc::clone(cached));
+    }
+
+    Some(Arc::new(ItemViewLayoutEngine::from(
+        compact.relayout_with_main_layout(input.layout),
+    )))
 }
 
 fn main_layout_matches_cached_layout(
@@ -392,6 +397,7 @@ mod tests {
             range_hint: None,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
+            force_rebuild_model: false,
             visible_count_override: None,
             cache,
             entries,
@@ -452,6 +458,30 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_update_force_rebuilds_model_inside_cached_range() {
+        let entries = snapshot_entries(100);
+
+        let first = prepare_virtual_view_snapshot_update(snapshot_input(
+            Arc::clone(&entries),
+            0.0,
+            VirtualViewCache::default(),
+        ));
+        assert!(first.rebuild_model);
+
+        let mut input = snapshot_input(
+            entries,
+            40.0,
+            cache_for_layout(first.range.clone(), first.entry_count, 64),
+        );
+        input.force_rebuild_model = true;
+        let second = prepare_virtual_view_snapshot_update(input);
+
+        assert!(second.rebuild_model);
+        assert!(!second.entries.is_empty());
+        assert_eq!(second.viewport_x, 40.0);
+    }
+
+    #[test]
     fn snapshot_update_reuses_model_while_cached_range_covers_visible_range() {
         let entries = snapshot_entries(160);
 
@@ -486,6 +516,44 @@ mod tests {
         assert!(update.rebuild_model);
         assert!(!update.entries.is_empty());
         assert!(Arc::ptr_eq(&update.layout, &cached_layout));
+    }
+
+    #[test]
+    fn snapshot_update_relayouts_cached_size_hints_when_zoom_metrics_change() {
+        let entries = snapshot_entries(100);
+        let first = prepare_virtual_view_snapshot_update(snapshot_input(
+            Arc::clone(&entries),
+            0.0,
+            VirtualViewCache::default(),
+        ));
+        let cached_layout = Arc::clone(&first.layout);
+        let mut cache = VirtualViewCache {
+            range: first.range,
+            ..VirtualViewCache::default()
+        };
+        cache.update_layout_signature_arc(Arc::clone(&cached_layout), 64);
+        let mut input = snapshot_input(entries, 0.0, cache);
+        input.layout.rows_per_column = 2;
+        input.layout.cell_width = 148.0;
+        input.layout.row_height = 128.0;
+        input.thumbnail_size_px = 128;
+        let expected = cached_layout
+            .as_compact()
+            .relayout_with_main_layout(input.layout);
+
+        let update = prepare_virtual_view_snapshot_update(input);
+
+        assert!(update.rebuild_model);
+        assert!(!update.entries.is_empty());
+        assert!(!Arc::ptr_eq(&update.layout, &cached_layout));
+        assert!(
+            update
+                .layout
+                .as_compact()
+                .matches_layout_signature(&expected)
+        );
+        assert_eq!(update.layout.as_compact().rows_per_column, 2);
+        assert_eq!(update.layout.as_compact().cell_width, 148.0);
     }
 
     #[test]
@@ -569,6 +637,7 @@ mod tests {
             range_hint: None,
             thumbnail_size_px: 64,
             schedule_thumbnails: true,
+            force_rebuild_model: false,
             visible_count_override: None,
             cache: VirtualViewCache::default(),
             entries: Arc::from(entries),

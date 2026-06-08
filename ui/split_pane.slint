@@ -1,4 +1,4 @@
-import { ItemViewMetadataEntry, ItemViewPaintEntry } from "models.slint";
+import { ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry } from "models.slint";
 
 export component SplitPaneView inherits Rectangle {
     in property <bool> dark;
@@ -7,6 +7,17 @@ export component SplitPaneView inherits Rectangle {
     in property <image> item-view-raster-layer;
     in property <float> item-view-raster-width: 1;
     in property <float> item-view-raster-height: 1;
+    in property <image> item-view-file-icon;
+    in property <image> item-view-folder-icon;
+    in property <image> item-view-image-icon;
+    in property <image> item-view-video-icon;
+    in property <image> item-view-audio-icon;
+    in property <image> item-view-archive-icon;
+    in property <image> item-view-pdf-icon;
+    in property <image> item-view-text-icon;
+    in property <image> item-view-code-icon;
+    in property <image> item-view-executable-icon;
+    in property <[ItemViewThumbnailEntry]> thumbnails;
     in property <[ItemViewMetadataEntry]> metadata;
     in property <int> virtual-start-column;
     in property <int> virtual-start-row;
@@ -119,6 +130,37 @@ export component SplitPaneView inherits Rectangle {
     function stop-smooth-scroll() {
         root.smooth-scroll-active = false;
         root.paint-viewport-x = root.viewport-x;
+    }
+
+    function fallback-icon-source(kind: int) -> image {
+        if (kind == 1) {
+            return root.item-view-folder-icon;
+        }
+        if (kind == 2) {
+            return root.item-view-image-icon;
+        }
+        if (kind == 3) {
+            return root.item-view-video-icon;
+        }
+        if (kind == 4) {
+            return root.item-view-audio-icon;
+        }
+        if (kind == 5) {
+            return root.item-view-archive-icon;
+        }
+        if (kind == 6) {
+            return root.item-view-pdf-icon;
+        }
+        if (kind == 7) {
+            return root.item-view-text-icon;
+        }
+        if (kind == 8) {
+            return root.item-view-code-icon;
+        }
+        if (kind == 9) {
+            return root.item-view-executable-icon;
+        }
+        return root.item-view-file-icon;
     }
 
     function stable-viewport-x(raw: float) -> float {
@@ -390,6 +432,25 @@ export component SplitPaneView inherits Rectangle {
                     width: max(1px, root.item-view-raster-width * 1px);
                     height: max(1px, root.item-view-raster-height * 1px);
                     source: root.item-view-raster-layer;
+                }
+
+                for paint[index] in root.paint: Image {
+                    visible: paint.thumbnail_state != 2;
+                    x: root.preview-padding + paint.x * 1px - root.paint-viewport-x * 1px + root.media-x;
+                    y: root.preview-padding + paint.y * 1px + root.media-y;
+                    width: root.media-width;
+                    height: root.media-height;
+                    source: root.fallback-icon-source(paint.media_kind);
+                    image-fit: contain;
+                }
+
+                for thumbnail[index] in root.thumbnails: Image {
+                    x: root.preview-padding + thumbnail.x * 1px - root.paint-viewport-x * 1px + root.media-x;
+                    y: root.preview-padding + thumbnail.y * 1px + root.media-y;
+                    width: root.media-width;
+                    height: root.media-height;
+                    source: thumbnail.media;
+                    image-fit: contain;
                 }
 
                 for paint[index] in root.paint: Text {

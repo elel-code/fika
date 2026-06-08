@@ -8,6 +8,8 @@ export struct ItemViewEntry {
 
 export struct ItemViewPaintEntry {
     name: string,
+    thumbnail_state: int,
+    media_kind: int,
     x: float,
     y: float,
     width: float,
@@ -24,6 +26,12 @@ export struct ItemViewMetadataEntry {
     line_height: float,
     font_size: float,
     is_group: bool,
+}
+
+export struct ItemViewThumbnailEntry {
+    media: image,
+    x: float,
+    y: float,
 }
 
 export struct PlaceEntry {
@@ -89,6 +97,17 @@ export struct PaneViewData {
     item_view_raster_layer: image,
     item_view_raster_width: float,
     item_view_raster_height: float,
+    item_view_file_icon: image,
+    item_view_folder_icon: image,
+    item_view_image_icon: image,
+    item_view_video_icon: image,
+    item_view_audio_icon: image,
+    item_view_archive_icon: image,
+    item_view_pdf_icon: image,
+    item_view_text_icon: image,
+    item_view_code_icon: image,
+    item_view_executable_icon: image,
+    thumbnails: [ItemViewThumbnailEntry],
     metadata: [ItemViewMetadataEntry],
     entry_count: int,
     virtual_start_column: int,

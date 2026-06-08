@@ -7,8 +7,8 @@ use crate::app::state::AppState;
 use crate::app::thumbnail_pipeline::{
     ThumbnailScheduleEntry, ThumbnailScheduleRow, thumbnail_schedule_batch_for_pane,
 };
+use crate::app::zoom::icon_size_for_zoom_level;
 use crate::fs::thumbnails;
-use slint::Model;
 use std::cell::RefCell;
 use std::io;
 use std::ops::Range;
@@ -20,43 +20,41 @@ pub(crate) const ICON_SIZE_UPDATE_INTERVAL: Duration = Duration::from_millis(300
 pub(crate) const RESOLVE_ALL_ITEMS_LIMIT: usize = 500;
 pub(crate) const READ_AHEAD_PAGES: usize = 5;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThumbnailScheduleScope {
+    VisibleOnly,
+    VisibleAndReadAhead,
+}
+
 pub(crate) fn thumbnail_size_px(ui: &AppWindow) -> u32 {
     thumbnail_size_px_for_zoom_level(ui.get_icon_zoom_level())
 }
 
 pub(crate) fn thumbnail_size_px_for_zoom_level(zoom_level: i32) -> u32 {
-    match zoom_level {
-        0 => 64,
-        1 => 80,
-        2 => 104,
-        3 => 128,
-        _ => 160,
-    }
+    icon_size_for_zoom_level(zoom_level)
 }
 
-pub(crate) fn schedule_thumbnail_roles_for_visible_panes(
-    ui: &AppWindow,
-    state: &Rc<RefCell<AppState>>,
-    bridge: &AsyncBridge,
-) {
-    let slots = ui.get_pane_slots();
-    if slots.row_count() == 0 {
-        schedule_thumbnail_roles_for_slot(ui, state, bridge, 0);
-        return;
-    }
-
-    for row in 0..slots.row_count() {
-        if let Some(pane) = slots.row_data(row) {
-            schedule_thumbnail_roles_for_slot(ui, state, bridge, pane.slot);
-        }
-    }
-}
-
-pub(crate) fn schedule_thumbnail_roles_for_slot(
+pub(crate) fn schedule_visible_thumbnail_roles_for_slot(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     slot: i32,
+) {
+    schedule_thumbnail_roles_for_slot_with_scope(
+        ui,
+        state,
+        bridge,
+        slot,
+        ThumbnailScheduleScope::VisibleOnly,
+    );
+}
+
+fn schedule_thumbnail_roles_for_slot_with_scope(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+    scope: ThumbnailScheduleScope,
 ) {
     let size_px = thumbnail_size_px(ui);
     let (pane_id, virtual_start_index, visible_range, maximum_visible_items, entries) = {
@@ -83,7 +81,7 @@ pub(crate) fn schedule_thumbnail_roles_for_slot(
         )
     };
 
-    schedule_thumbnail_roles_for_entries(
+    schedule_thumbnail_roles_for_entries_with_scope(
         state,
         bridge,
         pane_id,
@@ -92,6 +90,7 @@ pub(crate) fn schedule_thumbnail_roles_for_slot(
         visible_range,
         maximum_visible_items,
         size_px,
+        scope,
     );
 }
 
@@ -108,11 +107,39 @@ pub(crate) fn schedule_thumbnail_roles_for_entries<T>(
 ) where
     T: ThumbnailScheduleRow,
 {
-    let ordered_indexes = indexes_to_resolve_for_slice(
+    schedule_thumbnail_roles_for_entries_with_scope(
+        state,
+        bridge,
+        pane_id,
         entries,
         virtual_start_index,
         visible_range,
         maximum_visible_items,
+        size_px,
+        ThumbnailScheduleScope::VisibleAndReadAhead,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn schedule_thumbnail_roles_for_entries_with_scope<T>(
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    pane_id: u64,
+    entries: &[T],
+    virtual_start_index: usize,
+    visible_range: Range<usize>,
+    maximum_visible_items: usize,
+    size_px: u32,
+    scope: ThumbnailScheduleScope,
+) where
+    T: ThumbnailScheduleRow,
+{
+    let ordered_indexes = indexes_to_resolve_for_slice_with_scope(
+        entries,
+        virtual_start_index,
+        visible_range,
+        maximum_visible_items,
+        scope,
     );
     if ordered_indexes.is_empty() {
         return;
@@ -156,11 +183,57 @@ pub(crate) fn current_pane_visible_range(pane: &PaneState) -> Range<usize> {
         .unwrap_or(0..0)
 }
 
+#[cfg(test)]
 pub(crate) fn indexes_to_resolve_for_slice<T: ThumbnailScheduleRow>(
     entries: &[T],
     virtual_start_index: usize,
     visible_range: Range<usize>,
     maximum_visible_items: usize,
+) -> Vec<usize> {
+    indexes_to_resolve_for_slice_with_scope(
+        entries,
+        virtual_start_index,
+        visible_range,
+        maximum_visible_items,
+        ThumbnailScheduleScope::VisibleAndReadAhead,
+    )
+}
+
+fn indexes_to_resolve_for_slice_with_scope<T: ThumbnailScheduleRow>(
+    entries: &[T],
+    virtual_start_index: usize,
+    visible_range: Range<usize>,
+    maximum_visible_items: usize,
+    scope: ThumbnailScheduleScope,
+) -> Vec<usize> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+
+    let entry_count = virtual_start_index.saturating_add(entries.len());
+    let visible_first = visible_range.start.min(entry_count);
+    let visible_last_exclusive = visible_range.end.min(entry_count).max(visible_first);
+    let mut indexes =
+        visible_indexes_to_resolve_for_slice(entries, virtual_start_index, visible_range.clone());
+    match scope {
+        ThumbnailScheduleScope::VisibleOnly => indexes,
+        ThumbnailScheduleScope::VisibleAndReadAhead => {
+            indexes.extend(
+                indexes_to_resolve(entry_count, visible_range, maximum_visible_items)
+                    .into_iter()
+                    .filter(|index| *index < visible_first || *index >= visible_last_exclusive)
+                    .filter_map(|index| index.checked_sub(virtual_start_index))
+                    .filter(|&index| index < entries.len()),
+            );
+            indexes
+        }
+    }
+}
+
+pub(crate) fn visible_indexes_to_resolve_for_slice<T: ThumbnailScheduleRow>(
+    entries: &[T],
+    virtual_start_index: usize,
+    visible_range: Range<usize>,
 ) -> Vec<usize> {
     if entries.is_empty() {
         return Vec::new();
@@ -170,6 +243,7 @@ pub(crate) fn indexes_to_resolve_for_slice<T: ThumbnailScheduleRow>(
     let visible_first = visible_range.start.min(entry_count);
     let visible_last_exclusive = visible_range.end.min(entry_count).max(visible_first);
     let mut indexes = Vec::new();
+    let mut visible_dirs = Vec::new();
 
     for index in visible_first..visible_last_exclusive {
         let Some(local_index) = index.checked_sub(virtual_start_index) else {
@@ -178,29 +252,12 @@ pub(crate) fn indexes_to_resolve_for_slice<T: ThumbnailScheduleRow>(
         let Some(entry) = entries.get(local_index) else {
             continue;
         };
-        if !entry.is_dir() {
-            indexes.push(local_index);
-        }
-    }
-    for index in visible_first..visible_last_exclusive {
-        let Some(local_index) = index.checked_sub(virtual_start_index) else {
-            continue;
+        match entry.is_dir() {
+            true => visible_dirs.push(local_index),
+            false => indexes.push(local_index),
         };
-        let Some(entry) = entries.get(local_index) else {
-            continue;
-        };
-        if entry.is_dir() {
-            indexes.push(local_index);
-        }
     }
-
-    indexes.extend(
-        indexes_to_resolve(entry_count, visible_range, maximum_visible_items)
-            .into_iter()
-            .filter(|index| *index < visible_first || *index >= visible_last_exclusive)
-            .filter_map(|index| index.checked_sub(virtual_start_index))
-            .filter(|&index| index < entries.len()),
-    );
+    indexes.extend(visible_dirs);
     indexes
 }
 
@@ -379,11 +436,27 @@ mod tests {
     }
 
     #[test]
+    fn visible_indexes_to_resolve_for_slice_scans_once_with_files_before_dirs() {
+        let entries = (8..20)
+            .map(|index| TestRow {
+                path: format!("/tmp/{index}"),
+                is_dir: matches!(index, 10 | 12 | 15),
+            })
+            .collect::<Vec<_>>();
+
+        let indexes = visible_indexes_to_resolve_for_slice(&entries, 8, 10..16);
+
+        assert_eq!(indexes, vec![3, 5, 6, 2, 4, 7]);
+    }
+
+    #[test]
     fn thumbnail_size_px_tracks_zoom_levels() {
-        assert_eq!(thumbnail_size_px_for_zoom_level(0), 64);
-        assert_eq!(thumbnail_size_px_for_zoom_level(1), 80);
-        assert_eq!(thumbnail_size_px_for_zoom_level(2), 104);
-        assert_eq!(thumbnail_size_px_for_zoom_level(3), 128);
-        assert_eq!(thumbnail_size_px_for_zoom_level(4), 160);
+        assert_eq!(thumbnail_size_px_for_zoom_level(0), 16);
+        assert_eq!(thumbnail_size_px_for_zoom_level(1), 22);
+        assert_eq!(thumbnail_size_px_for_zoom_level(2), 32);
+        assert_eq!(thumbnail_size_px_for_zoom_level(3), 48);
+        assert_eq!(thumbnail_size_px_for_zoom_level(4), 64);
+        assert_eq!(thumbnail_size_px_for_zoom_level(5), 80);
+        assert_eq!(thumbnail_size_px_for_zoom_level(16), 256);
     }
 }

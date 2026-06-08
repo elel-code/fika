@@ -37,7 +37,9 @@ pub(crate) struct CompactItemViewLayout {
     pub(crate) content_width: f32,
     pub(crate) scroll_max_x: f32,
     text_width_reserved: f32,
-    pub(crate) item_widths: Arc<[f32]>,
+    title_font_size: f32,
+    text_width_units: Arc<[f32]>,
+    column_text_width_units: Arc<[f32]>,
     pub(crate) column_widths: Arc<[f32]>,
     pub(crate) column_offsets: Arc<[f32]>,
 }
@@ -279,10 +281,38 @@ impl CompactItemViewLayout {
             content_width: 1.0,
             scroll_max_x: 0.0,
             text_width_reserved: 0.0,
-            item_widths: Arc::from([]),
+            title_font_size: 1.0,
+            text_width_units: Arc::from([]),
+            column_text_width_units: Arc::from([]),
             column_widths: Arc::from([]),
             column_offsets: Arc::from([]),
         }
+    }
+
+    pub(crate) fn relayout_with_main_layout(&self, layout: MainItemViewLayout) -> Self {
+        let rows_per_column = layout.rows_per_column.max(1);
+        let column_text_width_units = if rows_per_column == self.rows_per_column {
+            Arc::clone(&self.column_text_width_units)
+        } else {
+            Arc::from(compact_item_view_column_text_width_units(
+                &self.text_width_units,
+                rows_per_column,
+            ))
+        };
+
+        compact_item_view_layout_from_cached_text_width_units(
+            layout.viewport_width,
+            Arc::clone(&self.text_width_units),
+            column_text_width_units,
+            rows_per_column,
+            layout.cell_width,
+            layout.row_height,
+            layout.padding,
+            layout.item_padding,
+            layout.media_width,
+            layout.media_text_gap,
+            layout.title_font_size,
+        )
     }
 }
 
@@ -324,7 +354,12 @@ impl ItemViewLayouter for CompactItemViewLayout {
             && same_layout_metric(self.content_width, other.content_width)
             && same_layout_metric(self.scroll_max_x, other.scroll_max_x)
             && same_layout_metric(self.text_width_reserved, other.text_width_reserved)
-            && same_layout_vec(&self.item_widths, &other.item_widths)
+            && same_layout_metric(self.title_font_size, other.title_font_size)
+            && same_layout_vec(&self.text_width_units, &other.text_width_units)
+            && same_layout_vec(
+                &self.column_text_width_units,
+                &other.column_text_width_units,
+            )
             && same_layout_vec(&self.column_widths, &other.column_widths)
             && same_layout_vec(&self.column_offsets, &other.column_offsets)
     }
@@ -434,11 +469,7 @@ impl ItemViewLayouter for CompactItemViewLayout {
             slice_index,
             main: self.column_offsets.get(column).copied().unwrap_or_default(),
             cross: self.row_y_for_index(index),
-            main_extent: self
-                .item_widths
-                .get(index)
-                .copied()
-                .unwrap_or(self.cell_width),
+            main_extent: self.item_width_for_index(index),
             cross_extent: self.row_height.max(1.0),
             text_main_extent: self.item_text_width_for_index(index),
         })
@@ -646,10 +677,24 @@ impl CompactItemViewLayout {
     }
 
     fn item_text_width_for_index(&self, index: usize) -> f32 {
-        self.item_widths
+        self.text_width_units
             .get(index)
-            .map(|width| (*width - self.text_width_reserved).max(1.0))
+            .map(|units| compact_text_width_estimate_from_units(*units, self.title_font_size))
             .unwrap_or(1.0)
+    }
+
+    fn item_width_for_index(&self, index: usize) -> f32 {
+        self.text_width_units
+            .get(index)
+            .map(|units| {
+                compact_item_view_item_width_from_text_width_units(
+                    *units,
+                    self.cell_width,
+                    self.text_width_reserved,
+                    self.title_font_size,
+                )
+            })
+            .unwrap_or(self.cell_width)
     }
 
     fn virtual_entry_ranges(
@@ -884,6 +929,46 @@ fn compact_item_view_layout_from_text_width_units(
     media_text_gap: f32,
     title_font_size: f32,
 ) -> CompactItemViewLayout {
+    let text_width_units = Arc::from(
+        text_width_units
+            .into_iter()
+            .map(|units| units.max(0.0))
+            .collect::<Vec<_>>(),
+    );
+    let rows_per_column = rows_per_column.max(1);
+    let column_text_width_units = Arc::from(compact_item_view_column_text_width_units(
+        &text_width_units,
+        rows_per_column,
+    ));
+    compact_item_view_layout_from_cached_text_width_units(
+        viewport_width,
+        text_width_units,
+        column_text_width_units,
+        rows_per_column,
+        cell_width,
+        row_height,
+        padding,
+        item_padding,
+        media_width,
+        media_text_gap,
+        title_font_size,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compact_item_view_layout_from_cached_text_width_units(
+    viewport_width: f32,
+    text_width_units: Arc<[f32]>,
+    column_text_width_units: Arc<[f32]>,
+    rows_per_column: usize,
+    cell_width: f32,
+    row_height: f32,
+    padding: f32,
+    item_padding: f32,
+    media_width: f32,
+    media_text_gap: f32,
+    title_font_size: f32,
+) -> CompactItemViewLayout {
     let viewport_width = viewport_width.max(1.0);
     let rows_per_column = rows_per_column.max(1);
     let cell_width = cell_width.max(1.0);
@@ -899,30 +984,18 @@ fn compact_item_view_layout_from_text_width_units(
     // Dolphin CompactLayout scrolls horizontally: rows fill the physical height,
     // then each completed column advances on the X axis by that column's
     // maximum item width. This mirrors Dolphin's size-hint layouter.
-    let mut item_widths = Vec::new();
-    let mut column_widths = Vec::new();
-    let mut current_column_width = cell_width;
-    for text_width_units in text_width_units {
-        let item_width = compact_item_view_item_width_from_text_width_units(
+    let mut column_widths = Vec::with_capacity(column_text_width_units.len().max(1));
+    for text_width_units in column_text_width_units.iter().copied() {
+        column_widths.push(compact_item_view_item_width_from_text_width_units(
             text_width_units,
             cell_width,
-            item_padding,
-            media_width,
-            media_text_gap,
+            text_width_reserved,
             title_font_size,
-        );
-        current_column_width = current_column_width.max(item_width);
-        item_widths.push(item_width);
-        if item_widths.len() % rows_per_column == 0 {
-            column_widths.push(current_column_width.max(1.0));
-            current_column_width = cell_width;
-        }
+        ));
     }
-    let entry_count = item_widths.len();
-    if entry_count == 0 {
+    let entry_count = text_width_units.len();
+    if column_widths.is_empty() {
         column_widths.push(cell_width);
-    } else if entry_count % rows_per_column != 0 {
-        column_widths.push(current_column_width.max(1.0));
     }
     let column_offsets = compact_item_view_column_offsets(&column_widths);
     let content_width =
@@ -939,7 +1012,9 @@ fn compact_item_view_layout_from_text_width_units(
         content_width,
         scroll_max_x,
         text_width_reserved,
-        item_widths: Arc::from(item_widths),
+        title_font_size,
+        text_width_units,
+        column_text_width_units,
         column_widths: Arc::from(column_widths),
         column_offsets: Arc::from(column_offsets),
     }
@@ -948,14 +1023,33 @@ fn compact_item_view_layout_from_text_width_units(
 fn compact_item_view_item_width_from_text_width_units(
     text_width_units: f32,
     cell_width: f32,
-    item_padding: f32,
-    media_width: f32,
-    media_text_gap: f32,
+    text_width_reserved: f32,
     title_font_size: f32,
 ) -> f32 {
     let text_width = compact_text_width_estimate_from_units(text_width_units, title_font_size);
-    let required = item_padding * 2.0 + media_width + media_text_gap + text_width;
+    let required = text_width_reserved.max(0.0) + text_width;
     required.max(cell_width).max(1.0)
+}
+
+fn compact_item_view_column_text_width_units(
+    text_width_units: &[f32],
+    rows_per_column: usize,
+) -> Vec<f32> {
+    let rows_per_column = rows_per_column.max(1);
+    if text_width_units.is_empty() {
+        return Vec::new();
+    }
+
+    let mut column_text_width_units =
+        Vec::with_capacity(text_width_units.len().div_ceil(rows_per_column));
+    for column_units in text_width_units.chunks(rows_per_column) {
+        let max_units = column_units
+            .iter()
+            .copied()
+            .fold(0.0_f32, |max_units, units| max_units.max(units));
+        column_text_width_units.push(max_units);
+    }
+    column_text_width_units
 }
 
 pub(crate) fn compact_text_width_estimate_from_units(units: f32, font_size: f32) -> f32 {
@@ -1905,11 +1999,11 @@ mod tests {
     use super::{
         AnchoredMenuGeometry, ChildBridgeGeometry, ChildMenuGeometry, ChildPopupInput,
         CompactItemViewLayout, HoverBridgeInput, ItemViewLayoutEngine, ItemViewLayoutMode,
-        ItemViewLayouter, ItemViewScrollAxis, MenuMetricsInput, PlaceDropGeometry, PopupPlacement,
-        PopupPoint, PopupRect, RootMenuGeometry, SHELL_HEADER_HEIGHT, VirtualRangeAnchor,
-        VirtualSliceGeometry, active_main_pane_width, compact_item_view_layout,
-        context_menu_metrics, inactive_main_pane_width, main_pane_bounds, place_drop_geometry,
-        search_panel_height,
+        ItemViewLayouter, ItemViewScrollAxis, MainItemViewLayout, MenuMetricsInput,
+        PlaceDropGeometry, PopupPlacement, PopupPoint, PopupRect, RootMenuGeometry,
+        SHELL_HEADER_HEIGHT, VirtualRangeAnchor, VirtualSliceGeometry, active_main_pane_width,
+        compact_item_view_layout, context_menu_metrics, inactive_main_pane_width, main_pane_bounds,
+        place_drop_geometry, search_panel_height,
     };
     use crate::app::item_view_metrics::{compact_cell_width, compact_row_height};
     use std::sync::Arc;
@@ -3955,12 +4049,14 @@ mod tests {
 
     #[test]
     fn compact_item_view_metrics_follow_dolphin_compact_formula() {
-        assert_eq!(compact_cell_width(0), 111.0);
-        assert_eq!(compact_cell_width(2), 129.0);
-        assert_eq!(compact_cell_width(4), 155.0);
-        assert_eq!(compact_row_height(2, 1), 50.0);
+        assert_eq!(compact_cell_width(0), 99.0);
+        assert_eq!(compact_cell_width(2), 115.0);
+        assert_eq!(compact_cell_width(4), 147.0);
+        assert_eq!(compact_cell_width(16), 339.0);
+        assert_eq!(compact_row_height(2, 1), 36.0);
         assert_eq!(compact_row_height(2, 3), 57.0);
-        assert_eq!(compact_row_height(4, 1), 76.0);
+        assert_eq!(compact_row_height(4, 1), 68.0);
+        assert_eq!(compact_row_height(16, 1), 260.0);
     }
 
     #[test]
@@ -4042,6 +4138,33 @@ mod tests {
         Arc::make_mut(&mut changed.column_widths)[1] += 1.0;
 
         assert!(!layout.matches_layout_signature(&changed));
+    }
+
+    #[test]
+    fn compact_item_view_layout_relayouts_cached_text_size_hints() {
+        let names = ["short", "mmmmmmmmmmmm", "tiny", "wide-wide-wide-wide", "z"];
+        let layout =
+            compact_item_view_layout(260.0, names, 2, 100.0, 24.0, 10.0, 6.0, 32.0, 8.0, 10.0);
+        let main_layout = MainItemViewLayout {
+            viewport_x: 0.0,
+            viewport_width: 320.0,
+            rows_per_column: 3,
+            cell_width: 148.0,
+            row_height: 48.0,
+            padding: 10.0,
+            item_padding: 6.0,
+            media_width: 64.0,
+            media_text_gap: 8.0,
+            title_font_size: 10.0,
+        };
+
+        let relayout = layout.relayout_with_main_layout(main_layout);
+        let rebuilt = main_layout.compact_item_view_from_names(names);
+
+        assert!(relayout.matches_layout_signature(&rebuilt));
+        assert_eq!(relayout.entry_count, layout.entry_count);
+        assert_eq!(relayout.rows_per_column, 3);
+        assert_eq!(relayout.column_widths.len(), 2);
     }
 
     #[test]

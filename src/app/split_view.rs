@@ -4,13 +4,13 @@ use crate::app::item_view_renderer::{
     ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
     ItemViewTileFrameRasterInput,
 };
-use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneTarget};
+use crate::app::pane::{ItemViewFallbackIconImages, PaneEntrySnapshot, PaneSearch, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
 use crate::{
-    AppWindow, ItemViewMetadataEntry, ItemViewPaintEntry, PaneSlotData, PaneSurfaceData,
-    PaneViewData, set_status, sync_virtual_entries_for_slot,
+    AppWindow, ItemViewMetadataEntry, ItemViewPaintEntry, ItemViewThumbnailEntry, PaneSlotData,
+    PaneSurfaceData, PaneViewData, set_status, sync_virtual_entries_for_slot,
 };
 use slint::{Image, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -367,6 +367,8 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
             item_view_metrics,
             item_view_render_geometry,
         );
+    let item_view_fallback_icons =
+        pane_slot_fallback_icon_images(ui, slot, state, item_view_render_geometry);
 
     PaneViewData {
         slot,
@@ -374,6 +376,17 @@ fn pane_view_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneViewData {
         item_view_raster_layer,
         item_view_raster_width,
         item_view_raster_height,
+        item_view_file_icon: item_view_fallback_icons.file,
+        item_view_folder_icon: item_view_fallback_icons.folder,
+        item_view_image_icon: item_view_fallback_icons.image,
+        item_view_video_icon: item_view_fallback_icons.video,
+        item_view_audio_icon: item_view_fallback_icons.audio,
+        item_view_archive_icon: item_view_fallback_icons.archive,
+        item_view_pdf_icon: item_view_fallback_icons.pdf,
+        item_view_text_icon: item_view_fallback_icons.text,
+        item_view_code_icon: item_view_fallback_icons.code,
+        item_view_executable_icon: item_view_fallback_icons.executable,
+        thumbnails: pane_slot_thumbnails(slot, state),
         metadata: pane_slot_metadata(slot, state),
         entry_count: item_view_metrics.entry_count,
         virtual_start_column: item_view_metrics.virtual_start_column,
@@ -472,6 +485,25 @@ fn pane_slot_tile_frame_raster(
             media_height: render_geometry.media_height,
         });
     (raster.image, raster.width as f32, raster.height as f32)
+}
+
+fn pane_slot_fallback_icon_images(
+    ui: &AppWindow,
+    slot: i32,
+    state: &AppState,
+    render_geometry: ItemViewRenderGeometry,
+) -> ItemViewFallbackIconImages {
+    let Some(pane) = state.panes.pane_for_slot(slot) else {
+        return ItemViewFallbackIconImages::default();
+    };
+    if pane.view.virtual_paint_entries.row_count() == 0 {
+        return ItemViewFallbackIconImages::default();
+    }
+    pane.view.fallback_icon_images(
+        raster_dimension_px(render_geometry.media_width),
+        raster_dimension_px(render_geometry.media_height),
+        ui.get_dark_mode(),
+    )
 }
 
 fn raster_dimension_px(value: f32) -> u32 {
@@ -586,6 +618,14 @@ fn pane_slot_metadata(slot: i32, state: &AppState) -> ModelRc<ItemViewMetadataEn
         .panes
         .pane_for_slot(slot)
         .map(|pane| pane.view.virtual_metadata_entries.clone())
+        .unwrap_or_default()
+}
+
+fn pane_slot_thumbnails(slot: i32, state: &AppState) -> ModelRc<ItemViewThumbnailEntry> {
+    state
+        .panes
+        .pane_for_slot(slot)
+        .map(|pane| pane.view.virtual_thumbnail_entries.clone())
         .unwrap_or_default()
 }
 
@@ -929,6 +969,8 @@ mod tests {
                     (0..visible_rows)
                         .map(|index| ItemViewPaintEntry {
                             name: format!("item-{index}").into(),
+                            thumbnail_state: 0,
+                            media_kind: 0,
                             x: index as f32 * 10.0,
                             y: 0.0,
                             width: 80.0,
@@ -940,6 +982,17 @@ mod tests {
             item_view_raster_layer: Image::default(),
             item_view_raster_width: 1.0,
             item_view_raster_height: 1.0,
+            item_view_file_icon: Image::default(),
+            item_view_folder_icon: Image::default(),
+            item_view_image_icon: Image::default(),
+            item_view_video_icon: Image::default(),
+            item_view_audio_icon: Image::default(),
+            item_view_archive_icon: Image::default(),
+            item_view_pdf_icon: Image::default(),
+            item_view_text_icon: Image::default(),
+            item_view_code_icon: Image::default(),
+            item_view_executable_icon: Image::default(),
+            thumbnails: ModelRc::default(),
             metadata: ModelRc::default(),
             entry_count,
             virtual_start_column: 0,

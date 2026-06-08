@@ -126,6 +126,7 @@ pub(crate) struct VirtualViewResult {
     pub(crate) generation: u64,
     pub(crate) thumbnail_size_px: u32,
     pub(crate) schedule_thumbnails: bool,
+    pub(crate) schedule_visible_thumbnail_roles_after_apply: bool,
     pub(crate) cell_width: f32,
     pub(crate) render_metrics: ItemViewRenderMetrics,
     pub(crate) update: VirtualViewSnapshotUpdate,
