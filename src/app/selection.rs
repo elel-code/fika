@@ -1,7 +1,7 @@
 use crate::FileEntry;
 use crate::app::item_view::SelectionRect;
 use crate::app::item_view_model::{
-    item_view_entry_matches_chooser_patterns, item_view_entry_matches_filters,
+    ItemViewModelEntry, item_view_entry_matches_chooser_patterns, item_view_entry_matches_filters,
     item_view_filters_are_identity,
 };
 use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneState};
@@ -40,7 +40,7 @@ pub(crate) fn filtered_entry_paths_for_pane(state: &AppState, pane: &PaneState) 
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .iter()
-            .map(|&index| pane.entries[index].path.clone())
+            .map(|&index| pane.entries[index].model_path_string())
             .collect();
     }
 
@@ -49,13 +49,13 @@ pub(crate) fn filtered_entry_paths_for_pane(state: &AppState, pane: &PaneState) 
         return pane
             .entries
             .iter()
-            .map(|entry| entry.path.clone())
+            .map(ItemViewModelEntry::model_path_string)
             .collect();
     }
 
     filtered_entries_for_pane(state, pane)
         .iter()
-        .map(|entry| entry.path.to_string())
+        .map(ItemViewModelEntry::model_path_string)
         .collect()
 }
 
@@ -78,7 +78,7 @@ pub(crate) fn filtered_entries_for_pane(state: &AppState, pane: &PaneState) -> V
     pane.entries
         .iter()
         .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
-        .map(PaneEntrySnapshot::to_file_entry)
+        .map(ItemViewModelEntry::model_to_file_entry)
         .collect()
 }
 
@@ -128,7 +128,7 @@ pub(crate) fn filtered_entry_at_for_pane(
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .get(index)
-            .map(|&entry_index| pane.entries[entry_index].to_file_entry());
+            .map(|&entry_index| pane.entries[entry_index].model_to_file_entry());
     }
 
     let chooser_patterns = active_chooser_patterns(state);
@@ -136,7 +136,7 @@ pub(crate) fn filtered_entry_at_for_pane(
         return pane
             .entries
             .get(index)
-            .map(PaneEntrySnapshot::to_file_entry);
+            .map(ItemViewModelEntry::model_to_file_entry);
     }
 
     let query = pane.search.query.to_ascii_lowercase();
@@ -144,7 +144,7 @@ pub(crate) fn filtered_entry_at_for_pane(
         .iter()
         .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
         .nth(index)
-        .map(PaneEntrySnapshot::to_file_entry)
+        .map(ItemViewModelEntry::model_to_file_entry)
 }
 
 pub(crate) fn filtered_entry_at(state: &AppState, index: usize) -> Option<FileEntry> {
@@ -170,20 +170,20 @@ pub(crate) fn rebuild_visible_entry_index_for_slot(
             ..FilteredEntrySummary::default()
         };
         for entry in pane.entries.iter() {
-            if entry.is_dir {
+            if entry.model_is_dir() {
                 summary.folders += 1;
             } else {
                 summary.files += 1;
             }
-            summary.has_locations |= !entry.location.is_empty();
+            summary.has_locations |= entry.model_has_location();
             if let Some(paths) = summary.visible_paths.as_mut() {
-                paths.push(entry.path.clone());
+                paths.push(entry.model_path_string());
             }
         }
         pane.search.visible_entries_have_locations = summary.has_locations;
         if summary.has_locations {
             let groups =
-                location_group_labels(pane.entries.iter().map(|entry| entry.location.as_str()));
+                location_group_labels(pane.entries.iter().map(ItemViewModelEntry::model_location));
             pane.search.visible_location_groups = Some(Arc::from(groups));
         }
         return summary;
@@ -203,16 +203,16 @@ pub(crate) fn rebuild_visible_entry_index_for_slot(
         })
     {
         summary.count += 1;
-        if entry.is_dir {
+        if entry.model_is_dir() {
             summary.folders += 1;
         } else {
             summary.files += 1;
         }
-        summary.has_locations |= !entry.location.is_empty();
+        summary.has_locations |= entry.model_has_location();
         if let Some(paths) = summary.visible_paths.as_mut() {
-            paths.push(entry.path.clone());
+            paths.push(entry.model_path_string());
         }
-        locations.push(entry.location.clone());
+        locations.push(entry.model_location().to_string());
         indices.push(index);
     }
 
@@ -262,14 +262,14 @@ pub(crate) fn filtered_entry_summary_for_pane(
         .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
     {
         summary.count += 1;
-        if entry.is_dir {
+        if entry.model_is_dir() {
             summary.folders += 1;
         } else {
             summary.files += 1;
         }
-        summary.has_locations |= !entry.location.is_empty();
+        summary.has_locations |= entry.model_has_location();
         if let Some(paths) = summary.visible_paths.as_mut() {
-            paths.push(entry.path.clone());
+            paths.push(entry.model_path_string());
         }
     }
 
@@ -303,14 +303,14 @@ pub(crate) fn filtered_entries_range_for_slot(
             .get(range.start..end)
             .unwrap_or(&[])
             .iter()
-            .map(|&index| pane.entries[index].to_file_entry())
+            .map(|&index| pane.entries[index].model_to_file_entry())
             .collect()
     } else if filters_are_identity(&pane.search, &chooser_patterns) {
         pane.entries
             .get(range.start..range.end.min(pane.entries.len()))
             .unwrap_or(&[])
             .iter()
-            .map(PaneEntrySnapshot::to_file_entry)
+            .map(ItemViewModelEntry::model_to_file_entry)
             .collect()
     } else {
         let query = pane.search.query.to_ascii_lowercase();
@@ -319,7 +319,7 @@ pub(crate) fn filtered_entries_range_for_slot(
             .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
             .skip(range.start)
             .take(range.end.saturating_sub(range.start))
-            .map(PaneEntrySnapshot::to_file_entry)
+            .map(ItemViewModelEntry::model_to_file_entry)
             .collect()
     };
 
@@ -391,7 +391,7 @@ fn visible_entry_location_at_for_pane(
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
         return indices
             .get(visible_index)
-            .map(|&entry_index| pane.entries[entry_index].location.clone());
+            .map(|&entry_index| pane.entries[entry_index].model_location().to_string());
     }
 
     let chooser_patterns = active_chooser_patterns(state);
@@ -399,7 +399,7 @@ fn visible_entry_location_at_for_pane(
         return pane
             .entries
             .get(visible_index)
-            .map(|entry| entry.location.clone());
+            .map(|entry| entry.model_location().to_string());
     }
 
     let query = pane.search.query.to_ascii_lowercase();
@@ -407,7 +407,7 @@ fn visible_entry_location_at_for_pane(
         .iter()
         .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
         .nth(visible_index)
-        .map(|entry| entry.location.clone())
+        .map(|entry| entry.model_location().to_string())
 }
 
 fn search_group_label(location: &str) -> String {
@@ -517,7 +517,7 @@ pub(crate) fn selection_range_paths_filtered_for_slot(
     let mut range = Vec::new();
 
     for entry in visible_entry_iter_for_slot(state, slot) {
-        let path = entry.path.as_str();
+        let path = entry.model_path();
         let is_anchor = path == anchor;
         let is_target = path == target;
 
@@ -551,7 +551,7 @@ pub(crate) fn selection_rect_paths(entries: &[FileEntry], rect: SelectionRect) -
         .enumerate()
         .filter_map(|(index, entry)| {
             if rect.intersects_index(index) {
-                Some(entry.path.to_string())
+                Some(entry.model_path_string())
             } else {
                 None
             }
@@ -574,7 +574,7 @@ pub(crate) fn selection_rect_paths_filtered_for_slot(
 
     for (visible_index, entry) in visible_entries_range_iter_for_slot(state, slot, visible_range) {
         if rect.intersects_index(visible_index) {
-            selected.push(entry.path.to_string());
+            selected.push(entry.model_path_string());
         }
     }
 

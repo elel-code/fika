@@ -1,13 +1,57 @@
-use crate::FileEntry;
+use crate::app::item_view_renderer::ItemViewMetadataSource;
 use crate::app::pane::PaneEntrySnapshot;
+use crate::fs::entries::RawFileEntry;
+use crate::{FileEntry, ItemViewEntry};
 
 pub(crate) trait ItemViewModelEntry {
     fn model_name(&self) -> &str;
     fn model_path(&self) -> &str;
+    fn model_group(&self) -> &str;
+    fn model_location(&self) -> &str;
+    fn model_kind(&self) -> &str;
+    fn model_size(&self) -> &str;
     fn model_is_dir(&self) -> bool;
     fn model_size_bytes(&self) -> f32;
+    fn model_modified(&self) -> &str;
     fn model_modified_age_days(&self) -> i32;
     fn model_name_width_units(&self) -> f32;
+
+    fn model_has_location(&self) -> bool {
+        !self.model_location().is_empty()
+    }
+
+    fn model_path_string(&self) -> String {
+        self.model_path().to_string()
+    }
+
+    fn model_to_file_entry(&self) -> FileEntry {
+        FileEntry {
+            name: self.model_name().into(),
+            path: self.model_path().into(),
+            group: self.model_group().into(),
+            location: self.model_location().into(),
+            kind: self.model_kind().into(),
+            size: self.model_size().into(),
+            size_bytes: self.model_size_bytes(),
+            modified: self.model_modified().into(),
+            modified_age_days: self.model_modified_age_days(),
+            is_dir: self.model_is_dir(),
+        }
+    }
+
+    fn model_to_item_view_entry(&self) -> ItemViewEntry {
+        ItemViewEntry {
+            name: self.model_name().into(),
+            path: self.model_path().into(),
+            is_dir: self.model_is_dir(),
+            thumbnail_state: 0,
+            media_token: 0,
+        }
+    }
+
+    fn model_metadata_source(&self) -> ItemViewMetadataSource {
+        ItemViewMetadataSource::new(self.model_group(), self.model_location())
+    }
 }
 
 impl ItemViewModelEntry for PaneEntrySnapshot {
@@ -19,12 +63,32 @@ impl ItemViewModelEntry for PaneEntrySnapshot {
         self.path.as_str()
     }
 
+    fn model_group(&self) -> &str {
+        self.group.as_str()
+    }
+
+    fn model_location(&self) -> &str {
+        self.location.as_str()
+    }
+
+    fn model_kind(&self) -> &str {
+        self.kind.as_str()
+    }
+
+    fn model_size(&self) -> &str {
+        self.size.as_str()
+    }
+
     fn model_is_dir(&self) -> bool {
         self.is_dir
     }
 
     fn model_size_bytes(&self) -> f32 {
         self.size_bytes
+    }
+
+    fn model_modified(&self) -> &str {
+        self.modified.as_str()
     }
 
     fn model_modified_age_days(&self) -> i32 {
@@ -45,12 +109,78 @@ impl ItemViewModelEntry for FileEntry {
         self.path.as_str()
     }
 
+    fn model_group(&self) -> &str {
+        self.group.as_str()
+    }
+
+    fn model_location(&self) -> &str {
+        self.location.as_str()
+    }
+
+    fn model_kind(&self) -> &str {
+        self.kind.as_str()
+    }
+
+    fn model_size(&self) -> &str {
+        self.size.as_str()
+    }
+
     fn model_is_dir(&self) -> bool {
         self.is_dir
     }
 
     fn model_size_bytes(&self) -> f32 {
         self.size_bytes
+    }
+
+    fn model_modified(&self) -> &str {
+        self.modified.as_str()
+    }
+
+    fn model_modified_age_days(&self) -> i32 {
+        self.modified_age_days
+    }
+
+    fn model_name_width_units(&self) -> f32 {
+        crate::app::geometry::compact_text_width_units(self.name.as_str())
+    }
+}
+
+impl ItemViewModelEntry for RawFileEntry {
+    fn model_name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn model_path(&self) -> &str {
+        self.path.as_str()
+    }
+
+    fn model_group(&self) -> &str {
+        self.group.as_str()
+    }
+
+    fn model_location(&self) -> &str {
+        self.location.as_str()
+    }
+
+    fn model_kind(&self) -> &str {
+        self.kind.as_str()
+    }
+
+    fn model_size(&self) -> &str {
+        self.size.as_str()
+    }
+
+    fn model_is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    fn model_size_bytes(&self) -> f32 {
+        self.size_bytes as f32
+    }
+
+    fn model_modified(&self) -> &str {
+        self.modified.as_str()
     }
 
     fn model_modified_age_days(&self) -> i32 {
@@ -222,6 +352,59 @@ mod tests {
         }
     }
 
+    fn raw_entry(name: &str, path: &str, location: &str) -> RawFileEntry {
+        RawFileEntry {
+            name: name.to_string(),
+            path: path.to_string(),
+            group: "Current folder".to_string(),
+            location: location.to_string(),
+            kind: "File".to_string(),
+            size: "2 KB".to_string(),
+            size_bytes: 2048,
+            modified: "Yesterday".to_string(),
+            modified_age_days: 1,
+            is_dir: false,
+        }
+    }
+
+    #[test]
+    fn item_view_model_trait_projects_complete_entry_rows() {
+        let raw = raw_entry("draft.md", "/tmp/docs/draft.md", "docs");
+        let snapshot = PaneEntrySnapshot::from_model(&raw);
+        let file = snapshot.model_to_file_entry();
+        let item = raw.model_to_item_view_entry();
+        let metadata = snapshot.model_metadata_source();
+
+        assert_eq!(snapshot.model_name(), "draft.md");
+        assert_eq!(snapshot.model_path(), "/tmp/docs/draft.md");
+        assert_eq!(snapshot.model_group(), "Current folder");
+        assert_eq!(snapshot.model_location(), "docs");
+        assert_eq!(snapshot.model_kind(), "File");
+        assert_eq!(snapshot.model_size(), "2 KB");
+        assert_eq!(snapshot.model_size_bytes(), 2048.0);
+        assert_eq!(snapshot.model_modified(), "Yesterday");
+        assert_eq!(snapshot.model_modified_age_days(), 1);
+        assert!(!snapshot.model_is_dir());
+        assert_eq!(
+            snapshot.model_name_width_units(),
+            raw.model_name_width_units()
+        );
+
+        assert_eq!(file.name, "draft.md");
+        assert_eq!(file.path, "/tmp/docs/draft.md");
+        assert_eq!(file.group, "Current folder");
+        assert_eq!(file.location, "docs");
+        assert_eq!(file.size_bytes, 2048.0);
+        assert_eq!(file.modified_age_days, 1);
+        assert_eq!(item.name, "draft.md");
+        assert_eq!(item.path, "/tmp/docs/draft.md");
+        assert!(!item.is_dir);
+        assert_eq!(item.thumbnail_state, 0);
+        assert_eq!(item.media_token, 0);
+        assert_eq!(metadata.group, "Current folder");
+        assert_eq!(metadata.location, "docs");
+    }
+
     #[test]
     fn item_view_model_filters_work_for_file_entry_without_snapshot_conversion() {
         let image = file_entry("photo.PNG", "/tmp/photo.PNG", false);
@@ -270,5 +453,22 @@ mod tests {
                 "{name} should consume item_view_model filters instead of owning duplicate file-model predicates"
             );
         }
+    }
+
+    #[test]
+    fn snapshot_row_projection_uses_model_trait_defaults() {
+        let pane = include_str!("pane.rs");
+        let selection = include_str!("selection.rs");
+        let main = include_str!("../main.rs");
+
+        assert!(
+            !pane.contains("fn to_file_entry")
+                && !pane.contains("fn to_item_view_entry")
+                && pane.contains("fn from_model(entry: &impl ItemViewModelEntry) -> Self")
+                && selection.contains("model_to_file_entry")
+                && main.contains("model_metadata_source")
+                && main.contains("model_to_item_view_entry"),
+            "PaneEntrySnapshot should not own concrete Slint row projection; callers should use ItemViewModelEntry defaults"
+        );
     }
 }

@@ -269,12 +269,12 @@ fn annotate_snapshot_location_groups(
         .checked_sub(1)
         .and_then(|index| snapshot_visible_entry_location_at(input, index));
     for entry in entries {
-        if previous_location.as_deref() != Some(entry.location.as_str()) {
-            entry.group = search_group_label(entry.location.as_str());
+        if previous_location.as_deref() != Some(entry.model_location()) {
+            entry.group = search_group_label(entry.model_location());
         } else {
             entry.group.clear();
         }
-        previous_location = Some(entry.location.clone());
+        previous_location = Some(entry.model_location().to_string());
     }
 }
 
@@ -285,14 +285,14 @@ fn snapshot_visible_entry_location_at(
     if let Some(indices) = input.visible_entry_indices.as_ref() {
         return indices
             .get(visible_index)
-            .map(|&entry_index| input.entries[entry_index].location.clone());
+            .map(|&entry_index| input.entries[entry_index].model_location().to_string());
     }
 
     if snapshot_filters_are_identity(input) {
         return input
             .entries
             .get(visible_index)
-            .map(|entry| entry.location.clone());
+            .map(|entry| entry.model_location().to_string());
     }
 
     input
@@ -300,7 +300,7 @@ fn snapshot_visible_entry_location_at(
         .iter()
         .filter(|entry| snapshot_matches_entry_filters(entry, input))
         .nth(visible_index)
-        .map(|entry| entry.location.clone())
+        .map(|entry| entry.model_location().to_string())
 }
 
 fn search_group_label(location: &str) -> String {
@@ -596,7 +596,7 @@ mod tests {
         let mut entries = update
             .entries
             .iter()
-            .map(PaneEntrySnapshot::to_item_view_entry)
+            .map(ItemViewModelEntry::model_to_item_view_entry)
             .collect::<Vec<_>>();
         let input = ItemViewRenderPlanInput {
             cell_width: update.layout.layout_metrics().cell_width,

@@ -2,6 +2,7 @@ use crate::app::geometry::{
     ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter, compact_text_width_units,
 };
 use crate::app::item_view::ItemViewInputState;
+use crate::app::item_view_model::ItemViewModelEntry;
 #[cfg(test)]
 use crate::app::item_view_renderer::ItemViewMediaSource;
 use crate::app::item_view_renderer::{
@@ -101,7 +102,7 @@ impl PaneState {
     }
 
     pub(crate) fn set_entries(&mut self, entries: Arc<[PaneEntrySnapshot]>) {
-        let has_locations = entries.iter().any(|entry| !entry.location.is_empty());
+        let has_locations = entries.iter().any(ItemViewModelEntry::model_has_location);
         self.set_entries_with_location_state(entries, has_locations);
     }
 
@@ -248,73 +249,27 @@ pub(crate) struct PaneEntrySnapshot {
 impl PaneEntrySnapshot {
     #[cfg(test)]
     pub(crate) fn from_entry(entry: &FileEntry) -> Self {
-        let name = entry.name.to_string();
+        Self::from_model(entry)
+    }
+
+    pub(crate) fn from_model(entry: &impl ItemViewModelEntry) -> Self {
         Self {
-            name_width_units: compact_text_width_units(&name),
-            name,
-            path: entry.path.to_string(),
-            group: entry.group.to_string(),
-            location: entry.location.to_string(),
-            kind: entry.kind.to_string(),
-            size: entry.size.to_string(),
-            size_bytes: entry.size_bytes,
-            modified: entry.modified.to_string(),
-            modified_age_days: entry.modified_age_days,
-            is_dir: entry.is_dir,
+            name_width_units: entry.model_name_width_units(),
+            name: entry.model_name().to_string(),
+            path: entry.model_path().to_string(),
+            group: entry.model_group().to_string(),
+            location: entry.model_location().to_string(),
+            kind: entry.model_kind().to_string(),
+            size: entry.model_size().to_string(),
+            size_bytes: entry.model_size_bytes(),
+            modified: entry.model_modified().to_string(),
+            modified_age_days: entry.model_modified_age_days(),
+            is_dir: entry.model_is_dir(),
         }
     }
 
     pub(crate) fn from_raw(entry: RawFileEntry) -> Self {
-        let RawFileEntry {
-            name,
-            path,
-            group,
-            location,
-            kind,
-            size,
-            size_bytes,
-            modified,
-            modified_age_days,
-            is_dir,
-        } = entry;
-        Self {
-            name_width_units: compact_text_width_units(&name),
-            name,
-            path,
-            group,
-            location,
-            kind,
-            size,
-            size_bytes: size_bytes as f32,
-            modified,
-            modified_age_days,
-            is_dir,
-        }
-    }
-
-    pub(crate) fn to_file_entry(&self) -> FileEntry {
-        FileEntry {
-            name: self.name.as_str().into(),
-            path: self.path.as_str().into(),
-            group: self.group.as_str().into(),
-            location: self.location.as_str().into(),
-            kind: self.kind.as_str().into(),
-            size: self.size.as_str().into(),
-            size_bytes: self.size_bytes,
-            modified: self.modified.as_str().into(),
-            modified_age_days: self.modified_age_days,
-            is_dir: self.is_dir,
-        }
-    }
-
-    pub(crate) fn to_item_view_entry(&self) -> ItemViewEntry {
-        ItemViewEntry {
-            name: self.name.as_str().into(),
-            path: self.path.as_str().into(),
-            is_dir: self.is_dir,
-            thumbnail_state: 0,
-            media_token: 0,
-        }
+        Self::from_model(&entry)
     }
 }
 
@@ -326,7 +281,7 @@ pub(crate) struct PreparedDirectoryEntries {
 
 impl PreparedDirectoryEntries {
     pub(crate) fn new(entries: Vec<PaneEntrySnapshot>) -> Self {
-        let has_locations = entries.iter().any(|entry| !entry.location.is_empty());
+        let has_locations = entries.iter().any(ItemViewModelEntry::model_has_location);
         Self {
             entries: entries.into(),
             has_locations,
@@ -1712,7 +1667,7 @@ mod tests {
             .focused()
             .entries
             .iter()
-            .map(PaneEntrySnapshot::to_item_view_entry)
+            .map(ItemViewModelEntry::model_to_item_view_entry)
             .collect();
         update_pane_item_view_entries_model(
             &mut panes.focused_mut().view,
@@ -1863,7 +1818,7 @@ mod tests {
         let mut pane = PaneState::new(PathBuf::from("/tmp"));
         pane.view.virtual_view = cache_for_layout(4..12, 64, 128);
         pane.set_file_entries(vec![test_entry("one.txt", "/tmp/one.txt")]);
-        let mut rendered = pane.entries[0].to_item_view_entry();
+        let mut rendered = pane.entries[0].model_to_item_view_entry();
         rendered.media_token = 101;
         update_pane_item_view_entries_model(
             &mut pane.view,
@@ -1900,7 +1855,7 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut view,
             0,
-            vec![snapshot.to_item_view_entry()],
+            vec![snapshot.model_to_item_view_entry()],
             vec![ItemViewItemBounds {
                 slice_index: 0,
                 x: 4.0,
@@ -1957,7 +1912,7 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut view,
             0,
-            vec![snapshot.to_item_view_entry()],
+            vec![snapshot.model_to_item_view_entry()],
             vec![ItemViewItemBounds {
                 slice_index: 0,
                 x: 4.0,
@@ -2080,7 +2035,7 @@ mod tests {
         update_pane_item_view_entries_model(
             &mut view,
             0,
-            vec![snapshot.to_item_view_entry()],
+            vec![snapshot.model_to_item_view_entry()],
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -2089,7 +2044,7 @@ mod tests {
 
         assert!(!view.has_renderable_virtual_entries());
 
-        let mut rendered = snapshot.to_item_view_entry();
+        let mut rendered = snapshot.model_to_item_view_entry();
         rendered.name = "one.txt".into();
         update_pane_item_view_entries_model(
             &mut view,

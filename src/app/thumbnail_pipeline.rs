@@ -1,4 +1,5 @@
 use crate::ItemViewEntry;
+use crate::app::item_view_model::ItemViewModelEntry;
 use crate::app::item_view_renderer::ItemViewMediaSource;
 use crate::app::model_update::ItemViewRowToken;
 use crate::app::state::AppState;
@@ -162,7 +163,7 @@ pub(crate) fn path_is_in_virtual_range_for_pane(
 
         return indices[start..end]
             .iter()
-            .any(|&entry_index| pane.entries[entry_index].path.as_str() == path_text);
+            .any(|&entry_index| pane.entries[entry_index].model_path() == path_text);
     }
 
     let start = range_start.min(pane.entries.len());
@@ -173,7 +174,7 @@ pub(crate) fn path_is_in_virtual_range_for_pane(
 
     pane.entries[start..end]
         .iter()
-        .any(|entry| entry.path.as_str() == path_text)
+        .any(|entry| entry.model_path() == path_text)
 }
 
 #[cfg(test)]
@@ -632,7 +633,7 @@ mod tests {
         assert!(!state.thumbnail_failures.contains_key(&key));
         assert_eq!(state.panes.focused().entries[0].path, path);
         assert_eq!(
-            state.panes.focused().entries[0].to_file_entry(),
+            state.panes.focused().entries[0].model_to_file_entry(),
             business_entry("photo.png", path)
         );
     }
@@ -672,7 +673,7 @@ mod tests {
         assert!(state.thumbnail_failures.contains_key(&key));
         assert_eq!(state.panes.focused().entries[0].path, path);
         assert_eq!(
-            state.panes.focused().entries[0].to_file_entry(),
+            state.panes.focused().entries[0].model_to_file_entry(),
             business_entry("photo.png", path)
         );
     }

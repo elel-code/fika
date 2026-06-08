@@ -1,10 +1,11 @@
 use crate::app::async_bridge::AsyncBridge;
 use crate::app::geometry::{ItemViewLayoutEngine, ItemViewLayouter};
+use crate::app::item_view_model::ItemViewModelEntry;
 use crate::app::item_view_renderer::{
     ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
     ItemViewTileFrameRasterInput,
 };
-use crate::app::pane::{ItemViewFallbackIconImages, PaneEntrySnapshot, PaneSearch, PaneTarget};
+use crate::app::pane::{ItemViewFallbackIconImages, PaneSearch, PaneTarget};
 use crate::app::state::AppState;
 use crate::config::paths::home_dir;
 use crate::fs;
@@ -919,13 +920,14 @@ fn sync_focused_ui(
     ui.set_selected_status(selection_status_text(selected_paths));
 }
 
-pub(crate) fn directory_status_text<'a>(
-    entries: impl Iterator<Item = &'a PaneEntrySnapshot>,
-) -> String {
+pub(crate) fn directory_status_text<'a, T>(entries: impl Iterator<Item = &'a T>) -> String
+where
+    T: ItemViewModelEntry + ?Sized + 'a,
+{
     let mut folders = 0usize;
     let mut files = 0usize;
     for entry in entries {
-        if entry.is_dir {
+        if entry.model_is_dir() {
             folders += 1;
         } else {
             files += 1;

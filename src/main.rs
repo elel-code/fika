@@ -61,9 +61,10 @@ use app::item_view::{
     context_menu_entry_at_pane_point, entry_at_pane_point, item_index_at_pane_point,
     move_blank_for_slot, press_blank_for_slot, press_entry_at_pane_point, release_blank_for_slot,
 };
+use app::item_view_model::ItemViewModelEntry;
 use app::item_view_renderer::{
-    ItemViewMediaSource, ItemViewMetadataOverlaySource, ItemViewMetadataSource,
-    ItemViewRenderMetrics, ItemViewRenderPlanInput, decorate_render_plan_with_metadata,
+    ItemViewMediaSource, ItemViewMetadataOverlaySource, ItemViewRenderMetrics,
+    ItemViewRenderPlanInput, decorate_render_plan_with_metadata,
 };
 use app::model_update::{
     update_pane_item_view_entries_model, update_pane_item_view_selection_model,
@@ -4528,14 +4529,14 @@ fn apply_virtual_view_result(
     let metadata_sources = if show_location {
         snapshots
             .iter()
-            .map(|entry| ItemViewMetadataSource::new(entry.group.as_str(), entry.location.as_str()))
+            .map(ItemViewModelEntry::model_metadata_source)
             .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
     let mut entries = snapshots
-        .into_iter()
-        .map(|entry| entry.to_item_view_entry())
+        .iter()
+        .map(ItemViewModelEntry::model_to_item_view_entry)
         .collect::<Vec<_>>();
     let metadata_entries = decorate_render_plan_with_metadata(
         &mut entries,
@@ -5626,16 +5627,13 @@ fn open_path_for_slot_impl(
             set_status(ui, state, "No pane target is available");
             return;
         };
-        let entry = pane
-            .entries
-            .iter()
-            .find(|entry| entry.path.as_str() == path);
+        let entry = pane.entries.iter().find(|entry| entry.model_path() == path);
         let path = entry
-            .map(|entry| Cow::Owned(entry.path.to_string()))
+            .map(|entry| Cow::Owned(entry.model_path_string()))
             .unwrap_or_else(|| Cow::Borrowed(path));
         (
             PathBuf::from(path.as_ref()),
-            entry.map(|entry| entry.is_dir),
+            entry.map(ItemViewModelEntry::model_is_dir),
         )
     };
 
