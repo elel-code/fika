@@ -1,4 +1,4 @@
-use crate::app::pane::{PaneEntrySnapshot, PaneTarget, PreparedDirectoryEntries};
+use crate::app::pane::{PaneEntryModel, PaneTarget, PreparedDirectoryEntries};
 use crate::app::state::AppState;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -55,15 +55,16 @@ pub(crate) fn prepare_directory_load_for_target(
 }
 
 pub(crate) fn directory_entries_match(
-    current_entries: &[PaneEntrySnapshot],
+    current_entries: &PaneEntryModel,
     incoming_entries: &PreparedDirectoryEntries,
 ) -> bool {
-    current_entries == incoming_entries.entries.as_ref()
+    current_entries.as_ref() == incoming_entries.entries.as_ref()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::pane::PaneEntrySnapshot;
     use crate::fs::thumbnails;
     use std::path::Path;
 
@@ -248,7 +249,7 @@ mod tests {
         let current = test_entries(vec![("photo.png", "/tmp/current/photo.png")]);
         let incoming = test_entries(vec![("photo.png", "/tmp/current/photo.png")]);
 
-        assert!(directory_entries_match(current.entries.as_ref(), &incoming));
+        assert!(directory_entries_match(&current.entries, &incoming));
     }
 
     #[test]
@@ -256,9 +257,6 @@ mod tests {
         let current = test_entries(vec![("photo.png", "/tmp/current/photo.png")]);
         let incoming = test_entries(vec![("notes.txt", "/tmp/current/notes.txt")]);
 
-        assert!(!directory_entries_match(
-            current.entries.as_ref(),
-            &incoming
-        ));
+        assert!(!directory_entries_match(&current.entries, &incoming));
     }
 }

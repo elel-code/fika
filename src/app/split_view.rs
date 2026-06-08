@@ -1,6 +1,6 @@
 use crate::app::async_bridge::AsyncBridge;
 use crate::app::geometry::{ItemViewLayoutEngine, ItemViewLayouter};
-use crate::app::item_view_model::ItemViewModelEntry;
+use crate::app::item_view_model::{ItemViewModelEntry, item_view_model_entry_summary};
 use crate::app::item_view_renderer::{
     ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
     ItemViewTileFrameRasterInput,
@@ -924,15 +924,9 @@ pub(crate) fn directory_status_text<'a, T>(entries: impl Iterator<Item = &'a T>)
 where
     T: ItemViewModelEntry + ?Sized + 'a,
 {
-    let mut folders = 0usize;
-    let mut files = 0usize;
-    for entry in entries {
-        if entry.model_is_dir() {
-            folders += 1;
-        } else {
-            files += 1;
-        }
-    }
+    let summary = item_view_model_entry_summary(entries, false, false);
+    let folders = summary.folders;
+    let files = summary.files;
     format!("{folders} folders, {files} files")
 }
 

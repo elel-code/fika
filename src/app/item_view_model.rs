@@ -54,6 +54,106 @@ pub(crate) trait ItemViewModelEntry {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ItemViewModelEntrySummary {
+    pub(crate) count: usize,
+    pub(crate) folders: usize,
+    pub(crate) files: usize,
+    pub(crate) has_locations: bool,
+    pub(crate) paths: Option<Vec<String>>,
+    pub(crate) locations: Option<Vec<String>>,
+}
+
+impl ItemViewModelEntrySummary {
+    pub(crate) fn new(collect_paths: bool, collect_locations: bool) -> Self {
+        Self {
+            paths: collect_paths.then(Vec::new),
+            locations: collect_locations.then(Vec::new),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn push_entry(&mut self, entry: &(impl ItemViewModelEntry + ?Sized)) {
+        self.count += 1;
+        if entry.model_is_dir() {
+            self.folders += 1;
+        } else {
+            self.files += 1;
+        }
+        self.has_locations |= entry.model_has_location();
+        if let Some(paths) = self.paths.as_mut() {
+            paths.push(entry.model_path_string());
+        }
+        if let Some(locations) = self.locations.as_mut() {
+            locations.push(entry.model_location().to_string());
+        }
+    }
+}
+
+pub(crate) fn item_view_model_entry_summary<'a, T>(
+    entries: impl IntoIterator<Item = &'a T>,
+    collect_paths: bool,
+    collect_locations: bool,
+) -> ItemViewModelEntrySummary
+where
+    T: ItemViewModelEntry + ?Sized + 'a,
+{
+    let mut summary = ItemViewModelEntrySummary::new(collect_paths, collect_locations);
+    for entry in entries {
+        summary.push_entry(entry);
+    }
+    summary
+}
+
+impl<T> ItemViewModelEntry for &T
+where
+    T: ItemViewModelEntry + ?Sized,
+{
+    fn model_name(&self) -> &str {
+        (**self).model_name()
+    }
+
+    fn model_path(&self) -> &str {
+        (**self).model_path()
+    }
+
+    fn model_group(&self) -> &str {
+        (**self).model_group()
+    }
+
+    fn model_location(&self) -> &str {
+        (**self).model_location()
+    }
+
+    fn model_kind(&self) -> &str {
+        (**self).model_kind()
+    }
+
+    fn model_size(&self) -> &str {
+        (**self).model_size()
+    }
+
+    fn model_is_dir(&self) -> bool {
+        (**self).model_is_dir()
+    }
+
+    fn model_size_bytes(&self) -> f32 {
+        (**self).model_size_bytes()
+    }
+
+    fn model_modified(&self) -> &str {
+        (**self).model_modified()
+    }
+
+    fn model_modified_age_days(&self) -> i32 {
+        (**self).model_modified_age_days()
+    }
+
+    fn model_name_width_units(&self) -> f32 {
+        (**self).model_name_width_units()
+    }
+}
+
 impl ItemViewModelEntry for PaneEntrySnapshot {
     fn model_name(&self) -> &str {
         self.name.as_str()
@@ -406,6 +506,48 @@ mod tests {
     }
 
     #[test]
+    fn item_view_model_summary_collects_counts_paths_and_locations() {
+        let entries = [
+            raw_entry("docs", "/tmp/docs", "."),
+            raw_entry("draft.md", "/tmp/docs/draft.md", "docs"),
+            raw_entry("notes.txt", "/tmp/docs/notes.txt", "docs"),
+        ];
+        let mut entries = entries
+            .iter()
+            .map(PaneEntrySnapshot::from_model)
+            .collect::<Vec<_>>();
+        entries[0].is_dir = true;
+
+        let summary = item_view_model_entry_summary(entries.iter(), true, true);
+
+        assert_eq!(summary.count, 3);
+        assert_eq!(summary.folders, 1);
+        assert_eq!(summary.files, 2);
+        assert!(summary.has_locations);
+        assert_eq!(
+            summary.paths,
+            Some(vec![
+                "/tmp/docs".to_string(),
+                "/tmp/docs/draft.md".to_string(),
+                "/tmp/docs/notes.txt".to_string()
+            ])
+        );
+        assert_eq!(
+            summary.locations,
+            Some(vec![
+                ".".to_string(),
+                "docs".to_string(),
+                "docs".to_string()
+            ])
+        );
+
+        let count_only = item_view_model_entry_summary(entries.iter(), false, false);
+        assert_eq!(count_only.paths, None);
+        assert_eq!(count_only.locations, None);
+        assert_eq!(count_only.count, 3);
+    }
+
+    #[test]
     fn item_view_model_filters_work_for_file_entry_without_snapshot_conversion() {
         let image = file_entry("photo.PNG", "/tmp/photo.PNG", false);
         let directory = file_entry("Pictures", "/tmp/Pictures", true);
@@ -469,6 +611,26 @@ mod tests {
                 && main.contains("model_metadata_source")
                 && main.contains("model_to_item_view_entry"),
             "PaneEntrySnapshot should not own concrete Slint row projection; callers should use ItemViewModelEntry defaults"
+        );
+    }
+
+    #[test]
+    fn pane_entry_model_store_hides_snapshot_container_from_consumers() {
+        let pane = include_str!("pane.rs");
+        let selection = include_str!("selection.rs");
+        let virtual_view = include_str!("virtual_view.rs");
+
+        assert!(
+            pane.contains("pub(crate) struct PaneEntryModel")
+                && pane.contains("pub(crate) entries: PaneEntryModel")
+                && pane.contains("pub(crate) entries: PaneEntryModel")
+                && virtual_view.contains("pub(crate) entries: PaneEntryModel")
+                && virtual_view.contains("VirtualViewSnapshotUpdate")
+                && !virtual_view.contains("pub(crate) entries: Vec<PaneEntrySnapshot>")
+                && !virtual_view.contains("pub(crate) entries: Arc<[PaneEntrySnapshot]>")
+                && !selection.contains("Iterator<Item = &PaneEntrySnapshot>")
+                && !selection.contains("Iterator<Item = (usize, &PaneEntrySnapshot)>"),
+            "Pane entry storage should be exposed through PaneEntryModel and model-trait iterators, not concrete snapshot containers"
         );
     }
 }

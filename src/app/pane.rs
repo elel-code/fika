@@ -23,6 +23,7 @@ use crate::{
 use slint::{Image, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::ops::Deref;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -38,7 +39,7 @@ pub(crate) struct PaneState {
     pub(crate) path_input_text: String,
     pub(crate) path_focused: bool,
     pub(crate) status: String,
-    pub(crate) entries: Arc<[PaneEntrySnapshot]>,
+    pub(crate) entries: PaneEntryModel,
     pub(crate) history: PaneHistory,
     pub(crate) selection: PaneSelection,
     pub(crate) search: PaneSearch,
@@ -64,7 +65,7 @@ impl PaneState {
             current_dir,
             path_focused: false,
             status: String::new(),
-            entries: Arc::from([]),
+            entries: PaneEntryModel::default(),
             history: PaneHistory::default(),
             selection: PaneSelection::default(),
             search: PaneSearch::default(),
@@ -80,7 +81,7 @@ impl PaneState {
 
     pub(crate) fn split_snapshot(&self, id: u64) -> Self {
         let mut pane = Self::new_with_id(id, self.current_dir.clone());
-        pane.set_entries(Arc::clone(&self.entries));
+        pane.set_entries(self.entries.clone());
         pane.search = self.search.clone();
         pane.view.viewport_x = self.view.viewport_x;
         pane.view.virtual_view = self.view.virtual_view.clone();
@@ -101,14 +102,14 @@ impl PaneState {
         pane
     }
 
-    pub(crate) fn set_entries(&mut self, entries: Arc<[PaneEntrySnapshot]>) {
+    pub(crate) fn set_entries(&mut self, entries: PaneEntryModel) {
         let has_locations = entries.iter().any(ItemViewModelEntry::model_has_location);
         self.set_entries_with_location_state(entries, has_locations);
     }
 
     pub(crate) fn set_entries_with_location_state(
         &mut self,
-        entries: Arc<[PaneEntrySnapshot]>,
+        entries: PaneEntryModel,
         has_locations: bool,
     ) {
         self.entries = entries;
@@ -119,7 +120,7 @@ impl PaneState {
     }
 
     pub(crate) fn clear_entries(&mut self) {
-        self.entries = Arc::from([]);
+        self.entries = PaneEntryModel::default();
         self.search.visible_entry_indices = None;
         self.search.visible_entries_have_locations = false;
         self.search.visible_location_groups = None;
@@ -136,8 +137,8 @@ impl PaneState {
         self.view.clear_virtual_view();
     }
 
-    pub(crate) fn entry_snapshot(&self) -> Arc<[PaneEntrySnapshot]> {
-        Arc::clone(&self.entries)
+    pub(crate) fn entry_model(&self) -> PaneEntryModel {
+        self.entries.clone()
     }
 
     pub(crate) fn show_item_locations(&self) -> bool {
@@ -274,8 +275,45 @@ impl PaneEntrySnapshot {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PaneEntryModel {
+    entries: Arc<[PaneEntrySnapshot]>,
+}
+
+impl PaneEntryModel {
+    pub(crate) fn new(entries: Vec<PaneEntrySnapshot>) -> Self {
+        Self {
+            entries: Arc::from(entries),
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[PaneEntrySnapshot] {
+        self.entries.as_ref()
+    }
+}
+
+impl From<Vec<PaneEntrySnapshot>> for PaneEntryModel {
+    fn from(entries: Vec<PaneEntrySnapshot>) -> Self {
+        Self::new(entries)
+    }
+}
+
+impl Deref for PaneEntryModel {
+    type Target = [PaneEntrySnapshot];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl AsRef<[PaneEntrySnapshot]> for PaneEntryModel {
+    fn as_ref(&self) -> &[PaneEntrySnapshot] {
+        self.as_slice()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PreparedDirectoryEntries {
-    pub(crate) entries: Arc<[PaneEntrySnapshot]>,
+    pub(crate) entries: PaneEntryModel,
     pub(crate) has_locations: bool,
 }
 
@@ -1153,7 +1191,7 @@ mod tests {
                 force_rebuild_model: false,
                 visible_count_override: None,
                 cache: VirtualViewCache::default(),
-                entries: Arc::from([PaneEntrySnapshot {
+                entries: PaneEntryModel::from(vec![PaneEntrySnapshot {
                     name_width_units: compact_text_width_units("item.txt"),
                     name: "item.txt".to_string(),
                     path: "/tmp/item.txt".to_string(),

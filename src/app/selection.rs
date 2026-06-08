@@ -1,10 +1,10 @@
 use crate::FileEntry;
 use crate::app::item_view::SelectionRect;
 use crate::app::item_view_model::{
-    ItemViewModelEntry, item_view_entry_matches_chooser_patterns, item_view_entry_matches_filters,
-    item_view_filters_are_identity,
+    ItemViewModelEntry, ItemViewModelEntrySummary, item_view_entry_matches_chooser_patterns,
+    item_view_entry_matches_filters, item_view_filters_are_identity, item_view_model_entry_summary,
 };
-use crate::app::pane::{PaneEntrySnapshot, PaneSearch, PaneState};
+use crate::app::pane::{PaneSearch, PaneState};
 use crate::app::state::AppState;
 use std::ops::Range;
 use std::sync::Arc;
@@ -16,6 +16,18 @@ pub(crate) struct FilteredEntrySummary {
     pub(crate) files: usize,
     pub(crate) has_locations: bool,
     pub(crate) visible_paths: Option<Vec<String>>,
+}
+
+impl From<ItemViewModelEntrySummary> for FilteredEntrySummary {
+    fn from(summary: ItemViewModelEntrySummary) -> Self {
+        Self {
+            count: summary.count,
+            folders: summary.folders,
+            files: summary.files,
+            has_locations: summary.has_locations,
+            visible_paths: summary.paths,
+        }
+    }
 }
 
 pub(crate) fn retained_visible_paths(
@@ -164,64 +176,48 @@ pub(crate) fn rebuild_visible_entry_index_for_slot(
     if filters_are_identity(&pane.search, &chooser_patterns) {
         pane.search.visible_entry_indices = None;
         pane.search.visible_location_groups = None;
-        let mut summary = FilteredEntrySummary {
-            count: pane.entries.len(),
-            visible_paths: collect_paths.then(Vec::new),
-            ..FilteredEntrySummary::default()
-        };
-        for entry in pane.entries.iter() {
-            if entry.model_is_dir() {
-                summary.folders += 1;
-            } else {
-                summary.files += 1;
-            }
-            summary.has_locations |= entry.model_has_location();
-            if let Some(paths) = summary.visible_paths.as_mut() {
-                paths.push(entry.model_path_string());
-            }
-        }
+        let summary = item_view_model_entry_summary(pane.entries.iter(), collect_paths, true);
         pane.search.visible_entries_have_locations = summary.has_locations;
         if summary.has_locations {
-            let groups =
-                location_group_labels(pane.entries.iter().map(ItemViewModelEntry::model_location));
+            let groups = location_group_labels(
+                summary
+                    .locations
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(String::as_str),
+            );
             pane.search.visible_location_groups = Some(Arc::from(groups));
         }
-        return summary;
+        return summary.into();
     }
 
     let query = pane.search.query.to_ascii_lowercase();
-    let mut summary = FilteredEntrySummary {
-        visible_paths: collect_paths.then(Vec::new),
-        ..FilteredEntrySummary::default()
-    };
+    let mut summary = ItemViewModelEntrySummary::new(collect_paths, true);
     let mut indices = Vec::new();
-    let mut locations = Vec::new();
 
     for (index, entry) in
         pane.entries.iter().enumerate().filter(|(_, entry)| {
             matches_entry_filters(entry, &pane.search, &chooser_patterns, &query)
         })
     {
-        summary.count += 1;
-        if entry.model_is_dir() {
-            summary.folders += 1;
-        } else {
-            summary.files += 1;
-        }
-        summary.has_locations |= entry.model_has_location();
-        if let Some(paths) = summary.visible_paths.as_mut() {
-            paths.push(entry.model_path_string());
-        }
-        locations.push(entry.model_location().to_string());
+        summary.push_entry(entry);
         indices.push(index);
     }
 
     pane.search.visible_entry_indices = Some(Arc::from(indices));
     pane.search.visible_entries_have_locations = summary.has_locations;
-    pane.search.visible_location_groups = summary
-        .has_locations
-        .then(|| Arc::from(location_group_labels(locations.iter().map(String::as_str))));
-    summary
+    pane.search.visible_location_groups = summary.has_locations.then(|| {
+        Arc::from(location_group_labels(
+            summary
+                .locations
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .map(String::as_str),
+        ))
+    });
+    summary.into()
 }
 
 #[allow(dead_code)]
@@ -251,29 +247,14 @@ pub(crate) fn filtered_entry_summary_for_pane(
 ) -> FilteredEntrySummary {
     let chooser_patterns = active_chooser_patterns(state);
     let query = pane.search.query.to_ascii_lowercase();
-    let mut summary = FilteredEntrySummary {
-        visible_paths: collect_paths.then(Vec::new),
-        ..FilteredEntrySummary::default()
-    };
-
-    for entry in pane
-        .entries
-        .iter()
-        .filter(|entry| matches_entry_filters(entry, &pane.search, &chooser_patterns, &query))
-    {
-        summary.count += 1;
-        if entry.model_is_dir() {
-            summary.folders += 1;
-        } else {
-            summary.files += 1;
-        }
-        summary.has_locations |= entry.model_has_location();
-        if let Some(paths) = summary.visible_paths.as_mut() {
-            paths.push(entry.model_path_string());
-        }
-    }
-
-    summary
+    item_view_model_entry_summary(
+        pane.entries
+            .iter()
+            .filter(|entry| matches_entry_filters(*entry, &pane.search, &chooser_patterns, &query)),
+        collect_paths,
+        false,
+    )
+    .into()
 }
 
 #[cfg(test)]
@@ -455,7 +436,7 @@ fn active_chooser_patterns(state: &AppState) -> Vec<String> {
 }
 
 fn matches_entry_filters(
-    entry: &PaneEntrySnapshot,
+    entry: &(impl ItemViewModelEntry + ?Sized),
     search: &PaneSearch,
     chooser_patterns: &[String],
     query: &str,
@@ -599,7 +580,7 @@ fn selection_rect_visible_range_for_slot(
 fn visible_entries_range_iter(
     state: &AppState,
     range: Range<usize>,
-) -> Box<dyn Iterator<Item = (usize, &PaneEntrySnapshot)> + '_> {
+) -> Box<dyn Iterator<Item = (usize, &dyn ItemViewModelEntry)> + '_> {
     visible_entries_range_iter_for_slot(state, 0, range)
 }
 
@@ -607,7 +588,7 @@ fn visible_entries_range_iter_for_slot(
     state: &AppState,
     slot: i32,
     range: Range<usize>,
-) -> Box<dyn Iterator<Item = (usize, &PaneEntrySnapshot)> + '_> {
+) -> Box<dyn Iterator<Item = (usize, &dyn ItemViewModelEntry)> + '_> {
     if range.is_empty() {
         return Box::new(std::iter::empty());
     }
@@ -623,7 +604,12 @@ fn visible_entries_range_iter_for_slot(
             indices[start..end]
                 .iter()
                 .enumerate()
-                .map(move |(offset, &index)| (start + offset, &pane.entries[index])),
+                .map(move |(offset, &index)| {
+                    (
+                        start + offset,
+                        &pane.entries[index] as &dyn ItemViewModelEntry,
+                    )
+                }),
         );
     }
 
@@ -635,7 +621,7 @@ fn visible_entries_range_iter_for_slot(
             pane.entries[start..end]
                 .iter()
                 .enumerate()
-                .map(move |(offset, entry)| (start + offset, entry)),
+                .map(move |(offset, entry)| (start + offset, entry as &dyn ItemViewModelEntry)),
         );
     }
 
@@ -648,37 +634,49 @@ fn visible_entries_range_iter_for_slot(
             })
             .enumerate()
             .skip(range.start)
-            .take(range.end.saturating_sub(range.start)),
+            .take(range.end.saturating_sub(range.start))
+            .map(|(index, entry)| (index, entry as &dyn ItemViewModelEntry)),
     )
 }
 
 #[allow(dead_code)]
-fn visible_entry_iter(state: &AppState) -> Box<dyn Iterator<Item = &PaneEntrySnapshot> + '_> {
+fn visible_entry_iter(state: &AppState) -> Box<dyn Iterator<Item = &dyn ItemViewModelEntry> + '_> {
     visible_entry_iter_for_slot(state, 0)
 }
 
 fn visible_entry_iter_for_slot(
     state: &AppState,
     slot: i32,
-) -> Box<dyn Iterator<Item = &PaneEntrySnapshot> + '_> {
+) -> Box<dyn Iterator<Item = &dyn ItemViewModelEntry> + '_> {
     let Some(pane) = state.panes.pane_for_slot(slot) else {
         return Box::new(std::iter::empty());
     };
 
     if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
-        return Box::new(indices.iter().map(|&index| &pane.entries[index]));
+        return Box::new(
+            indices
+                .iter()
+                .map(|&index| &pane.entries[index] as &dyn ItemViewModelEntry),
+        );
     }
 
     let chooser_patterns = active_chooser_patterns(state);
     if filters_are_identity(&pane.search, &chooser_patterns) {
-        return Box::new(pane.entries.iter());
+        return Box::new(
+            pane.entries
+                .iter()
+                .map(|entry| entry as &dyn ItemViewModelEntry),
+        );
     }
 
     let query = pane.search.query.to_ascii_lowercase();
     Box::new(
-        pane.entries.iter().filter(move |entry| {
-            matches_entry_filters(entry, &pane.search, &chooser_patterns, &query)
-        }),
+        pane.entries
+            .iter()
+            .filter(move |entry| {
+                matches_entry_filters(entry, &pane.search, &chooser_patterns, &query)
+            })
+            .map(|entry| entry as &dyn ItemViewModelEntry),
     )
 }
 

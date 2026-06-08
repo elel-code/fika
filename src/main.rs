@@ -2616,7 +2616,7 @@ fn load_prepared_pane_directory(
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
                 pane.set_entries_with_location_state(
-                    Arc::clone(&cached_entries.entries),
+                    cached_entries.entries.clone(),
                     cached_entries.has_locations,
                 );
             }
@@ -3137,7 +3137,7 @@ fn apply_pane_directory_result(
                     unchanged = true;
                 } else {
                     pane.set_entries_with_location_state(
-                        Arc::clone(&entries.entries),
+                        entries.entries.clone(),
                         entries.has_locations,
                     );
                     if !result.preserve_view {
@@ -3457,7 +3457,7 @@ fn restore_cached_directory_entries_for_slot(
     let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
         return false;
     };
-    pane.set_entries_with_location_state(Arc::clone(&entries.entries), entries.has_locations);
+    pane.set_entries_with_location_state(entries.entries.clone(), entries.has_locations);
     true
 }
 
@@ -3674,7 +3674,7 @@ fn apply_recursive_search_result(
                     return;
                 };
                 pane.set_entries_with_location_state(
-                    Arc::clone(&entries.entries),
+                    entries.entries.clone(),
                     entries.has_locations,
                 );
             }
@@ -4263,7 +4263,7 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
                     } else {
                         pane.view.virtual_view.clone()
                     },
-                    entries: pane.entry_snapshot(),
+                    entries: pane.entry_model(),
                     visible_entry_indices: pane.search.visible_entry_indices.clone(),
                     visible_entries_have_locations: pane.search.visible_entries_have_locations,
                     visible_location_groups: pane.search.visible_location_groups.clone(),
@@ -6044,7 +6044,7 @@ mod tests {
         let entries = PreparedDirectoryEntries::new(vec![PaneEntrySnapshot::from_entry(
             &test_entry("new", "/tmp/new"),
         )]);
-        pane.set_entries_with_location_state(Arc::clone(&entries.entries), entries.has_locations);
+        pane.set_entries_with_location_state(entries.entries.clone(), entries.has_locations);
 
         assert_eq!(
             cached_virtual_viewport_sync(&mut pane, &main_layout, 0.0, 64, true, None, &[]),

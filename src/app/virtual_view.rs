@@ -5,7 +5,7 @@ use crate::app::geometry::{
 use crate::app::item_view_model::{
     ItemViewModelEntry, item_view_entry_matches_filters, item_view_filters_are_identity,
 };
-use crate::app::pane::{PaneEntrySnapshot, VirtualViewCache};
+use crate::app::pane::{PaneEntryModel, PaneEntrySnapshot, VirtualViewCache};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -18,7 +18,7 @@ pub(crate) struct VirtualViewSnapshotUpdate {
     pub(crate) range: Range<usize>,
     pub(crate) visible_range: Range<usize>,
     pub(crate) start_column: usize,
-    pub(crate) entries: Vec<PaneEntrySnapshot>,
+    pub(crate) entries: PaneEntryModel,
     pub(crate) rebuild_model: bool,
 }
 
@@ -32,7 +32,7 @@ pub(crate) struct VirtualViewSnapshotInput {
     pub(crate) force_rebuild_model: bool,
     pub(crate) visible_count_override: Option<usize>,
     pub(crate) cache: VirtualViewCache,
-    pub(crate) entries: Arc<[PaneEntrySnapshot]>,
+    pub(crate) entries: PaneEntryModel,
     pub(crate) visible_entry_indices: Option<Arc<[usize]>>,
     pub(crate) visible_entries_have_locations: bool,
     pub(crate) visible_location_groups: Option<Arc<[String]>>,
@@ -79,7 +79,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
             range: plan.range,
             visible_range: plan.visible_range,
             start_column: plan.start_column,
-            entries: Vec::new(),
+            entries: PaneEntryModel::default(),
             rebuild_model: false,
         };
     }
@@ -95,7 +95,7 @@ pub(crate) fn prepare_virtual_view_snapshot_update(
         range,
         visible_range: plan.visible_range,
         start_column,
-        entries,
+        entries: PaneEntryModel::from(entries),
         rebuild_model: true,
     }
 }
@@ -324,7 +324,7 @@ fn snapshot_filters_are_identity(input: &VirtualViewSnapshotInput) -> bool {
 }
 
 fn snapshot_matches_entry_filters(
-    entry: &PaneEntrySnapshot,
+    entry: &(impl ItemViewModelEntry + ?Sized),
     input: &VirtualViewSnapshotInput,
 ) -> bool {
     item_view_entry_matches_filters(
@@ -378,8 +378,8 @@ mod tests {
         }
     }
 
-    fn snapshot_entries(count: usize) -> Arc<[PaneEntrySnapshot]> {
-        Arc::from(
+    fn snapshot_entries(count: usize) -> PaneEntryModel {
+        PaneEntryModel::from(
             (0..count)
                 .map(|index| snapshot_test_entry(index, ""))
                 .collect::<Vec<_>>(),
@@ -387,7 +387,7 @@ mod tests {
     }
 
     fn snapshot_input(
-        entries: Arc<[PaneEntrySnapshot]>,
+        entries: PaneEntryModel,
         requested_viewport_x: f32,
         cache: VirtualViewCache,
     ) -> VirtualViewSnapshotInput {
@@ -438,7 +438,7 @@ mod tests {
         let entries = snapshot_entries(100);
 
         let first = prepare_virtual_view_snapshot_update(snapshot_input(
-            Arc::clone(&entries),
+            entries.clone(),
             0.0,
             VirtualViewCache::default(),
         ));
@@ -462,7 +462,7 @@ mod tests {
         let entries = snapshot_entries(100);
 
         let first = prepare_virtual_view_snapshot_update(snapshot_input(
-            Arc::clone(&entries),
+            entries.clone(),
             0.0,
             VirtualViewCache::default(),
         ));
@@ -486,7 +486,7 @@ mod tests {
         let entries = snapshot_entries(160);
 
         let first = prepare_virtual_view_snapshot_update(snapshot_input(
-            Arc::clone(&entries),
+            entries.clone(),
             0.0,
             VirtualViewCache::default(),
         ));
@@ -522,7 +522,7 @@ mod tests {
     fn snapshot_update_relayouts_cached_size_hints_when_zoom_metrics_change() {
         let entries = snapshot_entries(100);
         let first = prepare_virtual_view_snapshot_update(snapshot_input(
-            Arc::clone(&entries),
+            entries.clone(),
             0.0,
             VirtualViewCache::default(),
         ));
@@ -640,7 +640,7 @@ mod tests {
             force_rebuild_model: false,
             visible_count_override: None,
             cache: VirtualViewCache::default(),
-            entries: Arc::from(entries),
+            entries: PaneEntryModel::from(entries),
             visible_entry_indices: None,
             visible_entries_have_locations: true,
             visible_location_groups: Some(Arc::from(groups)),
