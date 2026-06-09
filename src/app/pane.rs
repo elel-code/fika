@@ -50,6 +50,7 @@ pub(crate) struct PaneState {
     pub(crate) search_cancel: Option<Arc<AtomicBool>>,
     pub(crate) search_progress: search::SearchProgress,
     pub(crate) search_generation: GenerationCounter,
+    pub(crate) search_index_generation: GenerationCounter,
     pub(crate) load_generation: GenerationCounter,
     pub(crate) open_generation: GenerationCounter,
     pub(crate) thumbnail_generation: GenerationCounter,
@@ -76,6 +77,7 @@ impl PaneState {
             search_cancel: None,
             search_progress: search::SearchProgress::default(),
             search_generation: GenerationCounter::default(),
+            search_index_generation: GenerationCounter::default(),
             load_generation: GenerationCounter::default(),
             open_generation: GenerationCounter::default(),
             thumbnail_generation: GenerationCounter::default(),
@@ -87,6 +89,11 @@ impl PaneState {
         let mut pane = Self::new_with_id(id, self.current_dir.clone());
         pane.set_entries(self.entries.clone());
         pane.search = self.search.clone();
+        if pane.search.index_pending {
+            pane.search.index_pending = false;
+            pane.search.visible_entry_indices = None;
+            pane.search.visible_location_groups = None;
+        }
         pane.view.viewport_x = self.view.viewport_x;
         pane.view.virtual_view = self.view.virtual_view.clone();
         pane.view.virtual_entries = self.view.virtual_entries.clone();
@@ -117,6 +124,8 @@ impl PaneState {
         self.search.visible_entry_indices = None;
         self.search.visible_entries_have_locations = has_locations;
         self.search.visible_location_groups = None;
+        self.search.index_pending = false;
+        self.search_index_generation.next();
         self.view.clear_virtual_view();
     }
 
@@ -125,6 +134,8 @@ impl PaneState {
         self.search.visible_entry_indices = None;
         self.search.visible_entries_have_locations = false;
         self.search.visible_location_groups = None;
+        self.search.index_pending = false;
+        self.search_index_generation.next();
         self.view.virtual_entries.clear();
         self.view.virtual_bounds_entries.clear();
         self.view.virtual_item_slots = ModelRc::default();
@@ -493,7 +504,9 @@ impl PaneSelection {
 pub(crate) struct PaneSearch {
     pub(crate) bar_open: bool,
     pub(crate) loading: bool,
+    pub(crate) index_pending: bool,
     pub(crate) focus_request: i32,
+    pub(crate) query_sync_request: i32,
     pub(crate) query: String,
     pub(crate) recursive: bool,
     pub(crate) kind_filter: i32,
@@ -517,9 +530,14 @@ impl PaneSearch {
         self.focus_request = self.focus_request.saturating_add(1);
     }
 
+    pub(crate) fn request_query_sync(&mut self) {
+        self.query_sync_request = self.query_sync_request.saturating_add(1);
+    }
+
     pub(crate) fn reset_all(&mut self) {
         self.bar_open = false;
         self.loading = false;
+        self.index_pending = false;
         self.focus_request = 0;
         self.query.clear();
         self.recursive = false;
@@ -1538,7 +1556,9 @@ mod tests {
         let mut search = PaneSearch {
             bar_open: true,
             loading: true,
+            index_pending: true,
             focus_request: 3,
+            query_sync_request: 2,
             query: "report".to_string(),
             recursive: false,
             kind_filter: 1,
@@ -1553,6 +1573,8 @@ mod tests {
 
         assert!(!search.bar_open);
         assert!(!search.loading);
+        assert!(!search.index_pending);
+        assert_eq!(search.query_sync_request, 2);
         assert_eq!(search.query, "");
         assert_eq!(search.kind_filter, 0);
         assert_eq!(search.modified_filter, 0);
@@ -1915,6 +1937,31 @@ mod tests {
                 .as_str(),
             "one.txt"
         );
+    }
+
+    #[test]
+    fn inactive_pane_snapshot_clears_pending_search_index_state() {
+        let mut panes = PanesState::new(PathBuf::from("/tmp/active"));
+        panes.focused_mut().set_file_entries(vec![
+            test_entry("one.txt", "/tmp/active/one.txt"),
+            test_entry("two.txt", "/tmp/active/two.txt"),
+        ]);
+        panes.focused_mut().search = PaneSearch {
+            query: "one".to_string(),
+            index_pending: true,
+            visible_entry_indices: Some(Arc::from([0])),
+            visible_entries_have_locations: true,
+            visible_location_groups: Some(Arc::from(["docs".to_string()])),
+            ..Default::default()
+        };
+
+        assert!(panes.open_peer_from_focused());
+
+        let inactive = panes.pane_for_slot(1).expect("inactive pane");
+        assert_eq!(inactive.search.query, "one");
+        assert!(!inactive.search.index_pending);
+        assert!(inactive.search.visible_entry_indices.is_none());
+        assert!(inactive.search.visible_location_groups.is_none());
     }
 
     #[test]

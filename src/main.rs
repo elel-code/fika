@@ -41,7 +41,8 @@ use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult, DirectoryLoadResult,
     EXTERNAL_EDIT_DISCARD_OPERATION, EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult,
     FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult, FileUndoResult,
-    RecursiveSearchProgress, RecursiveSearchResult, VirtualViewProjection, VirtualViewResult,
+    LocalSearchIndexResult, RecursiveSearchProgress, RecursiveSearchResult, VirtualViewProjection,
+    VirtualViewResult,
 };
 use app::file_clipboard::{
     apply_clipboard_load_result, apply_clipboard_paste_load_result,
@@ -95,10 +96,12 @@ use app::search_ui::{
     set_search_filters_for_slot,
 };
 use app::selection::{
-    append_unique_paths, filtered_entry_count_for_slot, filtered_entry_paths_for_slot,
-    rebuild_visible_entry_index_for_slot, retained_visible_paths,
-    selection_range_paths_filtered_for_slot, selection_rect_paths_filtered_for_slot,
+    append_unique_paths, apply_prepared_visible_entry_index_to_pane, filtered_entry_paths_for_slot,
+    prepare_visible_entry_index, retained_visible_paths, selection_range_paths_filtered_for_slot,
+    selection_rect_paths_filtered_for_slot,
 };
+#[cfg(test)]
+use app::selection::{filtered_entry_count_for_slot, rebuild_visible_entry_index_for_slot};
 use app::settings_save::{SettingsSaveScheduler, save_settings_latest};
 use app::split_view::{
     directory_status_text, pane_viewport_x_from_ui, set_pane_viewport_ui, sync_focus_navigation_ui,
@@ -3052,6 +3055,15 @@ fn apply_async_event(
         AsyncEvent::RecursiveSearchFinished(result) => {
             apply_recursive_search_result(ui, state, bridge, result);
         }
+        AsyncEvent::LocalSearchIndexPrepared(result) => {
+            apply_local_search_index_result(ui, state, bridge, result);
+        }
+        AsyncEvent::LocalSearchIndexPrepareFailed {
+            pane_id,
+            generation,
+        } => {
+            apply_local_search_index_prepare_failure(state, pane_id, generation);
+        }
         AsyncEvent::OpenWithAppsLoaded(result) => {
             open_with::apply_open_with_apps_result(ui, state, result)
         }
@@ -3395,7 +3407,18 @@ fn clear_focused_search(
     bridge: &AsyncBridge,
 ) -> bool {
     let slot = { state.borrow().panes.focused_slot() };
-    clear_search_for_slot(ui, state, bridge, slot, true)
+    let query_is_non_empty = {
+        let state = state.borrow();
+        state
+            .panes
+            .pane_for_slot(slot)
+            .is_some_and(|pane| pane.search.panel_visible() && !pane.search.query.is_empty())
+    };
+    if query_is_non_empty {
+        clear_search_query_for_slot(ui, state, bridge, slot)
+    } else {
+        clear_search_for_slot(ui, state, bridge, slot, true)
+    }
 }
 
 fn close_search_for_slot(
@@ -3404,20 +3427,7 @@ fn close_search_for_slot(
     bridge: &AsyncBridge,
     slot: i32,
 ) {
-    let updated = {
-        let mut state = state.borrow_mut();
-        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
-            return;
-        };
-        let updated = pane.search.bar_open;
-        pane.search.bar_open = false;
-        pane.view.invalidate_virtual_view();
-        updated
-    };
-    if updated {
-        sync_pane_slot_ui(ui, state, slot);
-        sync_pane_view_for_slot(ui, state, bridge, slot);
-    }
+    clear_search_for_slot(ui, state, bridge, slot, true);
 }
 
 fn submit_search_for_slot(
@@ -3460,6 +3470,43 @@ fn submit_search_for_slot(
     } else {
         apply_filter_for_slot(ui, state, bridge, slot, false);
     }
+}
+
+fn clear_search_query_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) -> bool {
+    let restore_entries = {
+        let mut state = state.borrow_mut();
+        cancel_active_search_for_slot(&mut state, slot);
+        let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
+            return false;
+        };
+        if pane.search.query.is_empty() {
+            return false;
+        }
+        let restore_entries = pane.search.recursive || pane.search.visible_entries_have_locations;
+        pane.search.query.clear();
+        pane.search.recursive = false;
+        pane.search.loading = false;
+        pane.search.bar_open = true;
+        pane.search.request_query_sync();
+        pane.search_generation.next();
+        pane.view.invalidate_virtual_view();
+        restore_entries.then(|| pane.current_dir.clone())
+    };
+
+    if let Some(current_dir) = restore_entries {
+        if !restore_cached_directory_entries_for_slot(state, slot, &current_dir) {
+            load_current_directory_for_slot(ui, state, bridge, slot, true);
+            return true;
+        }
+    }
+
+    apply_filter_for_slot(ui, state, bridge, slot, true);
+    true
 }
 
 fn clear_search_for_slot(
@@ -3601,10 +3648,12 @@ fn start_recursive_search_for_slot(
             return;
         };
         let generation = pane.search_generation.next();
+        pane.search_index_generation.next();
         let cancel = Arc::new(AtomicBool::new(false));
         pane.search_cancel = Some(cancel.clone());
         pane.search_progress = search::SearchProgress::default();
         pane.search.loading = true;
+        pane.search.index_pending = false;
         pane.search.recursive = true;
         pane.search.visible_entry_indices = Some(Arc::from([]));
         pane.search.visible_entries_have_locations = false;
@@ -3721,7 +3770,6 @@ fn apply_recursive_search_result(
 
     match result.result {
         Ok(entries) => {
-            let total = entries.len();
             {
                 let mut state = state.borrow_mut();
                 let Some(pane) = state.panes.pane_mut_by_id(result.pane_id) else {
@@ -3733,13 +3781,6 @@ fn apply_recursive_search_result(
                 );
             }
             apply_filter_for_slot(ui, state, bridge, slot, true);
-            let visible = filtered_entry_count_for_slot(&state.borrow(), slot);
-            set_pane_status(
-                ui,
-                state,
-                slot,
-                &recursive_search_finished_status(visible, total),
-            );
         }
         Err(err) if err.kind() == io::ErrorKind::Interrupted => {
             set_pane_status(
@@ -4267,6 +4308,14 @@ fn sync_virtual_entries_for_slot_with_count_and_cache_policy(
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             return;
         };
+        if pane.search.index_pending {
+            item_view_perf::log(format_args!(
+                "virtual_sync slot={} search_index_pending=true sync_ms={:.3}",
+                slot,
+                sync_timer.elapsed_ms()
+            ));
+            return;
+        }
         let requested_viewport_x = pane.view.viewport_x;
         let show_location = pane.show_item_locations();
         layout.viewport_x = requested_viewport_x;
@@ -4957,18 +5006,123 @@ fn apply_filter_for_slot(
     slot: i32,
     preserve_selection: bool,
 ) {
-    let (query, filters_active, total, summary) = {
+    let Some((pane_id, generation, total, entries, search, chooser_patterns)) = ({
         let mut state_ref = state.borrow_mut();
-        let summary =
-            rebuild_visible_entry_index_for_slot(&mut state_ref, slot, preserve_selection);
+        let chooser_patterns = state_ref
+            .chooser_filters
+            .get(state_ref.chooser_filter_index)
+            .map(|filter| filter.patterns.clone())
+            .unwrap_or_default();
         let Some(pane) = state_ref.panes.pane_mut_for_slot(slot) else {
             return;
         };
+        let generation = pane.search_index_generation.next();
+        pane.search.index_pending = true;
+        pane.view.invalidate_virtual_view();
+        Some((
+            pane.id,
+            generation,
+            pane.entries.len(),
+            pane.entry_model(),
+            pane.search.clone(),
+            chooser_patterns,
+        ))
+    }) else {
+        return;
+    };
+    sync_pane_slot_ui(ui, state, slot);
+    start_local_search_index_prepare(
+        bridge,
+        pane_id,
+        generation,
+        total,
+        entries,
+        search,
+        chooser_patterns,
+        preserve_selection,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_local_search_index_prepare(
+    bridge: &AsyncBridge,
+    pane_id: u64,
+    generation: u64,
+    total: usize,
+    entries: app::pane::PaneEntryModel,
+    search: app::pane::PaneSearch,
+    chooser_patterns: Vec<String>,
+    preserve_selection: bool,
+) {
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        match tokio::task::spawn_blocking(move || {
+            prepare_visible_entry_index(entries, search, chooser_patterns, preserve_selection)
+        })
+        .await
+        {
+            Ok(result) => send_async_event(
+                async_tx,
+                notify_ui,
+                AsyncEvent::LocalSearchIndexPrepared(LocalSearchIndexResult {
+                    pane_id,
+                    generation,
+                    total,
+                    preserve_selection,
+                    result,
+                }),
+            ),
+            Err(_) => send_async_event(
+                async_tx,
+                notify_ui,
+                AsyncEvent::LocalSearchIndexPrepareFailed {
+                    pane_id,
+                    generation,
+                },
+            ),
+        }
+    });
+}
+
+fn apply_local_search_index_result(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: LocalSearchIndexResult,
+) {
+    let LocalSearchIndexResult {
+        pane_id,
+        generation,
+        total,
+        preserve_selection,
+        result,
+    } = result;
+    let summary = result.summary.clone();
+    let visible_paths = summary.visible_paths.clone().unwrap_or_default();
+    let Some((slot, query, filters_active, recursive_loading, recursive_results)) = ({
+        let mut state_ref = state.borrow_mut();
+        let Some(slot) = state_ref.panes.slot_for_id(pane_id) else {
+            return;
+        };
+        let Some(pane) = state_ref.panes.pane_mut_by_id(pane_id) else {
+            return;
+        };
+        if !pane.search_index_generation.is_current(generation) {
+            return;
+        }
+        pane.search.index_pending = false;
+        apply_prepared_visible_entry_index_to_pane(pane, result);
         pane.view.virtual_view.invalidate();
-        let query = pane.search.query.to_ascii_lowercase();
-        let filters_active = pane.search.filters_active();
-        let total = pane.entries.len();
-        (query, filters_active, total, summary)
+        Some((
+            slot,
+            pane.search.query.clone(),
+            pane.search.filters_active(),
+            pane.search.recursive && pane.search.loading && !pane.search.query.is_empty(),
+            pane.search.recursive && !pane.search.loading && !pane.search.query.is_empty(),
+        ))
+    }) else {
+        return;
     };
     sync_virtual_entries_for_slot_with_count_and_cache_policy(
         ui,
@@ -4984,14 +5138,23 @@ fn apply_filter_for_slot(
         false,
     );
     if preserve_selection {
-        let empty_paths = Vec::new();
-        let visible_paths = summary.visible_paths.as_ref().unwrap_or(&empty_paths);
-        retain_visible_selection_for_slot(ui, state, slot, visible_paths);
+        retain_visible_selection_for_slot(ui, state, slot, &visible_paths);
     } else {
         clear_selection_for_slot(ui, state, slot);
     }
 
-    if query.is_empty() && !filters_active {
+    if recursive_loading {
+        return;
+    }
+
+    if recursive_results {
+        set_pane_status(
+            ui,
+            state,
+            slot,
+            &recursive_search_finished_status(summary.count, total),
+        );
+    } else if query.is_empty() && !filters_active {
         set_pane_status(
             ui,
             state,
@@ -5008,6 +5171,20 @@ fn apply_filter_for_slot(
                 summary.count, summary.folders, summary.files
             ),
         );
+    }
+}
+
+fn apply_local_search_index_prepare_failure(
+    state: &Rc<RefCell<AppState>>,
+    pane_id: u64,
+    generation: u64,
+) {
+    let mut state_ref = state.borrow_mut();
+    let Some(pane) = state_ref.panes.pane_mut_by_id(pane_id) else {
+        return;
+    };
+    if pane.search_index_generation.is_current(generation) {
+        pane.search.index_pending = false;
     }
 }
 
@@ -6506,6 +6683,41 @@ mod tests {
     }
 
     #[test]
+    fn pending_visible_entry_index_keeps_committed_view_without_rescanning_query() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        state.panes.focused_mut().set_file_entries(vec![
+            test_entry("alpha.txt", "/tmp/alpha"),
+            test_entry("skip.log", "/tmp/skip"),
+            test_entry("beta.txt", "/tmp/beta"),
+        ]);
+        state.panes.focused_mut().search.query = ".txt".to_string();
+        state.panes.focused_mut().search.index_pending = true;
+
+        assert_eq!(filtered_entry_count_for_slot(&state, 0), 3);
+        assert_eq!(
+            filtered_entry_paths(&state),
+            vec![
+                "/tmp/alpha".to_string(),
+                "/tmp/skip".to_string(),
+                "/tmp/beta".to_string()
+            ]
+        );
+        assert_eq!(
+            filtered_entries_range(&state, 1..3)
+                .into_iter()
+                .map(|entry| entry.path.to_string())
+                .collect::<Vec<_>>(),
+            vec!["/tmp/skip".to_string(), "/tmp/beta".to_string()]
+        );
+        assert_eq!(
+            filtered_entry_at(&state, 1)
+                .map(|entry| entry.path.to_string())
+                .as_deref(),
+            Some("/tmp/skip")
+        );
+    }
+
+    #[test]
     fn visible_location_group_flag_tracks_only_visible_entries() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let mut hidden = test_entry("hidden.log", "/tmp/docs/hidden.log");
@@ -7423,9 +7635,19 @@ mod tests {
         let source = include_str!("main.rs");
         let filter_body = source
             .split_once("fn apply_filter_for_slot(")
-            .and_then(|(_, rest)| rest.split_once("fn select_entry_path_for_slot("))
+            .and_then(|(_, rest)| rest.split_once("#[allow(clippy::too_many_arguments)]"))
             .map(|(body, _)| body)
             .expect("filter body should be present");
+        let prepare_body = source
+            .split_once("fn start_local_search_index_prepare(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_local_search_index_result("))
+            .map(|(body, _)| body)
+            .expect("local search prepare body should be present");
+        let apply_body = source
+            .split_once("fn apply_local_search_index_result(")
+            .and_then(|(_, rest)| rest.split_once("fn apply_local_search_index_prepare_failure("))
+            .map(|(body, _)| body)
+            .expect("local search apply body should be present");
         let sync_body = source
             .split_once("fn sync_virtual_entries_for_slot_with_count_and_cache_policy(")
             .and_then(|(_, rest)| rest.split_once("fn start_virtual_view_prepare("))
@@ -7433,19 +7655,30 @@ mod tests {
             .expect("virtual entry sync body should be present");
 
         assert!(
-            filter_body.contains("rebuild_visible_entry_index_for_slot")
-                && !filter_body.contains("pane.view.clear_virtual_view();")
-                && filter_body.contains("pane.view.virtual_view.invalidate();")
-                && filter_body
+            filter_body.contains("pane.search_index_generation.next()")
+                && filter_body.contains("pane.search.index_pending = true;")
+                && filter_body.contains("start_local_search_index_prepare(")
+                && !filter_body.contains("rebuild_visible_entry_index_for_slot")
+                && !filter_body
                     .contains("sync_virtual_entries_for_slot_with_count_and_cache_policy(")
-                && filter_body.contains("Some(summary.count),")
-                && filter_body.contains("true,\n        false,\n        false,\n    );")
+                && prepare_body.contains("tokio::task::spawn_blocking")
+                && prepare_body.contains("prepare_visible_entry_index(")
+                && prepare_body.contains("AsyncEvent::LocalSearchIndexPrepared(")
+                && apply_body.contains("pane.search_index_generation.is_current(generation)")
+                && apply_body.contains("pane.search.index_pending = false;")
+                && apply_body.contains("apply_prepared_visible_entry_index_to_pane(")
+                && apply_body.contains("pane.view.virtual_view.invalidate();")
+                && apply_body
+                    .contains("sync_virtual_entries_for_slot_with_count_and_cache_policy(")
+                && apply_body.contains("Some(summary.count),")
+                && apply_body.contains("true,\n        false,\n        false,\n    );")
+                && sync_body.contains("if pane.search.index_pending")
                 && sync_body.contains("force_uncached_prepare: bool")
                 && sync_body.contains("force_rebuild_model: bool")
                 && sync_body.contains("if !force_uncached_prepare")
                 && sync_body.contains("&& !force_rebuild_model")
                 && sync_body.contains("VirtualViewCache::default()"),
-            "filter/search refresh should keep the old visible view alive, force an uncached background prepare for the new filter model, and commit atomically when the virtual result returns"
+            "filter/search refresh should build the visible index off the UI thread, keep the old view alive while pending, force an uncached virtual prepare for the new filter model, and commit atomically when the current result returns"
         );
     }
 

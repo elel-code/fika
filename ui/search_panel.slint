@@ -240,17 +240,6 @@ export component SearchPanel inherits Rectangle {
     private property <int> selector-modified: 2;
     private property <int> selector-size: 3;
 
-    function clear-search-state() {
-        search-submit-timer.stop();
-        root.query = "";
-        root.recursive = false;
-        root.kind-filter = 0;
-        root.modified-filter = 0;
-        root.size-filter = 0;
-        root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
-        root.submitted("", root.recursive);
-    }
-
     function set-kind-filter(value: int) {
         root.kind-filter = value;
         root.filters_changed(root.kind-filter, root.modified-filter, root.size-filter);
@@ -381,6 +370,21 @@ export component SearchPanel inherits Rectangle {
                         search-submit-timer.stop();
                         root.submitted(self.text, root.recursive);
                     }
+                    key_pressed(event) => {
+                        if (event.text == Key.Escape) {
+                            if (root.query != "") {
+                                root.query = "";
+                                root.recursive = false;
+                                search-submit-timer.stop();
+                                root.submitted("", root.recursive);
+                            } else {
+                                search-submit-timer.stop();
+                                root.close_requested();
+                            }
+                            return accept;
+                        }
+                        return reject;
+                    }
                     changed text => {
                         if (self.has-focus) {
                             root.schedule-search-submit();
@@ -415,7 +419,7 @@ export component SearchPanel inherits Rectangle {
                 label: "X";
                 dark: root.dark;
                 clicked => {
-                    root.clear-search-state();
+                    search-submit-timer.stop();
                     root.close_requested();
                 }
             }

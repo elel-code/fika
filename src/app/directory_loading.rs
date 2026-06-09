@@ -33,6 +33,8 @@ pub(crate) fn prepare_directory_load_for_target(
         let generation = pane.load_generation.next();
         pane.open_generation.next();
         pane.search_generation.next();
+        pane.search_index_generation.next();
+        pane.search.index_pending = false;
         if !preserve_view {
             pane.thumbnail_generation.next();
             pane.view.clear_thumbnail_pending();

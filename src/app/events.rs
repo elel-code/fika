@@ -3,6 +3,7 @@ use crate::ItemViewEntry;
 use crate::app::geometry::ItemViewItemBounds;
 use crate::app::model_update::PreparedItemViewSlotProjection;
 use crate::app::pane::PreparedDirectoryEntries;
+use crate::app::selection::PreparedVisibleEntryIndex;
 use crate::app::thumbnail_pipeline::PreparedThumbnailKey;
 use crate::app::virtual_view::VirtualViewSnapshotUpdate;
 use crate::desktop::{clipboard, open_with, service_menu, systemd_launch};
@@ -63,6 +64,15 @@ pub(crate) struct RecursiveSearchProgress {
     pub(crate) query: String,
     pub(crate) root: PathBuf,
     pub(crate) progress: search::SearchProgress,
+}
+
+#[derive(Debug)]
+pub(crate) struct LocalSearchIndexResult {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) total: usize,
+    pub(crate) preserve_selection: bool,
+    pub(crate) result: PreparedVisibleEntryIndex,
 }
 
 #[derive(Debug)]
@@ -160,6 +170,11 @@ pub(crate) enum AsyncEvent {
     FileOpened(FileOpenResult),
     RecursiveSearchProgress(RecursiveSearchProgress),
     RecursiveSearchFinished(RecursiveSearchResult),
+    LocalSearchIndexPrepared(LocalSearchIndexResult),
+    LocalSearchIndexPrepareFailed {
+        pane_id: u64,
+        generation: u64,
+    },
     OpenWithAppsLoaded(open_with::OpenWithAppsResult),
     OtherApplicationAppsLoaded(open_with::OtherApplicationAppsResult),
     DefaultAppSet(open_with::DefaultAppSetResult),

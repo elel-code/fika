@@ -338,6 +338,7 @@ fn pane_slot_data(ui: &AppWindow, slot: i32, state: &AppState) -> PaneSlotData {
         search_loading: search.loading,
         search_filters_active: search.filters_active(),
         search_focus_request: search.focus_request,
+        search_query_sync_request: search.query_sync_request,
         search_kind_label: search_kind_label(search.kind_filter),
         search_modified_label: search_modified_label(search.modified_filter),
         search_size_label: search_size_label(search.size_filter),

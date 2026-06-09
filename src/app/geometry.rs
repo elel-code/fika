@@ -2748,6 +2748,13 @@ mod tests {
                 && search_panel.contains("interval: 500ms;")
                 && search_panel.contains("changed text =>")
                 && search_panel.contains("root.schedule-search-submit();")
+                && search_panel.contains("key_pressed(event) =>")
+                && search_panel.contains("event.text == Key.Escape")
+                && search_panel.contains("root.query = \"\";")
+                && search_panel.contains("root.submitted(\"\", root.recursive);")
+                && search_panel.contains("return accept;")
+                && search_panel.contains("search-submit-timer.stop();\n                    root.close_requested();")
+                && !search_panel.contains("function clear-search-state")
                 && search_panel.contains("export component SearchFilterPopup inherits Rectangle")
                 && !search_panel.contains("target-filter")
                 && search_panel.contains("SearchLocationButton {")
@@ -2781,6 +2788,9 @@ mod tests {
                 && app.contains("search-filter-menu-selector")
                 && app.contains("selector-mode: root.search-filter-menu-selector;")
                 && app.contains("selector_requested(selector) => {")
+                && app.contains("search-query-sync-request: root.live-search-query-sync-request;")
+                && app.contains("root.live-search-query-sync-request != root.pane.search_query_sync_request")
+                && app.contains("root.search-input-focused = false;")
                 && !app.contains("selector_requested(x, y, selector)")
                 && !search_panel.contains("filters-expanded"),
             "SearchPanel should follow Dolphin's search bar structure with delayed text commits, left-aligned location buttons, right-aligned selector chips, and a widget-menu-style selector popup"

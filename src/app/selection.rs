@@ -4,18 +4,27 @@ use crate::app::item_view_model::{
     ItemViewModelEntry, ItemViewModelEntrySummary, item_view_entry_matches_chooser_patterns,
     item_view_entry_matches_filters, item_view_filters_are_identity, item_view_model_entry_summary,
 };
-use crate::app::pane::{PaneSearch, PaneState};
+use crate::app::pane::{PaneEntryModel, PaneSearch, PaneState};
 use crate::app::state::AppState;
+use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FilteredEntrySummary {
     pub(crate) count: usize,
     pub(crate) folders: usize,
     pub(crate) files: usize,
     pub(crate) has_locations: bool,
     pub(crate) visible_paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PreparedVisibleEntryIndex {
+    pub(crate) summary: FilteredEntrySummary,
+    pub(crate) visible_entry_indices: Option<Arc<[usize]>>,
+    pub(crate) visible_entries_have_locations: bool,
+    pub(crate) visible_location_groups: Option<Arc<[String]>>,
 }
 
 impl From<ItemViewModelEntrySummary> for FilteredEntrySummary {
@@ -34,9 +43,13 @@ pub(crate) fn retained_visible_paths(
     selected_paths: &[String],
     visible_paths: &[String],
 ) -> Vec<String> {
+    let visible_paths = visible_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
     selected_paths
         .iter()
-        .filter(|selected| visible_paths.iter().any(|visible| visible == *selected))
+        .filter(|selected| visible_paths.contains(selected.as_str()))
         .cloned()
         .collect()
 }
@@ -57,7 +70,7 @@ pub(crate) fn filtered_entry_paths_for_pane(state: &AppState, pane: &PaneState) 
     }
 
     let chooser_patterns = active_chooser_patterns(state);
-    if filters_are_identity(&pane.search, &chooser_patterns) {
+    if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
         return pane
             .entries
             .iter()
@@ -86,6 +99,22 @@ pub(crate) fn filtered_entries_for_slot(state: &AppState, slot: i32) -> Vec<File
 
 pub(crate) fn filtered_entries_for_pane(state: &AppState, pane: &PaneState) -> Vec<FileEntry> {
     let chooser_patterns = active_chooser_patterns(state);
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
+        return indices
+            .iter()
+            .filter_map(|&index| pane.entries.get(index))
+            .map(ItemViewModelEntry::model_to_file_entry)
+            .collect();
+    }
+
+    if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
+        return pane
+            .entries
+            .iter()
+            .map(ItemViewModelEntry::model_to_file_entry)
+            .collect();
+    }
+
     let query = pane.search.query.to_ascii_lowercase();
     pane.entries
         .iter()
@@ -112,7 +141,7 @@ pub(crate) fn filtered_entry_count_for_pane(state: &AppState, pane: &PaneState) 
     }
 
     let chooser_patterns = active_chooser_patterns(state);
-    if filters_are_identity(&pane.search, &chooser_patterns) {
+    if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
         return pane.entries.len();
     }
 
@@ -144,7 +173,7 @@ pub(crate) fn filtered_entry_at_for_pane(
     }
 
     let chooser_patterns = active_chooser_patterns(state);
-    if filters_are_identity(&pane.search, &chooser_patterns) {
+    if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
         return pane
             .entries
             .get(index)
@@ -163,6 +192,7 @@ pub(crate) fn filtered_entry_at(state: &AppState, index: usize) -> Option<FileEn
     filtered_entry_at_for_slot(state, 0, index)
 }
 
+#[cfg(test)]
 pub(crate) fn rebuild_visible_entry_index_for_slot(
     state: &mut AppState,
     slot: i32,
@@ -172,42 +202,77 @@ pub(crate) fn rebuild_visible_entry_index_for_slot(
     let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
         return FilteredEntrySummary::default();
     };
+    let prepared = prepare_visible_entry_index_for_pane(
+        &pane.entries,
+        &pane.search,
+        &chooser_patterns,
+        collect_paths,
+    );
+    let summary = prepared.summary.clone();
+    apply_prepared_visible_entry_index_to_pane(pane, prepared);
+    summary
+}
 
-    if filters_are_identity(&pane.search, &chooser_patterns) {
-        pane.search.visible_entry_indices = None;
-        pane.search.visible_location_groups = None;
-        let summary = item_view_model_entry_summary(pane.entries.iter(), collect_paths, true);
-        pane.search.visible_entries_have_locations = summary.has_locations;
-        if summary.has_locations {
-            let groups = location_group_labels(
+pub(crate) fn prepare_visible_entry_index(
+    entries: PaneEntryModel,
+    search: PaneSearch,
+    chooser_patterns: Vec<String>,
+    collect_paths: bool,
+) -> PreparedVisibleEntryIndex {
+    prepare_visible_entry_index_for_pane(&entries, &search, &chooser_patterns, collect_paths)
+}
+
+pub(crate) fn apply_prepared_visible_entry_index_to_pane(
+    pane: &mut PaneState,
+    prepared: PreparedVisibleEntryIndex,
+) {
+    pane.search.visible_entry_indices = prepared.visible_entry_indices;
+    pane.search.visible_entries_have_locations = prepared.visible_entries_have_locations;
+    pane.search.visible_location_groups = prepared.visible_location_groups;
+}
+
+fn prepare_visible_entry_index_for_pane(
+    entries: &PaneEntryModel,
+    search: &PaneSearch,
+    chooser_patterns: &[String],
+    collect_paths: bool,
+) -> PreparedVisibleEntryIndex {
+    if filters_are_identity(search, chooser_patterns) {
+        let summary = item_view_model_entry_summary(entries.iter(), collect_paths, true);
+        let visible_entries_have_locations = summary.has_locations;
+        let visible_location_groups = visible_entries_have_locations.then(|| {
+            Arc::from(location_group_labels(
                 summary
                     .locations
                     .as_deref()
                     .unwrap_or(&[])
                     .iter()
                     .map(String::as_str),
-            );
-            pane.search.visible_location_groups = Some(Arc::from(groups));
-        }
-        return summary.into();
+            ))
+        });
+        return PreparedVisibleEntryIndex {
+            summary: summary.into(),
+            visible_entry_indices: None,
+            visible_entries_have_locations,
+            visible_location_groups,
+        };
     }
 
-    let query = pane.search.query.to_ascii_lowercase();
+    let query = search.query.to_ascii_lowercase();
     let mut summary = ItemViewModelEntrySummary::new(collect_paths, true);
     let mut indices = Vec::new();
 
-    for (index, entry) in
-        pane.entries.iter().enumerate().filter(|(_, entry)| {
-            matches_entry_filters(entry, &pane.search, &chooser_patterns, &query)
-        })
+    for (index, entry) in entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| matches_entry_filters(entry, search, chooser_patterns, &query))
     {
         summary.push_entry(entry);
         indices.push(index);
     }
 
-    pane.search.visible_entry_indices = Some(Arc::from(indices));
-    pane.search.visible_entries_have_locations = summary.has_locations;
-    pane.search.visible_location_groups = summary.has_locations.then(|| {
+    let visible_entries_have_locations = summary.has_locations;
+    let visible_location_groups = visible_entries_have_locations.then(|| {
         Arc::from(location_group_labels(
             summary
                 .locations
@@ -217,7 +282,12 @@ pub(crate) fn rebuild_visible_entry_index_for_slot(
                 .map(String::as_str),
         ))
     });
-    summary.into()
+    PreparedVisibleEntryIndex {
+        summary: summary.into(),
+        visible_entry_indices: Some(Arc::from(indices)),
+        visible_entries_have_locations,
+        visible_location_groups,
+    }
 }
 
 #[allow(dead_code)]
@@ -246,6 +316,22 @@ pub(crate) fn filtered_entry_summary_for_pane(
     collect_paths: bool,
 ) -> FilteredEntrySummary {
     let chooser_patterns = active_chooser_patterns(state);
+    if let Some(indices) = pane.search.visible_entry_indices.as_ref() {
+        return item_view_model_entry_summary(
+            indices
+                .iter()
+                .filter_map(|&index| pane.entries.get(index))
+                .map(|entry| entry as &dyn ItemViewModelEntry),
+            collect_paths,
+            true,
+        )
+        .into();
+    }
+
+    if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
+        return item_view_model_entry_summary(pane.entries.iter(), collect_paths, true).into();
+    }
+
     let query = pane.search.query.to_ascii_lowercase();
     item_view_model_entry_summary(
         pane.entries
@@ -286,7 +372,7 @@ pub(crate) fn filtered_entries_range_for_slot(
             .iter()
             .map(|&index| pane.entries[index].model_to_file_entry())
             .collect()
-    } else if filters_are_identity(&pane.search, &chooser_patterns) {
+    } else if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
         pane.entries
             .iter()
             .skip(range.start)
@@ -376,7 +462,7 @@ fn visible_entry_location_at_for_pane(
     }
 
     let chooser_patterns = active_chooser_patterns(state);
-    if filters_are_identity(&pane.search, &chooser_patterns) {
+    if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
         return pane
             .entries
             .get(visible_index)
@@ -425,6 +511,10 @@ fn filters_are_identity(search: &PaneSearch, chooser_patterns: &[String]) -> boo
         search.size_filter,
         chooser_patterns,
     )
+}
+
+fn should_use_all_entries_without_filtering(pane: &PaneState, chooser_patterns: &[String]) -> bool {
+    pane.search.index_pending || filters_are_identity(&pane.search, chooser_patterns)
 }
 
 fn active_chooser_patterns(state: &AppState) -> Vec<String> {
@@ -606,7 +696,7 @@ fn visible_entries_range_iter_for_slot(
     }
 
     let chooser_patterns = active_chooser_patterns(state);
-    if filters_are_identity(&pane.search, &chooser_patterns) {
+    if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
         let start = range.start.min(pane.entries.len());
         let end = range.end.min(pane.entries.len());
         return Box::new(
@@ -651,7 +741,7 @@ fn visible_entry_iter_for_slot(
     }
 
     let chooser_patterns = active_chooser_patterns(state);
-    if filters_are_identity(&pane.search, &chooser_patterns) {
+    if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
         return Box::new(pane.entries.iter());
     }
 
@@ -667,8 +757,9 @@ fn visible_entry_iter_for_slot(
 }
 
 pub(crate) fn append_unique_paths(selected_paths: &mut Vec<String>, paths: Vec<String>) {
+    let mut seen = selected_paths.iter().cloned().collect::<HashSet<_>>();
     for path in paths {
-        if !selected_paths.iter().any(|selected| selected == &path) {
+        if seen.insert(path.clone()) {
             selected_paths.push(path);
         }
     }

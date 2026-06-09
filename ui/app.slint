@@ -90,6 +90,7 @@ component FilePane inherits Rectangle {
     in property <string> search-modified-label;
     in property <string> search-size-label;
     in property <int> search-focus-request: 0;
+    in property <int> search-query-sync-request: 0;
     in-out property <string> search-query;
     in-out property <bool> recursive-search;
     in-out property <int> search-kind-filter;
@@ -550,6 +551,7 @@ component PaneSlotSurface inherits Rectangle {
     private property <int> live-search-modified-filter: root.pane.search_modified_filter;
     private property <int> live-search-size-filter: root.pane.search_size_filter;
     private property <int> live-search-focus-request: root.pane.search_focus_request;
+    private property <int> live-search-query-sync-request: root.pane.search_query_sync_request;
     private property <bool> live-search-focused: false;
     private property <bool> live-drag-active: false;
     private property <bool> live-drag-rejected: false;
@@ -564,10 +566,14 @@ component PaneSlotSurface inherits Rectangle {
             root.live-path-text = root.pane.path_text;
         }
         root.live-path-focused = root.pane.path_focused;
+        if (!root.pane.search_panel_visible && root.live-search-focused) {
+            root.live-search-focused = false;
+            PaneRouting.search-focus-changed(root.pane.slot, false);
+        }
         if (root.live-slot != root.pane.slot || root.live-current-path != root.pane.current_path) {
             root.live-viewport-x = root.view.viewport_x;
         }
-        if (root.live-slot != root.pane.slot || !root.live-search-focused) {
+        if (root.live-slot != root.pane.slot || !root.live-search-focused || root.live-search-query-sync-request != root.pane.search_query_sync_request) {
             root.live-search-query = root.pane.search_query;
         }
         root.live-recursive-search = root.pane.recursive_search;
@@ -575,6 +581,7 @@ component PaneSlotSurface inherits Rectangle {
         root.live-search-modified-filter = root.pane.search_modified_filter;
         root.live-search-size-filter = root.pane.search_size_filter;
         root.live-search-focus-request = root.pane.search_focus_request;
+        root.live-search-query-sync-request = root.pane.search_query_sync_request;
         root.live-slot = root.pane.slot;
         root.live-current-path = root.pane.current_path;
     }
@@ -606,6 +613,7 @@ component PaneSlotSurface inherits Rectangle {
         search-modified-label: root.pane.search_modified_label;
         search-size-label: root.pane.search_size_label;
         search-focus-request: root.live-search-focus-request;
+        search-query-sync-request: root.live-search-query-sync-request;
         search-query <=> root.live-search-query;
         recursive-search <=> root.live-recursive-search;
         search-kind-filter <=> root.live-search-kind-filter;
@@ -1202,6 +1210,7 @@ export component AppWindow inherits Window {
 
     public function route-pane-search-close-requested(slot: int) {
         root.route-pane-focus(slot);
+        root.search-input-focused = false;
         root.close-search-filter-popup();
         root.search_close_requested(slot);
     }
