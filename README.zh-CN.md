@@ -3,9 +3,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://blog.rust-lang.org/2024/02/08/Rust-1.76.0.html)
 
-一个面向现代 Wayland 桌面的轻量文件管理器，使用 Rust + [Slint](https://slint.dev) 构建。
+一个面向现代 Wayland 桌面的轻量文件管理器。当前实现使用 Rust +
+[Slint](https://slint.dev)，但项目的活跃目标已经切换为全面 GPUI 重写，并以 Dolphin
+作为第一行为参考。
 
-**当前状态：** 活跃开发阶段，功能集持续增长中。部分高级特性仍在开发中（见 [docs/TODO.md](docs/TODO.md)）。
+**当前状态：** 迁移规划阶段。Slint 应用是旧实现和可复用 Rust 模块来源；新的 UI 架构工作应以
+[docs/TODO.md](docs/TODO.md) 和
+[docs/GPUI_DOLPHIN_MIGRATION_PLAN.md](docs/GPUI_DOLPHIN_MIGRATION_PLAN.md) 为准。
 
 > [English version](README.md)
 
@@ -102,22 +106,18 @@
 - 上次打开的目录
 - 设置存储在 `$XDG_CONFIG_HOME/fika/settings.tsv`
 
-### Dolphin 虚拟 Pane 架构对齐
+### 迁移方向
 
-Fika 主视图以 Dolphin 的五层 `KItemListView` 架构
-（`kfileitemmodel → kitemlistviewlayouter → kitemlistview → kitemlistcontroller → kstandarditemlistwidget`）为目标。
-当前对齐状态：
+后续目标是 GPUI + UI-neutral Rust core。目录加载、刷新、undo、split pane identity
+和 model signal 的第一参考是 Dolphin 的 `DolphinView → KDirLister → KFileItemModel →
+KItemListView` 执行流。
 
-| 层级 | Dolphin 对应 | 状态 |
-|------|-------------|------|
-| **平滑滚动器** | `kitemlistsmoothscroller` | ✅ 已完成 — 逻辑 `viewport-x` + 动画 `paint-viewport-x` 分离；当前虚拟切片范围内 120ms ease-out；用户交互时停止 |
-| **多态 Layouter** | `kitemlistviewlayouter` | 🟡 `ItemViewLayouter` trait 已完成（`layout_mode`、`scroll_axis`、`logical_item_rect`→物理投影）；`ItemViewLayoutEngine` dispatch 就绪；缺 Details/Icons 实现 |
-| **自渲染 Tile** | `kstandarditemlistwidget` | 🟡 Raster 底图已覆盖选中、fallback glyph、缩略图、drop target，通过 `ItemViewTileFrameBatch`→`SharedPixelBuffer` 产出；标题/metadata 文字仍为 Slint `Text` primitive |
-| **Model Trait** | `kfileitemmodel` | 🟡 窄接口初现：`ItemViewFrameEntry`（renderer 输入）、`ItemViewHitEntry`（controller 输出）；完整 `FileEntry`→layouter/selection 抽象未开始 |
-| **Controller 总线** | `kitemlistcontroller` | 🟡 Controller helpers 返回 `ItemViewControllerAction` 枚举；`main.rs` 执行 action 而非直接操作手势状态；无信号总线 |
-| **两阶段刷新** | `kitemlistview` | 🟡 异步刷新簿记已收敛至 `VirtualViewRefreshState`；无覆盖所有刷新类型的统一 pending→commit 状态机 |
+详见：
 
-详见 [docs/TODO.md](docs/TODO.md) "Spike Dolphin-style self-managed main viewport" 项。
+- [docs/TODO.md](docs/TODO.md)
+- [docs/DESIGN.md](docs/DESIGN.md)
+- [docs/REFERENCE.md](docs/REFERENCE.md)
+- [docs/GPUI_DOLPHIN_MIGRATION_PLAN.md](docs/GPUI_DOLPHIN_MIGRATION_PLAN.md)
 
 ## 前置条件
 

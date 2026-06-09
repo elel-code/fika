@@ -1,5 +1,8 @@
 # Dolphin-style Item Slot Reuse Plan
 
+> Archived Slint-era slot-reuse investigation. Future UI work targets GPUI and should
+> follow `docs/TODO.md`, `docs/DESIGN.md`, and `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`.
+
 ## Verdict
 
 当前 Slint 足够实现 Dolphin-style item 实例复用，但实现方式不能依赖

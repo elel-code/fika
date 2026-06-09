@@ -57,12 +57,49 @@ pub fn read_entries_sync(path: &Path) -> io::Result<Vec<RawFileEntry>> {
     Ok(entries)
 }
 
-fn sort_entries(entries: &mut [RawFileEntry], trash: bool) {
+pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<RawFileEntry> {
+    let decorate_trash_metadata = file_ops::is_trash_files_dir(directory);
+    let item_path = directory_entry_path(directory, path).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "directory item is outside directory",
+        )
+    })?;
+    let metadata = std::fs::metadata(&item_path)?;
+    let name = item_path
+        .file_name()
+        .map(|name| name.to_string_lossy().trim().to_string())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory item has no name"))?;
+    let mut entry = to_raw_file_entry(item_path.clone(), name, String::new(), metadata);
+    if decorate_trash_metadata {
+        decorate_trash_entry(&mut entry, &item_path);
+    }
+    Ok(entry)
+}
+
+pub fn sort_entries(entries: &mut [RawFileEntry], trash: bool) {
     if trash {
         entries.sort_by_cached_key(trash_sort_key);
     } else {
         entries.sort_by_cached_key(raw_sort_key);
     }
+}
+
+pub fn directory_entry_path(directory: &Path, path: &Path) -> Option<PathBuf> {
+    if file_ops::is_trash_files_dir(directory)
+        && path
+            .parent()
+            .is_some_and(|parent| parent == file_ops::trash_info_dir())
+        && path.extension().and_then(|extension| extension.to_str()) == Some("trashinfo")
+    {
+        let stem = path.file_stem()?;
+        return Some(file_ops::trash_files_dir().join(stem));
+    }
+
+    path.parent()
+        .is_some_and(|parent| parent == directory)
+        .then(|| path.to_path_buf())
 }
 
 fn decorate_trash_entry(entry: &mut RawFileEntry, path: &Path) {

@@ -81,6 +81,7 @@ pub(crate) enum FileUndoStartDecision {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FileUndoStartSummary {
+    pub(crate) serial: u64,
     pub(crate) undo: FileUndo,
     pub(crate) pane_ids: Vec<u64>,
     pub(crate) status: String,
@@ -212,11 +213,26 @@ impl FileOperationController {
 impl AppState {
     fn replace_file_undo(&mut self, undo: Option<FileUndo>) -> Option<PathBuf> {
         let old_undo = std::mem::replace(&mut self.last_undo, undo);
+        self.last_undo_serial = if self.last_undo.is_some() {
+            Some(self.allocate_file_undo_serial())
+        } else {
+            None
+        };
         file_undo_backup_path(old_undo)
     }
 
+    fn allocate_file_undo_serial(&mut self) -> u64 {
+        let serial = self.next_undo_serial;
+        self.next_undo_serial += 1;
+        serial
+    }
+
     fn file_undo_ui_state(&self) -> FileUndoUiState {
-        file_undo_ui_state(self.last_undo.as_ref())
+        let mut undo_ui = file_undo_ui_state(self.last_undo.as_ref());
+        if self.active_undo_serial.is_some() {
+            undo_ui.available = false;
+        }
+        undo_ui
     }
 
     pub(crate) fn complete_file_open(
@@ -306,18 +322,31 @@ impl AppState {
     }
 
     pub(crate) fn take_file_undo_start(&mut self) -> FileUndoStartDecision {
+        if self.active_undo_serial.is_some() {
+            return FileUndoStartDecision::Empty {
+                status: "Undo already in progress".to_string(),
+                undo_ui: self.file_undo_ui_state(),
+            };
+        }
+
         let Some(undo) = self.last_undo.take() else {
             return FileUndoStartDecision::Empty {
                 status: "Nothing to undo".to_string(),
                 undo_ui: self.file_undo_ui_state(),
             };
         };
+        let serial = self
+            .last_undo_serial
+            .take()
+            .unwrap_or_else(|| self.allocate_file_undo_serial());
+        self.active_undo_serial = Some(serial);
 
         let affected_dirs = file_undo_affected_dirs(&undo);
         let pane_ids =
             affected_directory_pane_ids(self, affected_dirs.iter().map(|dir| dir.as_path()));
         let status = file_undo_started_status(&undo.operation);
         FileUndoStartDecision::Started(FileUndoStartSummary {
+            serial,
             undo,
             pane_ids,
             status,
@@ -327,21 +356,29 @@ impl AppState {
 
     pub(crate) fn complete_file_undo(
         &mut self,
+        serial: u64,
         undo: FileUndo,
         result: Result<String, String>,
-    ) -> FileUndoCompletionSummary {
+    ) -> Option<FileUndoCompletionSummary> {
+        if self.active_undo_serial != Some(serial) {
+            return None;
+        }
+        self.active_undo_serial = None;
+
         let affected_dirs = file_undo_affected_dirs(&undo);
-        match result {
+        Some(match result {
             Ok(message) => FileUndoCompletionSummary {
                 affected_dirs,
                 status: file_undo_complete_status(&message),
                 cleanup_backup: None,
-                undo_ui: None,
+                undo_ui: Some(self.file_undo_ui_state()),
             },
             Err(error) => {
                 let restored = self.last_undo.is_none();
                 let cleanup_backup = if restored {
+                    let retry_serial = self.allocate_file_undo_serial();
                     self.last_undo = Some(undo);
+                    self.last_undo_serial = Some(retry_serial);
                     None
                 } else {
                     file_undo_backup_path(Some(undo))
@@ -350,10 +387,10 @@ impl AppState {
                     affected_dirs,
                     status: file_undo_failed_status(&error, restored),
                     cleanup_backup,
-                    undo_ui: restored.then(|| self.file_undo_ui_state()),
+                    undo_ui: Some(self.file_undo_ui_state()),
                 }
             }
-        }
+        })
     }
 
     pub(crate) fn complete_file_action(
@@ -1331,6 +1368,16 @@ mod tests {
         }
     }
 
+    fn start_registered_undo(state: &mut AppState, undo: FileUndo) -> FileUndoStartSummary {
+        state.register_file_undo(undo);
+        match state.take_file_undo_start() {
+            FileUndoStartDecision::Started(summary) => summary,
+            FileUndoStartDecision::Empty { status, .. } => {
+                panic!("expected undo start, got status {status}")
+            }
+        }
+    }
+
     fn external_edit_session(original_path: &str, token: &str) -> privilege::ExternalEditSession {
         privilege::ExternalEditSession {
             original_path: PathBuf::from(original_path),
@@ -1374,10 +1421,15 @@ mod tests {
     fn complete_file_undo_restores_failed_undo_when_no_newer_undo_exists() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let undo = undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
+        let start = start_registered_undo(&mut state, undo.clone());
 
         assert_eq!(
-            state.complete_file_undo(undo.clone(), Err("permission denied".to_string())),
-            FileUndoCompletionSummary {
+            state.complete_file_undo(
+                start.serial,
+                start.undo,
+                Err("permission denied".to_string())
+            ),
+            Some(FileUndoCompletionSummary {
                 affected_dirs: vec![PathBuf::from("/tmp"), PathBuf::from("/tmp/target")],
                 status: "Undo failed: permission denied; Undo can be retried".to_string(),
                 cleanup_backup: None,
@@ -1385,7 +1437,7 @@ mod tests {
                     available: true,
                     label: "Undo Copy".to_string(),
                 }),
-            }
+            })
         );
 
         let restored = state.last_undo.as_ref().unwrap();
@@ -1398,18 +1450,22 @@ mod tests {
     fn complete_file_undo_does_not_replace_newer_undo() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
         let newer = undo("move", "/tmp/new-source.txt", "/tmp/new-target.txt");
-        state.last_undo = Some(newer.clone());
         let mut failed = undo("copy", "/tmp/source.txt", "/tmp/target/source.txt");
         failed.overwritten_backup = Some(PathBuf::from("/tmp/fika-backup"));
+        let start = start_registered_undo(&mut state, failed);
+        state.register_file_undo(newer.clone());
 
         assert_eq!(
-            state.complete_file_undo(failed, Err("target changed".to_string())),
-            FileUndoCompletionSummary {
+            state.complete_file_undo(start.serial, start.undo, Err("target changed".to_string())),
+            Some(FileUndoCompletionSummary {
                 affected_dirs: vec![PathBuf::from("/tmp"), PathBuf::from("/tmp/target")],
                 status: "Undo failed: target changed; newer Undo is available".to_string(),
                 cleanup_backup: Some(PathBuf::from("/tmp/fika-backup")),
-                undo_ui: None,
-            }
+                undo_ui: Some(FileUndoUiState {
+                    available: true,
+                    label: "Undo Move".to_string(),
+                }),
+            })
         );
 
         let retained = state.last_undo.as_ref().unwrap();
@@ -1419,20 +1475,76 @@ mod tests {
     }
 
     #[test]
-    fn complete_file_undo_reports_success_without_restoring_undo() {
+    fn complete_file_undo_ignores_stale_serial_without_mutating_active_undo() {
         let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let stale = start_registered_undo(
+            &mut state,
+            undo("copy", "/tmp/old-source.txt", "/tmp/old-target.txt"),
+        );
+        let stale_serial = stale.serial;
+        let stale_undo = stale.undo.clone();
 
         assert_eq!(
             state.complete_file_undo(
-                undo("copy", "/tmp/source.txt", "/tmp/target/source.txt"),
+                stale.serial,
+                stale.undo,
+                Ok("removed /tmp/old-target.txt".to_string())
+            ),
+            Some(FileUndoCompletionSummary {
+                affected_dirs: vec![PathBuf::from("/tmp")],
+                status: "Undo complete: removed /tmp/old-target.txt".to_string(),
+                cleanup_backup: None,
+                undo_ui: Some(FileUndoUiState::default()),
+            })
+        );
+
+        let current = start_registered_undo(
+            &mut state,
+            undo("move", "/tmp/new-source.txt", "/tmp/new-target.txt"),
+        );
+
+        assert_eq!(
+            state.complete_file_undo(stale_serial, stale_undo, Err("late failure".to_string())),
+            None
+        );
+        assert_eq!(state.active_undo_serial, Some(current.serial));
+        assert!(state.last_undo.is_none());
+
+        assert_eq!(
+            state.complete_file_undo(
+                current.serial,
+                current.undo,
+                Ok("restored /tmp/new-source.txt".to_string())
+            ),
+            Some(FileUndoCompletionSummary {
+                affected_dirs: vec![PathBuf::from("/tmp")],
+                status: "Undo complete: restored /tmp/new-source.txt".to_string(),
+                cleanup_backup: None,
+                undo_ui: Some(FileUndoUiState::default()),
+            })
+        );
+    }
+
+    #[test]
+    fn complete_file_undo_reports_success_without_restoring_undo() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let start = start_registered_undo(
+            &mut state,
+            undo("copy", "/tmp/source.txt", "/tmp/target/source.txt"),
+        );
+
+        assert_eq!(
+            state.complete_file_undo(
+                start.serial,
+                start.undo,
                 Ok("removed /tmp/target/source.txt".to_string())
             ),
-            FileUndoCompletionSummary {
+            Some(FileUndoCompletionSummary {
                 affected_dirs: vec![PathBuf::from("/tmp"), PathBuf::from("/tmp/target")],
                 status: "Undo complete: removed /tmp/target/source.txt".to_string(),
                 cleanup_backup: None,
-                undo_ui: None,
-            }
+                undo_ui: Some(FileUndoUiState::default()),
+            })
         );
         assert!(state.last_undo.is_none());
     }
@@ -1858,6 +1970,57 @@ mod tests {
         assert_eq!(summary.pane_ids, vec![active_id, inactive_id]);
         assert_eq!(summary.status, "Undoing Copy...");
         assert_eq!(summary.undo_ui, FileUndoUiState::default());
+    }
+
+    #[test]
+    fn take_file_undo_start_rejects_active_undo_without_consuming_newer_undo() {
+        let mut state = AppState::new(PathBuf::from("/tmp"), Vec::new());
+        let active = start_registered_undo(
+            &mut state,
+            undo("copy", "/tmp/source.txt", "/tmp/target/source.txt"),
+        );
+        let registration =
+            state.register_file_undo(undo("move", "/tmp/new-source.txt", "/tmp/new-target.txt"));
+
+        assert_eq!(
+            registration.undo_ui,
+            FileUndoUiState {
+                available: false,
+                label: "Undo Move".to_string(),
+            }
+        );
+        match state.take_file_undo_start() {
+            FileUndoStartDecision::Empty { status, undo_ui } => {
+                assert_eq!(status, "Undo already in progress");
+                assert_eq!(
+                    undo_ui,
+                    FileUndoUiState {
+                        available: false,
+                        label: "Undo Move".to_string(),
+                    }
+                );
+            }
+            FileUndoStartDecision::Started(_) => panic!("active undo should block a second start"),
+        }
+        assert_eq!(state.active_undo_serial, Some(active.serial));
+        assert_eq!(
+            state.last_undo.as_ref().map(|undo| undo.operation.as_str()),
+            Some("move")
+        );
+
+        assert_eq!(
+            state
+                .complete_file_undo(
+                    active.serial,
+                    active.undo,
+                    Ok("removed /tmp/target/source.txt".to_string())
+                )
+                .map(|summary| summary.undo_ui),
+            Some(Some(FileUndoUiState {
+                available: true,
+                label: "Undo Move".to_string(),
+            }))
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::app::selection::PreparedVisibleEntryIndex;
 use crate::app::thumbnail_pipeline::PreparedThumbnailKey;
 use crate::app::virtual_view::VirtualViewSnapshotUpdate;
 use crate::desktop::{clipboard, open_with, service_menu, systemd_launch};
+use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_actions, file_ops, privilege, search, thumbnails};
 use std::io;
 use std::path::PathBuf;
@@ -26,11 +27,50 @@ pub(crate) struct DirectoryLoadResult {
 }
 
 #[derive(Debug)]
-pub(crate) struct DirectoryEntriesRemoved {
+pub(crate) struct DirectoryItemsAdded {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) path: PathBuf,
+    pub(crate) entries: Vec<RawFileEntry>,
+}
+
+#[derive(Debug)]
+pub(crate) struct DirectoryItemsDeleted {
     pub(crate) pane_id: u64,
     pub(crate) generation: u64,
     pub(crate) path: PathBuf,
     pub(crate) removed_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(crate) struct DirectoryItemsRefreshed {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) path: PathBuf,
+    pub(crate) old_paths: Vec<PathBuf>,
+    pub(crate) entries: Vec<RawFileEntry>,
+}
+
+#[derive(Debug)]
+pub(crate) struct DirectoryListingRefreshed {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) path: PathBuf,
+    pub(crate) result: io::Result<Vec<RawFileEntry>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct DirectoryListingCompleted {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct DirectoryCurrentRemoved {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -105,6 +145,7 @@ pub(crate) struct FileOperationProgress {
 
 #[derive(Debug)]
 pub(crate) struct FileUndoResult {
+    pub(crate) serial: u64,
     pub(crate) undo: crate::app::state::FileUndo,
     pub(crate) result: Result<String, String>,
 }
@@ -172,7 +213,12 @@ pub(crate) struct ServiceMenuActionLaunchResult {
 #[derive(Debug)]
 pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
-    DirectoryEntriesRemoved(DirectoryEntriesRemoved),
+    DirectoryItemsAdded(DirectoryItemsAdded),
+    DirectoryItemsDeleted(DirectoryItemsDeleted),
+    DirectoryItemsRefreshed(DirectoryItemsRefreshed),
+    DirectoryListingRefreshed(DirectoryListingRefreshed),
+    DirectoryListingCompleted(DirectoryListingCompleted),
+    DirectoryCurrentRemoved(DirectoryCurrentRemoved),
     DirectoryPrefetched {
         path: PathBuf,
         result: io::Result<PreparedDirectoryEntries>,

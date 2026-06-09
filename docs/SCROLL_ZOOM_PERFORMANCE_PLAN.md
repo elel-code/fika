@@ -1,5 +1,8 @@
 # Scroll and Zoom Performance Plan
 
+> Archived Slint-era investigation. Future UI work targets GPUI and should follow
+> `docs/TODO.md`, `docs/DESIGN.md`, and `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`.
+
 ## Scope
 
 用户体感问题集中在主文件视图的滚动和 zoom，不是目录刷新。当前 Dolphin-style slot reuse

@@ -1,493 +1,217 @@
-# Fika Design
+# Fika Design: GPUI Target Architecture
 
-本文档记录 Fika 当前架构、设计边界和后续扩展方向。它的目标不是冻结实现，而是给后续逐项完善提供稳定参照。
-
-Fika 的后续实现需要外部项目行为对齐时，直接参考本地源码副本，不再维护单独的 COSMIC 或 Dolphin 参考文档。
+本文档描述未来目标架构。当前 Slint 代码是旧实现，不再作为设计目标。后续工作以
+`docs/GPUI_DOLPHIN_MIGRATION_PLAN.md` 为执行计划，以本地 `../dolphin` 源码为第一参考。
 
 ## Goals
 
-Fika 是一个面向现代 Wayland 桌面的轻量文件管理器原型。当前优先级是：
-
-- 保持 UI 响应，不让目录读取、MIME 探测、文件操作阻塞 Slint 主线程。
-- 采用 Dolphin 风格的主布局逻辑：顶部路径/工具栏、左侧 Places、右侧列优先图标视图、底部状态栏。
-- 除主栏文件项排列方式继续保持当前 Dolphin-like 列优先模型外，视觉风格、Rust 侧桌面集成、菜单组织、剪贴板、文件操作队列、设备/mounter 抽象、缩略图缓存等后续打磨优先参考 cosmic-files。
-- Shell UI 后续向 COSMIC Files 靠齐：顶栏和主栏在配色层级上属于同一平面，只保留必要分隔线；侧栏作为更突出的独立层覆盖在左侧，可在 COSMIC 基础上保留 Fika 的圆角；地址栏位置、Back/Forward 按钮、搜索框位置和展开方式优先参考 COSMIC Files，而不是继续增加 Dolphin-like 顶栏细节。
-- 使用 Slint `1.16.1`，UI 保持在 `.slint` 文件中，通过 `build.rs` 编译。
-- 避免依赖长期未维护的 MIME/XDG 小库；桌面默认应用解析先采用项目内置实现。
-- 为后续 portal chooser 和 Polkit helper 保留清晰边界。
+- 用 GPUI 重建 Fika UI shell，消除 `.slint` 静态结构带来的 slot、sidecar model、callback
+  glue 和 focused-pane fallback。
+- 保留并清理可以复用的 Rust core：file operations、trash、MIME/open-with、devices、
+  thumbnail、settings、portal/helper 边界。
+- 以 Dolphin 的 directory lister/model/view/controller 执行流作为第一参考目标。
+- 每个 pane 都是稳定 identity：`PaneId + generation` 是所有异步结果和 UI 事件的路由边界。
+- UI 只渲染 state 和派发 input action；目录模型变化只通过 model/lister event 进入 view。
 
 ## Non-Goals
 
-当前阶段暂不追求：
-
-- 完整替代 Dolphin/Nautilus。
-- 支持所有文件系统后端和远程协议。
-- 在 UI 线程中直接执行可能阻塞的 I/O。
-- 引入大型 GUI 框架或重写 Slint UI 架构。
-
-## Current Architecture
-
-### UI Layer
-
-入口 UI 在 `ui/app.slint`，共享组件已拆分：
-
-- `AppWindow` 是主窗口。
-- `ui/models.slint` 定义 Slint-facing 的 `ItemViewSlotEntry` / `PlaceEntry` / `DesktopApp` 等 UI row；Rust-native `FileEntry` 和 `ItemViewEntry` 保留在 Rust 侧，主视图 item 身份不再从 Slint struct 生成。
-- `ui/widgets.slint` 包含通用按钮、菜单项、popup surface 和 Places 行。
-- `ui/top_bar.slint` 导出两个 chrome 组件：`TopBar` 负责窗口顶栏里的 Split 状态入口和主题切换；`PathBar` 负责每个 pane 内容顶部的 Back/Forward 导航组、路径输入和搜索入口。`AppWindow` 只保留动作 callback、输入状态和持久化转发。
-- `ui/split_pane.slint` 负责主栏 viewport、pane-level input/DnD、横向滚动条和当前可见 tile overlay 渲染；选择、命中、右键、激活、DnD payload 语义由 Rust item-view controller 决定，可见 tile 的 size/media/text rect、每项 bounds、selection background 和 drop target 由 Rust render plan/raster layer 下发，基础 file/folder fallback icon 与 loaded thumbnail 由 PaneView 缓存和 Rust slot token 决定，再通过稳定 slot loop 贴图，避免写入每个 `ItemViewEntry` row 或走重 raster 刷新。
-- `ui/status_bar.slint` 负责状态文本、外部受保护编辑动作、Undo、chooser 保存名/过滤/choices/确认按钮；`AppWindow` 只保留状态绑定和动作转发。
+- 不把现有 `.slint` 文件翻译为 GPUI widget。
+- 不保留 Slint 兼容层、slot 兼容层、旧 reload queue 或 focused-pane fallback。
+- 不追求一次性复制 Dolphin 的所有 KDE/KIO 后端。第一阶段只实现本地文件系统，但执行流必须
+  能映射到 Dolphin。
+- 不在 GPUI view 里直接执行阻塞 I/O。
+
+## Reference Priority
+
+1. Dolphin source execution flow.
+2. Linux desktop specifications and services used by Dolphin-compatible behavior:
+   XDG trash, freedesktop thumbnails, MIME apps, service menus, UDisks2, Polkit.
+3. Existing Fika Rust modules, only when they do not conflict with the Dolphin flow.
+4. GPUI idioms for entity/view/state composition.
 
-Shell surface layering now follows the COSMIC direction outside the main file arrangement: `AppWindow` owns one shared base surface with a separate window-wide shell/header row. That shell/header row hosts split and theme controls through `TopBar`, and it intentionally does not draw a horizontal divider above the main content. Below it, the left sidebar panel and right main pane share one equal-height content row. Each pane starts with `PathBar` for Back/Forward, address editing, and opening search, followed by the Dolphin-style two-row search strip, horizontal column-first file view, and status bar; these rows render transparent backgrounds and keep only necessary internal separators. Sidebar rows are inset inside the rounded panel, and the sidebar border is intentionally a little stronger than the flat shell separators.
-
-The non-main-pane chrome is intentionally allowed to track COSMIC Files more closely than Dolphin: the default sidebar width is 280px but remains user-resizable and persisted, while Back/Forward, address editing, and search controls live inside each pane so split view has no implicit primary pane. Future visual passes should copy COSMIC Files freely for palette, spacing, address-bar placement, Back/Forward affordances, menu/dialog styling, and main-pane toolbar treatment. The deliberate exception is the main pane's column-first item arrangement and horizontal scrolling model; the sidebar may keep Fika's rounded raised layer on top of COSMIC proportions.
-
-主栏当前采用列优先布局：
-
-- `rows-per-column` 由可见高度和 row height 计算。
-- `column = floor(index / rows-per-column)`，每列宽度由该列可见 item 的最大 whole-item/text bounds 决定。
-- `x` 来自 Rust 投影的 `ItemViewItemBounds.x` / column offset，`y = mod(index, rows-per-column) * row-height`。
-
-这样对应 Dolphin 横向列模式：内容宽度向右增长，普通滚轮驱动横向 viewport。
+## Target Crate Layout
 
-主栏现在使用轻量虚拟化：
+Planned structure:
+
+```text
+crates/
+  fika-core/
+    pane/
+    directory/
+    model/
+    operations/
+    trash/
+    thumbnails/
+    devices/
+    desktop/
+    settings/
+  fika-gpui/
+    app.rs
+    window.rs
+    pane_view.rs
+    item_view.rs
+    menus.rs
+    dialogs.rs
+    input.rs
+  fika-portal/
+  fika-privileged-helper/
+```
 
-- `entry_count` 只保存当前过滤后的条目数量，用于空状态和横向滚动宽度。
-- `virtual_entries` 只包含当前可见列附近的 Rust-side `ItemViewEntry` slice，额外保留少量左右 overscan 列；Slint 不再持有完整业务 `FileEntry` 模型，也不持有可见 entry row model。
-- Rust 侧维护轻量可见索引缓存：无搜索/过滤时使用隐式 identity fast path，有搜索/过滤时只保存匹配条目的 `usize` 索引。
-- 滚动同步时 Rust 直接通过可见索引缓存克隆当前虚拟范围的条目；不会为了更新可视窗口构造完整过滤结果模型，也不会在每次滚动事件中重复扫描完整目录。
-- Slint 侧把虚拟 tile 放进以 `virtual_start_column + virtual_start_row` 为锚点的局部 layer；tile local x/y/text_width 由 Rust-projected `ItemViewItemBounds` sidecar 投影到 pane-local `ItemViewSlotEntry` slot pool，整 tile width 留在 Rust bounds sidecar 供 raster/hit-test/layout 使用，避免基础绘制 loop 同时读取业务 row 和 bounds row，也允许未按当前 `rows_per_column` 对齐的缓存窗口在 zoom 后继续复用。
-- Rust 缓存虚拟范围、行数、列宽和缩略图尺寸；滚动仍落在同一虚拟范围时不重置 Slint model。
-- 参考 Dolphin `KItemListView::setScrollOffset()` 的同步布局路径，横向滚动位置变化会立即在 UI 线程夹紧 viewport 并重建当前 visible slice，不再把当前视口内容等待后台 virtual prepare 补齐。
-- Rust 侧的 `VirtualItemViewPlan` 统一计算 clamped viewport、scroll max、可见范围、overscan 范围和 Slint 锚点列，防止滚动条、缩略图调度和模型切片各用一套边界规则。
-- 过滤、搜索、缩放或窗口尺寸变化导致内容变窄时，Rust 会按同一套列宽规则夹紧横向滚动位置，避免旧 viewport 落在新内容之外造成空白主栏。
-- tile 的真实全局索引由 Rust item-view layout/hit-test 根据 viewport、rows-per-column 和可见索引缓存解析，因此选择范围、拖拽命中和右键语义仍然基于完整模型，而不是 Slint row index。
-- 横向滚动、缩放和窗口尺寸变化会重新切片 Rust-side `virtual_entries`，避免大目录一次性实例化所有可见 tile primitive。
-- Rust 侧从业务 `FileEntry` 切出当前可见范围，再投影为瘦身后的 `ItemViewEntry`。`ItemViewEntry` 只携带 name/path/is_dir、thumbnail 状态和 media token；已加载 thumbnail image 另行投影为 Rust-only `ItemViewMediaSource`，再按 slot key 和 media token patch 到 stable `ItemViewSlotEntry`，同 key + 同 token 时不比较也不替换 `Image`。普通 item 使用 Dolphin 横向列模式的 compact 布局，图标在左、文件名在右侧居中显示。tile x/y/text_width 由可复用的 pane-local bounds sidecar 投影到 pane-local `ItemViewSlotEntry` slot pool，整 tile width 仍只存在于 Rust bounds sidecar；slot path、absolute index 和 thumbnail token 留在 Rust-only `ItemViewSlotProjection` / `ItemViewSlotToken`，不进入 Slint row。基础 icon/name/thumbnail primitive 消费 slot pool；基础 file/folder icon 通过 `media_kind` 选择 PaneView 当前尺寸/主题缓存图，selection background 和 drop target 画入当前 virtual slice 的 `PaneViewData.item_view_raster_layer`。tile height、media rect、text rect、标题 y/line height 和字体由 pane-level `PaneViewData` 下发。带 group/location 的递归搜索结果先保留为 Rust-only `ItemViewMetadataOverlaySource`，再按 `slice_index` 附着到 active `ItemViewSlotEntry` 的 metadata 字段；Slint 不再接收独立 metadata model。`SplitPaneView` 的可见 item overlay 只按 Rust raster 底图、缓存基础图标、Rust-projected active slot rows 和 pane-level 几何绘制 primitive，group/location 也是 slot Text loop，不再为每个 item 使用 `HorizontalLayout` / `VerticalLayout`，也不再在 Slint 内部分支生成多节点 fallback glyph、thumbnail row 或 metadata row。
-- 框选仍按完整可见顺序返回路径，但候选项会先裁剪到选择矩形横向覆盖的列范围；搜索/过滤状态下通过可见索引缓存解析真实条目。
-- 缩略图调度按“当前可见列优先，overscan 后置”排序，减少大目录图片预览队列对当前屏幕反馈的拖慢。
-- 离屏缩略图完成时只更新 Rust 缓存，不重置 Slint 模型；缩略图所属路径落在当前虚拟切片内时才刷新 Rust-side slice 并 patch 对应 slot row。
-
-Slint `FlexboxLayout` 采用策略：
-
-- `build.rs` 明确启用 Slint 实验特性，允许使用当前 master 分支仍处于 experimental registry 的 `FlexboxLayout`。
-- Flex 只用于局部响应式控件行，例如搜索栏、后续菜单行或弹窗按钮组，用来减少固定宽度控件在窄窗口里的挤压。
-- 主栏文件视图不使用 Flex。列优先横向滚动、虚拟化范围、拖拽命中、选择框和缩略图调度都依赖确定性的行列几何，继续由 Rust/Slint 手写布局维护。
+Core rules:
 
-### State Layer
+- `fika-core` must not depend on GPUI, Slint, window handles, or UI image/model types.
+- `fika-gpui` owns presentation, input routing, focus, menus, animations, and entity lifecycle.
+- Async workers communicate with core through typed events. UI receives already-routed pane events.
+- Every long-running operation carries enough identity to reject stale results.
 
-Rust 侧核心状态在 `AppState`：
+## Core Model
 
-- `panes`: 主栏 pane 容器，拥有 active pane 和可选 inactive pane。active pane 的目录、完整条目、历史、选择、搜索/filter、递归搜索运行态和虚拟视图 cache 封装在 `PaneState` 中。inactive pane 目前是 split-view 的可见中间态：打开 Split 会从 active pane 克隆目录 entries、搜索/filter、viewport 和 virtual-view 快照，但不复制选区和历史；右侧预览面板按自己的水平 viewport 做虚拟切片，可点击并与 active pane 交换焦点。目录加载请求和目录 watcher 刷新结果携带稳定 pane id，切换焦点后也会回写到发起请求的 pane；文件操作、FileAction、Undo、提权操作和 protected external edit 保存完成后的 cache invalidation / reload 都会按受影响目录映射 pane id，active pane 走完整 UI refresh，inactive pane 走同一套带 pane id 的后台目录结果管线刷新预览。权限不足而转入提权确认的 FileAction 不会提前刷新，等 privileged operation result 返回后再按同一 affected-dir 路由刷新。inactive preview tile 双击会先路由焦点到该 pane，再复用 active pane 的 `open_path()` 路径打开目录或文件。`PaneTarget::{Focused, Inactive, Id}` 是后续快捷键、菜单、DnD 和非目录异步操作摆脱 hard-coded `active` 访问的路由边界。当前只有 active pane 使用完整横向列优先 item-view、菜单和 DnD，inactive pane 仍是轻量预览。后续真正双栏渲染需要把 pane-local viewport、快捷键、菜单、DnD、状态栏和更多操作回调都路由到 focused pane。
-- UI 侧把地址栏使用的 `current_path` 和主栏 item model 归属的 `items_path` 分开：uncached 导航时地址栏可以先显示目标路径，但 sidebar/Devices 选中态保持跟随旧 `items_path`，直到 cache hit 或新 entries 提交。这与 COSMIC Files 的 location / `items_opt` 分层一致，避免 Places 跳转时左侧先高亮新位置而右侧仍显示旧模型。
-- `places`: 左侧 Places。
-- `directory_cache`: 已访问目录的内存条目缓存，用于 back/forward 或重复进入时先即时渲染，再后台刷新；缓存使用 LRU 顺序并限制容量，避免长时间浏览时无限保留完整目录列表。
-- active pane 的 `PaneView`: 当前 pane 的 viewport 坐标、虚拟 range/cache metadata、thumbnail pending map，以及每个目录的 viewport 坐标 LRU cache，用于返回目录时恢复滚动位置；每个 pane 独立持有自己的 view-state / thumbnail-pending state，避免分屏后同一路径在不同 pane 之间互相覆盖滚动位置或 pending 状态。
-- uncached 目录导航会保留当前可见模型直到后台扫描返回；目标目录的 viewport 恢复也延后到新 entries 提交时一起执行，避免旧模型先跳到新目录滚动位置。保留的旧模型在加载期间只作为视觉占位，不接受打开、选择、右键、滚轮或 drop 操作；cache hit 仍即时恢复目标 viewport 并渲染缓存，同时后台刷新。目录读取失败时不会清空已经提交的主栏模型：刷新失败保留当前视图，缓存刷新失败保留缓存视图，未缓存的 Places/Devices 跳转失败会把 `current_path` 回滚到最后提交的 `items_path`。
-- `thumbnail_cache`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图像素。
-- `thumbnail_failures`: 按路径、mtime、目标尺寸和 freedesktop thumbnail size bucket 缓存缩略图失败结果，避免坏图或不支持格式在大目录滚动时反复排队解码；文件修改后 key 变化，会重新尝试。
-- thumbnail load 会同时计算 freedesktop.org Thumbnail Managing Standard 的 cache identity：canonical `file://` URI、MD5 PNG 文件名、`normal` / `large` / `x-large` / `xx-large` 目录和 `fail/fika-$version` marker 路径。后台任务会先读取有效磁盘 cache 或 fresh fail marker；内置图片解码成功后写入对应 PNG cache，解码失败后写入 fail marker。对 PDF/SVG/AVIF 等非内置格式，Fika 会从 XDG thumbnailer 目录发现 `.thumbnailer` entry，校验 `TryExec`，匹配 `MimeType`，按 freedesktop field code 展开 `Exec`，让外部 thumbnailer 写入标准 cache 文件，再复用同一 cache 读取/缩放路径。UI 侧仍通过内存 LRU cache 装饰当前虚拟切片，磁盘 cache 作为跨目录/跨进程的持久加速层。
-- 缩略图完成事件只更新全局成功/失败缓存和当前 pane 的 pending 状态，不扫描或改写完整 `entries`；如果结果落在当前虚拟切片内，Slint 模型通过缓存装饰重新同步可见项。
-- `operation_queue`: Move/Copy/Link 操作队列，一次只启动一个后台文件操作。
-- active pane 的 `load_generation` / `open_generation` / `search_generation` / `thumbnail_generation`: 每个 pane 独立持有的 `GenerationCounter`，用于丢弃过期目录加载、打开、递归搜索和缩略图结果。
+### Pane
 
-目录 cache 与 COSMIC Files 的关系：
+`PaneState` is a core object, not a UI slot.
 
-- Fika 对齐 COSMIC 的 location/items 分层：目标路径可以先成为当前 location，但右侧条目模型的归属路径只在 cache hit 或异步扫描结果确认后提交。
-- Fika 比 COSMIC 更激进：COSMIC 当前主要以 `Tab::items_opt` 表示扫描状态，Fika 额外维护最近目录条目 LRU、目录视图位置 LRU 和 Places 预取，以减少 back/forward 与侧栏跳转的等待。
-- 设备发现和目录扫描保持独立。普通目录切换不再同步重建设备侧栏或启动设备发现；Devices 只在启动、设备 monitor 信号/轮询、以及 Mount/Unmount/Eject 结果后刷新，避免 Places/Devices 导航时把侧栏重绘伪装成主栏闪烁。
+Required fields:
 
-Slint UI 只在主线程更新。后台任务不持有 `AppWindow` 或 `Rc<RefCell<AppState>>`。
+- `PaneId`
+- `generation`
+- `current_dir`
+- history back/forward stacks
+- `DirectoryModel`
+- `DirectoryListerHandle`
+- selection
+- search/filter state
+- view state: layout mode, scroll offset, zoom, visible range cache
+- thumbnail pending/cache handles
 
-Rust 代码当前按低耦合职责拆分为嵌套模块：
-
-- `src/app/`: UI 线程共享状态、异步事件/桥接、目录加载状态准备、应用内 DnD trace、Places UI 逻辑、主栏几何和选择辅助。
-- `src/config/`: CLI 参数、路径归一化、settings 持久化。
-- `src/desktop/`: 内置 MIME/default app 解析、Open With 异步桥接。
-- `src/fs/`: entries、Places、文件动作、文件操作、递归搜索、缩略图流水线。
-- `src/support/`: generation / stale-result helper。
-
-### Devices
-
-侧栏 Devices 现在由 Rust 模型驱动，而不是在 Slint 中硬编码。当前实现优先保持已挂载目录稳定，同时开始接入 UDisks2 设备发现和挂载：
-
-- 固定包含 `Filesystem`，路径为 `/`。
-- 优先解析 `/proc/self/mountinfo`，只显示挂载点位于 `/run/media/$USER`、`/media/$USER`、`/media` 和 `/mnt` 下、且 source / filesystem type 看起来像真实本地设备的路径。`tmpfs`、`proc`、`sysfs` 等伪文件系统会被过滤掉，避免把运行时目录误显示成 Devices。
-- 当 mountinfo 不可用时，才回退扫描这些目录下的一级目录。
-- 作为增强层，Fika 会 best-effort 查询 system bus 上的 UDisks2 `ObjectManager`，从 `Block` -> `Drive` 关系识别用户可见的外置介质。已插入介质且 `Drive.Removable`、`Drive.MediaRemovable`、`Drive.Ejectable`、`Drive.Optical`、`Drive.ConnectionBus=usb` 任一成立，或 `Drive.MediaCompatibility` 标记为 optical/flash 介质时会列出，这覆盖许多不标记为 removable 的 USB 外置硬盘、读卡器和光学介质；空光驱/空读卡器仍因 `MediaAvailable=false` 被过滤。同时继续尊重 `Block.HintIgnore` / `Block.HintSystem`，避免系统分区进入侧栏。只有带 `org.freedesktop.UDisks2.Filesystem` 接口的 block 才会成为侧栏设备，裸 removable block 会被过滤掉，避免 UI 展示无法 mount/open 的目标。设备模型同时保存显示/打开用的 `path` 和 UDisks2 操作用的 `device_path`：未挂载 filesystem 设备二者通常都是 `/dev/...`；已挂载设备的 `path` 使用第一个 `MountPoints`，`device_path` 继续保留底层 `/dev/...`。当 mountinfo 和 UDisks2 发现同一个挂载点时，mountinfo 行保留显示顺序和标签，但会从 UDisks2 补充底层 `device_path` 和 eject 支持。UDisks2 不可用、超时或返回错误时，不影响 mountinfo 结果。显示名优先使用桌面后端给出的 `Block.HintName`，之后才使用文件系统 label、挂载点名、drive vendor/model 和 raw device path。侧栏 marker 优先使用 UDisks2 drive profile 推导出的 `USB`、`SD`、`CD`，否则回退到 label 首字母；这为后续替换成真实图标保留了稳定的设备语义。
-- `DeviceEntry.kind` 记录设备行来源/语义，当前取值为 `filesystem`、`local-mount`、`removable-media`。这把 Devices 行向 cosmic-files 的 mounter item 模型靠齐：UI 仍然按一组侧栏行渲染，但后端可以区分根文件系统、mountinfo/root-scan fallback 和 UDisks2 可移动介质。mountinfo 与 UDisks2 合并同一挂载点时，行顺序和显示名保持 mountinfo 稳定来源，但 `kind` 会升级为 `removable-media`，确保后续图标、菜单和 monitor snapshot 能响应真实设备语义。
-- Devices 发现通过统一 async event bridge 后台运行，`/proc/self/mountinfo` 解析和 UDisks2 system-bus 查询都不会阻塞 UI 线程。`AppState` 保存最近一次设备列表和独立的 `device_generation`；过期的 `DevicesLoaded` 事件会被丢弃。
-- 启动后会创建轻量设备 monitor。它订阅 UDisks2 system bus 上 `/org/freedesktop/UDisks2` 命名空间的信号，收到设备对象、属性或挂载状态变化后只向 UI 线程投递 `DevicesChanged`，再由主线程复用现有 `refresh_devices_async()` 刷新流程。为了覆盖桌面后端漏信号、挂载表变化或 UDisks2 不可用的情况，monitor 还会低频比对 Devices 快照；只有快照真实变化时才触发刷新。连续信号会经过 debounce 合并，避免一次插拔造成侧栏多次重建。
-- 点击未挂载的 UDisks2 filesystem 设备时，UI 线程只发起后台任务；后台通过 system bus 反查对应 `Block` object 并调用 `org.freedesktop.UDisks2.Filesystem.Mount({})`。成功后刷新 Devices 并打开返回的挂载点；失败信息写入状态栏。
-- Devices 行右键菜单复用普通菜单定位和 PopupSurface。Open 只依赖当前行是否 mounted；Mount / Unmount / Eject 则分别由 `DeviceEntry.can_mount`、`can_unmount`、`can_eject` 显式控制。UDisks2 发现出的未挂载 filesystem 会设置 `can_mount`，UDisks2 发现出的已挂载 filesystem 会设置 `can_unmount`，Drive `Ejectable=true` 时设置 `can_eject`；根 Filesystem 行和 mountinfo-only fallback 行保持可打开，但不会显示后端无法执行的 UDisks2 动作。Unmount 调用 `org.freedesktop.UDisks2.Filesystem.Unmount({})`，Eject 调用对应 Drive object 上的 `org.freedesktop.UDisks2.Drive.Eject({})`。这些调用全部通过 Tokio `spawn_blocking()` 离开 UI 线程，完成后刷新 Devices 和当前目录。发起动作前，`AppState` 会按 `device_path` 登记 pending action；同一设备已有 Mount/Unmount/Eject 未完成时，新动作只更新状态栏，不会重复排队 D-Bus 调用。pending action 会叠加到 `DeviceEntry.pending_action`，侧栏行用蓝色 in-progress 状态显示，右键菜单只展示禁用的 Mounting/Unmounting/Ejecting 行。
-- UDisks2 方法调用失败时，后端会识别常见 D-Bus error name：busy device、authorization denied / missing polkit agent、already mounted、not mounted、cancelled、timed out。状态栏优先显示可操作 guidance，同时保留原始 error name 和 detail，便于后续真实发行版排查。
-- 最近一次设备动作失败会按 `device_path` 记录到 `AppState::device_errors`，`sync_devices()` 刷新侧栏时把该错误叠加到对应 `DeviceEntry.error`。`PlaceButton` 会用红色细边、淡红底和 `!` 标记渲染失败设备；同一设备后续 Mount/Unmount/Eject 成功会清除这个视觉错误状态。
-- Unmount/Eject 发起时会把当时的挂载点路径随后台任务一起保存。动作成功后，如果主视图当前目录仍在该挂载点下，Fika 会切回 Home，并清掉 back/forward history 中同一挂载点下的条目。这参考了 Dolphin `setViewsToHomeIfMountPathOpen()` 和 cosmic-files 对已卸载 location 的处理，避免停留或回退到失效路径。
-- 设置 `FIKA_DEBUG_DEVICES=1` 启动 Fika 时，会把设备发现和 monitor 诊断输出到 stderr，包括 mountinfo 是否可用、UDisks2 接受的设备、被过滤设备的原因、monitor 刷新原因、单行发现摘要、mountinfo-only / UDisks2-only / merged 行数，以及最终合并后的 Devices 侧栏列表。UDisks2 接受行和最终列表都会打印 marker；发现摘要记录 mountinfo/root-scan 来源、UDisks2 行数、最终 mounted/unmounted 行数和 Mount/Unmount/Eject 能力计数，用于真实 U 盘、外置硬盘、polkit/UDisks2 发行版差异验证。
-- `scripts/check-runtime-integration.sh` 的普通运行模式会额外报告 UDisks2 system service 状态、`udisksctl` 可用性、`org.freedesktop.UDisks2` system-bus owner/activation 状态，并调用 ObjectManager 统计 Block / Drive / Filesystem 接口数量。这是只读探测，不会执行 Mount、Unmount 或 Eject，适合打包后在不同发行版上确认 Devices 侧栏的后端条件。
-- `fika --diagnose-devices` 是不启动 GUI 的只读诊断入口，会直接运行 Rust 侧 Devices 发现逻辑并输出发现摘要、merge 统计、UDisks2 discovery 错误、label、marker、显示路径、底层 device path、mounted 状态和 Mount/Unmount/Eject 能力。它用于把真实机器上的侧栏输入模型和后端来源直接贴出来排查，不会执行任何设备动作。
-
-这能覆盖常见桌面环境已经自动挂载的 U 盘路径，也能提前显示并挂载部分未挂载 U 盘。这个分层参考了 Dolphin 通过 Solid/KMountPoint 处理真实挂载点、以及 cosmic-files 将设备抽象为 mounter item 再填入侧栏的结构。后续完整设备管理应继续基于 UDisks2 system bus D-Bus，并在真实发行版上验证 UDisks2 / polkit 边界情况。
-
-### Async Runtime
-
-Tokio runtime 在 `main()` 启动时创建，并持有到 `ui.run()` 返回。
-
-当前异步通道：
-
-- 后台任务通过统一 `async_tx/rx` 发送 `AsyncEvent`。
-- `AsyncEvent::DirectoryLoaded` 回传目录读取结果。
-- `AsyncEvent::FileOpened` 回传文件打开结果。
-- `AsyncEvent::ThumbnailLoaded` 回传缩略图解码结果。
-- 后台任务发送事件后调用 Slint `Weak::upgrade_in_event_loop()` 唤醒 UI 线程。
-- UI 线程通过 `async_results_ready` callback drain channel 并应用事件。
-
-当前已异步化：
-
-- `tokio::fs::read_dir()` 读取目录。
-- `tokio::fs::DirEntry::metadata()` 读取 metadata。
-- `spawn_blocking()` 执行 MIME 探测、`mimeapps.list` 解析、`.desktop` 解析和默认应用启动。
-- `spawn_blocking()` 解码 PNG/JPEG/WebP 缩略图并回传 RGBA 像素。
-
-异步 stale-result 策略：
-
-- 每条异步流水线持有自己的 `GenerationCounter`。
-- 启动新任务时调用 `next()` 得到 generation，并随 `AsyncEvent` 返回。
-- UI 线程应用结果前调用 `is_current()`；过期结果直接丢弃。
-
-### MIME / Default App
-
-`src/mime_open.rs` 内置默认应用打开逻辑：
-
-- 读取文件头做简单 magic 探测。
-- fallback 到扩展名。
-- 读取 XDG `mimeapps.list`。
-- 解析 `.desktop` 的 `Exec=`, `Name=`, `NoDisplay=`, `Terminal=`。
-- 展开 desktop exec field codes。
-- 右键文件的 Open With 是 hover 子菜单，候选应用来自当前 MIME 类型的默认应用、`mimeapps.list` 的 `Added Associations`，以及系统 `applications/mimeinfo.cache` 的 `MIME Cache`。
-- Open With hover 子菜单根据剩余窗口空间选择向右或向左展开，避免靠近右边缘时被挤压。
-- Open With 子菜单最后一项是 `Other Applications...`，会打开应用选择框。
-- 应用选择框支持指定 desktop app 打开、一次性自定义命令打开，以及写入用户级 `mimeapps.list` 设置默认应用。
-- `Other Applications` 弹窗使用一个对话框级别的 “Set selected application as default” 勾选框；候选列表只负责选择要打开的应用。
-- 内置 `Open Terminal Here` 已删除；终端或其它目录动作应通过 service-menu 条目提供。Fika 优先读取 `$XDG_DATA_HOME/fika/servicemenus` 和各 XDG data dir 下的 `fika/servicemenus`，随后读取 Dolphin/KDE 兼容的 `kio/servicemenus`。
-
-这个模块目前是同步实现，因此从 UI 调用时必须通过 `spawn_blocking()`。
-
-### Persistence
-
-当前持久化：
-
-- Places 存储在 `$XDG_CONFIG_HOME/fika/places.tsv` 或 `~/.config/fika/places.tsv`。
-- window size、dark mode、sidebar width、icon zoom level、last opened directory 存储在 `$XDG_CONFIG_HOME/fika/settings.tsv` 或 `~/.config/fika/settings.tsv`。
-
-## Interaction Model
-
-### Selection
-
-当前支持：
-
-- 单击文件项：单选。
-- Ctrl+单击：切换多选。
-- Shift+单击：按当前可见顺序选择从锚点到目标的范围。
-- Ctrl+Shift+单击：把锚点到目标的范围追加到现有选择。
-- Ctrl+A：选择当前过滤后可见的所有项。
-- Ctrl+C / Ctrl+X / Ctrl+V：复制、剪切、粘贴文件路径，粘贴目标为当前目录；Ctrl+Z 触发最近一次文件操作 Undo；Delete 将当前选择移动到回收站。上述文件操作快捷键使用 Slint `KeyBinding` 声明，并在路径输入框、搜索框、保存名输入框、右键菜单、传输菜单或对话框活跃时不执行，避免抢走文本编辑快捷键。
-- 主栏空白拖拽：显示选择矩形，松手后选择与矩形相交的可见 tile；Ctrl+拖拽会追加到当前选择。
-- 主栏采用列优先布局，不提供垂直滚动；普通滚轮和水平滚轮都绑定横向滚动，Ctrl+滚轮缩放图标。左栏是独立纵向滚动区域。主栏 viewport input layer 统一处理滚轮、缩放方向、边界夹紧和横向滚动规则。
-- Esc：优先关闭上下文菜单；没有菜单时清空选择。
-- 点击主栏空白处：取消选中并转移焦点。
-- 双击：打开目录或文件。
-- F5：刷新当前目录。
-- 鼠标 Back/Forward：按目录历史后退/前进。
-- 多选右键菜单只暴露已实现的批量安全动作。当前批量菜单显示选中摘要和 `Move Selected to Trash`；`Rename`、`Open With`、`Add to Places` 等单项动作在多选状态下隐藏，直到存在明确的批量语义。单目录菜单中的 `Add to Places` 也会在该路径已存在于 Places 时隐藏，避免显示无效动作。
-- 右键菜单按 Dolphin/Qt 的父子菜单模型模拟：根菜单以触发点为首选位置，放不下时向左/上翻转，然后 clamp 到窗口安全边距；子菜单锚定在父菜单项行，同样按可用空间水平翻转并垂直 clamp。父项与子菜单之间有不可见 hover bridge，bridge 高度会跟随实际 clamp 后的子菜单位置，避免从父项斜向移动到子菜单时误触发关闭。普通菜单项 hover 不主动关闭已有子菜单，关闭由父/子 hover leave 后的短延迟处理。Open With 子菜单不额外显示标题行，第一项与父菜单行对齐；应用列表最多显示 7 行后纵向滚动，最后固定为 `Other Applications...`。Transfer 根菜单、Open With / Create New / service-menu 分组子菜单和 hover bridge、chooser-choice 上方锚定 popup 都复用 Rust `PopupPlacement` 几何 helper。
-- 菜单外观和通用交互件集中在 `ui/widgets.slint`：`MenuItem` / `MenuSeparator` / `MenuTitle` / `PopupSurface` / `MenuHoverBridge` / `MenuHoverRegion` / `MenuDismissLayer`。具体菜单内容和弹出层承载组件在 `ui/menus.slint`；普通动作、service-menu 动作、子菜单父行、Paste、Cut/Copy 这些重复行分别收敛为内部 `ActionMenuRow` / `ServiceActionMenuRow` / `SubmenuMenuRow` / `PasteMenuRow` / `CutCopyMenuRows`，原始 `MenuItem` 只作为这些内部 row wrapper 的底层绘制件使用。`RootContextMenuLayer` 统一挂载 file / Places / Devices / blank-area 菜单，并负责根菜单宽高选择、触发点 flip/clamp 定位以及 Open With / Create New 父行锚点计算；`TransferMenuLayer` 统一挂载拖放操作菜单，并封装 Transfer 菜单固定尺寸和 root-menu flip/clamp 定位，Rust transfer 逻辑只保留 drop anchor 与目标语义；`ChildSubmenuLayer` 统一承载 Open With / Create New / service-menu 分组子菜单并封装子菜单尺寸、子菜单定位与 hover bridge 定位输入，`ChooserOptionPopupLayer` / `ChooserChoicePopupLayer` 统一挂载 chooser filter 和 choice 弹出菜单并封装锚点定位公式。菜单层直接调用 `ui/menu_geometry.slint` 的 `MenuGeometry` global；Rust 在 `src/app/geometry.rs` 注册这些 pure callback。Open With / Create New / service-menu 分组的子菜单 open 状态、row anchor 和延迟关闭 pending kind 由 `ui/menu_lifecycle.slint` 的 `MenuLifecycle` global 持有，`MenuLifecycleController` 拥有 240ms delayed-close timer 与 hover/show helper，`ui/app.slint` 只保留菜单业务动作和 Open With/service-menu 候选准备，不再转发几何 callback 或直接声明子菜单生命周期状态。所有右键入口通过 `show-context-menu()` 统一写入 kind、触发坐标、关闭子菜单并停止延迟关闭 timer。Open With / Create New / service-menu 分组的父项、hover bridge、子菜单内容和子菜单面板区域都走同一个 child-submenu hover/timer 入口，chooser popup 保留从按钮上方弹出的语义但边界 clamp 也由 Rust helper 计算。Service-menu 的用户策略由 `src/config/service_menu_policy.rs` 持久化；右键菜单可显示所有未禁用动作，也可只显示显式勾选动作，配置弹窗使用当前匹配到的完整动作快照，隐藏项仍可重新启用。Service-menu `Icon=` 通过 `src/desktop/icons.rs` 在后台发现阶段解析为本地图标文件路径，菜单和配置弹窗只在已解析成功时绘制图标。
-- 主栏空白菜单借鉴 COSMIC 的 action enablement 模式：提供 Select All，并且没有可粘贴文件时保留 disabled Paste，而不是隐藏整行，避免后续 Open Folder With / service-menu 动作的位置随剪贴板状态跳动。菜单项支持右侧快捷键提示，并只标注已经由 `KeyBinding` 实际接管的动作。
-- 单目录右键菜单也保持 Paste Into Folder 行稳定；剪贴板不可粘贴时该行动作禁用，而不是隐藏。
-- Places 空白菜单同样采用稳定 action layout：当前目录已在 Places 中时，Add Current Folder 保留为 disabled 行，Restore Defaults 的位置不随当前目录变化。
-- 鼠标侧键 Back/Forward 直接通过 Slint `PointerEventButton.back` / `PointerEventButton.forward` 处理，入口只挂在主栏 viewport input layer 上；侧栏、顶栏和分隔条不会触发目录历史导航。不再维护窗口后端自定义输入旁路。
-
-当前导航模型：
-
-- `navigate_to()` 会把当前目录压入 back stack，并清空 forward stack。
-- refresh 和 watcher reload 不进入历史。
-- mouse Back/Forward 使用 back/forward stack，不等同于“上一级”。
-- 未缓存目录导航不会立即清空旧主栏，而是保留旧画面并只通过状态栏反馈加载状态；新目录结果到达后再原子替换，避免短暂白屏闪烁。主栏内部不显示左上角 loading 文案。
-- back/forward 不在 UI 线程同步 `stat` 历史目标，避免慢盘或网络挂载阻塞事件循环。
-- 已访问目录会先从 `directory_cache` 即时显示，再启动异步刷新，兼顾“快”和新鲜度。
-- 本地目录读取借鉴 COSMIC Files 的后台同步 scan 思路：一次目录扫描整体放入 Tokio blocking pool，避免为每个 entry 创建独立异步 filesystem 调度。
-- refresh / watcher reload 如果得到的可见目录模型和当前模型一致，只更新 LRU 缓存与状态栏，不 invalidation 虚拟范围，也不重新提交 Slint model。
-- 借鉴 COSMIC Files 的 item/thumbnail 分层，同目录 refresh 和 watcher reload 只刷新目录条目，不推进 active pane 的 thumbnail generation、不清空 active pane 的 thumbnail pending map；已有和正在进行的缩略图任务继续回填缓存。只有真正的导航加载会取消旧目录的缩略图 generation 和 pending 队列。
-- 目录切换前会记录当前主栏滚动位置，进入已访问目录时恢复对应 viewport，减少 back/forward 后的视觉上下文丢失。
-- 鼠标 Back/Forward 只在右侧主栏范围触发，避免顶栏、侧栏或分隔条上的操作意外改变目录历史。
-
-调试：
+Opening or closing split panes creates or drops pane entities. It must not clone global UI state or share watcher state.
 
-- 导航和异步流水线日志默认静默。
-- 设置 `FIKA_DEBUG_NAV=1` 可重新启用 `[fika nav]` 诊断输出。
+### Directory Lister
 
-### Places Drag
+The lister mirrors Dolphin's `KDirLister -> KFileItemModel` relationship.
 
-当前 Places 拖拽使用 Slint master `DragArea` / `DropArea` 和 `data-transfer` 的“预览 + 插入线 + 松手提交”模型：
+Inputs:
 
-- 拖动时不实时修改 Rust 模型；DropArea hover 只更新 ghost 和插入槽位。
-- 只显示 ghost 和插入槽位。
-- 松手后通过 path 找到源 Places 项，再调用内部 reorder 逻辑一次性提交。
+- `load_directory(path)`
+- `refresh_directory(path)`
+- watcher events
+- file operation affected-directory refresh
 
-这个模型应继续用于后续列表拖拽，避免边拖边重建模型导致抖动。
+Outputs:
 
-Slint `DragArea` / `DropArea` 引入策略：
+- `DirectoryLoadingStarted`
+- `DirectoryItemsAdded`
+- `DirectoryItemsDeleted`
+- `DirectoryItemsRefreshed`
+- `DirectoryListingCompleted`
+- `DirectoryCurrentRemoved`
+- `DirectoryError`
 
-- 主栏 tile 通过 `DndApi.make-drag-folder()` / `DndApi.make-drag-file()` 构造内部 `data-transfer` user data，不再用自定义 MIME 字符串承载内部路径。
-- Places 项通过 `DndApi.make-drag-place()` 构造内部 `data-transfer` user data。
-- Places sidebar、主栏空白和主栏目录 tile 已使用 `DropArea` 接收应用内的主栏条目和 Places 项，并根据 `DropEvent` 的 data-transfer kind 决定 reorder、add place 或弹出 Move / Copy / Link 菜单。
-- 拖到 Places 缝隙时显示插入线；拖到 Places 项或主栏目录时高亮目标项，颜色与普通选中态区分。
-- Places 插入线、拖拽 ghost、拒绝提示和主栏拒绝提示统一由 `ui/dnd_overlay.slint` 的 `DragOverlayLayer` 承载；`ui/app.slint` 只保留 hover/drop 状态和动作转发。
-- Places DropArea 的 hover target、gap/item 判定和插入 slot 通过 Rust `PlaceDropGeometry` 计算，避免滚动后的视觉反馈和松手提交规则漂移。
-- 跨应用外部文件管理器 DnD 当前不支持；Slint 现阶段在本项目中只可靠覆盖应用内 DnD，所以外部 `text/uri-list` / `text/plain` 解析和窗口后端 drop 旁路都已移除。后续等 Slint 提供稳定跨应用 DnD 后再恢复外部 drop。
-- 保留当前 ghost、插入线和松手提交模型；`DropArea.contains-drag` 只驱动 hover/slot 视觉，不直接修改 Rust 模型。
+All outputs carry `PaneId`, `generation`, and `path`.
 
-### Internal Drag And Transfer
+### Directory Model
 
-当前内部拖拽语义：
+`DirectoryModel` owns entries, sorting, filtering, trash metadata, and path-index lookup.
 
-- 主栏文件夹拖到 Places 项之间的缝隙：按缝隙位置插入为新的 Place。
-- 主栏文件夹拖到 Places 项本体：弹出 Move / Copy / Link 菜单，目标为该 Place。
-- 主栏普通文件拖到 Places 项本体：弹出 Move / Copy / Link 菜单，目标为该 Place。
-- 主栏普通文件拖到 Places 项之间的缝隙：不作为 Place 添加，避免把不可打开为目录的文件写入 Places。
-- 主栏文件夹拖到主栏文件夹：弹出 Move / Copy / Link 菜单，目标为该文件夹。
-- 主栏文件夹拖到主栏空白处：弹出 Move / Copy / Link 菜单，目标为当前目录。
-- 主栏普通文件拖到主栏文件夹或空白处：弹出 Move / Copy / Link 菜单，目标分别为该文件夹或当前目录。
-- Places 项拖到主栏空白处：弹出 Move / Copy / Link 菜单，目标为当前目录。
-- Places 项拖到主栏文件夹：根据松手坐标和列优先网格几何计算目标 tile；如果命中目录则以该目录为目标，否则退回当前目录。
-- 拖到自身或自身子目录不会打开 transfer 菜单；Rust 侧准备菜单和执行操作都会拒绝这类目标并在状态栏提示。
-- Drop transfer 菜单提供 Move / Copy / Link / Cancel，Cancel 只关闭菜单不入队操作。
+The model emits Dolphin-style deltas:
 
-Move / Copy / Link 通过 Tokio `spawn_blocking()` 执行真实文件系统操作，完成后回到 UI 线程更新状态。操作会先检查目标目录中是否已有同名条目；存在冲突时弹出对话框，由用户选择 Overwrite、Keep Both、Rename 或 Skip，之后才进入 `operation_queue`。Paste 会复用同一套 transfer 接受/拒绝规则，只统计真正被接受的传输；Cut 剪贴板只在至少一个 move 被接受后清空，拒绝项不会误报为已排队。队列一次启动一个任务；copy 和跨文件系统 move 会按字节汇报进度。`src/app/operation_controller.rs` 集中处理入队快照、是否可启动、active id/cancel flag 生命周期、取消摘要、queued/start/progress/complete/failed 状态文本、剩余队列后缀、提权等待提示、完成 / 提权重试 / 普通失败的 result disposition，以及完成事件的 active-id 校验、目录 cache 失效、刷新判定和剩余队列 summary；`transfer.rs` 仍负责冲突判断与实际任务派发，`main.rs` 只执行 Undo 注册、权限弹窗、目录刷新等 UI 副作用。用户可以取消尚未开始的排队任务，也可以取消正在复制的活动任务。当前目录受影响时会触发刷新。权限不足时，UI 会保存待执行命令并弹出确认框；确认后通过受限 D-Bus helper 重试，GUI 进程本身不做 root 写入。
+- add items into pending/visible ranges
+- delete item ranges
+- refresh item data and preserve stable item identity where applicable
+- full listing refresh only when the lister cannot classify a delta
 
-### External Drag And Drop
+The GPUI item view consumes model signals and snapshots. It does not decide whether a filesystem event is an add, delete, refresh, or full reload.
 
-跨应用外部 DnD 当前明确延后：
+## GPUI UI Layer
 
-- Slint `DropArea` 只用于应用内拖拽，内部拖拽通过 `DropEvent.data.user_data()` 区分 place / folder / file。
-- 来自其他文件管理器的 `text/uri-list` / `text/plain` drop 暂不解析，也不通过窗口后端旁路接入。这样避免维护两套不一致的拖拽语义和平台 fallback。
-- `FIKA_DEBUG_DND=1` 只记录应用内 DropArea trace；非内部 payload 会以 `unsupported-dnd-payload` 拒绝，并且不会解析 `text/uri-list` / `text/plain` 内容。
-- 当前范围明确不保留 winit、X11 或 native-window drag/drop fallback；后续只有在 Slint 本身支持稳定跨应用 DnD 后才重新设计外部文件 drop。
-- 项目依赖 Slint master 后不再需要 `SLINT_ENABLE_EXPERIMENTAL_FEATURES` 来编译 `DragArea` / `DropArea`。后续等 Slint 支持稳定跨应用 DnD 后，再重新设计外部文件 drop。
+### App Entity
 
-### Places Management
+The app entity owns:
 
-Places 分为内置项和用户项：
+- global settings
+- theme
+- pane tree
+- Places and Devices models
+- global menus/dialog state
+- async event receiver
 
-- 内置项来自默认 Home/Desktop/Documents/Downloads 等位置。
-- 用户项来自 `Add to Places`，可重命名、移除、拖拽排序。
-- Places 右键菜单对用户项显示 Rename、Remove、Open in New Window。
-- Open in New Window 通过当前可执行文件打开对应路径，并优先纳入 systemd user transient scope；成功创建 scope 时记录 unit 名称，systemd 不可用时仍打开窗口并在状态栏显示非致命诊断。
-- 内置项不暴露 Rename/Remove，避免误删默认入口。
-- Restore Defaults 会恢复默认 Places，并写回 `places.tsv`；入口在 Places 空白区域右键菜单中。该空白菜单还会在当前目录尚未存在于 Places 时显示 Add Current Folder，复用普通目录的 Add to Places 后端。
+### Pane Entity
 
-### File Actions
+Each pane entity owns a core `PaneState` handle and renders:
 
-当前支持：
+- path/navigation row
+- optional search/filter row
+- file item view
+- pane status row
 
-- 新建：从主栏空白右键菜单 `Create New > Folder` 或 `Create New > File` 打开命名对话框，在当前目录创建；重名时自动生成 `copy` 后缀。
-- 自定义服务动作：文件、目录和主栏空白菜单可显示匹配的 service-menu 动作；内置终端动作不再存在，需要时由用户 service-menu 提供。
-- 重命名：文件/文件夹右键菜单打开对话框，只接受单级名称，拒绝路径分隔符。
-- Duplicate Here：右键单项后在同一父目录中排队执行 copy。
-- Copy Location：把当前条目的绝对路径通过内置 Wayland data-control 写入桌面文本剪贴板。
-- Properties：显示名称、路径、类型、大小和修改时间。
-- 内部 Cut / Copy / Paste：单项和多选菜单可以暂存路径；主栏空白和目录项菜单在有内部剪贴板内容时显示 Paste，实际执行复用 async move/copy 队列。
-- 桌面剪贴板：Cut / Copy 通过内置 Wayland data-control 同时发布 `x-special/gnome-copied-files`、`text/uri-list` 和 Dolphin/KDE 的 `application/x-kde-cutselection`，其中 GNOME file-list payload 第一行为 `cut` 或 `copy`，后续为 `file://` URI；URI list 只提供路径列表，cut/move 语义由 KDE cutselection marker 表达。启动后和右键菜单打开前会通过同一套内置 Wayland data-control 读取 `x-special/gnome-copied-files` / `text/uri-list` 并更新缓存；如果没有文件列表 payload，则只探测 data-control 暴露的 MIME 类型来判断 image/video/text 是否可粘贴，避免从 transient menu 路径里读取大图或视频数据。菜单 Paste 可见性使用缓存状态；执行 Paste 时也先通过 async event bridge 导入当前桌面剪贴板，读取结果回到 UI 线程后再入队 transfer；Wayland data-control 不可用或读取失败时继续使用 Fika 当前内部剪贴板状态。导入 URI list 时额外读取 Dolphin/KDE 使用的 `application/x-kde-cutselection`，首字节为 `1` 时按 cut/move 处理。读取成功后复用现有 async move/copy 队列。内部和导入的剪贴板路径会按原顺序去重，避免同一源路径被重复 Paste。右键菜单后台刷新和 Paste 入队前都会过滤已经不存在的剪贴板路径，全部失效时清空内部剪贴板；非文件 clipboard 内容按 COSMIC 顺序尝试 image、video、text，并写为唯一命名的 `Pasted Image.*`、`Pasted Video.*` 或 `Pasted Text.txt`，通过 FileAction 完成事件刷新目录并提供 Undo。
-- 冲突处理：通过 drop、Paste 或内部 transfer 菜单发起的 copy/move/link，如果目标名称已存在，会先要求用户选择 Overwrite、Keep Both、Rename 或 Skip。Apply-to-remaining 支持 Skip、Keep Both、Overwrite 和 Rename；Rename 会把当前冲突使用的显式名称只用于当前项，对剩余冲突按各自目标生成唯一的 `copy` 风格建议名，避免把一个手写目标名复用到不相关的后续冲突。Overwrite 会先把旧目标移动到同目录临时备份；操作失败时尝试恢复旧目标，因此文件和目录覆盖走同一套路径。
-- Undo：成功的 copy/link 会在状态栏提供一次性 Undo，执行时删除刚创建的目标；成功的 move 会尝试把目标移回原路径。Overwrite 操作会把被替换的旧目标保留为当前 Undo 条目的临时备份；撤销 copy/link overwrite 时删除新目标并恢复旧目标，撤销 move overwrite 时先把移动来的目标移回原路径再恢复旧目标。新的 Undo 条目替换旧条目时会清理旧 overwrite 备份。Undo 失败时会恢复同一个 Undo 入口以便修正阻塞条件后重试；如果失败结果返回前已经产生了新的 Undo 条目，则保留新的 Undo，不用旧失败结果覆盖当前状态。
-- 移到回收站：右键菜单支持单项或多选项移动到 XDG Trash；多选菜单只调用批量 trash 路径，写入 `files/` 和对应 `.trashinfo`。Places 默认包含内置 Trash 项，路径指向 XDG Trash 的 `files/` 目录；点击时会先确保 `files/` 和 `info/` 目录存在，再作为普通目录导航。Trash 上下文中的文件菜单会把普通 `Move to Trash` 替换为显式 `Restore From Trash` 和 `Delete Permanently`，Restore 从 `.trashinfo` 的 `Path=` 恢复原位置，Permanent Delete 只接受 Trash `files/` 内的条目。Trash 视图从 `.trashinfo` 读取原始位置和删除时间，并在条目副标题与属性弹窗中显示；排序使用 Trash 专用规则，有删除时间的项目按 newest-first 排列，缺少删除时间或缺 metadata 的项目排在后面并按名称稳定排序。Trash 空白区域菜单提供 `Empty Trash`，后端逐项删除 Trash `files/` 内条目并清理对应或孤立的 `.trashinfo` 文件。Trash 视图会同时监听 XDG Trash `files/` 和 `info/`，外部 trash metadata 变化也会触发刷新。Delete Permanently 和 Empty Trash 都会先打开通用确认弹窗，确认后才调用后端。
-- 错误汇总：批量移动到回收站会汇总成功数量和失败原因，显示在状态栏。
+The pane entity receives input locally and emits controller actions. It never routes through "currently focused pane" unless the command is explicitly global, such as `Ctrl+L` on the focused pane.
 
-这些动作通过 `file_actions.rs` 进入 Tokio `spawn_blocking()`，完成后回到 UI 线程刷新当前目录。权限不足时和 transfer 操作走同一套提权确认：普通用户态尝试失败后显示管理员授权提示，用户确认后才调用 polkit helper。正式路径是 system bus D-Bus activation 启动 `fika-privileged-helper --system-bus`，helper 对每个方法调用 polkit authority；开发 checkout 没有安装 system bus service 时，会退回 `pkexec --disable-internal-agent fika-privileged-helper --session-bus ...`。
+### Item View
 
-### Search
+The item view follows Dolphin's `KItemListView` boundary:
 
-当前支持两种搜索：
+- model signals create insert/remove/change layout work
+- layouter owns compact/details/icons geometry
+- controller owns hit-test, selection, activation, DnD, keyboard navigation
+- renderer owns visible item drawing
 
-- 默认搜索只过滤当前目录已加载条目。
-- `SearchPanel` 第二行提供 Dolphin-style 的 `Here` / `Everywhere` 位置按钮；在当前后端里，`Here` 表示只过滤当前目录，`Everywhere` 表示异步递归扫描当前目录及子目录。
-- `Filter` 按钮打开 pane-slot 路由的 anchored popup，提供 File Type、Modified since、Size 三组 selector；过滤器可在空查询时单独作用于当前目录，也会作用于递归搜索返回的结果。
-- 已启用过滤器会在第二行显示为可移除 chip，避免把过滤状态藏在按钮文案或展开式面板里。
-- 搜索 strip 的布局集中在 `ui/search_panel.slint` 的 `SearchPanel` / `SearchFilterPopup`。搜索过滤状态 helper、递归搜索取消 token 处理和状态栏文案集中在 `src/app/search_ui.rs`；`ui/app.slint` 只保留查询/过滤状态、popup 路由和主栏高度计算，`main.rs` 只保留后端 callback 转发与异步搜索启动。
+GPUI allows this to stay in Rust entities without projecting every intermediate row through a static UI language.
 
-递归搜索使用独立 `search_generation` 和一个协作取消标记。修改查询、清空查询、按下 Cancel 或切换目录会请求当前搜索尽快中断并使旧搜索结果失效；过期结果和过期进度事件回到 UI 线程后直接丢弃。递归搜索进行时 UI 设置 `search_loading`，主栏空状态显示搜索中而不是误报无匹配；后台任务会周期性回传已扫描目录数和已匹配结果数，状态栏据此显示实时进度。有效结果或取消/切目录会清除 loading 状态；用户主动取消时，状态栏会包含最近一次扫描进度。递归搜索完成后，如果 Type / Modified / Size 过滤器隐藏了部分匹配项，状态栏会明确显示可见数量是过滤后的结果数。递归结果按父目录位置排序，并在每个位置组的第一个 tile 上显示组名；每个结果仍显示父目录位置，便于区分同名文件。
+## Async and Stale Result Policy
 
-切换 `Here` / `Everywhere` 时，如果已有查询，会立即按新模式重新提交搜索。
+Every async result must include:
 
-Rust-native `FileEntry` 保存展示用的 `size` / `modified` 字符串、递归搜索分组用的 `group` / `location`、过滤用的 `size_bytes` / `modified_age_days`。这样搜索过滤不依赖格式化字符串解析，递归搜索、本地过滤和大目录虚拟化切片都走同一套可见索引逻辑。当前 viewport 另行投影为 Rust-native `ItemViewEntry` slice，只携带业务身份、目录标记、thumbnail 状态和 media token；已加载 thumbnail image patch 到 stable slot row，selection/drop feedback 存在 Rust-only sidecar 并画入当前 tile raster base layer，render-plan 几何存在 pane-level view data，因此主视图只消费预计算后的 pane-level 绘制坐标和图像；普通文件名和递归搜索元数据都使用同一套 Rust 侧横向 text rect。
+- `PaneId` when pane-scoped
+- `generation`
+- request serial when multiple same-generation requests can overlap
+- source path or operation id
 
-### Thumbnails
+Apply path:
 
-缩略图流水线当前覆盖 PNG/JPEG/WebP：
+1. Receive event.
+2. Resolve pane by `PaneId`.
+3. Check generation and path.
+4. Apply to core model.
+5. Notify GPUI entity/view.
 
-- Rust-native `ItemViewEntry` 包含 `thumbnail_state` 和 `media_token`；已加载 thumbnail image 通过 Rust-only `ItemViewMediaSource` patch 到 stable slot row，未成功时同一 slot 使用 pane-level fallback icon cache 生成的通用文件/目录图标。
-- 当前可见顺序的前若干项会先被调度，符合列优先图标视图的首屏优先策略。
-- 后台任务用 `image` crate 解码并缩放到当前 zoom 对应尺寸，回传 RGBA 像素给 UI 线程构造 Slint `Image`。
-- 缓存 key 为路径、mtime 和目标尺寸；重复访问或刷新同一目录时可复用。
-- 缩略图缓存有固定条目上限，插入新缩略图时刷新顺序并淘汰最旧条目，避免长时间浏览大目录后内存无限增长。
+No async result may apply by focused pane.
 
-### State Persistence
+## Undo and File Operation Policy
 
-当前保存到 `$XDG_CONFIG_HOME/fika/settings.tsv` 或 `~/.config/fika/settings.tsv`：
+Undo follows Dolphin's model: the operation performs filesystem changes; directory lister/model signals update the visible view.
 
-- dark mode。
-- sidebar width。
-- icon zoom level。
-- last opened directory。
-- window width / height。
+Fika-specific requirements:
 
-设置在启动时加载；损坏或无法解析的值会回退到默认值。状态在对应 UI 操作发生时保存，目录切换时同步保存 last opened directory。
-关闭窗口时也会保存当前窗口尺寸，启动时按最小尺寸约束恢复。
+- undo start takes a serial
+- undo finish with stale serial is ignored
+- affected directories are mapped to pane ids
+- each affected pane calls lister refresh
+- UI does not manually rebuild item views after undo
 
-## Planned Subsystems
+## Slint Archive Policy
 
-### Chooser Output Contract
+The old Slint implementation may be read for:
 
-`fika --chooser [START_DIR]` 后续作为 portal backend 的 UI 前端时，stdout 合约固定如下：
+- file operation behavior
+- trash edge cases
+- thumbnail cache behavior
+- MIME/open-with/service-menu parsing
+- UDisks2 diagnostics
+- tests that encode known bugs
 
-- 成功选择：每行输出一个本地绝对路径，UTF-8 文本，末尾带 `\n`。
-- 多选结果：按用户选择顺序输出多行。
-- portal backend 启动 chooser 时可以 opt-in 请求元数据行：`FIKA_CHOOSER_FILTER\t<index>` 和 `FIKA_CHOOSER_CHOICE\t<id>\t<selected>`。这些行只在 `--chooser-return-filter` / `--chooser-return-choices` 下输出，普通 chooser 调用仍只输出路径。
-- 用户取消：不输出路径，进程以非零状态退出。
-- 内部错误：stderr 输出人类可读错误，进程以非零状态退出。
-- stdout 不输出日志、状态文案或调试信息；调试信息只能走 stderr。
+It must not be used as:
 
-当前 chooser mode 使用双击和底部确认区两种选择语义：双击目录继续进入目录，双击普通文件会输出该文件路径并退出；底部确认区用于目录选择、保存路径选择和多选确认。stdout 合约必须保持稳定；任何调试输出都只能写 stderr。
+- UI architecture reference
+- pane identity reference
+- directory refresh execution-flow reference
+- compatibility surface for GPUI
 
-Chooser 的纯数据逻辑集中在 `src/app/chooser.rs`：portal filter / choice 参数解析、choice 选中项更新、stdout metadata 生成、保存文件名安全校验和“选中目录否则当前目录”的目标目录选择都在该模块测试。`main.rs` 只保留 chooser UI 同步、用户确认流程，以及真正写 stdout 并退出进程的边界。
+## Acceptance Definition
 
-### Directory Monitoring
+The GPUI rewrite is architecturally acceptable when:
 
-目标：
-
-- 当前目录发生文件新增、删除、重命名、metadata 变化时自动刷新。
-- 快速连续事件需要 debounce。
-- 切换目录时旧 watcher 必须停止或失效。
-- 刷新应保留仍然存在且仍然可见的选中项；导航到新目录才重置选择。
-
-当前实现：
-
-- 使用 `notify`。
-- 每次 pane 目录加载会按稳定 pane id 重建当前目录的 non-recursive watcher，并丢弃该 pane 的旧 watcher；split pane 关闭时会移除对应 watcher。
-- 当前目录是内置 Trash `files/` 时，同一个 watcher 会同时注册 `files/` 和 `info/`，但 reload 目标仍是 Trash `files/` 列表。
-- watcher 忽略纯读/open/close-nowrite access events，但保留 `Close(Write)` 和 rescan 事件触发刷新。
-- watcher 事件 debounce 200ms 后异步重读当前目录；同一 pane/generation 内的后台读取由 request 序号防止旧读取晚到覆盖新读取。
-- debounce 后复用 `AsyncEvent::DirectoryLoaded` 回到 UI 线程。
-- 复用目标 pane 的 load generation、目录路径和 request 序号丢弃过期结果。
-- `DirectoryLoadResult::preserve_view` 区分导航加载和刷新加载。F5 与 watcher reload 保留当前过滤和选择交集，导航加载重置过滤和选择。
-
-后续：
-
-- 根据文件操作队列减少本进程引起的重复刷新。
-
-### Locale Handling
-
-Fika no longer vendors `icu_segmenter` or forces `LC_ALL` / `LANG` at startup. The earlier ICU4X CJK segmentation warning workaround was removed after the upstream fix landed, so text segmentation now follows the process locale and the Slint/ICU stack supplied by Cargo.
-
-### Thumbnail Pipeline
-
-目标：
-
-- 图片/PDF/视频先显示通用图标，再异步替换缩略图。
-- 滚动和切目录时不能阻塞 UI。
-
-建议：
-
-- 为 entries 增加稳定 key，例如 path + modified + size。
-- 维护缩略图缓存目录，并复用 freedesktop.org thumbnail PNG cache / fail marker 作为跨会话加速层。
-- 导航到新目录时推进 active pane 的 thumbnail generation，使旧目录缩略图结果过期；同目录 refresh / watcher reload 复用当前 generation，让进行中的缩略图任务继续回填缓存。
-- 只为当前虚拟可视切片及 overscan 调度缩略图；generation 过期或视口/缩放变化导致旧结果回来时，只清理匹配同一 path+key 的 pending 记录，避免旧任务阻塞后续重新调度。
-- 后台按可见项优先生成。
-- 结果通过 channel 回 UI。
-
-### File Operations
-
-当前支持：
-
-- New Folder / New File / Rename / Trash / Copy / Move / Link。
-- Drop transfer 操作进入 `OperationQueue`，一次执行一个后台任务。
-- Copy 和跨文件系统 Move 会按字节汇报进度到状态栏。
-- `Cancel Operations` 会清空未开始的队列，并对活动 copy/move 设置取消标志。
-- 批量 Trash 会汇总错误。
-
-权限不足的受保护写入当前通过受限 D-Bus helper 执行：普通 GUI 进程记录 `PrivilegedCommand`，用户确认后优先通过 system bus 调用 `org.fika.FileManager1.Privileged`。打包安装时，D-Bus activation 会以 root 启动 `fika-privileged-helper --system-bus`，helper 再调用 polkit authority 对每个方法做授权。GUI 不做 root 写入，也不向 helper 传 shell 命令或任意 argv。
-
-system bus 形态使用 `data/dbus-1/system-services/org.fika.FileManager1.Privileged.service.in` 和 `data/dbus-1/system.d/org.fika.FileManager1.Privileged.conf` 安装激活与总线权限；`data/polkit-1/actions/org.fika.FileManager.policy.in` 定义稳定 action id `org.fika.FileManager.privileged-helper`。每个 D-Bus 方法都调用 `org.freedesktop.PolicyKit1.Authority.CheckAuthorization`，认证 UI 仍由桌面 polkit agent 提供。Polkit authority 不可用、授权检查失败和用户拒绝的诊断都会带 action id 和 policy 文件安装提示，避免把缺策略、无 agent 和用户拒绝混成无上下文错误。没有活跃 scratch 编辑 token 时，helper 空闲一段时间后退出。设置 `FIKA_DEBUG_PRIVILEGE=1` 时，helper 会输出 startup/exit 生命周期摘要，包含 system/session 模式、bus 连接来源、授权主体、空闲时长和活跃 external-edit token 数。
-
-`scripts/install-data.sh` 是当前打包入口：它展开 service / policy 模板中的 `@bindir@`，并安装 system bus service、D-Bus policy、polkit action、interface XML、portal backend service 和 portal descriptor。脚本支持 `DESTDIR`、`PREFIX`、`BINDIR`、`DATADIR` 和 `SYSCONFDIR`，便于本机安装和 distro packaging 共用。`scripts/check-install-data.sh` 会用临时 `DESTDIR` 做非 root 安装自检，验证所有 metadata 文件位置、模板展开结果、root system-bus activation、D-Bus send policy、导出的 privileged methods、polkit 默认授权策略、polkit 认证提示文案、portal backend metadata、`UseIn=fika` 描述符，以及安装产物不含 `@bindir@` / `example.invalid` 这类占位内容。
-
-`scripts/check-runtime-integration.sh` 是安装后的诊断入口。`--metadata-only` 可用于 `DESTDIR` staged package 检查；普通模式会先输出 OS、session、systemd user、xdg-desktop-portal、polkit agent、UDisks2 和 D-Bus/polkit 诊断工具摘要，再检查 Devices 的 UDisks2 ObjectManager 可见性，尝试运行 `fika --diagnose-devices` 打印 Fika 实际侧栏输入模型，并继续检查 helper / portal backend 可执行文件、system/session bus activatable name、已安装 polkit action 和当前 XDP FileChooser backend selection；`--activate-system-helper` 会额外通过 D-Bus introspection 激活并检查 `org.fika.FileManager1.Privileged`，但不会调用 CreateFolder / Transfer 等任何受保护文件操作方法。`--record FILE` 会把 stdout/stderr 连同报告头写入文件，适合在不同发行版和桌面环境上保存可比较的验证记录。
-
-脚本自检只能证明安装产物内容一致，不能替代真实系统验证。发行版包或本机安装后还需要在目标桌面环境中确认：system bus 能激活 `org.fika.FileManager1.Privileged`，polkit agent 能弹出 `org.fika.FileManager.privileged-helper` 的认证，授权后 protected operation 成功返回，拒绝授权时 GUI 显示带 action id 的错误，portal backend 能被 xdg-desktop-portal 枚举并启动 `fika-xdp-filechooser`，并且最高优先级的 `portals.conf` 明确把 `org.freedesktop.impl.portal.FileChooser` 指向 `fika` 或将 `fika` 放入无显式 FileChooser override 的 `default` backend 列表。
-
-`pkexec` 现在只是未安装 system bus service 时的开发 fallback：GUI 启动 `pkexec --disable-internal-agent fika-privileged-helper --session-bus ...`，helper 校验 D-Bus 调用者 uid 与 `PKEXEC_UID` 一致。这个 fallback 不作为正式打包路径。
-
-这个流程不引入用户可见的 `admin://` 协议。Dolphin 的 `admin://` + `kio-fuse` 是为 KIO 生态和外部 POSIX 应用兼容服务的通用桥；Fika 可以做得更窄也更可控：
-
-- GUI 始终是普通用户进程。
-- 受限 helper 提供 D-Bus 接口 `org.fika.FileManager1.Privileged`，只暴露固定文件操作：CreateFolder / CreateFile / Rename / Trash / Transfer。
-- 正式 helper 由 system bus activation 启动，并在每个 D-Bus 方法做 polkit authority 检查。
-- helper 不接受 shell 命令，不接受任意 argv 执行，只接受结构化路径和操作枚举。
-- D-Bus 接口草案在 `data/dbus-1/interfaces/org.fika.FileManager1.Privileged.xml`。
-
-外部编辑器写回不需要 `admin://`。优化后的流程是“临时工作副本 + D-Bus 提交”：
-
-1. Fika 检测目标文件不可由当前用户直接写入。
-2. 用户选择外部编辑器时，Fika 请求 helper `PrepareExternalEdit(path)`。
-3. helper 经 polkit 授权后读取 protected 文件，生成用户可读写的 scratch 文件，例如 `/run/user/$UID/fika-edit/<token>/<name>`，返回 scratch path 和 token。
-4. Fika 用普通路径启动 Zed / VS Code / 其他编辑器。外部编辑器完全不提权，也不需要理解虚拟协议。
-5. Helper 持有 scratch token 并监听 scratch 文件变更；用户在编辑器里保存时，helper 自动校验并写回 protected 文件。因此 Fika GUI 可以在外部编辑器启动后关闭，写回不依赖 GUI 存活。
-6. Fika 在状态栏提供 “Admin Save / Discard” 操作作为显式兜底和清理入口；`Admin Save` 调用 `CommitExternalEdit(token, scratch_path)`，`DiscardExternalEdit(token)` 清理 scratch。
-7. `DiscardExternalEdit(token)` 清理 scratch。
-
-这个模型避免了 Dolphin+kio-fuse 的 FUSE 挂载层，但保留“编辑器 Ctrl+S 后写回”的核心体验。Fika 当前通过 D-Bus `org.freedesktop.systemd1.Manager.StartTransientUnit` 把默认 Open / Open With / custom command 启动出的 child PID 纳入 user transient `.scope`；systemd user D-Bus 不可用时会保留普通 spawn 行为并把非致命诊断返回 UI 状态栏。受保护外部编辑会把 token 和 `.scope` unit 通过 `AssociateExternalEditUnit` 交给 helper。helper 使用传入的 session bus 地址订阅 systemd user unit 的 `ActiveState` 属性变化，unit 结束后做一次最终写回并清理 scratch；如果订阅不可用则退回保守轮询。没有 unit 的 token 会在固定 TTL 后做最终写回并过期。这样 scratch 清理和 helper 退出已经不依赖 GUI 进程；普通非保护 Open/Open With/custom command 的状态栏会显示 transient unit 名称，或显示应用已启动但 systemd scope 不可用的诊断。
-
-当前不引入 FUSE 层。scratch/writeback 已覆盖核心体验：helper 监听 scratch 保存并自动写回、GUI 可关闭、编辑器进程结束后按 systemd unit 做最终写回和清理、无 unit 时有 TTL 兜底，且测试覆盖 commit、discard、多次保存、原文件外部变更拒绝和过期清理。只有当真实外部编辑器工作流证明“普通路径 scratch”不足时，才重新评估 FUSE 或其他透明挂载方案。
-
-### Portal Chooser
-
-目标：
-
-- `fika --chooser` 成为未来 `org.freedesktop.impl.portal.FileChooser` backend 的 UI 前端。
-- 后续集成 XDP / `xdg-desktop-portal`，通过 `zbus` 提供 portal backend 原型。
-
-当前实现：
-
-- `fika-xdp-filechooser` 是独立 portal backend binary。
-- D-Bus name: `org.freedesktop.impl.portal.desktop.fika`。
-- Object path: `/org/freedesktop/portal/desktop`。
-- Interface: `org.freedesktop.impl.portal.FileChooser`。
-- Fika backend 只实现标准 FileChooser backend，不调用、不包装、也不依赖 GNOME/KDE/COSMIC/GTK portal backend。其它 portal interface 仍由当前桌面配置中的其它 backend 提供。
-- `data/xdg-desktop-portal/portals/fika.portal` 只是描述符：`UseIn=fika` 让 Fika 作为独立 backend 被枚举，但不会自动替换当前桌面的 FileChooser。实际是否使用 Fika 由 `xdg-desktop-portal` 的最高优先级 `portals.conf` 决定。
-- `docs/examples/fika-portals.conf` 提供手动 opt-in 示例：`[preferred] org.freedesktop.impl.portal.FileChooser=fika`。项目默认不安装这个配置，避免打包后意外接管现有桌面 FileChooser。
-- `OpenFile(handle, app_id, parent_window, title, options)` 启动 `fika --chooser [current_folder]`，读取 stdout 的本地绝对路径列表，并返回 `results["uris"] = as`。
-- `OpenFile` 支持 `options["directory"]` 和 `options["multiple"]`，分别映射到 `--chooser-directory` 和 `--chooser-multiple`。
-- `SaveFile` 支持 `current_folder`、`current_file` 和 `current_name`，通过 `--chooser-save NAME` 在当前目录下选择保存路径。
-- `SaveFiles` 支持 `current_folder` 和 `files`，通过 `--chooser-save-files` 先选择目标目录，再按 portal 传入的文件名返回完整目标 URI 列表。
-- portal `title` 会传给 chooser 窗口标题，`accept_label` 会传给 chooser 底部确认按钮；portal glob `filters` 会转换成 chooser 底部的过滤弹出菜单，常见 MIME filter（例如图片、文本、音频、视频、PDF、JSON、XML、常见压缩包、Microsoft Office 和 OpenDocument 格式）会保守转换成扩展名 glob。`current_filter` 会在匹配到可表达的 chooser filter 时选择初始过滤器，用户切换后的当前过滤器会随结果以原始 portal filter 返回。空白 portal filter label 会映射成稳定的 chooser label（例如 `Filter 1`），但结果仍回传原始 portal filter。未知 MIME-only filter 不会显示成空过滤器，因为当前 chooser UI 只能表达 glob 过滤。portal `choices` 会转换成 chooser 底部的选择控件，点击后展开该 choice 的候选菜单，并随结果返回用户当前选择。
-- `wayland:` `parent_window` 会通过 `--chooser-parent-window` 传给 `fika --chooser` 并保存在 chooser 状态中；空值、格式错误或未知 scheme 会被 backend 丢弃。设置 `FIKA_DEBUG_PORTAL=1` 时，backend 会打印 `parent_window` 解析结果，chooser 进程也会打印收到的 handle。当前 Slint 集成尚未把已保存 Wayland handle 绑定为原生 transient parent，因此两侧诊断都会显式报告 `parent_binding=metadata-only`、`parent_binding_reason=slint-parent-token-binding-unavailable` 和 `native_transient=false`。
-- 设置 `FIKA_DEBUG_PORTAL=1` 时，backend 还会为每个 OpenFile / SaveFile / SaveFiles 请求打印一行请求摘要，包含 request handle、起始目录、选择/保存模式、portal/chooser filter 数量、MIME 转换 filter 数量、隐藏的未知 filter 数量、初始 filter、parent-window 转发状态、parent binding 状态，并继续显式标记 `native_transient=false`。chooser future 结束时还会记录收尾原因：选择成功、用户取消、空输出、portal request Close、Close stream 结束或异常失败，方便验证 filter 映射、取消清理和子进程生命周期。
-- 返回 URI 统一为 `file://`，路径中的空格和非 ASCII 字节按百分号编码；backend 保留 chooser 输出的所选路径本身，不在返回前把符号链接解析成目标路径。
-- 用户关闭 chooser 时，`fika --chooser` 以专用取消码退出，backend 返回 response `1`；chooser 成功退出但无路径输出也按取消处理。其它非零退出会返回 D-Bus error，并带上 exit status 和 stderr，避免把崩溃或启动后异常静默伪装成用户取消。
-- backend 在每个 FileChooser 请求期间订阅对应 request handle 上的 `org.freedesktop.impl.portal.Request.Close` signal。Close 先到时 backend 会主动通知 chooser lifecycle task 终止 `fika --chooser` 子进程并等待其退出，然后返回 response `1`。`kill_on_drop` 仍保留为 backend future 被取消或连接断开时的兜底，避免留下孤儿选择器窗口。
-- `options["current_folder"]` 会作为 chooser 起始目录。
-- `data/dbus-1/services/org.freedesktop.impl.portal.desktop.fika.service.in` 提供 D-Bus activation 模板。
-- `data/xdg-desktop-portal/portals/fika.portal` 提供 xdg-desktop-portal backend 描述文件；active backend selection 由 `portals.conf` 单独控制，并由 `scripts/check-runtime-integration.sh` 的普通模式报告。
-
-后续：
-
-- 将已保存的 Wayland `parent_window` 接入具体窗口后端，处理原生 transient 关系。
-
-## Engineering Rules
-
-- UI 主线程只做状态更新和轻量计算。
-- 后台任务不能直接访问 Slint UI 对象。
-- 跨线程数据使用 owned Rust 类型；进入 UI 前再转换成 Slint 类型。
-- 每类异步任务都要有 generation 或 cancellation 机制，并通过统一 `AsyncEvent` 回到 UI 线程。
-- 新功能优先补 focused tests；UI 行为至少通过 `cargo check` 覆盖 Slint 编译。
-- 避免无关重构，按 TODO 阶段逐项推进。
+- single pane and split pane both refresh correctly from external filesystem changes
+- undo refreshes visible directories without manual UI rebuilds
+- closing a pane drops its lister/watcher and cannot receive stale results
+- two panes showing the same directory have independent selection, scroll, generation, and watcher state
+- Dolphin source references exist for every core file-view execution path
+- Slint is no longer in the primary build dependency graph

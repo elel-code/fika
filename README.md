@@ -3,11 +3,14 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://blog.rust-lang.org/2024/02/08/Rust-1.76.0.html)
 
-A lightweight file manager for modern Wayland desktops, built with
-Rust + [Slint](https://slint.dev).
+A lightweight file manager for modern Wayland desktops. The current
+implementation is Rust + [Slint](https://slint.dev); the active target is a
+full GPUI rewrite with Dolphin as the first behavioral reference.
 
-**Status:** Active development — a small, usable core with a growing feature set.
-Some advanced features are still in progress (see [docs/TODO.md](docs/TODO.md)).
+**Status:** Migration planning. The Slint app is the legacy implementation and
+source of reusable Rust modules; new UI architecture work should follow
+[docs/TODO.md](docs/TODO.md) and
+[docs/GPUI_DOLPHIN_MIGRATION_PLAN.md](docs/GPUI_DOLPHIN_MIGRATION_PLAN.md).
 
 > [中文版 / Chinese](README.zh-CN.md)
 
@@ -104,22 +107,19 @@ Some advanced features are still in progress (see [docs/TODO.md](docs/TODO.md)).
 - Last opened directory
 - Settings stored in `$XDG_CONFIG_HOME/fika/settings.tsv`
 
-### Dolphin Virtual Pane Architecture Alignment
+### Migration Direction
 
-Fika's main view targets Dolphin's five-layer `KItemListView` architecture
-(`kfileitemmodel → kitemlistviewlayouter → kitemlistview → kitemlistcontroller → kstandarditemlistwidget`).
-Current alignment status:
+Future work targets GPUI + a UI-neutral Rust core. Dolphin's `DolphinView →
+KDirLister → KFileItemModel → KItemListView` execution flow is the primary
+reference for directory loading, refresh, undo, split pane identity, and model
+signals.
 
-| Layer | Dolphin Equivalent | Status |
-|-------|-------------------|--------|
-| **Smooth Scroller** | `kitemlistsmoothscroller` | ✅ Done — logical `viewport-x` + animated `paint-viewport-x` split; 120ms ease-out within current virtual slice; stops on user interaction |
-| **Polymorphic Layouter** | `kitemlistviewlayouter` | 🟡 `ItemViewLayouter` trait done (`layout_mode`, `scroll_axis`, `logical_item_rect`→physical projection); `ItemViewLayoutEngine` dispatch ready; Details/Icons implementations missing |
-| **Self-rendered Tiles** | `kstandarditemlistwidget` | 🟡 Raster base layer covers selection, fallback glyphs, thumbnails, drop targets via `ItemViewTileFrameBatch`→`SharedPixelBuffer`; title/metadata text still Slint `Text` primitive |
-| **Model Trait** | `kfileitemmodel` | 🟡 Narrow interfaces emerging: `ItemViewFrameEntry` for renderer input, `ItemViewHitEntry` for controller output; full `FileEntry`→layouter/selection abstraction not started |
-| **Controller Bus** | `kitemlistcontroller` | 🟡 Controller helpers return `ItemViewControllerAction` enum; `main.rs` executes actions instead of mutating gesture state; no signal bus yet |
-| **Two-phase Refresh** | `kitemlistview` | 🟡 Async refresh bookkeeping consolidated into `VirtualViewRefreshState`; no unified pending→commit state machine across all refresh types |
+See:
 
-See [docs/TODO.md](docs/TODO.md) § "Spike Dolphin-style self-managed main viewport" for details.
+- [docs/TODO.md](docs/TODO.md)
+- [docs/DESIGN.md](docs/DESIGN.md)
+- [docs/REFERENCE.md](docs/REFERENCE.md)
+- [docs/GPUI_DOLPHIN_MIGRATION_PLAN.md](docs/GPUI_DOLPHIN_MIGRATION_PLAN.md)
 
 ## Prerequisites
 

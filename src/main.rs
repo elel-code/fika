@@ -42,10 +42,12 @@ use app::dnd::{
 };
 use app::events::{
     AsyncEvent, DeviceActionResult, DeviceMountResult, DevicesLoadedResult,
-    DirectoryEntriesRemoved, DirectoryLoadResult, EXTERNAL_EDIT_DISCARD_OPERATION,
-    EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult, FileOpenResult, FileOpenSuccess,
-    FileOperationProgress, FileOperationResult, FileUndoResult, LocalSearchIndexResult,
-    RecursiveSearchProgress, RecursiveSearchResult, VirtualViewProjection, VirtualViewResult,
+    DirectoryCurrentRemoved, DirectoryItemsAdded, DirectoryItemsDeleted, DirectoryItemsRefreshed,
+    DirectoryListingCompleted, DirectoryListingRefreshed, DirectoryLoadResult,
+    EXTERNAL_EDIT_DISCARD_OPERATION, EXTERNAL_EDIT_SAVE_OPERATION, ExternalEditResult,
+    FileOpenResult, FileOpenSuccess, FileOperationProgress, FileOperationResult, FileUndoResult,
+    LocalSearchIndexResult, RecursiveSearchProgress, RecursiveSearchResult, VirtualViewProjection,
+    VirtualViewResult,
 };
 use app::file_clipboard::{
     apply_clipboard_load_result, apply_clipboard_paste_load_result,
@@ -134,7 +136,7 @@ use desktop::{mime_open, open_with};
 use fs::devices::{
     device_diagnostics_report, eject_device, mount_device, mounted_devices, unmount_device,
 };
-use fs::entries::read_entries_async;
+use fs::entries::{directory_entry_path, read_entries_async, read_entry_sync};
 use fs::places::default_places;
 use fs::{file_actions, privilege, search, thumbnails};
 
@@ -2594,7 +2596,7 @@ fn load_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncB
 }
 
 fn refresh_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
-    load_directory_with_preservation(ui, state, bridge, true);
+    refresh_focused_directory(ui, state, bridge);
 }
 
 fn refresh_panes(
@@ -2604,7 +2606,7 @@ fn refresh_panes(
     pane_ids: &[u64],
 ) {
     for pane_id in pane_ids {
-        refresh_pane_by_id(ui, state, bridge, *pane_id);
+        refresh_pane_listing_by_id(ui, state, bridge, *pane_id);
     }
 }
 
@@ -2627,19 +2629,46 @@ fn refresh_affected_directories(
     pane_ids
 }
 
-fn refresh_pane_by_id(
+fn refresh_pane_listing_by_id(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
     pane_id: u64,
 ) {
-    let Some(preparation) = ({
+    let (slot, generation, path) = {
         let mut state = state.borrow_mut();
-        prepare_directory_load_for_target(&mut state, PaneTarget::Id(pane_id), true)
+        let Some(slot) = state.panes.slot_for_id(pane_id) else {
+            return;
+        };
+        let Some(pane) = state.panes.pane_by_id(pane_id) else {
+            return;
+        };
+        let generation = pane.load_generation.current();
+        let path = pane.current_dir.clone();
+        state.remove_directory_cache(&path);
+        (slot, generation, path)
+    };
+    if ui.get_focused_pane() == slot {
+        ui.set_directory_loading(false);
+    }
+    set_pane_status(ui, state, slot, "Refreshing folder...");
+    spawn_directory_listing_refresh(bridge, pane_id, generation, path);
+}
+
+fn refresh_pane_listing_for_slot(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    let Some(pane_id) = ({
+        let state_ref = state.borrow();
+        state_ref.panes.pane_for_slot(slot).map(|pane| pane.id)
     }) else {
+        set_status(ui, state, "No pane target is available");
         return;
     };
-    load_prepared_pane_directory(ui, state, bridge, preparation, true);
+    refresh_pane_listing_by_id(ui, state, bridge, pane_id);
 }
 
 fn load_prepared_pane_directory(
@@ -2725,27 +2754,15 @@ fn load_prepared_pane_directory(
         sync_pane_view_for_slot(ui, state, bridge, slot);
     }
     watch_current_directory(&current_dir, pane_id, generation, bridge);
-
-    let async_tx = bridge.tx.clone();
-    let notify_ui = bridge.ui_weak.clone();
-    bridge.handle.spawn(async move {
-        let result = read_entries_async(&current_dir)
-            .await
-            .map(PreparedDirectoryEntries::new);
-        send_async_event(
-            async_tx,
-            notify_ui,
-            AsyncEvent::DirectoryLoaded(DirectoryLoadResult {
-                pane_id,
-                generation,
-                request,
-                path: current_dir,
-                preserve_view,
-                defer_view_restore,
-                result,
-            }),
-        );
-    });
+    spawn_directory_read(
+        bridge,
+        pane_id,
+        generation,
+        request,
+        current_dir,
+        preserve_view,
+        defer_view_restore,
+    );
 }
 
 fn directory_read_tracker_for_pane(
@@ -2764,7 +2781,7 @@ fn begin_directory_read_request(
     tracker: &Arc<Mutex<DirectoryReadTracker>>,
     generation: u64,
 ) -> Option<u64> {
-    tracker.lock().ok()?.begin_request(generation)
+    tracker.lock().ok()?.begin_load(generation)
 }
 
 fn directory_read_result_is_current(
@@ -2786,6 +2803,71 @@ fn directory_read_result_is_current(
                 .map(|tracker| tracker.is_current(generation, request))
         })
         .unwrap_or(false)
+}
+
+fn finish_directory_read_request(
+    pane_id: u64,
+    generation: u64,
+    request: u64,
+    bridge: &AsyncBridge,
+) -> bool {
+    let tracker = bridge
+        .directory_read_trackers
+        .borrow()
+        .get(&pane_id)
+        .cloned();
+    tracker
+        .and_then(|tracker| {
+            tracker
+                .lock()
+                .ok()
+                .map(|mut tracker| tracker.finish_request(generation, request))
+        })
+        .unwrap_or(false)
+}
+
+fn spawn_directory_read(
+    bridge: &AsyncBridge,
+    pane_id: u64,
+    generation: u64,
+    request: u64,
+    path: PathBuf,
+    preserve_view: bool,
+    defer_view_restore: bool,
+) {
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        let result = read_entries_async(&path)
+            .await
+            .map(PreparedDirectoryEntries::new);
+        send_async_event(
+            async_tx,
+            notify_ui,
+            AsyncEvent::DirectoryLoaded(DirectoryLoadResult {
+                pane_id,
+                generation,
+                request,
+                path,
+                preserve_view,
+                defer_view_restore,
+                result,
+            }),
+        );
+    });
+}
+
+fn spawn_directory_listing_refresh(
+    bridge: &AsyncBridge,
+    pane_id: u64,
+    generation: u64,
+    path: PathBuf,
+) {
+    let async_tx = bridge.tx.clone();
+    let notify_ui = bridge.ui_weak.clone();
+    bridge.handle.spawn(async move {
+        send_directory_listing_refresh(async_tx, notify_ui, pane_id, generation, path).await;
+    });
 }
 
 fn prefetch_sidebar_locations_async(state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
@@ -3016,67 +3098,103 @@ pub(crate) fn watch_current_directory(
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
     let debounce = Arc::new(AtomicU64::new(0));
-    let read_tracker = directory_read_tracker_for_pane(pane_id, bridge);
 
     let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         let Ok(event) = event else {
             return;
         };
-        if !directory_watch_event_should_reload(&event) {
+        if !directory_watch_event_should_list(&event) {
             return;
         }
 
-        let removed_paths = directory_watch_removed_paths(&event, &watched_path);
-        if !removed_paths.is_empty() {
+        if directory_watch_current_removed(&event, &watched_path) {
             debug_log(&format!(
-                "directory watcher removed pane_id={pane_id} generation={generation} path={} removed={}",
-                watched_path.display(),
-                removed_paths.len()
+                "directory watcher current removed pane_id={pane_id} generation={generation} path={}",
+                watched_path.display()
             ));
             send_async_event(
                 async_tx.clone(),
                 notify_ui.clone(),
-                AsyncEvent::DirectoryEntriesRemoved(DirectoryEntriesRemoved {
+                AsyncEvent::DirectoryCurrentRemoved(DirectoryCurrentRemoved {
                     pane_id,
                     generation,
                     path: watched_path.clone(),
-                    removed_paths,
+                }),
+            );
+            return;
+        }
+
+        let update = directory_watch_update(&event, &watched_path);
+        if update.rescan {
+            let serial = debounce.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+            let refresh_path = watched_path.clone();
+            let async_tx = async_tx.clone();
+            let notify_ui = notify_ui.clone();
+            let debounce = Arc::clone(&debounce);
+            let async_handle = async_handle.clone();
+            async_handle.spawn(async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                if debounce.load(AtomicOrdering::SeqCst) != serial {
+                    return;
+                }
+                send_directory_listing_refresh(
+                    async_tx,
+                    notify_ui,
+                    pane_id,
+                    generation,
+                    refresh_path,
+                )
+                .await;
+            });
+            return;
+        }
+
+        if !update.deleted_paths.is_empty() {
+            debug_log(&format!(
+                "directory watcher removed pane_id={pane_id} generation={generation} path={} removed={}",
+                watched_path.display(),
+                update.deleted_paths.len()
+            ));
+            send_async_event(
+                async_tx.clone(),
+                notify_ui.clone(),
+                AsyncEvent::DirectoryItemsDeleted(DirectoryItemsDeleted {
+                    pane_id,
+                    generation,
+                    path: watched_path.clone(),
+                    removed_paths: update.deleted_paths,
                 }),
             );
         }
 
-        let serial = debounce.fetch_add(1, AtomicOrdering::SeqCst) + 1;
-        let reload_path = watched_path.clone();
-        let async_tx = async_tx.clone();
-        let notify_ui = notify_ui.clone();
-        let debounce = Arc::clone(&debounce);
-        let read_tracker = Arc::clone(&read_tracker);
-
-        async_handle.spawn(async move {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            if debounce.load(AtomicOrdering::SeqCst) != serial {
-                return;
-            }
-            let Some(request) = begin_directory_read_request(&read_tracker, generation) else {
-                return;
-            };
-
-            let result = read_entries_async(&reload_path)
-                .await
-                .map(PreparedDirectoryEntries::new);
+        if update.added_paths.is_empty() && update.refreshed_paths.is_empty() {
             send_async_event(
-                async_tx,
-                notify_ui,
-                AsyncEvent::DirectoryLoaded(DirectoryLoadResult {
+                async_tx.clone(),
+                notify_ui.clone(),
+                AsyncEvent::DirectoryListingCompleted(DirectoryListingCompleted {
                     pane_id,
                     generation,
-                    request,
-                    path: reload_path,
-                    preserve_view: true,
-                    defer_view_restore: false,
-                    result,
+                    path: watched_path.clone(),
                 }),
             );
+            return;
+        }
+
+        let async_tx = async_tx.clone();
+        let notify_ui = notify_ui.clone();
+        let watched_path = watched_path.clone();
+        let async_handle = async_handle.clone();
+        async_handle.spawn(async move {
+            send_directory_watch_entries(
+                async_tx,
+                notify_ui,
+                pane_id,
+                generation,
+                watched_path,
+                update.added_paths,
+                update.refreshed_paths,
+            )
+            .await;
         });
     });
 
@@ -3110,7 +3228,21 @@ pub(crate) fn watch_current_directory(
     }
 }
 
-fn directory_watch_event_should_reload(event: &notify::Event) -> bool {
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DirectoryWatchUpdate {
+    rescan: bool,
+    deleted_paths: Vec<PathBuf>,
+    added_paths: Vec<PathBuf>,
+    refreshed_paths: Vec<DirectoryWatchRefreshPath>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DirectoryWatchRefreshPath {
+    old_path: PathBuf,
+    path: PathBuf,
+}
+
+fn directory_watch_event_should_list(event: &notify::Event) -> bool {
     use notify::event::{AccessKind, AccessMode};
 
     if event.need_rescan() {
@@ -3126,28 +3258,310 @@ fn directory_watch_event_should_reload(event: &notify::Event) -> bool {
     }
 }
 
-fn directory_watch_removed_paths(event: &notify::Event, watched_path: &Path) -> Vec<PathBuf> {
+fn directory_watch_current_removed(event: &notify::Event, watched_path: &Path) -> bool {
     use notify::event::{ModifyKind, RenameMode};
 
-    let paths = match &event.kind {
-        notify::EventKind::Remove(_) => event.paths.iter().collect::<Vec<_>>(),
+    if fs::file_ops::is_trash_files_dir(watched_path) {
+        return false;
+    }
+
+    match &event.kind {
+        notify::EventKind::Remove(_) => event.paths.iter().any(|path| path == watched_path),
+        notify::EventKind::Modify(ModifyKind::Name(RenameMode::From | RenameMode::Both)) => {
+            event.paths.first().is_some_and(|path| path == watched_path)
+        }
+        _ => false,
+    }
+}
+
+fn directory_watch_update(event: &notify::Event, watched_path: &Path) -> DirectoryWatchUpdate {
+    use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
+
+    let mut update = DirectoryWatchUpdate::default();
+    if event.need_rescan() {
+        update.rescan = true;
+        return update;
+    }
+    if event.paths.is_empty() {
+        update.rescan = true;
+        return update;
+    }
+
+    match &event.kind {
+        notify::EventKind::Access(AccessKind::Close(
+            AccessMode::Write | AccessMode::Any | AccessMode::Other,
+        )) => push_directory_watch_refreshed_paths(
+            &mut update.refreshed_paths,
+            watched_path,
+            event.paths.iter(),
+        ),
+        notify::EventKind::Create(_) => push_directory_watch_added_paths(
+            &mut update.added_paths,
+            watched_path,
+            event.paths.iter(),
+        ),
+        notify::EventKind::Remove(_) => push_directory_watch_deleted_paths(
+            &mut update.deleted_paths,
+            watched_path,
+            event.paths.iter(),
+        ),
         notify::EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
-            event.paths.iter().collect::<Vec<_>>()
+            push_directory_watch_deleted_paths(
+                &mut update.deleted_paths,
+                watched_path,
+                event.paths.iter(),
+            )
+        }
+        notify::EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+            push_directory_watch_added_paths(
+                &mut update.added_paths,
+                watched_path,
+                event.paths.iter(),
+            )
         }
         notify::EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
-            event.paths.iter().take(1).collect::<Vec<_>>()
+            push_directory_watch_rename_both(&mut update, watched_path, &event.paths)
         }
-        _ => Vec::new(),
-    };
+        notify::EventKind::Modify(
+            ModifyKind::Data(_) | ModifyKind::Metadata(_) | ModifyKind::Any,
+        ) => push_directory_watch_refreshed_paths(
+            &mut update.refreshed_paths,
+            watched_path,
+            event.paths.iter(),
+        ),
+        notify::EventKind::Modify(ModifyKind::Name(_)) | notify::EventKind::Other => {
+            update.rescan = true;
+        }
+        _ => push_directory_watch_refreshed_paths(
+            &mut update.refreshed_paths,
+            watched_path,
+            event.paths.iter(),
+        ),
+    }
 
-    paths
-        .into_iter()
-        .filter(|path| {
-            path.as_path() != watched_path
-                && path.parent().is_some_and(|parent| parent == watched_path)
-        })
-        .cloned()
-        .collect()
+    update
+}
+
+fn push_directory_watch_added_paths<'a>(
+    added_paths: &mut Vec<PathBuf>,
+    watched_path: &Path,
+    paths: impl IntoIterator<Item = &'a PathBuf>,
+) {
+    for path in paths {
+        if directory_entry_path(watched_path, path).is_some() {
+            push_unique_directory_watch_path(added_paths, path.clone());
+        }
+    }
+}
+
+fn push_directory_watch_deleted_paths<'a>(
+    deleted_paths: &mut Vec<PathBuf>,
+    watched_path: &Path,
+    paths: impl IntoIterator<Item = &'a PathBuf>,
+) {
+    for path in paths {
+        if path == watched_path {
+            continue;
+        }
+        if let Some(path) = directory_entry_path(watched_path, path) {
+            push_unique_directory_watch_path(deleted_paths, path);
+        }
+    }
+}
+
+fn push_directory_watch_refreshed_paths<'a>(
+    refreshed_paths: &mut Vec<DirectoryWatchRefreshPath>,
+    watched_path: &Path,
+    paths: impl IntoIterator<Item = &'a PathBuf>,
+) {
+    for path in paths {
+        let Some(old_path) = directory_entry_path(watched_path, path) else {
+            continue;
+        };
+        push_unique_directory_watch_refresh(
+            refreshed_paths,
+            DirectoryWatchRefreshPath {
+                old_path,
+                path: path.clone(),
+            },
+        );
+    }
+}
+
+fn push_directory_watch_rename_both(
+    update: &mut DirectoryWatchUpdate,
+    watched_path: &Path,
+    paths: &[PathBuf],
+) {
+    let old_path = paths.first();
+    let new_path = paths.get(1);
+    match (old_path, new_path) {
+        (Some(old_path), Some(new_path)) => {
+            let old_entry_path = directory_entry_path(watched_path, old_path);
+            let new_entry_path = directory_entry_path(watched_path, new_path);
+            match (old_entry_path, new_entry_path) {
+                (Some(old_entry_path), Some(_)) => push_unique_directory_watch_refresh(
+                    &mut update.refreshed_paths,
+                    DirectoryWatchRefreshPath {
+                        old_path: old_entry_path,
+                        path: new_path.clone(),
+                    },
+                ),
+                (Some(old_entry_path), None) => {
+                    push_unique_directory_watch_path(&mut update.deleted_paths, old_entry_path)
+                }
+                (None, Some(_)) => {
+                    push_unique_directory_watch_path(&mut update.added_paths, new_path.clone())
+                }
+                (None, None) => {}
+            }
+        }
+        _ => {
+            update.rescan = true;
+        }
+    }
+}
+
+fn push_unique_directory_watch_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+fn push_unique_directory_watch_refresh(
+    paths: &mut Vec<DirectoryWatchRefreshPath>,
+    path: DirectoryWatchRefreshPath,
+) {
+    if !paths
+        .iter()
+        .any(|existing| existing.old_path == path.old_path && existing.path == path.path)
+    {
+        paths.push(path);
+    }
+}
+
+async fn send_directory_watch_entries(
+    async_tx: mpsc::Sender<AsyncEvent>,
+    notify_ui: slint::Weak<AppWindow>,
+    pane_id: u64,
+    generation: u64,
+    directory: PathBuf,
+    added_paths: Vec<PathBuf>,
+    refreshed_paths: Vec<DirectoryWatchRefreshPath>,
+) {
+    if !added_paths.is_empty() {
+        let entries = read_directory_watch_entries(directory.clone(), added_paths).await;
+        if !entries.is_empty() {
+            send_async_event(
+                async_tx.clone(),
+                notify_ui.clone(),
+                AsyncEvent::DirectoryItemsAdded(DirectoryItemsAdded {
+                    pane_id,
+                    generation,
+                    path: directory.clone(),
+                    entries,
+                }),
+            );
+        }
+    }
+
+    if !refreshed_paths.is_empty() {
+        let old_paths = refreshed_paths
+            .iter()
+            .map(|path| path.old_path.clone())
+            .collect::<Vec<_>>();
+        let paths = refreshed_paths
+            .into_iter()
+            .map(|path| path.path)
+            .collect::<Vec<_>>();
+        let entries = read_directory_watch_entries(directory.clone(), paths).await;
+        if entries.is_empty() {
+            send_async_event(
+                async_tx.clone(),
+                notify_ui.clone(),
+                AsyncEvent::DirectoryItemsDeleted(DirectoryItemsDeleted {
+                    pane_id,
+                    generation,
+                    path: directory.clone(),
+                    removed_paths: old_paths,
+                }),
+            );
+        } else {
+            send_async_event(
+                async_tx.clone(),
+                notify_ui.clone(),
+                AsyncEvent::DirectoryItemsRefreshed(DirectoryItemsRefreshed {
+                    pane_id,
+                    generation,
+                    path: directory.clone(),
+                    old_paths,
+                    entries,
+                }),
+            );
+        }
+    }
+
+    send_async_event(
+        async_tx,
+        notify_ui,
+        AsyncEvent::DirectoryListingCompleted(DirectoryListingCompleted {
+            pane_id,
+            generation,
+            path: directory,
+        }),
+    );
+}
+
+async fn send_directory_listing_refresh(
+    async_tx: mpsc::Sender<AsyncEvent>,
+    notify_ui: slint::Weak<AppWindow>,
+    pane_id: u64,
+    generation: u64,
+    path: PathBuf,
+) {
+    let read_path = path.clone();
+    let result = read_entries_async(&read_path).await;
+    send_async_event(
+        async_tx.clone(),
+        notify_ui.clone(),
+        AsyncEvent::DirectoryListingRefreshed(DirectoryListingRefreshed {
+            pane_id,
+            generation,
+            path: path.clone(),
+            result,
+        }),
+    );
+    send_async_event(
+        async_tx,
+        notify_ui,
+        AsyncEvent::DirectoryListingCompleted(DirectoryListingCompleted {
+            pane_id,
+            generation,
+            path,
+        }),
+    );
+}
+
+async fn read_directory_watch_entries(
+    directory: PathBuf,
+    paths: Vec<PathBuf>,
+) -> Vec<fs::entries::RawFileEntry> {
+    tokio::task::spawn_blocking(move || {
+        let mut entries = Vec::new();
+        let mut seen = HashSet::new();
+        for path in paths {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            if let Ok(entry) = read_entry_sync(&directory, &path) {
+                entries.push(entry);
+            }
+        }
+        fs::entries::sort_entries(&mut entries, fs::file_ops::is_trash_files_dir(&directory));
+        entries
+    })
+    .await
+    .unwrap_or_default()
 }
 
 pub(crate) fn unwatch_directory_for_pane(pane_id: u64, bridge: &AsyncBridge) {
@@ -3175,8 +3589,23 @@ fn apply_async_event(
 ) {
     match event {
         AsyncEvent::DirectoryLoaded(result) => apply_directory_result(ui, state, bridge, result),
-        AsyncEvent::DirectoryEntriesRemoved(result) => {
-            apply_directory_entries_removed(ui, state, bridge, result);
+        AsyncEvent::DirectoryItemsAdded(result) => {
+            apply_directory_items_added(ui, state, bridge, result);
+        }
+        AsyncEvent::DirectoryItemsDeleted(result) => {
+            apply_directory_items_deleted(ui, state, bridge, result);
+        }
+        AsyncEvent::DirectoryItemsRefreshed(result) => {
+            apply_directory_items_refreshed(ui, state, bridge, result);
+        }
+        AsyncEvent::DirectoryListingRefreshed(result) => {
+            apply_directory_listing_refreshed(ui, state, bridge, result);
+        }
+        AsyncEvent::DirectoryListingCompleted(result) => {
+            apply_directory_listing_completed(ui, state, result);
+        }
+        AsyncEvent::DirectoryCurrentRemoved(result) => {
+            apply_directory_current_removed(ui, state, bridge, result);
         }
         AsyncEvent::DirectoryPrefetched { path, result } => {
             apply_directory_prefetch_result(state, path, result);
@@ -3271,70 +3700,113 @@ fn apply_directory_result(
     bridge: &AsyncBridge,
     result: DirectoryLoadResult,
 ) {
+    let pane_id = result.pane_id;
+    let generation = result.generation;
+    let request = result.request;
+    let path = result.path.clone();
     {
         let state = state.borrow();
-        let Some(pane) = state.panes.pane_for_target(PaneTarget::Id(result.pane_id)) else {
+        let Some(pane) = state.panes.pane_for_target(PaneTarget::Id(pane_id)) else {
             debug_log(&format!(
                 "directory_loaded stale missing-pane pane_id={} generation={} request={} path={}",
-                result.pane_id,
-                result.generation,
-                result.request,
-                result.path.display()
+                pane_id,
+                generation,
+                request,
+                path.display()
             ));
             return;
         };
-        if !pane.load_generation.is_current(result.generation) || result.path != pane.current_dir {
+        if !pane.load_generation.is_current(generation) || path != pane.current_dir {
             debug_log(&format!(
                 "directory_loaded stale pane_id={} generation={} request={} path={} current={} current_generation_match={}",
-                result.pane_id,
-                result.generation,
-                result.request,
-                result.path.display(),
+                pane_id,
+                generation,
+                request,
+                path.display(),
                 pane.current_dir.display(),
-                pane.load_generation.is_current(result.generation)
+                pane.load_generation.is_current(generation)
             ));
             return;
         }
     }
-    if !directory_read_result_is_current(result.pane_id, result.generation, result.request, bridge)
-    {
+    if !directory_read_result_is_current(pane_id, generation, request, bridge) {
         debug_log(&format!(
             "directory_loaded stale request pane_id={} generation={} request={} path={}",
-            result.pane_id,
-            result.generation,
-            result.request,
-            result.path.display()
+            pane_id,
+            generation,
+            request,
+            path.display()
         ));
         return;
     }
 
-    let Some(slot) = state.borrow().panes.slot_for_id(result.pane_id) else {
+    let Some(slot) = state.borrow().panes.slot_for_id(pane_id) else {
         return;
     };
     apply_pane_directory_result(ui, state, bridge, result, slot);
+    finish_directory_read_request(pane_id, generation, request, bridge);
 }
 
-fn apply_directory_entries_removed(
+fn apply_directory_current_removed(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     bridge: &AsyncBridge,
-    result: DirectoryEntriesRemoved,
+    result: DirectoryCurrentRemoved,
 ) {
-    let removed_paths = result
-        .removed_paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<HashSet<_>>();
-    if removed_paths.is_empty() {
+    let Some((slot, current_dir)) = ({
+        let state_ref = state.borrow();
+        let Some(slot) = state_ref.panes.slot_for_id(result.pane_id) else {
+            return;
+        };
+        let Some(pane) = state_ref.panes.pane_by_id(result.pane_id) else {
+            return;
+        };
+        if !pane.load_generation.is_current(result.generation) || pane.current_dir != result.path {
+            return;
+        }
+        Some((slot, pane.current_dir.clone()))
+    }) else {
+        return;
+    };
+
+    if fs::file_ops::is_trash_files_dir(&current_dir) {
+        let _ = fs::file_ops::ensure_trash_dirs();
+        refresh_pane_listing_for_slot(ui, state, bridge, slot);
         return;
     }
 
-    let Some((slot, selected_paths, removed)) = ({
+    let fallback = nearest_existing_ancestor(&current_dir).unwrap_or_else(home_dir);
+    let status = format!(
+        "Current location changed; {} is no longer accessible",
+        current_dir.display()
+    );
+    navigate_pane_to_slot(ui, state, bridge, slot, fallback);
+    set_pane_status(ui, state, slot, &status);
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|ancestor| ancestor.is_dir())
+        .map(Path::to_path_buf)
+}
+
+fn apply_directory_items_added(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: DirectoryItemsAdded,
+) {
+    if result.entries.is_empty() {
+        return;
+    }
+
+    let entry_count = result.entries.len();
+    let Some((slot, changed)) = ({
         let mut state_ref = state.borrow_mut();
         state_ref.remove_directory_cache(&result.path);
         let Some(slot) = state_ref.panes.slot_for_id(result.pane_id) else {
             debug_log(&format!(
-                "directory_removed stale missing-pane pane_id={} generation={} path={}",
+                "directory_items_added stale missing-pane pane_id={} generation={} path={}",
                 result.pane_id,
                 result.generation,
                 result.path.display()
@@ -3346,7 +3818,66 @@ fn apply_directory_entries_removed(
         };
         if !pane.load_generation.is_current(result.generation) || pane.current_dir != result.path {
             debug_log(&format!(
-                "directory_removed stale pane_id={} generation={} path={} current={} current_generation_match={}",
+                "directory_items_added stale pane_id={} generation={} path={} current={} current_generation_match={}",
+                result.pane_id,
+                result.generation,
+                result.path.display(),
+                pane.current_dir.display(),
+                pane.load_generation.is_current(result.generation)
+            ));
+            return;
+        }
+        let changed = pane.add_raw_entries(result.entries);
+        Some((slot, changed))
+    }) else {
+        return;
+    };
+
+    if !changed {
+        return;
+    }
+
+    debug_log(&format!(
+        "directory_items_added applied slot={slot} pane_id={} generation={} path={} added={}",
+        result.pane_id,
+        result.generation,
+        result.path.display(),
+        entry_count
+    ));
+    sync_pane_slot_ui(ui, state, slot);
+    sync_pane_view_for_slot_model_signal(ui, state, bridge, slot);
+    set_directory_status_from_entries(ui, state, result.pane_id);
+}
+
+fn apply_directory_items_deleted(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: DirectoryItemsDeleted,
+) {
+    let removed_paths = directory_event_path_set(&result.removed_paths);
+    if removed_paths.is_empty() {
+        return;
+    }
+
+    let Some((slot, selected_paths, removed)) = ({
+        let mut state_ref = state.borrow_mut();
+        state_ref.remove_directory_cache(&result.path);
+        let Some(slot) = state_ref.panes.slot_for_id(result.pane_id) else {
+            debug_log(&format!(
+                "directory_items_deleted stale missing-pane pane_id={} generation={} path={}",
+                result.pane_id,
+                result.generation,
+                result.path.display()
+            ));
+            return;
+        };
+        let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
+            return;
+        };
+        if !pane.load_generation.is_current(result.generation) || pane.current_dir != result.path {
+            debug_log(&format!(
+                "directory_items_deleted stale pane_id={} generation={} path={} current={} current_generation_match={}",
                 result.pane_id,
                 result.generation,
                 result.path.display(),
@@ -3365,19 +3896,9 @@ fn apply_directory_entries_removed(
         return;
     };
 
-    let selected_path = selected_paths
-        .last()
-        .map_or_else(SharedString::new, |path| path.as_str().into());
-    let selected_count = selected_paths.len() as i32;
-    let selected_status = selection_status_text(&selected_paths);
-    if ui.get_focused_pane() == slot {
-        ui.set_selected_path(selected_path);
-        ui.set_selected_count(selected_count);
-        ui.set_selected_status(selected_status);
-    }
-
+    update_selection_ui_for_slot(ui, state, slot, &selected_paths);
     debug_log(&format!(
-        "directory_removed applied slot={slot} pane_id={} generation={} path={} removed={}",
+        "directory_items_deleted applied slot={slot} pane_id={} generation={} path={} removed={}",
         result.pane_id,
         result.generation,
         result.path.display(),
@@ -3386,9 +3907,189 @@ fn apply_directory_entries_removed(
     sync_pane_slot_ui(ui, state, slot);
     if !apply_removed_entries_relayout_for_slot(ui, state, bridge, slot, &removed) {
         clear_pane_rendered_virtual_slice(ui, state, slot);
-        sync_pane_view_for_slot(ui, state, bridge, slot);
+        sync_pane_view_for_slot_model_signal(ui, state, bridge, slot);
     }
     set_directory_status_from_entries(ui, state, result.pane_id);
+}
+
+fn apply_directory_items_refreshed(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: DirectoryItemsRefreshed,
+) {
+    if result.entries.is_empty() {
+        return;
+    }
+
+    let old_paths = directory_event_path_set(&result.old_paths);
+    let entry_count = result.entries.len();
+    let Some((slot, selected_paths, changed)) = ({
+        let mut state_ref = state.borrow_mut();
+        state_ref.remove_directory_cache(&result.path);
+        let Some(slot) = state_ref.panes.slot_for_id(result.pane_id) else {
+            debug_log(&format!(
+                "directory_items_refreshed stale missing-pane pane_id={} generation={} path={}",
+                result.pane_id,
+                result.generation,
+                result.path.display()
+            ));
+            return;
+        };
+        let Some(pane) = state_ref.panes.pane_mut_by_id(result.pane_id) else {
+            return;
+        };
+        if !pane.load_generation.is_current(result.generation) || pane.current_dir != result.path {
+            debug_log(&format!(
+                "directory_items_refreshed stale pane_id={} generation={} path={} current={} current_generation_match={}",
+                result.pane_id,
+                result.generation,
+                result.path.display(),
+                pane.current_dir.display(),
+                pane.load_generation.is_current(result.generation)
+            ));
+            return;
+        }
+        let changed = pane.refresh_raw_entries(&old_paths, result.entries);
+        Some((slot, pane.selection.paths.clone(), changed))
+    }) else {
+        return;
+    };
+
+    if !changed {
+        return;
+    }
+
+    update_selection_ui_for_slot(ui, state, slot, &selected_paths);
+    debug_log(&format!(
+        "directory_items_refreshed applied slot={slot} pane_id={} generation={} path={} refreshed={}",
+        result.pane_id,
+        result.generation,
+        result.path.display(),
+        entry_count
+    ));
+    sync_pane_slot_ui(ui, state, slot);
+    sync_pane_view_for_slot_model_signal(ui, state, bridge, slot);
+    set_directory_status_from_entries(ui, state, result.pane_id);
+}
+
+fn apply_directory_listing_refreshed(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    result: DirectoryListingRefreshed,
+) {
+    let DirectoryListingRefreshed {
+        pane_id,
+        generation,
+        path,
+        result,
+    } = result;
+    match result {
+        Ok(entries) => {
+            apply_directory_listing_entries(ui, state, bridge, pane_id, generation, path, entries)
+        }
+        Err(err) => {
+            let Some(slot) = directory_lister_slot(state, pane_id, generation, &path) else {
+                return;
+            };
+            set_pane_status(ui, state, slot, &format!("Cannot refresh directory: {err}"));
+        }
+    }
+}
+
+fn apply_directory_listing_entries(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    pane_id: u64,
+    generation: u64,
+    path: PathBuf,
+    entries: Vec<fs::entries::RawFileEntry>,
+) {
+    let prepared_entries = PreparedDirectoryEntries::new(entries.clone());
+    let cache_path = path.clone();
+    let incoming_paths = entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<HashSet<_>>();
+    let Some((slot, selected_paths, changed)) = ({
+        let mut state_ref = state.borrow_mut();
+        let Some(slot) = state_ref.panes.slot_for_id(pane_id) else {
+            return;
+        };
+        let Some(pane) = state_ref.panes.pane_mut_by_id(pane_id) else {
+            return;
+        };
+        if !pane.load_generation.is_current(generation) || pane.current_dir != path {
+            return;
+        }
+        let removed_paths = pane
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                let path = entry.model_path();
+                (!incoming_paths.contains(path)).then(|| path.to_string())
+            })
+            .collect::<HashSet<_>>();
+        let removed = if removed_paths.is_empty() {
+            None
+        } else {
+            pane.remove_entries_by_paths(&removed_paths)
+        };
+        let added_or_refreshed = pane.add_raw_entries(entries);
+        let changed = removed.is_some() || added_or_refreshed;
+        Some((slot, pane.selection.paths.clone(), changed))
+    }) else {
+        return;
+    };
+    state
+        .borrow_mut()
+        .insert_directory_cache(cache_path, prepared_entries);
+
+    if !changed {
+        set_directory_status_from_entries(ui, state, pane_id);
+        return;
+    }
+
+    update_selection_ui_for_slot(ui, state, slot, &selected_paths);
+    sync_pane_slot_ui(ui, state, slot);
+    sync_pane_view_for_slot_model_signal(ui, state, bridge, slot);
+    set_directory_status_from_entries(ui, state, pane_id);
+}
+
+fn apply_directory_listing_completed(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    result: DirectoryListingCompleted,
+) {
+    let Some(slot) = directory_lister_slot(state, result.pane_id, result.generation, &result.path)
+    else {
+        return;
+    };
+    if ui.get_focused_pane() == slot {
+        ui.set_directory_loading(false);
+    }
+    set_directory_status_from_entries(ui, state, result.pane_id);
+}
+
+fn directory_lister_slot(
+    state: &Rc<RefCell<AppState>>,
+    pane_id: u64,
+    generation: u64,
+    path: &Path,
+) -> Option<i32> {
+    let state_ref = state.borrow();
+    let slot = state_ref.panes.slot_for_id(pane_id)?;
+    let pane = state_ref.panes.pane_by_id(pane_id)?;
+    (pane.load_generation.is_current(generation) && pane.current_dir == path).then_some(slot)
+}
+
+fn directory_event_path_set(paths: &[PathBuf]) -> HashSet<String> {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -3702,6 +4403,7 @@ fn apply_pane_directory_result(
                 restore_pane_view_state(ui, state, slot, &result.path);
             }
             let mut unchanged = false;
+            let mut model_changed = false;
             let mut selected_paths_after_model_change = None;
             let mut reload_relayout = None;
             let mut rendered_slice_cleared = false;
@@ -3716,6 +4418,7 @@ fn apply_pane_directory_result(
                 if directory_entries_match(&pane.entries, &entries) {
                     unchanged = true;
                 } else {
+                    model_changed = true;
                     if result.preserve_view {
                         let diff = directory_reload_diff(&pane.entries, &entries);
                         if diff.supports_index_delta_relayout() {
@@ -3747,6 +4450,7 @@ fn apply_pane_directory_result(
                             entries.entries.clone(),
                             entries.summary.clone(),
                         );
+                        rendered_slice_cleared = true;
                     }
                     if !result.preserve_view {
                         pane.search.reset_all();
@@ -3776,12 +4480,20 @@ fn apply_pane_directory_result(
             if rendered_slice_cleared {
                 sync_pane_view_ui(ui, state, slot);
             }
-            if let Some(delta) = reload_relayout.as_ref()
-                && !apply_reload_delta_relayout_for_slot(ui, state, bridge, slot, delta)
-            {
-                clear_pane_rendered_virtual_slice(ui, state, slot);
+            let relayout_applied = if let Some(delta) = reload_relayout.as_ref() {
+                let applied = apply_reload_delta_relayout_for_slot(ui, state, bridge, slot, delta);
+                if !applied {
+                    clear_pane_rendered_virtual_slice(ui, state, slot);
+                }
+                applied
+            } else {
+                false
+            };
+            if model_changed && !relayout_applied {
+                sync_pane_view_for_slot_model_signal(ui, state, bridge, slot);
+            } else {
+                sync_pane_view_for_slot(ui, state, bridge, slot);
             }
-            sync_pane_view_for_slot(ui, state, bridge, slot);
             set_directory_status_from_entries(ui, state, result.pane_id);
         }
         Err(err) => {
@@ -4014,7 +4726,7 @@ fn submit_search_for_slot(
 
     if let Some(current_dir) = restore_entries {
         if !restore_cached_directory_entries_for_slot(state, slot, &current_dir) {
-            load_current_directory_for_slot(ui, state, bridge, slot, true);
+            refresh_pane_listing_for_slot(ui, state, bridge, slot);
             return;
         }
     }
@@ -4056,7 +4768,7 @@ fn clear_search_query_for_slot(
 
     if let Some(current_dir) = restore_entries {
         if !restore_cached_directory_entries_for_slot(state, slot, &current_dir) {
-            load_current_directory_for_slot(ui, state, bridge, slot, true);
+            refresh_pane_listing_for_slot(ui, state, bridge, slot);
             return true;
         }
     }
@@ -4094,7 +4806,7 @@ fn clear_search_for_slot(
     };
 
     if restore_entries && !restore_cached_directory_entries_for_slot(state, slot, &current_dir) {
-        load_current_directory_for_slot(ui, state, bridge, slot, true);
+        refresh_pane_listing_for_slot(ui, state, bridge, slot);
         return was_visible;
     }
 
@@ -4449,6 +5161,7 @@ fn start_file_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Async
     set_status_for_panes(ui, state, &summary.pane_ids, &summary.status);
     let async_tx = bridge.tx.clone();
     let notify_ui = bridge.ui_weak.clone();
+    let serial = summary.serial;
     let undo = summary.undo;
     bridge.handle.spawn(async move {
         let task_undo = undo.clone();
@@ -4485,7 +5198,11 @@ fn start_file_undo(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &Async
         send_async_event(
             async_tx,
             notify_ui,
-            AsyncEvent::FileUndoFinished(FileUndoResult { undo, result }),
+            AsyncEvent::FileUndoFinished(FileUndoResult {
+                serial,
+                undo,
+                result,
+            }),
         );
     });
 }
@@ -4498,7 +5215,10 @@ fn apply_file_undo_result(
 ) {
     let summary = {
         let mut state = state.borrow_mut();
-        state.complete_file_undo(result.undo, result.result)
+        state.complete_file_undo(result.serial, result.undo, result.result)
+    };
+    let Some(summary) = summary else {
+        return;
     };
     cleanup_file_undo_backup(summary.cleanup_backup);
     if let Some(undo_ui) = &summary.undo_ui {
@@ -6226,6 +6946,17 @@ fn sync_pane_view_for_slot(
     sync_virtual_entries_for_slot(ui, state, bridge, slot, true);
 }
 
+fn sync_pane_view_for_slot_model_signal(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bridge: &AsyncBridge,
+    slot: i32,
+) {
+    sync_virtual_entries_for_slot_with_count_and_cache_policy(
+        ui, state, bridge, slot, true, None, false, false, false, true, false,
+    );
+}
+
 fn focus_pane_slot(ui: &AppWindow, state: &Rc<RefCell<AppState>>, slot: i32) {
     let previous_slot = { state.borrow().panes.focused_slot() };
     let focused = {
@@ -6423,7 +7154,7 @@ fn navigate_pane_to_slot(
             "navigate_pane slot={slot} same path={} -> refresh",
             path.display()
         ));
-        load_current_directory_for_slot(ui, state, bridge, slot, true);
+        refresh_pane_listing_for_slot(ui, state, bridge, slot);
     } else {
         load_current_directory_for_slot(ui, state, bridge, slot, false);
     }
@@ -6472,8 +7203,8 @@ fn navigate_focused_to(
 }
 
 fn refresh_focused_directory(ui: &AppWindow, state: &Rc<RefCell<AppState>>, bridge: &AsyncBridge) {
-    let slot = { state.borrow().panes.focused_slot() };
-    load_current_directory_for_slot(ui, state, bridge, slot, true);
+    let pane_id = { state.borrow().panes.focused().id };
+    refresh_pane_listing_by_id(ui, state, bridge, pane_id);
 }
 
 fn load_current_directory_for_slot(
@@ -7770,9 +8501,9 @@ mod tests {
 
         assert!(
             body.contains("for pane_id in pane_ids {")
-                && body.contains("refresh_pane_by_id(ui, state, bridge, *pane_id);")
+                && body.contains("refresh_pane_listing_by_id(ui, state, bridge, *pane_id);")
                 && !body.contains("state.borrow().panes.slot_for_id(*pane_id)"),
-            "refresh_panes should dispatch by pane id without holding a slot lookup borrow"
+            "refresh_panes should dispatch lister refresh by pane id without holding a slot lookup borrow"
         );
     }
 
@@ -8189,7 +8920,7 @@ mod tests {
         let pane_source = include_str!("app/pane.rs");
         let geometry_source = include_str!("app/geometry.rs");
         let removed_body = source
-            .split_once("fn apply_directory_entries_removed(")
+            .split_once("fn apply_directory_items_deleted(")
             .and_then(|(_, rest)| rest.split_once("fn directory_removed_path_set("))
             .map(|(body, _)| body)
             .expect("directory removed body should be present");
@@ -9113,11 +9844,14 @@ mod tests {
                 && start_body.contains("apply_undo_ui(ui, &undo_ui);")
                 && start_body.contains(
                     "set_status_for_panes(ui, state, &summary.pane_ids, &summary.status);"
-                ),
-            "file undo start status should use the controller summary after releasing AppState borrow"
+                )
+                && start_body.contains("let serial = summary.serial;")
+                && start_body.contains("FileUndoResult {\n                serial,\n                undo,\n                result,\n            }"),
+            "file undo start should use the controller summary and forward its serial to async completion"
         );
         assert!(
-            result_body.contains("state.complete_file_undo(result.undo, result.result)")
+            result_body.contains("state.complete_file_undo(result.serial, result.undo, result.result)")
+                && result_body.contains("let Some(summary) = summary else {\n        return;\n    };")
                 && result_body.contains("cleanup_file_undo_backup(summary.cleanup_backup);")
                 && result_body.contains("if let Some(undo_ui) = &summary.undo_ui {")
                 && result_body.contains("apply_undo_ui(ui, undo_ui);")
@@ -9535,45 +10269,45 @@ mod tests {
             AccessKind, AccessMode, CreateKind, DataChange, Flag, ModifyKind, RemoveKind,
         };
 
-        assert!(directory_watch_event_should_reload(&notify::Event::new(
+        assert!(directory_watch_event_should_list(&notify::Event::new(
             notify::EventKind::Access(AccessKind::Close(AccessMode::Write))
         )));
-        assert!(directory_watch_event_should_reload(&notify::Event::new(
+        assert!(directory_watch_event_should_list(&notify::Event::new(
             notify::EventKind::Access(AccessKind::Close(AccessMode::Any))
         )));
-        assert!(directory_watch_event_should_reload(
+        assert!(directory_watch_event_should_list(
             &notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan)
         ));
-        assert!(directory_watch_event_should_reload(&notify::Event::new(
+        assert!(directory_watch_event_should_list(&notify::Event::new(
             notify::EventKind::Create(CreateKind::File)
         )));
-        assert!(directory_watch_event_should_reload(&notify::Event::new(
+        assert!(directory_watch_event_should_list(&notify::Event::new(
             notify::EventKind::Modify(ModifyKind::Data(DataChange::Any))
         )));
-        assert!(directory_watch_event_should_reload(&notify::Event::new(
+        assert!(directory_watch_event_should_list(&notify::Event::new(
             notify::EventKind::Remove(RemoveKind::File)
         )));
 
-        assert!(!directory_watch_event_should_reload(&notify::Event::new(
+        assert!(!directory_watch_event_should_list(&notify::Event::new(
             notify::EventKind::Access(AccessKind::Read)
         )));
-        assert!(!directory_watch_event_should_reload(&notify::Event::new(
+        assert!(!directory_watch_event_should_list(&notify::Event::new(
             notify::EventKind::Access(AccessKind::Open(AccessMode::Read))
         )));
-        assert!(!directory_watch_event_should_reload(&notify::Event::new(
+        assert!(!directory_watch_event_should_list(&notify::Event::new(
             notify::EventKind::Access(AccessKind::Close(AccessMode::Read))
         )));
     }
 
     #[test]
-    fn directory_watch_removed_paths_extracts_deletes_and_rename_sources() {
-        use notify::event::{ModifyKind, RemoveKind, RenameMode};
+    fn directory_watch_update_classifies_dolphin_lister_events() {
+        use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
 
         let watched = Path::new("/tmp/project");
         let deleted = notify::Event::new(notify::EventKind::Remove(RemoveKind::File))
             .add_path(PathBuf::from("/tmp/project/old.txt"));
         assert_eq!(
-            directory_watch_removed_paths(&deleted, watched),
+            directory_watch_update(&deleted, watched).deleted_paths,
             vec![PathBuf::from("/tmp/project/old.txt")]
         );
 
@@ -9582,7 +10316,7 @@ mod tests {
         )))
         .add_path(PathBuf::from("/tmp/project/before.txt"));
         assert_eq!(
-            directory_watch_removed_paths(&renamed_from, watched),
+            directory_watch_update(&renamed_from, watched).deleted_paths,
             vec![PathBuf::from("/tmp/project/before.txt")]
         );
 
@@ -9592,13 +10326,83 @@ mod tests {
         .add_path(PathBuf::from("/tmp/project/before.txt"))
         .add_path(PathBuf::from("/tmp/project/after.txt"));
         assert_eq!(
-            directory_watch_removed_paths(&renamed_both, watched),
-            vec![PathBuf::from("/tmp/project/before.txt")]
+            directory_watch_update(&renamed_both, watched).refreshed_paths,
+            vec![DirectoryWatchRefreshPath {
+                old_path: PathBuf::from("/tmp/project/before.txt"),
+                path: PathBuf::from("/tmp/project/after.txt"),
+            }]
+        );
+
+        let created = notify::Event::new(notify::EventKind::Create(CreateKind::File))
+            .add_path(PathBuf::from("/tmp/project/new.txt"));
+        assert_eq!(
+            directory_watch_update(&created, watched).added_paths,
+            vec![PathBuf::from("/tmp/project/new.txt")]
+        );
+
+        let modified =
+            notify::Event::new(notify::EventKind::Modify(ModifyKind::Data(DataChange::Any)))
+                .add_path(PathBuf::from("/tmp/project/changed.txt"));
+        assert_eq!(
+            directory_watch_update(&modified, watched).refreshed_paths,
+            vec![DirectoryWatchRefreshPath {
+                old_path: PathBuf::from("/tmp/project/changed.txt"),
+                path: PathBuf::from("/tmp/project/changed.txt"),
+            }]
         );
 
         let current_dir_removed = notify::Event::new(notify::EventKind::Remove(RemoveKind::Folder))
             .add_path(PathBuf::from("/tmp/project"));
-        assert!(directory_watch_removed_paths(&current_dir_removed, watched).is_empty());
+        assert!(
+            directory_watch_update(&current_dir_removed, watched)
+                .deleted_paths
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn directory_watch_current_removed_detects_watched_directory_only() {
+        use notify::event::{ModifyKind, RemoveKind, RenameMode};
+
+        let watched = Path::new("/tmp/project");
+        let removed_current = notify::Event::new(notify::EventKind::Remove(RemoveKind::Folder))
+            .add_path(PathBuf::from("/tmp/project"));
+        assert!(directory_watch_current_removed(&removed_current, watched));
+
+        let removed_child = notify::Event::new(notify::EventKind::Remove(RemoveKind::File))
+            .add_path(PathBuf::from("/tmp/project/old.txt"));
+        assert!(!directory_watch_current_removed(&removed_child, watched));
+
+        let renamed_current = notify::Event::new(notify::EventKind::Modify(ModifyKind::Name(
+            RenameMode::Both,
+        )))
+        .add_path(PathBuf::from("/tmp/project"))
+        .add_path(PathBuf::from("/tmp/project-renamed"));
+        assert!(directory_watch_current_removed(&renamed_current, watched));
+
+        let trash_files = fs::file_ops::trash_files_dir();
+        let removed_trash = notify::Event::new(notify::EventKind::Remove(RemoveKind::Folder))
+            .add_path(trash_files.clone());
+        assert!(!directory_watch_current_removed(
+            &removed_trash,
+            &trash_files
+        ));
+    }
+
+    #[test]
+    fn nearest_existing_ancestor_skips_removed_path_segments() {
+        let root = std::env::temp_dir().join(format!(
+            "fika-nearest-existing-ancestor-{}",
+            std::process::id()
+        ));
+        let existing = root.join("existing");
+        let removed = existing.join("removed").join("leaf");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&existing).unwrap();
+
+        assert_eq!(nearest_existing_ancestor(&removed), Some(existing));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -9720,6 +10524,10 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("#[derive(Debug)]"))
             .map(|(body, _)| body)
             .expect("toggle_split_view body should be present");
+        let production_body = main
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(body, _)| body)
+            .expect("main production body should be present");
 
         assert!(
             async_bridge.contains(
@@ -9734,18 +10542,40 @@ mod tests {
         );
         assert!(
             watch_body.contains("let debounce = Arc::new(AtomicU64::new(0));")
-                && watch_body.contains("directory_watch_event_should_reload(&event)")
-                && watch_body.contains("begin_directory_read_request(&read_tracker, generation)")
+                && watch_body.contains("directory_watch_event_should_list(&event)")
+                && watch_body.contains("directory_watch_current_removed(&event, &watched_path)")
+                && watch_body
+                    .contains("let update = directory_watch_update(&event, &watched_path);")
+                && watch_body
+                    .contains("AsyncEvent::DirectoryCurrentRemoved(DirectoryCurrentRemoved {")
+                && watch_body.contains("AsyncEvent::DirectoryItemsDeleted(DirectoryItemsDeleted {")
+                && watch_body.contains("AsyncEvent::DirectoryItemsAdded(DirectoryItemsAdded {")
+                && watch_body
+                    .contains("AsyncEvent::DirectoryItemsRefreshed(DirectoryItemsRefreshed {")
+                && watch_body
+                    .contains("AsyncEvent::DirectoryListingRefreshed(DirectoryListingRefreshed {")
+                && watch_body.contains("send_directory_watch_entries(")
+                && watch_body.contains("send_directory_listing_refresh(")
                 && watch_body.contains(".insert(pane_id, watcher);")
                 && watch_body.matches("remove(&pane_id)").count() >= 2
+                && !watch_body.contains("begin_directory_read_request(&read_tracker, generation)")
+                && !watch_body.contains("request_directory_reload(")
+                && !watch_body.contains("DirectoryLoaded(DirectoryLoadResult")
+                && !watch_body.contains("DirectoryReadStart")
                 && !watch_body.contains("bridge.directory_watch_debounce"),
-            "each pane watcher should own debounce state, use the precise event filter, and sequence directory reads"
+            "each pane watcher should own debounce state, route current-directory removal separately, and emit Dolphin-style lister events instead of queued directory reloads"
         );
         assert!(
-            main.contains(
-                "directory_read_result_is_current(result.pane_id, result.generation, result.request, bridge)"
-            ) && main.contains("bridge.directory_read_trackers.borrow_mut().remove(&pane_id);"),
-            "directory results should reject stale same-generation reads and closed panes should drop tracker state"
+            production_body
+                .contains("directory_read_result_is_current(pane_id, generation, request, bridge)")
+                && production_body.contains(
+                    "finish_directory_read_request(pane_id, generation, request, bridge)"
+                )
+                && !production_body.contains("DirectoryReadFinish::StartQueued")
+                && !production_body.contains("queued_request")
+                && production_body
+                    .contains("bridge.directory_read_trackers.borrow_mut().remove(&pane_id);"),
+            "directory load results should reject stale same-generation reads, and closed panes should drop tracker state without watcher reload queues"
         );
         assert!(
             split_toggle_body.contains("crate::unwatch_directory_for_pane(pane_id, bridge);")

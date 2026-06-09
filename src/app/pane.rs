@@ -20,13 +20,13 @@ use crate::app::item_view_renderer::{
 };
 use crate::app::model_update::{ItemViewRowToken, ItemViewSlotKey, ItemViewSlotToken};
 use crate::app::virtual_view::VirtualViewSnapshotInput;
-#[cfg(test)]
 use crate::fs::entries::RawFileEntry;
 use crate::fs::{file_ops, search, thumbnails};
 use crate::support::generation::GenerationCounter;
 use crate::{ItemViewEntry, ItemViewSlotEntry};
 use slint::{Image, Model, ModelRc, VecModel};
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::ops::{Index, Range};
@@ -190,6 +190,41 @@ impl PaneState {
         })
     }
 
+    pub(crate) fn add_raw_entries(&mut self, entries: Vec<RawFileEntry>) -> bool {
+        let trash_sort = file_ops::is_trash_files_dir(&self.current_dir);
+        let Some(entries) = self.entries.upsert_raw_entries(entries, trash_sort) else {
+            return false;
+        };
+        self.apply_directory_model_entries(entries, true);
+        true
+    }
+
+    pub(crate) fn refresh_raw_entries(
+        &mut self,
+        old_paths: &HashSet<String>,
+        entries: Vec<RawFileEntry>,
+    ) -> bool {
+        let incoming_paths = entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<HashSet<_>>();
+        let trash_sort = file_ops::is_trash_files_dir(&self.current_dir);
+        let Some(entries) =
+            self.entries
+                .replace_raw_entries_by_paths(old_paths.clone(), entries, trash_sort)
+        else {
+            return false;
+        };
+        let removed_paths = old_paths
+            .iter()
+            .filter(|path| !incoming_paths.contains(path.as_str()))
+            .cloned()
+            .collect::<HashSet<_>>();
+        self.apply_removed_paths_cleanup(&removed_paths);
+        self.apply_directory_model_entries(entries, true);
+        true
+    }
+
     pub(crate) fn apply_removed_paths_cleanup(&mut self, removed_paths: &HashSet<String>) -> bool {
         let mut changed = false;
         let old_selection_len = self.selection.paths.len();
@@ -225,6 +260,21 @@ impl PaneState {
         }
 
         model_ranges.to_vec()
+    }
+
+    fn apply_directory_model_entries(&mut self, entries: PaneEntryModel, preserve_rendered: bool) {
+        self.entries = entries;
+        self.entry_summary = item_view_model_entry_summary(self.entries.iter(), false, false);
+        self.search.visible_entry_indices = None;
+        self.search.visible_entries_have_locations = self.entry_summary.has_locations;
+        self.search.visible_location_groups = None;
+        self.search.index_pending = false;
+        self.search_index_generation.next();
+        if preserve_rendered {
+            self.view.invalidate_virtual_model_for_delta();
+        } else {
+            self.view.clear_virtual_view();
+        }
     }
 
     pub(crate) fn clear_entries(&mut self) {
@@ -377,6 +427,48 @@ impl PaneEntryModel {
             removed_count,
         })
     }
+
+    pub(crate) fn upsert_raw_entries(
+        &self,
+        entries: Vec<RawFileEntry>,
+        trash_sort: bool,
+    ) -> Option<Self> {
+        self.replace_raw_entries_by_paths(HashSet::new(), entries, trash_sort)
+    }
+
+    pub(crate) fn replace_raw_entries_by_paths(
+        &self,
+        old_paths: HashSet<String>,
+        entries: Vec<RawFileEntry>,
+        trash_sort: bool,
+    ) -> Option<Self> {
+        if old_paths.is_empty() && entries.is_empty() {
+            return None;
+        }
+
+        let mut incoming_paths = HashSet::new();
+        let mut incoming_entries = Vec::<ItemViewModelEntryArc>::new();
+        for entry in entries {
+            if incoming_paths.insert(entry.path.clone()) {
+                incoming_entries.push(Arc::new(entry) as ItemViewModelEntryArc);
+            }
+        }
+
+        let mut next = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                !old_paths.contains(entry.model_path())
+                    && !incoming_paths.contains(entry.model_path())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        next.extend(incoming_entries);
+        sort_entry_arcs(&mut next, trash_sort);
+
+        let next = Self::new(next);
+        (next != *self).then_some(next)
+    }
 }
 
 fn push_contiguous_range(ranges: &mut Vec<Range<usize>>, index: usize) {
@@ -387,6 +479,45 @@ fn push_contiguous_range(ranges: &mut Vec<Range<usize>>, index: usize) {
         return;
     }
     ranges.push(index..index + 1);
+}
+
+fn sort_entry_arcs(entries: &mut [ItemViewModelEntryArc], trash_sort: bool) {
+    entries.sort_by_cached_key(|entry| pane_entry_sort_key(entry.as_ref(), trash_sort));
+}
+
+fn pane_entry_sort_key(
+    entry: &(impl ItemViewModelEntry + ?Sized),
+    trash_sort: bool,
+) -> (u8, Reverse<String>, String) {
+    if trash_sort {
+        let bucket = trash_sort_bucket(entry);
+        let deletion_date = if bucket == 0 {
+            Reverse(entry.model_modified().to_string())
+        } else {
+            Reverse(String::new())
+        };
+        return (
+            bucket,
+            deletion_date,
+            entry.model_name().to_ascii_lowercase(),
+        );
+    }
+
+    (
+        u8::from(!entry.model_is_dir()),
+        Reverse(String::new()),
+        entry.model_name().to_ascii_lowercase(),
+    )
+}
+
+fn trash_sort_bucket(entry: &(impl ItemViewModelEntry + ?Sized)) -> u8 {
+    if entry.model_group().contains("Deleted: ") {
+        0
+    } else if !entry.model_group().is_empty() {
+        1
+    } else {
+        2
+    }
 }
 
 fn remove_model_ranges_from_visible_indices(
