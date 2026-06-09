@@ -10,7 +10,7 @@ use gpui::{
     App, Bounds, Context, IntoElement, ParentElement, Render, Styled, Window, WindowBounds,
     WindowOptions, div, px, rgb, size,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -165,11 +165,10 @@ struct ChooserState {
 struct PaneSnapshot {
     id: PaneId,
     path: PathBuf,
-    entries: Vec<Entry>,
+    item_count: usize,
+    visible_items: Vec<VisibleItemSnapshot>,
     view: ViewState,
     rubber_band: Option<ViewRect>,
-    selected_paths: BTreeSet<PathBuf>,
-    rename_draft: Option<RenameDraftSnapshot>,
     focused: bool,
     can_close: bool,
     can_go_back: bool,
@@ -178,6 +177,15 @@ struct PaneSnapshot {
     can_rename: bool,
     can_undo: bool,
     operation_pending: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct VisibleItemSnapshot {
+    pub(crate) slot_id: u64,
+    pub(crate) layout: fika_core::ItemLayout,
+    pub(crate) entry: Entry,
+    pub(crate) selected: bool,
+    pub(crate) draft_name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -256,8 +264,46 @@ struct ClipboardState {
     paths: Vec<PathBuf>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct VisibleItemSlotPool {
+    next_slot_id: u64,
+    slot_by_item_id: BTreeMap<fika_core::ItemId, u64>,
+    free_slots: Vec<u64>,
+}
+
+impl VisibleItemSlotPool {
+    fn slots_for_items(
+        &mut self,
+        visible_item_ids: impl IntoIterator<Item = fika_core::ItemId>,
+    ) -> BTreeMap<fika_core::ItemId, u64> {
+        let visible_item_ids = visible_item_ids.into_iter().collect::<BTreeSet<_>>();
+        let previous = std::mem::take(&mut self.slot_by_item_id);
+        for (item_id, slot_id) in previous {
+            if visible_item_ids.contains(&item_id) {
+                self.slot_by_item_id.insert(item_id, slot_id);
+            } else {
+                self.free_slots.push(slot_id);
+            }
+        }
+
+        for item_id in visible_item_ids {
+            if self.slot_by_item_id.contains_key(&item_id) {
+                continue;
+            }
+            let slot_id = self.free_slots.pop().unwrap_or_else(|| {
+                self.next_slot_id += 1;
+                self.next_slot_id
+            });
+            self.slot_by_item_id.insert(item_id, slot_id);
+        }
+
+        self.slot_by_item_id.clone()
+    }
+}
+
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
+    visible_item_slots: HashMap<PaneId, VisibleItemSlotPool>,
     operations: OperationQueue,
     clipboard: Option<ClipboardState>,
     rename_draft: Option<RenameDraft>,
@@ -288,6 +334,7 @@ impl FikaApp {
         });
         let mut app = Self {
             panes: PaneController::new(args.start_dir.clone()),
+            visible_item_slots: HashMap::new(),
             operations: OperationQueue::new(),
             clipboard: None,
             rename_draft: None,
@@ -327,46 +374,90 @@ impl FikaApp {
         app
     }
 
-    fn snapshots(&self) -> Vec<PaneSnapshot> {
+    fn snapshots(&mut self) -> Vec<PaneSnapshot> {
         let can_close = self.panes.pane_ids().len() > 1;
         let can_paste = !self.operation_pending && self.clipboard.is_some();
         let can_undo = !self.operation_pending && self.operations.latest_undo().is_some();
-        self.panes
-            .pane_ids()
-            .iter()
+        let pane_ids = self.panes.pane_ids().to_vec();
+        pane_ids
+            .into_iter()
             .filter_map(|pane_id| {
-                let pane = self.panes.pane(*pane_id)?;
-                let selected_paths = self
-                    .panes
-                    .selected_paths(*pane_id)
-                    .unwrap_or_default()
+                let (
+                    path,
+                    item_count,
+                    view,
+                    rubber_band,
+                    focused,
+                    can_go_back,
+                    can_go_forward,
+                    can_rename,
+                    visible_data,
+                ) = {
+                    let pane = self.panes.pane(pane_id)?;
+                    let rename_draft = self
+                        .rename_draft
+                        .as_ref()
+                        .filter(|draft| draft.pane_id == pane_id);
+                    let item_count = pane.model.len();
+                    let layout = compact_layout(item_count, &pane.view);
+                    let visible_data = layout
+                        .visible_items()
+                        .filter_map(|layout| {
+                            let entry = pane.model.get(layout.model_index)?.clone();
+                            let selected = pane.selection.is_selected(entry.id);
+                            let draft_name = rename_draft
+                                .filter(|draft| draft.original_path == entry.path)
+                                .map(|draft| draft.draft_name.clone());
+                            Some((layout, entry, selected, draft_name))
+                        })
+                        .collect::<Vec<_>>();
+                    (
+                        pane.current_dir.clone(),
+                        item_count,
+                        pane.view.clone(),
+                        self.rubber_band.and_then(|band| {
+                            (band.pane_id == pane_id)
+                                .then(|| band.visible_rect(pane.view.scroll_x, pane.view.scroll_y))
+                        }),
+                        self.panes.focused() == Some(pane_id),
+                        pane.can_go_back(),
+                        pane.can_go_forward(),
+                        !self.operation_pending && pane.selection.len() == 1,
+                        visible_data,
+                    )
+                };
+                let visible_ids = visible_data.iter().map(|(_, entry, _, _)| entry.id);
+                let slot_by_item_id = self
+                    .visible_item_slots
+                    .entry(pane_id)
+                    .or_default()
+                    .slots_for_items(visible_ids);
+                let visible_items = visible_data
                     .into_iter()
-                    .collect::<BTreeSet<_>>();
-                let rename_draft = self
-                    .rename_draft
-                    .as_ref()
-                    .filter(|draft| draft.pane_id == *pane_id)
-                    .map(|draft| RenameDraftSnapshot {
-                        original_path: draft.original_path.clone(),
-                        draft_name: draft.draft_name.clone(),
-                    });
+                    .filter_map(|(layout, entry, selected, draft_name)| {
+                        let slot_id = slot_by_item_id.get(&entry.id).copied()?;
+                        Some(VisibleItemSnapshot {
+                            slot_id,
+                            layout,
+                            entry,
+                            selected,
+                            draft_name,
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 Some(PaneSnapshot {
-                    id: *pane_id,
-                    path: pane.current_dir.clone(),
-                    entries: pane.model.entries().to_vec(),
-                    view: pane.view.clone(),
-                    rubber_band: self.rubber_band.and_then(|band| {
-                        (band.pane_id == *pane_id)
-                            .then(|| band.visible_rect(pane.view.scroll_x, pane.view.scroll_y))
-                    }),
-                    selected_paths,
-                    rename_draft,
-                    focused: self.panes.focused() == Some(*pane_id),
+                    id: pane_id,
+                    path,
+                    item_count,
+                    visible_items,
+                    view,
+                    rubber_band,
+                    focused,
                     can_close,
-                    can_go_back: pane.can_go_back(),
-                    can_go_forward: pane.can_go_forward(),
+                    can_go_back,
+                    can_go_forward,
                     can_paste,
-                    can_rename: !self.operation_pending && pane.selection.len() == 1,
+                    can_rename,
                     can_undo,
                     operation_pending: self.operation_pending,
                 })
@@ -443,6 +534,7 @@ impl FikaApp {
 
     fn close_pane(&mut self, pane_id: PaneId) {
         if self.panes.close(pane_id) {
+            self.visible_item_slots.remove(&pane_id);
             self.clear_rename_draft_for_pane(pane_id);
             self.status = format!("Closed pane {}", pane_id.0);
         }

@@ -20,11 +20,10 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
     let PaneSnapshot {
         id: pane_id,
         path,
-        entries,
+        item_count,
+        visible_items,
         view,
         rubber_band,
-        selected_paths,
-        rename_draft,
         focused,
         can_close,
         can_go_back,
@@ -39,8 +38,6 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
     } else {
         rgb(0xb6bcc6)
     };
-    let item_count = entries.len();
-
     div()
         .id(format!("pane-{}", pane_id.0))
         .flex()
@@ -198,11 +195,10 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         .child(file_grid(
             FileGridProps {
                 pane_id,
-                entries,
+                item_count,
+                visible_items,
                 view,
                 rubber_band,
-                selected_paths,
-                rename_draft,
                 mode: file_grid_mode,
             },
             cx,

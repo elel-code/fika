@@ -1,11 +1,10 @@
-use crate::{FikaApp, RenameDraftSnapshot, RubberBandDrag};
+use crate::{FikaApp, RubberBandDrag, VisibleItemSnapshot};
 use fika_core::{
     CompactLayout, CompactLayoutOptions, Entry, HorizontalScrollBarLayout, ItemLayout, PaneId,
     ViewPoint, ViewRect, ViewState,
 };
 use gpui::prelude::*;
 use gpui::{Bounds, Context, Div, ParentElement, Stateful, Styled, div, px, rgb};
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 const SCROLLBAR_THICKNESS: f32 = 12.0;
@@ -19,11 +18,10 @@ pub(crate) enum FileGridMode {
 
 pub(crate) struct FileGridProps {
     pub pane_id: PaneId,
-    pub entries: Vec<Entry>,
+    pub item_count: usize,
+    pub visible_items: Vec<VisibleItemSnapshot>,
     pub view: ViewState,
     pub rubber_band: Option<ViewRect>,
-    pub selected_paths: BTreeSet<PathBuf>,
-    pub rename_draft: Option<RenameDraftSnapshot>,
     pub mode: FileGridMode,
 }
 
@@ -36,18 +34,16 @@ struct ScrollBarDrag {
 pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stateful<Div> {
     let FileGridProps {
         pane_id,
-        entries,
+        item_count,
+        visible_items,
         view,
         rubber_band,
-        selected_paths,
-        rename_draft,
         mode,
     } = props;
-    let layout = compact_layout(entries.len(), &view);
+    let layout = compact_layout(item_count, &view);
     let content_size = layout.content_size();
     let max_scroll_x = (content_size.width - layout.viewport_rect().width).max(0.0);
     let max_scroll_y = (content_size.height - layout.viewport_rect().height).max(0.0);
-    let visible_items = layout.visible_items().collect::<Vec<_>>();
     let scroll_bar = layout.horizontal_scroll_bar(SCROLLBAR_THICKNESS, SCROLLBAR_MIN_HANDLE_WIDTH);
     let app = cx.weak_entity();
 
@@ -61,7 +57,7 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
             let _ = app.update(cx, |this, cx| {
                 if this
                     .panes
-                    .set_viewport_size(pane_id, width, height)
+                    .set_viewport_bounds(pane_id, width, height, max_scroll_x, max_scroll_y)
                     .unwrap_or(false)
                 {
                     cx.notify();
@@ -131,32 +127,30 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                         .top(px(-view.scroll_y))
                         .w(px(content_size.width))
                         .h(px(content_size.height))
-                        .children(visible_items.into_iter().filter_map(|item_layout| {
-                            entries.get(item_layout.model_index).cloned().map(|entry| {
-                                let path = entry.path.clone();
-                                let is_dir = entry.is_dir;
-                                let selected = selected_paths.contains(&entry.path);
-                                let draft_name = rename_draft
-                                    .as_ref()
-                                    .filter(|draft| draft.original_path == entry.path)
-                                    .map(|draft| draft.draft_name.clone());
-                                item_tile(entry, selected, draft_name, item_layout).on_click(
-                                    cx.listener(
-                                        move |this, event: &gpui::ClickEvent, _window, cx| {
-                                            handle_item_click(
-                                                this,
-                                                pane_id,
-                                                path.clone(),
-                                                is_dir,
-                                                mode,
-                                                event.modifiers().shift,
-                                                event.modifiers().secondary(),
-                                            );
-                                            cx.notify();
-                                        },
-                                    ),
-                                )
-                            })
+                        .children(visible_items.into_iter().map(|item| {
+                            let path = item.entry.path.clone();
+                            let is_dir = item.entry.is_dir;
+                            item_tile(
+                                item.slot_id,
+                                item.entry,
+                                item.selected,
+                                item.draft_name,
+                                item.layout,
+                            )
+                            .on_click(cx.listener(
+                                move |this, event: &gpui::ClickEvent, _window, cx| {
+                                    handle_item_click(
+                                        this,
+                                        pane_id,
+                                        path.clone(),
+                                        is_dir,
+                                        mode,
+                                        event.modifiers().shift,
+                                        event.modifiers().secondary(),
+                                    );
+                                    cx.notify();
+                                },
+                            ))
                         })),
                 )
                 .when_some(rubber_band, |viewport, rect| {
@@ -271,13 +265,14 @@ fn handle_item_click(
 }
 
 fn item_tile(
+    slot_id: u64,
     entry: Entry,
     selected: bool,
     draft_name: Option<String>,
     layout: ItemLayout,
 ) -> Stateful<Div> {
     let marker = if entry.is_dir { "[D]" } else { "[F]" };
-    let id = format!("item-{}", entry.id.0);
+    let id = format!("item-slot-{slot_id}");
     let renaming = draft_name.is_some();
     let display_name = draft_name.unwrap_or_else(|| entry.name.clone());
     let item = layout.item_rect;
@@ -354,7 +349,7 @@ fn item_tile(
         )
 }
 
-fn compact_layout(item_count: usize, view: &ViewState) -> CompactLayout {
+pub(crate) fn compact_layout(item_count: usize, view: &ViewState) -> CompactLayout {
     let layout = CompactLayout::new(item_count, compact_layout_options(view, 0.0));
     if layout
         .horizontal_scroll_bar(SCROLLBAR_THICKNESS, SCROLLBAR_MIN_HANDLE_WIDTH)

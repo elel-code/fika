@@ -243,14 +243,42 @@ impl CompactLayout {
 
     pub fn visible_items(&self) -> impl Iterator<Item = ItemLayout> + '_ {
         let viewport = self.viewport_rect();
-        self.items()
-            .filter(move |item| item.item_rect.intersects(viewport))
+        let column_count = self.item_count.div_ceil(self.rows_per_column);
+        let first_column = first_visible_column(self.options, column_count);
+        let end_column = visible_end_column(self.options, column_count);
+
+        (first_column..end_column).flat_map(move |column| {
+            let column_start = column * self.rows_per_column;
+            let column_end = (column_start + self.rows_per_column).min(self.item_count);
+            (column_start..column_end).filter_map(move |index| {
+                self.item(index)
+                    .filter(|item| item.item_rect.intersects(viewport))
+            })
+        })
     }
 
     pub fn hit_test_content_point(&self, point: ViewPoint) -> Option<usize> {
-        self.items()
-            .find(|item| item.item_rect.contains(point))
-            .map(|item| item.model_index)
+        if self.item_count == 0 {
+            return None;
+        }
+        let stride_x = self.options.item_width + self.options.gap;
+        let stride_y = self.options.item_height + self.options.gap;
+        if stride_x <= 0.0 || stride_y <= 0.0 {
+            return None;
+        }
+        let column = ((point.x - self.options.padding) / stride_x).floor();
+        let row = ((point.y - self.options.padding) / stride_y).floor();
+        if column < 0.0 || row < 0.0 {
+            return None;
+        }
+        let column = column as usize;
+        let row = row as usize;
+        if row >= self.rows_per_column {
+            return None;
+        }
+        let index = column * self.rows_per_column + row;
+        self.item(index)
+            .and_then(|item| item.item_rect.contains(point).then_some(item.model_index))
     }
 
     pub fn hit_test_viewport_point(&self, point: ViewPoint) -> Option<usize> {
@@ -261,12 +289,40 @@ impl CompactLayout {
     }
 
     pub fn indexes_intersecting(&self, rect: ViewRect) -> RangeSelection {
-        let indexes = self
-            .items()
-            .filter(|item| item.item_rect.intersects(rect))
-            .map(|item| item.model_index)
+        let column_range = self.column_range_intersecting(rect);
+        let row_range = self.row_range_intersecting(rect);
+        let indexes = column_range
+            .flat_map(|column| {
+                row_range.clone().filter_map(move |row| {
+                    let index = column * self.rows_per_column + row;
+                    (index < self.item_count).then_some(index)
+                })
+            })
             .collect();
         RangeSelection { indexes }
+    }
+
+    fn column_range_intersecting(&self, rect: ViewRect) -> Range<usize> {
+        let column_count = self.item_count.div_ceil(self.rows_per_column);
+        visible_axis_range(
+            rect.x,
+            rect.right(),
+            self.options.padding,
+            self.options.item_width,
+            self.options.gap,
+            column_count,
+        )
+    }
+
+    fn row_range_intersecting(&self, rect: ViewRect) -> Range<usize> {
+        visible_axis_range(
+            rect.y,
+            rect.bottom(),
+            self.options.padding,
+            self.options.item_height,
+            self.options.gap,
+            self.rows_per_column,
+        )
     }
 }
 
@@ -293,6 +349,46 @@ fn rows_per_column(options: CompactLayoutOptions) -> usize {
     ((available + options.gap) / (options.item_height + options.gap))
         .floor()
         .max(1.0) as usize
+}
+
+fn first_visible_column(options: CompactLayoutOptions, column_count: usize) -> usize {
+    if column_count == 0 {
+        return 0;
+    }
+    let pitch = (options.item_width + options.gap).max(1.0);
+    let x = options.scroll_x - options.padding - options.item_width;
+    ((x / pitch).floor() as isize + 1).max(0) as usize
+}
+
+fn visible_end_column(options: CompactLayoutOptions, column_count: usize) -> usize {
+    if column_count == 0 {
+        return 0;
+    }
+    let pitch = (options.item_width + options.gap).max(1.0);
+    let right = options.scroll_x + options.viewport_width;
+    let x = right - options.padding;
+    let end = (x / pitch).ceil() as isize + 1;
+    (end.max(0) as usize).min(column_count)
+}
+
+fn visible_axis_range(
+    visible_start: f32,
+    visible_end: f32,
+    padding: f32,
+    item_extent: f32,
+    gap: f32,
+    count: usize,
+) -> Range<usize> {
+    if count == 0 || visible_end <= visible_start {
+        return 0..0;
+    }
+    let pitch = item_extent + gap;
+    if pitch <= 0.0 || item_extent <= 0.0 {
+        return 0..0;
+    }
+    let start = ((visible_start - padding - item_extent) / pitch).floor() as isize + 1;
+    let end = ((visible_end - padding) / pitch).ceil() as isize;
+    start.max(0) as usize..(end.max(0) as usize).min(count)
 }
 
 #[cfg(test)]
