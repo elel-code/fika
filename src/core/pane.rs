@@ -1,4 +1,5 @@
 use super::directory::{DirectoryLister, DirectoryListerEvent, LoadMode};
+use super::entries::ItemId;
 use super::model::{DirectoryModel, DirectoryModelSignal};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -46,119 +47,115 @@ impl PaneIdAllocator {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SelectionState {
-    selected_paths: Vec<PathBuf>,
-    anchor_path: Option<PathBuf>,
-    active_path: Option<PathBuf>,
+    selected_ids: Vec<ItemId>,
+    anchor_id: Option<ItemId>,
+    active_id: Option<ItemId>,
 }
 
 impl SelectionState {
-    pub fn selected_paths(&self) -> &[PathBuf] {
-        &self.selected_paths
+    pub fn selected_ids(&self) -> &[ItemId] {
+        &self.selected_ids
     }
 
-    pub fn anchor_path(&self) -> Option<&Path> {
-        self.anchor_path.as_deref()
+    pub fn anchor_id(&self) -> Option<ItemId> {
+        self.anchor_id
     }
 
-    pub fn active_path(&self) -> Option<&Path> {
-        self.active_path.as_deref()
+    pub fn active_id(&self) -> Option<ItemId> {
+        self.active_id
     }
 
     pub fn len(&self) -> usize {
-        self.selected_paths.len()
+        self.selected_ids.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.selected_paths.is_empty()
+        self.selected_ids.is_empty()
     }
 
-    pub fn is_selected(&self, path: &Path) -> bool {
-        self.selected_paths.iter().any(|selected| selected == path)
+    pub fn is_selected(&self, id: ItemId) -> bool {
+        self.selected_ids.iter().any(|selected| *selected == id)
     }
 
     pub fn clear(&mut self) {
-        self.selected_paths.clear();
-        self.anchor_path = None;
-        self.active_path = None;
+        self.selected_ids.clear();
+        self.anchor_id = None;
+        self.active_id = None;
     }
 
-    pub fn select_only(&mut self, path: PathBuf) {
-        self.selected_paths.clear();
-        self.selected_paths.push(path.clone());
-        self.anchor_path = Some(path);
-        self.active_path = self.anchor_path.clone();
+    pub fn select_only(&mut self, id: ItemId) {
+        self.selected_ids.clear();
+        self.selected_ids.push(id);
+        self.anchor_id = Some(id);
+        self.active_id = Some(id);
     }
 
-    pub fn toggle(&mut self, path: PathBuf) -> bool {
-        self.anchor_path = Some(path.clone());
-        self.active_path = Some(path.clone());
+    pub fn toggle(&mut self, id: ItemId) -> bool {
+        self.anchor_id = Some(id);
+        self.active_id = Some(id);
         if let Some(index) = self
-            .selected_paths
+            .selected_ids
             .iter()
-            .position(|selected| selected == &path)
+            .position(|selected| *selected == id)
         {
-            self.selected_paths.remove(index);
+            self.selected_ids.remove(index);
             false
         } else {
-            self.selected_paths.push(path);
+            self.selected_ids.push(id);
             true
         }
     }
 
-    pub fn replace(&mut self, paths: Vec<PathBuf>) {
+    pub fn replace(&mut self, ids: Vec<ItemId>) {
         let mut seen = BTreeSet::new();
-        self.selected_paths = paths
+        self.selected_ids = ids
             .into_iter()
-            .filter(|path| seen.insert(path.clone()))
+            .filter(|id| id.is_assigned() && seen.insert(*id))
             .collect();
         if self
-            .anchor_path
-            .as_ref()
-            .is_none_or(|anchor| !self.selected_paths.iter().any(|path| path == anchor))
+            .anchor_id
+            .is_none_or(|anchor| !self.selected_ids.iter().any(|id| *id == anchor))
         {
-            self.anchor_path = self.selected_paths.first().cloned();
+            self.anchor_id = self.selected_ids.first().copied();
         }
         if self
-            .active_path
-            .as_ref()
-            .is_none_or(|active| !self.selected_paths.iter().any(|path| path == active))
+            .active_id
+            .is_none_or(|active| !self.selected_ids.iter().any(|id| *id == active))
         {
-            self.active_path = self.selected_paths.first().cloned();
+            self.active_id = self.selected_ids.first().copied();
         }
     }
 
-    pub fn replace_range(&mut self, anchor_path: PathBuf, paths: Vec<PathBuf>) {
-        self.replace(paths);
-        self.anchor_path = Some(anchor_path);
+    pub fn replace_range(&mut self, anchor_id: ItemId, ids: Vec<ItemId>) {
+        self.replace(ids);
+        self.anchor_id = Some(anchor_id);
     }
 
     pub fn replace_range_with_active(
         &mut self,
-        anchor_path: PathBuf,
-        active_path: PathBuf,
-        paths: Vec<PathBuf>,
+        anchor_id: ItemId,
+        active_id: ItemId,
+        ids: Vec<ItemId>,
     ) {
-        self.replace(paths);
-        self.anchor_path = Some(anchor_path);
-        self.active_path = Some(active_path);
+        self.replace(ids);
+        self.anchor_id = Some(anchor_id);
+        self.active_id = Some(active_id);
     }
 
-    pub fn retain_existing(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
-        let existing = paths.into_iter().collect::<BTreeSet<_>>();
-        self.selected_paths.retain(|path| existing.contains(path));
+    pub fn retain_existing(&mut self, ids: impl IntoIterator<Item = ItemId>) {
+        let existing = ids.into_iter().collect::<BTreeSet<_>>();
+        self.selected_ids.retain(|id| existing.contains(id));
         if self
-            .anchor_path
-            .as_ref()
-            .is_some_and(|anchor| !existing.contains(anchor))
+            .anchor_id
+            .is_some_and(|anchor| !existing.contains(&anchor))
         {
-            self.anchor_path = self.selected_paths.first().cloned();
+            self.anchor_id = self.selected_ids.first().copied();
         }
         if self
-            .active_path
-            .as_ref()
-            .is_some_and(|active| !existing.contains(active))
+            .active_id
+            .is_some_and(|active| !existing.contains(&active))
         {
-            self.active_path = self.selected_paths.first().cloned();
+            self.active_id = self.selected_ids.first().copied();
         }
     }
 }
@@ -169,11 +166,25 @@ pub enum SelectionMove {
     Next,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ViewState {
     pub scroll_x: f32,
     pub scroll_y: f32,
+    pub viewport_width: f32,
+    pub viewport_height: f32,
     pub icon_size: f32,
+}
+
+impl Default for ViewState {
+    fn default() -> Self {
+        Self {
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            viewport_width: 720.0,
+            viewport_height: 520.0,
+            icon_size: 0.0,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -376,10 +387,19 @@ impl PaneController {
             .collect()
     }
 
-    pub fn selected_paths(&self, pane_id: PaneId) -> Option<&[PathBuf]> {
-        self.panes
-            .get(&pane_id)
-            .map(|pane| pane.selection.selected_paths())
+    pub fn selected_paths(&self, pane_id: PaneId) -> Option<Vec<PathBuf>> {
+        let pane = self.panes.get(&pane_id)?;
+        Some(selected_paths_from_model(pane))
+    }
+
+    pub fn selection_anchor_path(&self, pane_id: PaneId) -> Option<PathBuf> {
+        let pane = self.panes.get(&pane_id)?;
+        path_for_selection_id(pane, pane.selection.anchor_id()?)
+    }
+
+    pub fn selection_active_path(&self, pane_id: PaneId) -> Option<PathBuf> {
+        let pane = self.panes.get(&pane_id)?;
+        path_for_selection_id(pane, pane.selection.active_id()?)
     }
 
     pub fn selected_count(&self, pane_id: PaneId) -> Option<usize> {
@@ -387,58 +407,60 @@ impl PaneController {
     }
 
     pub fn is_selected(&self, pane_id: PaneId, path: &Path) -> bool {
-        self.panes
-            .get(&pane_id)
-            .is_some_and(|pane| pane.selection.is_selected(path))
+        self.panes.get(&pane_id).is_some_and(|pane| {
+            pane.model
+                .index_of_path(path)
+                .map(|index| pane.selection.is_selected(pane.model.entries()[index].id))
+                .unwrap_or(false)
+        })
     }
 
     pub fn select_only(&mut self, pane_id: PaneId, path: PathBuf) -> bool {
         let Some(pane) = self.panes.get_mut(&pane_id) else {
             return false;
         };
-        if pane.model.index_of_path(&path).is_none() {
+        let Some(entry_id) = pane
+            .model
+            .index_of_path(&path)
+            .map(|index| pane.model.entries()[index].id)
+        else {
             return false;
-        }
-        pane.selection.select_only(path);
+        };
+        pane.selection.select_only(entry_id);
         true
     }
 
     pub fn toggle_selection(&mut self, pane_id: PaneId, path: PathBuf) -> Option<bool> {
         let pane = self.panes.get_mut(&pane_id)?;
-        if pane.model.index_of_path(&path).is_none() {
-            return None;
-        }
-        Some(pane.selection.toggle(path))
+        let entry_id = pane
+            .model
+            .index_of_path(&path)
+            .map(|index| pane.model.entries()[index].id)?;
+        Some(pane.selection.toggle(entry_id))
     }
 
     pub fn select_range_to(&mut self, pane_id: PaneId, path: PathBuf) -> Option<usize> {
         let pane = self.panes.get_mut(&pane_id)?;
         let target_index = pane.model.index_of_path(&path)?;
-        let anchor_path = pane
+        let target_id = pane.model.entries()[target_index].id;
+        let anchor_id = pane
             .selection
-            .anchor_path()
-            .and_then(|anchor| {
-                pane.model
-                    .index_of_path(anchor)
-                    .map(|_| anchor.to_path_buf())
-            })
-            .unwrap_or_else(|| path.clone());
-        let anchor_index = pane
-            .model
-            .index_of_path(&anchor_path)
-            .unwrap_or(target_index);
+            .anchor_id()
+            .filter(|id| pane.model.index_of_id(*id).is_some())
+            .unwrap_or(target_id);
+        let anchor_index = pane.model.index_of_id(anchor_id).unwrap_or(target_index);
         let (start, end) = if anchor_index <= target_index {
             (anchor_index, target_index)
         } else {
             (target_index, anchor_index)
         };
-        let paths = pane.model.entries()[start..=end]
+        let ids = pane.model.entries()[start..=end]
             .iter()
-            .map(|entry| entry.path.clone())
+            .map(|entry| entry.id)
             .collect::<Vec<_>>();
-        let count = paths.len();
+        let count = ids.len();
         pane.selection
-            .replace_range_with_active(anchor_path, path, paths);
+            .replace_range_with_active(anchor_id, target_id, ids);
         Some(count)
     }
 
@@ -455,13 +477,13 @@ impl PaneController {
 
         let current_index = pane
             .selection
-            .active_path()
-            .and_then(|active| pane.model.index_of_path(active))
+            .active_id()
+            .and_then(|active| pane.model.index_of_id(active))
             .or_else(|| {
                 pane.selection
-                    .selected_paths()
+                    .selected_ids()
                     .last()
-                    .and_then(|path| pane.model.index_of_path(path))
+                    .and_then(|id| pane.model.index_of_id(*id))
             });
         let target_index = match (current_index, direction) {
             (Some(index), SelectionMove::Previous) => index.saturating_sub(1),
@@ -469,51 +491,44 @@ impl PaneController {
             (None, SelectionMove::Previous) => pane.model.len() - 1,
             (None, SelectionMove::Next) => 0,
         };
-        let target_path = pane.model.entries()[target_index].path.clone();
+        let target_id = pane.model.entries()[target_index].id;
 
         if !extend {
-            pane.selection.select_only(target_path);
+            pane.selection.select_only(target_id);
             return Some(1);
         }
 
-        let anchor_path = pane
+        let anchor_id = pane
             .selection
-            .anchor_path()
-            .and_then(|anchor| {
-                pane.model
-                    .index_of_path(anchor)
-                    .map(|_| anchor.to_path_buf())
-            })
-            .unwrap_or_else(|| target_path.clone());
-        let anchor_index = pane
-            .model
-            .index_of_path(&anchor_path)
-            .unwrap_or(target_index);
+            .anchor_id()
+            .filter(|id| pane.model.index_of_id(*id).is_some())
+            .unwrap_or(target_id);
+        let anchor_index = pane.model.index_of_id(anchor_id).unwrap_or(target_index);
         let (start, end) = if anchor_index <= target_index {
             (anchor_index, target_index)
         } else {
             (target_index, anchor_index)
         };
-        let paths = pane.model.entries()[start..=end]
+        let ids = pane.model.entries()[start..=end]
             .iter()
-            .map(|entry| entry.path.clone())
+            .map(|entry| entry.id)
             .collect::<Vec<_>>();
-        let count = paths.len();
+        let count = ids.len();
         pane.selection
-            .replace_range_with_active(anchor_path, target_path, paths);
+            .replace_range_with_active(anchor_id, target_id, ids);
         Some(count)
     }
 
     pub fn select_all(&mut self, pane_id: PaneId) -> Option<usize> {
         let pane = self.panes.get_mut(&pane_id)?;
-        let paths = pane
+        let ids = pane
             .model
             .entries()
             .iter()
-            .map(|entry| entry.path.clone())
+            .map(|entry| entry.id)
             .collect::<Vec<_>>();
-        let count = paths.len();
-        pane.selection.replace(paths);
+        let count = ids.len();
+        pane.selection.replace(ids);
         Some(count)
     }
 
@@ -523,12 +538,12 @@ impl PaneController {
         indexes: impl IntoIterator<Item = usize>,
     ) -> Option<usize> {
         let pane = self.panes.get_mut(&pane_id)?;
-        let paths = indexes
+        let ids = indexes
             .into_iter()
-            .filter_map(|index| pane.model.get(index).map(|entry| entry.path.clone()))
+            .filter_map(|index| pane.model.get(index).map(|entry| entry.id))
             .collect::<Vec<_>>();
-        let count = paths.len();
-        pane.selection.replace(paths);
+        let count = ids.len();
+        pane.selection.replace(ids);
         Some(count)
     }
 
@@ -551,6 +566,47 @@ impl PaneController {
         Some(pane.view.clone())
     }
 
+    pub fn set_view_scroll(
+        &mut self,
+        pane_id: PaneId,
+        scroll_x: f32,
+        scroll_y: f32,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+    ) -> Option<ViewState> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        pane.view.scroll_x = scroll_x.clamp(0.0, max_scroll_x.max(0.0));
+        pane.view.scroll_y = scroll_y.clamp(0.0, max_scroll_y.max(0.0));
+        Some(pane.view.clone())
+    }
+
+    pub fn set_viewport_bounds(
+        &mut self,
+        pane_id: PaneId,
+        viewport_width: f32,
+        viewport_height: f32,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+    ) -> Option<bool> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        let viewport_width = viewport_width.max(1.0);
+        let viewport_height = viewport_height.max(1.0);
+        let scroll_x = pane.view.scroll_x.clamp(0.0, max_scroll_x.max(0.0));
+        let scroll_y = pane.view.scroll_y.clamp(0.0, max_scroll_y.max(0.0));
+        if pane.view.viewport_width == viewport_width
+            && pane.view.viewport_height == viewport_height
+            && pane.view.scroll_x == scroll_x
+            && pane.view.scroll_y == scroll_y
+        {
+            return Some(false);
+        }
+        pane.view.viewport_width = viewport_width;
+        pane.view.viewport_height = viewport_height;
+        pane.view.scroll_x = scroll_x;
+        pane.view.scroll_y = scroll_y;
+        Some(true)
+    }
+
     pub fn clear_selection(&mut self, pane_id: PaneId) -> bool {
         let Some(pane) = self.panes.get_mut(&pane_id) else {
             return false;
@@ -571,16 +627,30 @@ impl PaneController {
         let signals = pane.lister.apply_event_to_model(event, &mut pane.model);
         if !signals.is_empty() {
             pane.selection
-                .retain_existing(pane.model.entries().iter().map(|entry| entry.path.clone()));
+                .retain_existing(pane.model.entries().iter().map(|entry| entry.id));
         }
         Some(signals)
     }
 }
 
+fn selected_paths_from_model(pane: &PaneState) -> Vec<PathBuf> {
+    pane.selection
+        .selected_ids()
+        .iter()
+        .filter_map(|id| path_for_selection_id(pane, *id))
+        .collect()
+}
+
+fn path_for_selection_id(pane: &PaneState, id: ItemId) -> Option<PathBuf> {
+    pane.model
+        .index_of_id(id)
+        .map(|index| pane.model.entries()[index].path.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::directory::DirectoryListerEvent;
-    use super::super::entries::Entry;
+    use super::super::entries::{Entry, ItemId};
     use super::*;
 
     #[test]
@@ -755,6 +825,7 @@ mod tests {
             .unwrap()
             .model
             .replace_listing(vec![Entry {
+                id: ItemId::UNASSIGNED,
                 name: "file.txt".to_string(),
                 path: path.clone(),
                 group: String::new(),
@@ -771,6 +842,7 @@ mod tests {
             .unwrap()
             .model
             .replace_listing(vec![Entry {
+                id: ItemId::UNASSIGNED,
                 name: "file.txt".to_string(),
                 path: path.clone(),
                 group: String::new(),
@@ -803,6 +875,7 @@ mod tests {
             .model
             .replace_listing(vec![
                 Entry {
+                    id: ItemId::UNASSIGNED,
                     name: "keep.txt".to_string(),
                     path: keep.clone(),
                     group: String::new(),
@@ -815,6 +888,7 @@ mod tests {
                     is_dir: false,
                 },
                 Entry {
+                    id: ItemId::UNASSIGNED,
                     name: "remove.txt".to_string(),
                     path: remove.clone(),
                     group: String::new(),
@@ -837,7 +911,40 @@ mod tests {
             paths: vec![remove.clone()],
         });
 
-        assert_eq!(controller.selected_paths(pane_id), Some(&[keep][..]));
+        assert_eq!(controller.selected_paths(pane_id), Some(vec![keep]));
+    }
+
+    #[test]
+    fn selection_tracks_item_identity_across_rename_refresh() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let pane_id = controller.focused().unwrap();
+        let generation = controller.pane(pane_id).unwrap().generation;
+        let old_path = PathBuf::from("/tmp/a/old.txt");
+        let new_path = PathBuf::from("/tmp/a/new.txt");
+
+        controller
+            .pane_mut(pane_id)
+            .unwrap()
+            .model
+            .replace_listing(vec![test_entry("old.txt")]);
+        assert!(controller.select_only(pane_id, old_path.clone()));
+
+        controller.apply_lister_event(DirectoryListerEvent::ItemsRefreshed {
+            pane_id,
+            generation,
+            request_serial: RequestSerial(1),
+            path: PathBuf::from("/tmp/a"),
+            pairs: vec![super::super::directory::RefreshPair {
+                old_path,
+                entry: Some(test_entry("new.txt")),
+            }],
+        });
+
+        assert_eq!(
+            controller.selected_paths(pane_id),
+            Some(vec![new_path.clone()])
+        );
+        assert!(controller.is_selected(pane_id, &new_path));
     }
 
     #[test]
@@ -863,17 +970,15 @@ mod tests {
 
         assert_eq!(
             controller.selected_paths(pane_id),
-            Some(
-                &[
-                    PathBuf::from("/tmp/a/b.txt"),
-                    PathBuf::from("/tmp/a/c.txt"),
-                    PathBuf::from("/tmp/a/d.txt")
-                ][..]
-            )
+            Some(vec![
+                PathBuf::from("/tmp/a/b.txt"),
+                PathBuf::from("/tmp/a/c.txt"),
+                PathBuf::from("/tmp/a/d.txt")
+            ])
         );
         assert_eq!(
-            controller.pane(pane_id).unwrap().selection.anchor_path(),
-            Some(Path::new("/tmp/a/b.txt"))
+            controller.selection_anchor_path(pane_id),
+            Some(PathBuf::from("/tmp/a/b.txt"))
         );
     }
 
@@ -894,7 +999,7 @@ mod tests {
 
         assert_eq!(
             controller.selected_paths(pane_id),
-            Some(&[PathBuf::from("/tmp/a/b.txt")][..])
+            Some(vec![PathBuf::from("/tmp/a/b.txt")])
         );
     }
 
@@ -914,7 +1019,7 @@ mod tests {
         );
         assert_eq!(
             controller.selected_paths(pane_id),
-            Some(&[PathBuf::from("/tmp/a/a.txt")][..])
+            Some(vec![PathBuf::from("/tmp/a/a.txt")])
         );
 
         assert_eq!(
@@ -923,7 +1028,7 @@ mod tests {
         );
         assert_eq!(
             controller.selected_paths(pane_id),
-            Some(&[PathBuf::from("/tmp/a/b.txt")][..])
+            Some(vec![PathBuf::from("/tmp/a/b.txt")])
         );
 
         assert_eq!(
@@ -932,7 +1037,7 @@ mod tests {
         );
         assert_eq!(
             controller.selected_paths(pane_id),
-            Some(&[PathBuf::from("/tmp/a/a.txt")][..])
+            Some(vec![PathBuf::from("/tmp/a/a.txt")])
         );
     }
 
@@ -962,21 +1067,19 @@ mod tests {
 
         assert_eq!(
             controller.selected_paths(pane_id),
-            Some(
-                &[
-                    PathBuf::from("/tmp/a/a.txt"),
-                    PathBuf::from("/tmp/a/b.txt"),
-                    PathBuf::from("/tmp/a/c.txt")
-                ][..]
-            )
+            Some(vec![
+                PathBuf::from("/tmp/a/a.txt"),
+                PathBuf::from("/tmp/a/b.txt"),
+                PathBuf::from("/tmp/a/c.txt")
+            ])
         );
         assert_eq!(
-            controller.pane(pane_id).unwrap().selection.anchor_path(),
-            Some(Path::new("/tmp/a/a.txt"))
+            controller.selection_anchor_path(pane_id),
+            Some(PathBuf::from("/tmp/a/a.txt"))
         );
         assert_eq!(
-            controller.pane(pane_id).unwrap().selection.active_path(),
-            Some(Path::new("/tmp/a/c.txt"))
+            controller.selection_active_path(pane_id),
+            Some(PathBuf::from("/tmp/a/c.txt"))
         );
 
         assert_eq!(
@@ -985,7 +1088,10 @@ mod tests {
         );
         assert_eq!(
             controller.selected_paths(pane_id),
-            Some(&[PathBuf::from("/tmp/a/a.txt"), PathBuf::from("/tmp/a/b.txt")][..])
+            Some(vec![
+                PathBuf::from("/tmp/a/a.txt"),
+                PathBuf::from("/tmp/a/b.txt")
+            ])
         );
     }
 
@@ -1010,15 +1116,18 @@ mod tests {
 
         assert_eq!(
             controller.selected_paths(pane_id),
-            Some(&[PathBuf::from("/tmp/a/a.txt"), PathBuf::from("/tmp/a/c.txt")][..])
+            Some(vec![
+                PathBuf::from("/tmp/a/a.txt"),
+                PathBuf::from("/tmp/a/c.txt")
+            ])
         );
         assert_eq!(
-            controller.pane(pane_id).unwrap().selection.anchor_path(),
-            Some(Path::new("/tmp/a/a.txt"))
+            controller.selection_anchor_path(pane_id),
+            Some(PathBuf::from("/tmp/a/a.txt"))
         );
         assert_eq!(
-            controller.pane(pane_id).unwrap().selection.active_path(),
-            Some(Path::new("/tmp/a/a.txt"))
+            controller.selection_active_path(pane_id),
+            Some(PathBuf::from("/tmp/a/a.txt"))
         );
     }
 
@@ -1034,6 +1143,7 @@ mod tests {
                 scroll_x: 120.0,
                 scroll_y: 30.0,
                 icon_size: 48.0,
+                ..ViewState::default()
             })
         );
         assert_eq!(
@@ -1042,6 +1152,7 @@ mod tests {
                 scroll_x: 200.0,
                 scroll_y: 40.0,
                 icon_size: 48.0,
+                ..ViewState::default()
             })
         );
         assert_eq!(
@@ -1050,6 +1161,36 @@ mod tests {
                 scroll_x: 0.0,
                 scroll_y: 0.0,
                 icon_size: 48.0,
+                ..ViewState::default()
+            })
+        );
+
+        assert_eq!(controller.pane(second).unwrap().view.scroll_x, 0.0);
+        assert_eq!(controller.pane(second).unwrap().view.scroll_y, 0.0);
+    }
+
+    #[test]
+    fn compact_view_absolute_scroll_is_pane_local_and_clamped() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let first = controller.focused().unwrap();
+        let second = controller.split(first).unwrap();
+
+        assert_eq!(
+            controller.set_view_scroll(first, 260.0, 90.0, 200.0, 40.0),
+            Some(ViewState {
+                scroll_x: 200.0,
+                scroll_y: 40.0,
+                icon_size: 48.0,
+                ..ViewState::default()
+            })
+        );
+        assert_eq!(
+            controller.set_view_scroll(first, -20.0, -10.0, 200.0, 40.0),
+            Some(ViewState {
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                icon_size: 48.0,
+                ..ViewState::default()
             })
         );
 
@@ -1063,6 +1204,7 @@ mod tests {
 
     fn test_entry_at(parent: &str, name: &str) -> Entry {
         Entry {
+            id: ItemId::UNASSIGNED,
             name: name.to_string(),
             path: PathBuf::from(parent).join(name),
             group: String::new(),

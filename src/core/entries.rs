@@ -5,8 +5,20 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ItemId(pub u64);
+
+impl ItemId {
+    pub const UNASSIGNED: Self = Self(0);
+
+    pub fn is_assigned(self) -> bool {
+        self != Self::UNASSIGNED
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Entry {
+    pub id: ItemId,
     pub name: String,
     pub path: PathBuf,
     pub group: String,
@@ -173,6 +185,7 @@ fn to_entry(path: PathBuf, name: String, location: String, metadata: Metadata) -
     let modified = metadata.modified().ok();
 
     Entry {
+        id: ItemId::UNASSIGNED,
         name,
         path,
         group: String::new(),

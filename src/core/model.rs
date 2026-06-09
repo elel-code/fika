@@ -1,4 +1,4 @@
-use super::entries::{Entry, sort_entries};
+use super::entries::{Entry, ItemId, sort_entries};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -48,6 +48,8 @@ pub enum DirectoryModelSignal {
 pub struct DirectoryModel {
     entries: Vec<Entry>,
     index_by_path: HashMap<PathBuf, usize>,
+    index_by_id: HashMap<ItemId, usize>,
+    next_item_id: u64,
 }
 
 impl DirectoryModel {
@@ -75,7 +77,15 @@ impl DirectoryModel {
         self.index_by_path.get(path).copied()
     }
 
-    pub fn replace_listing(&mut self, mut entries: Vec<Entry>) -> Vec<DirectoryModelSignal> {
+    pub fn index_of_id(&self, id: ItemId) -> Option<usize> {
+        self.index_by_id.get(&id).copied()
+    }
+
+    pub fn replace_listing(&mut self, entries: Vec<Entry>) -> Vec<DirectoryModelSignal> {
+        let mut entries = entries
+            .into_iter()
+            .map(|entry| self.entry_with_path_identity(entry, None))
+            .collect::<Vec<_>>();
         sort_entries(&mut entries, false);
         if self.same_listing(&entries) {
             self.entries = entries;
@@ -90,22 +100,22 @@ impl DirectoryModel {
         vec![DirectoryModelSignal::ModelReset]
     }
 
-    pub fn apply_items_added(&mut self, mut entries: Vec<Entry>) -> Vec<DirectoryModelSignal> {
+    pub fn apply_items_added(&mut self, entries: Vec<Entry>) -> Vec<DirectoryModelSignal> {
         if entries.is_empty() {
             return Vec::new();
         }
 
         let mut changed = Vec::new();
-        entries.retain(|entry| {
+        let mut added = Vec::new();
+        for entry in entries {
             if let Some(index) = self.index_of_path(&entry.path) {
-                self.entries[index] = entry.clone();
+                self.entries[index] = self.entry_with_path_identity(entry, None);
                 changed.push(index);
-                false
             } else {
-                true
+                added.push(self.entry_with_path_identity(entry, None));
             }
-        });
-        self.entries.extend(entries);
+        }
+        self.entries.extend(added);
         sort_entries(&mut self.entries, false);
         self.rebuild_index();
 
@@ -158,7 +168,8 @@ impl DirectoryModel {
             match pair.entry {
                 Some(entry) => {
                     if let Some(index) = self.index_of_path(&pair.old_path) {
-                        self.entries[index] = entry;
+                        self.entries[index] =
+                            self.entry_with_path_identity(entry, Some(&pair.old_path));
                         changed.push(index);
                     } else {
                         added.push(entry);
@@ -199,9 +210,29 @@ impl DirectoryModel {
 
     fn rebuild_index(&mut self) {
         self.index_by_path.clear();
+        self.index_by_id.clear();
         for (index, entry) in self.entries.iter().enumerate() {
             self.index_by_path.insert(entry.path.clone(), index);
+            self.index_by_id.insert(entry.id, index);
         }
+    }
+
+    fn entry_with_path_identity(&mut self, mut entry: Entry, old_path: Option<&Path>) -> Entry {
+        if !entry.id.is_assigned() {
+            entry.id = old_path
+                .and_then(|path| self.index_of_path(path))
+                .or_else(|| self.index_of_path(&entry.path))
+                .map(|index| self.entries[index].id)
+                .unwrap_or_else(|| self.allocate_item_id());
+        } else {
+            self.next_item_id = self.next_item_id.max(entry.id.0);
+        }
+        entry
+    }
+
+    fn allocate_item_id(&mut self) -> ItemId {
+        self.next_item_id += 1;
+        ItemId(self.next_item_id)
     }
 }
 
@@ -238,6 +269,7 @@ mod tests {
 
     fn entry(name: &str, is_dir: bool) -> Entry {
         Entry {
+            id: ItemId::UNASSIGNED,
             name: name.to_string(),
             path: PathBuf::from(format!("/tmp/{name}")),
             group: String::new(),
@@ -281,5 +313,37 @@ mod tests {
             }])]
         );
         assert_eq!(model.entries()[0].name, "c");
+    }
+
+    #[test]
+    fn full_reload_retains_item_identity_for_same_path() {
+        let mut model = DirectoryModel::new();
+        model.replace_listing(vec![entry("a.txt", false), entry("b.txt", false)]);
+        let original_a = model.entries()[0].id;
+        let original_b = model.entries()[1].id;
+
+        model.replace_listing(vec![entry("a.txt", false), entry("b.txt", false)]);
+
+        assert_eq!(model.entries()[0].id, original_a);
+        assert_eq!(model.entries()[1].id, original_b);
+        assert_eq!(model.index_of_id(original_a), Some(0));
+        assert_eq!(model.index_of_id(original_b), Some(1));
+    }
+
+    #[test]
+    fn refresh_rename_retains_item_identity_from_old_path() {
+        let mut model = DirectoryModel::new();
+        model.replace_listing(vec![entry("old.txt", false)]);
+        let original = model.entries()[0].id;
+
+        model.apply_items_refreshed(vec![crate::core::directory::RefreshPair {
+            old_path: PathBuf::from("/tmp/old.txt"),
+            entry: Some(entry("new.txt", false)),
+        }]);
+
+        assert_eq!(model.entries()[0].id, original);
+        assert_eq!(model.entries()[0].path, PathBuf::from("/tmp/new.txt"));
+        assert_eq!(model.index_of_path(Path::new("/tmp/old.txt")), None);
+        assert_eq!(model.index_of_id(original), Some(0));
     }
 }

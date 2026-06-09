@@ -45,6 +45,7 @@ impl ViewRect {
 pub struct CompactLayoutOptions {
     pub viewport_width: f32,
     pub viewport_height: f32,
+    pub reserved_bottom: f32,
     pub scroll_x: f32,
     pub scroll_y: f32,
     pub padding: f32,
@@ -60,6 +61,7 @@ impl Default for CompactLayoutOptions {
         Self {
             viewport_width: 720.0,
             viewport_height: 520.0,
+            reserved_bottom: 0.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
             padding: 8.0,
@@ -80,6 +82,28 @@ pub struct ItemLayout {
     pub item_rect: ViewRect,
     pub icon_rect: ViewRect,
     pub text_rect: ViewRect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HorizontalScrollBarLayout {
+    pub track_rect: ViewRect,
+    pub handle_rect: ViewRect,
+    pub max_scroll_x: f32,
+}
+
+impl HorizontalScrollBarLayout {
+    pub fn scroll_x_for_handle_x(self, handle_x: f32) -> f32 {
+        let travel = (self.track_rect.width - self.handle_rect.width).max(0.0);
+        if travel <= 0.0 || self.max_scroll_x <= 0.0 {
+            return 0.0;
+        }
+        let local_x = (handle_x - self.track_rect.x).clamp(0.0, travel);
+        local_x / travel * self.max_scroll_x
+    }
+
+    pub fn scroll_x_for_track_x(self, track_x: f32) -> f32 {
+        self.scroll_x_for_handle_x(track_x - self.handle_rect.width / 2.0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -137,6 +161,43 @@ impl CompactLayout {
             width: self.options.viewport_width,
             height: self.options.viewport_height,
         }
+    }
+
+    pub fn horizontal_scroll_bar(
+        &self,
+        thickness: f32,
+        min_handle_width: f32,
+    ) -> Option<HorizontalScrollBarLayout> {
+        let max_scroll_x = (self.content_size.width - self.options.viewport_width).max(0.0);
+        if max_scroll_x <= 0.0 {
+            return None;
+        }
+        let track_width = self.options.viewport_width.max(0.0);
+        let handle_width = (self.options.viewport_width / self.content_size.width * track_width)
+            .clamp(min_handle_width.min(track_width), track_width);
+        let travel = (track_width - handle_width).max(0.0);
+        let handle_x = if max_scroll_x <= 0.0 {
+            0.0
+        } else {
+            self.options.scroll_x.clamp(0.0, max_scroll_x) / max_scroll_x * travel
+        };
+        let track_rect = ViewRect {
+            x: 0.0,
+            y: (self.options.viewport_height - thickness).max(0.0),
+            width: track_width,
+            height: thickness.max(0.0),
+        };
+
+        Some(HorizontalScrollBarLayout {
+            track_rect,
+            handle_rect: ViewRect {
+                x: handle_x,
+                y: track_rect.y,
+                width: handle_width,
+                height: track_rect.height,
+            },
+            max_scroll_x,
+        })
     }
 
     pub fn item(&self, model_index: usize) -> Option<ItemLayout> {
@@ -227,7 +288,8 @@ impl RangeSelection {
 }
 
 fn rows_per_column(options: CompactLayoutOptions) -> usize {
-    let available = (options.viewport_height - options.padding * 2.0).max(options.item_height);
+    let available = (options.viewport_height - options.reserved_bottom - options.padding * 2.0)
+        .max(options.item_height);
     ((available + options.gap) / (options.item_height + options.gap))
         .floor()
         .max(1.0) as usize
@@ -330,5 +392,67 @@ mod tests {
 
         assert_eq!(selection.indexes(), &[1, 3]);
         assert_eq!(selection.range(), Some(1..4));
+    }
+
+    #[test]
+    fn horizontal_scroll_bar_tracks_scroll_position() {
+        let layout = CompactLayout::new(
+            20,
+            CompactLayoutOptions {
+                viewport_width: 200.0,
+                viewport_height: 140.0,
+                scroll_x: 100.0,
+                item_width: 100.0,
+                item_height: 50.0,
+                gap: 0.0,
+                padding: 0.0,
+                ..CompactLayoutOptions::default()
+            },
+        );
+
+        let bar = layout.horizontal_scroll_bar(10.0, 32.0).unwrap();
+        assert_eq!(bar.track_rect.width, 200.0);
+        assert_eq!(bar.track_rect.y, 130.0);
+        assert!(bar.max_scroll_x > 0.0);
+        assert!(bar.handle_rect.width >= 32.0);
+        assert_eq!(
+            bar.scroll_x_for_handle_x(bar.handle_rect.x),
+            layout.viewport_rect().x
+        );
+    }
+
+    #[test]
+    fn horizontal_scroll_bar_is_hidden_when_content_fits() {
+        let layout = CompactLayout::new(
+            1,
+            CompactLayoutOptions {
+                viewport_width: 400.0,
+                viewport_height: 140.0,
+                item_width: 100.0,
+                item_height: 50.0,
+                ..CompactLayoutOptions::default()
+            },
+        );
+
+        assert!(layout.horizontal_scroll_bar(10.0, 32.0).is_none());
+    }
+
+    #[test]
+    fn compact_layout_rows_reserve_bottom_space() {
+        let layout = CompactLayout::new(
+            8,
+            CompactLayoutOptions {
+                viewport_height: 140.0,
+                reserved_bottom: 20.0,
+                item_height: 50.0,
+                gap: 10.0,
+                padding: 0.0,
+                ..CompactLayoutOptions::default()
+            },
+        );
+
+        assert_eq!(layout.rows_per_column(), 2);
+        assert_eq!(layout.item(2).unwrap().column, 1);
+        assert_eq!(layout.item(2).unwrap().row, 0);
     }
 }

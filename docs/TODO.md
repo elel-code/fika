@@ -1,7 +1,7 @@
 # Fika TODO: GPUI Mainline
 
 本文档是当前任务板。仓库已经切到单包 GPUI 主线；后续任务只应进入
-`src/` 下的 core modules、`src/main.rs` 和 `src/bin/`。
+`src/` 下的 core modules、GPUI UI modules、`src/main.rs` 和 `src/bin/`。
 
 状态说明：
 
@@ -16,7 +16,8 @@
 - [x] 每个 pane 必须有稳定 `PaneId`。所有 lister、watcher、async result、selection、thumbnail、file operation result 都按 `PaneId + generation` 路由。
 - [x] 主构建路径只保留 GPUI/core package。
 - [x] GPUI 从 Zed 官方仓库通过 git 依赖获取，不写 concrete crate release、branch 或 revision。
-- [ ] 新实现不得把 UI widget identity 当作文件模型 identity。GPUI view/entity 是渲染层，文件身份属于 core model。
+- [x] 新实现不得把 UI widget identity 当作文件模型 identity。GPUI view/entity 是渲染层，文件身份属于 core model。
+  - 验收：`Entry` 携带 core `ItemId`，`DirectoryModel` 负责分配、索引和 refresh/rename 身份延续；GPUI item id 使用 `ItemId`，pane selection 存储 `ItemId` 并按当前 model 派生 path。
 
 ## Completed Cutover
 
@@ -42,7 +43,8 @@
 - [x] 完善 `DirectoryLister` event 分类。
   - 验收：watcher add/delete/refresh 能稳定映射到 model delta；不能分类时才整目录 reload。
 - [~] 完善 `DirectoryModel`。
-  - 验收：支持排序、过滤、trash metadata，并保留 stable item identity。
+  - 已完成：目录条目有 stable `ItemId`；full reload 对同 path 保持身份；watcher rename/refresh 对 old path 延续身份；path 和 id 都有 model index。
+  - 剩余验收：支持过滤和更完整的 trash metadata/model 映射。
 - [x] 实现 current-directory-removed。
   - 验收：当前目录删除或 rename 后，pane 跳到最近存在 ancestor，符合 Dolphin 的 `slotCurrentDirectoryRemoved()` 行为。
 - [x] 为 directory core 增加覆盖。
@@ -51,18 +53,17 @@
 ## GPUI Pane and View
 
 - [x] 建立 GPUI pane shell。
-  - 验收：pane toolbar action 全部按 `PaneId` 路由。
+  - 验收：pane toolbar action 全部按 `PaneId` 路由；完整 pane 外壳已抽到 `src/ui/pane.rs`，主渲染只按 pane snapshot 数量实例化同一个可复用组件。
 - [x] 建立 dynamic split pane。
-  - 验收：split open/close 不复制全局 UI state；每个 pane 独立加载目录。
+  - 验收：split open/close 不复制全局 UI state；每个 pane 独立加载目录；1、3、4 个 pane 都走同一个 pane 组件路径。
 - [x] 接入 pane-local navigation history。
   - 验收：Back/Forward 通过 `PaneId` 路由，切换 focused pane 不会改变历史事件目标。
 - [~] 建立 chooser shell。
   - 验收：支持文件/目录选择、multi-select 输出、filter/choice metadata 输出。
 - [x] 实现 pane-local selection controller。
-  - 验收：single select、Ctrl/secondary toggle、Shift range、Ctrl/secondary+A、select all、clear selection、方向键移动、Shift+方向键范围选择、chooser multi-select、model change pruning 和 GPUI rubber-band selection 都进入 `fika-core::PaneState`。
-- [~] 实现 Dolphin compact file view。
-  - 已完成：core compact layout、model-index hit-test、selection rect、rubber-band overlay 和 GPUI item rendering 使用 `src/core/view.rs` 的布局结果。
-  - 剩余验收：scroll handle 同步、可见区虚拟化。
+  - 验收：single select、Ctrl/secondary toggle、Shift range、Ctrl/secondary+A、select all、clear selection、方向键移动、Shift+方向键范围选择、chooser multi-select、model change pruning 和 GPUI rubber-band selection 都进入 `fika-core::PaneState`；selection 内部存储 core `ItemId`，rename/refresh 后选择跟随同一 model item。
+- [x] 实现 Dolphin compact file view。
+  - 验收：core compact layout、model-index hit-test、selection rect、rubber-band overlay、GPUI item rendering 使用 `src/core/view.rs` 的布局结果；文件网格已抽到 `src/ui/file_grid.rs`；普通滚轮驱动 pane-local 横向 scroll state；条目按列优先 `index / rows_per_column`、`index % rows_per_column` 布局；GPUI 只渲染 `CompactLayout::visible_items()` 返回的可见条目；横向 scrollbar/handle visual 与 pane-local scroll state 同步，drag 更新 pane-local scroll。
 - [~] 实现 keyboard shortcuts。
   - 已完成：方向键、Shift+方向键、Ctrl/secondary+A、Ctrl/secondary+C/X/V、Ctrl/secondary+Shift+N、F2 rename、Escape、F5、Backspace、Alt+Left、Alt+Right、Delete 和 Ctrl/secondary+Z 都按 focused `PaneId` 路由到 pane-local action。
   - 剩余验收：后续新增交互继续按 pane-local action 路由。
@@ -94,8 +95,11 @@
 - [x] README 只描述当前 GPUI package。
 - [x] DESIGN 只描述当前 GPUI/core 架构。
 - [x] REFERENCE 路径指向 `src/...`。
-- [ ] 为 core 和 GPUI shell 补齐任务级测试。
-- [ ] 持续运行：
+- [~] 为 core 和 GPUI shell 补齐任务级测试。
+  - 已完成：core `ItemId` 稳定身份、rename/refresh 后 selection 跟随、column-first compact layout、visible item virtualization、horizontal scrollbar layout、pane-local scroll clamp。
+- [x] 持续运行：
   - `cargo fmt --all`
   - `cargo test`
   - `cargo check`
+  - `cargo build --release`
+  - `timeout 4s target/release/fika`

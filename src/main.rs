@@ -1,13 +1,14 @@
+mod ui;
+
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, CreateUndoItem, CreatedItemKind, DirectoryListerEvent,
-    Entry, ItemLayout, OperationQueue, PaneController, PaneId, RenameUndoItem, SelectionMove,
-    TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord, ViewPoint, ViewRect, ViewState,
-    file_ops, nearest_existing_ancestor,
+    CompactLayout, CreateUndoItem, CreatedItemKind, DirectoryListerEvent, Entry, OperationQueue,
+    PaneController, PaneId, RenameUndoItem, SelectionMove, TransferUndoItem, TrashUndoItem,
+    UndoPayload, UndoRecord, ViewPoint, ViewRect, ViewState, file_ops, nearest_existing_ancestor,
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Div, IntoElement, ParentElement, Render, Stateful, Styled, Window,
-    WindowBounds, WindowOptions, div, px, rgb, size,
+    App, Bounds, Context, IntoElement, ParentElement, Render, Styled, Window, WindowBounds,
+    WindowOptions, div, px, rgb, size,
 };
 use std::collections::BTreeSet;
 use std::env;
@@ -222,7 +223,7 @@ struct RenameDraft {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RenameDraftSnapshot {
+pub(crate) struct RenameDraftSnapshot {
     original_path: PathBuf,
     draft_name: String,
 }
@@ -255,14 +256,14 @@ struct ClipboardState {
     paths: Vec<PathBuf>,
 }
 
-struct FikaApp {
-    panes: PaneController,
+pub(crate) struct FikaApp {
+    pub(crate) panes: PaneController,
     operations: OperationQueue,
     clipboard: Option<ClipboardState>,
     rename_draft: Option<RenameDraft>,
     chooser: Option<ChooserState>,
     _keystroke_subscription: Option<gpui::Subscription>,
-    rubber_band: Option<RubberBandState>,
+    pub(crate) rubber_band: Option<RubberBandState>,
     operation_pending: bool,
     status: String,
 }
@@ -335,11 +336,11 @@ impl FikaApp {
             .iter()
             .filter_map(|pane_id| {
                 let pane = self.panes.pane(*pane_id)?;
-                let selected_paths = pane
-                    .selection
-                    .selected_paths()
-                    .iter()
-                    .cloned()
+                let selected_paths = self
+                    .panes
+                    .selected_paths(*pane_id)
+                    .unwrap_or_default()
+                    .into_iter()
                     .collect::<BTreeSet<_>>();
                 let rename_draft = self
                     .rename_draft
@@ -546,11 +547,7 @@ impl FikaApp {
             self.status = "File operation already running".to_string();
             return;
         }
-        let selected_paths = self
-            .panes
-            .selected_paths(pane_id)
-            .map(<[PathBuf]>::to_vec)
-            .unwrap_or_default();
+        let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         let [original_path] = selected_paths.as_slice() else {
             self.status = "Select one item to rename".to_string();
             return;
@@ -749,11 +746,7 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        let paths = self
-            .panes
-            .selected_paths(pane_id)
-            .map(<[PathBuf]>::to_vec)
-            .unwrap_or_default();
+        let paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         if paths.is_empty() {
             self.status = format!("No selection to {}", mode.label().to_ascii_lowercase());
             return;
@@ -841,11 +834,7 @@ impl FikaApp {
             self.status = "File operation already running".to_string();
             return;
         }
-        let selected_paths = self
-            .panes
-            .selected_paths(pane_id)
-            .map(<[PathBuf]>::to_vec)
-            .unwrap_or_default();
+        let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         if selected_paths.is_empty() {
             self.status = "No selection to trash".to_string();
             return;
@@ -1003,7 +992,6 @@ impl FikaApp {
             .panes
             .focused()
             .and_then(|pane_id| self.panes.selected_paths(pane_id))
-            .map(<[PathBuf]>::to_vec)
             .unwrap_or_default();
         if selected_paths.is_empty() {
             if self
@@ -1100,356 +1088,6 @@ impl FikaApp {
         }
         changed
     }
-
-    fn render_pane(
-        snapshot: PaneSnapshot,
-        manager_mode: bool,
-        chooser_directories: bool,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let PaneSnapshot {
-            id: pane_id,
-            path,
-            entries,
-            view,
-            rubber_band,
-            selected_paths,
-            rename_draft,
-            focused,
-            can_close,
-            can_go_back,
-            can_go_forward,
-            can_paste,
-            can_rename,
-            can_undo,
-            operation_pending,
-        } = snapshot;
-        let layout = CompactLayout::new(entries.len(), compact_layout_options(&view));
-        let content_size = layout.content_size();
-        let max_scroll_x = (content_size.width - layout.viewport_rect().width).max(0.0);
-        let max_scroll_y = (content_size.height - layout.viewport_rect().height).max(0.0);
-        let visible_items = layout.visible_items().collect::<Vec<_>>();
-        let border = if focused {
-            rgb(0x2f6fed)
-        } else {
-            rgb(0xb6bcc6)
-        };
-        let item_count = entries.len();
-        div()
-            .id(format!("pane-{}", pane_id.0))
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w(px(280.0))
-            .border_1()
-            .rounded_md()
-            .border_color(border)
-            .bg(rgb(0xffffff))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.panes.focus(pane_id);
-                cx.notify();
-            }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(rgb(0xd5d9df))
-                    .bg(if focused {
-                        rgb(0xeaf1ff)
-                    } else {
-                        rgb(0xf6f7f9)
-                    })
-                    .child(
-                        toolbar_button("back", "Back")
-                            .when(!can_go_back, |button| button.opacity(0.35))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.go_back(pane_id);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        toolbar_button("forward", "Forward")
-                            .when(!can_go_forward, |button| button.opacity(0.35))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.go_forward(pane_id);
-                                cx.notify();
-                            })),
-                    )
-                    .child(toolbar_button("up", "Up").on_click(cx.listener(
-                        move |this, _event, _window, cx| {
-                            this.go_parent(pane_id);
-                            cx.notify();
-                        },
-                    )))
-                    .child(toolbar_button("refresh", "Refresh").on_click(cx.listener(
-                        move |this, _event, _window, cx| {
-                            this.reload_pane(pane_id);
-                            cx.notify();
-                        },
-                    )))
-                    .child(toolbar_button("split", "Split").on_click(cx.listener(
-                        move |this, _event, _window, cx| {
-                            this.split_pane(pane_id);
-                            cx.notify();
-                        },
-                    )))
-                    .child(
-                        toolbar_button("close", "Close")
-                            .when(!can_close, |button| button.opacity(0.35))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.close_pane(pane_id);
-                                cx.notify();
-                            })),
-                    )
-                    .child(toolbar_button("all", "All").on_click(cx.listener(
-                        move |this, _event, _window, cx| {
-                            this.select_all(pane_id);
-                            cx.notify();
-                        },
-                    )))
-                    .child(toolbar_button("clear", "Clear").on_click(cx.listener(
-                        move |this, _event, _window, cx| {
-                            this.clear_selection(pane_id);
-                            cx.notify();
-                        },
-                    )))
-                    .when(manager_mode, |toolbar| {
-                        toolbar
-                            .child(
-                                toolbar_button("new-folder", "New Folder")
-                                    .when(operation_pending, |button| button.opacity(0.35))
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.create_item_in_pane(
-                                            pane_id,
-                                            CreatedItemKind::Folder,
-                                            cx,
-                                        );
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                toolbar_button("new-file", "New File")
-                                    .when(operation_pending, |button| button.opacity(0.35))
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.create_item_in_pane(
-                                            pane_id,
-                                            CreatedItemKind::File,
-                                            cx,
-                                        );
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(toolbar_button("copy", "Copy").on_click(cx.listener(
-                                move |this, _event, _window, cx| {
-                                    this.store_selection_for_transfer(pane_id, ClipboardMode::Copy);
-                                    cx.notify();
-                                },
-                            )))
-                            .child(toolbar_button("cut", "Cut").on_click(cx.listener(
-                                move |this, _event, _window, cx| {
-                                    this.store_selection_for_transfer(pane_id, ClipboardMode::Cut);
-                                    cx.notify();
-                                },
-                            )))
-                            .child(
-                                toolbar_button("paste", "Paste")
-                                    .when(!can_paste, |button| button.opacity(0.35))
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.paste_into_pane(pane_id, cx);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                toolbar_button("rename", "Rename")
-                                    .when(!can_rename, |button| button.opacity(0.35))
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.start_rename_in_pane(pane_id);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                toolbar_button("trash", "Trash")
-                                    .when(operation_pending, |button| button.opacity(0.35))
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.trash_selection(pane_id, cx);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                toolbar_button("undo", "Undo")
-                                    .when(!can_undo, |button| button.opacity(0.35))
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.undo_latest(cx);
-                                        cx.notify();
-                                    })),
-                            )
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .truncate()
-                            .text_sm()
-                            .text_color(rgb(0x24292f))
-                            .child(path.display().to_string()),
-                    ),
-            )
-            .child(
-                div()
-                    .id(format!("items-{}", pane_id.0))
-                    .relative()
-                    .overflow_hidden()
-                    .flex_1()
-                    .on_scroll_wheel(cx.listener(
-                        move |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                            let delta = event.delta.pixel_delta(window.line_height());
-                            let horizontal_delta = -(delta.x.as_f32() + delta.y.as_f32());
-                            this.panes.scroll_view(
-                                pane_id,
-                                horizontal_delta,
-                                0.0,
-                                max_scroll_x,
-                                max_scroll_y,
-                            );
-                            cx.stop_propagation();
-                            cx.notify();
-                        },
-                    ))
-                    .on_drag(RubberBandDrag { pane_id }, |_, _, _, cx| {
-                        cx.new(|_| gpui::Empty)
-                    })
-                    .on_drag_move::<RubberBandDrag>({
-                        let layout = layout.clone();
-                        let view = view.clone();
-                        cx.listener(
-                            move |this,
-                                  event: &gpui::DragMoveEvent<RubberBandDrag>,
-                                  _window,
-                                  cx| {
-                                let current = content_point_from_window(
-                                    event.event.position,
-                                    event.bounds,
-                                    &view,
-                                );
-                                if this
-                                    .rubber_band
-                                    .as_ref()
-                                    .is_none_or(|band| band.pane_id != pane_id)
-                                {
-                                    this.start_rubber_band(pane_id, current);
-                                }
-                                this.update_rubber_band(pane_id, current, layout.clone());
-                                cx.notify();
-                            },
-                        )
-                    })
-                    .on_drop::<RubberBandDrag>(cx.listener(
-                        move |this, _drag: &RubberBandDrag, _window, cx| {
-                            this.finish_rubber_band(pane_id);
-                            cx.notify();
-                        },
-                    ))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(-view.scroll_x))
-                            .top(px(-view.scroll_y))
-                            .relative()
-                            .w(px(content_size.width))
-                            .h(px(content_size.height))
-                            .children(visible_items.into_iter().filter_map(|item_layout| {
-                                entries
-                                    .get(item_layout.model_index)
-                                    .cloned()
-                                    .map(|entry| {
-                                    let path = entry.path.clone();
-                                    let is_dir = entry.is_dir;
-                                    let selected = selected_paths.contains(&entry.path);
-                                    let draft_name = rename_draft
-                                        .as_ref()
-                                        .filter(|draft| draft.original_path == entry.path)
-                                        .map(|draft| draft.draft_name.clone());
-                                    Some(
-                                        item_tile(entry, selected, draft_name, item_layout)
-                                            .on_click(cx.listener(
-                                            move |this, event: &gpui::ClickEvent, _window, cx| {
-                                                let modifiers = event.modifiers();
-                                                let extend = modifiers.shift;
-                                                let toggle = modifiers.secondary();
-                                                if this.chooser.is_some() {
-                                                    let chooser_multiple = this
-                                                        .chooser
-                                                        .as_ref()
-                                                        .is_some_and(|chooser| chooser.multiple);
-                                                    if chooser_directories {
-                                                        if is_dir {
-                                                            if chooser_multiple {
-                                                                if extend {
-                                                                    this.select_range_to(
-                                                                        pane_id,
-                                                                        path.clone(),
-                                                                    );
-                                                                } else {
-                                                                    this.toggle_selection(
-                                                                        pane_id,
-                                                                        path.clone(),
-                                                                    );
-                                                                }
-                                                            } else {
-                                                                this.choose_path(path.clone());
-                                                            }
-                                                        }
-                                                    } else if is_dir {
-                                                        this.load_pane(pane_id, path.clone());
-                                                    } else if chooser_multiple {
-                                                        if extend {
-                                                            this.select_range_to(
-                                                                pane_id,
-                                                                path.clone(),
-                                                            );
-                                                        } else {
-                                                            this.toggle_selection(
-                                                                pane_id,
-                                                                path.clone(),
-                                                            );
-                                                        }
-                                                    } else {
-                                                        this.choose_path(path.clone());
-                                                    }
-                                                } else if extend {
-                                                    this.select_range_to(pane_id, path.clone());
-                                                } else if toggle {
-                                                    this.toggle_selection(pane_id, path.clone());
-                                                } else if is_dir {
-                                                    this.load_pane(pane_id, path.clone());
-                                                } else {
-                                                    this.select_only(pane_id, path.clone());
-                                                }
-                                                cx.notify();
-                                            },
-                                        )),
-                                    )
-                                    })
-                            })),
-                    )
-                    .when_some(rubber_band, |viewport, rect| {
-                        viewport.child(rubber_band_overlay(rect))
-                    }),
-            )
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(rgb(0xd5d9df))
-                    .text_xs()
-                    .text_color(rgb(0x59636e))
-                    .child(format!("{item_count} item(s)")),
-            )
-    }
 }
 
 impl Render for FikaApp {
@@ -1462,10 +1100,15 @@ impl Render for FikaApp {
         window.set_window_title(title);
         let snapshots = self.snapshots();
         let manager_mode = self.chooser.is_none();
-        let chooser_directories = self
-            .chooser
-            .as_ref()
-            .is_some_and(|chooser| chooser.directories);
+        let file_grid_mode =
+            self.chooser
+                .as_ref()
+                .map_or(ui::file_grid::FileGridMode::Manager, |chooser| {
+                    ui::file_grid::FileGridMode::Chooser {
+                        directories: chooser.directories,
+                        multiple: chooser.multiple,
+                    }
+                });
         let chooser_action_label = self.chooser.as_ref().map(|chooser| {
             let target = if chooser.directories {
                 "folders"
@@ -1481,7 +1124,16 @@ impl Render for FikaApp {
         });
         let pane_elements = snapshots
             .into_iter()
-            .map(|snapshot| Self::render_pane(snapshot, manager_mode, chooser_directories, cx))
+            .map(|snapshot| {
+                ui::pane::pane_view(
+                    ui::pane::PaneProps {
+                        snapshot,
+                        manager_mode,
+                        file_grid_mode,
+                    },
+                    cx,
+                )
+            })
             .collect::<Vec<_>>();
         div()
             .size_full()
@@ -1514,12 +1166,12 @@ impl Render for FikaApp {
                         ),
                     )
                     .when(self.chooser.is_some(), |bar| {
-                        bar.child(toolbar_button("choose", "Choose").on_click(cx.listener(
-                            move |this, _event, _window, cx| {
+                        bar.child(ui::pane::toolbar_button("choose", "Choose").on_click(
+                            cx.listener(move |this, _event, _window, cx| {
                                 this.confirm_chooser();
                                 cx.notify();
-                            },
-                        )))
+                            }),
+                        ))
                     }),
             )
             .child(
@@ -1547,141 +1199,6 @@ impl Render for FikaApp {
                     }),
             )
     }
-}
-
-fn toolbar_button(id: &'static str, label: &'static str) -> Stateful<Div> {
-    div()
-        .id(format!("toolbar-{id}"))
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0xb6bcc6))
-        .bg(rgb(0xffffff))
-        .hover(|button| button.bg(rgb(0xeaf1ff)))
-        .cursor_pointer()
-        .text_xs()
-        .child(label)
-}
-
-fn item_tile(
-    entry: Entry,
-    selected: bool,
-    draft_name: Option<String>,
-    layout: ItemLayout,
-) -> Stateful<Div> {
-    let marker = if entry.is_dir { "[D]" } else { "[F]" };
-    let id = format!("item-{}", entry.path.display());
-    let renaming = draft_name.is_some();
-    let display_name = draft_name.unwrap_or_else(|| entry.name.clone());
-    let item = layout.item_rect;
-    let icon = layout.icon_rect;
-    let text = layout.text_rect;
-    div()
-        .id(id)
-        .absolute()
-        .left(px(item.x))
-        .top(px(item.y))
-        .w(px(item.width))
-        .h(px(item.height))
-        .rounded_md()
-        .border_1()
-        .border_color(if selected {
-            rgb(0x2f6fed)
-        } else {
-            rgb(0xd5d9df)
-        })
-        .bg(if selected {
-            rgb(0xeaf1ff)
-        } else {
-            rgb(0xffffff)
-        })
-        .hover(|tile| tile.bg(rgb(0xf3f7ff)).border_color(rgb(0x7aa7ff)))
-        .cursor_pointer()
-        .child(
-            div()
-                .absolute()
-                .left(px(icon.x - item.x))
-                .top(px(icon.y - item.y))
-                .w(px(icon.width))
-                .h(px(icon.height))
-                .rounded_md()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(if entry.is_dir {
-                    rgb(0x0b5cad)
-                } else {
-                    rgb(0x59636e)
-                })
-                .bg(if entry.is_dir {
-                    rgb(0xeaf4ff)
-                } else {
-                    rgb(0xf2f4f7)
-                })
-                .child(marker),
-        )
-        .child(
-            div()
-                .absolute()
-                .left(px(text.x - item.x))
-                .top(px(text.y - item.y))
-                .w(px(text.width))
-                .h(px(text.height))
-                .when(renaming, |name| {
-                    name.border_1()
-                        .rounded_md()
-                        .border_color(rgb(0x2f6fed))
-                        .bg(rgb(0xffffff))
-                        .px_1()
-                })
-                .child(div().text_sm().truncate().child(display_name))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(0x6b7280))
-                        .truncate()
-                        .child(entry.kind),
-                ),
-        )
-}
-
-fn compact_layout_options(view: &ViewState) -> CompactLayoutOptions {
-    CompactLayoutOptions {
-        viewport_width: 720.0,
-        viewport_height: 520.0,
-        scroll_x: view.scroll_x,
-        scroll_y: view.scroll_y,
-        icon_size: view.icon_size.max(32.0),
-        ..CompactLayoutOptions::default()
-    }
-}
-
-fn content_point_from_window(
-    position: gpui::Point<gpui::Pixels>,
-    bounds: Bounds<gpui::Pixels>,
-    view: &ViewState,
-) -> ViewPoint {
-    ViewPoint {
-        x: (position.x - bounds.origin.x).as_f32() + view.scroll_x,
-        y: (position.y - bounds.origin.y).as_f32() + view.scroll_y,
-    }
-}
-
-fn rubber_band_overlay(rect: ViewRect) -> Stateful<Div> {
-    div()
-        .id("rubber-band")
-        .absolute()
-        .left(px(rect.x))
-        .top(px(rect.y))
-        .w(px(rect.width.max(1.0)))
-        .h(px(rect.height.max(1.0)))
-        .border_1()
-        .border_color(rgb(0x2f6fed))
-        .bg(rgb(0x2f6fed))
-        .opacity(0.18)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
