@@ -876,16 +876,15 @@ pub(crate) fn toggle_split_view(
         }
     }
 
-    let (opened, status) = {
+    let (opened, status, closed_pane_id) = {
         let mut state = state.borrow_mut();
         if state.panes.is_split() {
-            let closed_slot = state
+            let (closed_slot, closed) = state
                 .panes
                 .close_focused_pane_slot()
-                .expect("split is open, close must succeed")
-                .0;
+                .expect("split is open, close must succeed");
             let status = format!("Split view closed; slot {closed_slot} closed");
-            (false, status)
+            (false, status, Some(closed.id))
         } else {
             let current_dir = state.panes.focused().current_dir.clone();
             state.panes.open_peer_from_focused();
@@ -898,12 +897,33 @@ pub(crate) fn toggle_split_view(
             (
                 true,
                 format!("Split view opened at {}", current_dir.display()),
+                None,
             )
         }
     };
+    if let Some(pane_id) = closed_pane_id {
+        crate::unwatch_directory_for_pane(pane_id, bridge);
+    }
 
     let slots: Vec<i32> = state.borrow().panes.iter().map(|(s, _)| s).collect();
     if opened {
+        let watch_targets = {
+            let state = state.borrow();
+            state
+                .panes
+                .iter()
+                .map(|(_, pane)| {
+                    (
+                        pane.id,
+                        pane.current_dir.clone(),
+                        pane.load_generation.current(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for (pane_id, current_dir, generation) in watch_targets {
+            crate::watch_current_directory(&current_dir, pane_id, generation, bridge);
+        }
         for slot in slots {
             set_pane_viewport_ui(ui, slot, 0.0, state);
         }

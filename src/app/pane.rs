@@ -27,7 +27,7 @@ use crate::support::generation::GenerationCounter;
 use crate::{ItemViewEntry, ItemViewSlotEntry};
 use slint::{Image, Model, ModelRc, VecModel};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::ops::{Index, Range};
 use std::path::{Path, PathBuf};
@@ -57,6 +57,14 @@ pub(crate) struct PaneState {
     pub(crate) open_generation: GenerationCounter,
     pub(crate) thumbnail_generation: GenerationCounter,
     pub(crate) view: PaneView,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PaneEntriesRemoved {
+    pub(crate) model_ranges: Vec<Range<usize>>,
+    pub(crate) visible_ranges: Vec<Range<usize>>,
+    pub(crate) removed_count: usize,
+    pub(crate) selection_changed: bool,
 }
 
 impl PaneState {
@@ -124,6 +132,23 @@ impl PaneState {
         entries: PaneEntryModel,
         summary: ItemViewModelEntrySummary,
     ) {
+        self.replace_entries_with_summary(entries, summary, true);
+    }
+
+    pub(crate) fn set_entries_with_summary_preserving_rendered(
+        &mut self,
+        entries: PaneEntryModel,
+        summary: ItemViewModelEntrySummary,
+    ) {
+        self.replace_entries_with_summary(entries, summary, false);
+    }
+
+    fn replace_entries_with_summary(
+        &mut self,
+        entries: PaneEntryModel,
+        summary: ItemViewModelEntrySummary,
+        clear_rendered: bool,
+    ) {
         self.entries = entries;
         self.entry_summary = summary;
         self.search.visible_entry_indices = None;
@@ -131,7 +156,75 @@ impl PaneState {
         self.search.visible_location_groups = None;
         self.search.index_pending = false;
         self.search_index_generation.next();
-        self.view.clear_virtual_view();
+        if clear_rendered {
+            self.view.clear_virtual_view();
+        } else {
+            self.view.invalidate_virtual_view();
+        }
+    }
+
+    pub(crate) fn remove_entries_by_paths(
+        &mut self,
+        removed_paths: &HashSet<String>,
+    ) -> Option<PaneEntriesRemoved> {
+        let removal = self.entries.remove_paths(removed_paths)?;
+        let visible_ranges = self.apply_removed_model_ranges_to_search(&removal.model_ranges);
+        let summary = item_view_model_entry_summary(removal.entries.iter(), false, false);
+        self.entries = removal.entries;
+        self.entry_summary = summary;
+        if self.search.visible_entry_indices.is_none() {
+            self.search.visible_entries_have_locations = self.entry_summary.has_locations;
+            self.search.visible_location_groups = None;
+        }
+        self.search.index_pending = false;
+        self.search_index_generation.next();
+        if !visible_ranges.is_empty() {
+            self.view.invalidate_virtual_model_for_delta();
+        }
+        let selection_changed = self.apply_removed_paths_cleanup(removed_paths);
+        Some(PaneEntriesRemoved {
+            model_ranges: removal.model_ranges,
+            visible_ranges,
+            removed_count: removal.removed_count,
+            selection_changed,
+        })
+    }
+
+    pub(crate) fn apply_removed_paths_cleanup(&mut self, removed_paths: &HashSet<String>) -> bool {
+        let mut changed = false;
+        let old_selection_len = self.selection.paths.len();
+        self.selection
+            .paths
+            .retain(|path| !removed_paths.contains(path.as_str()));
+        changed |= self.selection.paths.len() != old_selection_len;
+        let old_anchor = self.selection.anchor.clone();
+        if self
+            .selection
+            .anchor
+            .as_ref()
+            .is_some_and(|anchor| removed_paths.contains(anchor.as_str()))
+        {
+            self.selection.anchor = self.selection.paths.last().cloned();
+        }
+        changed |= self.selection.anchor != old_anchor;
+        changed |= self.view.clear_removed_drop_target(removed_paths);
+        self.view.remove_thumbnail_pending_paths(removed_paths);
+        changed
+    }
+
+    fn apply_removed_model_ranges_to_search(
+        &mut self,
+        model_ranges: &[Range<usize>],
+    ) -> Vec<Range<usize>> {
+        if let Some(indices) = self.search.visible_entry_indices.as_ref() {
+            let (next_indices, visible_ranges) =
+                remove_model_ranges_from_visible_indices(indices, model_ranges);
+            self.search.visible_entry_indices = Some(Arc::from(next_indices));
+            self.search.visible_location_groups = None;
+            return visible_ranges;
+        }
+
+        model_ranges.to_vec()
     }
 
     pub(crate) fn clear_entries(&mut self) {
@@ -142,16 +235,6 @@ impl PaneState {
         self.search.visible_location_groups = None;
         self.search.index_pending = false;
         self.search_index_generation.next();
-        self.view.virtual_entries.clear();
-        self.view.virtual_bounds_entries.clear();
-        self.view.virtual_item_slots = ModelRc::default();
-        self.view.virtual_slot_entries.clear();
-        self.view.virtual_slot_tokens.clear();
-        self.view.virtual_slot_keys.clear();
-        self.view.virtual_entry_tokens.clear();
-        self.view.drop_target_slice_index = None;
-        self.view.clear_raster_cache();
-        self.view.virtual_start_index = 0;
         self.view.clear_virtual_view();
     }
 
@@ -209,6 +292,13 @@ pub(crate) struct PaneEntryModel {
     entries: Arc<[ItemViewModelEntryArc]>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PaneEntryRemoval {
+    pub(crate) entries: PaneEntryModel,
+    pub(crate) model_ranges: Vec<Range<usize>>,
+    pub(crate) removed_count: usize,
+}
+
 impl PaneEntryModel {
     pub(crate) fn new(entries: Vec<ItemViewModelEntryArc>) -> Self {
         Self {
@@ -261,6 +351,76 @@ impl PaneEntryModel {
         let end = range.end.min(self.entries.len());
         self.entries[start..end].iter().cloned()
     }
+
+    pub(crate) fn remove_paths(&self, removed_paths: &HashSet<String>) -> Option<PaneEntryRemoval> {
+        if removed_paths.is_empty() {
+            return None;
+        }
+
+        let mut entries = Vec::with_capacity(self.entries.len());
+        let mut model_ranges = Vec::<Range<usize>>::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if removed_paths.contains(entry.model_path()) {
+                push_contiguous_range(&mut model_ranges, index);
+            } else {
+                entries.push(Arc::clone(entry));
+            }
+        }
+
+        let removed_count = model_ranges
+            .iter()
+            .map(|range| range.end.saturating_sub(range.start))
+            .sum();
+        (removed_count > 0).then(|| PaneEntryRemoval {
+            entries: Self::new(entries),
+            model_ranges,
+            removed_count,
+        })
+    }
+}
+
+fn push_contiguous_range(ranges: &mut Vec<Range<usize>>, index: usize) {
+    if let Some(last) = ranges.last_mut()
+        && last.end == index
+    {
+        last.end = index + 1;
+        return;
+    }
+    ranges.push(index..index + 1);
+}
+
+fn remove_model_ranges_from_visible_indices(
+    indices: &[usize],
+    model_ranges: &[Range<usize>],
+) -> (Vec<usize>, Vec<Range<usize>>) {
+    if indices.is_empty() || model_ranges.is_empty() {
+        return (indices.to_vec(), Vec::new());
+    }
+
+    let mut next_indices = Vec::with_capacity(indices.len());
+    let mut visible_ranges = Vec::new();
+    let mut range_index = 0;
+    let mut removed_before = 0usize;
+
+    for (visible_index, &model_index) in indices.iter().enumerate() {
+        while let Some(range) = model_ranges.get(range_index)
+            && range.end <= model_index
+        {
+            removed_before += range.end.saturating_sub(range.start);
+            range_index += 1;
+        }
+
+        let removed = model_ranges
+            .get(range_index)
+            .is_some_and(|range| range.start <= model_index && model_index < range.end);
+        if removed {
+            push_contiguous_range(&mut visible_ranges, visible_index);
+        } else {
+            next_indices.push(model_index.saturating_sub(removed_before));
+        }
+    }
+
+    (next_indices, visible_ranges)
 }
 
 impl From<Vec<ItemViewModelEntryArc>> for PaneEntryModel {
@@ -763,8 +923,45 @@ impl PaneView {
         self.raster_updates_deferred = false;
         self.virtual_generation.next();
         self.bump_raster_revision();
+        self.clear_rendered_virtual_slice();
         self.clear_raster_cache();
         self.cancel_virtual_prepare_queue();
+    }
+
+    pub(crate) fn invalidate_virtual_model_for_delta(&mut self) {
+        self.virtual_view.invalidate();
+        self.raster_updates_deferred = false;
+        self.virtual_generation.next();
+        self.bump_raster_revision();
+        self.clear_raster_cache();
+        self.cancel_virtual_prepare_queue();
+    }
+
+    pub(crate) fn clear_removed_drop_target(&mut self, removed_paths: &HashSet<String>) -> bool {
+        let removed = self
+            .drop_target_slice_index
+            .and_then(|index| self.virtual_entry_tokens.get(index))
+            .is_some_and(|token| removed_paths.contains(token.path()));
+        if !removed {
+            return false;
+        }
+
+        self.drop_target_slice_index = None;
+        self.bump_raster_revision();
+        self.clear_raster_cache();
+        true
+    }
+
+    pub(crate) fn clear_rendered_virtual_slice(&mut self) {
+        self.virtual_entries.clear();
+        self.virtual_bounds_entries.clear();
+        self.virtual_item_slots = ModelRc::default();
+        self.virtual_slot_entries.clear();
+        self.virtual_slot_tokens.clear();
+        self.virtual_slot_keys.clear();
+        self.virtual_entry_tokens.clear();
+        self.drop_target_slice_index = None;
+        self.virtual_start_index = 0;
     }
 
     pub(crate) fn has_virtual_prepare_in_flight(&self) -> bool {
@@ -1130,6 +1327,14 @@ impl PaneView {
 
     pub(crate) fn clear_thumbnail_pending(&mut self) {
         self.thumbnail_pending.clear();
+    }
+
+    pub(crate) fn remove_thumbnail_pending_paths(&mut self, removed_paths: &HashSet<String>) {
+        if removed_paths.is_empty() {
+            return;
+        }
+        self.thumbnail_pending
+            .retain(|path, _| !removed_paths.contains(path.as_str()));
     }
 
     pub(crate) fn cached_state(&mut self, path: &Path) -> Option<DirectoryViewState> {
@@ -1618,6 +1823,161 @@ mod tests {
         assert!(pane.search.visible_entries_have_locations);
         assert!(pane.search.visible_entry_indices.is_none());
         assert!(pane.search.visible_location_groups.is_none());
+    }
+
+    #[test]
+    fn pane_remove_entries_by_paths_prunes_model_selection_and_visible_slot() {
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+        pane.set_file_entries(vec![
+            test_entry("keep.txt", "/tmp/keep.txt"),
+            test_entry("remove.txt", "/tmp/remove.txt"),
+            test_entry("other.txt", "/tmp/other.txt"),
+        ]);
+        pane.selection.paths = vec!["/tmp/remove.txt".to_string(), "/tmp/keep.txt".to_string()];
+        pane.selection.anchor = Some("/tmp/remove.txt".to_string());
+        pane.view.insert_thumbnail_pending(
+            "/tmp/remove.txt".to_string(),
+            thumbnails::fallback_key(Path::new("/tmp/remove.txt"), 64),
+        );
+
+        let entries = pane
+            .entries
+            .iter()
+            .map(ItemViewModelEntry::model_to_item_view_entry)
+            .collect::<Vec<_>>();
+        let bounds = (0..entries.len())
+            .map(|index| ItemViewItemBounds {
+                slice_index: index,
+                x: index as f32 * 16.0,
+                y: 0.0,
+                width: 48.0,
+                text_width: 32.0,
+            })
+            .collect::<Vec<_>>();
+        update_pane_item_view_entries_model(
+            &mut pane.view,
+            0,
+            entries,
+            bounds,
+            Vec::new(),
+            Vec::new(),
+            &pane.selection.paths,
+        );
+        assert!(
+            pane.view
+                .virtual_slot_entries
+                .iter()
+                .any(|entry| entry.active && entry.name == "remove.txt")
+        );
+
+        let removed = HashSet::from(["/tmp/remove.txt".to_string()]);
+        let removal = pane
+            .remove_entries_by_paths(&removed)
+            .expect("removed path should produce a model delta");
+
+        assert_eq!(
+            pane.entries
+                .iter()
+                .map(|entry| entry.model_path().to_string())
+                .collect::<Vec<_>>(),
+            vec!["/tmp/keep.txt".to_string(), "/tmp/other.txt".to_string()]
+        );
+        assert_eq!(pane.selection.paths, vec!["/tmp/keep.txt".to_string()]);
+        assert_eq!(pane.selection.anchor.as_deref(), Some("/tmp/keep.txt"));
+        assert!(!pane.view.has_thumbnail_pending("/tmp/remove.txt"));
+        assert!(pane.view.virtual_view.range.is_empty());
+        assert_eq!(removal.model_ranges, vec![1..2]);
+        assert_eq!(removal.visible_ranges, vec![1..2]);
+        assert_eq!(removal.removed_count, 1);
+        assert!(removal.selection_changed);
+    }
+
+    #[test]
+    fn pane_remove_entries_by_paths_folds_filtered_visible_indices() {
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+        pane.set_file_entries(vec![
+            test_entry("a.txt", "/tmp/a.txt"),
+            test_entry("b.log", "/tmp/b.log"),
+            test_entry("c.txt", "/tmp/c.txt"),
+            test_entry("d.log", "/tmp/d.log"),
+            test_entry("e.txt", "/tmp/e.txt"),
+        ]);
+        pane.search.query = ".txt".to_string();
+        pane.search.visible_entry_indices = Some(Arc::from([0, 2, 4]));
+        pane.search.visible_entries_have_locations = true;
+        pane.search.visible_location_groups = Some(Arc::from([".".to_string()]));
+
+        let removed = HashSet::from(["/tmp/c.txt".to_string(), "/tmp/d.log".to_string()]);
+        let removal = pane
+            .remove_entries_by_paths(&removed)
+            .expect("removed paths should produce a model delta");
+
+        assert_eq!(removal.model_ranges, vec![2..4]);
+        assert_eq!(removal.visible_ranges, vec![1..2]);
+        assert_eq!(
+            pane.search
+                .visible_entry_indices
+                .as_deref()
+                .expect("filtered index should stay materialized"),
+            &[0, 2]
+        );
+        assert!(pane.search.visible_location_groups.is_none());
+        assert_eq!(
+            pane.entries
+                .iter()
+                .map(|entry| entry.model_path().to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "/tmp/a.txt".to_string(),
+                "/tmp/b.log".to_string(),
+                "/tmp/e.txt".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pane_remove_entries_by_paths_keeps_rendered_slots_until_relayout_replaces_them() {
+        let mut pane = PaneState::new(PathBuf::from("/tmp"));
+        pane.set_file_entries(vec![
+            test_entry("keep.txt", "/tmp/keep.txt"),
+            test_entry("remove.txt", "/tmp/remove.txt"),
+            test_entry("other.txt", "/tmp/other.txt"),
+        ]);
+        let entries = pane
+            .entries
+            .iter()
+            .map(ItemViewModelEntry::model_to_item_view_entry)
+            .collect::<Vec<_>>();
+        let bounds = (0..entries.len())
+            .map(|index| ItemViewItemBounds {
+                slice_index: index,
+                x: index as f32 * 16.0,
+                y: 0.0,
+                width: 48.0,
+                text_width: 32.0,
+            })
+            .collect::<Vec<_>>();
+        update_pane_item_view_entries_model(
+            &mut pane.view,
+            0,
+            entries,
+            bounds,
+            Vec::new(),
+            Vec::new(),
+            &[],
+        );
+
+        let removed = HashSet::from(["/tmp/remove.txt".to_string()]);
+        pane.remove_entries_by_paths(&removed)
+            .expect("removed path should produce a model delta");
+
+        assert!(
+            pane.view
+                .virtual_slot_entries
+                .iter()
+                .any(|entry| entry.active && entry.name == "remove.txt"),
+            "model deletion must not create inactive holes by mutating old slots directly"
+        );
     }
 
     #[test]

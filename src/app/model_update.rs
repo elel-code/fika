@@ -281,7 +281,7 @@ pub(crate) fn new_item_view_slot_model(
     ModelRc::new(Rc::new(VecModel::from(slot_entries)))
 }
 
-fn inactive_item_view_slot_entry() -> ItemViewSlotEntry {
+pub(crate) fn inactive_item_view_slot_entry() -> ItemViewSlotEntry {
     ItemViewSlotEntry {
         active: false,
         name: SharedString::new(),

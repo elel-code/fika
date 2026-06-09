@@ -49,9 +49,11 @@
 - 搜索输入 focus 路由按 Dolphin 的 focus proxy 边界收敛：搜索栏内部事件不再调用会抢走输入框焦点的
   global `app-focus.focus()`，`focus_request` 会立即并延后一拍重试 focus，避免搜索框打开、debounce
   submit 或筛选变化后失焦。
-- search filter popup 改成 Dolphin/Qt `QToolButton::InstantPopup` 风格的按钮下沿贴边弹出：使用
-  root menu geometry、`pointer_gap=0`、更窄的 selector 宽度和紧凑行高，不再走 anchored-above
-  大卡片式弹层。
+- search filter popup 按 Dolphin `QToolButton::InstantPopup` + `WidgetMenu` 结构收敛：Filter
+  按钮下沿打开紧凑主面板，主面板内部是扁长 selector 控件；点击 selector 或 active chip
+  时打开独立下拉列表，等价于 Dolphin 里 `FileTypeSelector(QComboBox)` 和
+  `DateSelector(QToolButton::InstantPopup)` 的两级交互，不再把整个 popup 切换成大列表页面。
+  主面板和下拉都按窗口可用宽度/高度 clamp，避免横向或纵向溢出。
 - `PaneState` 缓存 unfiltered entry summary，目录加载结果携带后台已计算 summary；状态栏和无过滤
   count summary 不再在 UI 线程重新扫描 entries。
 - 已补结构测试覆盖 scroll/zoom 同步边界、thumbnail flush gate、fallback icon lazy kinds、slot stats
@@ -201,10 +203,17 @@ SearchPanel.TextInput changed text
   `Search::Bar`/`FilterBar` 都把 focus proxy 设置到输入框；Search filter button 是
   `QToolButton::InstantPopup` + `setMenu(m_popup)`，不是单独抢焦点后再显示大偏移面板。
   `WidgetMenu::showEvent()` 在非自发 show 后把焦点交给内部 widget。
+  `Search::Popup::init()` 用 `QGridLayout` 放置高级过滤控件；`FileTypeSelector` 继承
+  `QComboBox`，`DateSelector` 是 `QToolButton::InstantPopup` + `KDatePickerPopup`，点击内部
+  selector 应打开自身下拉，而不是替换整个 popup 内容。
   - `/home/yk/Code/dolphin/src/search/bar.cpp:48`
   - `/home/yk/Code/dolphin/src/search/bar.cpp:70`
   - `/home/yk/Code/dolphin/src/search/bar.cpp:82`
   - `/home/yk/Code/dolphin/src/search/widgetmenu.cpp:66`
+  - `/home/yk/Code/dolphin/src/search/popup.cpp:201`
+  - `/home/yk/Code/dolphin/src/search/selectors/filetypeselector.cpp:18`
+  - `/home/yk/Code/dolphin/src/search/selectors/dateselector.cpp:22`
+  - `/home/yk/Code/dolphin/src/search/selectors/dateselector.cpp:30`
   - `/home/yk/Code/dolphin/src/search/bar.cpp:279`
   - `/home/yk/Code/dolphin/src/filterbar/filterbar.cpp:46`
   - `/home/yk/Code/dolphin/src/filterbar/filterbar.cpp:39`
@@ -236,7 +245,7 @@ Rust 侧状态清理。preview/thumbnail role 更新继续独立合并并按 vis
 | Zoom transaction | `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:665-684` | `beginTransaction()` suppresses intermediate layouts; `endTransaction()` runs one final `doLayout()` | `src/main.rs:5157-5180`, `src/main.rs:4175-4350`, `src/main.rs:4474-4625` | Phase 2 must verify one zoom event -> one `sync_virtual_entries_for_slot...` and one `sync_pane_view_ui()` per visible pane. |
 | Style/item size side effects | `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:874-912`, `/home/yk/Code/dolphin/src/kitemviews/kitemlistview.cpp:916-953` | `setItemSize()` and `setStyleOption()` clear size-hint cache, update visible widgets, mark layouter dirty and layout | `src/app/split_view.rs:353-429`, `src/app/split_view.rs:453-505` | Zoom-side `PaneViewData` construction must be measured: metrics, raster, fallback icons and slot model separately. |
 | Icon-size roles update | `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp:142-153`, `/home/yk/Code/dolphin/src/kitemviews/kfileitemmodelrolesupdater.cpp:887-970` | icon size change clears finished previews, synchronously updates visible icons under timeout, then starts preview/role work | `src/main.rs:206-238`, `src/main.rs:5183-5217`, `src/app/file_item_roles_updater.rs:19-21`, `src/app/file_item_roles_updater.rs:37-49`, `src/app/file_item_roles_updater.rs:123-143` | Keep 300ms `IconSizeUpdateScheduler` limited to thumbnail/preview roles. It must not gate layout. |
-| Search focus / filter popup | `/home/yk/Code/dolphin/src/search/bar.cpp:48-82`, `/home/yk/Code/dolphin/src/search/widgetmenu.cpp:66-70`, `/home/yk/Code/dolphin/src/filterbar/filterbar.cpp:46` | search/filter bars proxy focus to input; filter button uses Qt menu popup under the button; widget menu focuses its child on show | `ui/app.slint:1154-1226`, `ui/search_panel.slint:274-322`, `ui/app.slint:2306-2323` | Search-internal routes must not call global focus scope; popup should be button-attached QMenu-style geometry, not anchored-above large card geometry. |
+| Search focus / filter popup | `/home/yk/Code/dolphin/src/search/bar.cpp:48-82`, `/home/yk/Code/dolphin/src/search/widgetmenu.cpp:66-70`, `/home/yk/Code/dolphin/src/search/popup.cpp:201-239`, `/home/yk/Code/dolphin/src/search/selectors/filetypeselector.cpp:18-83`, `/home/yk/Code/dolphin/src/search/selectors/dateselector.cpp:22-41` | search/filter bars proxy focus to input; filter button uses Qt menu popup under the button; popup embeds flat selector controls whose own combo/menu opens on click | `ui/app.slint:1210-1229`, `ui/search_panel.slint:468-742`, `ui/app.slint:2331-2370` | Search-internal routes must not call global focus scope; Filter opens a compact panel below the button; selector/chip clicks open a separate dropdown below the selector instead of switching the whole popup into a list page. |
 | Search input Escape/close | `/home/yk/Code/dolphin/src/search/bar.cpp:279-289`, `/home/yk/Code/dolphin/src/filterbar/filterbar.cpp:192-200` | Escape clears non-empty input and closes only when empty; close button emits close request | `ui/search_panel.slint:370-434`, `ui/app.slint:1210-1214`, `src/main.rs:3404-3499` | SearchPanel owns local input/timer only. Rust owns close/clear state. Programmatic query clear must use `search_query_sync_request` rather than overwriting active typing on every pane update. |
 | Local search/filter index | Dolphin search/filter state is committed by view container/model, while item view layout still operates on visible model/indexes | Avoid doing full model filtering inside item-view scroll/zoom paths | `src/main.rs:5006-5177`, `src/app/selection.rs:195-286`, `src/app/events.rs:66-75` | `apply_filter_for_slot()` must start latest-only background visible-index prepare. UI thread must not scan all entries on each debounced search input or filter chip change. |
 

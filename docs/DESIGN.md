@@ -373,12 +373,12 @@ Chooser 的纯数据逻辑集中在 `src/app/chooser.rs`：portal filter / choic
 当前实现：
 
 - 使用 `notify`。
-- 每次 `load_directory()` 会重建当前目录的 non-recursive watcher，并丢弃旧 watcher。
+- 每次 pane 目录加载会按稳定 pane id 重建当前目录的 non-recursive watcher，并丢弃该 pane 的旧 watcher；split pane 关闭时会移除对应 watcher。
 - 当前目录是内置 Trash `files/` 时，同一个 watcher 会同时注册 `files/` 和 `info/`，但 reload 目标仍是 Trash `files/` 列表。
-- watcher 忽略 non-mutating access events。
-- watcher 事件 debounce 200ms 后异步重读当前目录。
+- watcher 忽略纯读/open/close-nowrite access events，但保留 `Close(Write)` 和 rescan 事件触发刷新。
+- watcher 事件 debounce 200ms 后异步重读当前目录；同一 pane/generation 内的后台读取由 request 序号防止旧读取晚到覆盖新读取。
 - debounce 后复用 `AsyncEvent::DirectoryLoaded` 回到 UI 线程。
-- 复用 active pane 的 load generation 丢弃过期结果。
+- 复用目标 pane 的 load generation、目录路径和 request 序号丢弃过期结果。
 - `DirectoryLoadResult::preserve_view` 区分导航加载和刷新加载。F5 与 watcher reload 保留当前过滤和选择交集，导航加载重置过滤和选择。
 
 后续：

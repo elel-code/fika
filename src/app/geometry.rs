@@ -36,6 +36,9 @@ pub(crate) struct CompactItemViewLayout {
     pub(crate) padding: f32,
     pub(crate) content_width: f32,
     pub(crate) scroll_max_x: f32,
+    item_padding: f32,
+    media_width: f32,
+    media_text_gap: f32,
     text_width_reserved: f32,
     title_font_size: f32,
     text_width_units: Arc<[f32]>,
@@ -280,6 +283,9 @@ impl CompactItemViewLayout {
             padding: 0.0,
             content_width: 1.0,
             scroll_max_x: 0.0,
+            item_padding: 0.0,
+            media_width: 1.0,
+            media_text_gap: 0.0,
             text_width_reserved: 0.0,
             title_font_size: 1.0,
             text_width_units: Arc::from([]),
@@ -287,6 +293,99 @@ impl CompactItemViewLayout {
             column_widths: Arc::from([]),
             column_offsets: Arc::from([]),
         }
+    }
+
+    pub(crate) fn without_item_ranges(&self, ranges: &[Range<usize>]) -> Self {
+        if ranges.is_empty() {
+            return self.clone();
+        }
+
+        let ranges = normalized_item_ranges(ranges, self.text_width_units.len());
+        if ranges.is_empty() {
+            return self.clone();
+        }
+
+        let removed_count = ranges
+            .iter()
+            .map(|range| range.end.saturating_sub(range.start))
+            .sum::<usize>();
+        let mut next_width_units =
+            Vec::with_capacity(self.text_width_units.len().saturating_sub(removed_count));
+        let mut cursor = 0usize;
+        for range in ranges {
+            if cursor < range.start {
+                next_width_units.extend_from_slice(&self.text_width_units[cursor..range.start]);
+            }
+            cursor = range.end;
+        }
+        if cursor < self.text_width_units.len() {
+            next_width_units.extend_from_slice(&self.text_width_units[cursor..]);
+        }
+
+        compact_item_view_layout_from_text_width_units(
+            self.viewport_width,
+            next_width_units,
+            self.rows_per_column,
+            self.cell_width,
+            self.row_height,
+            self.padding,
+            self.item_padding,
+            self.media_width,
+            self.media_text_gap,
+            self.title_font_size,
+        )
+    }
+
+    pub(crate) fn with_inserted_item_width_ranges(&self, ranges: &[(usize, Vec<f32>)]) -> Self {
+        if ranges.is_empty() {
+            return self.clone();
+        }
+
+        let mut ranges = ranges
+            .iter()
+            .filter(|(_, width_units)| !width_units.is_empty())
+            .map(|(index, width_units)| (*index, width_units.as_slice()))
+            .collect::<Vec<_>>();
+        if ranges.is_empty() {
+            return self.clone();
+        }
+        ranges.sort_by_key(|(index, _)| *index);
+
+        let inserted_count = ranges
+            .iter()
+            .map(|(_, width_units)| width_units.len())
+            .sum::<usize>();
+        let mut next_width_units = Vec::with_capacity(self.text_width_units.len() + inserted_count);
+        let mut source_cursor = 0usize;
+        let mut inserted_before = 0usize;
+        for (final_index, width_units) in ranges {
+            let source_index = final_index
+                .saturating_sub(inserted_before)
+                .min(self.text_width_units.len());
+            if source_cursor < source_index {
+                next_width_units
+                    .extend_from_slice(&self.text_width_units[source_cursor..source_index]);
+            }
+            next_width_units.extend_from_slice(width_units);
+            source_cursor = source_index;
+            inserted_before = inserted_before.saturating_add(width_units.len());
+        }
+        if source_cursor < self.text_width_units.len() {
+            next_width_units.extend_from_slice(&self.text_width_units[source_cursor..]);
+        }
+
+        compact_item_view_layout_from_text_width_units(
+            self.viewport_width,
+            next_width_units,
+            self.rows_per_column,
+            self.cell_width,
+            self.row_height,
+            self.padding,
+            self.item_padding,
+            self.media_width,
+            self.media_text_gap,
+            self.title_font_size,
+        )
     }
 
     pub(crate) fn relayout_with_main_layout(&self, layout: MainItemViewLayout) -> Self {
@@ -353,6 +452,9 @@ impl ItemViewLayouter for CompactItemViewLayout {
             && same_layout_metric(self.padding, other.padding)
             && same_layout_metric(self.content_width, other.content_width)
             && same_layout_metric(self.scroll_max_x, other.scroll_max_x)
+            && same_layout_metric(self.item_padding, other.item_padding)
+            && same_layout_metric(self.media_width, other.media_width)
+            && same_layout_metric(self.media_text_gap, other.media_text_gap)
             && same_layout_metric(self.text_width_reserved, other.text_width_reserved)
             && same_layout_metric(self.title_font_size, other.title_font_size)
             && same_layout_vec(&self.text_width_units, &other.text_width_units)
@@ -1011,6 +1113,9 @@ fn compact_item_view_layout_from_cached_text_width_units(
         padding,
         content_width,
         scroll_max_x,
+        item_padding,
+        media_width,
+        media_text_gap,
         text_width_reserved,
         title_font_size,
         text_width_units,
@@ -1050,6 +1155,30 @@ fn compact_item_view_column_text_width_units(
         column_text_width_units.push(max_units);
     }
     column_text_width_units
+}
+
+fn normalized_item_ranges(ranges: &[Range<usize>], item_count: usize) -> Vec<Range<usize>> {
+    let mut ranges = ranges
+        .iter()
+        .filter_map(|range| {
+            let start = range.start.min(item_count);
+            let end = range.end.min(item_count).max(start);
+            (start < end).then_some(start..end)
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_by_key(|range| range.start);
+
+    let mut normalized = Vec::<Range<usize>>::new();
+    for range in ranges {
+        if let Some(last) = normalized.last_mut()
+            && range.start <= last.end
+        {
+            last.end = last.end.max(range.end);
+            continue;
+        }
+        normalized.push(range);
+    }
+    normalized
 }
 
 pub(crate) fn compact_text_width_estimate_from_units(units: f32, font_size: f32) -> f32 {
@@ -2002,8 +2131,8 @@ mod tests {
         ItemViewLayouter, ItemViewScrollAxis, MainItemViewLayout, MenuMetricsInput,
         PlaceDropGeometry, PopupPlacement, PopupPoint, PopupRect, RootMenuGeometry,
         SHELL_HEADER_HEIGHT, VirtualRangeAnchor, VirtualSliceGeometry, active_main_pane_width,
-        compact_item_view_layout, context_menu_metrics, inactive_main_pane_width, main_pane_bounds,
-        place_drop_geometry, search_panel_height,
+        compact_item_view_layout, compact_text_width_units, context_menu_metrics,
+        inactive_main_pane_width, main_pane_bounds, place_drop_geometry, search_panel_height,
     };
     use crate::app::item_view_metrics::{compact_cell_width, compact_row_height};
     use std::sync::Arc;
@@ -2764,18 +2893,18 @@ mod tests {
                 && search_panel.contains("remove_requested => { root.set-kind-filter(0); }")
                 && search_panel.contains("component SearchLocationButton inherits Rectangle")
                 && search_panel.contains("component SearchFilterChip inherits Rectangle")
-                && search_panel.contains("component SearchSelectorRow inherits Rectangle")
                 && search_panel.contains("component SearchSelectorOption inherits Rectangle")
+                && search_panel.contains("component SearchFilterSelectorButton inherits Rectangle")
                 && search_panel.contains("component SearchPopupSectionLabel inherits Text")
+                && search_panel.contains("export component SearchFilterDropdown inherits Rectangle")
                 && search_panel.contains("callback remove_requested();")
-                && search_panel.contains("callback selector_requested(int);")
-                && search_panel.matches("SearchSelectorRow {").count() == 3
+                && search_panel.contains("callback selector_requested(length, length, length, int);")
+                && search_panel.matches("SearchFilterSelectorButton {").count() == 3
                 && search_panel.matches("SearchSelectorOption {").count() == 12
                 && search_panel.matches("SearchPopupSectionLabel {").count() == 3
                 && search_panel.contains("label: \"File Type:\";")
                 && search_panel.contains("label: \"Modified since:\";")
                 && search_panel.contains("label: \"Size:\";")
-                && search_panel.contains("in property <int> selector-mode: 0;")
                 && search_panel.contains("root.selector-kind")
                 && search_panel.contains("root.selector-modified")
                 && search_panel.contains("root.selector-size")
@@ -2785,15 +2914,22 @@ mod tests {
                 && search_panel.contains("Rectangle {\n                flex-grow: 1;\n                min-width: 1px;\n                height: 1px;")
                 && search_panel.contains("root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, root.selector-all);")
                 && search_panel.contains("root.request-filter-menu(self.absolute-position.x, self.absolute-position.y + self.height, root.selector-kind);")
-                && app.contains("search-filter-menu-selector")
-                && app.contains("selector-mode: root.search-filter-menu-selector;")
-                && app.contains("selector_requested(selector) => {")
+                && app.contains("search-filter-dropdown-open")
+                && app.contains("if (selector != 0) {")
+                && app.contains("root.search-filter-menu-width = 300px;")
+                && app.contains("root.search-filter-menu-height = 158px;")
+                && app.contains("SearchFilterDropdown {")
+                && app.contains("selector-mode: root.search-filter-dropdown-selector;")
+                && app.contains("selector_requested(x, y, selector-width, selector) => {")
                 && app.contains("search-query-sync-request: root.live-search-query-sync-request;")
                 && app.contains("root.live-search-query-sync-request != root.pane.search_query_sync_request")
                 && app.contains("root.search-input-focused = false;")
-                && !app.contains("selector_requested(x, y, selector)")
+                && !search_panel.contains("component SearchSelectorRow inherits Rectangle")
+                && !app.contains("search-filter-menu-selector")
+                && !app.contains("selector-mode: root.search-filter-menu-selector;")
+                && !app.contains("selector_requested(selector) => {")
                 && !search_panel.contains("filters-expanded"),
-            "SearchPanel should follow Dolphin's search bar structure with delayed text commits, left-aligned location buttons, right-aligned selector chips, and a widget-menu-style selector popup"
+            "SearchPanel should follow Dolphin's search bar structure with delayed text commits, left-aligned location buttons, right-aligned selector chips, a compact WidgetMenu-style filter popup, and real dropdown selectors"
         );
         assert!(
             !top_bar_component.contains("search_requested")
@@ -4232,6 +4368,27 @@ mod tests {
         assert_eq!(relayout.entry_count, layout.entry_count);
         assert_eq!(relayout.rows_per_column, 3);
         assert_eq!(relayout.column_widths.len(), 2);
+    }
+
+    #[test]
+    fn compact_item_view_layout_applies_removed_and_inserted_size_hint_ranges() {
+        let old_names = ["alpha", "remove-me", "charlie", "delta"];
+        let new_names = ["alpha", "bravo-bravo", "charlie", "delta", "echo"];
+        let layout =
+            compact_item_view_layout(260.0, old_names, 2, 100.0, 24.0, 10.0, 6.0, 32.0, 8.0, 10.0);
+        let inserted_width_ranges = vec![
+            (1, vec![compact_text_width_units("bravo-bravo")]),
+            (4, vec![compact_text_width_units("echo")]),
+        ];
+
+        let delta = layout
+            .without_item_ranges(&[1..2])
+            .with_inserted_item_width_ranges(&inserted_width_ranges);
+        let rebuilt =
+            compact_item_view_layout(260.0, new_names, 2, 100.0, 24.0, 10.0, 6.0, 32.0, 8.0, 10.0);
+
+        assert!(delta.matches_layout_signature(&rebuilt));
+        assert_eq!(delta.entry_count, new_names.len());
     }
 
     #[test]

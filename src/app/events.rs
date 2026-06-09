@@ -18,10 +18,19 @@ pub(crate) const EXTERNAL_EDIT_DISCARD_OPERATION: &str = "Discard";
 pub(crate) struct DirectoryLoadResult {
     pub(crate) pane_id: u64,
     pub(crate) generation: u64,
+    pub(crate) request: u64,
     pub(crate) path: PathBuf,
     pub(crate) preserve_view: bool,
     pub(crate) defer_view_restore: bool,
     pub(crate) result: io::Result<PreparedDirectoryEntries>,
+}
+
+#[derive(Debug)]
+pub(crate) struct DirectoryEntriesRemoved {
+    pub(crate) pane_id: u64,
+    pub(crate) generation: u64,
+    pub(crate) path: PathBuf,
+    pub(crate) removed_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -163,6 +172,7 @@ pub(crate) struct ServiceMenuActionLaunchResult {
 #[derive(Debug)]
 pub(crate) enum AsyncEvent {
     DirectoryLoaded(DirectoryLoadResult),
+    DirectoryEntriesRemoved(DirectoryEntriesRemoved),
     DirectoryPrefetched {
         path: PathBuf,
         result: io::Result<PreparedDirectoryEntries>,
