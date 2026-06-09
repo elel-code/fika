@@ -94,7 +94,7 @@ pub fn perform_transfer_with_progress_outcome(
     match result {
         Ok(()) => {
             // Keep the backup in the richer outcome so callers that expose Undo can restore it.
-            // The compatibility wrapper removes it immediately for one-shot operations.
+            // The simpler transfer API removes it immediately for one-shot operations.
         }
         Err(err) => {
             if let Some(backup) = overwrite_backup {
@@ -918,7 +918,7 @@ fn trash_original_path(trash_path: &Path) -> Result<PathBuf, String> {
     trash_metadata(trash_path).map(|metadata| metadata.original_path)
 }
 
-pub(crate) fn trash_metadata(trash_path: &Path) -> Result<TrashMetadata, String> {
+pub fn trash_metadata(trash_path: &Path) -> Result<TrashMetadata, String> {
     let info_path =
         trash_info_path(trash_path).ok_or_else(|| "trash item has no metadata name".to_string())?;
     let contents = fs::read_to_string(&info_path).map_err(|err| {

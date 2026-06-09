@@ -1,4 +1,4 @@
-use fika::privilege::HelperBus;
+use fika_core::{HelperBus, run_dbus_service};
 use std::env;
 
 fn main() {
@@ -29,7 +29,7 @@ fn main() {
         .build()
         .expect("failed to initialize privileged helper runtime");
 
-    if let Err(err) = runtime.block_on(fika::privilege::run_dbus_service(bus)) {
+    if let Err(err) = runtime.block_on(run_dbus_service(bus)) {
         eprintln!("{err}");
         std::process::exit(1);
     }

@@ -1,168 +1,127 @@
-# Fika Design: GPUI Target Architecture
+# Fika Design: GPUI Architecture
 
-本文档描述未来目标架构。当前 Slint 代码是旧实现，不再作为设计目标。后续工作以
-`docs/GPUI_DOLPHIN_MIGRATION_PLAN.md` 为执行计划，以本地 `../dolphin` 源码为第一参考。
+本文档描述当前 GPUI 主线架构。实现边界以根 Cargo package 和 `src/` 源码目录为准；Dolphin 源码执行流仍是目录加载、刷新、model signal 和 current-directory-removed 行为的第一参考。
 
 ## Goals
 
-- 用 GPUI 重建 Fika UI shell，消除 `.slint` 静态结构带来的 slot、sidecar model、callback
-  glue 和 focused-pane fallback。
-- 保留并清理可以复用的 Rust core：file operations、trash、MIME/open-with、devices、
-  thumbnail、settings、portal/helper 边界。
-- 以 Dolphin 的 directory lister/model/view/controller 执行流作为第一参考目标。
-- 每个 pane 都是稳定 identity：`PaneId + generation` 是所有异步结果和 UI 事件的路由边界。
-- UI 只渲染 state 和派发 input action；目录模型变化只通过 model/lister event 进入 view。
+- 用 GPUI 承载窗口、pane、输入路由和渲染。
+- 保持 `fika-core` UI-neutral：core 不依赖 GPUI、窗口句柄或 UI model 类型。
+- 每个 pane 都有稳定 identity：`PaneId + generation` 是 lister、watcher、async result 和 UI event 的路由边界。
+- 目录变化通过 lister event 进入 `DirectoryModel`，GPUI 层只渲染 snapshot 并派发 action。
+- 旧 UI 主路径不再存在；新功能只进入 GPUI/core 主路径。
 
 ## Non-Goals
 
-- 不把现有 `.slint` 文件翻译为 GPUI widget。
-- 不保留 Slint 兼容层、slot 兼容层、旧 reload queue 或 focused-pane fallback。
-- 不追求一次性复制 Dolphin 的所有 KDE/KIO 后端。第一阶段只实现本地文件系统，但执行流必须
-  能映射到 Dolphin。
-- 不在 GPUI view 里直接执行阻塞 I/O。
+- 不翻译旧 UI 文件。
+- 不保留旧 slot、focused-pane fallback 或 reload queue。
+- 不一次性复制 Dolphin 的所有 KDE/KIO 后端。当前主线先保住本地目录、pane identity 和 portal/helper 边界。
+- 不在 GPUI render/input 路径中执行阻塞 I/O。
 
 ## Reference Priority
 
 1. Dolphin source execution flow.
-2. Linux desktop specifications and services used by Dolphin-compatible behavior:
+2. Linux desktop specifications and services used by Dolphin-like behavior:
    XDG trash, freedesktop thumbnails, MIME apps, service menus, UDisks2, Polkit.
-3. Existing Fika Rust modules, only when they do not conflict with the Dolphin flow.
-4. GPUI idioms for entity/view/state composition.
+3. Existing `fika-core` modules when they preserve the Dolphin-style flow.
+4. GPUI idioms for entity, view, state, and input composition.
 
-## Target Crate Layout
-
-Planned structure:
+## Source Layout
 
 ```text
-crates/
-  fika-core/
-    pane/
-    directory/
-    model/
-    operations/
-    trash/
-    thumbnails/
-    devices/
-    desktop/
-    settings/
-  fika-gpui/
-    app.rs
-    window.rs
-    pane_view.rs
-    item_view.rs
-    menus.rs
-    dialogs.rs
-    input.rs
-  fika-portal/
-  fika-privileged-helper/
+src/
+  lib.rs                     UI-neutral core module exports
+  entries.rs                 directory entry metadata and sorting input
+  directory.rs               directory lister, watcher events, generation checks
+  model.rs                   directory model snapshots and model signals
+  pane.rs                    pane identity, pane state, split/close routing
+  operations.rs              operation controller boundary
+  file_ops.rs                file transfer/trash/create/rename primitives
+  privilege.rs               privileged helper API surface
+  main.rs                    GPUI window, pane rendering, chooser shell
+  bin/fika-xdp-filechooser.rs
+                             portal FileChooser backend
+  bin/fika-privileged-helper.rs
+                             system-bus privileged helper binary
 ```
 
-Core rules:
-
-- `fika-core` must not depend on GPUI, Slint, window handles, or UI image/model types.
-- `fika-gpui` owns presentation, input routing, focus, menus, animations, and entity lifecycle.
-- Async workers communicate with core through typed events. UI receives already-routed pane events.
-- Every long-running operation carries enough identity to reject stale results.
+Root `Cargo.toml` is a single package. It exposes the `fika_core` library from
+`src/lib.rs` and builds the `fika`, `fika-xdp-filechooser`, and
+`fika-privileged-helper` binaries from `src/main.rs` and `src/bin/`. GPUI
+is sourced from the official Zed repository with a git dependency and no numeric
+crate release pin.
 
 ## Core Model
 
 ### Pane
 
-`PaneState` is a core object, not a UI slot.
-
-Required fields:
+`PaneState` is a core object, not a UI slot. It owns:
 
 - `PaneId`
 - `generation`
 - `current_dir`
-- history back/forward stacks
 - `DirectoryModel`
-- `DirectoryListerHandle`
-- selection
-- search/filter state
-- view state: layout mode, scroll offset, zoom, visible range cache
-- thumbnail pending/cache handles
+- `DirectoryLister`
+- watcher state
 
-Opening or closing split panes creates or drops pane entities. It must not clone global UI state or share watcher state.
+Opening or closing split panes creates or drops pane state. It must not clone global UI state or share watcher state.
 
 ### Directory Lister
 
-The lister mirrors Dolphin's `KDirLister -> KFileItemModel` relationship.
+The lister mirrors Dolphin's `KDirLister -> KFileItemModel` boundary.
 
 Inputs:
 
-- `load_directory(path)`
-- `refresh_directory(path)`
-- watcher events
-- file operation affected-directory refresh
+- load directory
+- reload current directory
+- watcher refresh
+- current-directory-removed detection
 
 Outputs:
 
-- `DirectoryLoadingStarted`
-- `DirectoryItemsAdded`
-- `DirectoryItemsDeleted`
-- `DirectoryItemsRefreshed`
-- `DirectoryListingCompleted`
-- `DirectoryCurrentRemoved`
-- `DirectoryError`
+- `LoadingStarted`
+- `ItemsAdded`
+- `ItemsDeleted`
+- `ItemsRefreshed`
+- `ListingCompleted`
+- `CurrentDirectoryRemoved`
+- `Error`
 
-All outputs carry `PaneId`, `generation`, and `path`.
+All outputs carry `PaneId`, `generation`, and path context so stale events can be rejected.
 
 ### Directory Model
 
-`DirectoryModel` owns entries, sorting, filtering, trash metadata, and path-index lookup.
+`DirectoryModel` owns entries and emits model signals:
 
-The model emits Dolphin-style deltas:
-
-- add items into pending/visible ranges
+- reset on new listing
+- insert item ranges
 - delete item ranges
-- refresh item data and preserve stable item identity where applicable
-- full listing refresh only when the lister cannot classify a delta
+- refresh item ranges
+- report loading/error state
 
-The GPUI item view consumes model signals and snapshots. It does not decide whether a filesystem event is an add, delete, refresh, or full reload.
+The GPUI pane consumes snapshots and signals. It does not decide whether a filesystem event is an add, delete, refresh, or full reload.
 
-## GPUI UI Layer
+## GPUI Layer
 
-### App Entity
+The current GPUI shell owns:
 
-The app entity owns:
+- window creation through `gpui_platform::application()`
+- pane toolbar actions
+- split/close/focus routing by `PaneId`
+- directory item rendering
+- watcher polling handoff into core events
+- pane-local selection, navigation shortcuts, and manager actions
+- background file-operation tasks that return affected directories
+- chooser path output and portal metadata output
 
-- global settings
-- theme
-- pane tree
-- Places and Devices models
-- global menus/dialog state
-- async event receiver
-
-### Pane Entity
-
-Each pane entity owns a core `PaneState` handle and renders:
-
-- path/navigation row
-- optional search/filter row
-- file item view
-- pane status row
-
-The pane entity receives input locally and emits controller actions. It never routes through "currently focused pane" unless the command is explicitly global, such as `Ctrl+L` on the focused pane.
-
-### Item View
-
-The item view follows Dolphin's `KItemListView` boundary:
-
-- model signals create insert/remove/change layout work
-- layouter owns compact/details/icons geometry
-- controller owns hit-test, selection, activation, DnD, keyboard navigation
-- renderer owns visible item drawing
-
-GPUI allows this to stay in Rust entities without projecting every intermediate row through a static UI language.
+Rendering is intentionally thin. Feature work should move domain logic into
+`fika-core` first, then expose it through GPUI actions.
 
 ## Async and Stale Result Policy
 
-Every async result must include:
+Every pane-scoped async result must include:
 
-- `PaneId` when pane-scoped
+- `PaneId`
 - `generation`
-- request serial when multiple same-generation requests can overlap
 - source path or operation id
 
 Apply path:
@@ -171,47 +130,27 @@ Apply path:
 2. Resolve pane by `PaneId`.
 3. Check generation and path.
 4. Apply to core model.
-5. Notify GPUI entity/view.
+5. Notify GPUI view.
 
-No async result may apply by focused pane.
+No pane-scoped async result may apply by focused pane.
 
 ## Undo and File Operation Policy
 
-Undo follows Dolphin's model: the operation performs filesystem changes; directory lister/model signals update the visible view.
+File operations belong in core. UI actions should produce operation requests; operation completion should return affected directories and trigger lister refresh for panes that show those directories.
 
-Fika-specific requirements:
+Undo follows the same rule: filesystem change first, affected pane refresh second, no manual item-view rebuild in the UI layer.
 
-- undo start takes a serial
-- undo finish with stale serial is ignored
-- affected directories are mapped to pane ids
-- each affected pane calls lister refresh
-- UI does not manually rebuild item views after undo
+## Historical Docs
 
-## Slint Archive Policy
-
-The old Slint implementation may be read for:
-
-- file operation behavior
-- trash edge cases
-- thumbnail cache behavior
-- MIME/open-with/service-menu parsing
-- UDisks2 diagnostics
-- tests that encode known bugs
-
-It must not be used as:
-
-- UI architecture reference
-- pane identity reference
-- directory refresh execution-flow reference
-- compatibility surface for GPUI
+The archived optimization documents describe the removed UI implementation and are not architecture input for new code. They may be read only for behavior notes and bug history.
 
 ## Acceptance Definition
 
-The GPUI rewrite is architecturally acceptable when:
+The GPUI architecture is acceptable when:
 
-- single pane and split pane both refresh correctly from external filesystem changes
-- undo refreshes visible directories without manual UI rebuilds
+- single pane and split pane refresh correctly from external filesystem changes
 - closing a pane drops its lister/watcher and cannot receive stale results
-- two panes showing the same directory have independent selection, scroll, generation, and watcher state
-- Dolphin source references exist for every core file-view execution path
-- Slint is no longer in the primary build dependency graph
+- two panes showing the same directory have independent generation and watcher state
+- current-directory-removed uses nearest existing ancestor fallback
+- portal and privileged-helper binaries build from the root package
+- the main build has no dependency on the removed UI implementation

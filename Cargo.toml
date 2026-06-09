@@ -1,25 +1,19 @@
 [package]
 name = "fika"
-version = "0.1.0"
 edition = "2024"
-description = "A lightweight Rust + Slint file manager prototype for Wayland desktops."
 license = "MIT"
-build = "build.rs"
+publish = false
 default-run = "fika"
 
-[dependencies]
-notify = "8"
-futures-lite = "2"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-png = "0.18"
-slint = { git = "https://github.com/slint-ui/slint", branch = "master", features = ["image-default-formats"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
-rustix = { version = "1", features = ["pipe"] }
-wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
-wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-zbus = "5"
-zbus_polkit = "5"
+[lib]
+name = "fika_core"
 
-[build-dependencies]
-slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
+[dependencies]
+async-io = "*"
+futures-lite = "*"
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", features = ["wayland", "x11"] }
+notify = "*"
+tokio = { version = "*", features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+zbus = "*"
+zbus_polkit = "*"

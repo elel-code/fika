@@ -82,7 +82,7 @@ fn parent_window_binding(status: ParentWindowStatus) -> &'static str {
 
 fn parent_window_binding_reason(status: ParentWindowStatus) -> &'static str {
     match status {
-        ParentWindowStatus::Accepted => "slint-parent-token-binding-unavailable",
+        ParentWindowStatus::Accepted => "gpui-parent-token-binding-unavailable",
         ParentWindowStatus::Empty => "no-parent-window",
         ParentWindowStatus::Malformed => "malformed-parent-window",
         ParentWindowStatus::EmptyHandle => "empty-parent-window-handle",
@@ -429,7 +429,7 @@ fn chooser_args(request: ChooserArgs) -> Vec<String> {
 
 fn chooser_run_from_output(output: ChooserProcessOutput) -> Result<ChooserRun, String> {
     if !output.status.success() {
-        if output.status.code() == Some(fika::chooser::CHOOSER_CANCEL_EXIT_CODE) {
+        if output.status.code() == Some(fika_core::CHOOSER_CANCEL_EXIT_CODE) {
             return Ok(ChooserRun::Cancelled(ChooserCancelReason::UserCancelled));
         }
         return Err(chooser_failure_message(
@@ -1372,7 +1372,7 @@ mod tests {
 
         assert_eq!(
             summary,
-            "request method=OpenFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=/home/yk directory=true multiple=true save_kind=none save_files=0 portal_filters=2 chooser_filters=1 mime_mapped_filters=1 hidden_filters=1 initial_filter=0 portal_choices=1 parent_status=accepted parent_forwarded=true parent_binding=metadata-only parent_binding_reason=slint-parent-token-binding-unavailable native_transient=false"
+            "request method=OpenFile handle=/org/freedesktop/portal/desktop/request/1_42/fika start_dir=/home/yk directory=true multiple=true save_kind=none save_files=0 portal_filters=2 chooser_filters=1 mime_mapped_filters=1 hidden_filters=1 initial_filter=0 portal_choices=1 parent_status=accepted parent_forwarded=true parent_binding=metadata-only parent_binding_reason=gpui-parent-token-binding-unavailable native_transient=false"
         );
     }
 

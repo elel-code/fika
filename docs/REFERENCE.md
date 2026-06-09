@@ -1,11 +1,10 @@
 # Fika Reference Index
 
-本文档是迁移期参考索引。旧的 Rust + Slint 架构说明已经失效；未来目标见
-`docs/DESIGN.md` 和 `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`。
+本文档是当前 GPUI package 的参考索引。实现前先查 Dolphin 源码和本仓库 core 边界，不使用记忆或猜测替代源码。
 
 ## Primary Reference: Dolphin
 
-本地 Dolphin 源码在 `../dolphin`。实现前必须先查源码，不使用记忆或猜测替代。
+本地 Dolphin 源码在 `../dolphin`。
 
 ### Directory Load and Refresh
 
@@ -58,69 +57,43 @@
   - `DolphinViewContainer::slotCurrentDirectoryRemoved()`
   - local path moves to nearest existing ancestor and shows warning
 
-## Target Fika Concepts
+## Current Fika Concepts
 
-| Dolphin concept | Fika target |
+| Dolphin concept | Fika module |
 | --- | --- |
-| `DolphinView` | GPUI pane entity + view shell |
-| `KDirLister` | `DirectoryLister` |
-| `KFileItemModel` | `DirectoryModel` |
-| `KItemListView` | GPUI item view entity |
-| `KItemListViewLayouter` | Rust item-view layouter |
-| `KItemListController` | Pane-local controller |
-| `KFileItemModelRolesUpdater` | thumbnail/metadata role scheduler |
+| `DolphinView` | `src/main.rs` GPUI pane shell |
+| `KDirLister` | `src/core/directory.rs` |
+| `KFileItemModel` | `src/core/model.rs` |
+| `KItemListView` | layout in `src/core/view.rs`, GPUI rendering in `src/main.rs` |
+| pane identity | `src/core/pane.rs` |
+| file operation primitives | `src/core/file_ops.rs` |
+| privileged operation API | `src/core/privilege.rs` |
+| portal FileChooser backend | `src/bin/fika-xdp-filechooser.rs` |
+| system-bus helper | `src/bin/fika-privileged-helper.rs` |
 
-## Current Fika Code Worth Reusing
+## Cargo Boundaries
 
-These modules may be mined during the GPUI rewrite, but they must be moved behind UI-neutral interfaces.
-
-- `src/fs/file_ops.rs`
-  - transfer, trash, undo primitives
-- `src/fs/entries.rs`
-  - local directory entry reading and trash metadata decoration
-- `src/fs/thumbnails.rs`
-  - freedesktop thumbnail cache and thumbnailer discovery
-- `src/fs/devices.rs`
-  - mountinfo/UDisks2 discovery and diagnostics
-- `src/desktop/mime_open.rs`
-  - MIME/default app lookup
-- `src/desktop/service_menu.rs`
-  - KDE/Fika service-menu parsing
-- `src/app/operation_controller.rs`
-  - operation queue summaries, undo serial policy, affected-directory routing
-- `src/support/generation.rs`
-  - stale result helper
-
-Do not reuse these as future architecture:
-
-- `ui/*.slint`
-- Slint `ModelRc` / `VecModel` projection layers
-- slot/focused-pane callback routing
-- old directory reload queues
-- Slint-specific DnD and menu lifecycle globals
-
-## Migration Documents
-
-- `docs/TODO.md`
-  - active task board
-- `docs/DESIGN.md`
-  - GPUI target architecture
-- `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`
-  - full replacement plan
-- `docs/OPTIMIZATION.md`
-  - archived Slint optimization history
-- `docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md`
-  - archived Slint scroll/zoom investigation
-- `docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md`
-  - archived Slint slot-reuse investigation
+- Root `Cargo.toml` is a single Cargo package.
+- `src/lib.rs` is exposed as the `fika_core` library and has no GPUI dependency.
+- `src/main.rs` contains the `fika` binary source.
+- GPUI dependencies come from `https://github.com/zed-industries/zed` through `git` package dependencies.
+- No GPUI dependency is pinned to a concrete crate release, branch, or revision.
 
 ## Engineering Checks
 
-Before implementing a GPUI migration task:
+Before implementing a file-view task:
 
 1. Find the Dolphin source path for the behavior.
-2. Write the Fika core type boundary.
-3. Ensure every async result has `PaneId + generation`.
-4. Write a stale-result test.
-5. Write a split-pane test.
-6. Only then wire GPUI rendering or input.
+2. Put behavior state in `fika-core` unless it is purely visual.
+3. Ensure pane-scoped async results carry `PaneId + generation`.
+4. Add stale-result and split-pane coverage for shared behavior.
+5. Wire GPUI rendering or input after the core boundary is stable.
+
+## Documents
+
+- `docs/DESIGN.md` - current GPUI/core architecture
+- `docs/TODO.md` - remaining task board
+- `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md` - original cutover plan
+- `docs/OPTIMIZATION.md` - archived optimization notes
+- `docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md` - archived scroll/zoom notes
+- `docs/DOLPHIN_ITEM_SLOT_REUSE_PLAN.md` - archived slot-reuse notes

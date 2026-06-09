@@ -1,10 +1,7 @@
-# Fika TODO: GPUI Rewrite
+# Fika TODO: GPUI Mainline
 
-本文档是当前唯一有效的任务板。旧的 Slint 优化任务已经归档，不再作为未来实现方向。
-
-目标：全面替换为 GPUI，同时以 Dolphin 源码执行流作为第一参考目标。迁移不是把 `.slint`
-组件翻译成 GPUI 组件，而是借迁移机会重建 pane、directory lister、model signal、undo 和
-view/controller 的边界。
+本文档是当前任务板。仓库已经切到单包 GPUI 主线；后续任务只应进入
+`src/` 下的 core modules、`src/main.rs` 和 `src/bin/`。
 
 状态说明：
 
@@ -15,123 +12,90 @@ view/controller 的边界。
 
 ## Hard Rules
 
-- [x] 当前 Slint 实现只作为旧实现和可复用 Rust 模块来源，不再继续扩展 UI 胶水。
-- [x] Dolphin 是第一参考目标。目录加载、刷新、删除、rename、undo 后刷新必须先确认
-  Dolphin 源码执行流，再实现 Fika 对应层。
-- [x] 每个 pane 必须有稳定 `PaneId`。所有 lister、watcher、async result、selection、
-  thumbnail、file operation result 都按 `PaneId + generation` 路由。
-- [x] 不保留 Slint 兼容层，不保留 slot/focused-pane fallback，不保留旧 reload queue。
-- [ ] 新实现不得把 UI widget identity 当作文件模型 identity。GPUI view/entity 是渲染层，
-  文件身份属于 core model。
+- [x] Dolphin 是第一参考目标。目录加载、刷新、删除、rename、undo 后刷新必须先确认 Dolphin 源码执行流，再实现 Fika 对应层。
+- [x] 每个 pane 必须有稳定 `PaneId`。所有 lister、watcher、async result、selection、thumbnail、file operation result 都按 `PaneId + generation` 路由。
+- [x] 主构建路径只保留 GPUI/core package。
+- [x] GPUI 从 Zed 官方仓库通过 git 依赖获取，不写 concrete crate release、branch 或 revision。
+- [ ] 新实现不得把 UI widget identity 当作文件模型 identity。GPUI view/entity 是渲染层，文件身份属于 core model。
 
-## Phase 0: Reference Freeze
+## Completed Cutover
 
-- [x] 建立 Dolphin 源码参考清单并写入迁移计划。
-  - 验收：`docs/GPUI_DOLPHIN_MIGRATION_PLAN.md` 包含 `DolphinView::loadDirectory()`、
-    `KFileItemModel::{loadDirectory, refreshDirectory}`、KDirLister 信号连接、
-    `slotItemsAdded`、`slotItemsDeleted`、`slotRefreshItems`、`slotCompleted`、
-    `KItemListView::setModel()` 和 current-directory-removed 处理路径。
-- [~] 给每个迁移子系统写“Dolphin 对应层”。
-  - 验收：目录、view layout、selection/controller、undo、trash、devices、thumbnail
-    都能在计划文档里找到 Dolphin 或 Linux desktop reference。
-- [x] 冻结 Slint 文档语义。
-  - 验收：`docs/DESIGN.md` 描述 GPUI 目标架构；旧 Slint 优化文档标注为归档。
+- [x] 建立 Dolphin 源码参考清单。
+  - 验收：`docs/GPUI_DOLPHIN_MIGRATION_PLAN.md` 包含 `DolphinView::loadDirectory()`、`KFileItemModel::{loadDirectory, refreshDirectory}`、KDirLister signal、model slot 和 current-directory-removed 处理路径。
+- [x] 移除多包 Cargo 布局。
+  - 验收：root `Cargo.toml` 是单一 package，并从 `src/` 构建 core library 和三个 binary。
+- [x] 建立 UI-neutral core。
+  - 验收：`fika-core` 不依赖 GPUI 或 window 类型。
+- [x] 新增 GPUI app shell。
+  - 验收：`fika` binary 位于 `src/main.rs`，可打开窗口、加载目录、分屏、关闭 pane、刷新目录。
+- [x] 实现初版 `DirectoryLister`、`DirectoryModel` 和 pane-scoped watcher。
+  - 验收：加载、刷新、watcher event 和 current-directory-removed 都走 core event path。
+- [x] 保留 portal/backend 和 privileged-helper 二进制边界。
+  - 验收：两个二进制从 root package 构建。
+- [x] 清理旧主路径。
+  - 验收：root manifest 不再引用旧 UI 构建路径；旧 UI 源目录和构建脚本已从主代码树移除。
+- [x] 更新 README、DESIGN 和 REFERENCE。
+  - 验收：文档描述当前 GPUI package 和剩余功能缺口。
 
-## Phase 1: Repository Shape
+## Directory Core
 
-- [ ] 拆出 core 与 UI shell 边界。
-  - 目标结构：
-    - `crates/fika-core`: pane、directory lister、entry model、selection、operations、trash、
-      thumbnails、devices、settings。
-    - `crates/fika-gpui`: GPUI app、window、pane views、menus、dialogs、input routing。
-    - `crates/fika-portal`: chooser / xdp portal bridge，复用 core。
-    - `crates/fika-privileged-helper`: 保留现有 helper 边界。
-  - 验收：core 不依赖 GPUI、Slint 或 window 类型。
-- [ ] 新增 GPUI app skeleton。
-  - 验收：能打开窗口，显示 single pane shell，加载一个目录，退出干净。
-- [ ] 明确旧 Slint 二进制的生命周期。
-  - 验收：旧 `fika` 入口只保留到 GPUI shell 达到功能替代；不新增 Slint 功能。
+- [x] 完善 `DirectoryLister` event 分类。
+  - 验收：watcher add/delete/refresh 能稳定映射到 model delta；不能分类时才整目录 reload。
+- [~] 完善 `DirectoryModel`。
+  - 验收：支持排序、过滤、trash metadata，并保留 stable item identity。
+- [x] 实现 current-directory-removed。
+  - 验收：当前目录删除或 rename 后，pane 跳到最近存在 ancestor，符合 Dolphin 的 `slotCurrentDirectoryRemoved()` 行为。
+- [x] 为 directory core 增加覆盖。
+  - 验收：包含 stale generation、split pane、同目录双 pane、current-directory-removed、watcher refresh 测试。
 
-## Phase 2: Dolphin-like Directory Core
+## GPUI Pane and View
 
-- [ ] 实现 `DirectoryLister`。
-  - 输入：`PaneId`、`generation`、directory path、reload flag。
-  - 输出：`DirectoryModelEvent`，包括 `LoadingStarted`、`ItemsAdded`、`ItemsDeleted`、
-    `ItemsRefreshed`、`ListingCompleted`、`CurrentDirectoryRemoved`、`Error`。
-  - 验收：手动 refresh 和 watcher refresh 走同一条 lister event path，不发 UI reload 命令。
-- [ ] 实现 `DirectoryModel`。
-  - 验收：支持 Dolphin-style add/delete/refresh delta；排序、过滤、trash metadata 更新在 model
-    层完成；view 只消费 model signal/snapshot。
-- [ ] 实现 pane-scoped watcher。
-  - 验收：每个 pane 独立 watcher/debounce/generation；关闭 pane 会 drop watcher；split open/close
-    不影响其它 pane。
-- [ ] 实现 current directory removed。
-  - 验收：当前目录删除或 rename 后，pane 跳到最近存在 ancestor，符合 Dolphin 的
-    `slotCurrentDirectoryRemoved()` 行为。
+- [x] 建立 GPUI pane shell。
+  - 验收：pane toolbar action 全部按 `PaneId` 路由。
+- [x] 建立 dynamic split pane。
+  - 验收：split open/close 不复制全局 UI state；每个 pane 独立加载目录。
+- [x] 接入 pane-local navigation history。
+  - 验收：Back/Forward 通过 `PaneId` 路由，切换 focused pane 不会改变历史事件目标。
+- [~] 建立 chooser shell。
+  - 验收：支持文件/目录选择、multi-select 输出、filter/choice metadata 输出。
+- [x] 实现 pane-local selection controller。
+  - 验收：single select、Ctrl/secondary toggle、Shift range、Ctrl/secondary+A、select all、clear selection、方向键移动、Shift+方向键范围选择、chooser multi-select、model change pruning 和 GPUI rubber-band selection 都进入 `fika-core::PaneState`。
+- [~] 实现 Dolphin compact file view。
+  - 已完成：core compact layout、model-index hit-test、selection rect、rubber-band overlay 和 GPUI item rendering 使用 `src/core/view.rs` 的布局结果。
+  - 剩余验收：scroll handle 同步、可见区虚拟化。
+- [~] 实现 keyboard shortcuts。
+  - 已完成：方向键、Shift+方向键、Ctrl/secondary+A、Ctrl/secondary+C/X/V、Ctrl/secondary+Shift+N、F2 rename、Escape、F5、Backspace、Alt+Left、Alt+Right、Delete 和 Ctrl/secondary+Z 都按 focused `PaneId` 路由到 pane-local action。
+  - 剩余验收：后续新增交互继续按 pane-local action 路由。
 
-## Phase 3: GPUI Pane and View
+## File Operations and Undo
 
-- [ ] 建立 `PaneEntity`。
-  - 验收：每个 pane 是独立 GPUI entity，持有 `PaneId`、current directory、history、
-    selection、search/filter、view state 和 lister handle。
-- [ ] 建立 dynamic pane tree。
-  - 验收：split open/close 不复制 UI glue；每个 pane independently renders and receives input。
-- [ ] 实现 compact file view。
-  - 验收：先支持 Dolphin compact horizontal layout；scroll、hit-test、selection rect 与 model
-    index 对齐。
-- [ ] 实现 view/controller signal boundary。
-  - 验收：model events 进入 view layout/controller；input 产生 controller action；UI 不直接改
-    directory model。
+- [~] 迁移 file operation primitives 到 core。
+  - 已完成：create file/folder、rename、move-to-trash 和内部 Copy/Cut/Paste 都通过 GPUI 后台任务调用 core file operation primitives，并返回 affected dirs / undo payload。
+  - 验收：copy/move/link/trash/rename/create/delete 结果只返回 affected dirs / pane ids / undo registration，不直接触碰 UI。
+- [~] 迁移 undo serial。
+  - 已完成：create file/folder、rename、move-to-trash 和内部 Copy/Cut/Paste 会记录 core undo payload 和受影响目录；Undo 取最新 serial，恢复后通过 affected panes 的 lister refresh。
+  - 验收：undo start/finish 以 serial 防 stale result；undo 完成后通过 affected panes 的 lister refresh。
+- [ ] 迁移 trash view。
+  - 验收：trash `files/` 和 `info/` 变化映射到同一个 model item；restore/permanent delete 后走 lister event path。
 
-## Phase 4: File Operations and Undo
-
-- [ ] 迁移 `FileOperationController` 到 core。
-  - 验收：copy/move/link/trash/rename/create/delete 结果只返回 affected dirs / pane ids / undo
-    registration，不直接触碰 UI。
-- [ ] 迁移 undo serial。
-  - 验收：undo start/finish 以 serial 防 stale result；undo 完成后通过 affected panes 的 lister
-    refresh，不能手动重建 view。
-- [ ] 迁移 trash。
-  - 验收：trash `files/` 和 `info/` 变化映射到同一个 model item；restore/permanent delete
-    后走 lister event path。
-
-## Phase 5: Interaction Parity
-
-- [ ] Selection。
-  - 验收：single、ctrl、shift range、rubber-band、Ctrl+A 都由 pane-local controller 处理。
-- [ ] Context menus。
-  - 验收：文件、目录、blank、Places、Devices、service-menu 都按 pane id 路由。
-- [ ] Drag and drop。
-  - 验收：内部 drag payload 不依赖 UI row index；drop target 由 core hit-test 决定。
-- [ ] Search/filter。
-  - 验收：搜索输入不抢 pane focus；filter 改变只更新 visible model/index，不重启目录 lister。
-
-## Phase 6: Desktop Integration
+## Desktop Integration
 
 - [ ] MIME/Open With/service-menu 迁移到 core/desktop module。
   - 验收：无 UI 阻塞 I/O；结果按 pane id 回到 GPUI shell。
 - [ ] Devices 迁移。
-  - 验收：UDisks2/mountinfo discovery 与 GPUI sidebar 解耦；mount/unmount/eject result 按 affected
-    panes 刷新。
+  - 验收：UDisks2/mountinfo discovery 与 GPUI sidebar 解耦；mount/unmount/eject result 按 affected panes 刷新。
 - [ ] Thumbnail pipeline 迁移。
-  - 验收：thumbnail cache、failure cache、visible-first scheduling 不依赖 Slint image/model 类型。
-- [ ] Portal chooser 迁移评估。
-  - 验收：chooser 可以复用 GPUI shell 或保留独立二进制，但 core selection/output 共享。
+  - 验收：thumbnail cache、failure cache、visible-first scheduling 不依赖 UI image/model 类型。
+- [~] Portal chooser。
+  - 验收：portal backend 调用 GPUI chooser shell，并共享 core selection/output 常量。
 
-## Phase 7: Cutover
+## Documentation and Checks
 
-- [ ] GPUI shell 达到旧功能替代门槛。
-  - 必须包含：single pane、split pane、directory lister、watch refresh、undo refresh、trash、
-    selection、copy/move/trash/rename、open with、context menu、thumbnail、basic devices。
-- [ ] 删除 Slint UI 依赖。
-  - 验收：`ui/*.slint`、`slint`、`slint-build`、Slint-specific bridge/model/update code 从主构建路径移除。
-- [ ] 清理文档。
-  - 验收：README、DESIGN、REFERENCE、TODO 均只描述 GPUI 架构；旧 Slint 文档只留在归档说明中。
-
-## Immediate Next Tasks
-
-- [x] 创建 `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md`。
-- [ ] 为 GPUI spike 建立单独分支或 crate，不在现有 Slint 回调层继续堆代码。
-- [ ] 写 core API 草图：`PaneId`、`DirectoryLister`、`DirectoryModelEvent`、`PaneEntityState`。
-- [ ] 做最小 GPUI spike：single pane + directory listing + create/delete external watcher refresh。
-- [ ] 跑 split pane spike：两个 pane 打开同一路径，一个 pane refresh 不污染另一个 pane identity。
+- [x] README 只描述当前 GPUI package。
+- [x] DESIGN 只描述当前 GPUI/core 架构。
+- [x] REFERENCE 路径指向 `src/...`。
+- [ ] 为 core 和 GPUI shell 补齐任务级测试。
+- [ ] 持续运行：
+  - `cargo fmt --all`
+  - `cargo test`
+  - `cargo check`
