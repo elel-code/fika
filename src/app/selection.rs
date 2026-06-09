@@ -329,6 +329,9 @@ pub(crate) fn filtered_entry_summary_for_pane(
     }
 
     if should_use_all_entries_without_filtering(pane, &chooser_patterns) {
+        if !collect_paths {
+            return pane.entry_summary.clone().into();
+        }
         return item_view_model_entry_summary(pane.entries.iter(), collect_paths, true).into();
     }
 

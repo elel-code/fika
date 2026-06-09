@@ -1,6 +1,6 @@
 use crate::app::async_bridge::AsyncBridge;
 use crate::app::geometry::{ItemViewLayoutEngine, ItemViewLayouter};
-use crate::app::item_view_model::{ItemViewModelEntry, item_view_model_entry_summary};
+use crate::app::item_view_model::ItemViewModelEntrySummary;
 use crate::app::item_view_renderer::{
     ItemViewRenderGeometry, ItemViewRenderMetrics, ItemViewRenderPlanInput,
     ItemViewTileFrameRasterInput,
@@ -964,11 +964,7 @@ fn sync_focused_ui(
     ui.set_selected_status(selection_status_text(selected_paths));
 }
 
-pub(crate) fn directory_status_text<'a, T>(entries: impl Iterator<Item = &'a T>) -> String
-where
-    T: ItemViewModelEntry + ?Sized + 'a,
-{
-    let summary = item_view_model_entry_summary(entries, false, false);
+pub(crate) fn directory_status_text(summary: &ItemViewModelEntrySummary) -> String {
     let folders = summary.folders;
     let files = summary.files;
     format!("{folders} folders, {files} files")

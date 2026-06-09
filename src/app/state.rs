@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(
             state.cached_directory_entries(&path).map(|entries| {
                 (
-                    entries.has_locations,
+                    entries.summary.has_locations,
                     entries
                         .entries
                         .iter()

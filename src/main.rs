@@ -2672,9 +2672,9 @@ fn load_prepared_pane_directory(
         {
             let mut state = state.borrow_mut();
             if let Some(pane) = state.panes.pane_mut_for_target(PaneTarget::Id(pane_id)) {
-                pane.set_entries_with_location_state(
+                pane.set_entries_with_summary(
                     cached_entries.entries.clone(),
-                    cached_entries.has_locations,
+                    cached_entries.summary.clone(),
                 );
             }
         }
@@ -3202,10 +3202,7 @@ fn apply_pane_directory_result(
                 if directory_entries_match(&pane.entries, &entries) {
                     unchanged = true;
                 } else {
-                    pane.set_entries_with_location_state(
-                        entries.entries.clone(),
-                        entries.has_locations,
-                    );
+                    pane.set_entries_with_summary(entries.entries.clone(), entries.summary.clone());
                     if !result.preserve_view {
                         pane.search.reset_all();
                         pane.selection.clear();
@@ -3558,7 +3555,7 @@ fn restore_cached_directory_entries_for_slot(
     let Some(pane) = state.panes.pane_mut_for_slot(slot) else {
         return false;
     };
-    pane.set_entries_with_location_state(entries.entries.clone(), entries.has_locations);
+    pane.set_entries_with_summary(entries.entries.clone(), entries.summary.clone());
     true
 }
 
@@ -3775,10 +3772,7 @@ fn apply_recursive_search_result(
                 let Some(pane) = state.panes.pane_mut_by_id(result.pane_id) else {
                     return;
                 };
-                pane.set_entries_with_location_state(
-                    entries.entries.clone(),
-                    entries.has_locations,
-                );
+                pane.set_entries_with_summary(entries.entries.clone(), entries.summary.clone());
             }
             apply_filter_for_slot(ui, state, bridge, slot, true);
         }
@@ -6277,7 +6271,7 @@ fn set_directory_status_from_entries(ui: &AppWindow, state: &Rc<RefCell<AppState
                 state
                     .panes
                     .slot_for_id(pane_id)
-                    .map(|slot| (slot, directory_status_text(pane.entries.iter())))
+                    .map(|slot| (slot, directory_status_text(&pane.entry_summary)))
             })
     };
     if let Some((slot, status)) = status {
@@ -6462,7 +6456,7 @@ mod tests {
         pane.view.virtual_view.thumbnail_size_px = 64;
 
         let entries = PreparedDirectoryEntries::new(vec![test_entry("new", "/tmp/new")]);
-        pane.set_entries_with_location_state(entries.entries.clone(), entries.has_locations);
+        pane.set_entries_with_summary(entries.entries.clone(), entries.summary.clone());
 
         assert_eq!(
             cached_virtual_viewport_sync(&mut pane, &main_layout, 0.0, 64, true, None, &[]),

@@ -840,8 +840,8 @@ export component AppWindow inherits Window {
     private property <int> search-filter-menu-slot: 0;
     private property <length> search-filter-menu-x: 0px;
     private property <length> search-filter-menu-y: 0px;
-    private property <length> search-filter-menu-width: 360px;
-    private property <length> search-filter-menu-height: 250px;
+    private property <length> search-filter-menu-width: 300px;
+    private property <length> search-filter-menu-height: 156px;
     private property <int> search-filter-menu-kind-filter: 0;
     private property <int> search-filter-menu-modified-filter: 0;
     private property <int> search-filter-menu-size-filter: 0;
@@ -1154,6 +1154,10 @@ export component AppWindow inherits Window {
 
     public function route-pane-focus(slot: int) {
         app-focus.focus();
+        root.ensure-pane-focus(slot);
+    }
+
+    function ensure-pane-focus(slot: int) {
         if (root.focused_pane == slot) {
             return;
         }
@@ -1173,27 +1177,27 @@ export component AppWindow inherits Window {
     }
 
     public function route-pane-search-open(slot: int) {
-        root.route-pane-focus(slot);
+        root.ensure-pane-focus(slot);
         root.open_search_for_slot(slot);
     }
 
     public function route-pane-search-submitted(slot: int, query: string, recursive: bool) {
-        root.route-pane-focus(slot);
+        root.ensure-pane-focus(slot);
         root.search_submitted(slot, query, recursive);
     }
 
     public function route-pane-cancel-search(slot: int) {
-        root.route-pane-focus(slot);
+        root.ensure-pane-focus(slot);
         root.cancel_search(slot);
     }
 
     public function route-pane-search-filters-changed(slot: int, kind: int, modified: int, size: int) {
-        root.route-pane-focus(slot);
+        root.ensure-pane-focus(slot);
         root.search_filters_changed(slot, kind, modified, size);
     }
 
     public function route-pane-search-filter-menu-requested(slot: int, x: length, y: length, kind: int, modified: int, size: int, selector: int) {
-        root.route-pane-focus(slot);
+        root.ensure-pane-focus(slot);
         root.close-context-popups();
         root.close-chooser-popups();
         root.search-filter-menu-slot = slot;
@@ -1203,13 +1207,13 @@ export component AppWindow inherits Window {
         root.search-filter-menu-modified-filter = modified;
         root.search-filter-menu-size-filter = size;
         root.search-filter-menu-selector = selector;
-        root.search-filter-menu-width = selector == 0 ? 360px : 250px;
-        root.search-filter-menu-height = selector == 0 ? 170px : 205px;
+        root.search-filter-menu-width = selector == 0 ? 300px : 190px;
+        root.search-filter-menu-height = selector == 0 ? 156px : 196px;
         root.search-filter-menu-open = true;
     }
 
     public function route-pane-search-close-requested(slot: int) {
-        root.route-pane-focus(slot);
+        root.ensure-pane-focus(slot);
         root.search-input-focused = false;
         root.close-search-filter-popup();
         root.search_close_requested(slot);
@@ -1218,7 +1222,7 @@ export component AppWindow inherits Window {
     public function route-pane-search-focus-changed(slot: int, focused: bool) {
         root.search-input-focused = focused;
         if (focused) {
-            root.route-pane-focus(slot);
+            root.ensure-pane-focus(slot);
         }
     }
 
@@ -2300,8 +2304,8 @@ export component AppWindow inherits Window {
     }
 
     if (root.search-filter-menu-open): SearchFilterPopup {
-        x: MenuGeometry.anchored_menu_left(root.width / 1px, root.height / 1px, root.search-filter-menu-x / 1px, root.search-filter-menu-y / 1px, root.search-filter-menu-width / 1px, root.search-filter-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
-        y: MenuGeometry.anchored_menu_top(root.width / 1px, root.height / 1px, root.search-filter-menu-x / 1px, root.search-filter-menu-y / 1px, root.search-filter-menu-width / 1px, root.search-filter-menu-height / 1px, root.menu-screen-margin / 1px, root.menu-pointer-gap / 1px, root.child-menu-gap / 1px) * 1px;
+        x: MenuGeometry.root_menu_left(root.width / 1px, root.height / 1px, root.search-filter-menu-x / 1px, root.search-filter-menu-y / 1px, root.search-filter-menu-width / 1px, root.search-filter-menu-height / 1px, root.menu-screen-margin / 1px, 0) * 1px;
+        y: MenuGeometry.root_menu_top(root.width / 1px, root.height / 1px, root.search-filter-menu-x / 1px, root.search-filter-menu-y / 1px, root.search-filter-menu-width / 1px, root.search-filter-menu-height / 1px, root.menu-screen-margin / 1px, 0) * 1px;
         width: root.search-filter-menu-width;
         height: root.search-filter-menu-height;
         dark: root.dark_mode;
@@ -2314,7 +2318,8 @@ export component AppWindow inherits Window {
         }
         selector_requested(selector) => {
             root.search-filter-menu-selector = selector;
-            root.search-filter-menu-height = 205px;
+            root.search-filter-menu-width = 190px;
+            root.search-filter-menu-height = 196px;
         }
         close_requested => {
             root.search-filter-menu-open = false;

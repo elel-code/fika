@@ -5,7 +5,8 @@ use crate::app::geometry::compact_text_width_units;
 use crate::app::geometry::{ItemViewItemBounds, ItemViewLayoutEngine, ItemViewLayouter};
 use crate::app::item_view::ItemViewInputState;
 use crate::app::item_view_model::{
-    ItemViewModelEntry, ItemViewModelEntryArc, item_view_model_entries_equal,
+    ItemViewModelEntry, ItemViewModelEntryArc, ItemViewModelEntrySummary,
+    item_view_model_entries_equal, item_view_model_entry_summary,
 };
 use crate::app::item_view_perf::{self, PerfTimer};
 #[cfg(test)]
@@ -44,6 +45,7 @@ pub(crate) struct PaneState {
     pub(crate) path_focused: bool,
     pub(crate) status: String,
     pub(crate) entries: PaneEntryModel,
+    pub(crate) entry_summary: ItemViewModelEntrySummary,
     pub(crate) history: PaneHistory,
     pub(crate) selection: PaneSelection,
     pub(crate) search: PaneSearch,
@@ -71,6 +73,7 @@ impl PaneState {
             path_focused: false,
             status: String::new(),
             entries: PaneEntryModel::default(),
+            entry_summary: ItemViewModelEntrySummary::default(),
             history: PaneHistory::default(),
             selection: PaneSelection::default(),
             search: PaneSearch::default(),
@@ -87,7 +90,7 @@ impl PaneState {
 
     pub(crate) fn split_snapshot(&self, id: u64) -> Self {
         let mut pane = Self::new_with_id(id, self.current_dir.clone());
-        pane.set_entries(self.entries.clone());
+        pane.set_entries_with_summary(self.entries.clone(), self.entry_summary.clone());
         pane.search = self.search.clone();
         if pane.search.index_pending {
             pane.search.index_pending = false;
@@ -110,19 +113,21 @@ impl PaneState {
         pane
     }
 
+    #[cfg(test)]
     pub(crate) fn set_entries(&mut self, entries: PaneEntryModel) {
-        let has_locations = entries.iter().any(ItemViewModelEntry::model_has_location);
-        self.set_entries_with_location_state(entries, has_locations);
+        let summary = item_view_model_entry_summary(entries.iter(), false, false);
+        self.set_entries_with_summary(entries, summary);
     }
 
-    pub(crate) fn set_entries_with_location_state(
+    pub(crate) fn set_entries_with_summary(
         &mut self,
         entries: PaneEntryModel,
-        has_locations: bool,
+        summary: ItemViewModelEntrySummary,
     ) {
         self.entries = entries;
+        self.entry_summary = summary;
         self.search.visible_entry_indices = None;
-        self.search.visible_entries_have_locations = has_locations;
+        self.search.visible_entries_have_locations = self.entry_summary.has_locations;
         self.search.visible_location_groups = None;
         self.search.index_pending = false;
         self.search_index_generation.next();
@@ -131,6 +136,7 @@ impl PaneState {
 
     pub(crate) fn clear_entries(&mut self) {
         self.entries = PaneEntryModel::default();
+        self.entry_summary = ItemViewModelEntrySummary::default();
         self.search.visible_entry_indices = None;
         self.search.visible_entries_have_locations = false;
         self.search.visible_location_groups = None;
@@ -293,7 +299,7 @@ impl PartialEq for PaneEntryModel {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PreparedDirectoryEntries {
     pub(crate) entries: PaneEntryModel,
-    pub(crate) has_locations: bool,
+    pub(crate) summary: ItemViewModelEntrySummary,
 }
 
 impl PreparedDirectoryEntries {
@@ -301,10 +307,10 @@ impl PreparedDirectoryEntries {
     where
         T: ItemViewModelEntry + Send + Sync + 'static,
     {
-        let has_locations = entries.iter().any(ItemViewModelEntry::model_has_location);
+        let summary = item_view_model_entry_summary(entries.iter(), false, false);
         Self {
             entries: PaneEntryModel::from_entries(entries),
-            has_locations,
+            summary,
         }
     }
 

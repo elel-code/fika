@@ -4,7 +4,7 @@ component SearchPopupSectionLabel inherits Text {
     in property <string> label;
     in property <bool> dark;
 
-    height: 20px;
+    height: 18px;
     text: root.label;
     color: root.dark ? #9aa5af : #64748b;
     font-size: 12px;
@@ -18,8 +18,8 @@ component SearchSelectorOption inherits Rectangle {
     in property <bool> dark;
     callback clicked();
 
-    height: 30px;
-    border-radius: 5px;
+    height: 28px;
+    border-radius: 4px;
     border-width: 0px;
     background: touch.has-hover ? (root.dark ? #1f262d : #f2f5f8) : transparent;
 
@@ -274,6 +274,16 @@ export component SearchPanel inherits Rectangle {
         search-submit-timer.start();
     }
 
+    function request-search-input-focus() {
+        root.handled-focus-request = root.focus-request;
+        if (root.focus-request <= 0) {
+            return;
+        }
+        search-input.focus();
+        focus-request-timer.stop();
+        focus-request-timer.start();
+    }
+
     background: transparent;
     border-width: 0px;
 
@@ -285,6 +295,7 @@ export component SearchPanel inherits Rectangle {
     private property <color> field-text-color: root.dark ? #eef3f7 : #24303b;
     private property <color> muted-text-color: root.dark ? #8b97a3 : #667381;
     private property <length> second-row-height: root.width < 620px ? 64px : 30px;
+    private property <int> handled-focus-request: 0;
 
     search-submit-timer := Timer {
         running: false;
@@ -295,9 +306,18 @@ export component SearchPanel inherits Rectangle {
         }
     }
 
-    changed focus-request => {
-        if (root.focus-request > 0) {
+    focus-request-timer := Timer {
+        running: false;
+        interval: 1ms;
+        triggered => {
+            self.running = false;
             search-input.focus();
+        }
+    }
+
+    changed focus-request => {
+        if (root.focus-request != root.handled-focus-request) {
+            root.request-search-input-focus();
         }
     }
 
@@ -392,9 +412,7 @@ export component SearchPanel inherits Rectangle {
                     }
                     changed has-focus => { root.focus_changed(self.has-focus); }
                     init => {
-                        if (root.focus-request > 0) {
-                            self.focus();
-                        }
+                        root.request-search-input-focus();
                     }
                 }
             }
@@ -544,7 +562,7 @@ export component SearchFilterPopup inherits Rectangle {
         }
     }
 
-    border-radius: 8px;
+    border-radius: 6px;
     border-width: 1px;
     border-color: root.dark ? #3f474f : #d9e1e8;
     background: root.dark ? #24282c : #fcfdfe;
@@ -606,7 +624,7 @@ export component SearchFilterPopup inherits Rectangle {
 
         if (root.selector-mode == root.selector-kind): Rectangle {
             width: parent.width;
-            height: 152px;
+            height: 142px;
             background: transparent;
 
             VerticalLayout {
@@ -653,7 +671,7 @@ export component SearchFilterPopup inherits Rectangle {
 
         if (root.selector-mode == root.selector-modified): Rectangle {
             width: parent.width;
-            height: 152px;
+            height: 142px;
             background: transparent;
 
             VerticalLayout {
@@ -700,7 +718,7 @@ export component SearchFilterPopup inherits Rectangle {
 
         if (root.selector-mode == root.selector-size): Rectangle {
             width: parent.width;
-            height: 152px;
+            height: 142px;
             background: transparent;
 
             VerticalLayout {
