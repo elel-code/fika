@@ -70,6 +70,17 @@ item-vs-blank event boundaries, and later submenu behavior.
     Copy Location on single item targets only. It appends Properties to blank,
     single-item, and multi-item menus, matching Dolphin's final properties
     action placement.
+  - `ContextMenuSubmenu` mirrors Qt `QMenu` child menus for first-level
+    cascading items. `context_menu_overlay()` opens the submenu on hover or
+    click, positions it at the parent row, and flips it to the left when there
+    is not enough viewport space to the right.
+  - Blank viewport menus expose Dolphin-aligned `Sort By` and `View Mode`
+    submenu entries. Sort actions route through pane-local
+    `PaneController` sort methods into `DirectoryModel` sorting; each pane
+    remembers its own Dolphin-style preferred order per sort role. The Sort By
+    submenu includes Folders First and Hidden Files Last pane-local toggles,
+    matching Dolphin's `folders_first` and `hidden_last` actions. Future
+    Icons/Details view modes remain disabled; Compact is the active view mode.
   - `run_context_menu_action()` routes Open in New Pane through the same
     pane-splitting path as keyboard split actions, then loads the target
     directory into the new pane.
@@ -78,16 +89,26 @@ item-vs-blank event boundaries, and later submenu behavior.
   - `run_context_menu_action()` routes Paste on a single directory target into
     that directory; blank and non-directory targets paste into the current pane
     directory, following Dolphin `createPasteAction()` destination selection.
+  - Places sidebar context menus follow Dolphin `PlacesPanel` on top of
+    `KFilePlacesView`: blank sidebar space exposes Add Entry; normal places
+    expose Open, Open in New Pane, Edit Entry, Remove Entry, Copy Location, and
+    Properties; built-in places keep Edit/Remove disabled; user bookmarks keep
+    Edit/Remove enabled; Trash places expose Open, Open in New Pane, Empty
+    Trash, Copy Location, and Properties. User bookmarks are persisted through
+    `src/core/places.rs` using a KDE/Dolphin-style `user-places.xbel` bookmark
+    file under `$XDG_DATA_HOME` with `~/.local/share` fallback; built-in paths
+    keep priority over persisted bookmarks.
   - `properties_for_path()` and `properties_for_selection()` build the current
     GPUI Properties dialog data from `symlink_metadata()` only. Directory sizes
     are not recursively scanned on the UI path.
 
 ## Current Gap List
 
-- Add Dolphin-equivalent Sort By and View Mode submenus.
+- Implement Icons and Details view modes behind the existing View Mode submenu.
 - Add Open With submenu populated by MIME/application data.
 - Add Open in New Window.
 - Add remaining multi-selection differences such as Compress and batch rename.
-- Add Trash-specific Restore, Empty Trash, and Delete Permanently actions.
-- Add Places context menus.
-- Add submenu positioning and delayed hide behavior comparable to Qt menus.
+- Complete Trash-specific conflict handling and Details columns.
+- Complete Places Hide Section, removable device actions, and drop/reorder
+  behavior.
+- Add delayed submenu hide behavior comparable to Qt menus.

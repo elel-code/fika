@@ -1,6 +1,6 @@
 use super::directory::{DirectoryLister, DirectoryListerEvent, LoadMode};
 use super::entries::ItemId;
-use super::model::{DirectoryModel, DirectoryModelSignal};
+use super::model::{DirectoryModel, DirectoryModelSignal, SortDescriptor, SortOrder, SortRole};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -348,6 +348,7 @@ pub struct PaneState {
     pub lister: DirectoryLister,
     history_back: Vec<PathBuf>,
     history_forward: Vec<PathBuf>,
+    sort_order_by_role: HashMap<SortRole, SortOrder>,
 }
 
 impl PaneState {
@@ -363,7 +364,19 @@ impl PaneState {
             lister: DirectoryLister::new(id, current_dir, generation),
             history_back: Vec::new(),
             history_forward: Vec::new(),
+            sort_order_by_role: HashMap::new(),
         }
+    }
+
+    pub fn preferred_sort_order(&self, role: SortRole) -> SortOrder {
+        self.sort_order_by_role
+            .get(&role)
+            .copied()
+            .unwrap_or_else(|| role.default_order())
+    }
+
+    fn remember_sort_order(&mut self, sort: SortDescriptor) {
+        self.sort_order_by_role.insert(sort.role, sort.order);
     }
 
     pub fn navigate_to(&mut self, path: PathBuf, generation: Generation) {
@@ -465,6 +478,7 @@ impl PaneController {
         let generation = source_pane.generation;
         let model = source_pane.model.fork_for_pane();
         let view = source_pane.view.clone();
+        let sort_order_by_role = source_pane.sort_order_by_role.clone();
         let id = self.allocator.allocate();
         let mut pane = PaneState::new(id, current_dir);
         pane.generation = generation;
@@ -472,6 +486,7 @@ impl PaneController {
             .set_target(id, pane.current_dir.clone(), generation);
         pane.model = model;
         pane.view = view;
+        pane.sort_order_by_role = sort_order_by_role;
         self.panes.insert(id, pane);
         let insert_at = self
             .order
@@ -716,6 +731,85 @@ impl PaneController {
         Some(pane.view.clone())
     }
 
+    pub fn set_sort(
+        &mut self,
+        pane_id: PaneId,
+        sort: SortDescriptor,
+    ) -> Option<Vec<DirectoryModelSignal>> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        pane.remember_sort_order(sort);
+        Some(apply_pane_sort(pane, sort))
+    }
+
+    pub fn set_sort_role(
+        &mut self,
+        pane_id: PaneId,
+        role: SortRole,
+    ) -> Option<(SortDescriptor, Vec<DirectoryModelSignal>)> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        let current_sort = pane.model.sort_descriptor();
+        let sort = SortDescriptor {
+            role,
+            order: pane.preferred_sort_order(role),
+            folders_first: current_sort.folders_first,
+            hidden_last: current_sort.hidden_last,
+        };
+        pane.remember_sort_order(sort);
+        let signals = apply_pane_sort(pane, sort);
+        Some((sort, signals))
+    }
+
+    pub fn set_sort_order(
+        &mut self,
+        pane_id: PaneId,
+        order: SortOrder,
+    ) -> Option<(SortDescriptor, Vec<DirectoryModelSignal>)> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        let mut sort = pane.model.sort_descriptor();
+        sort.order = order;
+        pane.remember_sort_order(sort);
+        let signals = apply_pane_sort(pane, sort);
+        Some((sort, signals))
+    }
+
+    pub fn set_sort_folders_first(
+        &mut self,
+        pane_id: PaneId,
+        folders_first: bool,
+    ) -> Option<(SortDescriptor, Vec<DirectoryModelSignal>)> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        let mut sort = pane.model.sort_descriptor();
+        sort.folders_first = folders_first;
+        pane.remember_sort_order(sort);
+        let signals = apply_pane_sort(pane, sort);
+        Some((sort, signals))
+    }
+
+    pub fn set_sort_hidden_last(
+        &mut self,
+        pane_id: PaneId,
+        hidden_last: bool,
+    ) -> Option<(SortDescriptor, Vec<DirectoryModelSignal>)> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        let mut sort = pane.model.sort_descriptor();
+        sort.hidden_last = hidden_last;
+        pane.remember_sort_order(sort);
+        let signals = apply_pane_sort(pane, sort);
+        Some((sort, signals))
+    }
+
+    pub fn preferred_sort_order(&self, pane_id: PaneId, role: SortRole) -> Option<SortOrder> {
+        self.panes
+            .get(&pane_id)
+            .map(|pane| pane.preferred_sort_order(role))
+    }
+
+    pub fn sort_descriptor(&self, pane_id: PaneId) -> Option<SortDescriptor> {
+        self.panes
+            .get(&pane_id)
+            .map(|pane| pane.model.sort_descriptor())
+    }
+
     pub fn scroll_view(
         &mut self,
         pane_id: PaneId,
@@ -802,6 +896,18 @@ impl PaneController {
         }
         Some(signals)
     }
+}
+
+fn apply_pane_sort(pane: &mut PaneState, sort: SortDescriptor) -> Vec<DirectoryModelSignal> {
+    let signals = pane.model.set_sort(sort);
+    if !signals.is_empty() {
+        let fallback_id = pane.model.get(0).map(|entry| entry.id);
+        let model = &pane.model;
+        pane.selection
+            .retain_existing_by(|id| model.index_of_id(id).is_some(), fallback_id);
+        pane.view.reset_scroll();
+    }
+    signals
 }
 
 fn selected_paths_from_model(pane: &PaneState) -> Vec<PathBuf> {
@@ -1409,6 +1515,134 @@ mod tests {
         controller.go_forward(pane_id).unwrap();
         assert_eq!(controller.pane(pane_id).unwrap().view.scroll_x, 0.0);
         assert_eq!(controller.pane(pane_id).unwrap().view.scroll_y, 0.0);
+    }
+
+    #[test]
+    fn sort_role_uses_dolphin_default_order_and_remembers_per_role_order() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let pane_id = controller.focused().unwrap();
+
+        assert_eq!(
+            controller.preferred_sort_order(pane_id, SortRole::Name),
+            Some(SortOrder::Ascending)
+        );
+        assert_eq!(
+            controller.preferred_sort_order(pane_id, SortRole::Size),
+            Some(SortOrder::Descending)
+        );
+
+        let (size_sort, _) = controller
+            .set_sort_role(pane_id, SortRole::Size)
+            .expect("pane exists");
+        assert_eq!(
+            size_sort,
+            SortDescriptor {
+                role: SortRole::Size,
+                order: SortOrder::Descending,
+                ..SortDescriptor::default()
+            }
+        );
+
+        controller
+            .set_sort_order(pane_id, SortOrder::Ascending)
+            .expect("pane exists");
+        assert_eq!(
+            controller.preferred_sort_order(pane_id, SortRole::Size),
+            Some(SortOrder::Ascending)
+        );
+
+        let (name_sort, _) = controller
+            .set_sort_role(pane_id, SortRole::Name)
+            .expect("pane exists");
+        assert_eq!(
+            name_sort,
+            SortDescriptor {
+                role: SortRole::Name,
+                order: SortOrder::Ascending,
+                ..SortDescriptor::default()
+            }
+        );
+
+        controller
+            .set_sort_order(pane_id, SortOrder::Descending)
+            .expect("pane exists");
+        let (size_sort, _) = controller
+            .set_sort_role(pane_id, SortRole::Size)
+            .expect("pane exists");
+        assert_eq!(
+            size_sort,
+            SortDescriptor {
+                role: SortRole::Size,
+                order: SortOrder::Ascending,
+                ..SortDescriptor::default()
+            }
+        );
+        assert_eq!(
+            controller.preferred_sort_order(pane_id, SortRole::Name),
+            Some(SortOrder::Descending)
+        );
+    }
+
+    #[test]
+    fn split_inherits_sort_order_preferences_but_updates_are_pane_local() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let first = controller.focused().unwrap();
+
+        controller
+            .set_sort_role(first, SortRole::Size)
+            .expect("pane exists");
+        controller
+            .set_sort_order(first, SortOrder::Ascending)
+            .expect("pane exists");
+
+        let second = controller.split(first).unwrap();
+        assert_eq!(
+            controller.preferred_sort_order(second, SortRole::Size),
+            Some(SortOrder::Ascending)
+        );
+
+        controller
+            .set_sort_order(first, SortOrder::Descending)
+            .expect("pane exists");
+
+        assert_eq!(
+            controller.preferred_sort_order(first, SortRole::Size),
+            Some(SortOrder::Descending)
+        );
+        assert_eq!(
+            controller.preferred_sort_order(second, SortRole::Size),
+            Some(SortOrder::Ascending)
+        );
+    }
+
+    #[test]
+    fn sort_folder_and_hidden_toggles_are_pane_local_after_split() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let first = controller.focused().unwrap();
+
+        let second = controller.split(first).unwrap();
+
+        let (first_sort, _) = controller
+            .set_sort_folders_first(first, false)
+            .expect("pane exists");
+        assert!(!first_sort.folders_first);
+        assert!(
+            controller
+                .sort_descriptor(second)
+                .expect("pane exists")
+                .folders_first
+        );
+
+        let (second_sort, _) = controller
+            .set_sort_hidden_last(second, true)
+            .expect("pane exists");
+        assert!(second_sort.hidden_last);
+        assert!(
+            !controller
+                .sort_descriptor(first)
+                .expect("pane exists")
+                .hidden_last
+        );
     }
 
     #[test]

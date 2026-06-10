@@ -9,7 +9,6 @@ default-run = "fika"
 name = "fika_core"
 
 [dependencies]
-async-io = "*"
 futures-lite = "*"
 gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", features = ["wayland", "x11"] }

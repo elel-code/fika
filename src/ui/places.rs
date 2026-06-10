@@ -13,7 +13,7 @@ pub(crate) fn places_sidebar(
         if current_group != Some(place.group) {
             current_group = Some(place.group);
             if !place.group.is_empty() {
-                rows.push(group_heading(place.group));
+                rows.push(group_heading(place.group, cx));
             }
         }
         rows.push(place_row(index, place, cx));
@@ -34,6 +34,14 @@ pub(crate) fn places_sidebar(
         .bg(rgb(0xf8f9fb))
         .px_2()
         .py_2()
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                this.show_places_blank_context_menu(event.position);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
         .child(
             div()
                 .px_2()
@@ -46,7 +54,7 @@ pub(crate) fn places_sidebar(
         .children(rows)
 }
 
-fn group_heading(label: &'static str) -> Stateful<Div> {
+fn group_heading(label: &'static str, cx: &mut Context<FikaApp>) -> Stateful<Div> {
     div()
         .id(format!("place-group-{label}"))
         .px_2()
@@ -54,12 +62,20 @@ fn group_heading(label: &'static str) -> Stateful<Div> {
         .pb_1()
         .text_xs()
         .text_color(rgb(0x6b7280))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                this.show_place_section_context_menu(label, event.position);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
         .child(label)
 }
 
 fn place_row(index: usize, place: PlaceSnapshot, cx: &mut Context<FikaApp>) -> Stateful<Div> {
     let path = place.path.clone();
-    let context_path = place.path.clone();
+    let context_place = place.clone();
     let marker_color = if place.trash_place && place.trash_has_items {
         rgb(0x2f6fed)
     } else {
@@ -87,7 +103,7 @@ fn place_row(index: usize, place: PlaceSnapshot, cx: &mut Context<FikaApp>) -> S
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                this.show_place_context_menu(context_path.clone(), event.position);
+                this.show_place_context_menu(context_place.clone(), event.position);
                 cx.stop_propagation();
                 cx.notify();
             }),

@@ -20,7 +20,8 @@ pub use core::entries::{
 pub use core::file_ops;
 pub use core::filter::{FilteredModel, NameFilter, NameFilterMode};
 pub use core::model::{
-    ChangedRoles, DirectoryModel, DirectoryModelSignal, ItemRange, ItemRangeList,
+    ChangedRoles, DirectoryModel, DirectoryModelSignal, ItemRange, ItemRangeList, SortDescriptor,
+    SortOrder, SortRole,
 };
 pub use core::operations::{
     AffectedDirectoryRefresh, CreateUndoItem, CreatedItemKind, OperationQueue, RenameUndoItem,
@@ -30,6 +31,10 @@ pub use core::pane::{
     DEFAULT_ZOOM_LEVEL, Generation, MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL, PaneController,
     PaneGenerationCounter, PaneId, PaneIdAllocator, PaneState, RequestSerial, SelectionMove,
     SelectionState, ViewState, ZoomChange, icon_size_for_zoom_level,
+};
+pub use core::places::{
+    UserPlace, default_user_places_path, load_user_places, parse_user_places_xbel,
+    save_user_places, user_places_xbel,
 };
 pub use core::privilege::{HelperBus, run_dbus_service};
 pub use core::scroll::{

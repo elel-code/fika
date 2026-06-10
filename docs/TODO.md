@@ -110,12 +110,12 @@
 > `DolphinContextMenu::open()` / `DolphinContextMenu::showEvent()`。
 
 - [~] 建立 Dolphin 右键菜单源码执行流参考清单。
-  - 已完成：新增 `docs/CONTEXT_MENU_REFERENCE.md`，记录 `DolphinContextMenu::{addAllActions, addViewportContextMenu, addItemContextMenu, createPasteAction}` 和 `KItemListController` 右键/空白区事件边界。
-  - 剩余验收：补齐子菜单级联定位、hide delay 和 Places/Trash 专用 context menu 的完整执行流。
+  - 已完成：新增 `docs/CONTEXT_MENU_REFERENCE.md`，记录 `DolphinContextMenu::{addAllActions, addViewportContextMenu, addItemContextMenu, createPasteAction}` 和 `KItemListController` 右键/空白区事件边界；补充 Fika 当前 `ContextMenuSubmenu` 级联定位映射。
+  - 剩余验收：补齐 hide delay 和 Places/Trash 专用 context menu 的完整执行流。
 - [~] 实现基础右键菜单（空白区域）。
-  - 已完成：pane 空白区域右键弹出 GPUI overlay menu；包含 New Folder、Paste、Select All、Refresh、Properties；Paste 按内部 clipboard 状态启用/禁用；点击外部或 Esc 关闭；空白右键不启动 rubber-band；Properties 只读取当前目录自身 metadata，不递归扫描。
+  - 已完成：pane 空白区域右键弹出 GPUI overlay menu；包含 New Folder、Paste、Sort By、View Mode、Select All、Refresh、Properties；Paste 按内部 clipboard 状态启用/禁用；Sort By / View Mode 走可复用 `ContextMenuSubmenu` 级联结构；Sort By 已路由到 pane-local `DirectoryModel` 排序，支持 Name、Modified、Size、Ascending、Descending、Folders First 和 Hidden Files Last，并按 Dolphin `preferredSortOrder(role)` 思路在每个 pane 内记录每个排序字段自己的升/降序；Folders First / Hidden Files Last 是 pane-local toggle，分屏后互不影响；点击外部或 Esc 关闭；空白右键不启动 rubber-band；Properties 只读取当前目录自身 metadata，不递归扫描。
   - 参考：Dolphin 在空白目录区域右键弹出 `DolphinContextMenu`（包含 Paste、Sort By、View Mode、Properties 等）。
-  - 剩余验收：补 Sort By、View 子菜单、打开终端和完整 Dolphin-like action grouping。
+  - 剩余验收：补 Icons/Details view mode、打开终端和完整 Dolphin-like action grouping。
 - [~] 实现文件/目录右键菜单。
   - 已完成：item core 区域右键弹出菜单；未选中 item 先按 `PaneId` 选中；菜单包含 Open/Open With、Rename、Copy、Copy Location、Cut、Move to Trash、Properties；Copy Location 使用 GPUI clipboard 写入真实系统剪贴板；目录 item 增加 Open in New Pane；单目录右键 Paste 目标为该目录，和 Dolphin `createPasteAction()` 一致；右键 item 停止 rubber-band。
   - 参考：Dolphin 选中单文件时右键菜单包含 Open With、Cut/Copy、Rename、Move to Trash、Properties 等；选中目录时额外包含 Open in New Tab/Window。
@@ -124,15 +124,17 @@
   - 已完成：右键目标属于多选时，菜单生成批量 Copy、Cut、Move to Trash、Properties，不再显示单文件/单目录专属 Open、Open With、Rename 或 Open in New Pane；Properties 汇总数量、类型计数和非目录文件大小，不递归扫描目录。
   - 参考：Dolphin 多选时右键菜单不包含单文件专属项（如 Open With），只显示批量操作。
   - 剩余验收：补 Compress 和“全是目录”的批量专属操作。
-- [ ] 实现子菜单定位。
+- [~] 实现子菜单定位。
   - 参考：Dolphin 使用 `QMenu::popup()` 时传入 `QPoint` 指定弹出位置，子菜单（Open With、Sort By 等）由 Qt 自动处理级联定位；Dolphin 不对子菜单做自定义偏移。
+  - 已完成：当前 GPUI overlay 支持一级 `ContextMenuSubmenu`，父菜单项 hover/点击打开右侧子菜单；根据窗口宽度自动翻转到左侧，并按父菜单行计算垂直位置；Sort By / View Mode 已接入该结构。
   - 验收：子菜单（Open With、Sort By、Create New 等）在父菜单项右侧弹出，不超出窗口边界；窗口靠右边缘时子菜单自动翻转到左侧；多级子菜单级联展开位置正确。
 - [ ] 实现子菜单延迟消失（hide delay）。
   - 参考：Dolphin 使用 `QMenu` 默认 hide delay（约 300ms），鼠标短暂离开菜单区域不会关闭；子菜单之间移动时有 grace period。
   - 验收：鼠标在父菜单和子菜单之间移动时有 ~300ms 过渡窗口，菜单不立即关闭；鼠标直接从父菜单项滑入子菜单不会触发菜单消失；鼠标完全离开整个菜单树（父+子）后延迟关闭。
-- [ ] 实现 Places 侧栏右键菜单。
+- [~] 实现 Places 侧栏右键菜单。
   - 参考：Dolphin Places 面板右键菜单（`DolphinPlacesModel` 的 context menu），包含 Add Entry、Edit、Remove、Hide Section 等。
-  - 验收：侧栏空白区域右键可添加新书签；侧栏已有条目右键可编辑/移除/重命名；侧栏 section（如 Removable Devices）有独立的上下文操作。
+  - 已完成：对照 Dolphin `PlacesPanel::slotContextMenuAboutToShow()` / `KFilePlacesView` 的入口，侧栏空白区域右键提供 Add Entry；普通 place 条目提供 Open、Open in New Pane、Edit Entry、Remove Entry、Copy Location、Properties；内置 place 的 Edit/Remove 保持 disabled；用户 bookmark 的 Edit/Remove 可用；Trash place 提供 Open、Open in New Pane、Empty Trash、Copy Location、Properties，Empty Trash 按 trash 状态启用；Add/Edit 通过 pane-local draft dialog 写入 places model，Remove 只允许 removable bookmark；用户 bookmark 已按 KDE/Dolphin `user-places.xbel` 风格持久化到 XBEL，启动时从 `$XDG_DATA_HOME/user-places.xbel`（回退 `~/.local/share/user-places.xbel`）加载，内置 Home/Trash/Root 等路径优先且不会被持久化 bookmark 覆盖；已补菜单启用规则、Add/Edit/Remove、XBEL 读写、启动加载和输入分类测试。
+  - 剩余验收：补 Hide Section、设备 place 的 Unmount/Eject/Safely Remove、Places 拖拽 reorder/drop 和 section 级 context menu。
 - [ ] 实现 Trash 视图右键菜单。
   - 参考：Dolphin trash 目录右键菜单包含 Empty Trash、Restore、Delete Permanently。
   - 验收：在 trash 视图中右键文件增加 Restore 选项；右键空白区域增加 Empty Trash 选项；无 Restore 目标时 Restore 置灰。
@@ -197,6 +199,16 @@
 - [ ] D-Bus 总线控制（Bus Control）。
   - 参考：cosmic-files 中 `zbus` Connection 管理（session bus + system bus 统一生命周期）；Dolphin 的 `KDirNotify` / `org.freedesktop.FileManager1` D-Bus 接口；`fika-privileged-helper` 现有的 system bus 连接模式。
   - 验收：`fika-core` 新增 `src/core/bus.rs`，统一管理系统总线（system bus）和会话总线（session bus）的 `zbus::Connection`；连接按需延迟建立，空闲超时后自动断开（默认 30s）；D-Bus 方法调用支持超时重试（默认 3 次，间隔递进）；UDisks2 设备信号（`InterfacesAdded`/`InterfacesRemoved`/`PropertiesChanged`）通过统一 bus 层订阅和分发到 `devices.rs`；systemd `StartTransientUnit` 调用通过统一 bus 层路由到 `launcher.rs`；Portal `org.freedesktop.impl.portal.FileChooser` 接口通过 session bus 注册，走统一 bus 层管理；`privileged-helper` 的 system bus 服务注册和 Polkit 授权检查复用同一 bus 层；D-Bus 错误统一转换为 `fika-core` 结构化错误类型（`BusError`），包含服务名、方法名和错误详情。
+- [ ] 异步运行时架构：tokio + compio 双运行时。
+  - 参考：cosmic-files 的 `Cargo.toml` 双运行时依赖布局——tokio 用于通用异步（进程、同步、D-Bus、网络），compio 用于 completion-based 文件 I/O（io_uring / IOCP / polling）；compio 的 thread-per-core 模型和 tokio 的 work-stealing 模型各自独立运行，不混用 future。
+  - 验收：
+    - `Cargo.toml` 引入 `tokio` 和 `compio`，不写 concrete crate release、branch 或 revision；Linux 上默认启用 `io-uring` feature，其他平台回退到 polling/runtime 支持。
+    - `fika-core` 新增 `src/core/runtime.rs`，封装双运行时初始化逻辑：tokio 多线程 runtime 作为主异步环境（D-Bus、进程启动、网络请求）；compio runtime 专用于文件 I/O（`read_dir`、`stat`、`copy`、缩略图读写）。
+    - `DirectoryLister` 的 `read_dir` 和 `FileOps` 的 copy/move/delete 操作使用 compio 异步文件 API 替代 `std::fs` + `spawn_blocking`；watcher 事件回调仍走 tokio（因为 `notify` crate 基于 tokio/blocking）。
+    - 缩略图管线的 PNG/JPEG 解码和 thumbnail cache 读写走 compio 文件 I/O，解码在 tokio `spawn_blocking` 中（因为 `image` crate 是 CPU bound 同步操作）。
+    - 双运行时不共享 future：compio 的 `AsyncRead`/`AsyncWrite` future 仅在 compio runtime 上 `block_on` 或 spawn；tokio future 仅在 tokio runtime 上 spawn；跨运行时数据传输通过 `async-channel` 或 `tokio::sync::oneshot` channel 桥接。
+    - 性能目标：`read_dir` 大目录（100K 条目）通过 compio io_uring 批量 `getdents64` + 批量 `statx` 完成时间比 `std::fs::read_dir` + `spawn_blocking` 减少 30%+；编译期 feature flag `io-uring` 可关闭（回退 compio polling 模式），确保非 Linux 平台工作。
+    - 参考文档：`docs/RUNTIME_REFERENCE.md` 记录 cosmic-files 双运行时集成细节、compio 文件和线程模型、与 tokio spawn_blocking 的性能对比数据。
 - [ ] MIME 类型自我识别。
   - 参考：cosmic-files `src/mime.rs` / `src/mime_types.rs` 的 MIME 识别实现（不依赖 KIO / GLib GVfs，纯 Rust 实现）；`xdg-mime` / `shared-mime-info` 数据库；`mime_guess` / `tree_magic` / `infer` crate 生态。
   - 验收：`fika-core` 新增 `src/core/mime.rs`，通过文件扩展名和 magic bytes（文件头）双重识别 MIME 类型；支持从系统 `shared-mime-info` 数据库（`/usr/share/mime/`）加载 MIME 映射；`Entry` 增加 `mime_type: Option<String>` 字段；目录加载完成后按需批量识别（不阻塞首屏渲染），结果通过 model refresh event 回填。
@@ -235,8 +247,8 @@
     - 优化：缩略图懒加载，item 滚入 viewport 后才请求生成；离开 viewport 且未完成的请求取消。
     - `DirectoryModel` 不直接持有缩略图像素数据，只存储 thumbnail path；GPUI 渲染层按需加载图片。
 - [~] Places 侧栏完善。
-  - 已完成：GPUI shell 增加 Dolphin-like Places sidebar，入口包括 Home、XDG user dirs、Trash 和 Root；active place 按当前 pane 路径派生；点击 place 通过 focused pane 加载目标目录；侧栏容器和条目改为圆角样式。
-  - 验收：后续继续对齐 Dolphin `PlacesPanel` / `KFilePlacesModel`，补齐 bookmarks、devices、trash state 和异步设备操作。
+  - 已完成：GPUI shell 增加 Dolphin-like Places sidebar，入口包括 Home、XDG user dirs、Trash 和 Root；active place 按当前 pane 路径派生；点击 place 通过 focused pane 加载目标目录；侧栏容器和条目改为圆角样式；右键菜单已支持 blank Add Entry、条目 Open/Open in New Pane、用户 bookmark Edit/Remove、Copy Location/Properties 和 Trash Empty；用户 bookmark 已读写 `user-places.xbel`。
+  - 验收：后续继续对齐 Dolphin `PlacesPanel` / `KFilePlacesModel`，补齐 devices、section hide、drag/drop、trash state signal 和异步设备操作。
 - [~] Portal chooser。
   - 验收：portal backend 调用 GPUI chooser shell，并共享 core selection/output 常量。
 

@@ -1702,7 +1702,6 @@ dependencies = [
 name = "fika"
 version = "0.0.0"
 dependencies = [
- "async-io",
  "futures-lite 2.6.1",
  "gpui",
  "gpui_platform",

@@ -1,6 +1,7 @@
 use super::entries::{Entry, ItemId, ModelEntry, directory_entry_path, entry_name_cmp};
 use super::file_ops;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,6 +48,63 @@ pub enum DirectoryModelSignal {
     ModelReset,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum SortRole {
+    Name,
+    Modified,
+    Size,
+    TrashDeletionTime,
+}
+
+impl SortRole {
+    pub fn default_order(self) -> SortOrder {
+        match self {
+            Self::Name => SortOrder::Ascending,
+            Self::Modified | Self::Size | Self::TrashDeletionTime => SortOrder::Descending,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SortDescriptor {
+    pub role: SortRole,
+    pub order: SortOrder,
+    pub folders_first: bool,
+    pub hidden_last: bool,
+}
+
+impl SortDescriptor {
+    pub fn for_directory(directory: &Path) -> Self {
+        if file_ops::is_trash_files_dir(directory) {
+            Self {
+                role: SortRole::TrashDeletionTime,
+                order: SortOrder::Descending,
+                folders_first: true,
+                hidden_last: false,
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
+impl Default for SortDescriptor {
+    fn default() -> Self {
+        Self {
+            role: SortRole::Name,
+            order: SortOrder::Ascending,
+            folders_first: true,
+            hidden_last: false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct DirectoryModel {
     data: DirectoryModelData,
@@ -59,6 +117,7 @@ pub struct DirectoryModel {
 struct DirectoryModelData {
     directory: PathBuf,
     entries: Vec<ModelEntry>,
+    sort: SortDescriptor,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,10 +139,12 @@ impl DirectoryModel {
     }
 
     pub fn for_directory(directory: PathBuf) -> Self {
+        let sort = SortDescriptor::for_directory(&directory);
         Self {
             data: DirectoryModelData {
                 directory,
                 entries: Vec::new(),
+                sort,
             },
             next_item_id: 0,
             data_generation: 0,
@@ -106,6 +167,10 @@ impl DirectoryModel {
 
     pub fn entries(&self) -> &[ModelEntry] {
         &self.data.entries
+    }
+
+    pub fn sort_descriptor(&self) -> SortDescriptor {
+        self.data.sort
     }
 
     pub fn len(&self) -> usize {
@@ -163,7 +228,12 @@ impl DirectoryModel {
             .cloned()
             .map(ModelEntry::unassigned)
             .collect::<Vec<_>>();
-        sort_model_entries(&mut entries, file_ops::is_trash_files_dir(&directory));
+        let sort = if self.data.directory == directory {
+            self.data.sort
+        } else {
+            SortDescriptor::for_directory(&directory)
+        };
+        sort_model_entries(&mut entries, sort);
         self.assign_listing_identity(&directory, &mut entries);
         if self.same_listing(&directory, &entries) {
             self.replace_data(directory, entries);
@@ -196,12 +266,10 @@ impl DirectoryModel {
             }
         }
         {
+            let sort = self.data.sort;
             let data = self.data_mut();
             data.entries.extend(added);
-            sort_model_entries(
-                &mut data.entries,
-                file_ops::is_trash_files_dir(&data.directory),
-            );
+            sort_model_entries(&mut data.entries, sort);
         }
         self.mark_data_changed();
 
@@ -278,14 +346,14 @@ impl DirectoryModel {
             signals.extend(self.apply_items_added(added));
         }
         if !changed.is_empty() {
-            let trash = file_ops::is_trash_files_dir(&self.data.directory);
+            let sort = self.data.sort;
             let old_order = self
                 .data
                 .entries
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>();
-            sort_model_entries(&mut self.data_mut().entries, trash);
+            sort_model_entries(&mut self.data_mut().entries, sort);
             let order_changed = old_order
                 .iter()
                 .zip(&self.data.entries)
@@ -301,6 +369,16 @@ impl DirectoryModel {
             }
         }
         signals
+    }
+
+    pub fn set_sort(&mut self, sort: SortDescriptor) -> Vec<DirectoryModelSignal> {
+        if self.data.sort == sort {
+            return Vec::new();
+        }
+        self.data.sort = sort;
+        sort_model_entries(&mut self.data.entries, sort);
+        self.mark_data_changed();
+        vec![DirectoryModelSignal::SortChanged]
     }
 
     fn same_listing(&self, directory: &Path, entries: &[ModelEntry]) -> bool {
@@ -322,33 +400,7 @@ impl DirectoryModel {
             return;
         }
 
-        if file_ops::is_trash_files_dir(directory) {
-            self.assign_listing_identity_by_name(entries);
-            return;
-        }
-
-        let mut old_index = 0usize;
-        for entry in entries {
-            if entry.id.is_assigned() {
-                self.next_item_id = self.next_item_id.max(entry.id.0);
-                continue;
-            }
-
-            let mut reused_id = None;
-            while let Some(old_entry) = self.data.entries.get(old_index) {
-                match identity_sort_cmp(old_entry, entry) {
-                    std::cmp::Ordering::Less => old_index += 1,
-                    std::cmp::Ordering::Equal => {
-                        reused_id = Some(old_entry.id);
-                        old_index += 1;
-                        break;
-                    }
-                    std::cmp::Ordering::Greater => break,
-                }
-            }
-
-            entry.id = reused_id.unwrap_or_else(|| self.allocate_item_id());
-        }
+        self.assign_listing_identity_by_name(entries);
     }
 
     fn assign_listing_identity_by_name(&mut self, entries: &mut [ModelEntry]) {
@@ -408,7 +460,16 @@ impl DirectoryModel {
     }
 
     fn replace_data(&mut self, directory: PathBuf, entries: Vec<ModelEntry>) {
-        self.data = DirectoryModelData { directory, entries };
+        let sort = if self.data.directory == directory {
+            self.data.sort
+        } else {
+            SortDescriptor::for_directory(&directory)
+        };
+        self.data = DirectoryModelData {
+            directory,
+            entries,
+            sort,
+        };
         self.data_generation = self.data_generation.wrapping_add(1);
         self.reset_path_index();
     }
@@ -487,30 +548,63 @@ impl PathIndexCache {
     }
 }
 
-fn identity_sort_cmp(left: &ModelEntry, right: &ModelEntry) -> std::cmp::Ordering {
-    match right.is_dir.cmp(&left.is_dir) {
-        std::cmp::Ordering::Equal => entry_name_cmp(&left.name, &right.name),
-        ordering => ordering,
+fn sort_model_entries(entries: &mut [ModelEntry], sort: SortDescriptor) {
+    entries.sort_by(|left, right| sort_cmp(left, right, sort));
+}
+
+fn sort_cmp(left: &ModelEntry, right: &ModelEntry, sort: SortDescriptor) -> Ordering {
+    if sort.hidden_last {
+        match left_is_hidden(left).cmp(&left_is_hidden(right)) {
+            Ordering::Equal => {}
+            ordering => return ordering,
+        }
+    }
+
+    if sort.folders_first || sort.role == SortRole::Size {
+        match right.is_dir.cmp(&left.is_dir) {
+            Ordering::Equal => {}
+            ordering => return ordering,
+        }
+    }
+
+    match sort.role {
+        SortRole::TrashDeletionTime => trash_deletion_sort_cmp(left, right, sort.order),
+        role => apply_sort_order(role_sort_cmp(left, right, role), sort.order)
+            .then_with(|| entry_name_cmp(&left.name, &right.name))
+            .then_with(|| left.size_bytes.cmp(&right.size_bytes)),
     }
 }
 
-fn sort_model_entries(entries: &mut [ModelEntry], trash: bool) {
-    if trash {
-        entries.sort_by(trash_sort_cmp);
-    } else {
-        entries.sort_by(ModelEntry::sort_cmp);
+fn left_is_hidden(entry: &ModelEntry) -> bool {
+    entry.name.starts_with('.')
+}
+
+fn role_sort_cmp(left: &ModelEntry, right: &ModelEntry, role: SortRole) -> Ordering {
+    match role {
+        SortRole::Name => entry_name_cmp(&left.name, &right.name),
+        SortRole::Modified => left
+            .modified_secs
+            .unwrap_or_default()
+            .cmp(&right.modified_secs.unwrap_or_default()),
+        SortRole::Size => left.size_bytes.cmp(&right.size_bytes),
+        SortRole::TrashDeletionTime => Ordering::Equal,
     }
 }
 
-fn trash_sort_cmp(left: &ModelEntry, right: &ModelEntry) -> std::cmp::Ordering {
+fn apply_sort_order(ordering: Ordering, order: SortOrder) -> Ordering {
+    match order {
+        SortOrder::Ascending => ordering,
+        SortOrder::Descending => ordering.reverse(),
+    }
+}
+
+fn trash_deletion_sort_cmp(left: &ModelEntry, right: &ModelEntry, order: SortOrder) -> Ordering {
     trash_sort_bucket(left)
         .cmp(&trash_sort_bucket(right))
         .then_with(|| {
-            right
-                .trash_deletion_time
-                .as_deref()
-                .unwrap_or_default()
-                .cmp(left.trash_deletion_time.as_deref().unwrap_or_default())
+            let left = left.trash_deletion_time.as_deref().unwrap_or_default();
+            let right = right.trash_deletion_time.as_deref().unwrap_or_default();
+            apply_sort_order(left.cmp(right), order)
         })
         .then_with(|| left.sort_cmp(right))
 }
@@ -558,11 +652,20 @@ mod tests {
     use crate::core::entries::EntryData;
 
     fn entry(name: &str, is_dir: bool) -> Entry {
+        entry_with_metadata(name, is_dir, 0, None)
+    }
+
+    fn entry_with_metadata(
+        name: &str,
+        is_dir: bool,
+        size_bytes: u64,
+        modified_secs: Option<u64>,
+    ) -> Entry {
         Entry::new(EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
-            size_bytes: 0,
-            modified_secs: None,
+            size_bytes,
+            modified_secs,
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir,
@@ -730,6 +833,166 @@ mod tests {
         assert_eq!(model.path_for_index(0), Some(PathBuf::from("/tmp/new.txt")));
         assert_eq!(model.index_of_path(Path::new("/tmp/old.txt")), None);
         assert_eq!(model.index_of_id(original), Some(0));
+    }
+
+    #[test]
+    fn set_sort_by_size_keeps_directories_first_and_preserves_item_identity() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![
+                entry_with_metadata("small.txt", false, 1, None),
+                entry_with_metadata("folder-b", true, 0, None),
+                entry_with_metadata("big.txt", false, 100, None),
+                entry_with_metadata("folder-a", true, 0, None),
+            ]),
+        );
+        let big_id = model
+            .entries()
+            .iter()
+            .find(|entry| entry.name.as_ref() == "big.txt")
+            .unwrap()
+            .id;
+
+        let signals = model.set_sort(SortDescriptor {
+            role: SortRole::Size,
+            order: SortOrder::Descending,
+            ..SortDescriptor::default()
+        });
+
+        assert_eq!(signals, vec![DirectoryModelSignal::SortChanged]);
+        assert_eq!(
+            model
+                .entries()
+                .iter()
+                .map(|entry| entry.name.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["folder-a", "folder-b", "big.txt", "small.txt"]
+        );
+        assert_eq!(model.index_of_id(big_id), Some(2));
+    }
+
+    #[test]
+    fn set_sort_by_modified_uses_model_role_order() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![
+                entry_with_metadata("new.txt", false, 0, Some(30)),
+                entry_with_metadata("unknown.txt", false, 0, None),
+                entry_with_metadata("old.txt", false, 0, Some(10)),
+            ]),
+        );
+
+        model.set_sort(SortDescriptor {
+            role: SortRole::Modified,
+            order: SortOrder::Ascending,
+            ..SortDescriptor::default()
+        });
+
+        assert_eq!(
+            model
+                .entries()
+                .iter()
+                .map(|entry| entry.name.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["unknown.txt", "old.txt", "new.txt"]
+        );
+    }
+
+    #[test]
+    fn folders_first_can_be_disabled_for_name_sorting() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![
+                entry("z-dir", true),
+                entry("b-file.txt", false),
+                entry("a-dir", true),
+                entry("a-file.txt", false),
+            ]),
+        );
+
+        model.set_sort(SortDescriptor {
+            role: SortRole::Name,
+            order: SortOrder::Ascending,
+            folders_first: false,
+            hidden_last: false,
+        });
+
+        assert_eq!(
+            model
+                .entries()
+                .iter()
+                .map(|entry| entry.name.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["a-dir", "a-file.txt", "b-file.txt", "z-dir"]
+        );
+    }
+
+    #[test]
+    fn size_sort_keeps_directories_first_even_when_folders_first_is_disabled() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![
+                entry_with_metadata("large-file.txt", false, 100, None),
+                entry_with_metadata("folder-b", true, 0, None),
+                entry_with_metadata("small-file.txt", false, 1, None),
+                entry_with_metadata("folder-a", true, 0, None),
+            ]),
+        );
+
+        model.set_sort(SortDescriptor {
+            role: SortRole::Size,
+            order: SortOrder::Descending,
+            folders_first: false,
+            hidden_last: false,
+        });
+
+        assert_eq!(
+            model
+                .entries()
+                .iter()
+                .map(|entry| entry.name.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["folder-a", "folder-b", "large-file.txt", "small-file.txt"]
+        );
+    }
+
+    #[test]
+    fn hidden_last_sorts_hidden_entries_after_visible_entries() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![
+                entry(".hidden-file.txt", false),
+                entry("visible-file.txt", false),
+                entry(".hidden-folder", true),
+                entry("visible-folder", true),
+            ]),
+        );
+
+        model.set_sort(SortDescriptor {
+            role: SortRole::Name,
+            order: SortOrder::Ascending,
+            folders_first: true,
+            hidden_last: true,
+        });
+
+        assert_eq!(
+            model
+                .entries()
+                .iter()
+                .map(|entry| entry.name.as_ref())
+                .collect::<Vec<_>>(),
+            vec![
+                "visible-folder",
+                "visible-file.txt",
+                ".hidden-folder",
+                ".hidden-file.txt"
+            ]
+        );
     }
 
     #[test]
