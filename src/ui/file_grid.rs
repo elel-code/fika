@@ -466,13 +466,22 @@ pub(crate) fn compact_layout_options(
     view: &ViewState,
     reserved_bottom: f32,
 ) -> CompactLayoutOptions {
+    let icon_size = view.icon_size();
+    let padding = 8.0;
+    let gap = 8.0;
+    let text_height = 32.0;
     CompactLayoutOptions {
         viewport_width: view.viewport_width.max(1.0),
         viewport_height: view.viewport_height.max(1.0),
         reserved_bottom,
         scroll_x: view.scroll_x,
         scroll_y: view.scroll_y,
-        icon_size: view.icon_size.max(32.0),
+        padding,
+        gap,
+        item_width: icon_size + 120.0,
+        item_height: (icon_size + 28.0).max(text_height + padding * 2.0),
+        icon_size,
+        text_height,
         ..CompactLayoutOptions::default()
     }
 }

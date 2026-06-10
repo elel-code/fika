@@ -48,7 +48,7 @@ pub enum DirectoryModelSignal {
 
 #[derive(Debug)]
 pub struct DirectoryModel {
-    data: Arc<DirectoryModelData>,
+    data: DirectoryModelData,
     next_item_id: u64,
     data_generation: u64,
     path_index: RefCell<PathIndexCache>,
@@ -67,17 +67,6 @@ struct PathIndexCache {
     index_by_name: HashMap<Arc<str>, usize>,
 }
 
-impl Clone for DirectoryModel {
-    fn clone(&self) -> Self {
-        Self {
-            data: Arc::clone(&self.data),
-            next_item_id: self.next_item_id,
-            data_generation: self.data_generation,
-            path_index: RefCell::new(PathIndexCache::default()),
-        }
-    }
-}
-
 impl Default for DirectoryModel {
     fn default() -> Self {
         Self::new()
@@ -91,12 +80,21 @@ impl DirectoryModel {
 
     pub fn for_directory(directory: PathBuf) -> Self {
         Self {
-            data: Arc::new(DirectoryModelData {
+            data: DirectoryModelData {
                 directory,
                 entries: Vec::new(),
-            }),
+            },
             next_item_id: 0,
             data_generation: 0,
+            path_index: RefCell::new(PathIndexCache::default()),
+        }
+    }
+
+    pub fn fork_for_pane(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            next_item_id: self.next_item_id,
+            data_generation: self.data_generation,
             path_index: RefCell::new(PathIndexCache::default()),
         }
     }
@@ -351,13 +349,13 @@ impl DirectoryModel {
     }
 
     fn replace_data(&mut self, directory: PathBuf, entries: Vec<ModelEntry>) {
-        self.data = Arc::new(DirectoryModelData { directory, entries });
+        self.data = DirectoryModelData { directory, entries };
         self.data_generation = self.data_generation.wrapping_add(1);
         self.reset_path_index();
     }
 
     fn data_mut(&mut self) -> &mut DirectoryModelData {
-        Arc::make_mut(&mut self.data)
+        &mut self.data
     }
 
     fn mark_data_changed(&mut self) {
@@ -609,6 +607,37 @@ mod tests {
         assert!(Entry::ptr_eq(
             &first.entries()[0].entry,
             &second.entries()[0].entry
+        ));
+    }
+
+    #[test]
+    fn fork_for_pane_shares_payload_but_not_model_entries() {
+        let mut source = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        source.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry("a.txt", false), entry("b.txt", false)]),
+        );
+
+        let mut fork = source.fork_for_pane();
+        assert_eq!(fork.len(), source.len());
+        assert!(Entry::ptr_eq(
+            &source.entries()[0].entry,
+            &fork.entries()[0].entry
+        ));
+        assert!(Entry::ptr_eq(
+            &source.entries()[1].entry,
+            &fork.entries()[1].entry
+        ));
+
+        fork.apply_items_deleted(&[PathBuf::from("/tmp/a.txt")]);
+
+        assert_eq!(source.len(), 2);
+        assert_eq!(fork.len(), 1);
+        assert_eq!(source.index_of_path(Path::new("/tmp/a.txt")), Some(0));
+        assert_eq!(fork.index_of_path(Path::new("/tmp/a.txt")), None);
+        assert!(Entry::ptr_eq(
+            &source.entries()[1].entry,
+            &fork.entries()[0].entry
         ));
     }
 

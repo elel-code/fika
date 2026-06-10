@@ -2,9 +2,9 @@ mod ui;
 
 use fika_core::{
     CompactColumnMetrics, CompactLayout, CompactLayoutOptions, CreateUndoItem, CreatedItemKind,
-    DirectoryLister, DirectoryListerEvent, OperationQueue, PaneController, PaneId, RenameUndoItem,
-    SelectionMove, TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord, ViewPoint, ViewRect,
-    ViewState, file_ops, nearest_existing_ancestor,
+    DirectoryCache, DirectoryLister, DirectoryListerEvent, OperationQueue, PaneController, PaneId,
+    RenameUndoItem, SelectionMove, TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord,
+    ViewPoint, ViewRect, ViewState, ZoomChange, file_ops, nearest_existing_ancestor,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -14,7 +14,7 @@ use gpui::{
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, UNIX_EPOCH};
@@ -168,13 +168,20 @@ struct ChooserState {
 #[derive(Clone, Debug)]
 struct PaneSnapshot {
     id: PaneId,
-    path: PathBuf,
+    breadcrumbs: Vec<BreadcrumbSegment>,
+    location_draft: Option<String>,
     item_count: usize,
     layout: CompactLayout,
     visible_items: Vec<VisibleItemSnapshot>,
     view: ViewState,
     rubber_band: Option<ViewRect>,
     focused: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BreadcrumbSegment {
+    pub(crate) label: String,
+    pub(crate) path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -340,6 +347,12 @@ struct RenameDraft {
     draft_name: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LocationDraft {
+    pane_id: PaneId,
+    value: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClipboardMode {
     Copy,
@@ -423,13 +436,22 @@ struct CompactColumnWidthCacheKey {
 
 #[derive(Clone, Debug, Default)]
 struct CompactColumnWidthCache {
-    cached: Vec<(CompactColumnWidthCacheKey, CompactColumnMetrics)>,
+    cached: Vec<CompactColumnWidthCacheEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct CompactColumnWidthCacheEntry {
+    key: CompactColumnWidthCacheKey,
+    widths: Vec<f32>,
+    resolved_columns: Vec<bool>,
+    metrics: Option<CompactColumnMetrics>,
 }
 
 const AVERAGE_COMPACT_CHAR_WIDTH: f32 = 7.0;
 
 impl CompactColumnWidthCache {
     const MAX_CACHED_LAYOUTS: usize = 4;
+    const COLUMN_OVERSCAN: usize = 2;
 
     fn metrics_for_model(
         &mut self,
@@ -446,32 +468,136 @@ impl CompactColumnWidthCache {
             padding: options.padding,
             gap: options.gap,
         };
-        if let Some((_, metrics)) = self.cached.iter().find(|(cached, _)| *cached == key) {
+        let column_count = model.len().div_ceil(rows_per_column);
+        let position = self.cached.iter().position(|entry| entry.key == key);
+        let position = match position {
+            Some(position) => position,
+            None => {
+                if self.cached.len() >= Self::MAX_CACHED_LAYOUTS {
+                    self.cached.remove(0);
+                }
+                self.cached.push(CompactColumnWidthCacheEntry::new(
+                    key,
+                    column_count,
+                    options,
+                ));
+                self.cached.len() - 1
+            }
+        };
+
+        let entry = &mut self.cached[position];
+        entry.resolve_visible_columns(model, rows_per_column, options);
+        entry.metrics(options)
+    }
+}
+
+impl CompactColumnWidthCacheEntry {
+    fn new(
+        key: CompactColumnWidthCacheKey,
+        column_count: usize,
+        options: CompactLayoutOptions,
+    ) -> Self {
+        Self {
+            key,
+            widths: vec![options.item_width; column_count],
+            resolved_columns: vec![false; column_count],
+            metrics: None,
+        }
+    }
+
+    fn metrics(&mut self, options: CompactLayoutOptions) -> CompactColumnMetrics {
+        if let Some(metrics) = &self.metrics {
             return metrics.clone();
         }
-
-        let column_count = model.len().div_ceil(rows_per_column);
-        let mut widths = vec![options.item_width; column_count];
-        for (index, entry) in model.entries().iter().enumerate() {
-            let column = index / rows_per_column;
-            let text_width = compact_text_width(entry.name_width_units);
-            let required_width = options.padding * 4.0 + options.icon_size + text_width;
-            widths[column] = widths[column].max(required_width);
-        }
-
         let metrics = CompactColumnMetrics::new(
-            column_count,
+            self.widths.len(),
             options.item_width,
             options.padding,
             options.gap,
-            widths,
+            self.widths.clone(),
         );
-        if self.cached.len() >= Self::MAX_CACHED_LAYOUTS {
-            self.cached.remove(0);
-        }
-        self.cached.push((key, metrics.clone()));
+        self.metrics = Some(metrics.clone());
         metrics
     }
+
+    fn resolve_visible_columns(
+        &mut self,
+        model: &fika_core::DirectoryModel,
+        rows_per_column: usize,
+        options: CompactLayoutOptions,
+    ) {
+        if self.widths.is_empty() {
+            return;
+        }
+
+        for _ in 0..2 {
+            let metrics = self.metrics(options);
+            let layout = CompactLayout::new_with_column_metrics(model.len(), options, metrics);
+            let range = overscanned_column_range(
+                layout.visible_column_range(),
+                self.widths.len(),
+                CompactColumnWidthCache::COLUMN_OVERSCAN,
+            );
+            if range.is_empty() || !self.resolve_columns(model, rows_per_column, options, range) {
+                break;
+            }
+        }
+    }
+
+    fn resolve_columns(
+        &mut self,
+        model: &fika_core::DirectoryModel,
+        rows_per_column: usize,
+        options: CompactLayoutOptions,
+        columns: std::ops::Range<usize>,
+    ) -> bool {
+        let mut width_changed = false;
+        for column in columns {
+            if self
+                .resolved_columns
+                .get(column)
+                .copied()
+                .unwrap_or_default()
+            {
+                continue;
+            }
+            let start = column * rows_per_column;
+            let end = (start + rows_per_column).min(model.len());
+            let mut width = options.item_width;
+            for entry in &model.entries()[start..end] {
+                width = width.max(required_compact_item_width(entry, options));
+            }
+            if let Some(resolved) = self.resolved_columns.get_mut(column) {
+                *resolved = true;
+            }
+            if let Some(cached_width) = self.widths.get_mut(column)
+                && (*cached_width - width).abs() > f32::EPSILON
+            {
+                *cached_width = width;
+                width_changed = true;
+            }
+        }
+
+        if width_changed {
+            self.metrics = None;
+        }
+        width_changed
+    }
+}
+
+fn overscanned_column_range(
+    range: std::ops::Range<usize>,
+    column_count: usize,
+    overscan: usize,
+) -> std::ops::Range<usize> {
+    if column_count == 0 || range.is_empty() {
+        return 0..0;
+    }
+    range.start.saturating_sub(overscan)..(range.end + overscan).min(column_count)
+}
+
+fn required_compact_item_width(entry: &fika_core::EntryData, options: CompactLayoutOptions) -> f32 {
+    options.padding * 4.0 + options.icon_size + compact_text_width(entry.name_width_units)
 }
 
 fn compact_text_width(name_width_units: u16) -> f32 {
@@ -692,11 +818,15 @@ struct ListingWorkerState {
     pending: VecDeque<ListingRequest>,
     latest_request_by_pane: HashMap<PaneId, ListingRequestKey>,
     results_by_pane: BTreeMap<PaneId, Vec<DirectoryListerEvent>>,
+    cache: DirectoryCache,
     shutdown: bool,
 }
 
 impl ListingWorkerState {
     fn schedule(&mut self, request: ListingRequest) {
+        if request.mode == fika_core::LoadMode::Reload {
+            self.cache.mark_stale(&request.path);
+        }
         self.pending
             .retain(|pending| pending.pane_id != request.pane_id);
         self.latest_request_by_pane
@@ -709,6 +839,53 @@ impl ListingWorkerState {
         self.pending.retain(|pending| pending.pane_id != pane_id);
         self.latest_request_by_pane.remove(&pane_id);
         self.results_by_pane.remove(&pane_id);
+    }
+
+    fn mark_cache_stale(&mut self, path: &Path) {
+        self.cache.mark_stale(path);
+    }
+
+    fn remove_cached_directory(&mut self, path: &Path) {
+        self.cache.remove(path);
+    }
+
+    fn cached_events_for(&mut self, request: &ListingRequest) -> Option<Vec<DirectoryListerEvent>> {
+        if request.mode != fika_core::LoadMode::Load {
+            return None;
+        }
+        let snapshot = self.cache.get(&request.path)?;
+        if snapshot.state() != fika_core::DirectoryCacheState::Fresh {
+            return None;
+        }
+        Some(vec![
+            DirectoryListerEvent::ListingRefreshed {
+                pane_id: request.pane_id,
+                generation: request.generation,
+                request_serial: request.request_serial,
+                path: request.path.clone(),
+                entries: Arc::clone(snapshot.entries()),
+            },
+            DirectoryListerEvent::ListingCompleted {
+                pane_id: request.pane_id,
+                generation: request.generation,
+                request_serial: request.request_serial,
+                path: request.path.clone(),
+            },
+        ])
+    }
+
+    fn schedule_or_cached(&mut self, request: ListingRequest) -> Option<Vec<DirectoryListerEvent>> {
+        if let Some(events) = self.cached_events_for(&request) {
+            self.pending
+                .retain(|pending| pending.pane_id != request.pane_id);
+            self.latest_request_by_pane
+                .insert(request.pane_id, request.key());
+            self.results_by_pane.remove(&request.pane_id);
+            return Some(events);
+        }
+
+        self.schedule(request);
+        None
     }
 
     fn pop_batch(&mut self) -> Option<ListingBatch> {
@@ -770,6 +947,9 @@ impl ListingWorkerState {
                 .insert(request.pane_id, retarget_listing_events(events, request));
             published = true;
         }
+        if published && let Some(entries) = listing_refreshed_entries(events) {
+            self.cache.insert_fresh(&batch.path, entries);
+        }
         published
     }
 
@@ -796,16 +976,6 @@ impl ListingWorker {
         }
     }
 
-    fn schedule(&self, request: ListingRequest) {
-        let (lock, cvar) = &*self.state;
-        let mut state = lock.lock().expect("listing worker state poisoned");
-        if state.shutdown {
-            return;
-        }
-        state.schedule(request);
-        cvar.notify_one();
-    }
-
     fn schedule_all(&self, requests: Vec<ListingRequest>) {
         if requests.is_empty() {
             return;
@@ -819,6 +989,31 @@ impl ListingWorker {
             state.schedule(request);
         }
         cvar.notify_one();
+    }
+
+    fn schedule_or_cached(&self, request: ListingRequest) -> Option<Vec<DirectoryListerEvent>> {
+        let (lock, cvar) = &*self.state;
+        let mut state = lock.lock().expect("listing worker state poisoned");
+        if state.shutdown {
+            return None;
+        }
+        let cached_events = state.schedule_or_cached(request);
+        if cached_events.is_none() {
+            cvar.notify_one();
+        }
+        cached_events
+    }
+
+    fn mark_cache_stale(&self, path: &Path) {
+        let (lock, _) = &*self.state;
+        let mut state = lock.lock().expect("listing worker state poisoned");
+        state.mark_cache_stale(path);
+    }
+
+    fn remove_cached_directory(&self, path: &Path) {
+        let (lock, _) = &*self.state;
+        let mut state = lock.lock().expect("listing worker state poisoned");
+        state.remove_cached_directory(path);
     }
 
     fn cancel_pane(&self, pane_id: PaneId) {
@@ -942,6 +1137,18 @@ fn retarget_listing_event(
     }
 }
 
+fn listing_refreshed_entries(
+    events: &[DirectoryListerEvent],
+) -> Option<Arc<Vec<fika_core::Entry>>> {
+    events.iter().find_map(|event| {
+        if let DirectoryListerEvent::ListingRefreshed { entries, .. } = event {
+            Some(Arc::clone(entries))
+        } else {
+            None
+        }
+    })
+}
+
 fn listing_worker_loop(state: Arc<(Mutex<ListingWorkerState>, Condvar)>) {
     loop {
         let batch = {
@@ -980,6 +1187,7 @@ pub(crate) struct FikaApp {
     operations: OperationQueue,
     clipboard: Option<ClipboardState>,
     rename_draft: Option<RenameDraft>,
+    location_draft: Option<LocationDraft>,
     chooser: Option<ChooserState>,
     listing_worker: ListingWorker,
     _keystroke_subscription: Option<gpui::Subscription>,
@@ -1018,6 +1226,7 @@ impl FikaApp {
             operations: OperationQueue::new(),
             clipboard: None,
             rename_draft: None,
+            location_draft: None,
             chooser,
             listing_worker: ListingWorker::new(),
             _keystroke_subscription: None,
@@ -1063,12 +1272,26 @@ impl FikaApp {
         pane_ids
             .into_iter()
             .filter_map(|pane_id| {
-                let (path, item_count, layout, view, rubber_band, focused, visible_data) = {
+                let (
+                    breadcrumbs,
+                    location_draft,
+                    item_count,
+                    layout,
+                    view,
+                    rubber_band,
+                    focused,
+                    visible_data,
+                ) = {
                     let pane = self.panes.pane(pane_id)?;
                     let rename_draft = self
                         .rename_draft
                         .as_ref()
                         .filter(|draft| draft.pane_id == pane_id);
+                    let location_draft = self
+                        .location_draft
+                        .as_ref()
+                        .filter(|draft| draft.pane_id == pane_id)
+                        .map(|draft| draft.value.clone());
                     let item_count = pane.model.len();
                     let layout = compact_layout_for_model(
                         self.compact_column_widths.entry(pane_id).or_default(),
@@ -1101,7 +1324,8 @@ impl FikaApp {
                         })
                         .collect::<Vec<_>>();
                     (
-                        pane.current_dir.clone(),
+                        breadcrumb_segments(&pane.current_dir),
+                        location_draft,
                         item_count,
                         layout,
                         pane.view.clone(),
@@ -1152,7 +1376,8 @@ impl FikaApp {
                     .collect::<Vec<_>>();
                 Some(PaneSnapshot {
                     id: pane_id,
-                    path,
+                    breadcrumbs,
+                    location_draft,
                     item_count,
                     layout,
                     visible_items,
@@ -1200,8 +1425,9 @@ impl FikaApp {
             return;
         };
         self.clear_pane_transient_state(pane_id);
-        self.schedule_listing(&event);
+        let cached_events = self.schedule_listing(&event);
         self.apply_event(event);
+        self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
         self.status = format!("Loading {}", path.display());
     }
@@ -1211,8 +1437,9 @@ impl FikaApp {
             return;
         };
         self.clear_pane_transient_state(pane_id);
-        self.schedule_listing(&event);
+        let cached_events = self.schedule_listing(&event);
         self.apply_event(event);
+        self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
         if let Some(path) = self
             .panes
@@ -1229,8 +1456,9 @@ impl FikaApp {
         };
         self.clear_pane_transient_state(pane_id);
         let path = event.path().to_path_buf();
-        self.schedule_listing(&event);
+        let cached_events = self.schedule_listing(&event);
         self.apply_event(event);
+        self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
         self.status = format!("Loading {}", path.display());
     }
@@ -1241,8 +1469,9 @@ impl FikaApp {
         };
         self.clear_pane_transient_state(pane_id);
         let path = event.path().to_path_buf();
-        self.schedule_listing(&event);
+        let cached_events = self.schedule_listing(&event);
         self.apply_event(event);
+        self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
         self.status = format!("Loading {}", path.display());
     }
@@ -1301,11 +1530,13 @@ impl FikaApp {
         }
         self.properties_dialog = None;
         self.clear_rename_draft_for_pane(pane_id);
+        self.clear_location_draft_for_pane(pane_id);
     }
 
     fn select_only(&mut self, pane_id: PaneId, path: PathBuf) {
         if self.panes.select_only(pane_id, path) {
             self.clear_rename_draft_for_pane(pane_id);
+            self.clear_location_draft_for_pane(pane_id);
             let selected = self.panes.selected_count(pane_id).unwrap_or_default();
             self.status = format!("{selected} selected");
         }
@@ -1314,6 +1545,7 @@ impl FikaApp {
     fn toggle_selection(&mut self, pane_id: PaneId, path: PathBuf) {
         if self.panes.toggle_selection(pane_id, path).is_some() {
             self.clear_rename_draft_for_pane(pane_id);
+            self.clear_location_draft_for_pane(pane_id);
             let selected = self.panes.selected_count(pane_id).unwrap_or_default();
             self.status = format!("{selected} selected");
         }
@@ -1322,6 +1554,7 @@ impl FikaApp {
     fn select_range_to(&mut self, pane_id: PaneId, path: PathBuf) {
         if let Some(selected) = self.panes.select_range_to(pane_id, path) {
             self.clear_rename_draft_for_pane(pane_id);
+            self.clear_location_draft_for_pane(pane_id);
             self.status = format!("{selected} selected");
         }
     }
@@ -1329,6 +1562,7 @@ impl FikaApp {
     fn select_all(&mut self, pane_id: PaneId) {
         if let Some(selected) = self.panes.select_all(pane_id) {
             self.clear_rename_draft_for_pane(pane_id);
+            self.clear_location_draft_for_pane(pane_id);
             self.status = format!("{selected} selected");
         }
     }
@@ -1336,6 +1570,7 @@ impl FikaApp {
     fn clear_selection(&mut self, pane_id: PaneId) {
         if self.panes.clear_selection(pane_id) {
             self.clear_rename_draft_for_pane(pane_id);
+            self.clear_location_draft_for_pane(pane_id);
             self.status = "Selection cleared".to_string();
         }
     }
@@ -1343,8 +1578,33 @@ impl FikaApp {
     fn move_selection(&mut self, pane_id: PaneId, direction: SelectionMove, extend: bool) {
         if let Some(selected) = self.panes.move_selection(pane_id, direction, extend) {
             self.clear_rename_draft_for_pane(pane_id);
+            self.clear_location_draft_for_pane(pane_id);
             self.status = format!("{selected} selected");
         }
+    }
+
+    fn apply_zoom_change(&mut self, pane_id: PaneId, change: ZoomChange) {
+        let Some(previous_level) = self.panes.pane(pane_id).map(|pane| pane.view.zoom_level)
+        else {
+            return;
+        };
+        let Some(view) = self.panes.apply_zoom_change(pane_id, change) else {
+            return;
+        };
+        if view.zoom_level == previous_level {
+            self.status = format!(
+                "Zoom level {} ({} px)",
+                view.zoom_level,
+                view.icon_size() as i32
+            );
+            return;
+        }
+        self.compact_column_widths.remove(&pane_id);
+        self.status = format!(
+            "Zoom level {} ({} px)",
+            view.zoom_level,
+            view.icon_size() as i32
+        );
     }
 
     fn set_viewport_origin(&mut self, pane_id: PaneId, origin: ViewPoint) -> bool {
@@ -1369,14 +1629,11 @@ impl FikaApp {
     }
 
     fn layout_for_pane(&mut self, pane_id: PaneId) -> Option<CompactLayout> {
-        let (model, view) = {
-            let pane = self.panes.pane(pane_id)?;
-            (pane.model.clone(), pane.view.clone())
-        };
+        let pane = self.panes.pane(pane_id)?;
         Some(compact_layout_for_model(
             self.compact_column_widths.entry(pane_id).or_default(),
-            &model,
-            &view,
+            &pane.model,
+            &pane.view,
         ))
     }
 
@@ -1456,6 +1713,7 @@ impl FikaApp {
 
     fn start_rubber_band(&mut self, pane_id: PaneId, start: ViewPoint) {
         self.clear_rename_draft_for_pane(pane_id);
+        self.clear_location_draft_for_pane(pane_id);
         self.rubber_band = Some(RubberBandState {
             pane_id,
             start,
@@ -1501,6 +1759,123 @@ impl FikaApp {
         }
     }
 
+    fn clear_location_draft_for_pane(&mut self, pane_id: PaneId) {
+        if self
+            .location_draft
+            .as_ref()
+            .is_some_and(|draft| draft.pane_id == pane_id)
+        {
+            self.location_draft = None;
+        }
+    }
+
+    pub(crate) fn start_location_edit(&mut self, pane_id: PaneId) {
+        let Some(path) = self
+            .panes
+            .pane(pane_id)
+            .map(|pane| pane.current_dir.clone())
+        else {
+            return;
+        };
+        self.panes.focus(pane_id);
+        self.dismiss_context_menu();
+        self.clear_rename_draft_for_pane(pane_id);
+        self.location_draft = Some(LocationDraft {
+            pane_id,
+            value: path.display().to_string(),
+        });
+        self.status = format!("Location {}", path.display());
+    }
+
+    pub(crate) fn open_location_segment(&mut self, pane_id: PaneId, path: PathBuf) {
+        self.panes.focus(pane_id);
+        self.clear_location_draft_for_pane(pane_id);
+        if self
+            .panes
+            .pane(pane_id)
+            .is_some_and(|pane| pane.current_dir == path)
+        {
+            return;
+        }
+        self.load_pane(pane_id, path);
+    }
+
+    fn handle_location_keystroke(&mut self, keystroke: &gpui::Keystroke) -> bool {
+        let Some(draft_pane_id) = self.location_draft.as_ref().map(|draft| draft.pane_id) else {
+            return false;
+        };
+        if self.panes.focused() != Some(draft_pane_id) {
+            return false;
+        }
+
+        match location_input_action(keystroke) {
+            LocationInputAction::Cancel => {
+                self.location_draft = None;
+                self.status = "Location edit cancelled".to_string();
+            }
+            LocationInputAction::Commit => self.commit_location_draft(),
+            LocationInputAction::Complete => self.complete_location_draft(),
+            LocationInputAction::Backspace => {
+                if let Some(draft) = &mut self.location_draft {
+                    draft.value.pop();
+                }
+            }
+            LocationInputAction::Insert(text) => {
+                if let Some(draft) = &mut self.location_draft {
+                    draft.value.push_str(&text);
+                }
+            }
+            LocationInputAction::Ignore => return false,
+        }
+        true
+    }
+
+    fn commit_location_draft(&mut self) {
+        let Some(draft) = self.location_draft.take() else {
+            return;
+        };
+        let Some(current_dir) = self
+            .panes
+            .pane(draft.pane_id)
+            .map(|pane| pane.current_dir.clone())
+        else {
+            return;
+        };
+        let Some(path) = resolve_location_input(&current_dir, &draft.value) else {
+            self.status = "Location is empty".to_string();
+            return;
+        };
+        if !path.is_dir() {
+            self.status = format!("Location is not a folder: {}", path.display());
+            return;
+        }
+        if path == current_dir {
+            self.status = format!("Location {}", path.display());
+            return;
+        }
+        self.load_pane(draft.pane_id, path);
+    }
+
+    fn complete_location_draft(&mut self) {
+        let Some(draft) = self.location_draft.clone() else {
+            return;
+        };
+        let Some(current_dir) = self
+            .panes
+            .pane(draft.pane_id)
+            .map(|pane| pane.current_dir.clone())
+        else {
+            return;
+        };
+        let Some(completed) = complete_location_input(&current_dir, &draft.value) else {
+            self.status = "No location completion".to_string();
+            return;
+        };
+        if let Some(active) = &mut self.location_draft {
+            active.value = completed;
+        }
+    }
+
     fn start_rename_in_pane(&mut self, pane_id: PaneId) {
         if self.chooser.is_some() {
             return;
@@ -1523,6 +1898,7 @@ impl FikaApp {
             return;
         };
 
+        self.clear_location_draft_for_pane(pane_id);
         self.rename_draft = Some(RenameDraft {
             pane_id,
             original_path: original_path.clone(),
@@ -2105,6 +2481,9 @@ impl FikaApp {
             self.dismiss_context_menu();
             return true;
         }
+        if self.handle_location_keystroke(&event.keystroke) {
+            return true;
+        }
         if self.handle_rename_keystroke(&event.keystroke, cx) {
             return true;
         }
@@ -2120,6 +2499,7 @@ impl FikaApp {
             Some(PaneShortcut::GoForward) => self.go_forward(pane_id),
             Some(PaneShortcut::SplitPane) => self.split_pane(pane_id),
             Some(PaneShortcut::ClosePane) => self.close_pane(pane_id),
+            Some(PaneShortcut::EditLocation) => self.start_location_edit(pane_id),
             Some(PaneShortcut::MoveSelection { direction, extend }) => {
                 self.move_selection(pane_id, direction, extend)
             }
@@ -2195,6 +2575,7 @@ impl FikaApp {
 
     fn apply_event(&mut self, event: DirectoryListerEvent) {
         if let DirectoryListerEvent::CurrentDirectoryRemoved { pane_id, path, .. } = &event {
+            self.listing_worker.remove_cached_directory(path);
             let still_current = self.panes.pane(*pane_id).is_some_and(|pane| {
                 event.matches_target(pane.id, pane.generation, &pane.current_dir)
             });
@@ -2205,6 +2586,15 @@ impl FikaApp {
                 self.load_pane(*pane_id, fallback);
             }
             return;
+        }
+
+        match &event {
+            DirectoryListerEvent::ItemsAdded { path, .. }
+            | DirectoryListerEvent::ItemsDeleted { path, .. }
+            | DirectoryListerEvent::ItemsRefreshed { path, .. } => {
+                self.listing_worker.mark_cache_stale(path);
+            }
+            _ => {}
         }
 
         if let Some(signals) = self.panes.apply_lister_event(event) {
@@ -2229,15 +2619,20 @@ impl FikaApp {
         }
     }
 
-    fn schedule_listing(&self, event: &DirectoryListerEvent) {
-        if let Some(request) = ListingRequest::from_event(event) {
-            self.listing_worker.schedule(request);
-        }
+    fn schedule_listing(&self, event: &DirectoryListerEvent) -> Option<Vec<DirectoryListerEvent>> {
+        let request = ListingRequest::from_event(event)?;
+        self.listing_worker.schedule_or_cached(request)
     }
 
     fn schedule_listings<'a>(&self, events: impl IntoIterator<Item = &'a DirectoryListerEvent>) {
         self.listing_worker
             .schedule_all(listing_requests_from_events(events));
+    }
+
+    fn apply_cached_listing_events(&mut self, events: Option<Vec<DirectoryListerEvent>>) {
+        for event in events.unwrap_or_default() {
+            self.apply_event(event);
+        }
     }
 
     fn drain_background_listing_results(&mut self) -> bool {
@@ -2663,6 +3058,7 @@ enum PaneShortcut {
     },
     CreateFolder,
     RenameSelection,
+    EditLocation,
     CopySelection,
     CutSelection,
     PasteIntoPane,
@@ -2675,6 +3071,7 @@ fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut> {
         return match keystroke.key.to_ascii_lowercase().as_str() {
             "escape" => Some(PaneShortcut::ClearSelection),
             "f5" => Some(PaneShortcut::Refresh),
+            "f6" => Some(PaneShortcut::EditLocation),
             "f3" => Some(PaneShortcut::SplitPane),
             "f2" => Some(PaneShortcut::RenameSelection),
             "up" | "left" => Some(PaneShortcut::MoveSelection {
@@ -2719,6 +3116,7 @@ fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut> {
         return match keystroke.key.to_ascii_lowercase().as_str() {
             "a" => Some(PaneShortcut::SelectAll),
             "c" => Some(PaneShortcut::CopySelection),
+            "l" => Some(PaneShortcut::EditLocation),
             "v" => Some(PaneShortcut::PasteIntoPane),
             "w" => Some(PaneShortcut::ClosePane),
             "x" => Some(PaneShortcut::CutSelection),
@@ -2729,6 +3127,7 @@ fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut> {
 
     if keystroke.modifiers.alt && keystroke.modifiers.number_of_modifiers() == 1 {
         return match keystroke.key.to_ascii_lowercase().as_str() {
+            "d" => Some(PaneShortcut::EditLocation),
             "left" => Some(PaneShortcut::GoBack),
             "right" => Some(PaneShortcut::GoForward),
             _ => None,
@@ -2776,6 +3175,48 @@ fn rename_text_input_action(keystroke: &gpui::Keystroke) -> RenameInputAction {
         .filter(|text| text.chars().all(|ch| !ch.is_control()))
         .map(|text| RenameInputAction::Insert(text.clone()))
         .unwrap_or(RenameInputAction::Ignore)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LocationInputAction {
+    Cancel,
+    Commit,
+    Complete,
+    Backspace,
+    Insert(String),
+    Ignore,
+}
+
+fn location_input_action(keystroke: &gpui::Keystroke) -> LocationInputAction {
+    if has_no_modifiers(keystroke) {
+        return match keystroke.key.to_ascii_lowercase().as_str() {
+            "escape" => LocationInputAction::Cancel,
+            "enter" => LocationInputAction::Commit,
+            "tab" => LocationInputAction::Complete,
+            "backspace" => LocationInputAction::Backspace,
+            _ => location_text_input_action(keystroke),
+        };
+    }
+
+    if keystroke.modifiers.shift
+        && !keystroke.modifiers.control
+        && !keystroke.modifiers.alt
+        && !keystroke.modifiers.platform
+        && !keystroke.modifiers.function
+    {
+        return location_text_input_action(keystroke);
+    }
+
+    LocationInputAction::Ignore
+}
+
+fn location_text_input_action(keystroke: &gpui::Keystroke) -> LocationInputAction {
+    keystroke
+        .key_char
+        .as_ref()
+        .filter(|text| text.chars().all(|ch| !ch.is_control()))
+        .map(|text| LocationInputAction::Insert(text.clone()))
+        .unwrap_or(LocationInputAction::Ignore)
 }
 
 fn has_no_modifiers(keystroke: &gpui::Keystroke) -> bool {
@@ -3293,6 +3734,107 @@ fn active_place_index(places: &[PlaceEntry], current_dir: &Path) -> Option<usize
         .map(|(index, _)| index)
 }
 
+fn breadcrumb_segments(path: &Path) -> Vec<BreadcrumbSegment> {
+    let mut segments = Vec::new();
+    let mut current = PathBuf::new();
+
+    for component in path.components() {
+        let label = match component {
+            Component::Prefix(prefix) => {
+                current.push(prefix.as_os_str());
+                prefix.as_os_str().to_string_lossy().into_owned()
+            }
+            Component::RootDir => {
+                current = PathBuf::from("/");
+                "/".to_string()
+            }
+            Component::CurDir => {
+                current.push(".");
+                ".".to_string()
+            }
+            Component::ParentDir => {
+                current.push("..");
+                "..".to_string()
+            }
+            Component::Normal(name) => {
+                current.push(name);
+                name.to_string_lossy().into_owned()
+            }
+        };
+        segments.push(BreadcrumbSegment {
+            label,
+            path: current.clone(),
+        });
+    }
+
+    if segments.is_empty() {
+        segments.push(BreadcrumbSegment {
+            label: ".".to_string(),
+            path: PathBuf::from("."),
+        });
+    }
+
+    segments
+}
+
+fn resolve_location_input(current_dir: &Path, input: &str) -> Option<PathBuf> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    let expanded = expand_user_path(input);
+    if expanded.is_absolute() {
+        Some(expanded)
+    } else {
+        Some(current_dir.join(expanded))
+    }
+}
+
+fn complete_location_input(current_dir: &Path, input: &str) -> Option<String> {
+    let (parent_text, prefix) = split_location_input(input);
+    let parent = if parent_text.is_empty() {
+        current_dir.to_path_buf()
+    } else {
+        resolve_location_input(current_dir, parent_text)?
+    };
+    let mut matches = fs::read_dir(parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.starts_with(prefix)
+                .then(|| (name, entry.file_type().ok().is_some_and(|ty| ty.is_dir())))
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let (name, is_dir) = matches.into_iter().next()?;
+    let mut completed = join_location_text(parent_text, &name);
+    if is_dir && !completed.ends_with('/') {
+        completed.push('/');
+    }
+    Some(completed)
+}
+
+fn split_location_input(input: &str) -> (&str, &str) {
+    let input = input.trim();
+    match input.rfind('/') {
+        Some(0) => ("/", &input[1..]),
+        Some(index) => (&input[..index], &input[index + 1..]),
+        None => ("", input),
+    }
+}
+
+fn join_location_text(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_string()
+    } else if parent == "/" {
+        format!("/{name}")
+    } else {
+        format!("{parent}/{name}")
+    }
+}
+
 fn normalize_start_dir(path: PathBuf) -> PathBuf {
     if path.is_dir() {
         path
@@ -3414,6 +3956,68 @@ mod tests {
             active_place_index(&places, Path::new("/home/yk/Downloads/archive")),
             Some(2)
         );
+    }
+
+    #[test]
+    fn breadcrumb_segments_build_incremental_paths() {
+        let segments = breadcrumb_segments(Path::new("/home/yk/Documents"));
+        let labels = segments
+            .iter()
+            .map(|segment| segment.label.as_str())
+            .collect::<Vec<_>>();
+        let paths = segments
+            .iter()
+            .map(|segment| segment.path.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels, vec!["/", "home", "yk", "Documents"]);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/"),
+                PathBuf::from("/home"),
+                PathBuf::from("/home/yk"),
+                PathBuf::from("/home/yk/Documents"),
+            ]
+        );
+    }
+
+    #[test]
+    fn location_input_resolves_absolute_relative_and_home_paths() {
+        let current = Path::new("/tmp/fika-current");
+
+        assert_eq!(
+            resolve_location_input(current, "/etc"),
+            Some(PathBuf::from("/etc"))
+        );
+        assert_eq!(
+            resolve_location_input(current, "notes"),
+            Some(PathBuf::from("/tmp/fika-current/notes"))
+        );
+        assert_eq!(resolve_location_input(current, "  "), None);
+        assert_eq!(resolve_location_input(current, "~"), Some(home_dir()));
+    }
+
+    #[test]
+    fn location_completion_uses_filesystem_and_sorts_matches() {
+        let temp = test_dir("location-completion");
+        std::fs::create_dir_all(temp.join("alpha")).unwrap();
+        std::fs::write(temp.join("alpine.txt"), "file").unwrap();
+        std::fs::create_dir_all(temp.join("nested")).unwrap();
+        std::fs::create_dir_all(temp.join("nested/zed")).unwrap();
+        std::fs::create_dir_all(temp.join("nested/zen")).unwrap();
+
+        assert_eq!(
+            complete_location_input(&temp, "al"),
+            Some("alpha/".to_string())
+        );
+        assert_eq!(
+            complete_location_input(&temp, "nested/ze"),
+            Some("nested/zed/".to_string())
+        );
+        assert_eq!(complete_location_input(&temp, "missing"), None);
+
+        let _ = std::fs::remove_dir_all(temp);
     }
 
     #[test]
@@ -3609,6 +4213,10 @@ mod tests {
             Some(PaneShortcut::RenameSelection)
         );
         assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("f6").unwrap()),
+            Some(PaneShortcut::EditLocation)
+        );
+        assert_eq!(
             pane_shortcut(&gpui::Keystroke::parse("up").unwrap()),
             Some(PaneShortcut::MoveSelection {
                 direction: SelectionMove::Previous,
@@ -3649,6 +4257,10 @@ mod tests {
             Some(PaneShortcut::GoForward)
         );
         assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("alt-d").unwrap()),
+            Some(PaneShortcut::EditLocation)
+        );
+        assert_eq!(
             pane_shortcut(&gpui::Keystroke::parse("delete").unwrap()),
             Some(PaneShortcut::TrashSelection)
         );
@@ -3659,6 +4271,10 @@ mod tests {
         assert_eq!(
             pane_shortcut(&gpui::Keystroke::parse("secondary-c").unwrap()),
             Some(PaneShortcut::CopySelection)
+        );
+        assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("secondary-l").unwrap()),
+            Some(PaneShortcut::EditLocation)
         );
         assert_eq!(
             pane_shortcut(&gpui::Keystroke::parse("secondary-v").unwrap()),
@@ -3707,6 +4323,38 @@ mod tests {
         assert_eq!(
             rename_input_action(&gpui::Keystroke::parse("secondary-a").unwrap()),
             RenameInputAction::Ignore
+        );
+    }
+
+    #[test]
+    fn location_input_action_classifies_controls_completion_and_text() {
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("escape").unwrap()),
+            LocationInputAction::Cancel
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("enter").unwrap()),
+            LocationInputAction::Commit
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("tab").unwrap()),
+            LocationInputAction::Complete
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("backspace").unwrap()),
+            LocationInputAction::Backspace
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("/->/").unwrap()),
+            LocationInputAction::Insert("/".to_string())
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("shift-a->A").unwrap()),
+            LocationInputAction::Insert("A".to_string())
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("secondary-l").unwrap()),
+            LocationInputAction::Ignore
         );
     }
 
@@ -3975,6 +4623,67 @@ mod tests {
     }
 
     #[test]
+    fn compact_column_width_cache_resolves_only_visible_columns() {
+        let mut model = fika_core::DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        let entries = (0..120)
+            .map(|index| {
+                let name = if index == 80 {
+                    format!(
+                        "{index:03}-very-long-name-that-should-not-be-measured-until-scrolled.txt"
+                    )
+                } else {
+                    format!("{index:03}.txt")
+                };
+                fika_core::Entry::new(fika_core::EntryData {
+                    name: Arc::from(name.as_str()),
+                    name_width_units: name.len() as u16,
+                    size_bytes: 0,
+                    modified_secs: None,
+                    trash_group: None,
+                    trash_deletion_label: None,
+                    is_dir: false,
+                })
+            })
+            .collect::<Vec<_>>();
+        model.replace_listing(PathBuf::from("/tmp"), Arc::new(entries));
+
+        let mut cache = CompactColumnWidthCache::default();
+        let options = CompactLayoutOptions {
+            viewport_width: 140.0,
+            viewport_height: 128.0,
+            item_width: 100.0,
+            item_height: 50.0,
+            gap: 10.0,
+            padding: 4.0,
+            scroll_x: 0.0,
+            ..CompactLayoutOptions::default()
+        };
+        let rows_per_column = CompactLayout::rows_per_column_for_options(options);
+        let metrics = cache.metrics_for_model(&model, rows_per_column, options);
+        let column_count = model.len().div_ceil(rows_per_column);
+        let resolved_count = cache.cached[0]
+            .resolved_columns
+            .iter()
+            .filter(|resolved| **resolved)
+            .count();
+
+        assert!(resolved_count < column_count);
+        let far_column = 80 / rows_per_column;
+        assert_eq!(metrics.column_width(far_column), Some(options.item_width));
+
+        let scrolled_options = CompactLayoutOptions {
+            scroll_x: far_column as f32 * (options.item_width + options.gap),
+            ..options
+        };
+        let metrics = cache.metrics_for_model(&model, rows_per_column, scrolled_options);
+
+        assert!(
+            metrics.column_width(far_column).unwrap() > options.item_width,
+            "far column width should be resolved only after it enters the viewport"
+        );
+    }
+
+    #[test]
     fn listing_requests_from_events_keeps_only_loading_events() {
         let first = listing_request(1, 1);
         let second = listing_request(2, 1);
@@ -4124,6 +4833,106 @@ mod tests {
     }
 
     #[test]
+    fn listing_worker_cache_serves_load_with_shared_entries() {
+        let mut state = ListingWorkerState::default();
+        let first = listing_request_at(1, 1, "/tmp/fika-cached-listing");
+        let second = listing_request_at(2, 2, "/tmp/fika-cached-listing");
+        let entries = test_entries(&["cached.txt"]);
+        let events = vec![
+            listing_refreshed(&first, Arc::clone(&entries)),
+            listing_completed(&first),
+        ];
+
+        state.schedule(first.clone());
+        assert!(state.publish_batch_if_current(&listing_batch(vec![first]), &events));
+
+        let cached = state.cached_events_for(&second).expect("cache miss");
+        let DirectoryListerEvent::ListingRefreshed {
+            pane_id,
+            request_serial,
+            entries: cached_entries,
+            ..
+        } = &cached[0]
+        else {
+            panic!("expected cached listing refresh");
+        };
+        assert_eq!(*pane_id, second.pane_id);
+        assert_eq!(*request_serial, second.request_serial);
+        assert!(Arc::ptr_eq(&entries, cached_entries));
+        assert!(matches!(
+            cached[1],
+            DirectoryListerEvent::ListingCompleted { .. }
+        ));
+    }
+
+    #[test]
+    fn listing_worker_cache_hit_does_not_schedule_background_reload() {
+        let mut state = ListingWorkerState::default();
+        let first = listing_request_at(1, 1, "/tmp/fika-cached-listing");
+        let second = listing_request_at(2, 2, "/tmp/fika-cached-listing");
+        let entries = test_entries(&["cached.txt"]);
+        let events = vec![
+            listing_refreshed(&first, Arc::clone(&entries)),
+            listing_completed(&first),
+        ];
+
+        state.schedule(first.clone());
+        let first_batch = state
+            .pop_batch()
+            .expect("scheduled listing should be pending");
+        assert_eq!(first_batch.requests, vec![first]);
+        assert!(state.publish_batch_if_current(&first_batch, &events));
+
+        let cached = state
+            .schedule_or_cached(second.clone())
+            .expect("fresh cache should serve request directly");
+
+        assert_eq!(cached.len(), 2);
+        assert!(state.pending.is_empty());
+        assert_eq!(
+            state.latest_request_by_pane.get(&second.pane_id),
+            Some(&second.key())
+        );
+    }
+
+    #[test]
+    fn listing_worker_cache_ignores_reload_and_can_remove_directory() {
+        let mut state = ListingWorkerState::default();
+        let first = listing_request_at(1, 1, "/tmp/fika-cached-listing");
+        let mut reload = listing_request_at(2, 2, "/tmp/fika-cached-listing");
+        reload.mode = fika_core::LoadMode::Reload;
+        let entries = test_entries(&["cached.txt"]);
+        let events = vec![
+            listing_refreshed(&first, Arc::clone(&entries)),
+            listing_completed(&first),
+        ];
+
+        state.schedule(first.clone());
+        assert!(state.publish_batch_if_current(&listing_batch(vec![first]), &events));
+
+        assert!(state.cached_events_for(&reload).is_none());
+        state.schedule(reload);
+        let snapshot = state
+            .cache
+            .get(Path::new("/tmp/fika-cached-listing"))
+            .expect("cache should retain stale payload");
+        assert_eq!(snapshot.state(), fika_core::DirectoryCacheState::Stale);
+        assert!(
+            state
+                .cached_events_for(&listing_request_at(3, 3, "/tmp/fika-cached-listing"))
+                .is_none()
+        );
+
+        state.remove_cached_directory(Path::new("/tmp/fika-cached-listing"));
+        assert!(
+            state
+                .cache
+                .get(Path::new("/tmp/fika-cached-listing"))
+                .is_none()
+        );
+    }
+
+    #[test]
     fn listing_batch_cancelled_only_when_all_requests_are_stale() {
         let mut state = ListingWorkerState::default();
         let first = listing_request_at(1, 1, "/tmp/fika-shared-listing");
@@ -4189,6 +4998,38 @@ mod tests {
             request_serial: request.request_serial,
             path: request.path.clone(),
         }
+    }
+
+    fn listing_refreshed(
+        request: &ListingRequest,
+        entries: Arc<Vec<fika_core::Entry>>,
+    ) -> DirectoryListerEvent {
+        DirectoryListerEvent::ListingRefreshed {
+            pane_id: request.pane_id,
+            generation: request.generation,
+            request_serial: request.request_serial,
+            path: request.path.clone(),
+            entries,
+        }
+    }
+
+    fn test_entries(names: &[&str]) -> Arc<Vec<fika_core::Entry>> {
+        Arc::new(
+            names
+                .iter()
+                .map(|name| {
+                    fika_core::Entry::new(fika_core::EntryData {
+                        name: Arc::from(*name),
+                        name_width_units: name.len() as u16,
+                        size_bytes: 0,
+                        modified_secs: None,
+                        trash_group: None,
+                        trash_deletion_label: None,
+                        is_dir: false,
+                    })
+                })
+                .collect(),
+        )
     }
 
     fn test_dir(name: &str) -> PathBuf {

@@ -237,7 +237,7 @@ pub struct ViewState {
     pub scroll_y: f32,
     pub viewport_width: f32,
     pub viewport_height: f32,
-    pub icon_size: f32,
+    pub zoom_level: i32,
 }
 
 impl Default for ViewState {
@@ -247,7 +247,52 @@ impl Default for ViewState {
             scroll_y: 0.0,
             viewport_width: 720.0,
             viewport_height: 520.0,
-            icon_size: 0.0,
+            zoom_level: DEFAULT_ZOOM_LEVEL,
+        }
+    }
+}
+
+pub const MIN_ZOOM_LEVEL: i32 = 0;
+pub const MAX_ZOOM_LEVEL: i32 = 16;
+pub const DEFAULT_ZOOM_LEVEL: i32 = 3;
+
+pub fn icon_size_for_zoom_level(level: i32) -> f32 {
+    match level.clamp(MIN_ZOOM_LEVEL, MAX_ZOOM_LEVEL) {
+        0 => 16.0,
+        1 => 22.0,
+        2 => 32.0,
+        3 => 48.0,
+        4 => 64.0,
+        level => 64.0 + ((level - 4) as f32 * 16.0),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ZoomChange {
+    In,
+    Out,
+    Reset,
+}
+
+impl ViewState {
+    pub fn icon_size(&self) -> f32 {
+        icon_size_for_zoom_level(self.zoom_level)
+    }
+
+    pub fn set_zoom_level(&mut self, level: i32) -> bool {
+        let level = level.clamp(MIN_ZOOM_LEVEL, MAX_ZOOM_LEVEL);
+        if self.zoom_level == level {
+            return false;
+        }
+        self.zoom_level = level;
+        true
+    }
+
+    pub fn apply_zoom_change(&mut self, change: ZoomChange) -> bool {
+        match change {
+            ZoomChange::In => self.set_zoom_level(self.zoom_level + 1),
+            ZoomChange::Out => self.set_zoom_level(self.zoom_level - 1),
+            ZoomChange::Reset => self.set_zoom_level(DEFAULT_ZOOM_LEVEL),
         }
     }
 }
@@ -274,10 +319,7 @@ impl PaneState {
             current_dir: current_dir.clone(),
             model: DirectoryModel::for_directory(current_dir.clone()),
             selection: SelectionState::default(),
-            view: ViewState {
-                icon_size: 48.0,
-                ..ViewState::default()
-            },
+            view: ViewState::default(),
             lister: DirectoryLister::new(id, current_dir, generation),
             history_back: Vec::new(),
             history_forward: Vec::new(),
@@ -378,7 +420,7 @@ impl PaneController {
         let source_pane = self.panes.get(&source)?;
         let current_dir = source_pane.current_dir.clone();
         let generation = source_pane.generation;
-        let model = source_pane.model.clone();
+        let model = source_pane.model.fork_for_pane();
         let view = source_pane.view.clone();
         let id = self.allocator.allocate();
         let mut pane = PaneState::new(id, current_dir);
@@ -617,6 +659,18 @@ impl PaneController {
         let count = ids.len();
         pane.selection.replace(ids);
         Some(count)
+    }
+
+    pub fn set_zoom_level(&mut self, pane_id: PaneId, level: i32) -> Option<ViewState> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        pane.view.set_zoom_level(level);
+        Some(pane.view.clone())
+    }
+
+    pub fn apply_zoom_change(&mut self, pane_id: PaneId, change: ZoomChange) -> Option<ViewState> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        pane.view.apply_zoom_change(change);
+        Some(pane.view.clone())
     }
 
     pub fn scroll_view(
@@ -919,6 +973,33 @@ mod tests {
 
         assert!(controller.is_selected(first, &path));
         assert!(!controller.is_selected(second, &path));
+    }
+
+    #[test]
+    fn split_panes_do_not_share_mutable_model_entries() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let first = controller.focused().unwrap();
+        let path = PathBuf::from("/tmp/a/file.txt");
+        controller.pane_mut(first).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            listing(vec![test_entry_with_path(path.clone())]),
+        );
+        let second = controller.split(first).unwrap();
+        let generation = controller.pane(first).unwrap().generation;
+
+        controller.apply_lister_event(DirectoryListerEvent::ItemsDeleted {
+            pane_id: first,
+            generation,
+            request_serial: RequestSerial(1),
+            path: PathBuf::from("/tmp/a"),
+            paths: vec![path.clone()],
+        });
+
+        assert!(controller.pane(first).unwrap().model.is_empty());
+        assert_eq!(
+            controller.pane(second).unwrap().model.index_of_path(&path),
+            Some(0)
+        );
     }
 
     #[test]

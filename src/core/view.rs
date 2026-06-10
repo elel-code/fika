@@ -134,6 +134,10 @@ impl CompactColumnMetrics {
         self.column_widths.len()
     }
 
+    pub fn column_width(&self, column: usize) -> Option<f32> {
+        self.column_widths.get(column).copied()
+    }
+
     fn width(&self, column: usize) -> f32 {
         self.column_widths[column]
     }
@@ -370,6 +374,11 @@ impl CompactLayout {
                     .filter(|item| item.item_rect.intersects(viewport))
             })
         })
+    }
+
+    pub fn visible_column_range(&self) -> Range<usize> {
+        let viewport = self.viewport_rect();
+        self.column_range_intersecting_x(viewport.x, viewport.right())
     }
 
     pub fn hit_test_content_point(&self, point: ViewPoint) -> Option<usize> {
