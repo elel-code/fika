@@ -1,9 +1,10 @@
-use super::entries::{Entry, read_entries_sync, read_entry_sync};
+use super::entries::{Entry, read_entries_sync_cancellable, read_entry_sync};
 use super::model::{DirectoryModel, DirectoryModelSignal};
 use super::pane::{Generation, PaneId, RequestSerial};
 use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,7 +54,7 @@ pub enum DirectoryListerEvent {
         generation: Generation,
         request_serial: RequestSerial,
         path: PathBuf,
-        entries: Vec<Entry>,
+        entries: Arc<Vec<Entry>>,
     },
     ListingCompleted {
         pane_id: PaneId,
@@ -173,16 +174,46 @@ impl DirectoryLister {
 
     pub fn load_directory(&mut self, mode: LoadMode) -> DirectoryListerEvent {
         let serial = self.next_serial();
-        self.scan_listing(mode, serial)
+        self.loading_started(mode, serial)
     }
 
     pub fn read_listing(&mut self, mode: LoadMode) -> Vec<DirectoryListerEvent> {
         let serial = self.next_serial();
-        vec![
-            self.loading_started(mode, serial),
-            self.scan_listing(mode, serial),
-            self.listing_completed(serial),
-        ]
+        read_listing_events(
+            self.pane_id,
+            self.generation,
+            serial,
+            self.path.clone(),
+            mode,
+        )
+    }
+
+    pub fn read_listing_events(
+        pane_id: PaneId,
+        generation: Generation,
+        request_serial: RequestSerial,
+        path: PathBuf,
+        mode: LoadMode,
+    ) -> Vec<DirectoryListerEvent> {
+        read_listing_events(pane_id, generation, request_serial, path, mode)
+    }
+
+    pub fn read_listing_events_cancellable(
+        pane_id: PaneId,
+        generation: Generation,
+        request_serial: RequestSerial,
+        path: PathBuf,
+        mode: LoadMode,
+        is_cancelled: impl FnMut() -> bool,
+    ) -> Option<Vec<DirectoryListerEvent>> {
+        read_listing_events_cancellable(
+            pane_id,
+            generation,
+            request_serial,
+            path,
+            mode,
+            is_cancelled,
+        )
     }
 
     pub fn start_watcher(&mut self) -> Result<(), String> {
@@ -227,8 +258,12 @@ impl DirectoryLister {
         }
 
         match event {
-            DirectoryListerEvent::LoadingStarted { .. }
-            | DirectoryListerEvent::ListingCompleted { .. }
+            DirectoryListerEvent::LoadingStarted { path, mode, .. } => match mode {
+                LoadMode::Load => model.clear_for_directory(path),
+                LoadMode::Reload if model.directory() != path => model.clear_for_directory(path),
+                LoadMode::Reload => Vec::new(),
+            },
+            DirectoryListerEvent::ListingCompleted { .. }
             | DirectoryListerEvent::CurrentDirectoryRemoved { .. }
             | DirectoryListerEvent::Error { .. } => Vec::new(),
             DirectoryListerEvent::ItemsAdded { entries, .. } => model.apply_items_added(entries),
@@ -236,8 +271,9 @@ impl DirectoryLister {
             DirectoryListerEvent::ItemsRefreshed { pairs, .. } => {
                 model.apply_items_refreshed(pairs)
             }
-            DirectoryListerEvent::ListingRefreshed { entries, .. } => {
-                model.replace_listing(entries)
+            DirectoryListerEvent::ListingRefreshed { path, entries, .. } => {
+                let entries = Arc::try_unwrap(entries).unwrap_or_else(|entries| (*entries).clone());
+                model.replace_listing(path, entries)
             }
         }
     }
@@ -315,43 +351,13 @@ impl DirectoryLister {
                     }],
                 }
             }
-            ClassifiedWatcherDelta::FullReload => self.scan_listing(LoadMode::Reload, serial),
+            ClassifiedWatcherDelta::FullReload => self.loading_started(LoadMode::Reload, serial),
             ClassifiedWatcherDelta::CurrentDirectoryRemoved => {
                 DirectoryListerEvent::CurrentDirectoryRemoved {
                     pane_id: self.pane_id,
                     generation: self.generation,
                     request_serial: serial,
                     path: self.path.clone(),
-                }
-            }
-        }
-    }
-
-    fn scan_listing(&self, mode: LoadMode, serial: RequestSerial) -> DirectoryListerEvent {
-        match read_entries_sync(&self.path) {
-            Ok(entries) => DirectoryListerEvent::ListingRefreshed {
-                pane_id: self.pane_id,
-                generation: self.generation,
-                request_serial: serial,
-                path: self.path.clone(),
-                entries,
-            },
-            Err(err) => {
-                if mode == LoadMode::Reload && !self.path.exists() {
-                    DirectoryListerEvent::CurrentDirectoryRemoved {
-                        pane_id: self.pane_id,
-                        generation: self.generation,
-                        request_serial: serial,
-                        path: self.path.clone(),
-                    }
-                } else {
-                    DirectoryListerEvent::Error {
-                        pane_id: self.pane_id,
-                        generation: self.generation,
-                        request_serial: serial,
-                        path: self.path.clone(),
-                        message: err.to_string(),
-                    }
                 }
             }
         }
@@ -367,15 +373,6 @@ impl DirectoryLister {
         }
     }
 
-    fn listing_completed(&self, serial: RequestSerial) -> DirectoryListerEvent {
-        DirectoryListerEvent::ListingCompleted {
-            pane_id: self.pane_id,
-            generation: self.generation,
-            request_serial: serial,
-            path: self.path.clone(),
-        }
-    }
-
     fn next_serial(&mut self) -> RequestSerial {
         self.request_serial += 1;
         RequestSerial(self.request_serial)
@@ -385,6 +382,71 @@ impl DirectoryLister {
         self.watcher = None;
         self.watcher_rx = None;
     }
+}
+
+fn read_listing_events(
+    pane_id: PaneId,
+    generation: Generation,
+    request_serial: RequestSerial,
+    path: PathBuf,
+    mode: LoadMode,
+) -> Vec<DirectoryListerEvent> {
+    read_listing_events_cancellable(pane_id, generation, request_serial, path, mode, || false)
+        .unwrap_or_default()
+}
+
+fn read_listing_events_cancellable(
+    pane_id: PaneId,
+    generation: Generation,
+    request_serial: RequestSerial,
+    path: PathBuf,
+    mode: LoadMode,
+    mut is_cancelled: impl FnMut() -> bool,
+) -> Option<Vec<DirectoryListerEvent>> {
+    if is_cancelled() {
+        return None;
+    }
+
+    let result = match read_entries_sync_cancellable(&path, &mut is_cancelled) {
+        Ok(Some(entries)) => DirectoryListerEvent::ListingRefreshed {
+            pane_id,
+            generation,
+            request_serial,
+            path: path.clone(),
+            entries: Arc::new(entries),
+        },
+        Ok(None) => return None,
+        Err(err) => {
+            if mode == LoadMode::Reload && !path.exists() {
+                DirectoryListerEvent::CurrentDirectoryRemoved {
+                    pane_id,
+                    generation,
+                    request_serial,
+                    path: path.clone(),
+                }
+            } else {
+                DirectoryListerEvent::Error {
+                    pane_id,
+                    generation,
+                    request_serial,
+                    path: path.clone(),
+                    message: err.to_string(),
+                }
+            }
+        }
+    };
+    if is_cancelled() {
+        return None;
+    }
+    Some(vec![
+        result,
+        DirectoryListerEvent::ListingCompleted {
+            pane_id,
+            generation,
+            request_serial,
+            path,
+        },
+    ])
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -48,6 +48,8 @@ impl PaneIdAllocator {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SelectionState {
     selected_ids: Vec<ItemId>,
+    excluded_ids: Vec<ItemId>,
+    all_selected: bool,
     anchor_id: Option<ItemId>,
     active_id: Option<ItemId>,
 }
@@ -69,28 +71,66 @@ impl SelectionState {
         self.selected_ids.len()
     }
 
+    pub fn count_for_model(&self, model_len: usize) -> usize {
+        if self.all_selected {
+            model_len.saturating_sub(self.excluded_ids.len())
+        } else {
+            self.selected_ids.len()
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.selected_ids.is_empty()
+        !self.all_selected && self.selected_ids.is_empty()
+    }
+
+    pub fn is_all_selected(&self) -> bool {
+        self.all_selected
+    }
+
+    pub fn is_excluded(&self, id: ItemId) -> bool {
+        self.excluded_ids.iter().any(|excluded| *excluded == id)
     }
 
     pub fn is_selected(&self, id: ItemId) -> bool {
-        self.selected_ids.iter().any(|selected| *selected == id)
+        if self.all_selected {
+            !self.is_excluded(id)
+        } else {
+            self.selected_ids.iter().any(|selected| *selected == id)
+        }
     }
 
     pub fn clear(&mut self) {
         self.selected_ids.clear();
+        self.excluded_ids.clear();
+        self.all_selected = false;
         self.anchor_id = None;
         self.active_id = None;
     }
 
     pub fn select_only(&mut self, id: ItemId) {
         self.selected_ids.clear();
+        self.excluded_ids.clear();
+        self.all_selected = false;
         self.selected_ids.push(id);
         self.anchor_id = Some(id);
         self.active_id = Some(id);
     }
 
     pub fn toggle(&mut self, id: ItemId) -> bool {
+        if self.all_selected {
+            self.anchor_id = Some(id);
+            self.active_id = Some(id);
+            if let Some(index) = self
+                .excluded_ids
+                .iter()
+                .position(|excluded| *excluded == id)
+            {
+                self.excluded_ids.remove(index);
+                return true;
+            }
+            self.excluded_ids.push(id);
+            return false;
+        }
         self.anchor_id = Some(id);
         self.active_id = Some(id);
         if let Some(index) = self
@@ -107,6 +147,8 @@ impl SelectionState {
     }
 
     pub fn replace(&mut self, ids: Vec<ItemId>) {
+        self.all_selected = false;
+        self.excluded_ids.clear();
         let mut seen = BTreeSet::new();
         self.selected_ids = ids
             .into_iter()
@@ -126,6 +168,18 @@ impl SelectionState {
         }
     }
 
+    pub fn select_all(&mut self, anchor_id: Option<ItemId>) {
+        if anchor_id.is_none() {
+            self.clear();
+            return;
+        }
+        self.selected_ids.clear();
+        self.excluded_ids.clear();
+        self.all_selected = true;
+        self.anchor_id = anchor_id;
+        self.active_id = anchor_id;
+    }
+
     pub fn replace_range(&mut self, anchor_id: ItemId, ids: Vec<ItemId>) {
         self.replace(ids);
         self.anchor_id = Some(anchor_id);
@@ -142,19 +196,30 @@ impl SelectionState {
         self.active_id = Some(active_id);
     }
 
-    pub fn retain_existing(&mut self, ids: impl IntoIterator<Item = ItemId>) {
-        let existing = ids.into_iter().collect::<BTreeSet<_>>();
-        self.selected_ids.retain(|id| existing.contains(id));
-        if self
-            .anchor_id
-            .is_some_and(|anchor| !existing.contains(&anchor))
-        {
+    pub fn retain_existing_by(
+        &mut self,
+        mut exists: impl FnMut(ItemId) -> bool,
+        fallback_id: Option<ItemId>,
+    ) {
+        if self.all_selected {
+            self.excluded_ids.retain(|id| exists(*id));
+            if self.anchor_id.is_some_and(|anchor| !exists(anchor)) {
+                self.anchor_id = fallback_id;
+            }
+            if self.active_id.is_some_and(|active| !exists(active)) {
+                self.active_id = fallback_id;
+            }
+            if fallback_id.is_none() {
+                self.clear();
+            }
+            return;
+        }
+
+        self.selected_ids.retain(|id| exists(*id));
+        if self.anchor_id.is_some_and(|anchor| !exists(anchor)) {
             self.anchor_id = self.selected_ids.first().copied();
         }
-        if self
-            .active_id
-            .is_some_and(|active| !existing.contains(&active))
-        {
+        if self.active_id.is_some_and(|active| !exists(active)) {
             self.active_id = self.selected_ids.first().copied();
         }
     }
@@ -207,7 +272,7 @@ impl PaneState {
             id,
             generation,
             current_dir: current_dir.clone(),
-            model: DirectoryModel::new(),
+            model: DirectoryModel::for_directory(current_dir.clone()),
             selection: SelectionState::default(),
             view: ViewState {
                 icon_size: 48.0,
@@ -310,9 +375,19 @@ impl PaneController {
     }
 
     pub fn split(&mut self, source: PaneId) -> Option<PaneId> {
-        let current_dir = self.panes.get(&source)?.current_dir.clone();
+        let source_pane = self.panes.get(&source)?;
+        let current_dir = source_pane.current_dir.clone();
+        let generation = source_pane.generation;
+        let model = source_pane.model.clone();
+        let view = source_pane.view.clone();
         let id = self.allocator.allocate();
-        self.panes.insert(id, PaneState::new(id, current_dir));
+        let mut pane = PaneState::new(id, current_dir);
+        pane.generation = generation;
+        pane.lister
+            .set_target(id, pane.current_dir.clone(), generation);
+        pane.model = model;
+        pane.view = view;
+        self.panes.insert(id, pane);
         let insert_at = self
             .order
             .iter()
@@ -403,7 +478,9 @@ impl PaneController {
     }
 
     pub fn selected_count(&self, pane_id: PaneId) -> Option<usize> {
-        self.panes.get(&pane_id).map(|pane| pane.selection.len())
+        self.panes
+            .get(&pane_id)
+            .map(|pane| pane.selection.count_for_model(pane.model.len()))
     }
 
     pub fn is_selected(&self, pane_id: PaneId, path: &Path) -> bool {
@@ -521,14 +598,9 @@ impl PaneController {
 
     pub fn select_all(&mut self, pane_id: PaneId) -> Option<usize> {
         let pane = self.panes.get_mut(&pane_id)?;
-        let ids = pane
-            .model
-            .entries()
-            .iter()
-            .map(|entry| entry.id)
-            .collect::<Vec<_>>();
-        let count = ids.len();
-        pane.selection.replace(ids);
+        let count = pane.model.len();
+        let anchor_id = pane.model.get(0).map(|entry| entry.id);
+        pane.selection.select_all(anchor_id);
         Some(count)
     }
 
@@ -626,14 +698,27 @@ impl PaneController {
         }
         let signals = pane.lister.apply_event_to_model(event, &mut pane.model);
         if !signals.is_empty() {
+            let fallback_id = pane.model.get(0).map(|entry| entry.id);
+            let model = &pane.model;
             pane.selection
-                .retain_existing(pane.model.entries().iter().map(|entry| entry.id));
+                .retain_existing_by(|id| model.index_of_id(id).is_some(), fallback_id);
         }
         Some(signals)
     }
 }
 
 fn selected_paths_from_model(pane: &PaneState) -> Vec<PathBuf> {
+    if pane.selection.is_all_selected() {
+        return (0..pane.model.len())
+            .filter(|index| {
+                pane.model
+                    .get(*index)
+                    .is_some_and(|entry| !pane.selection.is_excluded(entry.id))
+            })
+            .filter_map(|index| pane.model.path_for_index(index))
+            .collect();
+    }
+
     pane.selection
         .selected_ids()
         .iter()
@@ -644,7 +729,7 @@ fn selected_paths_from_model(pane: &PaneState) -> Vec<PathBuf> {
 fn path_for_selection_id(pane: &PaneState, id: ItemId) -> Option<PathBuf> {
     pane.model
         .index_of_id(id)
-        .map(|index| pane.model.entries()[index].path.clone())
+        .and_then(|index| pane.model.path_for_index(index))
 }
 
 #[cfg(test)]
@@ -652,6 +737,7 @@ mod tests {
     use super::super::directory::DirectoryListerEvent;
     use super::super::entries::{Entry, ItemId};
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn split_allocates_distinct_pane_identity_for_same_path() {
@@ -693,7 +779,7 @@ mod tests {
             generation: Generation(0),
             request_serial: RequestSerial(1),
             path: PathBuf::from("/tmp/b"),
-            entries: vec![test_entry_at("/tmp/b", "stale.txt")],
+            entries: Arc::new(vec![test_entry_at("/tmp/b", "stale.txt")]),
         };
 
         assert!(controller.apply_lister_event(event).is_none());
@@ -820,40 +906,14 @@ mod tests {
         let second = controller.split(first).unwrap();
         let path = PathBuf::from("/tmp/a/file.txt");
 
-        controller
-            .pane_mut(first)
-            .unwrap()
-            .model
-            .replace_listing(vec![Entry {
-                id: ItemId::UNASSIGNED,
-                name: "file.txt".to_string(),
-                path: path.clone(),
-                group: String::new(),
-                location: String::new(),
-                kind: "File".to_string(),
-                size: "-".to_string(),
-                size_bytes: 0,
-                modified: "-".to_string(),
-                modified_age_days: -1,
-                is_dir: false,
-            }]);
-        controller
-            .pane_mut(second)
-            .unwrap()
-            .model
-            .replace_listing(vec![Entry {
-                id: ItemId::UNASSIGNED,
-                name: "file.txt".to_string(),
-                path: path.clone(),
-                group: String::new(),
-                location: String::new(),
-                kind: "File".to_string(),
-                size: "-".to_string(),
-                size_bytes: 0,
-                modified: "-".to_string(),
-                modified_age_days: -1,
-                is_dir: false,
-            }]);
+        controller.pane_mut(first).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![test_entry_with_path(path.clone())],
+        );
+        controller.pane_mut(second).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![test_entry_with_path(path.clone())],
+        );
 
         assert!(controller.select_only(first, path.clone()));
 
@@ -869,38 +929,13 @@ mod tests {
         let remove = PathBuf::from("/tmp/a/remove.txt");
         let generation = controller.pane(pane_id).unwrap().generation;
 
-        controller
-            .pane_mut(pane_id)
-            .unwrap()
-            .model
-            .replace_listing(vec![
-                Entry {
-                    id: ItemId::UNASSIGNED,
-                    name: "keep.txt".to_string(),
-                    path: keep.clone(),
-                    group: String::new(),
-                    location: String::new(),
-                    kind: "File".to_string(),
-                    size: "-".to_string(),
-                    size_bytes: 0,
-                    modified: "-".to_string(),
-                    modified_age_days: -1,
-                    is_dir: false,
-                },
-                Entry {
-                    id: ItemId::UNASSIGNED,
-                    name: "remove.txt".to_string(),
-                    path: remove.clone(),
-                    group: String::new(),
-                    location: String::new(),
-                    kind: "File".to_string(),
-                    size: "-".to_string(),
-                    size_bytes: 0,
-                    modified: "-".to_string(),
-                    modified_age_days: -1,
-                    is_dir: false,
-                },
-            ]);
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![
+                test_entry_with_path(keep.clone()),
+                test_entry_with_path(remove.clone()),
+            ],
+        );
         controller.select_all(pane_id);
 
         controller.apply_lister_event(DirectoryListerEvent::ItemsDeleted {
@@ -915,6 +950,46 @@ mod tests {
     }
 
     #[test]
+    fn select_all_keeps_selection_compact_and_toggle_excludes_item() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let pane_id = controller.focused().unwrap();
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![
+                test_entry("a.txt"),
+                test_entry("b.txt"),
+                test_entry("c.txt"),
+            ],
+        );
+
+        assert_eq!(controller.select_all(pane_id), Some(3));
+        let selection = &controller.pane(pane_id).unwrap().selection;
+        assert!(selection.is_all_selected());
+        assert!(selection.selected_ids().is_empty());
+        assert_eq!(controller.selected_count(pane_id), Some(3));
+
+        assert_eq!(
+            controller.toggle_selection(pane_id, PathBuf::from("/tmp/a/b.txt")),
+            Some(false)
+        );
+        assert_eq!(controller.selected_count(pane_id), Some(2));
+        assert!(!controller.is_selected(pane_id, Path::new("/tmp/a/b.txt")));
+        assert_eq!(
+            controller.selected_paths(pane_id),
+            Some(vec![
+                PathBuf::from("/tmp/a/a.txt"),
+                PathBuf::from("/tmp/a/c.txt")
+            ])
+        );
+
+        assert_eq!(
+            controller.toggle_selection(pane_id, PathBuf::from("/tmp/a/b.txt")),
+            Some(true)
+        );
+        assert_eq!(controller.selected_count(pane_id), Some(3));
+    }
+
+    #[test]
     fn selection_tracks_item_identity_across_rename_refresh() {
         let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
         let pane_id = controller.focused().unwrap();
@@ -926,7 +1001,7 @@ mod tests {
             .pane_mut(pane_id)
             .unwrap()
             .model
-            .replace_listing(vec![test_entry("old.txt")]);
+            .replace_listing(PathBuf::from("/tmp/a"), vec![test_entry("old.txt")]);
         assert!(controller.select_only(pane_id, old_path.clone()));
 
         controller.apply_lister_event(DirectoryListerEvent::ItemsRefreshed {
@@ -951,16 +1026,15 @@ mod tests {
     fn range_selection_uses_model_order_and_keeps_anchor() {
         let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
         let pane_id = controller.focused().unwrap();
-        controller
-            .pane_mut(pane_id)
-            .unwrap()
-            .model
-            .replace_listing(vec![
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![
                 test_entry("a.txt"),
                 test_entry("b.txt"),
                 test_entry("c.txt"),
                 test_entry("d.txt"),
-            ]);
+            ],
+        );
 
         assert!(controller.select_only(pane_id, PathBuf::from("/tmp/a/b.txt")));
         assert_eq!(
@@ -986,11 +1060,10 @@ mod tests {
     fn range_selection_without_anchor_starts_at_target() {
         let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
         let pane_id = controller.focused().unwrap();
-        controller
-            .pane_mut(pane_id)
-            .unwrap()
-            .model
-            .replace_listing(vec![test_entry("a.txt"), test_entry("b.txt")]);
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![test_entry("a.txt"), test_entry("b.txt")],
+        );
 
         assert_eq!(
             controller.select_range_to(pane_id, PathBuf::from("/tmp/a/b.txt")),
@@ -1007,11 +1080,10 @@ mod tests {
     fn keyboard_selection_moves_by_model_order() {
         let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
         let pane_id = controller.focused().unwrap();
-        controller
-            .pane_mut(pane_id)
-            .unwrap()
-            .model
-            .replace_listing(vec![test_entry("a.txt"), test_entry("b.txt")]);
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![test_entry("a.txt"), test_entry("b.txt")],
+        );
 
         assert_eq!(
             controller.move_selection(pane_id, SelectionMove::Next, false),
@@ -1045,15 +1117,14 @@ mod tests {
     fn keyboard_range_selection_keeps_anchor_and_moves_active_path() {
         let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
         let pane_id = controller.focused().unwrap();
-        controller
-            .pane_mut(pane_id)
-            .unwrap()
-            .model
-            .replace_listing(vec![
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![
                 test_entry("a.txt"),
                 test_entry("b.txt"),
                 test_entry("c.txt"),
-            ]);
+            ],
+        );
 
         assert!(controller.select_only(pane_id, PathBuf::from("/tmp/a/a.txt")));
         assert_eq!(
@@ -1099,15 +1170,14 @@ mod tests {
     fn rubber_band_selection_replaces_paths_by_model_indexes() {
         let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
         let pane_id = controller.focused().unwrap();
-        controller
-            .pane_mut(pane_id)
-            .unwrap()
-            .model
-            .replace_listing(vec![
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            vec![
                 test_entry("a.txt"),
                 test_entry("b.txt"),
                 test_entry("c.txt"),
-            ]);
+            ],
+        );
 
         assert_eq!(
             controller.replace_selection_by_indexes(pane_id, [0, 2, 99]),
@@ -1203,17 +1273,24 @@ mod tests {
     }
 
     fn test_entry_at(parent: &str, name: &str) -> Entry {
+        test_entry_with_path(PathBuf::from(parent).join(name))
+    }
+
+    fn test_entry_with_path(path: PathBuf) -> Entry {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let name_width_units = name.len() as u16;
         Entry {
             id: ItemId::UNASSIGNED,
-            name: name.to_string(),
-            path: PathBuf::from(parent).join(name),
-            group: String::new(),
-            location: String::new(),
-            kind: "File".to_string(),
-            size: "-".to_string(),
+            name: Arc::from(name),
+            name_width_units,
             size_bytes: 0,
-            modified: "-".to_string(),
-            modified_age_days: -1,
+            modified_secs: None,
+            trash_group: None,
+            trash_deletion_label: None,
             is_dir: false,
         }
     }

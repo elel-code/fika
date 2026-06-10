@@ -1,8 +1,9 @@
 use super::file_ops;
-use std::cmp::Reverse;
+use std::cmp::Ordering;
 use std::fs::Metadata;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -19,29 +20,44 @@ impl ItemId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Entry {
     pub id: ItemId,
-    pub name: String,
-    pub path: PathBuf,
-    pub group: String,
-    pub location: String,
-    pub kind: String,
-    pub size: String,
+    pub name: Arc<str>,
+    pub name_width_units: u16,
     pub size_bytes: u64,
-    pub modified: String,
-    pub modified_age_days: i32,
+    pub modified_secs: Option<u64>,
+    pub trash_group: Option<Arc<str>>,
+    pub trash_deletion_label: Option<Arc<str>>,
     pub is_dir: bool,
 }
 
 impl Entry {
-    pub fn sort_key(&self) -> (u8, String) {
-        (u8::from(!self.is_dir), self.name.to_ascii_lowercase())
+    pub(crate) fn sort_cmp(&self, other: &Self) -> Ordering {
+        match other.is_dir.cmp(&self.is_dir) {
+            Ordering::Equal => entry_name_cmp(&self.name, &other.name)
+                .then_with(|| self.size_bytes.cmp(&other.size_bytes)),
+            ordering => ordering,
+        }
     }
 }
 
 pub fn read_entries_sync(path: &Path) -> io::Result<Vec<Entry>> {
+    Ok(read_entries_sync_cancellable(path, || false)?.unwrap_or_default())
+}
+
+pub(crate) fn read_entries_sync_cancellable(
+    path: &Path,
+    mut is_cancelled: impl FnMut() -> bool,
+) -> io::Result<Option<Vec<Entry>>> {
+    if is_cancelled() {
+        return Ok(None);
+    }
+
     let mut entries = Vec::new();
     let decorate_trash_metadata = file_ops::is_trash_files_dir(path);
 
-    for item in std::fs::read_dir(path)? {
+    for (index, item) in std::fs::read_dir(path)?.enumerate() {
+        if index % 64 == 0 && is_cancelled() {
+            return Ok(None);
+        }
         let Ok(item) = item else {
             continue;
         };
@@ -51,7 +67,7 @@ pub fn read_entries_sync(path: &Path) -> io::Result<Vec<Entry>> {
             if name.is_empty() {
                 continue;
             }
-            let mut entry = to_entry(item_path.clone(), name, String::new(), metadata);
+            let mut entry = to_entry(name, metadata);
             if decorate_trash_metadata {
                 decorate_trash_entry(&mut entry, &item_path);
             }
@@ -59,8 +75,11 @@ pub fn read_entries_sync(path: &Path) -> io::Result<Vec<Entry>> {
         }
     }
 
+    if is_cancelled() {
+        return Ok(None);
+    }
     sort_entries(&mut entries, decorate_trash_metadata);
-    Ok(entries)
+    Ok(Some(entries))
 }
 
 pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
@@ -77,7 +96,7 @@ pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
         .map(|name| name.to_string_lossy().trim().to_string())
         .filter(|name| !name.is_empty())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory item has no name"))?;
-    let mut entry = to_entry(item_path.clone(), name, String::new(), metadata);
+    let mut entry = to_entry(name, metadata);
     if decorate_trash_metadata {
         decorate_trash_entry(&mut entry, &item_path);
     }
@@ -86,9 +105,9 @@ pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
 
 pub fn sort_entries(entries: &mut [Entry], trash: bool) {
     if trash {
-        entries.sort_by_cached_key(trash_sort_key);
+        entries.sort_by(trash_sort_cmp);
     } else {
-        entries.sort_by_cached_key(Entry::sort_key);
+        entries.sort_by(Entry::sort_cmp);
     }
 }
 
@@ -112,10 +131,12 @@ fn decorate_trash_entry(entry: &mut Entry, path: &Path) {
     let Ok(metadata) = file_ops::trash_metadata(path) else {
         return;
     };
-    entry.group = trash_group_label(&metadata.original_path, metadata.deletion_date.as_deref());
+    entry.trash_group = Some(Arc::from(trash_group_label(
+        &metadata.original_path,
+        metadata.deletion_date.as_deref(),
+    )));
     if let Some(deletion_date) = metadata.deletion_date {
-        entry.modified = format_trash_deletion_date(&deletion_date);
-        entry.modified_age_days = -1;
+        entry.trash_deletion_label = Some(Arc::from(format_trash_deletion_date(&deletion_date)));
     }
 }
 
@@ -159,64 +180,86 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
-fn trash_sort_key(entry: &Entry) -> (u8, Reverse<String>, String) {
-    let bucket = trash_sort_bucket(entry);
-    let deletion_date = if bucket == 0 {
-        Reverse(entry.modified.clone())
-    } else {
-        Reverse(String::new())
-    };
-    (bucket, deletion_date, entry.name.to_ascii_lowercase())
+fn trash_sort_cmp(left: &Entry, right: &Entry) -> Ordering {
+    trash_sort_bucket(left)
+        .cmp(&trash_sort_bucket(right))
+        .then_with(|| {
+            right
+                .trash_deletion_label
+                .as_deref()
+                .unwrap_or_default()
+                .cmp(left.trash_deletion_label.as_deref().unwrap_or_default())
+        })
+        .then_with(|| left.sort_cmp(right))
+}
+
+pub(crate) fn entry_name_cmp(left: &str, right: &str) -> Ordering {
+    ascii_case_insensitive_cmp(left, right).then_with(|| left.cmp(right))
 }
 
 fn trash_sort_bucket(entry: &Entry) -> u8 {
-    if entry.group.contains("Deleted: ") {
+    if entry.trash_deletion_label.is_some() {
         0
-    } else if !entry.group.is_empty() {
+    } else if entry.trash_group.is_some() {
         1
     } else {
         2
     }
 }
 
-fn to_entry(path: PathBuf, name: String, location: String, metadata: Metadata) -> Entry {
+fn ascii_case_insensitive_cmp(left: &str, right: &str) -> Ordering {
+    let mut left_bytes = left.bytes();
+    let mut right_bytes = right.bytes();
+    loop {
+        match (left_bytes.next(), right_bytes.next()) {
+            (Some(left), Some(right)) => {
+                let ordering = left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase());
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+            (Some(_), None) => return Ordering::Greater,
+            (None, Some(_)) => return Ordering::Less,
+            (None, None) => return Ordering::Equal,
+        }
+    }
+}
+
+fn name_width_units(name: &str) -> u16 {
+    name.chars()
+        .map(|ch| if ch.is_ascii() { 1u32 } else { 2u32 })
+        .sum::<u32>()
+        .min(u16::MAX as u32) as u16
+}
+
+fn to_entry(name: String, metadata: Metadata) -> Entry {
     let is_dir = metadata.is_dir();
     let size_bytes = if is_dir { 0 } else { metadata.len() };
-    let modified = metadata.modified().ok();
+    let modified_secs = metadata.modified().ok().map(system_time_secs);
+    let name_width_units = name_width_units(&name);
 
     Entry {
         id: ItemId::UNASSIGNED,
-        name,
-        path,
-        group: String::new(),
-        location,
-        kind: if is_dir { "Folder" } else { "File" }.to_string(),
-        size: if is_dir {
-            "-".to_string()
-        } else {
-            format_size(size_bytes)
-        },
+        name: Arc::from(name),
+        name_width_units,
         size_bytes,
-        modified: modified
-            .map(format_system_time)
-            .unwrap_or_else(|| "-".to_string()),
-        modified_age_days: modified.map(modified_age_days).unwrap_or(-1),
+        modified_secs,
+        trash_group: None,
+        trash_deletion_label: None,
         is_dir,
     }
 }
 
-fn modified_age_days(time: SystemTime) -> i32 {
-    match SystemTime::now().duration_since(time) {
-        Ok(duration) => (duration.as_secs() / 86_400).min(i32::MAX as u64) as i32,
-        Err(_) => 0,
-    }
+fn system_time_secs(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
-fn format_system_time(time: SystemTime) -> String {
-    let secs = time
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
+pub fn format_modified_secs(secs: Option<u64>) -> String {
+    let Some(secs) = secs else {
+        return "-".to_string();
+    };
     format_unix_time(secs)
 }
 
@@ -251,5 +294,13 @@ mod tests {
     fn formats_file_sizes_without_ui_types() {
         assert_eq!(format_size(999), "999 B");
         assert_eq!(format_size(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn cancellable_listing_returns_none_before_touching_directory() {
+        let result =
+            read_entries_sync_cancellable(Path::new("/definitely/missing/fika"), || true).unwrap();
+
+        assert!(result.is_none());
     }
 }
