@@ -24,8 +24,8 @@ pub struct EntryData {
     pub name_width_units: u16,
     pub size_bytes: u64,
     pub modified_secs: Option<u64>,
-    pub trash_group: Option<Arc<str>>,
-    pub trash_deletion_label: Option<Arc<str>>,
+    pub trash_original_path: Option<PathBuf>,
+    pub trash_deletion_time: Option<Arc<str>>,
     pub is_dir: bool,
 }
 
@@ -184,31 +184,26 @@ fn decorate_trash_entry(entry: &mut EntryData, path: &Path) {
     let Ok(metadata) = file_ops::trash_metadata(path) else {
         return;
     };
-    entry.trash_group = Some(Arc::from(trash_group_label(
-        &metadata.original_path,
-        metadata.deletion_date.as_deref(),
-    )));
-    if let Some(deletion_date) = metadata.deletion_date {
-        entry.trash_deletion_label = Some(Arc::from(format_trash_deletion_date(&deletion_date)));
-    }
+    entry.trash_original_path = Some(metadata.original_path);
+    entry.trash_deletion_time = metadata.deletion_date.map(Arc::from);
 }
 
-fn trash_group_label(original_path: &Path, deletion_date: Option<&str>) -> String {
+pub fn format_trash_original_location(original_path: &Path, deletion_time: Option<&str>) -> String {
     let original_location = original_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(original_path);
-    match deletion_date {
+    match deletion_time {
         Some(date) => format!(
             "Original: {} - Deleted: {}",
             original_location.display(),
-            format_trash_deletion_date(date)
+            format_trash_deletion_time(date)
         ),
         None => format!("Original: {}", original_location.display()),
     }
 }
 
-fn format_trash_deletion_date(value: &str) -> String {
+pub fn format_trash_deletion_time(value: &str) -> String {
     let normalized = value.replace('T', " ");
     normalized
         .strip_suffix(":00")
@@ -238,10 +233,10 @@ fn trash_sort_cmp(left: &Entry, right: &Entry) -> Ordering {
         .cmp(&trash_sort_bucket(right))
         .then_with(|| {
             right
-                .trash_deletion_label
+                .trash_deletion_time
                 .as_deref()
                 .unwrap_or_default()
-                .cmp(left.trash_deletion_label.as_deref().unwrap_or_default())
+                .cmp(left.trash_deletion_time.as_deref().unwrap_or_default())
         })
         .then_with(|| left.sort_cmp(right))
 }
@@ -251,9 +246,9 @@ pub(crate) fn entry_name_cmp(left: &str, right: &str) -> Ordering {
 }
 
 fn trash_sort_bucket(entry: &Entry) -> u8 {
-    if entry.trash_deletion_label.is_some() {
+    if entry.trash_deletion_time.is_some() {
         0
-    } else if entry.trash_group.is_some() {
+    } else if entry.trash_original_path.is_some() {
         1
     } else {
         2
@@ -296,8 +291,8 @@ fn to_entry_data(name: String, metadata: Metadata) -> EntryData {
         name_width_units,
         size_bytes,
         modified_secs,
-        trash_group: None,
-        trash_deletion_label: None,
+        trash_original_path: None,
+        trash_deletion_time: None,
         is_dir,
     }
 }
@@ -341,6 +336,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn formats_file_sizes_without_ui_types() {
@@ -354,5 +350,58 @@ mod tests {
             read_entries_sync_cancellable(Path::new("/definitely/missing/fika"), || true).unwrap();
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn trash_listing_reads_original_path_and_deletion_time_from_trashinfo() {
+        let files_dir = file_ops::trash_files_dir();
+        let info_dir = file_ops::trash_info_dir();
+        file_ops::ensure_trash_dirs().unwrap();
+
+        let unique = format!(
+            "fika-trash-metadata-{}-{}.txt",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let trash_path = files_dir.join(&unique);
+        let info_path = info_dir.join(format!("{unique}.trashinfo"));
+        struct TrashTestGuard {
+            trash_path: PathBuf,
+            info_path: PathBuf,
+        }
+        impl Drop for TrashTestGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.trash_path);
+                let _ = fs::remove_file(&self.info_path);
+            }
+        }
+        let _guard = TrashTestGuard {
+            trash_path: trash_path.clone(),
+            info_path: info_path.clone(),
+        };
+        let original_path = PathBuf::from(format!("/tmp/fika original {unique}"));
+        fs::write(&trash_path, "trashed").unwrap();
+        fs::write(
+            &info_path,
+            format!(
+                "[Trash Info]\nPath=/tmp/fika%20original%20{unique}\nDeletionDate=2026-06-02T10:11:12\n"
+            ),
+        )
+        .unwrap();
+
+        let entry = read_entry_sync(&files_dir, &trash_path).unwrap();
+
+        assert_eq!(entry.name.as_ref(), unique);
+        assert_eq!(
+            entry.trash_original_path.as_deref(),
+            Some(original_path.as_path())
+        );
+        assert_eq!(
+            entry.trash_deletion_time.as_deref(),
+            Some("2026-06-02T10:11:12")
+        );
     }
 }

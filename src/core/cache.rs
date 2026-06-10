@@ -236,8 +236,8 @@ mod tests {
             name_width_units: name.len() as u16,
             size_bytes: 0,
             modified_secs: None,
-            trash_group: None,
-            trash_deletion_label: None,
+            trash_original_path: None,
+            trash_deletion_time: None,
             is_dir: false,
         })
     }

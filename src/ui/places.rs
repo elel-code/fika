@@ -1,6 +1,6 @@
 use crate::{FikaApp, PlaceSnapshot};
 use gpui::prelude::*;
-use gpui::{Context, Div, ParentElement, Stateful, Styled, div, px, rgb};
+use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb};
 
 pub(crate) fn places_sidebar(
     places: Vec<PlaceSnapshot>,
@@ -59,6 +59,12 @@ fn group_heading(label: &'static str) -> Stateful<Div> {
 
 fn place_row(index: usize, place: PlaceSnapshot, cx: &mut Context<FikaApp>) -> Stateful<Div> {
     let path = place.path.clone();
+    let context_path = place.path.clone();
+    let marker_color = if place.trash_place && place.trash_has_items {
+        rgb(0x2f6fed)
+    } else {
+        rgb(0x59636e)
+    };
     div()
         .id(format!("place-{index}"))
         .flex()
@@ -78,11 +84,19 @@ fn place_row(index: usize, place: PlaceSnapshot, cx: &mut Context<FikaApp>) -> S
             this.open_place(path.clone());
             cx.notify();
         }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                this.show_place_context_menu(context_path.clone(), event.position);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
         .child(
             div()
                 .w(px(28.0))
                 .text_xs()
-                .text_color(rgb(0x59636e))
+                .text_color(marker_color)
                 .child(place.marker),
         )
         .child(
@@ -97,4 +111,18 @@ fn place_row(index: usize, place: PlaceSnapshot, cx: &mut Context<FikaApp>) -> S
                 })
                 .child(place.label),
         )
+        .when(place.trash_place, |row| {
+            row.child(
+                div()
+                    .id(format!("place-trash-state-{index}"))
+                    .w(px(7.0))
+                    .h(px(7.0))
+                    .rounded_full()
+                    .bg(if place.trash_has_items {
+                        rgb(0x2f6fed)
+                    } else {
+                        rgb(0xc8ced6)
+                    }),
+            )
+        })
 }

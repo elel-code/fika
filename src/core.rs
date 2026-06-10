@@ -1,9 +1,12 @@
 pub mod cache;
+pub mod clipboard;
 pub mod directory;
 pub mod entries;
 pub mod file_ops;
+pub mod filter;
 pub mod model;
 pub mod operations;
 pub mod pane;
 pub mod privilege;
+pub mod scroll;
 pub mod view;

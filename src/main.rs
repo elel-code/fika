@@ -2,22 +2,28 @@ mod ui;
 
 use fika_core::{
     CompactColumnMetrics, CompactLayout, CompactLayoutOptions, CreateUndoItem, CreatedItemKind,
-    DirectoryCache, DirectoryLister, DirectoryListerEvent, OperationQueue, PaneController, PaneId,
-    RenameUndoItem, SelectionMove, TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord,
-    ViewPoint, ViewRect, ViewState, ZoomChange, file_ops, nearest_existing_ancestor,
+    DirectoryCache, DirectoryLister, DirectoryListerEvent, FileClipboardRole, OperationQueue,
+    PaneController, PaneId, RenameUndoItem, SMOOTH_SCROLL_FRAME, ScrollBounds, ScrollDragTracker,
+    SelectionMove, SmoothScroll, TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord,
+    ViewPoint, ViewRect, ViewState, ZoomChange, decode_file_clipboard_text,
+    encode_file_clipboard_text, file_ops, nearest_existing_ancestor,
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Div, IntoElement, MouseButton, ParentElement, Render,
-    Stateful, Styled, Window, WindowBounds, WindowOptions, div, px, rgb, rgba, size,
+    App, Bounds, ClipboardEntry, ClipboardItem, Context, Div, IntoElement, MouseButton,
+    ParentElement, Render, Stateful, Styled, Window, WindowBounds, WindowOptions, div, px, rgb,
+    rgba, size,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque, hash_map::DefaultHasher};
 use std::env;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -170,12 +176,51 @@ struct PaneSnapshot {
     id: PaneId,
     breadcrumbs: Vec<BreadcrumbSegment>,
     location_draft: Option<String>,
-    item_count: usize,
+    filter_bar: Option<FilterBarSnapshot>,
+    status_bar: StatusBarSnapshot,
     layout: CompactLayout,
     visible_items: Vec<VisibleItemSnapshot>,
     view: ViewState,
     rubber_band: Option<ViewRect>,
     focused: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FilterBarSnapshot {
+    pub(crate) query: String,
+    pub(crate) focused: bool,
+    pub(crate) case_sensitive: bool,
+    pub(crate) mode: fika_core::NameFilterMode,
+    pub(crate) match_count: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StatusBarSnapshot {
+    pub(crate) message: String,
+    pub(crate) item_summary: String,
+    pub(crate) free_space: Option<SpaceInfoSnapshot>,
+    pub(crate) zoom_level: i32,
+    pub(crate) zoom_icon_size: f32,
+    pub(crate) zoom_min: i32,
+    pub(crate) zoom_max: i32,
+    pub(crate) operation_pending: bool,
+    pub(crate) operation_progress: Option<OperationProgressSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SpaceInfoSnapshot {
+    pub(crate) free_label: String,
+    pub(crate) detail_label: String,
+    pub(crate) used_percent: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OperationProgressSnapshot {
+    pub(crate) label: String,
+    pub(crate) bytes_done: u64,
+    pub(crate) bytes_total: u64,
+    pub(crate) percent: Option<u8>,
+    pub(crate) cancellable: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -238,11 +283,21 @@ struct ContextMenuState {
 
 #[derive(Clone, Debug, PartialEq)]
 enum ContextMenuTarget {
-    Blank,
+    Blank {
+        trash_view: bool,
+        trash_has_items: bool,
+    },
+    Place {
+        path: PathBuf,
+        trash_place: bool,
+        trash_has_items: bool,
+    },
     Item {
         path: PathBuf,
         is_dir: bool,
         selection_count: usize,
+        trash_view: bool,
+        trash_can_restore: bool,
     },
 }
 
@@ -255,6 +310,9 @@ enum ContextMenuAction {
     CopyLocation,
     Cut,
     Trash,
+    RestoreFromTrash,
+    DeletePermanently,
+    EmptyTrash,
     Properties,
     CreateFolder,
     Paste,
@@ -295,6 +353,8 @@ pub(crate) struct PlaceSnapshot {
     pub(crate) label: String,
     pub(crate) path: PathBuf,
     pub(crate) active: bool,
+    pub(crate) trash_place: bool,
+    pub(crate) trash_has_items: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -353,6 +413,67 @@ struct LocationDraft {
     value: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PaneFilterState {
+    visible: bool,
+    focused: bool,
+    query: String,
+    mode: fika_core::NameFilterMode,
+    case_sensitive: bool,
+}
+
+impl Default for PaneFilterState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            focused: false,
+            query: String::new(),
+            mode: fika_core::NameFilterMode::Glob,
+            case_sensitive: false,
+        }
+    }
+}
+
+impl PaneFilterState {
+    fn active_filter(&self) -> Option<fika_core::NameFilter> {
+        if self.query.is_empty() {
+            return None;
+        }
+        let filter = match self.mode {
+            fika_core::NameFilterMode::PlainText => {
+                fika_core::NameFilter::plain_text(self.query.clone())
+            }
+            fika_core::NameFilterMode::Glob => fika_core::NameFilter::glob(self.query.clone()),
+        }
+        .with_case_sensitive(self.case_sensitive);
+        Some(filter)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FilteredModelCacheKey {
+    model_generation: u64,
+    filter: fika_core::NameFilter,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FilteredModelCacheEntry {
+    key: FilteredModelCacheKey,
+    model: fika_core::FilteredModel,
+}
+
+#[derive(Clone, Debug)]
+struct PaneLayoutProjection {
+    layout: CompactLayout,
+    filtered: Option<fika_core::FilteredModel>,
+}
+
+impl PaneLayoutProjection {
+    fn model_index_for_layout_index(&self, layout_index: usize) -> Option<usize> {
+        model_index_for_layout_index(self.filtered.as_ref(), layout_index)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClipboardMode {
     Copy,
@@ -373,12 +494,240 @@ impl ClipboardMode {
             Self::Cut => "Move",
         }
     }
+
+    fn file_clipboard_role(self) -> FileClipboardRole {
+        match self {
+            Self::Copy => FileClipboardRole::Copy,
+            Self::Cut => FileClipboardRole::Cut,
+        }
+    }
+
+    fn from_file_clipboard_role(role: FileClipboardRole) -> Self {
+        match role {
+            FileClipboardRole::Copy => Self::Copy,
+            FileClipboardRole::Cut => Self::Cut,
+        }
+    }
+
+    fn metadata_tag(self) -> &'static str {
+        match self {
+            Self::Copy => "fika-file-clipboard:copy",
+            Self::Cut => "fika-file-clipboard:cut",
+        }
+    }
+
+    fn from_metadata_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "fika-file-clipboard:copy" => Some(Self::Copy),
+            "fika-file-clipboard:cut" => Some(Self::Cut),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ClipboardState {
     mode: ClipboardMode,
     paths: Vec<PathBuf>,
+    text: Option<String>,
+}
+
+impl ClipboardState {
+    fn files(mode: ClipboardMode, paths: Vec<PathBuf>) -> Self {
+        Self {
+            mode,
+            paths,
+            text: None,
+        }
+    }
+
+    fn text(text: String) -> Option<Self> {
+        (!text.is_empty()).then_some(Self {
+            mode: ClipboardMode::Copy,
+            paths: Vec::new(),
+            text: Some(text),
+        })
+    }
+
+    fn to_clipboard_item(&self) -> ClipboardItem {
+        if let Some(text) = &self.text {
+            return ClipboardItem::new_string(text.clone());
+        }
+        ClipboardItem::new_string_with_metadata(
+            encode_file_clipboard_text(self.mode.file_clipboard_role(), &self.paths),
+            self.mode.metadata_tag().to_string(),
+        )
+    }
+
+    fn from_clipboard_item(item: &ClipboardItem) -> Option<Self> {
+        let metadata_mode = item
+            .metadata()
+            .and_then(|tag| ClipboardMode::from_metadata_tag(tag.as_str()));
+        let external_paths = item
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                ClipboardEntry::ExternalPaths(paths) => Some(paths.paths()),
+                _ => None,
+            })
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>();
+        if !external_paths.is_empty() {
+            return Some(Self {
+                mode: metadata_mode.unwrap_or(ClipboardMode::Copy),
+                paths: external_paths,
+                text: None,
+            });
+        }
+
+        let text = item.text()?;
+        if let Some(payload) = decode_file_clipboard_text(&text) {
+            return Some(Self {
+                mode: metadata_mode
+                    .unwrap_or_else(|| ClipboardMode::from_file_clipboard_role(payload.role)),
+                paths: payload.paths,
+                text: None,
+            });
+        }
+
+        Self::text(text)
+    }
+
+    fn item_count(&self) -> usize {
+        if self.text.is_some() {
+            1
+        } else {
+            self.paths.len()
+        }
+    }
+
+    fn action_label(&self) -> &'static str {
+        if self.text.is_some() {
+            "Paste"
+        } else {
+            self.mode.label()
+        }
+    }
+
+    fn progress_label(&self) -> String {
+        if self.text.is_some() {
+            "Pasting text".to_string()
+        } else {
+            format!("{}ing {} item(s)", self.mode.label(), self.item_count())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct SpaceInfoCache {
+    path: Option<PathBuf>,
+    snapshot: Option<SpaceInfoSnapshot>,
+    request_in_flight: bool,
+    last_requested: Option<Instant>,
+}
+
+impl SpaceInfoCache {
+    const RETRY_AFTER: Duration = Duration::from_secs(30);
+
+    fn snapshot_for(&self, path: &Path) -> Option<SpaceInfoSnapshot> {
+        (self.path.as_deref() == Some(path))
+            .then(|| self.snapshot.clone())
+            .flatten()
+    }
+
+    fn should_request(&self, path: &Path, now: Instant) -> bool {
+        if self.request_in_flight && self.path.as_deref() == Some(path) {
+            return false;
+        }
+        if self.path.as_deref() != Some(path) {
+            return true;
+        }
+        if self.snapshot.is_some() {
+            return false;
+        }
+        self.last_requested
+            .is_none_or(|last_requested| now.duration_since(last_requested) >= Self::RETRY_AFTER)
+    }
+
+    fn start_request(&mut self, path: PathBuf, now: Instant) {
+        self.path = Some(path);
+        self.snapshot = None;
+        self.request_in_flight = true;
+        self.last_requested = Some(now);
+    }
+
+    fn finish_request(&mut self, path: &Path, snapshot: Option<SpaceInfoSnapshot>) -> bool {
+        if self.path.as_deref() != Some(path) {
+            return false;
+        }
+        self.request_in_flight = false;
+        self.snapshot = snapshot;
+        true
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StatusSummaryCacheKey {
+    model_generation: u64,
+    model_len: usize,
+    filter_revision: u64,
+    visible_len: usize,
+    selection_count: usize,
+    selection_revision: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StatusSummaryCacheEntry {
+    key: StatusSummaryCacheKey,
+    summary: String,
+}
+
+#[derive(Clone, Debug)]
+struct OperationProgressHandle {
+    pane_id: PaneId,
+    label: String,
+    progress: Arc<Mutex<file_ops::TransferProgress>>,
+    cancel: Option<Arc<AtomicBool>>,
+    started_at: Instant,
+}
+
+impl OperationProgressHandle {
+    fn snapshot(&self, now: Instant) -> Option<OperationProgressSnapshot> {
+        if !progress_delay_elapsed(self.started_at, now) {
+            return None;
+        }
+        let progress = *self
+            .progress
+            .lock()
+            .expect("operation progress state poisoned");
+        Some(OperationProgressSnapshot {
+            label: self.label.clone(),
+            bytes_done: progress.bytes_done,
+            bytes_total: progress.bytes_total,
+            percent: progress_percent(progress.bytes_done, progress.bytes_total),
+            cancellable: self.cancel.is_some(),
+        })
+    }
+}
+
+const PROGRESS_DISPLAY_DELAY: Duration = Duration::from_millis(500);
+
+#[derive(Clone, Copy, Debug)]
+struct LoadingPaneState {
+    key: ListingRequestKey,
+    started_at: Instant,
+}
+
+fn progress_percent(bytes_done: u64, bytes_total: u64) -> Option<u8> {
+    if bytes_total == 0 {
+        return None;
+    }
+    Some(((bytes_done.saturating_mul(100) + (bytes_total / 2)) / bytes_total).min(100) as u8)
+}
+
+fn progress_delay_elapsed(started_at: Instant, now: Instant) -> bool {
+    now.duration_since(started_at) >= PROGRESS_DISPLAY_DELAY
 }
 
 #[derive(Clone, Debug, Default)]
@@ -426,6 +775,7 @@ impl VisibleItemSlotPool {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CompactColumnWidthCacheKey {
     generation: u64,
+    source_revision: u64,
     item_count: usize,
     rows_per_column: usize,
     min_item_width: f32,
@@ -459,16 +809,46 @@ impl CompactColumnWidthCache {
         rows_per_column: usize,
         options: CompactLayoutOptions,
     ) -> CompactColumnMetrics {
+        self.metrics_for_model_view(model, None, 0, rows_per_column, options)
+    }
+
+    fn metrics_for_filtered_model(
+        &mut self,
+        model: &fika_core::DirectoryModel,
+        filtered: &fika_core::FilteredModel,
+        source_revision: u64,
+        rows_per_column: usize,
+        options: CompactLayoutOptions,
+    ) -> CompactColumnMetrics {
+        self.metrics_for_model_view(
+            model,
+            Some(filtered),
+            source_revision,
+            rows_per_column,
+            options,
+        )
+    }
+
+    fn metrics_for_model_view(
+        &mut self,
+        model: &fika_core::DirectoryModel,
+        filtered: Option<&fika_core::FilteredModel>,
+        source_revision: u64,
+        rows_per_column: usize,
+        options: CompactLayoutOptions,
+    ) -> CompactColumnMetrics {
+        let item_count = filtered.map_or_else(|| model.len(), fika_core::FilteredModel::len);
         let key = CompactColumnWidthCacheKey {
             generation: model.data_generation(),
-            item_count: model.len(),
+            source_revision,
+            item_count,
             rows_per_column,
             min_item_width: options.item_width,
             icon_size: options.icon_size,
             padding: options.padding,
             gap: options.gap,
         };
-        let column_count = model.len().div_ceil(rows_per_column);
+        let column_count = item_count.div_ceil(rows_per_column);
         let position = self.cached.iter().position(|entry| entry.key == key);
         let position = match position {
             Some(position) => position,
@@ -486,7 +866,7 @@ impl CompactColumnWidthCache {
         };
 
         let entry = &mut self.cached[position];
-        entry.resolve_visible_columns(model, rows_per_column, options);
+        entry.resolve_visible_columns(model, filtered, item_count, rows_per_column, options);
         entry.metrics(options)
     }
 }
@@ -523,6 +903,8 @@ impl CompactColumnWidthCacheEntry {
     fn resolve_visible_columns(
         &mut self,
         model: &fika_core::DirectoryModel,
+        filtered: Option<&fika_core::FilteredModel>,
+        item_count: usize,
         rows_per_column: usize,
         options: CompactLayoutOptions,
     ) {
@@ -532,13 +914,22 @@ impl CompactColumnWidthCacheEntry {
 
         for _ in 0..2 {
             let metrics = self.metrics(options);
-            let layout = CompactLayout::new_with_column_metrics(model.len(), options, metrics);
+            let layout = CompactLayout::new_with_column_metrics(item_count, options, metrics);
             let range = overscanned_column_range(
                 layout.visible_column_range(),
                 self.widths.len(),
                 CompactColumnWidthCache::COLUMN_OVERSCAN,
             );
-            if range.is_empty() || !self.resolve_columns(model, rows_per_column, options, range) {
+            if range.is_empty()
+                || !self.resolve_columns(
+                    model,
+                    filtered,
+                    item_count,
+                    rows_per_column,
+                    options,
+                    range,
+                )
+            {
                 break;
             }
         }
@@ -547,6 +938,8 @@ impl CompactColumnWidthCacheEntry {
     fn resolve_columns(
         &mut self,
         model: &fika_core::DirectoryModel,
+        filtered: Option<&fika_core::FilteredModel>,
+        item_count: usize,
         rows_per_column: usize,
         options: CompactLayoutOptions,
         columns: std::ops::Range<usize>,
@@ -562,10 +955,15 @@ impl CompactColumnWidthCacheEntry {
                 continue;
             }
             let start = column * rows_per_column;
-            let end = (start + rows_per_column).min(model.len());
+            let end = (start + rows_per_column).min(item_count);
             let mut width = options.item_width;
-            for entry in &model.entries()[start..end] {
-                width = width.max(required_compact_item_width(entry, options));
+            for layout_index in start..end {
+                let Some(model_index) = model_index_for_layout_index(filtered, layout_index) else {
+                    continue;
+                };
+                if let Some(entry) = model.get(model_index) {
+                    width = width.max(required_compact_item_width(entry, options));
+                }
             }
             if let Some(resolved) = self.resolved_columns.get_mut(column) {
                 *resolved = true;
@@ -604,9 +1002,27 @@ fn compact_text_width(name_width_units: u16) -> f32 {
     f32::from(name_width_units) * AVERAGE_COMPACT_CHAR_WIDTH
 }
 
+fn model_index_for_layout_index(
+    filtered: Option<&fika_core::FilteredModel>,
+    layout_index: usize,
+) -> Option<usize> {
+    filtered.map_or(Some(layout_index), |filtered| {
+        filtered.model_index(layout_index)
+    })
+}
+
+fn filter_source_revision(filter: &fika_core::NameFilter) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    filter.hash(&mut hasher);
+    match hasher.finish() {
+        0 => 1,
+        revision => revision,
+    }
+}
+
 fn format_entry_kind_label(entry: &fika_core::EntryData) -> String {
-    if let Some(label) = &entry.trash_deletion_label {
-        return label.to_string();
+    if let Some(deletion_time) = &entry.trash_deletion_time {
+        return fika_core::format_trash_deletion_time(deletion_time);
     }
     if entry.is_dir {
         "Folder".to_string()
@@ -715,10 +1131,40 @@ fn compact_layout_for_model(
     model: &fika_core::DirectoryModel,
     view: &ViewState,
 ) -> CompactLayout {
+    compact_layout_for_model_view(cache, model, None, 0, view)
+}
+
+fn compact_layout_for_filtered_model(
+    cache: &mut CompactColumnWidthCache,
+    model: &fika_core::DirectoryModel,
+    filtered: &fika_core::FilteredModel,
+    source_revision: u64,
+    view: &ViewState,
+) -> CompactLayout {
+    compact_layout_for_model_view(cache, model, Some(filtered), source_revision, view)
+}
+
+fn compact_layout_for_model_view(
+    cache: &mut CompactColumnWidthCache,
+    model: &fika_core::DirectoryModel,
+    filtered: Option<&fika_core::FilteredModel>,
+    source_revision: u64,
+    view: &ViewState,
+) -> CompactLayout {
+    let item_count = filtered.map_or_else(|| model.len(), fika_core::FilteredModel::len);
     let options = ui::file_grid::compact_layout_options(view, 0.0);
     let rows_per_column = CompactLayout::rows_per_column_for_options(options);
-    let metrics = cache.metrics_for_model(model, rows_per_column, options);
-    let layout = CompactLayout::new_with_column_metrics(model.len(), options, metrics);
+    let metrics = match filtered {
+        Some(filtered) => cache.metrics_for_filtered_model(
+            model,
+            filtered,
+            source_revision,
+            rows_per_column,
+            options,
+        ),
+        None => cache.metrics_for_model(model, rows_per_column, options),
+    };
+    let layout = CompactLayout::new_with_column_metrics(item_count, options, metrics);
 
     if layout
         .horizontal_scroll_bar(
@@ -732,8 +1178,17 @@ fn compact_layout_for_model(
 
     let options = ui::file_grid::compact_layout_options(view, ui::file_grid::SCROLLBAR_THICKNESS);
     let rows_per_column = CompactLayout::rows_per_column_for_options(options);
-    let metrics = cache.metrics_for_model(model, rows_per_column, options);
-    CompactLayout::new_with_column_metrics(model.len(), options, metrics)
+    let metrics = match filtered {
+        Some(filtered) => cache.metrics_for_filtered_model(
+            model,
+            filtered,
+            source_revision,
+            rows_per_column,
+            options,
+        ),
+        None => cache.metrics_for_model(model, rows_per_column, options),
+    };
+    CompactLayout::new_with_column_metrics(item_count, options, metrics)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1149,6 +1604,104 @@ fn listing_refreshed_entries(
     })
 }
 
+fn update_loading_state_for_event(
+    loading_panes: &mut HashMap<PaneId, LoadingPaneState>,
+    pane: Option<&fika_core::PaneState>,
+    event: &DirectoryListerEvent,
+    now: Instant,
+) {
+    match event {
+        DirectoryListerEvent::LoadingStarted {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        } => {
+            if pane.is_some_and(|pane| {
+                event.matches_target(pane.id, pane.generation, &pane.current_dir)
+            }) {
+                loading_panes.insert(
+                    *pane_id,
+                    LoadingPaneState {
+                        key: ListingRequestKey {
+                            generation: *generation,
+                            request_serial: *request_serial,
+                        },
+                        started_at: now,
+                    },
+                );
+            } else {
+                loading_panes.remove(pane_id);
+            }
+        }
+        DirectoryListerEvent::ListingCompleted {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        }
+        | DirectoryListerEvent::Error {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        }
+        | DirectoryListerEvent::CurrentDirectoryRemoved {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        } => {
+            let key = ListingRequestKey {
+                generation: *generation,
+                request_serial: *request_serial,
+            };
+            if loading_panes
+                .get(pane_id)
+                .is_some_and(|state| state.key == key)
+            {
+                loading_panes.remove(pane_id);
+            }
+        }
+        DirectoryListerEvent::ListingRefreshed {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        }
+        | DirectoryListerEvent::ItemsAdded {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        }
+        | DirectoryListerEvent::ItemsDeleted {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        }
+        | DirectoryListerEvent::ItemsRefreshed {
+            pane_id,
+            generation,
+            request_serial,
+            ..
+        } => {
+            let Some(pane) = pane else {
+                loading_panes.remove(pane_id);
+                return;
+            };
+            if pane.generation != *generation
+                || loading_panes
+                    .get(pane_id)
+                    .is_some_and(|state| state.key.request_serial < *request_serial)
+            {
+                loading_panes.remove(pane_id);
+            }
+        }
+    }
+}
+
 fn listing_worker_loop(state: Arc<(Mutex<ListingWorkerState>, Condvar)>) {
     loop {
         let batch = {
@@ -1181,9 +1734,17 @@ pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
     places: Vec<PlaceEntry>,
     file_icons: FileIconCache,
+    space_info: SpaceInfoCache,
+    status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
+    loading_panes: HashMap<PaneId, LoadingPaneState>,
+    smooth_scrolls: HashMap<PaneId, SmoothScroll>,
+    scroll_drag_trackers: HashMap<PaneId, ScrollDragTracker>,
+    smooth_scroll_tick_running: bool,
     viewport_origins: HashMap<PaneId, ViewPoint>,
     visible_item_slots: HashMap<PaneId, VisibleItemSlotPool>,
     compact_column_widths: HashMap<PaneId, CompactColumnWidthCache>,
+    pane_filters: HashMap<PaneId, PaneFilterState>,
+    filtered_models: HashMap<PaneId, FilteredModelCacheEntry>,
     operations: OperationQueue,
     clipboard: Option<ClipboardState>,
     rename_draft: Option<RenameDraft>,
@@ -1194,8 +1755,10 @@ pub(crate) struct FikaApp {
     pub(crate) rubber_band: Option<RubberBandState>,
     context_menu: Option<ContextMenuState>,
     properties_dialog: Option<PropertiesDialogState>,
+    pane_statuses: HashMap<PaneId, String>,
     operation_pending: bool,
-    status: String,
+    operation_pane: Option<PaneId>,
+    operation_progress: Option<OperationProgressHandle>,
 }
 
 impl FikaApp {
@@ -1220,9 +1783,17 @@ impl FikaApp {
             panes: PaneController::new(args.start_dir.clone()),
             places: build_places(),
             file_icons: FileIconCache::default(),
+            space_info: SpaceInfoCache::default(),
+            status_summaries: HashMap::new(),
+            loading_panes: HashMap::new(),
+            smooth_scrolls: HashMap::new(),
+            scroll_drag_trackers: HashMap::new(),
+            smooth_scroll_tick_running: false,
             viewport_origins: HashMap::new(),
             visible_item_slots: HashMap::new(),
             compact_column_widths: HashMap::new(),
+            pane_filters: HashMap::new(),
+            filtered_models: HashMap::new(),
             operations: OperationQueue::new(),
             clipboard: None,
             rename_draft: None,
@@ -1233,8 +1804,10 @@ impl FikaApp {
             rubber_band: None,
             context_menu: None,
             properties_dialog: None,
+            pane_statuses: HashMap::new(),
             operation_pending: false,
-            status: String::new(),
+            operation_pane: None,
+            operation_progress: None,
         };
         app._keystroke_subscription = Some(cx.observe_keystrokes(|this, event, _window, cx| {
             if this.handle_keystroke(event, cx) {
@@ -1251,7 +1824,11 @@ impl FikaApp {
                     async_io::Timer::after(Duration::from_millis(350)).await;
                     if this
                         .update(&mut cx, |app, cx| {
-                            if app.drain_background_listing_results() | app.drain_watchers() {
+                            if app.drain_background_listing_results()
+                                | app.drain_watchers()
+                                | app.operation_progress.is_some()
+                                | !app.loading_panes.is_empty()
+                            {
                                 cx.notify();
                             }
                         })
@@ -1266,16 +1843,240 @@ impl FikaApp {
         app
     }
 
-    fn snapshots(&mut self) -> Vec<PaneSnapshot> {
+    fn active_filter_for_pane(&self, pane_id: PaneId) -> Option<fika_core::NameFilter> {
+        self.pane_filters
+            .get(&pane_id)
+            .and_then(PaneFilterState::active_filter)
+    }
+
+    fn filtered_model_for_pane(
+        &mut self,
+        pane_id: PaneId,
+    ) -> Option<(fika_core::FilteredModel, u64)> {
+        let Some(filter) = self.active_filter_for_pane(pane_id) else {
+            self.filtered_models.remove(&pane_id);
+            return None;
+        };
+        let source_revision = filter_source_revision(&filter);
+        let model_generation = self.panes.pane(pane_id)?.model.data_generation();
+        let key = FilteredModelCacheKey {
+            model_generation,
+            filter: filter.clone(),
+        };
+        if let Some(cached) = self
+            .filtered_models
+            .get(&pane_id)
+            .filter(|cached| cached.key == key)
+        {
+            return Some((cached.model.clone(), source_revision));
+        }
+
+        let model = {
+            let pane = self.panes.pane(pane_id)?;
+            fika_core::FilteredModel::from_model(&pane.model, &filter)
+        };
+        self.filtered_models.insert(
+            pane_id,
+            FilteredModelCacheEntry {
+                key,
+                model: model.clone(),
+            },
+        );
+        Some((model, source_revision))
+    }
+
+    fn filter_bar_snapshot(
+        &self,
+        pane_id: PaneId,
+        focused_pane: Option<PaneId>,
+        match_count: usize,
+    ) -> Option<FilterBarSnapshot> {
+        let filter = self
+            .pane_filters
+            .get(&pane_id)
+            .filter(|filter| filter.visible)?;
+        Some(FilterBarSnapshot {
+            query: filter.query.clone(),
+            focused: filter.focused && focused_pane == Some(pane_id),
+            case_sensitive: filter.case_sensitive,
+            mode: filter.mode,
+            match_count,
+        })
+    }
+
+    pub(crate) fn show_filter_bar(&mut self, pane_id: PaneId) {
+        self.panes.focus(pane_id);
+        self.dismiss_context_menu();
+        self.clear_rename_draft_for_pane(pane_id);
+        self.clear_location_draft_for_pane(pane_id);
+        let filter = self.pane_filters.entry(pane_id).or_default();
+        filter.visible = true;
+        filter.focused = true;
+        self.set_pane_status(pane_id, "Filter");
+    }
+
+    pub(crate) fn focus_filter_bar(&mut self, pane_id: PaneId) {
+        self.show_filter_bar(pane_id);
+    }
+
+    pub(crate) fn close_filter_bar(&mut self, pane_id: PaneId) {
+        if let Some(filter) = self.pane_filters.get_mut(&pane_id) {
+            filter.visible = false;
+            filter.focused = false;
+            filter.query.clear();
+        }
+        self.invalidate_filter_projection(pane_id);
+        self.set_pane_status(pane_id, "Filter closed");
+    }
+
+    fn set_filter_query(&mut self, pane_id: PaneId, query: String) {
+        let filter = self.pane_filters.entry(pane_id).or_default();
+        filter.visible = true;
+        filter.focused = true;
+        if filter.query == query {
+            return;
+        }
+        filter.query = query;
+        self.invalidate_filter_projection(pane_id);
+        self.set_pane_status(pane_id, "Filtering");
+    }
+
+    pub(crate) fn toggle_filter_case_sensitive(&mut self, pane_id: PaneId) {
+        let filter = self.pane_filters.entry(pane_id).or_default();
+        filter.visible = true;
+        filter.focused = true;
+        filter.case_sensitive = !filter.case_sensitive;
+        let enabled = filter.case_sensitive;
+        self.invalidate_filter_projection(pane_id);
+        let message = if enabled {
+            "Filter match case"
+        } else {
+            "Filter ignore case"
+        };
+        self.set_pane_status(pane_id, message);
+    }
+
+    pub(crate) fn toggle_filter_mode(&mut self, pane_id: PaneId) {
+        let filter = self.pane_filters.entry(pane_id).or_default();
+        filter.visible = true;
+        filter.focused = true;
+        filter.mode = match filter.mode {
+            fika_core::NameFilterMode::PlainText => fika_core::NameFilterMode::Glob,
+            fika_core::NameFilterMode::Glob => fika_core::NameFilterMode::PlainText,
+        };
+        let mode = filter.mode;
+        self.invalidate_filter_projection(pane_id);
+        let message = match mode {
+            fika_core::NameFilterMode::PlainText => "Plain text filter",
+            fika_core::NameFilterMode::Glob => "Glob filter",
+        };
+        self.set_pane_status(pane_id, message);
+    }
+
+    fn clear_filter_query_for_pane(&mut self, pane_id: PaneId) {
+        if let Some(filter) = self.pane_filters.get_mut(&pane_id) {
+            filter.query.clear();
+        }
+        self.invalidate_filter_projection(pane_id);
+    }
+
+    fn clear_filter_query_for_url_change(&mut self, pane_id: PaneId) {
+        let Some(filter) = self.pane_filters.get_mut(&pane_id) else {
+            return;
+        };
+        if filter.query.is_empty() {
+            return;
+        }
+        filter.query.clear();
+        filter.focused = false;
+        self.filtered_models.remove(&pane_id);
+        self.compact_column_widths.remove(&pane_id);
+        self.status_summaries.remove(&pane_id);
+    }
+
+    fn invalidate_filter_projection(&mut self, pane_id: PaneId) {
+        self.filtered_models.remove(&pane_id);
+        self.compact_column_widths.remove(&pane_id);
+        self.status_summaries.remove(&pane_id);
+        self.smooth_scrolls.remove(&pane_id);
+        self.scroll_drag_trackers.remove(&pane_id);
+        if let Some(pane) = self.panes.pane_mut(pane_id) {
+            pane.view.reset_scroll();
+        }
+    }
+
+    fn clear_filter_focus_for_pane(&mut self, pane_id: PaneId) {
+        if let Some(filter) = self.pane_filters.get_mut(&pane_id) {
+            filter.focused = false;
+        }
+    }
+
+    fn handle_filter_keystroke(&mut self, pane_id: PaneId, keystroke: &gpui::Keystroke) -> bool {
+        if !self
+            .pane_filters
+            .get(&pane_id)
+            .is_some_and(|filter| filter.visible && filter.focused)
+        {
+            return false;
+        }
+
+        match filter_input_action(keystroke) {
+            FilterInputAction::Cancel => {
+                let query_empty = self
+                    .pane_filters
+                    .get(&pane_id)
+                    .is_none_or(|filter| filter.query.is_empty());
+                if query_empty {
+                    self.close_filter_bar(pane_id);
+                } else {
+                    self.clear_filter_query_for_pane(pane_id);
+                    self.set_pane_status(pane_id, "Filter cleared");
+                }
+            }
+            FilterInputAction::FocusView => {
+                self.clear_filter_focus_for_pane(pane_id);
+            }
+            FilterInputAction::Backspace => {
+                let next = self
+                    .pane_filters
+                    .get(&pane_id)
+                    .map(|filter| {
+                        let mut query = filter.query.clone();
+                        query.pop();
+                        query
+                    })
+                    .unwrap_or_default();
+                self.set_filter_query(pane_id, next);
+            }
+            FilterInputAction::Insert(text) => {
+                let mut next = self
+                    .pane_filters
+                    .get(&pane_id)
+                    .map(|filter| filter.query.clone())
+                    .unwrap_or_default();
+                next.push_str(&text);
+                self.set_filter_query(pane_id, next);
+            }
+            FilterInputAction::PassToView => {
+                self.clear_filter_focus_for_pane(pane_id);
+                return false;
+            }
+            FilterInputAction::Ignore => return false,
+        }
+        true
+    }
+
+    fn snapshots(&mut self, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
         let focused_pane = self.panes.focused();
         let pane_ids = self.panes.pane_ids().to_vec();
         pane_ids
             .into_iter()
             .filter_map(|pane_id| {
+                let filtered_model = self.filtered_model_for_pane(pane_id);
                 let (
                     breadcrumbs,
                     location_draft,
-                    item_count,
+                    filter_bar,
                     layout,
                     view,
                     rubber_band,
@@ -1283,6 +2084,9 @@ impl FikaApp {
                     visible_data,
                 ) = {
                     let pane = self.panes.pane(pane_id)?;
+                    let filtered = filtered_model.as_ref().map(|(model, _)| model);
+                    let source_revision =
+                        filtered_model.as_ref().map_or(0, |(_, revision)| *revision);
                     let rename_draft = self
                         .rename_draft
                         .as_ref()
@@ -1292,19 +2096,29 @@ impl FikaApp {
                         .as_ref()
                         .filter(|draft| draft.pane_id == pane_id)
                         .map(|draft| draft.value.clone());
-                    let item_count = pane.model.len();
-                    let layout = compact_layout_for_model(
-                        self.compact_column_widths.entry(pane_id).or_default(),
-                        &pane.model,
-                        &pane.view,
-                    );
+                    let layout = match filtered {
+                        Some(filtered) => compact_layout_for_filtered_model(
+                            self.compact_column_widths.entry(pane_id).or_default(),
+                            &pane.model,
+                            filtered,
+                            source_revision,
+                            &pane.view,
+                        ),
+                        None => compact_layout_for_model(
+                            self.compact_column_widths.entry(pane_id).or_default(),
+                            &pane.model,
+                            &pane.view,
+                        ),
+                    };
                     let visible_data = layout
                         .visible_items()
                         .filter_map(|visible_item| {
-                            let entry = pane.model.get(visible_item.model_index)?;
-                            let path = pane.model.path_for_index(visible_item.model_index)?;
+                            let layout_index = visible_item.model_index;
+                            let model_index = model_index_for_layout_index(filtered, layout_index)?;
+                            let entry = pane.model.get(model_index)?;
+                            let path = pane.model.path_for_index(model_index)?;
                             let item_layout = layout.item_with_required_text_width(
-                                visible_item.model_index,
+                                layout_index,
                                 Some(compact_text_width(entry.name_width_units)),
                             )?;
                             let selected = pane.selection.is_selected(entry.id);
@@ -1326,7 +2140,12 @@ impl FikaApp {
                     (
                         breadcrumb_segments(&pane.current_dir),
                         location_draft,
-                        item_count,
+                        self.filter_bar_snapshot(
+                            pane_id,
+                            focused_pane,
+                            filtered
+                                .map_or_else(|| pane.model.len(), fika_core::FilteredModel::len),
+                        ),
                         layout,
                         pane.view.clone(),
                         self.rubber_band.and_then(|band| {
@@ -1374,11 +2193,13 @@ impl FikaApp {
                         },
                     )
                     .collect::<Vec<_>>();
+                let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 Some(PaneSnapshot {
                     id: pane_id,
                     breadcrumbs,
                     location_draft,
-                    item_count,
+                    filter_bar,
+                    status_bar,
                     layout,
                     visible_items,
                     view,
@@ -1387,6 +2208,224 @@ impl FikaApp {
                 })
             })
             .collect()
+    }
+
+    fn status_bar_snapshot_for_pane(
+        &mut self,
+        pane_id: PaneId,
+        cx: &mut Context<Self>,
+    ) -> StatusBarSnapshot {
+        let now = Instant::now();
+        let message = self.status_message_for_pane(pane_id);
+        let operation_pending = self.operation_pane == Some(pane_id) && self.operation_pending;
+        let Some((path, zoom_level, zoom_icon_size)) = self.panes.pane(pane_id).map(|pane| {
+            (
+                pane.current_dir.clone(),
+                pane.view.zoom_level,
+                pane.view.icon_size(),
+            )
+        }) else {
+            return StatusBarSnapshot {
+                message,
+                item_summary: "0 folders, 0 files".to_string(),
+                free_space: None,
+                zoom_level: fika_core::DEFAULT_ZOOM_LEVEL,
+                zoom_icon_size: fika_core::icon_size_for_zoom_level(fika_core::DEFAULT_ZOOM_LEVEL),
+                zoom_min: fika_core::MIN_ZOOM_LEVEL,
+                zoom_max: fika_core::MAX_ZOOM_LEVEL,
+                operation_pending,
+                operation_progress: self.operation_progress_snapshot_for_pane(pane_id, now),
+            };
+        };
+
+        self.request_space_info_if_needed(path.clone(), cx);
+        let operation_progress = self
+            .operation_progress_snapshot_for_pane(pane_id, now)
+            .or_else(|| self.loading_progress_snapshot(pane_id, now));
+        StatusBarSnapshot {
+            message,
+            item_summary: self
+                .status_summary_for_pane(pane_id)
+                .unwrap_or_else(|| "0 folders, 0 files".to_string()),
+            free_space: self.space_info.snapshot_for(&path),
+            zoom_level,
+            zoom_icon_size,
+            zoom_min: fika_core::MIN_ZOOM_LEVEL,
+            zoom_max: fika_core::MAX_ZOOM_LEVEL,
+            operation_pending,
+            operation_progress,
+        }
+    }
+
+    fn status_message_for_pane(&self, pane_id: PaneId) -> String {
+        self.pane_statuses
+            .get(&pane_id)
+            .filter(|message| !message.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "Ready".to_string())
+    }
+
+    fn set_pane_status(&mut self, pane_id: PaneId, message: impl Into<String>) {
+        self.pane_statuses.insert(pane_id, message.into());
+    }
+
+    fn begin_pane_operation(&mut self, pane_id: PaneId, message: impl Into<String>) {
+        self.operation_pending = true;
+        self.operation_pane = Some(pane_id);
+        self.set_pane_status(pane_id, message);
+    }
+
+    fn finish_pane_operation(&mut self, pane_id: PaneId, message: impl Into<String>) {
+        self.operation_pending = false;
+        self.operation_pane = None;
+        self.set_pane_status(pane_id, message);
+    }
+
+    fn operation_progress_snapshot_for_pane(
+        &self,
+        pane_id: PaneId,
+        now: Instant,
+    ) -> Option<OperationProgressSnapshot> {
+        self.operation_progress
+            .as_ref()
+            .filter(|progress| progress.pane_id == pane_id)
+            .and_then(|progress| progress.snapshot(now))
+    }
+
+    fn loading_progress_snapshot(
+        &self,
+        pane_id: PaneId,
+        now: Instant,
+    ) -> Option<OperationProgressSnapshot> {
+        self.loading_panes.get(&pane_id).and_then(|loading| {
+            progress_delay_elapsed(loading.started_at, now).then(|| OperationProgressSnapshot {
+                label: "Loading".to_string(),
+                bytes_done: 0,
+                bytes_total: 0,
+                percent: None,
+                cancellable: true,
+            })
+        })
+    }
+
+    fn start_transfer_progress(
+        &mut self,
+        pane_id: PaneId,
+        label: String,
+    ) -> (Arc<AtomicBool>, Arc<Mutex<file_ops::TransferProgress>>) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(Mutex::new(file_ops::TransferProgress::default()));
+        self.operation_progress = Some(OperationProgressHandle {
+            pane_id,
+            label,
+            progress: Arc::clone(&progress),
+            cancel: Some(Arc::clone(&cancel)),
+            started_at: Instant::now(),
+        });
+        (cancel, progress)
+    }
+
+    fn clear_operation_progress(&mut self) {
+        self.operation_progress = None;
+    }
+
+    pub(crate) fn cancel_operation_or_loading(&mut self, pane_id: PaneId) {
+        if let Some(progress) = &self.operation_progress
+            && progress.pane_id == pane_id
+            && let Some(cancel) = &progress.cancel
+        {
+            cancel.store(true, Ordering::Relaxed);
+            self.set_pane_status(pane_id, format!("Cancelling {}", progress.label));
+            return;
+        }
+        self.cancel_loading(pane_id);
+    }
+
+    pub(crate) fn cancel_loading(&mut self, pane_id: PaneId) {
+        if self.loading_panes.remove(&pane_id).is_some() {
+            self.listing_worker.cancel_pane(pane_id);
+            self.set_pane_status(pane_id, "Loading stopped");
+        }
+    }
+
+    fn status_summary_for_pane(&mut self, pane_id: PaneId) -> Option<String> {
+        let filtered = self.filtered_model_for_pane(pane_id);
+        let (key, summary) = {
+            let pane = self.panes.pane(pane_id)?;
+            let filter_revision = filtered.as_ref().map_or(0, |(_, revision)| *revision);
+            let visible_len = filtered
+                .as_ref()
+                .map_or_else(|| pane.model.len(), |(filtered, _)| filtered.len());
+            let selection_count = pane.selection.count_for_model(pane.model.len());
+            let key = StatusSummaryCacheKey {
+                model_generation: pane.model.data_generation(),
+                model_len: pane.model.len(),
+                filter_revision,
+                visible_len,
+                selection_count,
+                selection_revision: pane.selection.revision(),
+            };
+            if let Some(cached) = self
+                .status_summaries
+                .get(&pane_id)
+                .filter(|cached| cached.key == key)
+            {
+                return Some(cached.summary.clone());
+            }
+            let summary = match filtered {
+                Some((filtered, _)) if pane.selection.is_empty() => {
+                    status_summary_for_model_indexes(
+                        pane.model.entries(),
+                        filtered.iter_model_indexes(),
+                        &pane.selection,
+                    )
+                }
+                _ => status_summary_for_model(pane.model.entries(), &pane.selection),
+            };
+            (key, summary)
+        };
+        self.status_summaries.insert(
+            pane_id,
+            StatusSummaryCacheEntry {
+                key,
+                summary: summary.clone(),
+            },
+        );
+        Some(summary)
+    }
+
+    fn request_space_info_if_needed(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        if !self.space_info.should_request(&path, now) {
+            return;
+        }
+        self.space_info.start_request(path.clone(), now);
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let request_path = path.clone();
+                    let snapshot = cx
+                        .background_spawn(async move { filesystem_space_info(request_path) })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        if app.finish_space_info_request(path, snapshot) {
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_space_info_request(
+        &mut self,
+        path: PathBuf,
+        snapshot: Option<SpaceInfoSnapshot>,
+    ) -> bool {
+        self.space_info.finish_request(&path, snapshot)
     }
 
     fn place_snapshots(&self) -> Vec<PlaceSnapshot> {
@@ -1400,12 +2439,17 @@ impl FikaApp {
         self.places
             .iter()
             .enumerate()
-            .map(|(index, place)| PlaceSnapshot {
-                group: place.group,
-                marker: place.marker,
-                label: place.label.clone(),
-                path: place.path.clone(),
-                active: active_index == Some(index),
+            .map(|(index, place)| {
+                let trash_place = file_ops::is_trash_files_dir(&place.path);
+                PlaceSnapshot {
+                    group: place.group,
+                    marker: place.marker,
+                    label: place.label.clone(),
+                    path: place.path.clone(),
+                    active: active_index == Some(index),
+                    trash_place,
+                    trash_has_items: trash_place && file_ops::trash_has_items(),
+                }
             })
             .collect()
     }
@@ -1420,16 +2464,46 @@ impl FikaApp {
         self.load_pane(pane_id, path);
     }
 
+    fn show_place_context_menu(
+        &mut self,
+        path: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
+    ) {
+        let Some(pane_id) = self.panes.focused() else {
+            return;
+        };
+        let trash_place = file_ops::is_trash_files_dir(&path);
+        self.context_menu = Some(ContextMenuState {
+            pane_id,
+            target: ContextMenuTarget::Place {
+                path,
+                trash_place,
+                trash_has_items: trash_place && file_ops::trash_has_items(),
+            },
+            position: ViewPoint {
+                x: position.x.as_f32(),
+                y: position.y.as_f32(),
+            },
+        });
+    }
+
     fn load_pane(&mut self, pane_id: PaneId, path: PathBuf) {
+        let url_changed = self
+            .panes
+            .pane(pane_id)
+            .is_some_and(|pane| pane.current_dir != path);
         let Some(event) = self.panes.load(pane_id, path.clone()) else {
             return;
         };
         self.clear_pane_transient_state(pane_id);
+        if url_changed {
+            self.clear_filter_query_for_url_change(pane_id);
+        }
         let cached_events = self.schedule_listing(&event);
         self.apply_event(event);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
-        self.status = format!("Loading {}", path.display());
+        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
     }
 
     fn reload_pane(&mut self, pane_id: PaneId) {
@@ -1446,7 +2520,7 @@ impl FikaApp {
             .pane(pane_id)
             .map(|pane| pane.current_dir.clone())
         {
-            self.status = format!("Reloading {}", path.display());
+            self.set_pane_status(pane_id, format!("Reloading {}", path.display()));
         }
     }
 
@@ -1455,12 +2529,13 @@ impl FikaApp {
             return;
         };
         self.clear_pane_transient_state(pane_id);
+        self.clear_filter_query_for_url_change(pane_id);
         let path = event.path().to_path_buf();
         let cached_events = self.schedule_listing(&event);
         self.apply_event(event);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
-        self.status = format!("Loading {}", path.display());
+        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
     }
 
     fn go_forward(&mut self, pane_id: PaneId) {
@@ -1468,12 +2543,13 @@ impl FikaApp {
             return;
         };
         self.clear_pane_transient_state(pane_id);
+        self.clear_filter_query_for_url_change(pane_id);
         let path = event.path().to_path_buf();
         let cached_events = self.schedule_listing(&event);
         self.apply_event(event);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
-        self.status = format!("Loading {}", path.display());
+        self.set_pane_status(pane_id, format!("Loading {}", path.display()));
     }
 
     fn go_parent(&mut self, pane_id: PaneId) {
@@ -1492,7 +2568,7 @@ impl FikaApp {
             return;
         };
         self.start_watcher(new_id);
-        self.status = format!("Split pane {}", new_id.0);
+        self.set_pane_status(new_id, format!("Split pane {}", new_id.0));
     }
 
     fn open_path_in_new_pane(&mut self, source_pane_id: PaneId, path: PathBuf) {
@@ -1506,14 +2582,23 @@ impl FikaApp {
         if self.panes.close(pane_id) {
             self.listing_worker.cancel_pane(pane_id);
             self.clear_pane_transient_state(pane_id);
-            self.status = format!("Closed pane {}", pane_id.0);
+            self.pane_filters.remove(&pane_id);
+            if let Some(focused_pane) = self.panes.focused() {
+                self.set_pane_status(focused_pane, format!("Closed pane {}", pane_id.0));
+            }
         }
     }
 
     fn clear_pane_transient_state(&mut self, pane_id: PaneId) {
         self.visible_item_slots.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
+        self.status_summaries.remove(&pane_id);
+        self.filtered_models.remove(&pane_id);
+        self.loading_panes.remove(&pane_id);
+        self.smooth_scrolls.remove(&pane_id);
+        self.scroll_drag_trackers.remove(&pane_id);
         self.viewport_origins.remove(&pane_id);
+        self.pane_statuses.remove(&pane_id);
         if self
             .rubber_band
             .as_ref()
@@ -1538,7 +2623,7 @@ impl FikaApp {
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             let selected = self.panes.selected_count(pane_id).unwrap_or_default();
-            self.status = format!("{selected} selected");
+            self.set_pane_status(pane_id, format!("{selected} selected"));
         }
     }
 
@@ -1547,23 +2632,33 @@ impl FikaApp {
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
             let selected = self.panes.selected_count(pane_id).unwrap_or_default();
-            self.status = format!("{selected} selected");
+            self.set_pane_status(pane_id, format!("{selected} selected"));
         }
     }
 
     fn select_range_to(&mut self, pane_id: PaneId, path: PathBuf) {
-        if let Some(selected) = self.panes.select_range_to(pane_id, path) {
+        let selected = if let Some((filtered, _)) = self.filtered_model_for_pane(pane_id) {
+            self.select_filtered_range_to(pane_id, &filtered, path)
+        } else {
+            self.panes.select_range_to(pane_id, path)
+        };
+        if let Some(selected) = selected {
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
-            self.status = format!("{selected} selected");
+            self.set_pane_status(pane_id, format!("{selected} selected"));
         }
     }
 
     fn select_all(&mut self, pane_id: PaneId) {
-        if let Some(selected) = self.panes.select_all(pane_id) {
+        let selected = if let Some((filtered, _)) = self.filtered_model_for_pane(pane_id) {
+            self.select_all_filtered(pane_id, &filtered)
+        } else {
+            self.panes.select_all(pane_id)
+        };
+        if let Some(selected) = selected {
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
-            self.status = format!("{selected} selected");
+            self.set_pane_status(pane_id, format!("{selected} selected"));
         }
     }
 
@@ -1571,40 +2666,351 @@ impl FikaApp {
         if self.panes.clear_selection(pane_id) {
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
-            self.status = "Selection cleared".to_string();
+            self.set_pane_status(pane_id, "Selection cleared");
         }
     }
 
     fn move_selection(&mut self, pane_id: PaneId, direction: SelectionMove, extend: bool) {
-        if let Some(selected) = self.panes.move_selection(pane_id, direction, extend) {
+        let selected = if let Some((filtered, _)) = self.filtered_model_for_pane(pane_id) {
+            self.move_filtered_selection(pane_id, &filtered, direction, extend)
+        } else {
+            self.panes.move_selection(pane_id, direction, extend)
+        };
+        if let Some(selected) = selected {
             self.clear_rename_draft_for_pane(pane_id);
             self.clear_location_draft_for_pane(pane_id);
-            self.status = format!("{selected} selected");
+            self.set_pane_status(pane_id, format!("{selected} selected"));
         }
     }
 
+    fn select_all_filtered(
+        &mut self,
+        pane_id: PaneId,
+        filtered: &fika_core::FilteredModel,
+    ) -> Option<usize> {
+        let pane = self.panes.pane_mut(pane_id)?;
+        let ids = filtered
+            .iter_model_indexes()
+            .filter_map(|index| pane.model.get(index).map(|entry| entry.id))
+            .collect::<Vec<_>>();
+        let count = ids.len();
+        pane.selection.replace(ids);
+        Some(count)
+    }
+
+    fn select_filtered_range_to(
+        &mut self,
+        pane_id: PaneId,
+        filtered: &fika_core::FilteredModel,
+        path: PathBuf,
+    ) -> Option<usize> {
+        let pane = self.panes.pane_mut(pane_id)?;
+        let target_model_index = pane.model.index_of_path(&path)?;
+        let target_layout_index = filtered.layout_index_for_model_index(target_model_index)?;
+        let target_id = pane.model.get(target_model_index)?.id;
+        let anchor_id = pane
+            .selection
+            .anchor_id()
+            .filter(|id| {
+                pane.model
+                    .index_of_id(*id)
+                    .and_then(|index| filtered.layout_index_for_model_index(index))
+                    .is_some()
+            })
+            .unwrap_or(target_id);
+        let anchor_layout_index = pane
+            .model
+            .index_of_id(anchor_id)
+            .and_then(|index| filtered.layout_index_for_model_index(index))
+            .unwrap_or(target_layout_index);
+        let (start, end) = if anchor_layout_index <= target_layout_index {
+            (anchor_layout_index, target_layout_index)
+        } else {
+            (target_layout_index, anchor_layout_index)
+        };
+        let ids = filtered.as_slice()[start..=end]
+            .iter()
+            .filter_map(|index| pane.model.get(*index).map(|entry| entry.id))
+            .collect::<Vec<_>>();
+        let count = ids.len();
+        pane.selection
+            .replace_range_with_active(anchor_id, target_id, ids);
+        Some(count)
+    }
+
+    fn move_filtered_selection(
+        &mut self,
+        pane_id: PaneId,
+        filtered: &fika_core::FilteredModel,
+        direction: SelectionMove,
+        extend: bool,
+    ) -> Option<usize> {
+        if filtered.is_empty() {
+            return None;
+        }
+        let pane = self.panes.pane_mut(pane_id)?;
+        let current_layout_index = pane
+            .selection
+            .active_id()
+            .and_then(|active| pane.model.index_of_id(active))
+            .and_then(|index| filtered.layout_index_for_model_index(index))
+            .or_else(|| {
+                pane.selection
+                    .selected_ids()
+                    .last()
+                    .and_then(|id| pane.model.index_of_id(*id))
+                    .and_then(|index| filtered.layout_index_for_model_index(index))
+            });
+        let target_layout_index = match (current_layout_index, direction) {
+            (Some(index), SelectionMove::Previous) => index.saturating_sub(1),
+            (Some(index), SelectionMove::Next) => (index + 1).min(filtered.len() - 1),
+            (None, SelectionMove::Previous) => filtered.len() - 1,
+            (None, SelectionMove::Next) => 0,
+        };
+        let target_model_index = filtered.model_index(target_layout_index)?;
+        let target_id = pane.model.get(target_model_index)?.id;
+
+        if !extend {
+            pane.selection.select_only(target_id);
+            return Some(1);
+        }
+
+        let anchor_id = pane
+            .selection
+            .anchor_id()
+            .filter(|id| {
+                pane.model
+                    .index_of_id(*id)
+                    .and_then(|index| filtered.layout_index_for_model_index(index))
+                    .is_some()
+            })
+            .unwrap_or(target_id);
+        let anchor_layout_index = pane
+            .model
+            .index_of_id(anchor_id)
+            .and_then(|index| filtered.layout_index_for_model_index(index))
+            .unwrap_or(target_layout_index);
+        let (start, end) = if anchor_layout_index <= target_layout_index {
+            (anchor_layout_index, target_layout_index)
+        } else {
+            (target_layout_index, anchor_layout_index)
+        };
+        let ids = filtered.as_slice()[start..=end]
+            .iter()
+            .filter_map(|index| pane.model.get(*index).map(|entry| entry.id))
+            .collect::<Vec<_>>();
+        let count = ids.len();
+        pane.selection
+            .replace_range_with_active(anchor_id, target_id, ids);
+        Some(count)
+    }
+
     fn apply_zoom_change(&mut self, pane_id: PaneId, change: ZoomChange) {
-        let Some(previous_level) = self.panes.pane(pane_id).map(|pane| pane.view.zoom_level)
-        else {
+        let Some(previous_level) = self.panes.pane(pane_id).map(|pane| pane.view.zoom_level) else {
             return;
         };
         let Some(view) = self.panes.apply_zoom_change(pane_id, change) else {
             return;
         };
         if view.zoom_level == previous_level {
-            self.status = format!(
-                "Zoom level {} ({} px)",
-                view.zoom_level,
-                view.icon_size() as i32
+            self.set_pane_status(
+                pane_id,
+                format!(
+                    "Zoom level {} ({} px)",
+                    view.zoom_level,
+                    view.icon_size() as i32
+                ),
             );
             return;
         }
         self.compact_column_widths.remove(&pane_id);
-        self.status = format!(
-            "Zoom level {} ({} px)",
-            view.zoom_level,
-            view.icon_size() as i32
+        self.smooth_scrolls.remove(&pane_id);
+        self.scroll_drag_trackers.remove(&pane_id);
+        self.set_pane_status(
+            pane_id,
+            format!(
+                "Zoom level {} ({} px)",
+                view.zoom_level,
+                view.icon_size() as i32
+            ),
         );
+    }
+
+    pub(crate) fn set_zoom_level(&mut self, pane_id: PaneId, level: i32) {
+        let Some(previous_level) = self.panes.pane(pane_id).map(|pane| pane.view.zoom_level) else {
+            return;
+        };
+        let Some(view) = self.panes.set_zoom_level(pane_id, level) else {
+            return;
+        };
+        if view.zoom_level != previous_level {
+            self.compact_column_widths.remove(&pane_id);
+            self.smooth_scrolls.remove(&pane_id);
+            self.scroll_drag_trackers.remove(&pane_id);
+        }
+        self.set_pane_status(
+            pane_id,
+            format!(
+                "Zoom level {} ({} px)",
+                view.zoom_level,
+                view.icon_size() as i32
+            ),
+        );
+    }
+
+    pub(crate) fn scroll_pane_smooth(
+        &mut self,
+        pane_id: PaneId,
+        delta_x: f32,
+        delta_y: f32,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        if delta_x.abs() <= f32::EPSILON && delta_y.abs() <= f32::EPSILON {
+            return;
+        }
+        let Some(current) = self.panes.pane(pane_id).map(|pane| ViewPoint {
+            x: pane.view.scroll_x,
+            y: pane.view.scroll_y,
+        }) else {
+            return;
+        };
+        let bounds = ScrollBounds::new(max_scroll_x, max_scroll_y);
+        let delta = ViewPoint {
+            x: delta_x,
+            y: delta_y,
+        };
+        let target = bounds.clamp(ViewPoint {
+            x: current.x + delta.x,
+            y: current.y + delta.y,
+        });
+        if target == current && !self.smooth_scrolls.contains_key(&pane_id) {
+            return;
+        }
+
+        let now = Instant::now();
+        let scroll = self.smooth_scrolls.remove(&pane_id).map_or_else(
+            || SmoothScroll::to_target(current, target, bounds, now),
+            |scroll| scroll.retarget(current, delta, bounds, now),
+        );
+        if scroll
+            .target_offset()
+            .is_some_and(|target| target == current)
+        {
+            return;
+        }
+        self.scroll_drag_trackers.remove(&pane_id);
+        self.smooth_scrolls.insert(pane_id, scroll);
+        self.schedule_smooth_scroll_tick(cx);
+    }
+
+    pub(crate) fn set_pane_scroll_immediate(
+        &mut self,
+        pane_id: PaneId,
+        scroll_x: f32,
+        scroll_y: f32,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+    ) {
+        self.smooth_scrolls.remove(&pane_id);
+        if let Some(view) =
+            self.panes
+                .set_view_scroll(pane_id, scroll_x, scroll_y, max_scroll_x, max_scroll_y)
+        {
+            self.scroll_drag_trackers
+                .entry(pane_id)
+                .or_default()
+                .sample(
+                    ViewPoint {
+                        x: view.scroll_x,
+                        y: view.scroll_y,
+                    },
+                    Instant::now(),
+                );
+        }
+    }
+
+    pub(crate) fn finish_scrollbar_drag(
+        &mut self,
+        pane_id: PaneId,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tracker) = self.scroll_drag_trackers.remove(&pane_id) else {
+            return;
+        };
+        let bounds = ScrollBounds::new(max_scroll_x, max_scroll_y);
+        if let Some(scroll) = SmoothScroll::kinetic(tracker.velocity(), bounds, Instant::now()) {
+            self.smooth_scrolls.insert(pane_id, scroll);
+            self.schedule_smooth_scroll_tick(cx);
+        }
+    }
+
+    fn advance_smooth_scrolls(&mut self, now: Instant) -> bool {
+        let pane_ids = self.smooth_scrolls.keys().copied().collect::<Vec<_>>();
+        let mut changed = false;
+        for pane_id in pane_ids {
+            let Some(mut scroll) = self.smooth_scrolls.remove(&pane_id) else {
+                continue;
+            };
+            let Some(current) = self.panes.pane(pane_id).map(|pane| ViewPoint {
+                x: pane.view.scroll_x,
+                y: pane.view.scroll_y,
+            }) else {
+                continue;
+            };
+            let bounds = scroll.bounds();
+            let advance = scroll.advance(current, now);
+            if let Some(view) = self.panes.set_view_scroll(
+                pane_id,
+                advance.offset.x,
+                advance.offset.y,
+                bounds.max_x,
+                bounds.max_y,
+            ) {
+                changed |= (view.scroll_x - current.x).abs() > f32::EPSILON
+                    || (view.scroll_y - current.y).abs() > f32::EPSILON;
+            }
+            if advance.active {
+                self.smooth_scrolls.insert(pane_id, scroll);
+            }
+        }
+        changed
+    }
+
+    fn schedule_smooth_scroll_tick(&mut self, cx: &mut Context<Self>) {
+        if self.smooth_scroll_tick_running || self.smooth_scrolls.is_empty() {
+            return;
+        }
+        self.smooth_scroll_tick_running = true;
+        cx.spawn(|this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                loop {
+                    async_io::Timer::after(SMOOTH_SCROLL_FRAME).await;
+                    let Ok(keep_running) = this.update(&mut cx, |app, cx| {
+                        let changed = app.advance_smooth_scrolls(Instant::now());
+                        if changed {
+                            cx.notify();
+                        }
+                        if app.smooth_scrolls.is_empty() {
+                            app.smooth_scroll_tick_running = false;
+                            false
+                        } else {
+                            true
+                        }
+                    }) else {
+                        break;
+                    };
+                    if !keep_running {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
     }
 
     fn set_viewport_origin(&mut self, pane_id: PaneId, origin: ViewPoint) -> bool {
@@ -1613,6 +3019,31 @@ impl FikaApp {
         }
         self.viewport_origins.insert(pane_id, origin);
         true
+    }
+
+    fn set_pane_viewport_bounds(
+        &mut self,
+        pane_id: PaneId,
+        viewport_width: f32,
+        viewport_height: f32,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+    ) -> bool {
+        let changed = self
+            .panes
+            .set_viewport_bounds(
+                pane_id,
+                viewport_width,
+                viewport_height,
+                max_scroll_x,
+                max_scroll_y,
+            )
+            .unwrap_or(false);
+        if changed {
+            self.smooth_scrolls.remove(&pane_id);
+            self.scroll_drag_trackers.remove(&pane_id);
+        }
+        changed
     }
 
     fn content_point_from_window(
@@ -1628,13 +3059,27 @@ impl FikaApp {
         })
     }
 
-    fn layout_for_pane(&mut self, pane_id: PaneId) -> Option<CompactLayout> {
+    fn layout_projection_for_pane(&mut self, pane_id: PaneId) -> Option<PaneLayoutProjection> {
+        let filtered_model = self.filtered_model_for_pane(pane_id);
         let pane = self.panes.pane(pane_id)?;
-        Some(compact_layout_for_model(
-            self.compact_column_widths.entry(pane_id).or_default(),
-            &pane.model,
-            &pane.view,
-        ))
+        let layout = match filtered_model.as_ref() {
+            Some((filtered, source_revision)) => compact_layout_for_filtered_model(
+                self.compact_column_widths.entry(pane_id).or_default(),
+                &pane.model,
+                filtered,
+                *source_revision,
+                &pane.view,
+            ),
+            None => compact_layout_for_model(
+                self.compact_column_widths.entry(pane_id).or_default(),
+                &pane.model,
+                &pane.view,
+            ),
+        };
+        Some(PaneLayoutProjection {
+            layout,
+            filtered: filtered_model.map(|(filtered, _)| filtered),
+        })
     }
 
     fn item_at_content_point(
@@ -1642,12 +3087,13 @@ impl FikaApp {
         pane_id: PaneId,
         point: ViewPoint,
     ) -> Option<ContentItemHit> {
-        let layout = self.layout_for_pane(pane_id)?;
-        let model_index = layout.hit_test_content_point(point)?;
+        let projection = self.layout_projection_for_pane(pane_id)?;
+        let layout_index = projection.layout.hit_test_content_point(point)?;
+        let model_index = projection.model_index_for_layout_index(layout_index)?;
         let pane = self.panes.pane(pane_id)?;
         let entry = pane.model.get(model_index)?;
-        let item_layout = layout.item_with_required_text_width(
-            model_index,
+        let item_layout = projection.layout.item_with_required_text_width(
+            layout_index,
             Some(compact_text_width(entry.name_width_units)),
         )?;
         if !item_layout.visual_rect.contains(point) {
@@ -1661,25 +3107,32 @@ impl FikaApp {
     }
 
     fn indexes_intersecting_visual_rect(&mut self, pane_id: PaneId, rect: ViewRect) -> Vec<usize> {
-        let Some(layout) = self.layout_for_pane(pane_id) else {
+        let Some(projection) = self.layout_projection_for_pane(pane_id) else {
             return Vec::new();
         };
-        let candidate_indexes = layout.indexes_intersecting(rect).indexes().to_vec();
+        let candidate_indexes = projection
+            .layout
+            .indexes_intersecting(rect)
+            .indexes()
+            .to_vec();
         let Some(pane) = self.panes.pane(pane_id) else {
             return Vec::new();
         };
         candidate_indexes
             .into_iter()
-            .filter(|index| {
-                let Some(entry) = pane.model.get(*index) else {
-                    return false;
+            .filter_map(|layout_index| {
+                let model_index = projection.model_index_for_layout_index(layout_index)?;
+                let Some(entry) = pane.model.get(model_index) else {
+                    return None;
                 };
-                layout
+                projection
+                    .layout
                     .item_with_required_text_width(
-                        *index,
+                        layout_index,
                         Some(compact_text_width(entry.name_width_units)),
                     )
                     .is_some_and(|item| item.visual_rect.intersects(rect))
+                    .then_some(model_index)
             })
             .collect()
     }
@@ -1735,7 +3188,7 @@ impl FikaApp {
             .panes
             .replace_selection_by_indexes(pane_id, selection.iter().copied())
         {
-            self.status = format!("{selected} selected");
+            self.set_pane_status(pane_id, format!("{selected} selected"));
         }
     }
 
@@ -1784,7 +3237,7 @@ impl FikaApp {
             pane_id,
             value: path.display().to_string(),
         });
-        self.status = format!("Location {}", path.display());
+        self.set_pane_status(pane_id, format!("Location {}", path.display()));
     }
 
     pub(crate) fn open_location_segment(&mut self, pane_id: PaneId, path: PathBuf) {
@@ -1811,7 +3264,7 @@ impl FikaApp {
         match location_input_action(keystroke) {
             LocationInputAction::Cancel => {
                 self.location_draft = None;
-                self.status = "Location edit cancelled".to_string();
+                self.set_pane_status(draft_pane_id, "Location edit cancelled");
             }
             LocationInputAction::Commit => self.commit_location_draft(),
             LocationInputAction::Complete => self.complete_location_draft(),
@@ -1842,15 +3295,18 @@ impl FikaApp {
             return;
         };
         let Some(path) = resolve_location_input(&current_dir, &draft.value) else {
-            self.status = "Location is empty".to_string();
+            self.set_pane_status(draft.pane_id, "Location is empty");
             return;
         };
         if !path.is_dir() {
-            self.status = format!("Location is not a folder: {}", path.display());
+            self.set_pane_status(
+                draft.pane_id,
+                format!("Location is not a folder: {}", path.display()),
+            );
             return;
         }
         if path == current_dir {
-            self.status = format!("Location {}", path.display());
+            self.set_pane_status(draft.pane_id, format!("Location {}", path.display()));
             return;
         }
         self.load_pane(draft.pane_id, path);
@@ -1868,7 +3324,7 @@ impl FikaApp {
             return;
         };
         let Some(completed) = complete_location_input(&current_dir, &draft.value) else {
-            self.status = "No location completion".to_string();
+            self.set_pane_status(draft.pane_id, "No location completion");
             return;
         };
         if let Some(active) = &mut self.location_draft {
@@ -1881,12 +3337,12 @@ impl FikaApp {
             return;
         }
         if self.operation_pending {
-            self.status = "File operation already running".to_string();
+            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         let [original_path] = selected_paths.as_slice() else {
-            self.status = "Select one item to rename".to_string();
+            self.set_pane_status(pane_id, "Select one item to rename");
             return;
         };
         let Some(name) = original_path
@@ -1894,7 +3350,7 @@ impl FikaApp {
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
         else {
-            self.status = "Selected item cannot be renamed".to_string();
+            self.set_pane_status(pane_id, "Selected item cannot be renamed");
             return;
         };
 
@@ -1904,7 +3360,7 @@ impl FikaApp {
             original_path: original_path.clone(),
             draft_name: name.to_string(),
         });
-        self.status = format!("Renaming {name}");
+        self.set_pane_status(pane_id, format!("Renaming {name}"));
     }
 
     fn handle_rename_keystroke(
@@ -1922,7 +3378,7 @@ impl FikaApp {
         match rename_input_action(keystroke) {
             RenameInputAction::Cancel => {
                 self.rename_draft = None;
-                self.status = "Rename cancelled".to_string();
+                self.set_pane_status(draft_pane_id, "Rename cancelled");
             }
             RenameInputAction::Commit => self.commit_rename_draft(cx),
             RenameInputAction::Backspace => {
@@ -1941,8 +3397,11 @@ impl FikaApp {
     }
 
     fn commit_rename_draft(&mut self, cx: &mut Context<Self>) {
+        let Some(draft_pane_id) = self.rename_draft.as_ref().map(|draft| draft.pane_id) else {
+            return;
+        };
         if self.operation_pending {
-            self.status = "File operation already running".to_string();
+            self.set_pane_status(draft_pane_id, "File operation already running");
             return;
         }
         let Some(draft) = self.rename_draft.take() else {
@@ -1950,7 +3409,7 @@ impl FikaApp {
         };
         let new_name = draft.draft_name.trim().to_string();
         if new_name.is_empty() {
-            self.status = "Name cannot be empty".to_string();
+            self.set_pane_status(draft.pane_id, "Name cannot be empty");
             return;
         }
         if draft
@@ -1962,12 +3421,14 @@ impl FikaApp {
             let _ = self
                 .panes
                 .select_only(draft.pane_id, draft.original_path.clone());
-            self.status = "Rename unchanged".to_string();
+            self.set_pane_status(draft.pane_id, "Rename unchanged");
             return;
         }
 
-        self.operation_pending = true;
-        self.status = format!("Renaming {}", draft.original_path.display());
+        self.begin_pane_operation(
+            draft.pane_id,
+            format!("Renaming {}", draft.original_path.display()),
+        );
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -1988,7 +3449,6 @@ impl FikaApp {
     }
 
     fn finish_rename_item(&mut self, result: RenameItemResult) {
-        self.operation_pending = false;
         match result.result {
             Ok(renamed_path) => {
                 self.operations.register_undo_with_payload(
@@ -2003,10 +3463,16 @@ impl FikaApp {
                 );
                 self.refresh_affected_dirs(&result.affected_dirs);
                 let _ = self.panes.select_only(result.pane_id, renamed_path.clone());
-                self.status = format!("Renamed to {}", renamed_path.display());
+                self.finish_pane_operation(
+                    result.pane_id,
+                    format!("Renamed to {}", renamed_path.display()),
+                );
             }
             Err(err) => {
-                self.status = format!("Cannot rename {}: {err}", result.original_path.display());
+                self.finish_pane_operation(
+                    result.pane_id,
+                    format!("Cannot rename {}: {err}", result.original_path.display()),
+                );
             }
         }
     }
@@ -2021,7 +3487,7 @@ impl FikaApp {
             return;
         }
         if self.operation_pending {
-            self.status = "File operation already running".to_string();
+            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         let Some(parent_dir) = self
@@ -2032,8 +3498,10 @@ impl FikaApp {
             return;
         };
 
-        self.operation_pending = true;
-        self.status = format!("Creating {}", created_item_label(kind).to_ascii_lowercase());
+        self.begin_pane_operation(
+            pane_id,
+            format!("Creating {}", created_item_label(kind).to_ascii_lowercase()),
+        );
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -2054,7 +3522,6 @@ impl FikaApp {
     }
 
     fn finish_create_item(&mut self, result: CreateItemResult) {
-        self.operation_pending = false;
         match result.result {
             Ok(path) => {
                 self.operations.register_undo_with_payload(
@@ -2069,30 +3536,66 @@ impl FikaApp {
                 );
                 self.refresh_affected_dirs(&result.affected_dirs);
                 let _ = self.panes.select_only(result.pane_id, path.clone());
-                self.status = format!("Created {}", path.display());
+                self.finish_pane_operation(result.pane_id, format!("Created {}", path.display()));
             }
             Err(err) => {
-                self.status = format!(
-                    "Cannot create {}: {err}",
-                    created_item_label(result.kind).to_ascii_lowercase()
+                self.finish_pane_operation(
+                    result.pane_id,
+                    format!(
+                        "Cannot create {}: {err}",
+                        created_item_label(result.kind).to_ascii_lowercase()
+                    ),
                 );
             }
         }
     }
 
-    fn store_selection_for_transfer(&mut self, pane_id: PaneId, mode: ClipboardMode) {
+    fn store_selection_for_transfer(
+        &mut self,
+        pane_id: PaneId,
+        mode: ClipboardMode,
+        cx: &mut Context<Self>,
+    ) {
         if self.chooser.is_some() {
             return;
         }
         let paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         if paths.is_empty() {
-            self.status = format!("No selection to {}", mode.label().to_ascii_lowercase());
+            self.set_pane_status(
+                pane_id,
+                format!("No selection to {}", mode.label().to_ascii_lowercase()),
+            );
             return;
         }
 
         let count = paths.len();
-        self.clipboard = Some(ClipboardState { mode, paths });
-        self.status = format!("{} {} item(s)", mode.label(), count);
+        let clipboard = ClipboardState::files(mode, paths);
+        let item = clipboard.to_clipboard_item();
+        cx.write_to_clipboard(item.clone());
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        cx.write_to_primary(item);
+        self.clipboard = Some(clipboard);
+        self.set_pane_status(pane_id, format!("{} {} item(s)", mode.label(), count));
+    }
+
+    fn import_system_clipboard(&mut self, cx: &mut Context<Self>) {
+        if let Some(clipboard) = cx
+            .read_from_clipboard()
+            .as_ref()
+            .and_then(ClipboardState::from_clipboard_item)
+        {
+            self.clipboard = Some(clipboard);
+            return;
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if let Some(clipboard) = cx
+            .read_from_primary()
+            .as_ref()
+            .and_then(ClipboardState::from_clipboard_item)
+        {
+            self.clipboard = Some(clipboard);
+        }
     }
 
     fn paste_into_pane(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
@@ -2116,31 +3619,38 @@ impl FikaApp {
             return;
         }
         if self.operation_pending {
-            self.status = "File operation already running".to_string();
+            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
+        self.import_system_clipboard(cx);
         let Some(clipboard) = self.clipboard.clone() else {
-            self.status = "Nothing to paste".to_string();
+            self.set_pane_status(pane_id, "Nothing to paste");
             return;
         };
         if !target_dir.is_dir() {
-            self.status = format!("Cannot paste into {}", target_dir.display());
+            self.set_pane_status(
+                pane_id,
+                format!("Cannot paste into {}", target_dir.display()),
+            );
             return;
         }
 
-        self.operation_pending = true;
-        self.status = format!(
-            "{}ing {} item(s)",
-            clipboard.mode.label(),
-            clipboard.paths.len()
-        );
+        let progress_label = clipboard.progress_label();
+        self.begin_pane_operation(pane_id, progress_label.clone());
+        let (cancel, progress) = self.start_transfer_progress(pane_id, progress_label);
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
                     let result = cx
                         .background_spawn(async move {
-                            paste_clipboard_result(pane_id, target_dir, clipboard)
+                            paste_clipboard_result(
+                                pane_id,
+                                target_dir,
+                                clipboard,
+                                Some(cancel),
+                                Some(progress),
+                            )
                         })
                         .await;
                     let _ = this.update(&mut cx, |app, cx| {
@@ -2154,26 +3664,50 @@ impl FikaApp {
     }
 
     fn finish_paste(&mut self, result: PasteTaskResult) {
-        self.operation_pending = false;
-        if result.success_count > 0 {
-            self.operations.register_undo_with_payload(
-                result.mode.label().to_string(),
-                result.affected_dirs.clone(),
-                UndoPayload::Transfer {
-                    items: result.undo_items,
-                },
-            );
-            self.refresh_affected_dirs(&result.affected_dirs);
-            if result.mode == ClipboardMode::Cut {
+        self.clear_operation_progress();
+        let PasteTaskResult {
+            pane_id,
+            mode,
+            label,
+            success_count,
+            failure_count,
+            affected_dirs,
+            undo_items,
+            created_items,
+        } = result;
+
+        if success_count > 0 {
+            let created_selection = created_items.first().map(|item| item.path.clone());
+            let has_transfer_items = !undo_items.is_empty();
+            if has_transfer_items {
+                self.operations.register_undo_with_payload(
+                    mode.label().to_string(),
+                    affected_dirs.clone(),
+                    UndoPayload::Transfer { items: undo_items },
+                );
+            }
+            if !created_items.is_empty() {
+                self.operations.register_undo_with_payload(
+                    label.to_string(),
+                    affected_dirs.clone(),
+                    UndoPayload::Create {
+                        items: created_items,
+                    },
+                );
+            }
+            self.refresh_affected_dirs(&affected_dirs);
+            if let Some(path) = created_selection {
+                let _ = self.panes.select_only(pane_id, path);
+            }
+            if mode == ClipboardMode::Cut && has_transfer_items {
                 self.clipboard = None;
-                let _ = self.panes.clear_selection(result.pane_id);
+                let _ = self.panes.clear_selection(pane_id);
             }
         }
 
-        self.status = action_status(
-            &format!("{} complete", result.mode.label()),
-            result.success_count,
-            result.failure_count,
+        self.finish_pane_operation(
+            pane_id,
+            action_status(&format!("{label} complete"), success_count, failure_count),
         );
     }
 
@@ -2182,17 +3716,19 @@ impl FikaApp {
             return;
         }
         if self.operation_pending {
-            self.status = "File operation already running".to_string();
+            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
         if selected_paths.is_empty() {
-            self.status = "No selection to trash".to_string();
+            self.set_pane_status(pane_id, "No selection to trash");
             return;
         }
 
-        self.operation_pending = true;
-        self.status = format!("Moving {} item(s) to trash", selected_paths.len());
+        self.begin_pane_operation(
+            pane_id,
+            format!("Moving {} item(s) to trash", selected_paths.len()),
+        );
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -2213,7 +3749,6 @@ impl FikaApp {
     }
 
     fn finish_trash_selection(&mut self, result: TrashSelectionResult) {
-        self.operation_pending = false;
         if result.success_count > 0 {
             self.operations.register_undo_with_payload(
                 "Move to Trash".to_string(),
@@ -2226,19 +3761,143 @@ impl FikaApp {
             let _ = self.panes.clear_selection(result.pane_id);
         }
 
-        self.status = action_status("Moved to trash", result.success_count, result.failure_count);
+        self.finish_pane_operation(
+            result.pane_id,
+            action_status("Moved to trash", result.success_count, result.failure_count),
+        );
     }
 
-    fn undo_latest(&mut self, cx: &mut Context<Self>) {
+    fn restore_trash_selection(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+        self.start_trash_view_selection_operation(
+            pane_id,
+            TrashViewOperation::Restore,
+            "No trash selection to restore",
+            cx,
+        );
+    }
+
+    fn delete_trash_selection_permanently(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+        self.start_trash_view_selection_operation(
+            pane_id,
+            TrashViewOperation::DeletePermanently,
+            "No trash selection to delete",
+            cx,
+        );
+    }
+
+    fn start_trash_view_selection_operation(
+        &mut self,
+        pane_id: PaneId,
+        operation: TrashViewOperation,
+        empty_selection_status: &'static str,
+        cx: &mut Context<Self>,
+    ) {
         if self.chooser.is_some() {
             return;
         }
         if self.operation_pending {
-            self.status = "File operation already running".to_string();
+            self.set_pane_status(pane_id, "File operation already running");
+            return;
+        }
+        if !self.trash_view_state(pane_id).0 {
+            self.set_pane_status(pane_id, "Trash action is only available in Trash");
+            return;
+        }
+        let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
+        if selected_paths.is_empty() {
+            self.set_pane_status(pane_id, empty_selection_status);
+            return;
+        }
+        self.start_trash_view_operation(pane_id, operation, selected_paths, cx);
+    }
+
+    fn empty_trash(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+        if self.chooser.is_some() {
+            return;
+        }
+        if self.operation_pending {
+            self.set_pane_status(pane_id, "File operation already running");
+            return;
+        }
+        let (trash_view, trash_has_items) = self.trash_view_state(pane_id);
+        if !trash_view {
+            self.set_pane_status(pane_id, "Empty Trash is only available in Trash");
+            return;
+        }
+        if !trash_has_items {
+            self.set_pane_status(pane_id, "Trash is empty");
+            return;
+        }
+        self.start_trash_view_operation(pane_id, TrashViewOperation::Empty, Vec::new(), cx);
+    }
+
+    fn empty_trash_from_place(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+        if self.chooser.is_some() {
+            return;
+        }
+        if self.operation_pending {
+            self.set_pane_status(pane_id, "File operation already running");
+            return;
+        }
+        if !file_ops::trash_has_items() {
+            self.set_pane_status(pane_id, "Trash is empty");
+            return;
+        }
+        self.start_trash_view_operation(pane_id, TrashViewOperation::Empty, Vec::new(), cx);
+    }
+
+    fn start_trash_view_operation(
+        &mut self,
+        pane_id: PaneId,
+        operation: TrashViewOperation,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        self.begin_pane_operation(pane_id, operation.progress_label(paths.len()));
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_spawn(async move {
+                            trash_view_operation_result(pane_id, operation, paths)
+                        })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.finish_trash_view_operation(result);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_trash_view_operation(&mut self, result: TrashViewOperationResult) {
+        if result.success_count > 0 {
+            self.refresh_affected_dirs(&result.affected_dirs);
+            let _ = self.panes.clear_selection(result.pane_id);
+        }
+        self.finish_pane_operation(
+            result.pane_id,
+            action_status(
+                result.operation.completed_label(),
+                result.success_count,
+                result.failure_count,
+            ),
+        );
+    }
+
+    fn undo_latest(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+        if self.chooser.is_some() {
+            return;
+        }
+        if self.operation_pending {
+            self.set_pane_status(pane_id, "File operation already running");
             return;
         }
         let Some(record) = self.operations.latest_undo().cloned() else {
-            self.status = "No operation to undo".to_string();
+            self.set_pane_status(pane_id, "No operation to undo");
             return;
         };
 
@@ -2248,13 +3907,12 @@ impl FikaApp {
             UndoPayload::Trash { .. } => {}
             UndoPayload::Transfer { .. } => {}
             UndoPayload::None => {
-                self.status = format!("No undo action for {}", record.label);
+                self.set_pane_status(pane_id, format!("No undo action for {}", record.label));
                 return;
             }
         }
 
-        self.operation_pending = true;
-        self.status = format!("Undoing {}", record.label);
+        self.begin_pane_operation(pane_id, format!("Undoing {}", record.label));
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -2263,7 +3921,7 @@ impl FikaApp {
                         .background_spawn(async move { undo_record_result(record) })
                         .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_undo(result);
+                        app.finish_undo(pane_id, result);
                         cx.notify();
                     });
                 }
@@ -2272,8 +3930,7 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_undo(&mut self, result: UndoTaskResult) {
-        self.operation_pending = false;
+    fn finish_undo(&mut self, pane_id: PaneId, result: UndoTaskResult) {
         match result.result {
             Ok(message) => {
                 if self
@@ -2281,14 +3938,20 @@ impl FikaApp {
                     .take_latest_undo(result.record.serial)
                     .is_none()
                 {
-                    self.status = "Undo result is stale".to_string();
+                    self.finish_pane_operation(pane_id, "Undo result is stale");
                     return;
                 }
                 self.refresh_affected_dirs(&result.record.affected_dirs);
-                self.status = format!("Undid {}: {message}", result.record.label);
+                self.finish_pane_operation(
+                    pane_id,
+                    format!("Undid {}: {message}", result.record.label),
+                );
             }
             Err(err) => {
-                self.status = format!("Cannot undo {}: {err}", result.record.label);
+                self.finish_pane_operation(
+                    pane_id,
+                    format!("Cannot undo {}: {err}", result.record.label),
+                );
             }
         }
     }
@@ -2326,9 +3989,13 @@ impl FikaApp {
     }
 
     fn show_blank_context_menu(&mut self, pane_id: PaneId, position: ViewPoint) {
+        let (trash_view, trash_has_items) = self.trash_view_state(pane_id);
         self.context_menu = Some(ContextMenuState {
             pane_id,
-            target: ContextMenuTarget::Blank,
+            target: ContextMenuTarget::Blank {
+                trash_view,
+                trash_has_items,
+            },
             position,
         });
     }
@@ -2346,6 +4013,8 @@ impl FikaApp {
             self.select_only(pane_id, path.clone());
         }
         let selection_count = self.panes.selected_count(pane_id).unwrap_or(1).max(1);
+        let trash_view = self.trash_view_state(pane_id).0;
+        let trash_can_restore = trash_view && file_ops::trash_metadata(&path).is_ok();
         let menu_position = ViewPoint {
             x: position.x.as_f32(),
             y: position.y.as_f32(),
@@ -2356,9 +4025,22 @@ impl FikaApp {
                 path,
                 is_dir,
                 selection_count,
+                trash_view,
+                trash_can_restore,
             },
             position: menu_position,
         });
+    }
+
+    fn trash_view_state(&self, pane_id: PaneId) -> (bool, bool) {
+        self.panes
+            .pane(pane_id)
+            .map(|pane| {
+                let trash_view = file_ops::is_trash_files_dir(&pane.current_dir);
+                let trash_has_items = trash_view && !pane.model.is_empty();
+                (trash_view, trash_has_items)
+            })
+            .unwrap_or_default()
     }
 
     fn dismiss_context_menu(&mut self) {
@@ -2371,7 +4053,7 @@ impl FikaApp {
 
     fn show_properties_for_context(&mut self, pane_id: PaneId, target: ContextMenuTarget) {
         let dialog = match target {
-            ContextMenuTarget::Blank => {
+            ContextMenuTarget::Blank { .. } => {
                 let Some(path) = self
                     .panes
                     .pane(pane_id)
@@ -2394,6 +4076,7 @@ impl FikaApp {
                 }
             }
             ContextMenuTarget::Item { path, .. } => properties_for_path(&path),
+            ContextMenuTarget::Place { path, .. } => properties_for_path(&path),
         };
         self.properties_dialog = Some(dialog);
     }
@@ -2427,32 +4110,62 @@ impl FikaApp {
                 },
             ) => {
                 self.select_only(menu.pane_id, path.clone());
-                self.status = format!("Open with is not implemented for {}", path.display());
+                self.set_pane_status(
+                    menu.pane_id,
+                    format!("Open with is not implemented for {}", path.display()),
+                );
+            }
+            (ContextMenuAction::Open, ContextMenuTarget::Place { path, .. }) => {
+                self.open_place(path);
             }
             (ContextMenuAction::Rename, ContextMenuTarget::Item { path, .. }) => {
                 self.select_only(menu.pane_id, path);
                 self.start_rename_in_pane(menu.pane_id);
             }
             (ContextMenuAction::Copy, ContextMenuTarget::Item { .. })
-            | (ContextMenuAction::Copy, ContextMenuTarget::Blank) => {
-                self.store_selection_for_transfer(menu.pane_id, ClipboardMode::Copy)
+            | (ContextMenuAction::Copy, ContextMenuTarget::Blank { .. }) => {
+                self.store_selection_for_transfer(menu.pane_id, ClipboardMode::Copy, cx)
             }
             (ContextMenuAction::CopyLocation, ContextMenuTarget::Item { path, .. }) => {
                 let location = path.display().to_string();
                 cx.write_to_clipboard(ClipboardItem::new_string(location));
-                self.status = format!("Copied location {}", path.display());
+                self.set_pane_status(menu.pane_id, format!("Copied location {}", path.display()));
+            }
+            (ContextMenuAction::CopyLocation, ContextMenuTarget::Place { path, .. }) => {
+                let location = path.display().to_string();
+                cx.write_to_clipboard(ClipboardItem::new_string(location));
+                self.set_pane_status(menu.pane_id, format!("Copied location {}", path.display()));
             }
             (ContextMenuAction::Cut, ContextMenuTarget::Item { .. })
-            | (ContextMenuAction::Cut, ContextMenuTarget::Blank) => {
-                self.store_selection_for_transfer(menu.pane_id, ClipboardMode::Cut)
+            | (ContextMenuAction::Cut, ContextMenuTarget::Blank { .. }) => {
+                self.store_selection_for_transfer(menu.pane_id, ClipboardMode::Cut, cx)
             }
             (ContextMenuAction::Trash, ContextMenuTarget::Item { .. })
-            | (ContextMenuAction::Trash, ContextMenuTarget::Blank) => {
+            | (ContextMenuAction::Trash, ContextMenuTarget::Blank { .. }) => {
                 self.trash_selection(menu.pane_id, cx)
             }
+            (ContextMenuAction::RestoreFromTrash, ContextMenuTarget::Item { .. }) => {
+                self.restore_trash_selection(menu.pane_id, cx)
+            }
+            (ContextMenuAction::DeletePermanently, ContextMenuTarget::Item { .. }) => {
+                self.delete_trash_selection_permanently(menu.pane_id, cx)
+            }
+            (ContextMenuAction::EmptyTrash, ContextMenuTarget::Blank { .. }) => {
+                self.empty_trash(menu.pane_id, cx)
+            }
+            (
+                ContextMenuAction::EmptyTrash,
+                ContextMenuTarget::Place {
+                    trash_place: true, ..
+                },
+            ) => self.empty_trash_from_place(menu.pane_id, cx),
             (ContextMenuAction::Properties, target) => {
                 self.show_properties_for_context(menu.pane_id, target)
             }
+            (ContextMenuAction::CreateFolder, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::Paste, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::SelectAll, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::Refresh, ContextMenuTarget::Place { .. }) => {}
             (ContextMenuAction::CreateFolder, _) => {
                 self.create_item_in_pane(menu.pane_id, CreatedItemKind::Folder, cx)
             }
@@ -2465,10 +4178,17 @@ impl FikaApp {
             (ContextMenuAction::Paste, _) => self.paste_into_pane(menu.pane_id, cx),
             (ContextMenuAction::SelectAll, _) => self.select_all(menu.pane_id),
             (ContextMenuAction::Refresh, _) => self.reload_pane(menu.pane_id),
-            (ContextMenuAction::Open, ContextMenuTarget::Blank)
-            | (ContextMenuAction::CopyLocation, ContextMenuTarget::Blank)
+            (ContextMenuAction::Open, ContextMenuTarget::Blank { .. })
+            | (ContextMenuAction::CopyLocation, ContextMenuTarget::Blank { .. })
+            | (ContextMenuAction::Copy, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::Cut, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::Trash, ContextMenuTarget::Place { .. })
             | (ContextMenuAction::OpenInNewPane, _)
-            | (ContextMenuAction::Rename, ContextMenuTarget::Blank) => {}
+            | (ContextMenuAction::Rename, ContextMenuTarget::Blank { .. })
+            | (ContextMenuAction::Rename, ContextMenuTarget::Place { .. })
+            | (ContextMenuAction::RestoreFromTrash, _)
+            | (ContextMenuAction::DeletePermanently, _)
+            | (ContextMenuAction::EmptyTrash, _) => {}
         }
     }
 
@@ -2490,6 +4210,9 @@ impl FikaApp {
         let Some(pane_id) = self.panes.focused() else {
             return false;
         };
+        if self.handle_filter_keystroke(pane_id, &event.keystroke) {
+            return true;
+        }
         match pane_shortcut(&event.keystroke) {
             Some(PaneShortcut::SelectAll) => self.select_all(pane_id),
             Some(PaneShortcut::ClearSelection) => self.clear_selection(pane_id),
@@ -2500,6 +4223,8 @@ impl FikaApp {
             Some(PaneShortcut::SplitPane) => self.split_pane(pane_id),
             Some(PaneShortcut::ClosePane) => self.close_pane(pane_id),
             Some(PaneShortcut::EditLocation) => self.start_location_edit(pane_id),
+            Some(PaneShortcut::ShowFilter) => self.show_filter_bar(pane_id),
+            Some(PaneShortcut::Zoom(change)) => self.apply_zoom_change(pane_id, change),
             Some(PaneShortcut::MoveSelection { direction, extend }) => {
                 self.move_selection(pane_id, direction, extend)
             }
@@ -2508,14 +4233,14 @@ impl FikaApp {
             }
             Some(PaneShortcut::RenameSelection) => self.start_rename_in_pane(pane_id),
             Some(PaneShortcut::CopySelection) => {
-                self.store_selection_for_transfer(pane_id, ClipboardMode::Copy)
+                self.store_selection_for_transfer(pane_id, ClipboardMode::Copy, cx)
             }
             Some(PaneShortcut::CutSelection) => {
-                self.store_selection_for_transfer(pane_id, ClipboardMode::Cut)
+                self.store_selection_for_transfer(pane_id, ClipboardMode::Cut, cx)
             }
             Some(PaneShortcut::PasteIntoPane) => self.paste_into_pane(pane_id, cx),
             Some(PaneShortcut::TrashSelection) => self.trash_selection(pane_id, cx),
-            Some(PaneShortcut::Undo) => self.undo_latest(cx),
+            Some(PaneShortcut::Undo) => self.undo_latest(pane_id, cx),
             None => return false,
         }
         true
@@ -2546,7 +4271,9 @@ impl FikaApp {
                     return;
                 }
             }
-            self.status = "No chooser selection".to_string();
+            if let Some(pane_id) = self.panes.focused() {
+                self.set_pane_status(pane_id, "No chooser selection");
+            }
             return;
         }
         self.choose_paths(selected_paths);
@@ -2574,6 +4301,7 @@ impl FikaApp {
     }
 
     fn apply_event(&mut self, event: DirectoryListerEvent) {
+        self.update_loading_state(&event);
         if let DirectoryListerEvent::CurrentDirectoryRemoved { pane_id, path, .. } = &event {
             self.listing_worker.remove_cached_directory(path);
             let still_current = self.panes.pane(*pane_id).is_some_and(|pane| {
@@ -2582,7 +4310,7 @@ impl FikaApp {
             if still_current {
                 let fallback =
                     nearest_existing_ancestor(path).unwrap_or_else(|| PathBuf::from("/"));
-                self.status = format!("{} was removed", path.display());
+                self.set_pane_status(*pane_id, format!("{} was removed", path.display()));
                 self.load_pane(*pane_id, fallback);
             }
             return;
@@ -2597,11 +4325,24 @@ impl FikaApp {
             _ => {}
         }
 
+        let pane_id = event.pane_id();
         if let Some(signals) = self.panes.apply_lister_event(event) {
             if !signals.is_empty() {
-                self.status = format!("{} model signal(s)", signals.len());
+                self.filtered_models.remove(&pane_id);
+                self.compact_column_widths.remove(&pane_id);
+                self.status_summaries.remove(&pane_id);
+                self.set_pane_status(pane_id, format!("{} model signal(s)", signals.len()));
             }
         }
+    }
+
+    fn update_loading_state(&mut self, event: &DirectoryListerEvent) {
+        update_loading_state_for_event(
+            &mut self.loading_panes,
+            self.panes.pane(event.pane_id()),
+            event,
+            Instant::now(),
+        );
     }
 
     fn start_watchers(&mut self) {
@@ -2614,8 +4355,12 @@ impl FikaApp {
         let Some(pane) = self.panes.pane_mut(pane_id) else {
             return;
         };
+        let current_dir = pane.current_dir.clone();
         if let Err(err) = pane.lister.start_watcher() {
-            self.status = format!("Cannot watch {}: {err}", pane.current_dir.display());
+            self.set_pane_status(
+                pane_id,
+                format!("Cannot watch {}: {err}", current_dir.display()),
+            );
         }
     }
 
@@ -2676,7 +4421,7 @@ impl Render for FikaApp {
             .unwrap_or("Fika");
         window.set_window_title(title);
         let places = self.place_snapshots();
-        let snapshots = self.snapshots();
+        let snapshots = self.snapshots(cx);
         let file_grid_mode =
             self.chooser
                 .as_ref()
@@ -2771,21 +4516,6 @@ impl Render for FikaApp {
                             .children(pane_elements),
                     ),
             )
-            .child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(rgb(0xc8ced6))
-                    .bg(rgb(0xffffff))
-                    .text_xs()
-                    .text_color(rgb(0x59636e))
-                    .child(if self.status.is_empty() {
-                        "Ready".to_string()
-                    } else {
-                        self.status.clone()
-                    }),
-            )
             .when_some(context_menu, |root, menu| {
                 root.child(context_menu_overlay(menu, clipboard_available, cx))
             })
@@ -2851,7 +4581,22 @@ fn context_menu_actions(
     clipboard_available: bool,
 ) -> Vec<ContextMenuItem> {
     match target {
-        ContextMenuTarget::Blank => vec![
+        ContextMenuTarget::Blank {
+            trash_view: true,
+            trash_has_items,
+        } => vec![
+            ContextMenuItem {
+                action: ContextMenuAction::EmptyTrash,
+                label: "Empty Trash",
+                enabled: *trash_has_items,
+            },
+            context_menu_item(ContextMenuAction::SelectAll, "Select All"),
+            context_menu_item(ContextMenuAction::Refresh, "Refresh"),
+            context_menu_item(ContextMenuAction::Properties, "Properties"),
+        ],
+        ContextMenuTarget::Blank {
+            trash_view: false, ..
+        } => vec![
             context_menu_item(ContextMenuAction::CreateFolder, "New Folder"),
             ContextMenuItem {
                 action: ContextMenuAction::Paste,
@@ -2860,6 +4605,39 @@ fn context_menu_actions(
             },
             context_menu_item(ContextMenuAction::SelectAll, "Select All"),
             context_menu_item(ContextMenuAction::Refresh, "Refresh"),
+            context_menu_item(ContextMenuAction::Properties, "Properties"),
+        ],
+        ContextMenuTarget::Place {
+            trash_place: true,
+            trash_has_items,
+            ..
+        } => vec![
+            context_menu_item(ContextMenuAction::Open, "Open"),
+            ContextMenuItem {
+                action: ContextMenuAction::EmptyTrash,
+                label: "Empty Trash",
+                enabled: *trash_has_items,
+            },
+            context_menu_item(ContextMenuAction::CopyLocation, "Copy Location"),
+            context_menu_item(ContextMenuAction::Properties, "Properties"),
+        ],
+        ContextMenuTarget::Place { .. } => vec![
+            context_menu_item(ContextMenuAction::Open, "Open"),
+            context_menu_item(ContextMenuAction::CopyLocation, "Copy Location"),
+            context_menu_item(ContextMenuAction::Properties, "Properties"),
+        ],
+        ContextMenuTarget::Item {
+            trash_view: true,
+            trash_can_restore,
+            ..
+        } => vec![
+            ContextMenuItem {
+                action: ContextMenuAction::RestoreFromTrash,
+                label: "Restore to Former Location",
+                enabled: *trash_can_restore,
+            },
+            context_menu_item(ContextMenuAction::Copy, "Copy"),
+            context_menu_item(ContextMenuAction::DeletePermanently, "Delete Permanently"),
             context_menu_item(ContextMenuAction::Properties, "Properties"),
         ],
         ContextMenuTarget::Item {
@@ -3059,6 +4837,8 @@ enum PaneShortcut {
     CreateFolder,
     RenameSelection,
     EditLocation,
+    ShowFilter,
+    Zoom(ZoomChange),
     CopySelection,
     CutSelection,
     PasteIntoPane,
@@ -3070,6 +4850,7 @@ fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut> {
     if has_no_modifiers(keystroke) {
         return match keystroke.key.to_ascii_lowercase().as_str() {
             "escape" => Some(PaneShortcut::ClearSelection),
+            "/" => Some(PaneShortcut::ShowFilter),
             "f5" => Some(PaneShortcut::Refresh),
             "f6" => Some(PaneShortcut::EditLocation),
             "f3" => Some(PaneShortcut::SplitPane),
@@ -3106,6 +4887,9 @@ fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut> {
         && keystroke.modifiers.shift
         && keystroke.modifiers.number_of_modifiers() == 2
     {
+        if let Some(shortcut) = zoom_shortcut(keystroke) {
+            return Some(shortcut);
+        }
         return match keystroke.key.to_ascii_lowercase().as_str() {
             "n" => Some(PaneShortcut::CreateFolder),
             _ => None,
@@ -3113,9 +4897,13 @@ fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut> {
     }
 
     if keystroke.modifiers.secondary() && keystroke.modifiers.number_of_modifiers() == 1 {
+        if let Some(shortcut) = zoom_shortcut(keystroke) {
+            return Some(shortcut);
+        }
         return match keystroke.key.to_ascii_lowercase().as_str() {
             "a" => Some(PaneShortcut::SelectAll),
             "c" => Some(PaneShortcut::CopySelection),
+            "i" => Some(PaneShortcut::ShowFilter),
             "l" => Some(PaneShortcut::EditLocation),
             "v" => Some(PaneShortcut::PasteIntoPane),
             "w" => Some(PaneShortcut::ClosePane),
@@ -3134,6 +4922,21 @@ fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut> {
         };
     }
 
+    None
+}
+
+fn zoom_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut> {
+    let key = keystroke.key.to_ascii_lowercase();
+    let key_char = keystroke.key_char.as_deref();
+    if matches!(key.as_str(), "+" | "=" | "plus") || key_char == Some("+") {
+        return Some(PaneShortcut::Zoom(ZoomChange::In));
+    }
+    if matches!(key.as_str(), "-" | "minus") || key_char == Some("-") {
+        return Some(PaneShortcut::Zoom(ZoomChange::Out));
+    }
+    if key == "0" || key_char == Some("0") {
+        return Some(PaneShortcut::Zoom(ZoomChange::Reset));
+    }
     None
 }
 
@@ -3219,6 +5022,48 @@ fn location_text_input_action(keystroke: &gpui::Keystroke) -> LocationInputActio
         .unwrap_or(LocationInputAction::Ignore)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FilterInputAction {
+    Cancel,
+    FocusView,
+    Backspace,
+    Insert(String),
+    PassToView,
+    Ignore,
+}
+
+fn filter_input_action(keystroke: &gpui::Keystroke) -> FilterInputAction {
+    if has_no_modifiers(keystroke) {
+        return match keystroke.key.to_ascii_lowercase().as_str() {
+            "escape" => FilterInputAction::Cancel,
+            "enter" => FilterInputAction::FocusView,
+            "up" | "down" | "pageup" | "pagedown" => FilterInputAction::PassToView,
+            "backspace" => FilterInputAction::Backspace,
+            _ => filter_text_input_action(keystroke),
+        };
+    }
+
+    if keystroke.modifiers.shift
+        && !keystroke.modifiers.control
+        && !keystroke.modifiers.alt
+        && !keystroke.modifiers.platform
+        && !keystroke.modifiers.function
+    {
+        return filter_text_input_action(keystroke);
+    }
+
+    FilterInputAction::Ignore
+}
+
+fn filter_text_input_action(keystroke: &gpui::Keystroke) -> FilterInputAction {
+    keystroke
+        .key_char
+        .as_ref()
+        .filter(|text| text.chars().all(|ch| !ch.is_control()))
+        .map(|text| FilterInputAction::Insert(text.clone()))
+        .unwrap_or(FilterInputAction::Ignore)
+}
+
 fn has_no_modifiers(keystroke: &gpui::Keystroke) -> bool {
     !keystroke.modifiers.control
         && !keystroke.modifiers.alt
@@ -3236,14 +5081,50 @@ struct TrashSelectionResult {
     undo_items: Vec<TrashUndoItem>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrashViewOperation {
+    Restore,
+    DeletePermanently,
+    Empty,
+}
+
+impl TrashViewOperation {
+    fn progress_label(self, count: usize) -> String {
+        match self {
+            Self::Restore => format!("Restoring {count} item(s)"),
+            Self::DeletePermanently => format!("Deleting {count} item(s) permanently"),
+            Self::Empty => "Emptying Trash".to_string(),
+        }
+    }
+
+    fn completed_label(self) -> &'static str {
+        match self {
+            Self::Restore => "Restored from trash",
+            Self::DeletePermanently => "Deleted permanently",
+            Self::Empty => "Emptied Trash",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TrashViewOperationResult {
+    pane_id: PaneId,
+    operation: TrashViewOperation,
+    success_count: usize,
+    failure_count: usize,
+    affected_dirs: Vec<PathBuf>,
+}
+
 #[derive(Clone, Debug)]
 struct PasteTaskResult {
     pane_id: PaneId,
     mode: ClipboardMode,
+    label: &'static str,
     success_count: usize,
     failure_count: usize,
     affected_dirs: Vec<PathBuf>,
     undo_items: Vec<TransferUndoItem>,
+    created_items: Vec<CreateUndoItem>,
 }
 
 #[derive(Clone, Debug)]
@@ -3324,26 +5205,74 @@ fn paste_clipboard_result(
     pane_id: PaneId,
     target_dir: PathBuf,
     clipboard: ClipboardState,
+    cancel: Option<Arc<AtomicBool>>,
+    progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
 ) -> PasteTaskResult {
+    let mode = clipboard.mode;
+    let label = clipboard.action_label();
     let mut success_count = 0;
     let mut failure_count = 0;
     let mut affected_dirs = Vec::new();
     let mut undo_items = Vec::new();
-    let operation = clipboard.mode.operation();
+    let mut created_items = Vec::new();
+
+    if let Some(text) = clipboard.text.as_deref() {
+        let result =
+            file_ops::write_unique_file(&target_dir, "Pasted Text", "txt", text.as_bytes());
+        match result {
+            Ok(path) => {
+                success_count = 1;
+                push_unique_path(&mut affected_dirs, target_dir.clone());
+                created_items.push(CreateUndoItem {
+                    path,
+                    kind: CreatedItemKind::File,
+                });
+            }
+            Err(_) => {
+                failure_count = 1;
+            }
+        }
+        return PasteTaskResult {
+            pane_id,
+            mode,
+            label,
+            success_count,
+            failure_count,
+            affected_dirs,
+            undo_items,
+            created_items,
+        };
+    }
+
+    let operation = mode.operation();
 
     for source in clipboard.paths {
+        if cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+        {
+            failure_count += 1;
+            continue;
+        }
+        let progress = progress.clone();
         match file_ops::perform_transfer_with_progress_outcome(
             operation,
             &source,
             &target_dir,
             "keep-both",
-            None,
-            |_| {},
+            cancel.clone(),
+            move |transfer_progress| {
+                if let Some(progress) = &progress
+                    && let Ok(mut progress) = progress.lock()
+                {
+                    *progress = transfer_progress;
+                }
+            },
         ) {
             Ok(outcome) => {
                 success_count += 1;
                 push_unique_path(&mut affected_dirs, target_dir.clone());
-                if clipboard.mode == ClipboardMode::Cut
+                if mode == ClipboardMode::Cut
                     && let Some(parent) = source
                         .parent()
                         .filter(|parent| !parent.as_os_str().is_empty())
@@ -3365,11 +5294,13 @@ fn paste_clipboard_result(
 
     PasteTaskResult {
         pane_id,
-        mode: clipboard.mode,
+        mode,
+        label,
         success_count,
         failure_count,
         affected_dirs,
         undo_items,
+        created_items,
     }
 }
 
@@ -3401,6 +5332,43 @@ fn trash_selection_result(pane_id: PaneId, selected_paths: Vec<PathBuf>) -> Tras
         failure_count,
         affected_dirs,
         undo_items,
+    }
+}
+
+fn trash_view_operation_result(
+    pane_id: PaneId,
+    operation: TrashViewOperation,
+    paths: Vec<PathBuf>,
+) -> TrashViewOperationResult {
+    let summary = match operation {
+        TrashViewOperation::Restore => file_ops::restore_trash_paths(&paths),
+        TrashViewOperation::DeletePermanently => file_ops::permanently_delete_trash_paths(&paths),
+        TrashViewOperation::Empty => file_ops::empty_trash(),
+    };
+    let success_count = summary.successes.len();
+    let failure_count = summary.failures.len();
+    let mut affected_dirs = Vec::new();
+    if success_count > 0 {
+        push_unique_path(&mut affected_dirs, file_ops::trash_files_dir());
+    }
+    if operation == TrashViewOperation::Restore {
+        for record in &summary.successes {
+            if let Some(parent) = record
+                .original_path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                push_unique_path(&mut affected_dirs, parent.to_path_buf());
+            }
+        }
+    }
+
+    TrashViewOperationResult {
+        pane_id,
+        operation,
+        success_count,
+        failure_count,
+        affected_dirs,
     }
 }
 
@@ -3504,6 +5472,149 @@ fn action_status(label: &str, success_count: usize, failure_count: usize) -> Str
         (0, _) => format!("{label} failed for {failure_count} item(s)"),
         (_, _) => format!("{label}: {success_count} item(s), {failure_count} failed"),
     }
+}
+
+fn status_summary_for_model(
+    entries: &[fika_core::ModelEntry],
+    selection: &fika_core::SelectionState,
+) -> String {
+    let has_selection = !selection.is_empty();
+    let mut folders = 0usize;
+    let mut files = 0usize;
+    let mut total_size = 0u64;
+
+    for entry in entries {
+        if has_selection && !selection.is_selected(entry.id) {
+            continue;
+        }
+        if entry.is_dir {
+            folders += 1;
+        } else {
+            files += 1;
+            total_size = total_size.saturating_add(entry.size_bytes);
+        }
+    }
+
+    format_status_counts(folders, files, total_size, has_selection)
+}
+
+fn status_summary_for_model_indexes(
+    entries: &[fika_core::ModelEntry],
+    indexes: impl IntoIterator<Item = usize>,
+    selection: &fika_core::SelectionState,
+) -> String {
+    let has_selection = !selection.is_empty();
+    let mut folders = 0usize;
+    let mut files = 0usize;
+    let mut total_size = 0u64;
+
+    for index in indexes {
+        let Some(entry) = entries.get(index) else {
+            continue;
+        };
+        if has_selection && !selection.is_selected(entry.id) {
+            continue;
+        }
+        if entry.is_dir {
+            folders += 1;
+        } else {
+            files += 1;
+            total_size = total_size.saturating_add(entry.size_bytes);
+        }
+    }
+
+    format_status_counts(folders, files, total_size, has_selection)
+}
+
+fn format_status_counts(
+    folders: usize,
+    files: usize,
+    total_size: u64,
+    has_selection: bool,
+) -> String {
+    let folder_label = count_label(
+        folders,
+        if has_selection {
+            "folder selected"
+        } else {
+            "folder"
+        },
+    );
+    let file_label = count_label(
+        files,
+        if has_selection {
+            "file selected"
+        } else {
+            "file"
+        },
+    );
+
+    match (folders, files) {
+        (0, 0) => "0 folders, 0 files".to_string(),
+        (_, 0) => folder_label,
+        (0, _) => format!("{file_label} ({})", fika_core::format_size(total_size)),
+        _ => format!(
+            "{folder_label}, {file_label} ({})",
+            fika_core::format_size(total_size)
+        ),
+    }
+}
+
+fn count_label(count: usize, singular: &'static str) -> String {
+    let suffix = if count == 1 {
+        singular
+    } else {
+        match singular {
+            "folder" => "folders",
+            "file" => "files",
+            "folder selected" => "folders selected",
+            "file selected" => "files selected",
+            _ => singular,
+        }
+    };
+    format!("{count} {suffix}")
+}
+
+fn filesystem_space_info(path: PathBuf) -> Option<SpaceInfoSnapshot> {
+    let output = Command::new("df")
+        .arg("-B1")
+        .arg("--output=size,avail")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_df_space_output(std::str::from_utf8(&output.stdout).ok()?)
+}
+
+fn parse_df_space_output(output: &str) -> Option<SpaceInfoSnapshot> {
+    let values = output.lines().skip(1).find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let total = parts.next()?.parse::<u64>().ok()?;
+        let available = parts.next()?.parse::<u64>().ok()?;
+        Some((total, available))
+    })?;
+    space_info_snapshot(values.0, values.1)
+}
+
+fn space_info_snapshot(total: u64, available: u64) -> Option<SpaceInfoSnapshot> {
+    if total == 0 {
+        return None;
+    }
+    let available = available.min(total);
+    let used = total.saturating_sub(available);
+    let used_percent = ((used.saturating_mul(100) + (total / 2)) / total).min(100) as u8;
+    Some(SpaceInfoSnapshot {
+        free_label: format!("{} free", fika_core::format_size(available)),
+        detail_label: format!(
+            "{} free out of {} ({}% used)",
+            fika_core::format_size(available),
+            fika_core::format_size(total),
+            used_percent
+        ),
+        used_percent,
+    })
 }
 
 fn properties_for_path(path: &Path) -> PropertiesDialogState {
@@ -4022,7 +6133,7 @@ mod tests {
 
     #[test]
     fn context_menu_actions_track_blank_paste_availability() {
-        let blank = ContextMenuTarget::Blank;
+        let blank = context_blank_target();
         let without_clipboard = context_menu_actions(&blank, false);
         let with_clipboard = context_menu_actions(&blank, true);
 
@@ -4049,16 +6160,8 @@ mod tests {
 
     #[test]
     fn context_menu_actions_offer_new_pane_only_for_directories() {
-        let dir_target = ContextMenuTarget::Item {
-            path: PathBuf::from("/tmp"),
-            is_dir: true,
-            selection_count: 1,
-        };
-        let file_target = ContextMenuTarget::Item {
-            path: PathBuf::from("/tmp/readme.txt"),
-            is_dir: false,
-            selection_count: 1,
-        };
+        let dir_target = context_item_target("/tmp", true, 1);
+        let file_target = context_item_target("/tmp/readme.txt", false, 1);
 
         assert!(
             context_menu_actions(&dir_target, false)
@@ -4079,16 +6182,8 @@ mod tests {
 
     #[test]
     fn context_menu_actions_offer_paste_only_for_single_directory_targets() {
-        let dir_target = ContextMenuTarget::Item {
-            path: PathBuf::from("/tmp"),
-            is_dir: true,
-            selection_count: 1,
-        };
-        let file_target = ContextMenuTarget::Item {
-            path: PathBuf::from("/tmp/readme.txt"),
-            is_dir: false,
-            selection_count: 1,
-        };
+        let dir_target = context_item_target("/tmp", true, 1);
+        let file_target = context_item_target("/tmp/readme.txt", false, 1);
 
         assert_eq!(
             context_menu_actions(&dir_target, true)
@@ -4106,11 +6201,7 @@ mod tests {
 
     #[test]
     fn context_menu_actions_use_batch_actions_for_multi_selection() {
-        let target = ContextMenuTarget::Item {
-            path: PathBuf::from("/tmp/readme.txt"),
-            is_dir: false,
-            selection_count: 3,
-        };
+        let target = context_item_target("/tmp/readme.txt", false, 3);
         let actions = context_menu_actions(&target, false)
             .into_iter()
             .map(|item| item.action)
@@ -4123,6 +6214,105 @@ mod tests {
                 ContextMenuAction::Cut,
                 ContextMenuAction::Trash,
                 ContextMenuAction::Properties
+            ]
+        );
+    }
+
+    #[test]
+    fn context_menu_actions_use_trash_view_actions() {
+        let blank = ContextMenuTarget::Blank {
+            trash_view: true,
+            trash_has_items: false,
+        };
+        let blank_actions = context_menu_actions(&blank, false);
+        assert_eq!(
+            blank_actions
+                .iter()
+                .find(|item| item.action == ContextMenuAction::EmptyTrash)
+                .map(|item| item.enabled),
+            Some(false)
+        );
+        assert!(
+            !blank_actions
+                .iter()
+                .any(|item| item.action == ContextMenuAction::CreateFolder)
+        );
+
+        let item = ContextMenuTarget::Item {
+            path: PathBuf::from("/tmp/fika-trash-item"),
+            is_dir: false,
+            selection_count: 2,
+            trash_view: true,
+            trash_can_restore: true,
+        };
+        let item_actions = context_menu_actions(&item, false)
+            .into_iter()
+            .map(|item| (item.action, item.enabled))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            item_actions,
+            vec![
+                (ContextMenuAction::RestoreFromTrash, true),
+                (ContextMenuAction::Copy, true),
+                (ContextMenuAction::DeletePermanently, true),
+                (ContextMenuAction::Properties, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn context_menu_actions_use_place_actions_for_trash_place() {
+        let empty_trash = context_place_target(file_ops::trash_files_dir(), true, false);
+        let empty_actions = context_menu_actions(&empty_trash, false)
+            .into_iter()
+            .map(|item| (item.action, item.enabled))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            empty_actions,
+            vec![
+                (ContextMenuAction::Open, true),
+                (ContextMenuAction::EmptyTrash, false),
+                (ContextMenuAction::CopyLocation, true),
+                (ContextMenuAction::Properties, true),
+            ]
+        );
+
+        let non_empty_trash = context_place_target(file_ops::trash_files_dir(), true, true);
+        assert_eq!(
+            context_menu_actions(&non_empty_trash, false)
+                .iter()
+                .find(|item| item.action == ContextMenuAction::EmptyTrash)
+                .map(|item| item.enabled),
+            Some(true)
+        );
+        assert!(
+            !context_menu_actions(&non_empty_trash, true)
+                .iter()
+                .any(|item| matches!(
+                    item.action,
+                    ContextMenuAction::CreateFolder
+                        | ContextMenuAction::Paste
+                        | ContextMenuAction::Trash
+                ))
+        );
+    }
+
+    #[test]
+    fn context_menu_actions_use_basic_actions_for_normal_places() {
+        let home = context_place_target(PathBuf::from("/home/yk"), false, false);
+        let actions = context_menu_actions(&home, true)
+            .into_iter()
+            .map(|item| item.action)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                ContextMenuAction::Open,
+                ContextMenuAction::CopyLocation,
+                ContextMenuAction::Properties,
             ]
         );
     }
@@ -4273,6 +6463,34 @@ mod tests {
             Some(PaneShortcut::CopySelection)
         );
         assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("/").unwrap()),
+            Some(PaneShortcut::ShowFilter)
+        );
+        assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("secondary-i").unwrap()),
+            Some(PaneShortcut::ShowFilter)
+        );
+        assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("secondary-=").unwrap()),
+            Some(PaneShortcut::Zoom(ZoomChange::In))
+        );
+        let mut shifted_plus = gpui::Keystroke::parse("secondary-shift-=").unwrap();
+        shifted_plus.key_char = Some("+".to_string());
+        assert_eq!(
+            pane_shortcut(&shifted_plus),
+            Some(PaneShortcut::Zoom(ZoomChange::In))
+        );
+        let mut zoom_out = gpui::Keystroke::parse("secondary-x").unwrap();
+        zoom_out.key = "-".to_string();
+        assert_eq!(
+            pane_shortcut(&zoom_out),
+            Some(PaneShortcut::Zoom(ZoomChange::Out))
+        );
+        assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("secondary-0").unwrap()),
+            Some(PaneShortcut::Zoom(ZoomChange::Reset))
+        );
+        assert_eq!(
             pane_shortcut(&gpui::Keystroke::parse("secondary-l").unwrap()),
             Some(PaneShortcut::EditLocation)
         );
@@ -4295,6 +6513,123 @@ mod tests {
         assert_eq!(
             pane_shortcut(&gpui::Keystroke::parse("shift-f5").unwrap()),
             None
+        );
+    }
+
+    #[test]
+    fn compact_layout_options_derive_size_from_zoom_level() {
+        let default_options = ui::file_grid::compact_layout_options(&ViewState::default(), 0.0);
+        assert_eq!(default_options.icon_size, 48.0);
+        assert_eq!(default_options.item_width, 168.0);
+        assert_eq!(default_options.item_height, 76.0);
+
+        let zoomed_options = ui::file_grid::compact_layout_options(
+            &ViewState {
+                zoom_level: fika_core::MAX_ZOOM_LEVEL,
+                ..ViewState::default()
+            },
+            0.0,
+        );
+        assert_eq!(zoomed_options.icon_size, 256.0);
+        assert_eq!(zoomed_options.item_width, 376.0);
+        assert_eq!(zoomed_options.item_height, 284.0);
+    }
+
+    #[test]
+    fn status_bar_zoom_track_maps_drag_position_to_level() {
+        assert_eq!(
+            ui::status_bar::zoom_level_for_track_x(
+                -10.0,
+                160.0,
+                fika_core::MIN_ZOOM_LEVEL,
+                fika_core::MAX_ZOOM_LEVEL
+            ),
+            fika_core::MIN_ZOOM_LEVEL
+        );
+        assert_eq!(
+            ui::status_bar::zoom_level_for_track_x(
+                80.0,
+                160.0,
+                fika_core::MIN_ZOOM_LEVEL,
+                fika_core::MAX_ZOOM_LEVEL
+            ),
+            8
+        );
+        assert_eq!(
+            ui::status_bar::zoom_level_for_track_x(
+                200.0,
+                160.0,
+                fika_core::MIN_ZOOM_LEVEL,
+                fika_core::MAX_ZOOM_LEVEL
+            ),
+            fika_core::MAX_ZOOM_LEVEL
+        );
+    }
+
+    #[test]
+    fn status_messages_are_pane_local() {
+        let mut app = test_app_with_entries("/tmp/fika-status-a", &["one.txt"]);
+        let first = app.panes.focused().unwrap();
+        let second = app.panes.split(first).unwrap();
+        app.panes.focus(second);
+
+        app.set_pane_status(first, "First pane");
+
+        assert_eq!(app.status_message_for_pane(first), "First pane");
+        assert_eq!(app.status_message_for_pane(second), "Ready");
+
+        app.set_pane_status(second, "Second pane");
+
+        assert_eq!(app.status_message_for_pane(first), "First pane");
+        assert_eq!(app.status_message_for_pane(second), "Second pane");
+    }
+
+    #[test]
+    fn zoom_status_updates_only_target_pane() {
+        let mut app = test_app_with_entries("/tmp/fika-status-zoom", &["one.txt"]);
+        let first = app.panes.focused().unwrap();
+        let second = app.panes.split(first).unwrap();
+        app.panes.focus(second);
+        let next_level = fika_core::DEFAULT_ZOOM_LEVEL + 1;
+
+        app.set_zoom_level(first, next_level);
+
+        assert_eq!(
+            app.status_message_for_pane(first),
+            format!(
+                "Zoom level {next_level} ({} px)",
+                fika_core::icon_size_for_zoom_level(next_level) as i32
+            )
+        );
+        assert_eq!(app.status_message_for_pane(second), "Ready");
+    }
+
+    #[test]
+    fn operation_progress_snapshot_is_pane_local() {
+        let mut app = test_app_with_entries("/tmp/fika-status-progress", &["one.txt"]);
+        let first = app.panes.focused().unwrap();
+        let second = app.panes.split(first).unwrap();
+
+        app.begin_pane_operation(first, "Copying");
+        let (_cancel, progress) = app.start_transfer_progress(first, "Copy".to_string());
+        {
+            let mut progress = progress.lock().unwrap();
+            progress.bytes_done = 40;
+            progress.bytes_total = 100;
+        }
+        let now = app.operation_progress.as_ref().unwrap().started_at + PROGRESS_DISPLAY_DELAY;
+
+        let snapshot = app
+            .operation_progress_snapshot_for_pane(first, now)
+            .unwrap();
+
+        assert_eq!(app.status_message_for_pane(first), "Copying");
+        assert_eq!(snapshot.label, "Copy");
+        assert_eq!(snapshot.percent, Some(40));
+        assert!(snapshot.cancellable);
+        assert!(
+            app.operation_progress_snapshot_for_pane(second, now)
+                .is_none()
         );
     }
 
@@ -4359,6 +6694,89 @@ mod tests {
     }
 
     #[test]
+    fn filter_input_action_classifies_controls_navigation_and_text() {
+        assert_eq!(
+            filter_input_action(&gpui::Keystroke::parse("escape").unwrap()),
+            FilterInputAction::Cancel
+        );
+        assert_eq!(
+            filter_input_action(&gpui::Keystroke::parse("enter").unwrap()),
+            FilterInputAction::FocusView
+        );
+        assert_eq!(
+            filter_input_action(&gpui::Keystroke::parse("down").unwrap()),
+            FilterInputAction::PassToView
+        );
+        assert_eq!(
+            filter_input_action(&gpui::Keystroke::parse("pageup").unwrap()),
+            FilterInputAction::PassToView
+        );
+        assert_eq!(
+            filter_input_action(&gpui::Keystroke::parse("backspace").unwrap()),
+            FilterInputAction::Backspace
+        );
+        assert_eq!(
+            filter_input_action(&gpui::Keystroke::parse("a->a").unwrap()),
+            FilterInputAction::Insert("a".to_string())
+        );
+        assert_eq!(
+            filter_input_action(&gpui::Keystroke::parse("shift-a->A").unwrap()),
+            FilterInputAction::Insert("A".to_string())
+        );
+        assert_eq!(
+            filter_input_action(&gpui::Keystroke::parse("secondary-i").unwrap()),
+            FilterInputAction::Ignore
+        );
+    }
+
+    #[test]
+    fn filter_projection_is_pane_local_and_navigation_clears_query() {
+        let mut app = test_app_with_entries("/tmp/fika-filter-a", &["alpha.rs", "beta.txt"]);
+        let first = app.panes.focused().unwrap();
+        let second = app.panes.split(first).unwrap();
+
+        app.set_filter_query(first, "*.rs".to_string());
+        let first_filtered = app.filtered_model_for_pane(first).unwrap().0;
+        assert_eq!(first_filtered.as_slice(), &[0]);
+        assert!(app.filtered_model_for_pane(second).is_none());
+        assert!(!app.panes.can_go_back(first));
+
+        let next_dir = PathBuf::from("/tmp/fika-filter-b");
+        app.load_pane(first, next_dir.clone());
+        let first_filter = app.pane_filters.get(&first).unwrap();
+        assert!(first_filter.query.is_empty());
+        assert!(!first_filter.focused);
+        assert!(app.filtered_models.get(&first).is_none());
+        assert!(app.panes.can_go_back(first));
+        assert_eq!(
+            app.panes.pane(first).map(|pane| pane.current_dir.as_path()),
+            Some(next_dir.as_path())
+        );
+    }
+
+    #[test]
+    fn filter_projection_rebuilds_after_model_signal() {
+        let mut app = test_app_with_entries("/tmp/fika-filter-model", &["alpha.rs", "beta.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        app.set_filter_query(pane_id, "*.rs".to_string());
+        assert!(app.filtered_model_for_pane(pane_id).is_some());
+        assert!(app.filtered_models.contains_key(&pane_id));
+
+        let generation = app.panes.pane(pane_id).unwrap().generation;
+        app.apply_event(DirectoryListerEvent::ItemsAdded {
+            pane_id,
+            generation,
+            request_serial: fika_core::RequestSerial(0),
+            path: PathBuf::from("/tmp/fika-filter-model"),
+            entries: vec![test_entry("gamma.rs")],
+        });
+
+        assert!(app.filtered_models.get(&pane_id).is_none());
+        let filtered = app.filtered_model_for_pane(pane_id).unwrap().0;
+        assert_eq!(filtered.as_slice(), &[0, 2]);
+    }
+
+    #[test]
     fn rename_item_result_renames_item_and_records_affected_dir() {
         let temp = test_dir("rename-item");
         std::fs::create_dir_all(&temp).unwrap();
@@ -4412,6 +6830,109 @@ mod tests {
     }
 
     #[test]
+    fn status_summary_reports_current_model_without_selection() {
+        let entries = vec![
+            status_entry(1, "folder", true, 0),
+            status_entry(2, "large.bin", false, 1536),
+            status_entry(3, "small.txt", false, 512),
+        ];
+
+        assert_eq!(
+            status_summary_for_model(&entries, &fika_core::SelectionState::default()),
+            "1 folder, 2 files (2.0 KB)"
+        );
+    }
+
+    #[test]
+    fn status_summary_reports_selected_items_without_path_expansion() {
+        let entries = vec![
+            status_entry(1, "folder", true, 0),
+            status_entry(2, "large.bin", false, 1536),
+            status_entry(3, "small.txt", false, 512),
+        ];
+        let mut selection = fika_core::SelectionState::default();
+        selection.select_all(Some(fika_core::ItemId(1)));
+        assert_eq!(selection.toggle(fika_core::ItemId(2)), false);
+
+        assert_eq!(
+            status_summary_for_model(&entries, &selection),
+            "1 folder selected, 1 file selected (512 B)"
+        );
+    }
+
+    #[test]
+    fn space_info_snapshot_formats_free_space_and_used_percent() {
+        let snapshot = space_info_snapshot(4096, 1024).unwrap();
+
+        assert_eq!(snapshot.free_label, "1.0 KB free");
+        assert_eq!(
+            snapshot.detail_label,
+            "1.0 KB free out of 4.0 KB (75% used)"
+        );
+        assert_eq!(snapshot.used_percent, 75);
+        assert_eq!(
+            parse_df_space_output("1B-blocks Avail\n4096 1024\n"),
+            Some(snapshot)
+        );
+    }
+
+    #[test]
+    fn progress_percent_handles_unknown_and_complete_totals() {
+        assert_eq!(progress_percent(0, 0), None);
+        assert_eq!(progress_percent(50, 100), Some(50));
+        assert_eq!(progress_percent(128, 128), Some(100));
+        assert_eq!(progress_percent(256, 128), Some(100));
+    }
+
+    #[test]
+    fn progress_delay_matches_dolphin_delayed_progress_bar() {
+        let started = Instant::now();
+
+        assert!(!progress_delay_elapsed(
+            started,
+            started + PROGRESS_DISPLAY_DELAY - Duration::from_millis(1)
+        ));
+        assert!(progress_delay_elapsed(
+            started,
+            started + PROGRESS_DISPLAY_DELAY
+        ));
+    }
+
+    #[test]
+    fn clipboard_state_round_trips_file_clipboard_item_metadata() {
+        let paths = vec![
+            PathBuf::from("/tmp/fika-copy-a.txt"),
+            PathBuf::from("/tmp/fika-copy-b.txt"),
+        ];
+        let clipboard = ClipboardState::files(ClipboardMode::Cut, paths.clone());
+        let item = clipboard.to_clipboard_item();
+
+        assert_eq!(
+            ClipboardState::from_clipboard_item(&item),
+            Some(ClipboardState::files(ClipboardMode::Cut, paths))
+        );
+    }
+
+    #[test]
+    fn clipboard_state_imports_uri_list_text_and_plain_text() {
+        let uri_list =
+            ClipboardItem::new_string("copy\nfile:///tmp/fika%20clipboard.txt\n".to_string());
+        assert_eq!(
+            ClipboardState::from_clipboard_item(&uri_list),
+            Some(ClipboardState::files(
+                ClipboardMode::Copy,
+                vec![PathBuf::from("/tmp/fika clipboard.txt")]
+            ))
+        );
+
+        let plain = ClipboardItem::new_string("hello from clipboard".to_string());
+        assert_eq!(
+            ClipboardState::from_clipboard_item(&plain),
+            ClipboardState::text("hello from clipboard".to_string())
+        );
+    }
+
+    #[test]
     fn paste_clipboard_result_copies_item_and_records_transfer_undo() {
         let temp = test_dir("paste-copy");
         let source_dir = temp.join("source");
@@ -4424,10 +6945,9 @@ mod tests {
         let result = paste_clipboard_result(
             PaneId(7),
             target_dir.clone(),
-            ClipboardState {
-                mode: ClipboardMode::Copy,
-                paths: vec![source.clone()],
-            },
+            ClipboardState::files(ClipboardMode::Copy, vec![source.clone()]),
+            None,
+            None,
         );
 
         let destination = target_dir.join("note.txt");
@@ -4451,6 +6971,146 @@ mod tests {
     }
 
     #[test]
+    fn paste_clipboard_result_writes_plain_text_file_and_records_create_undo() {
+        let temp = test_dir("paste-text");
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let result = paste_clipboard_result(
+            PaneId(15),
+            temp.clone(),
+            ClipboardState::text("plain text".to_string()).unwrap(),
+            None,
+            None,
+        );
+
+        let destination = temp.join("Pasted Text.txt");
+        assert_eq!(result.pane_id, PaneId(15));
+        assert_eq!(result.mode, ClipboardMode::Copy);
+        assert_eq!(result.label, "Paste");
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert_eq!(result.affected_dirs, vec![temp.clone()]);
+        assert!(result.undo_items.is_empty());
+        assert_eq!(
+            result.created_items,
+            vec![CreateUndoItem {
+                path: destination.clone(),
+                kind: CreatedItemKind::File,
+            }]
+        );
+        assert_eq!(std::fs::read_to_string(destination).unwrap(), "plain text");
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn paste_clipboard_result_updates_shared_transfer_progress() {
+        let temp = test_dir("paste-progress");
+        let source_dir = temp.join("source");
+        let target_dir = temp.join("target");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let source = source_dir.join("note.bin");
+        std::fs::write(&source, vec![42_u8; 32 * 1024]).unwrap();
+        let progress = Arc::new(Mutex::new(file_ops::TransferProgress::default()));
+
+        let result = paste_clipboard_result(
+            PaneId(13),
+            target_dir,
+            ClipboardState::files(ClipboardMode::Copy, vec![source]),
+            None,
+            Some(Arc::clone(&progress)),
+        );
+
+        assert_eq!(result.success_count, 1);
+        let progress = *progress.lock().unwrap();
+        assert_eq!(progress.bytes_total, 32 * 1024);
+        assert_eq!(progress.bytes_done, 32 * 1024);
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn paste_clipboard_result_honors_cancel_flag_before_transfer() {
+        let temp = test_dir("paste-cancel");
+        let source_dir = temp.join("source");
+        let target_dir = temp.join("target");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let source = source_dir.join("note.bin");
+        std::fs::write(&source, "cancel").unwrap();
+        let cancel = Arc::new(AtomicBool::new(true));
+
+        let result = paste_clipboard_result(
+            PaneId(14),
+            target_dir.clone(),
+            ClipboardState::files(ClipboardMode::Copy, vec![source]),
+            Some(cancel),
+            None,
+        );
+
+        assert_eq!(result.success_count, 0);
+        assert_eq!(result.failure_count, 1);
+        assert!(std::fs::read_dir(&target_dir).unwrap().next().is_none());
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn trash_view_operation_result_restores_items_and_marks_original_dir() {
+        let temp = test_dir("trash-restore");
+        std::fs::create_dir_all(&temp).unwrap();
+        let unique_name = format!(
+            "restore-{}.txt",
+            temp.file_name().unwrap().to_string_lossy()
+        );
+        let original = temp.join(unique_name);
+        std::fs::write(&original, "restore").unwrap();
+        let trashed = file_ops::trash_paths(std::slice::from_ref(&original));
+        assert!(trashed.failures.is_empty());
+        let trash_path = trashed.successes[0].trash_path.clone();
+        assert!(!original.exists());
+
+        let result =
+            trash_view_operation_result(PaneId(16), TrashViewOperation::Restore, vec![trash_path]);
+
+        assert_eq!(result.pane_id, PaneId(16));
+        assert_eq!(result.operation, TrashViewOperation::Restore);
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert_eq!(
+            result.affected_dirs,
+            vec![file_ops::trash_files_dir(), temp.clone()]
+        );
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "restore");
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn trash_view_operation_result_deletes_items_permanently() {
+        let temp = test_dir("trash-delete-permanently");
+        std::fs::create_dir_all(&temp).unwrap();
+        let original = temp.join("delete.txt");
+        std::fs::write(&original, "delete").unwrap();
+        let trashed = file_ops::trash_paths(std::slice::from_ref(&original));
+        assert!(trashed.failures.is_empty());
+        let trash_path = trashed.successes[0].trash_path.clone();
+        assert!(!original.exists());
+
+        let result = trash_view_operation_result(
+            PaneId(17),
+            TrashViewOperation::DeletePermanently,
+            vec![trash_path.clone()],
+        );
+
+        assert_eq!(result.pane_id, PaneId(17));
+        assert_eq!(result.operation, TrashViewOperation::DeletePermanently);
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert_eq!(result.affected_dirs, vec![file_ops::trash_files_dir()]);
+        assert!(!trash_path.exists());
+        assert!(!original.exists());
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
     fn paste_clipboard_result_moves_item_and_marks_both_directories() {
         let temp = test_dir("paste-move");
         let source_dir = temp.join("source");
@@ -4463,10 +7123,9 @@ mod tests {
         let result = paste_clipboard_result(
             PaneId(8),
             target_dir.clone(),
-            ClipboardState {
-                mode: ClipboardMode::Cut,
-                paths: vec![source.clone()],
-            },
+            ClipboardState::files(ClipboardMode::Cut, vec![source.clone()]),
+            None,
+            None,
         );
 
         let destination = target_dir.join("note.txt");
@@ -4498,10 +7157,9 @@ mod tests {
         let paste = paste_clipboard_result(
             PaneId(9),
             target_dir,
-            ClipboardState {
-                mode: ClipboardMode::Cut,
-                paths: vec![source.clone()],
-            },
+            ClipboardState::files(ClipboardMode::Cut, vec![source.clone()]),
+            None,
+            None,
         );
         assert_eq!(paste.success_count, 1);
         assert!(destination.exists());
@@ -4639,8 +7297,8 @@ mod tests {
                     name_width_units: name.len() as u16,
                     size_bytes: 0,
                     modified_secs: None,
-                    trash_group: None,
-                    trash_deletion_label: None,
+                    trash_original_path: None,
+                    trash_deletion_time: None,
                     is_dir: false,
                 })
             })
@@ -4750,8 +7408,8 @@ mod tests {
             name_width_units: 10,
             size_bytes: 4,
             modified_secs: None,
-            trash_group: None,
-            trash_deletion_label: None,
+            trash_original_path: None,
+            trash_deletion_time: None,
             is_dir: false,
         })]);
         let events = vec![DirectoryListerEvent::ListingRefreshed {
@@ -4959,6 +7617,60 @@ mod tests {
         assert!(listing_batch_cancelled(&shared, &batch));
     }
 
+    #[test]
+    fn loading_state_tracks_current_request_and_ignores_stale_events() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/fika-loading"));
+        let pane_id = controller.focused().unwrap();
+        let start = controller.reload(pane_id).unwrap();
+        let mut loading = HashMap::new();
+        let now = Instant::now();
+
+        update_loading_state_for_event(&mut loading, controller.pane(pane_id), &start, now);
+        assert_eq!(
+            loading.get(&pane_id).map(|state| state.key),
+            Some(ListingRequestKey {
+                generation: start.generation(),
+                request_serial: start.request_serial(),
+            })
+        );
+
+        let stale = DirectoryListerEvent::ListingCompleted {
+            pane_id,
+            generation: start.generation(),
+            request_serial: fika_core::RequestSerial(start.request_serial().0 + 1),
+            path: start.path().to_path_buf(),
+        };
+        update_loading_state_for_event(&mut loading, controller.pane(pane_id), &stale, now);
+        assert!(loading.contains_key(&pane_id));
+
+        let completed = DirectoryListerEvent::ListingCompleted {
+            pane_id,
+            generation: start.generation(),
+            request_serial: start.request_serial(),
+            path: start.path().to_path_buf(),
+        };
+        update_loading_state_for_event(&mut loading, controller.pane(pane_id), &completed, now);
+        assert!(!loading.contains_key(&pane_id));
+    }
+
+    #[test]
+    fn loading_state_rejects_stale_started_event_for_old_generation() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/fika-loading-a"));
+        let pane_id = controller.focused().unwrap();
+        let stale = controller.reload(pane_id).unwrap();
+        controller.load(pane_id, PathBuf::from("/tmp/fika-loading-b"));
+        let mut loading = HashMap::new();
+
+        update_loading_state_for_event(
+            &mut loading,
+            controller.pane(pane_id),
+            &stale,
+            Instant::now(),
+        );
+
+        assert!(loading.is_empty());
+    }
+
     fn listing_request(pane: u64, serial: u64) -> ListingRequest {
         listing_request_at(pane, serial, &format!("/tmp/fika-listing-{pane}"))
     }
@@ -5013,23 +7725,110 @@ mod tests {
         }
     }
 
+    fn test_app_with_entries(path: &str, names: &[&str]) -> FikaApp {
+        let path = PathBuf::from(path);
+        let mut panes = PaneController::new(path.clone());
+        let pane_id = panes.focused().unwrap();
+        panes
+            .pane_mut(pane_id)
+            .unwrap()
+            .model
+            .replace_listing(path, test_entries(names));
+        FikaApp {
+            panes,
+            places: Vec::new(),
+            file_icons: FileIconCache::default(),
+            space_info: SpaceInfoCache::default(),
+            status_summaries: HashMap::new(),
+            loading_panes: HashMap::new(),
+            smooth_scrolls: HashMap::new(),
+            scroll_drag_trackers: HashMap::new(),
+            smooth_scroll_tick_running: false,
+            viewport_origins: HashMap::new(),
+            visible_item_slots: HashMap::new(),
+            compact_column_widths: HashMap::new(),
+            pane_filters: HashMap::new(),
+            filtered_models: HashMap::new(),
+            operations: OperationQueue::new(),
+            clipboard: None,
+            rename_draft: None,
+            location_draft: None,
+            chooser: None,
+            listing_worker: ListingWorker::new(),
+            _keystroke_subscription: None,
+            rubber_band: None,
+            context_menu: None,
+            properties_dialog: None,
+            pane_statuses: HashMap::new(),
+            operation_pending: false,
+            operation_pane: None,
+            operation_progress: None,
+        }
+    }
+
+    fn test_entry(name: &str) -> fika_core::Entry {
+        fika_core::Entry::new(fika_core::EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len() as u16,
+            size_bytes: 0,
+            modified_secs: None,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir: false,
+        })
+    }
+
     fn test_entries(names: &[&str]) -> Arc<Vec<fika_core::Entry>> {
-        Arc::new(
-            names
-                .iter()
-                .map(|name| {
-                    fika_core::Entry::new(fika_core::EntryData {
-                        name: Arc::from(*name),
-                        name_width_units: name.len() as u16,
-                        size_bytes: 0,
-                        modified_secs: None,
-                        trash_group: None,
-                        trash_deletion_label: None,
-                        is_dir: false,
-                    })
-                })
-                .collect(),
-        )
+        Arc::new(names.iter().map(|name| test_entry(name)).collect())
+    }
+
+    fn status_entry(
+        id: u64,
+        name: &'static str,
+        is_dir: bool,
+        size_bytes: u64,
+    ) -> fika_core::ModelEntry {
+        fika_core::ModelEntry {
+            id: fika_core::ItemId(id),
+            entry: fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from(name),
+                name_width_units: name.len() as u16,
+                size_bytes,
+                modified_secs: None,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                is_dir,
+            }),
+        }
+    }
+
+    fn context_blank_target() -> ContextMenuTarget {
+        ContextMenuTarget::Blank {
+            trash_view: false,
+            trash_has_items: false,
+        }
+    }
+
+    fn context_item_target(path: &str, is_dir: bool, selection_count: usize) -> ContextMenuTarget {
+        ContextMenuTarget::Item {
+            path: PathBuf::from(path),
+            is_dir,
+            selection_count,
+            trash_view: false,
+            trash_can_restore: false,
+        }
+    }
+
+    fn context_place_target(
+        path: PathBuf,
+        trash_place: bool,
+        trash_has_items: bool,
+    ) -> ContextMenuTarget {
+        ContextMenuTarget::Place {
+            path,
+            trash_place,
+            trash_has_items,
+        }
     }
 
     fn test_dir(name: &str) -> PathBuf {

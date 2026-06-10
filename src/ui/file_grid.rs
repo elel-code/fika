@@ -75,10 +75,13 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
             };
             let _ = app.update(cx, |this, cx| {
                 let origin_changed = this.set_viewport_origin(pane_id, origin);
-                let bounds_changed = this
-                    .panes
-                    .set_viewport_bounds(pane_id, width, height, max_scroll_x, max_scroll_y)
-                    .unwrap_or(false);
+                let bounds_changed = this.set_pane_viewport_bounds(
+                    pane_id,
+                    width,
+                    height,
+                    max_scroll_x,
+                    max_scroll_y,
+                );
                 if origin_changed || bounds_changed {
                     cx.notify();
                 }
@@ -98,15 +101,15 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                     move |this, event: &gpui::ScrollWheelEvent, window, cx| {
                         let delta = event.delta.pixel_delta(window.line_height());
                         let horizontal_delta = -(delta.x.as_f32() + delta.y.as_f32());
-                        this.panes.scroll_view(
+                        this.scroll_pane_smooth(
                             pane_id,
                             horizontal_delta,
                             0.0,
                             max_scroll_x,
                             max_scroll_y,
+                            cx,
                         );
                         cx.stop_propagation();
-                        cx.notify();
                     },
                 ))
                 .on_click(
@@ -157,8 +160,8 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                 .child(
                     div()
                         .absolute()
-                        .left(px(-view.scroll_x))
-                        .top(px(-view.scroll_y))
+                        .left(px(-view.scroll_x.round()))
+                        .top(px(-view.scroll_y.round()))
                         .w(px(content_size.width))
                         .h(px(content_size.height))
                         .children(
@@ -199,17 +202,21 @@ fn horizontal_scroll_bar(
                 let drag = *event.drag(cx);
                 let track_x = (event.event.position.x - event.bounds.origin.x).as_f32();
                 let scroll_x = drag.bar.scroll_x_for_track_x(track_x);
-                this.panes
-                    .set_view_scroll(drag.pane_id, scroll_x, 0.0, drag.bar.max_scroll_x, 0.0);
+                this.set_pane_scroll_immediate(
+                    drag.pane_id,
+                    scroll_x,
+                    0.0,
+                    drag.bar.max_scroll_x,
+                    0.0,
+                );
                 cx.stop_propagation();
                 cx.notify();
             },
         ))
-        .on_drop::<ScrollBarDrag>(
-            cx.listener(move |_this, _drag: &ScrollBarDrag, _window, cx| {
-                cx.stop_propagation();
-            }),
-        )
+        .on_drop::<ScrollBarDrag>(cx.listener(move |this, drag: &ScrollBarDrag, _window, cx| {
+            this.finish_scrollbar_drag(drag.pane_id, drag.bar.max_scroll_x, 0.0, cx);
+            cx.stop_propagation();
+        }))
         .child(
             div()
                 .id(format!("scrollbar-x-handle-{}", pane_id.0))

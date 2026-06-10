@@ -52,9 +52,14 @@ pub struct SelectionState {
     all_selected: bool,
     anchor_id: Option<ItemId>,
     active_id: Option<ItemId>,
+    revision: u64,
 }
 
 impl SelectionState {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn selected_ids(&self) -> &[ItemId] {
         &self.selected_ids
     }
@@ -105,6 +110,7 @@ impl SelectionState {
         self.all_selected = false;
         self.anchor_id = None;
         self.active_id = None;
+        self.bump_revision();
     }
 
     pub fn select_only(&mut self, id: ItemId) {
@@ -114,6 +120,7 @@ impl SelectionState {
         self.selected_ids.push(id);
         self.anchor_id = Some(id);
         self.active_id = Some(id);
+        self.bump_revision();
     }
 
     pub fn toggle(&mut self, id: ItemId) -> bool {
@@ -126,9 +133,11 @@ impl SelectionState {
                 .position(|excluded| *excluded == id)
             {
                 self.excluded_ids.remove(index);
+                self.bump_revision();
                 return true;
             }
             self.excluded_ids.push(id);
+            self.bump_revision();
             return false;
         }
         self.anchor_id = Some(id);
@@ -139,9 +148,11 @@ impl SelectionState {
             .position(|selected| *selected == id)
         {
             self.selected_ids.remove(index);
+            self.bump_revision();
             false
         } else {
             self.selected_ids.push(id);
+            self.bump_revision();
             true
         }
     }
@@ -166,6 +177,7 @@ impl SelectionState {
         {
             self.active_id = self.selected_ids.first().copied();
         }
+        self.bump_revision();
     }
 
     pub fn select_all(&mut self, anchor_id: Option<ItemId>) {
@@ -178,6 +190,7 @@ impl SelectionState {
         self.all_selected = true;
         self.anchor_id = anchor_id;
         self.active_id = anchor_id;
+        self.bump_revision();
     }
 
     pub fn replace_range(&mut self, anchor_id: ItemId, ids: Vec<ItemId>) {
@@ -202,6 +215,9 @@ impl SelectionState {
         fallback_id: Option<ItemId>,
     ) {
         if self.all_selected {
+            let before_excluded_len = self.excluded_ids.len();
+            let before_anchor = self.anchor_id;
+            let before_active = self.active_id;
             self.excluded_ids.retain(|id| exists(*id));
             if self.anchor_id.is_some_and(|anchor| !exists(anchor)) {
                 self.anchor_id = fallback_id;
@@ -212,9 +228,18 @@ impl SelectionState {
             if fallback_id.is_none() {
                 self.clear();
             }
+            if self.excluded_ids.len() != before_excluded_len
+                || self.anchor_id != before_anchor
+                || self.active_id != before_active
+            {
+                self.bump_revision();
+            }
             return;
         }
 
+        let before_selected_len = self.selected_ids.len();
+        let before_anchor = self.anchor_id;
+        let before_active = self.active_id;
         self.selected_ids.retain(|id| exists(*id));
         if self.anchor_id.is_some_and(|anchor| !exists(anchor)) {
             self.anchor_id = self.selected_ids.first().copied();
@@ -222,6 +247,16 @@ impl SelectionState {
         if self.active_id.is_some_and(|active| !exists(active)) {
             self.active_id = self.selected_ids.first().copied();
         }
+        if self.selected_ids.len() != before_selected_len
+            || self.anchor_id != before_anchor
+            || self.active_id != before_active
+        {
+            self.bump_revision();
+        }
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 
@@ -275,6 +310,11 @@ pub enum ZoomChange {
 }
 
 impl ViewState {
+    pub fn reset_scroll(&mut self) {
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
+    }
+
     pub fn icon_size(&self) -> f32 {
         icon_size_for_zoom_level(self.zoom_level)
     }
@@ -332,6 +372,7 @@ impl PaneState {
             self.history_forward.clear();
             self.current_dir = path.clone();
             self.selection.clear();
+            self.view.reset_scroll();
         }
         self.generation = generation;
         self.lister.set_target(self.id, path, generation);
@@ -350,6 +391,7 @@ impl PaneState {
         self.history_forward.push(self.current_dir.clone());
         self.current_dir = previous.clone();
         self.selection.clear();
+        self.view.reset_scroll();
         self.generation = generation;
         self.lister
             .set_target(self.id, previous.clone(), generation);
@@ -361,6 +403,7 @@ impl PaneState {
         self.history_back.push(self.current_dir.clone());
         self.current_dir = next.clone();
         self.selection.clear();
+        self.view.reset_scroll();
         self.generation = generation;
         self.lister.set_target(self.id, next.clone(), generation);
         Some(next)
@@ -1292,7 +1335,6 @@ mod tests {
             Some(ViewState {
                 scroll_x: 120.0,
                 scroll_y: 30.0,
-                icon_size: 48.0,
                 ..ViewState::default()
             })
         );
@@ -1301,7 +1343,6 @@ mod tests {
             Some(ViewState {
                 scroll_x: 200.0,
                 scroll_y: 40.0,
-                icon_size: 48.0,
                 ..ViewState::default()
             })
         );
@@ -1310,7 +1351,6 @@ mod tests {
             Some(ViewState {
                 scroll_x: 0.0,
                 scroll_y: 0.0,
-                icon_size: 48.0,
                 ..ViewState::default()
             })
         );
@@ -1330,7 +1370,6 @@ mod tests {
             Some(ViewState {
                 scroll_x: 200.0,
                 scroll_y: 40.0,
-                icon_size: 48.0,
                 ..ViewState::default()
             })
         );
@@ -1339,13 +1378,88 @@ mod tests {
             Some(ViewState {
                 scroll_x: 0.0,
                 scroll_y: 0.0,
-                icon_size: 48.0,
                 ..ViewState::default()
             })
         );
 
         assert_eq!(controller.pane(second).unwrap().view.scroll_x, 0.0);
         assert_eq!(controller.pane(second).unwrap().view.scroll_y, 0.0);
+    }
+
+    #[test]
+    fn navigation_resets_scroll_but_reload_preserves_it() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let pane_id = controller.focused().unwrap();
+
+        controller.set_view_scroll(pane_id, 120.0, 30.0, 200.0, 40.0);
+        controller.reload(pane_id).unwrap();
+        assert_eq!(controller.pane(pane_id).unwrap().view.scroll_x, 120.0);
+        assert_eq!(controller.pane(pane_id).unwrap().view.scroll_y, 30.0);
+
+        controller.load(pane_id, PathBuf::from("/tmp/b")).unwrap();
+        assert_eq!(controller.pane(pane_id).unwrap().view.scroll_x, 0.0);
+        assert_eq!(controller.pane(pane_id).unwrap().view.scroll_y, 0.0);
+
+        controller.set_view_scroll(pane_id, 80.0, 20.0, 200.0, 40.0);
+        controller.go_back(pane_id).unwrap();
+        assert_eq!(controller.pane(pane_id).unwrap().view.scroll_x, 0.0);
+        assert_eq!(controller.pane(pane_id).unwrap().view.scroll_y, 0.0);
+
+        controller.set_view_scroll(pane_id, 80.0, 20.0, 200.0, 40.0);
+        controller.go_forward(pane_id).unwrap();
+        assert_eq!(controller.pane(pane_id).unwrap().view.scroll_x, 0.0);
+        assert_eq!(controller.pane(pane_id).unwrap().view.scroll_y, 0.0);
+    }
+
+    #[test]
+    fn zoom_level_maps_to_icon_size_and_clamps() {
+        assert_eq!(icon_size_for_zoom_level(MIN_ZOOM_LEVEL - 1), 16.0);
+        assert_eq!(icon_size_for_zoom_level(0), 16.0);
+        assert_eq!(icon_size_for_zoom_level(1), 22.0);
+        assert_eq!(icon_size_for_zoom_level(2), 32.0);
+        assert_eq!(icon_size_for_zoom_level(DEFAULT_ZOOM_LEVEL), 48.0);
+        assert_eq!(icon_size_for_zoom_level(4), 64.0);
+        assert_eq!(icon_size_for_zoom_level(MAX_ZOOM_LEVEL), 256.0);
+        assert_eq!(icon_size_for_zoom_level(MAX_ZOOM_LEVEL + 1), 256.0);
+    }
+
+    #[test]
+    fn zoom_level_is_pane_local_and_split_inherits_source_view() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let first = controller.focused().unwrap();
+
+        let zoomed = controller
+            .apply_zoom_change(first, ZoomChange::In)
+            .expect("pane exists");
+        assert_eq!(zoomed.zoom_level, DEFAULT_ZOOM_LEVEL + 1);
+        assert_eq!(zoomed.icon_size(), 64.0);
+
+        let second = controller.split(first).unwrap();
+        assert_eq!(
+            controller.pane(second).unwrap().view.zoom_level,
+            DEFAULT_ZOOM_LEVEL + 1
+        );
+
+        let first_view = controller
+            .set_zoom_level(first, MAX_ZOOM_LEVEL + 10)
+            .expect("pane exists");
+        assert_eq!(first_view.zoom_level, MAX_ZOOM_LEVEL);
+        assert_eq!(first_view.icon_size(), 256.0);
+
+        let second_view = controller
+            .set_zoom_level(second, MIN_ZOOM_LEVEL - 10)
+            .expect("pane exists");
+        assert_eq!(second_view.zoom_level, MIN_ZOOM_LEVEL);
+        assert_eq!(second_view.icon_size(), 16.0);
+        assert_eq!(
+            controller.pane(first).unwrap().view.zoom_level,
+            MAX_ZOOM_LEVEL
+        );
+
+        let reset = controller
+            .apply_zoom_change(second, ZoomChange::Reset)
+            .expect("pane exists");
+        assert_eq!(reset.zoom_level, DEFAULT_ZOOM_LEVEL);
     }
 
     fn test_entry(name: &str) -> Entry {
@@ -1368,8 +1482,8 @@ mod tests {
             name_width_units,
             size_bytes: 0,
             modified_secs: None,
-            trash_group: None,
-            trash_deletion_label: None,
+            trash_original_path: None,
+            trash_deletion_time: None,
             is_dir: false,
         })
     }

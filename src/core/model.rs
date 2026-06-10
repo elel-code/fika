@@ -1,4 +1,5 @@
 use super::entries::{Entry, ItemId, ModelEntry, directory_entry_path, entry_name_cmp};
+use super::file_ops;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -162,7 +163,7 @@ impl DirectoryModel {
             .cloned()
             .map(ModelEntry::unassigned)
             .collect::<Vec<_>>();
-        sort_model_entries(&mut entries, false);
+        sort_model_entries(&mut entries, file_ops::is_trash_files_dir(&directory));
         self.assign_listing_identity(&directory, &mut entries);
         if self.same_listing(&directory, &entries) {
             self.replace_data(directory, entries);
@@ -197,7 +198,10 @@ impl DirectoryModel {
         {
             let data = self.data_mut();
             data.entries.extend(added);
-            sort_model_entries(&mut data.entries, false);
+            sort_model_entries(
+                &mut data.entries,
+                file_ops::is_trash_files_dir(&data.directory),
+            );
         }
         self.mark_data_changed();
 
@@ -274,12 +278,27 @@ impl DirectoryModel {
             signals.extend(self.apply_items_added(added));
         }
         if !changed.is_empty() {
-            sort_model_entries(&mut self.data_mut().entries, false);
+            let trash = file_ops::is_trash_files_dir(&self.data.directory);
+            let old_order = self
+                .data
+                .entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>();
+            sort_model_entries(&mut self.data_mut().entries, trash);
+            let order_changed = old_order
+                .iter()
+                .zip(&self.data.entries)
+                .any(|(old_id, entry)| *old_id != entry.id);
             self.mark_data_changed();
-            signals.push(DirectoryModelSignal::ItemsChanged(
-                ranges_from_indexes(changed),
-                ChangedRoles::ALL,
-            ));
+            if order_changed {
+                signals.push(DirectoryModelSignal::ModelReset);
+            } else {
+                signals.push(DirectoryModelSignal::ItemsChanged(
+                    ranges_from_indexes(changed),
+                    ChangedRoles::ALL,
+                ));
+            }
         }
         signals
     }
@@ -300,6 +319,11 @@ impl DirectoryModel {
             for entry in entries {
                 self.assign_new_identity(entry);
             }
+            return;
+        }
+
+        if file_ops::is_trash_files_dir(directory) {
+            self.assign_listing_identity_by_name(entries);
             return;
         }
 
@@ -324,6 +348,41 @@ impl DirectoryModel {
             }
 
             entry.id = reused_id.unwrap_or_else(|| self.allocate_item_id());
+        }
+    }
+
+    fn assign_listing_identity_by_name(&mut self, entries: &mut [ModelEntry]) {
+        let mut old_indexes = (0..self.data.entries.len()).collect::<Vec<_>>();
+        old_indexes.sort_by(|left, right| {
+            entry_name_cmp(
+                &self.data.entries[*left].name,
+                &self.data.entries[*right].name,
+            )
+        });
+        let mut new_indexes = (0..entries.len()).collect::<Vec<_>>();
+        new_indexes
+            .sort_by(|left, right| entry_name_cmp(&entries[*left].name, &entries[*right].name));
+
+        let mut old_cursor = 0usize;
+        for new_index in new_indexes {
+            if entries[new_index].id.is_assigned() {
+                self.next_item_id = self.next_item_id.max(entries[new_index].id.0);
+                continue;
+            }
+
+            let mut reused_id = None;
+            while let Some(old_index) = old_indexes.get(old_cursor).copied() {
+                match entry_name_cmp(&self.data.entries[old_index].name, &entries[new_index].name) {
+                    std::cmp::Ordering::Less => old_cursor += 1,
+                    std::cmp::Ordering::Equal => {
+                        reused_id = Some(self.data.entries[old_index].id);
+                        old_cursor += 1;
+                        break;
+                    }
+                    std::cmp::Ordering::Greater => break,
+                }
+            }
+            entries[new_index].id = reused_id.unwrap_or_else(|| self.allocate_item_id());
         }
     }
 
@@ -448,18 +507,18 @@ fn trash_sort_cmp(left: &ModelEntry, right: &ModelEntry) -> std::cmp::Ordering {
         .cmp(&trash_sort_bucket(right))
         .then_with(|| {
             right
-                .trash_deletion_label
+                .trash_deletion_time
                 .as_deref()
                 .unwrap_or_default()
-                .cmp(left.trash_deletion_label.as_deref().unwrap_or_default())
+                .cmp(left.trash_deletion_time.as_deref().unwrap_or_default())
         })
         .then_with(|| left.sort_cmp(right))
 }
 
 fn trash_sort_bucket(entry: &ModelEntry) -> u8 {
-    if entry.trash_deletion_label.is_some() {
+    if entry.trash_deletion_time.is_some() {
         0
-    } else if entry.trash_group.is_some() {
+    } else if entry.trash_original_path.is_some() {
         1
     } else {
         2
@@ -504,9 +563,21 @@ mod tests {
             name_width_units: name.len() as u16,
             size_bytes: 0,
             modified_secs: None,
-            trash_group: None,
-            trash_deletion_label: None,
+            trash_original_path: None,
+            trash_deletion_time: None,
             is_dir,
+        })
+    }
+
+    fn trash_entry(name: &str, original_path: &str, deletion_time: &str) -> Entry {
+        Entry::new(EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len() as u16,
+            size_bytes: 0,
+            modified_secs: None,
+            trash_original_path: Some(PathBuf::from(original_path)),
+            trash_deletion_time: Some(Arc::from(deletion_time)),
+            is_dir: false,
         })
     }
 
@@ -659,5 +730,68 @@ mod tests {
         assert_eq!(model.path_for_index(0), Some(PathBuf::from("/tmp/new.txt")));
         assert_eq!(model.index_of_path(Path::new("/tmp/old.txt")), None);
         assert_eq!(model.index_of_id(original), Some(0));
+    }
+
+    #[test]
+    fn trash_listing_sorts_by_deletion_time_and_retains_identity_after_reload() {
+        let trash_dir = file_ops::trash_files_dir();
+        let mut model = DirectoryModel::for_directory(trash_dir.clone());
+        model.replace_listing(
+            trash_dir.clone(),
+            listing(vec![
+                trash_entry("old.txt", "/tmp/old.txt", "2026-06-01T10:00:00"),
+                trash_entry("new.txt", "/tmp/new.txt", "2026-06-03T10:00:00"),
+            ]),
+        );
+        let new_id = model.entries()[0].id;
+        let old_id = model.entries()[1].id;
+
+        assert_eq!(model.entries()[0].name.as_ref(), "new.txt");
+        assert_eq!(model.entries()[1].name.as_ref(), "old.txt");
+
+        let signals = model.replace_listing(
+            trash_dir.clone(),
+            listing(vec![
+                trash_entry("old.txt", "/tmp/old.txt", "2026-06-05T10:00:00"),
+                trash_entry("new.txt", "/tmp/new.txt", "2026-06-03T10:00:00"),
+            ]),
+        );
+
+        assert_eq!(signals, vec![DirectoryModelSignal::ModelReset]);
+        assert_eq!(model.entries()[0].name.as_ref(), "old.txt");
+        assert_eq!(model.entries()[0].id, old_id);
+        assert_eq!(model.entries()[1].name.as_ref(), "new.txt");
+        assert_eq!(model.entries()[1].id, new_id);
+    }
+
+    #[test]
+    fn trash_metadata_refresh_resorts_and_keeps_item_identity() {
+        let trash_dir = file_ops::trash_files_dir();
+        let mut model = DirectoryModel::for_directory(trash_dir.clone());
+        model.replace_listing(
+            trash_dir.clone(),
+            listing(vec![
+                trash_entry("old.txt", "/tmp/old.txt", "2026-06-01T10:00:00"),
+                trash_entry("new.txt", "/tmp/new.txt", "2026-06-03T10:00:00"),
+            ]),
+        );
+        let old_id = model.entries()[1].id;
+
+        let signals = model.apply_items_refreshed(vec![crate::core::directory::RefreshPair {
+            old_path: trash_dir.join("old.txt"),
+            entry: Some(trash_entry(
+                "old.txt",
+                "/tmp/old.txt",
+                "2026-06-05T10:00:00",
+            )),
+        }]);
+
+        assert_eq!(signals, vec![DirectoryModelSignal::ModelReset]);
+        assert_eq!(model.entries()[0].name.as_ref(), "old.txt");
+        assert_eq!(model.entries()[0].id, old_id);
+        assert_eq!(
+            model.entries()[0].trash_deletion_time.as_deref(),
+            Some("2026-06-05T10:00:00")
+        );
     }
 }

@@ -431,6 +431,12 @@ pub fn trash_info_dir() -> PathBuf {
     trash_home().join("info")
 }
 
+pub fn trash_has_items() -> bool {
+    fs::read_dir(trash_files_dir())
+        .ok()
+        .is_some_and(|mut entries| entries.any(|entry| entry.is_ok()))
+}
+
 pub fn is_trash_files_dir(path: &Path) -> bool {
     path == trash_files_dir()
 }
@@ -463,7 +469,7 @@ pub fn undo_trash(items: &[(PathBuf, PathBuf)]) -> Result<String, String> {
         if let Some(parent) = original_path.parent() {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
-        fs::rename(trash_path, original_path).map_err(|err| err.to_string())?;
+        move_path(trash_path, original_path, None, &mut |_| {}).map_err(|err| err.to_string())?;
         let _ = remove_trashinfo(trash_path);
     }
 
@@ -543,7 +549,7 @@ fn restore_trash_path(trash_path: &Path) -> Result<TrashRecord, String> {
     if let Some(parent) = original_path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    fs::rename(trash_path, &original_path).map_err(|err| err.to_string())?;
+    move_path(trash_path, &original_path, None, &mut |_| {}).map_err(|err| err.to_string())?;
     let _ = remove_trashinfo(trash_path);
 
     Ok(TrashRecord {
