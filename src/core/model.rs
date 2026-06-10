@@ -53,13 +53,14 @@ pub enum SortRole {
     Name,
     Modified,
     Size,
+    TrashOriginalPath,
     TrashDeletionTime,
 }
 
 impl SortRole {
     pub fn default_order(self) -> SortOrder {
         match self {
-            Self::Name => SortOrder::Ascending,
+            Self::Name | Self::TrashOriginalPath => SortOrder::Ascending,
             Self::Modified | Self::Size | Self::TrashDeletionTime => SortOrder::Descending,
         }
     }
@@ -568,6 +569,7 @@ fn sort_cmp(left: &ModelEntry, right: &ModelEntry, sort: SortDescriptor) -> Orde
     }
 
     match sort.role {
+        SortRole::TrashOriginalPath => trash_original_path_sort_cmp(left, right, sort.order),
         SortRole::TrashDeletionTime => trash_deletion_sort_cmp(left, right, sort.order),
         role => apply_sort_order(role_sort_cmp(left, right, role), sort.order)
             .then_with(|| entry_name_cmp(&left.name, &right.name))
@@ -587,6 +589,7 @@ fn role_sort_cmp(left: &ModelEntry, right: &ModelEntry, role: SortRole) -> Order
             .unwrap_or_default()
             .cmp(&right.modified_secs.unwrap_or_default()),
         SortRole::Size => left.size_bytes.cmp(&right.size_bytes),
+        SortRole::TrashOriginalPath => Ordering::Equal,
         SortRole::TrashDeletionTime => Ordering::Equal,
     }
 }
@@ -607,6 +610,31 @@ fn trash_deletion_sort_cmp(left: &ModelEntry, right: &ModelEntry, order: SortOrd
             apply_sort_order(left.cmp(right), order)
         })
         .then_with(|| left.sort_cmp(right))
+}
+
+fn trash_original_path_sort_cmp(
+    left: &ModelEntry,
+    right: &ModelEntry,
+    order: SortOrder,
+) -> Ordering {
+    trash_sort_bucket(left)
+        .cmp(&trash_sort_bucket(right))
+        .then_with(|| {
+            let left = trash_original_path_key(left);
+            let right = trash_original_path_key(right);
+            apply_sort_order(entry_name_cmp(left.as_ref(), right.as_ref()), order)
+        })
+        .then_with(|| left.sort_cmp(right))
+}
+
+fn trash_original_path_key(entry: &ModelEntry) -> std::borrow::Cow<'_, str> {
+    let Some(path) = entry.trash_original_path.as_deref() else {
+        return std::borrow::Cow::Borrowed("");
+    };
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(path)
+        .to_string_lossy()
 }
 
 fn trash_sort_bucket(entry: &ModelEntry) -> u8 {
@@ -1025,6 +1053,37 @@ mod tests {
         assert_eq!(model.entries()[0].id, old_id);
         assert_eq!(model.entries()[1].name.as_ref(), "new.txt");
         assert_eq!(model.entries()[1].id, new_id);
+    }
+
+    #[test]
+    fn trash_listing_can_sort_by_original_path_role() {
+        let trash_dir = file_ops::trash_files_dir();
+        let mut model = DirectoryModel::for_directory(trash_dir.clone());
+        model.replace_listing(
+            trash_dir,
+            listing(vec![
+                trash_entry("beta.txt", "/tmp/beta/beta.txt", "2026-06-03T10:00:00"),
+                trash_entry("alpha.txt", "/tmp/alpha/alpha.txt", "2026-06-01T10:00:00"),
+                trash_entry("gamma.txt", "/tmp/gamma/gamma.txt", "2026-06-02T10:00:00"),
+            ]),
+        );
+
+        let signals = model.set_sort(SortDescriptor {
+            role: SortRole::TrashOriginalPath,
+            order: SortOrder::Ascending,
+            folders_first: true,
+            hidden_last: false,
+        });
+
+        assert_eq!(signals, vec![DirectoryModelSignal::SortChanged]);
+        assert_eq!(
+            model
+                .entries()
+                .iter()
+                .map(|entry| entry.name.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["alpha.txt", "beta.txt", "gamma.txt"]
+        );
     }
 
     #[test]

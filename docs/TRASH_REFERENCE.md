@@ -53,7 +53,11 @@ operation flow, while using the local XDG Trash layout as the backing store.
     provide the display text used by the compact view and future details roles.
 - Sorting and identity:
   - `src/core/model.rs` sorts Trash entries by deletion time role, then normal
-    name order.
+    name order by default.
+  - The model also exposes Dolphin-aligned Trash sort roles for original path
+    and deletion time. Original path sorting uses the original parent
+    directory, matching Dolphin's Trash `path` role rather than the local
+    `$XDG_DATA_HOME/Trash/files` file name.
   - Trash full reloads reuse pane-local `ItemId` by trash file name instead of
     assuming the current sort order, matching Dolphin's role-based sorting
     where metadata changes can move an item without creating a new item.
@@ -64,6 +68,9 @@ operation flow, while using the local XDG Trash layout as the backing store.
   - `src/main.rs` routes Delete in normal directories to move-to-trash.
   - Trash view context menus provide Restore, Delete Permanently, and Empty
     Trash actions.
+  - Trash blank context menus use a Trash-specific Sort By submenu containing
+    Name, Original Path, and Deletion Time, wired through pane-local
+    `DirectoryModel` sort roles.
   - Completion refreshes the Trash directory and restored original directories
     through the lister path, keeping `PaneId + generation` routing.
 - Places:
@@ -85,5 +92,3 @@ operation flow, while using the local XDG Trash layout as the backing store.
   Deletion Time, only compact metadata display.
 - Places Trash state is polled from the local Trash directory; it is not yet
   backed by a singleton lister that emits Dolphin-style `emptinessChanged`.
-- Sort role selection is not yet user-facing; the model has deletion-time sort
-  semantics for Trash but not a complete Details view sort controller.

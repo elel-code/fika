@@ -110,8 +110,8 @@
 > `DolphinContextMenu::open()` / `DolphinContextMenu::showEvent()`。
 
 - [~] 建立 Dolphin 右键菜单源码执行流参考清单。
-  - 已完成：新增 `docs/CONTEXT_MENU_REFERENCE.md`，记录 `DolphinContextMenu::{addAllActions, addViewportContextMenu, addItemContextMenu, createPasteAction}` 和 `KItemListController` 右键/空白区事件边界；补充 Fika 当前 `ContextMenuSubmenu` 级联定位映射。
-  - 剩余验收：补齐 hide delay 和 Places/Trash 专用 context menu 的完整执行流。
+  - 已完成：新增 `docs/CONTEXT_MENU_REFERENCE.md`，记录 `DolphinContextMenu::{addAllActions, addViewportContextMenu, addItemContextMenu, createPasteAction}` 和 `KItemListController` 右键/空白区事件边界；补充 Fika 当前 `ContextMenuSubmenu` 级联定位、延迟消失、Places 和 Trash 右键菜单映射。
+  - 剩余验收：继续补齐 Open With、Open in New Window、设备和拖拽相关 context menu 执行流。
 - [~] 实现基础右键菜单（空白区域）。
   - 已完成：pane 空白区域右键弹出 GPUI overlay menu；包含 New Folder、Paste、Sort By、View Mode、Select All、Refresh、Properties；Paste 按内部 clipboard 状态启用/禁用；Sort By / View Mode 走可复用 `ContextMenuSubmenu` 级联结构；Sort By 已路由到 pane-local `DirectoryModel` 排序，支持 Name、Modified、Size、Ascending、Descending、Folders First 和 Hidden Files Last，并按 Dolphin `preferredSortOrder(role)` 思路在每个 pane 内记录每个排序字段自己的升/降序；Folders First / Hidden Files Last 是 pane-local toggle，分屏后互不影响；点击外部或 Esc 关闭；空白右键不启动 rubber-band；Properties 只读取当前目录自身 metadata，不递归扫描。
   - 参考：Dolphin 在空白目录区域右键弹出 `DolphinContextMenu`（包含 Paste、Sort By、View Mode、Properties 等）。
@@ -128,16 +128,18 @@
   - 参考：Dolphin 使用 `QMenu::popup()` 时传入 `QPoint` 指定弹出位置，子菜单（Open With、Sort By 等）由 Qt 自动处理级联定位；Dolphin 不对子菜单做自定义偏移。
   - 已完成：当前 GPUI overlay 支持一级 `ContextMenuSubmenu`，父菜单项 hover/点击打开右侧子菜单；根据窗口宽度自动翻转到左侧，并按父菜单行计算垂直位置；Sort By / View Mode 已接入该结构。
   - 验收：子菜单（Open With、Sort By、Create New 等）在父菜单项右侧弹出，不超出窗口边界；窗口靠右边缘时子菜单自动翻转到左侧；多级子菜单级联展开位置正确。
-- [ ] 实现子菜单延迟消失（hide delay）。
+- [x] 实现子菜单延迟消失（hide delay）。
   - 参考：Dolphin 使用 `QMenu` 默认 hide delay（约 300ms），鼠标短暂离开菜单区域不会关闭；子菜单之间移动时有 grace period。
   - 验收：鼠标在父菜单和子菜单之间移动时有 ~300ms 过渡窗口，菜单不立即关闭；鼠标直接从父菜单项滑入子菜单不会触发菜单消失；鼠标完全离开整个菜单树（父+子）后延迟关闭。
+  - 已完成：`ContextMenuSubmenu` 使用 pane app 内的 generation 取消模型，父菜单非 submenu 行和 submenu parent 离开时只调度 300ms delayed hide；进入 submenu overlay 会取消 pending hide，离开 submenu overlay 后重新调度；旧 timer 只能清理 generation 未变化的当前 submenu，避免鼠标快速切换父菜单项时关闭新 submenu；已补 stale/current generation 单元测试。
 - [~] 实现 Places 侧栏右键菜单。
   - 参考：Dolphin Places 面板右键菜单（`DolphinPlacesModel` 的 context menu），包含 Add Entry、Edit、Remove、Hide Section 等。
-  - 已完成：对照 Dolphin `PlacesPanel::slotContextMenuAboutToShow()` / `KFilePlacesView` 的入口，侧栏空白区域右键提供 Add Entry；普通 place 条目提供 Open、Open in New Pane、Edit Entry、Remove Entry、Copy Location、Properties；内置 place 的 Edit/Remove 保持 disabled；用户 bookmark 的 Edit/Remove 可用；Trash place 提供 Open、Open in New Pane、Empty Trash、Copy Location、Properties，Empty Trash 按 trash 状态启用；Add/Edit 通过 pane-local draft dialog 写入 places model，Remove 只允许 removable bookmark；用户 bookmark 已按 KDE/Dolphin `user-places.xbel` 风格持久化到 XBEL，启动时从 `$XDG_DATA_HOME/user-places.xbel`（回退 `~/.local/share/user-places.xbel`）加载，内置 Home/Trash/Root 等路径优先且不会被持久化 bookmark 覆盖；已补菜单启用规则、Add/Edit/Remove、XBEL 读写、启动加载和输入分类测试。
-  - 剩余验收：补 Hide Section、设备 place 的 Unmount/Eject/Safely Remove、Places 拖拽 reorder/drop 和 section 级 context menu。
-- [ ] 实现 Trash 视图右键菜单。
+  - 已完成：对照 Dolphin `PlacesPanel::slotContextMenuAboutToShow()` / `KFilePlacesView` 的入口，侧栏空白区域右键提供 Add Entry 和 Show Hidden Places；普通 place 条目提供 Open、Open in New Pane、Edit Entry、Remove Entry、Hide、Copy Location、Properties；内置 place 的 Edit/Remove 保持 disabled；用户 bookmark 的 Edit/Remove 可用；Trash place 提供 Open、Open in New Pane、Empty Trash、Hide、Copy Location、Properties，Empty Trash 按 trash 状态启用；section header 右键提供 Hide Section，单个 place 和 section 隐藏状态只过滤 sidebar snapshot，不删除 places model，也不写入 `user-places.xbel`；Add/Edit 通过 pane-local draft dialog 写入 places model，Remove 只允许 removable bookmark；用户 bookmark 已按 KDE/Dolphin `user-places.xbel` 风格持久化到 XBEL，启动时从 `$XDG_DATA_HOME/user-places.xbel`（回退 `~/.local/share/user-places.xbel`）加载，内置 Home/Trash/Root 等路径优先且不会被持久化 bookmark 覆盖；已补菜单启用规则、Add/Edit/Remove、Hide/Hide Section、XBEL 读写、启动加载和输入分类测试。
+  - 剩余验收：补设备 place 的 Unmount/Eject/Safely Remove、Places 拖拽 reorder/drop。
+- [x] 实现 Trash 视图右键菜单。
   - 参考：Dolphin trash 目录右键菜单包含 Empty Trash、Restore、Delete Permanently。
   - 验收：在 trash 视图中右键文件增加 Restore 选项；右键空白区域增加 Empty Trash 选项；无 Restore 目标时 Restore 置灰。
+  - 已完成：Trash blank context menu 提供 Empty Trash 并按 trash 是否有内容启用；Trash item context menu 提供 Restore to Former Location、Copy、Delete Permanently 和 Properties；Restore 按 `.trashinfo` 可解析性启用；action 路由到 pane-local Trash 操作并刷新 affected dirs。
 
 ## Drag and Drop（拖拽）
 
@@ -177,8 +179,8 @@
   - 验收：undo start/finish 以 serial 防 stale result；undo 完成后通过 affected panes 的 lister refresh。
 - [~] 实现完整的 Trash 功能和视图。
   - 参考：Dolphin trash 实现 `../dolphin/src/trash/`、`TrashBase`、`DolphinTrash`；XDG trash spec（`freedesktop.org/wiki/Specifications/trash-spec/`）；trash 目录结构 `$XDG_DATA_HOME/Trash/files/` 和 `$XDG_DATA_HOME/Trash/info/`。
-  - 已完成：新增 `docs/TRASH_REFERENCE.md`，记录 Dolphin `Trash` singleton、`KIO::DeleteOrTrashJob`、`KFileItemModel` Trash PathRole/DeletionTimeRole、Trash context menu 和 Places trash emptiness 更新来源；Fika 以 `$XDG_DATA_HOME/Trash/files` 作为当前 Trash 视图路径，`Entry` 从 `.trashinfo` 读取 `trash_original_path` 和 `trash_deletion_time`；Trash 右键菜单已有 Restore、Delete Permanently 和 Empty Trash；普通 Delete 路由到 move-to-trash 并记录 Undo；Empty Trash 清理 `files/` 和孤立 `info/`；`.trashinfo` watcher refresh 映射回同一个 `files/` item；Trash model 按 deletion time 排序并在 reload/metadata refresh 时保持同名 trash item 的 `ItemId`；Places 侧栏 Trash 条目用轻量 `read_dir().next()` 派生空/非空状态，渲染状态点和 marker 颜色，右键菜单包含 Open、Empty Trash、Copy Location 和 Properties，Empty Trash 从当前 focused pane 的 pane-local 状态栏显示进度。
-  - 剩余：restore 目标冲突还需要 Dolphin/KIO 式覆盖确认对话框；Details view 的 Original Path / Deletion Time 列还未暴露；Trash sort role 还没有用户可选的 Name / Original Path / Deletion Date 控制。
+  - 已完成：新增 `docs/TRASH_REFERENCE.md`，记录 Dolphin `Trash` singleton、`KIO::DeleteOrTrashJob`、`KFileItemModel` Trash PathRole/DeletionTimeRole、Trash context menu 和 Places trash emptiness 更新来源；Fika 以 `$XDG_DATA_HOME/Trash/files` 作为当前 Trash 视图路径，`Entry` 从 `.trashinfo` 读取 `trash_original_path` 和 `trash_deletion_time`；Trash 右键菜单已有 Restore、Delete Permanently 和 Empty Trash；普通 Delete 路由到 move-to-trash 并记录 Undo；Empty Trash 清理 `files/` 和孤立 `info/`；`.trashinfo` watcher refresh 映射回同一个 `files/` item；Trash model 按 deletion time 排序并在 reload/metadata refresh 时保持同名 trash item 的 `ItemId`；Trash 空白右键 Sort By 使用 Trash 专用 submenu，支持 Name、Original Path 和 Deletion Time，并在 model 层提供 `TrashOriginalPath` / `TrashDeletionTime` sort role；Places 侧栏 Trash 条目用轻量 `read_dir().next()` 派生空/非空状态，渲染状态点和 marker 颜色，右键菜单包含 Open、Empty Trash、Copy Location 和 Properties，Empty Trash 从当前 focused pane 的 pane-local 状态栏显示进度。
+  - 剩余：restore 目标冲突还需要 Dolphin/KIO 式覆盖确认对话框；Details view 的 Original Path / Deletion Time 列还未暴露。
   - 验收：
     - Trash 目录作为特殊虚拟目录加载，`DirectoryModel` 可展示 `files/` 下所有被删除文件及其原始路径（从 `info/` 中 `.trashinfo` 文件读取）。
     - `Entry` 携带 trash metadata：原始路径（`orig_path`）、删除时间（`deletion_date`），在 trash 视图中作为额外列或 tooltip 显示。
