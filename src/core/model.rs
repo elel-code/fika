@@ -1,4 +1,4 @@
-use super::entries::{Entry, ItemId, directory_entry_path, entry_name_cmp, sort_entries};
+use super::entries::{Entry, ItemId, ModelEntry, directory_entry_path, entry_name_cmp};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -57,7 +57,7 @@ pub struct DirectoryModel {
 #[derive(Clone, Debug, Default)]
 struct DirectoryModelData {
     directory: PathBuf,
-    entries: Vec<Entry>,
+    entries: Vec<ModelEntry>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -105,7 +105,7 @@ impl DirectoryModel {
         &self.data.directory
     }
 
-    pub fn entries(&self) -> &[Entry] {
+    pub fn entries(&self) -> &[ModelEntry] {
         &self.data.entries
     }
 
@@ -121,7 +121,7 @@ impl DirectoryModel {
         self.data.entries.is_empty()
     }
 
-    pub fn get(&self, index: usize) -> Option<&Entry> {
+    pub fn get(&self, index: usize) -> Option<&ModelEntry> {
         self.data.entries.get(index)
     }
 
@@ -132,7 +132,7 @@ impl DirectoryModel {
             .map(|entry| self.path_for_entry(entry))
     }
 
-    pub fn path_for_entry(&self, entry: &Entry) -> PathBuf {
+    pub fn path_for_entry(&self, entry: &ModelEntry) -> PathBuf {
         self.data.directory.join(entry.name.as_ref())
     }
 
@@ -157,9 +157,14 @@ impl DirectoryModel {
     pub fn replace_listing(
         &mut self,
         directory: PathBuf,
-        mut entries: Vec<Entry>,
+        entries: Arc<Vec<Entry>>,
     ) -> Vec<DirectoryModelSignal> {
-        sort_entries(&mut entries, false);
+        let mut entries = entries
+            .iter()
+            .cloned()
+            .map(ModelEntry::unassigned)
+            .collect::<Vec<_>>();
+        sort_model_entries(&mut entries, false);
         self.assign_listing_identity(&directory, &mut entries);
         if self.same_listing(&directory, &entries) {
             self.replace_data(directory, entries);
@@ -181,12 +186,12 @@ impl DirectoryModel {
         let mut added = Vec::new();
         for entry in entries {
             if let Some(index) = self.index_of_entry_name(entry.name.as_ref()) {
-                let mut entry = entry;
+                let mut entry = ModelEntry::unassigned(entry);
                 self.assign_identity_from_index(&mut entry, index);
                 self.data_mut().entries[index] = entry;
                 changed.push(index);
             } else {
-                let mut entry = entry;
+                let mut entry = ModelEntry::unassigned(entry);
                 self.assign_new_identity(&mut entry);
                 added.push(entry);
             }
@@ -194,7 +199,7 @@ impl DirectoryModel {
         {
             let data = self.data_mut();
             data.entries.extend(added);
-            sort_entries(&mut data.entries, false);
+            sort_model_entries(&mut data.entries, false);
         }
         self.mark_data_changed();
 
@@ -249,7 +254,7 @@ impl DirectoryModel {
             match pair.entry {
                 Some(entry) => {
                     if let Some(index) = self.index_of_path(&pair.old_path) {
-                        let mut entry = entry;
+                        let mut entry = ModelEntry::unassigned(entry);
                         self.assign_identity_from_index(&mut entry, index);
                         self.data_mut().entries[index] = entry;
                         changed.push(index);
@@ -271,7 +276,7 @@ impl DirectoryModel {
             signals.extend(self.apply_items_added(added));
         }
         if !changed.is_empty() {
-            sort_entries(&mut self.data_mut().entries, false);
+            sort_model_entries(&mut self.data_mut().entries, false);
             self.mark_data_changed();
             signals.push(DirectoryModelSignal::ItemsChanged(
                 ranges_from_indexes(changed),
@@ -281,7 +286,7 @@ impl DirectoryModel {
         signals
     }
 
-    fn same_listing(&self, directory: &Path, entries: &[Entry]) -> bool {
+    fn same_listing(&self, directory: &Path, entries: &[ModelEntry]) -> bool {
         self.data.directory == directory
             && self.data.entries.len() == entries.len()
             && self
@@ -292,7 +297,7 @@ impl DirectoryModel {
                 .all(|(left, right)| left.name == right.name && left.is_dir == right.is_dir)
     }
 
-    fn assign_listing_identity(&mut self, directory: &Path, entries: &mut [Entry]) {
+    fn assign_listing_identity(&mut self, directory: &Path, entries: &mut [ModelEntry]) {
         if self.data.directory != directory {
             for entry in entries {
                 self.assign_new_identity(entry);
@@ -324,7 +329,7 @@ impl DirectoryModel {
         }
     }
 
-    fn assign_identity_from_index(&mut self, entry: &mut Entry, index: usize) {
+    fn assign_identity_from_index(&mut self, entry: &mut ModelEntry, index: usize) {
         if entry.id.is_assigned() {
             self.next_item_id = self.next_item_id.max(entry.id.0);
         } else {
@@ -337,7 +342,7 @@ impl DirectoryModel {
         }
     }
 
-    fn assign_new_identity(&mut self, entry: &mut Entry) {
+    fn assign_new_identity(&mut self, entry: &mut ModelEntry) {
         if entry.id.is_assigned() {
             self.next_item_id = self.next_item_id.max(entry.id.0);
         } else {
@@ -345,7 +350,7 @@ impl DirectoryModel {
         }
     }
 
-    fn replace_data(&mut self, directory: PathBuf, entries: Vec<Entry>) {
+    fn replace_data(&mut self, directory: PathBuf, entries: Vec<ModelEntry>) {
         self.data = Arc::new(DirectoryModelData { directory, entries });
         self.data_generation = self.data_generation.wrapping_add(1);
         self.reset_path_index();
@@ -425,10 +430,41 @@ impl PathIndexCache {
     }
 }
 
-fn identity_sort_cmp(left: &Entry, right: &Entry) -> std::cmp::Ordering {
+fn identity_sort_cmp(left: &ModelEntry, right: &ModelEntry) -> std::cmp::Ordering {
     match right.is_dir.cmp(&left.is_dir) {
         std::cmp::Ordering::Equal => entry_name_cmp(&left.name, &right.name),
         ordering => ordering,
+    }
+}
+
+fn sort_model_entries(entries: &mut [ModelEntry], trash: bool) {
+    if trash {
+        entries.sort_by(trash_sort_cmp);
+    } else {
+        entries.sort_by(ModelEntry::sort_cmp);
+    }
+}
+
+fn trash_sort_cmp(left: &ModelEntry, right: &ModelEntry) -> std::cmp::Ordering {
+    trash_sort_bucket(left)
+        .cmp(&trash_sort_bucket(right))
+        .then_with(|| {
+            right
+                .trash_deletion_label
+                .as_deref()
+                .unwrap_or_default()
+                .cmp(left.trash_deletion_label.as_deref().unwrap_or_default())
+        })
+        .then_with(|| left.sort_cmp(right))
+}
+
+fn trash_sort_bucket(entry: &ModelEntry) -> u8 {
+    if entry.trash_deletion_label.is_some() {
+        0
+    } else if entry.trash_group.is_some() {
+        1
+    } else {
+        2
     }
 }
 
@@ -462,10 +498,10 @@ fn ranges_from_indexes(mut indexes: Vec<usize>) -> ItemRangeList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::entries::EntryData;
 
     fn entry(name: &str, is_dir: bool) -> Entry {
-        Entry {
-            id: ItemId::UNASSIGNED,
+        Entry::new(EntryData {
             name: Arc::from(name),
             name_width_units: name.len() as u16,
             size_bytes: 0,
@@ -473,7 +509,11 @@ mod tests {
             trash_group: None,
             trash_deletion_label: None,
             is_dir,
-        }
+        })
+    }
+
+    fn listing(entries: Vec<Entry>) -> Arc<Vec<Entry>> {
+        Arc::new(entries)
     }
 
     #[test]
@@ -481,7 +521,7 @@ mod tests {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         let signals = model.replace_listing(
             PathBuf::from("/tmp"),
-            vec![entry("b.txt", false), entry("a", true)],
+            listing(vec![entry("b.txt", false), entry("a", true)]),
         );
 
         assert_eq!(signals, vec![DirectoryModelSignal::ModelReset]);
@@ -495,7 +535,7 @@ mod tests {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
-            vec![entry("b.txt", false), entry("a", true)],
+            listing(vec![entry("b.txt", false), entry("a", true)]),
         );
 
         assert_eq!(model.index_of_path(Path::new("/tmp/b.txt")), Some(1));
@@ -514,7 +554,11 @@ mod tests {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
-            vec![entry("a", false), entry("b", false), entry("c", false)],
+            listing(vec![
+                entry("a", false),
+                entry("b", false),
+                entry("c", false),
+            ]),
         );
 
         let signals =
@@ -535,14 +579,14 @@ mod tests {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
-            vec![entry("a.txt", false), entry("b.txt", false)],
+            listing(vec![entry("a.txt", false), entry("b.txt", false)]),
         );
         let original_a = model.entries()[0].id;
         let original_b = model.entries()[1].id;
 
         model.replace_listing(
             PathBuf::from("/tmp"),
-            vec![entry("a.txt", false), entry("b.txt", false)],
+            listing(vec![entry("a.txt", false), entry("b.txt", false)]),
         );
 
         assert_eq!(model.entries()[0].id, original_a);
@@ -552,9 +596,29 @@ mod tests {
     }
 
     #[test]
+    fn split_models_share_listing_payload_without_entry_level_identity() {
+        let listing = listing(vec![entry("shared.txt", false)]);
+        let mut first = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        let mut second = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+
+        first.replace_listing(PathBuf::from("/tmp"), Arc::clone(&listing));
+        second.replace_listing(PathBuf::from("/tmp"), Arc::clone(&listing));
+
+        assert!(first.entries()[0].id.is_assigned());
+        assert!(second.entries()[0].id.is_assigned());
+        assert!(Entry::ptr_eq(
+            &first.entries()[0].entry,
+            &second.entries()[0].entry
+        ));
+    }
+
+    #[test]
     fn refresh_rename_retains_item_identity_from_old_path() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
-        model.replace_listing(PathBuf::from("/tmp"), vec![entry("old.txt", false)]);
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry("old.txt", false)]),
+        );
         let original = model.entries()[0].id;
 
         model.apply_items_refreshed(vec![crate::core::directory::RefreshPair {

@@ -735,7 +735,7 @@ fn path_for_selection_id(pane: &PaneState, id: ItemId) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::super::directory::DirectoryListerEvent;
-    use super::super::entries::{Entry, ItemId};
+    use super::super::entries::{Entry, EntryData};
     use super::*;
     use std::sync::Arc;
 
@@ -908,11 +908,11 @@ mod tests {
 
         controller.pane_mut(first).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![test_entry_with_path(path.clone())],
+            listing(vec![test_entry_with_path(path.clone())]),
         );
         controller.pane_mut(second).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![test_entry_with_path(path.clone())],
+            listing(vec![test_entry_with_path(path.clone())]),
         );
 
         assert!(controller.select_only(first, path.clone()));
@@ -931,10 +931,10 @@ mod tests {
 
         controller.pane_mut(pane_id).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![
+            listing(vec![
                 test_entry_with_path(keep.clone()),
                 test_entry_with_path(remove.clone()),
-            ],
+            ]),
         );
         controller.select_all(pane_id);
 
@@ -955,11 +955,11 @@ mod tests {
         let pane_id = controller.focused().unwrap();
         controller.pane_mut(pane_id).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![
+            listing(vec![
                 test_entry("a.txt"),
                 test_entry("b.txt"),
                 test_entry("c.txt"),
-            ],
+            ]),
         );
 
         assert_eq!(controller.select_all(pane_id), Some(3));
@@ -997,11 +997,10 @@ mod tests {
         let old_path = PathBuf::from("/tmp/a/old.txt");
         let new_path = PathBuf::from("/tmp/a/new.txt");
 
-        controller
-            .pane_mut(pane_id)
-            .unwrap()
-            .model
-            .replace_listing(PathBuf::from("/tmp/a"), vec![test_entry("old.txt")]);
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            listing(vec![test_entry("old.txt")]),
+        );
         assert!(controller.select_only(pane_id, old_path.clone()));
 
         controller.apply_lister_event(DirectoryListerEvent::ItemsRefreshed {
@@ -1028,12 +1027,12 @@ mod tests {
         let pane_id = controller.focused().unwrap();
         controller.pane_mut(pane_id).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![
+            listing(vec![
                 test_entry("a.txt"),
                 test_entry("b.txt"),
                 test_entry("c.txt"),
                 test_entry("d.txt"),
-            ],
+            ]),
         );
 
         assert!(controller.select_only(pane_id, PathBuf::from("/tmp/a/b.txt")));
@@ -1062,7 +1061,7 @@ mod tests {
         let pane_id = controller.focused().unwrap();
         controller.pane_mut(pane_id).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![test_entry("a.txt"), test_entry("b.txt")],
+            listing(vec![test_entry("a.txt"), test_entry("b.txt")]),
         );
 
         assert_eq!(
@@ -1082,7 +1081,7 @@ mod tests {
         let pane_id = controller.focused().unwrap();
         controller.pane_mut(pane_id).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![test_entry("a.txt"), test_entry("b.txt")],
+            listing(vec![test_entry("a.txt"), test_entry("b.txt")]),
         );
 
         assert_eq!(
@@ -1119,11 +1118,11 @@ mod tests {
         let pane_id = controller.focused().unwrap();
         controller.pane_mut(pane_id).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![
+            listing(vec![
                 test_entry("a.txt"),
                 test_entry("b.txt"),
                 test_entry("c.txt"),
-            ],
+            ]),
         );
 
         assert!(controller.select_only(pane_id, PathBuf::from("/tmp/a/a.txt")));
@@ -1172,11 +1171,11 @@ mod tests {
         let pane_id = controller.focused().unwrap();
         controller.pane_mut(pane_id).unwrap().model.replace_listing(
             PathBuf::from("/tmp/a"),
-            vec![
+            listing(vec![
                 test_entry("a.txt"),
                 test_entry("b.txt"),
                 test_entry("c.txt"),
-            ],
+            ]),
         );
 
         assert_eq!(
@@ -1283,8 +1282,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
         let name_width_units = name.len() as u16;
-        Entry {
-            id: ItemId::UNASSIGNED,
+        Entry::new(EntryData {
             name: Arc::from(name),
             name_width_units,
             size_bytes: 0,
@@ -1292,6 +1290,10 @@ mod tests {
             trash_group: None,
             trash_deletion_label: None,
             is_dir: false,
-        }
+        })
+    }
+
+    fn listing(entries: Vec<Entry>) -> Arc<Vec<Entry>> {
+        Arc::new(entries)
     }
 }

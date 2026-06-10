@@ -272,7 +272,6 @@ impl DirectoryLister {
                 model.apply_items_refreshed(pairs)
             }
             DirectoryListerEvent::ListingRefreshed { path, entries, .. } => {
-                let entries = Arc::try_unwrap(entries).unwrap_or_else(|entries| (*entries).clone());
                 model.replace_listing(path, entries)
             }
         }

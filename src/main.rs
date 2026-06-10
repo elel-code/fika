@@ -478,7 +478,7 @@ fn compact_text_width(name_width_units: u16) -> f32 {
     f32::from(name_width_units) * AVERAGE_COMPACT_CHAR_WIDTH
 }
 
-fn format_entry_kind_label(entry: &fika_core::Entry) -> String {
+fn format_entry_kind_label(entry: &fika_core::EntryData) -> String {
     if let Some(label) = &entry.trash_deletion_label {
         return label.to_string();
     }
@@ -1196,10 +1196,10 @@ impl FikaApp {
     }
 
     fn load_pane(&mut self, pane_id: PaneId, path: PathBuf) {
-        self.clear_rename_draft_for_pane(pane_id);
         let Some(event) = self.panes.load(pane_id, path.clone()) else {
             return;
         };
+        self.clear_pane_transient_state(pane_id);
         self.schedule_listing(&event);
         self.apply_event(event);
         self.start_watcher(pane_id);
@@ -1210,6 +1210,7 @@ impl FikaApp {
         let Some(event) = self.panes.reload(pane_id) else {
             return;
         };
+        self.clear_pane_transient_state(pane_id);
         self.schedule_listing(&event);
         self.apply_event(event);
         self.start_watcher(pane_id);
@@ -1223,10 +1224,10 @@ impl FikaApp {
     }
 
     fn go_back(&mut self, pane_id: PaneId) {
-        self.clear_rename_draft_for_pane(pane_id);
         let Some(event) = self.panes.go_back(pane_id) else {
             return;
         };
+        self.clear_pane_transient_state(pane_id);
         let path = event.path().to_path_buf();
         self.schedule_listing(&event);
         self.apply_event(event);
@@ -1235,10 +1236,10 @@ impl FikaApp {
     }
 
     fn go_forward(&mut self, pane_id: PaneId) {
-        self.clear_rename_draft_for_pane(pane_id);
         let Some(event) = self.panes.go_forward(pane_id) else {
             return;
         };
+        self.clear_pane_transient_state(pane_id);
         let path = event.path().to_path_buf();
         self.schedule_listing(&event);
         self.apply_event(event);
@@ -1275,26 +1276,31 @@ impl FikaApp {
     fn close_pane(&mut self, pane_id: PaneId) {
         if self.panes.close(pane_id) {
             self.listing_worker.cancel_pane(pane_id);
-            self.visible_item_slots.remove(&pane_id);
-            self.compact_column_widths.remove(&pane_id);
-            self.viewport_origins.remove(&pane_id);
-            if self
-                .rubber_band
-                .as_ref()
-                .is_some_and(|band| band.pane_id == pane_id)
-            {
-                self.rubber_band = None;
-            }
-            if self
-                .context_menu
-                .as_ref()
-                .is_some_and(|menu| menu.pane_id == pane_id)
-            {
-                self.context_menu = None;
-            }
-            self.clear_rename_draft_for_pane(pane_id);
+            self.clear_pane_transient_state(pane_id);
             self.status = format!("Closed pane {}", pane_id.0);
         }
+    }
+
+    fn clear_pane_transient_state(&mut self, pane_id: PaneId) {
+        self.visible_item_slots.remove(&pane_id);
+        self.compact_column_widths.remove(&pane_id);
+        self.viewport_origins.remove(&pane_id);
+        if self
+            .rubber_band
+            .as_ref()
+            .is_some_and(|band| band.pane_id == pane_id)
+        {
+            self.rubber_band = None;
+        }
+        if self
+            .context_menu
+            .as_ref()
+            .is_some_and(|menu| menu.pane_id == pane_id)
+        {
+            self.context_menu = None;
+        }
+        self.properties_dialog = None;
+        self.clear_rename_draft_for_pane(pane_id);
     }
 
     fn select_only(&mut self, pane_id: PaneId, path: PathBuf) {
@@ -4030,8 +4036,7 @@ mod tests {
     fn retarget_listing_events_preserves_shared_listing_entries() {
         let source = listing_request_at(1, 1, "/tmp/fika-shared-listing");
         let target = listing_request_at(2, 7, "/tmp/fika-shared-listing");
-        let entries = Arc::new(vec![fika_core::Entry {
-            id: fika_core::ItemId(1),
+        let entries = Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
             name: Arc::from("shared.txt"),
             name_width_units: 10,
             size_bytes: 4,
@@ -4039,7 +4044,7 @@ mod tests {
             trash_group: None,
             trash_deletion_label: None,
             is_dir: false,
-        }]);
+        })]);
         let events = vec![DirectoryListerEvent::ListingRefreshed {
             pane_id: source.pane_id,
             generation: source.generation,

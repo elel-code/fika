@@ -2,6 +2,7 @@ use super::file_ops;
 use std::cmp::Ordering;
 use std::fs::Metadata;
 use std::io;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,8 +19,7 @@ impl ItemId {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Entry {
-    pub id: ItemId,
+pub struct EntryData {
     pub name: Arc<str>,
     pub name_width_units: u16,
     pub size_bytes: u64,
@@ -30,12 +30,65 @@ pub struct Entry {
 }
 
 impl Entry {
+    pub fn new(data: EntryData) -> Self {
+        Self(Arc::new(data))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ptr_eq(left: &Self, right: &Self) -> bool {
+        Arc::ptr_eq(&left.0, &right.0)
+    }
+
+    pub(crate) fn sort_cmp(&self, other: &Self) -> Ordering {
+        self.0.sort_cmp(&other.0)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Entry(Arc<EntryData>);
+
+impl Deref for Entry {
+    type Target = EntryData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl EntryData {
     pub(crate) fn sort_cmp(&self, other: &Self) -> Ordering {
         match other.is_dir.cmp(&self.is_dir) {
             Ordering::Equal => entry_name_cmp(&self.name, &other.name)
                 .then_with(|| self.size_bytes.cmp(&other.size_bytes)),
             ordering => ordering,
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelEntry {
+    pub id: ItemId,
+    pub entry: Entry,
+}
+
+impl ModelEntry {
+    pub(crate) fn unassigned(entry: Entry) -> Self {
+        Self {
+            id: ItemId::UNASSIGNED,
+            entry,
+        }
+    }
+
+    pub(crate) fn sort_cmp(&self, other: &Self) -> Ordering {
+        self.entry.sort_cmp(&other.entry)
+    }
+}
+
+impl Deref for ModelEntry {
+    type Target = EntryData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entry
     }
 }
 
@@ -67,11 +120,11 @@ pub(crate) fn read_entries_sync_cancellable(
             if name.is_empty() {
                 continue;
             }
-            let mut entry = to_entry(name, metadata);
+            let mut data = to_entry_data(name, metadata);
             if decorate_trash_metadata {
-                decorate_trash_entry(&mut entry, &item_path);
+                decorate_trash_entry(&mut data, &item_path);
             }
-            entries.push(entry);
+            entries.push(Entry::new(data));
         }
     }
 
@@ -96,11 +149,11 @@ pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
         .map(|name| name.to_string_lossy().trim().to_string())
         .filter(|name| !name.is_empty())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory item has no name"))?;
-    let mut entry = to_entry(name, metadata);
+    let mut data = to_entry_data(name, metadata);
     if decorate_trash_metadata {
-        decorate_trash_entry(&mut entry, &item_path);
+        decorate_trash_entry(&mut data, &item_path);
     }
-    Ok(entry)
+    Ok(Entry::new(data))
 }
 
 pub fn sort_entries(entries: &mut [Entry], trash: bool) {
@@ -127,7 +180,7 @@ pub fn directory_entry_path(directory: &Path, path: &Path) -> Option<PathBuf> {
         .then(|| path.to_path_buf())
 }
 
-fn decorate_trash_entry(entry: &mut Entry, path: &Path) {
+fn decorate_trash_entry(entry: &mut EntryData, path: &Path) {
     let Ok(metadata) = file_ops::trash_metadata(path) else {
         return;
     };
@@ -232,14 +285,13 @@ fn name_width_units(name: &str) -> u16 {
         .min(u16::MAX as u32) as u16
 }
 
-fn to_entry(name: String, metadata: Metadata) -> Entry {
+fn to_entry_data(name: String, metadata: Metadata) -> EntryData {
     let is_dir = metadata.is_dir();
     let size_bytes = if is_dir { 0 } else { metadata.len() };
     let modified_secs = metadata.modified().ok().map(system_time_secs);
     let name_width_units = name_width_units(&name);
 
-    Entry {
-        id: ItemId::UNASSIGNED,
+    EntryData {
         name: Arc::from(name),
         name_width_units,
         size_bytes,

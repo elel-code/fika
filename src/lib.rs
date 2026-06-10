@@ -7,7 +7,8 @@ pub use core::directory::{
     WatcherDelta, nearest_existing_ancestor,
 };
 pub use core::entries::{
-    Entry, ItemId, format_modified_secs, format_size, read_entries_sync, read_entry_sync,
+    Entry, EntryData, ItemId, ModelEntry, format_modified_secs, format_size, read_entries_sync,
+    read_entry_sync,
 };
 pub use core::file_ops;
 pub use core::model::{
