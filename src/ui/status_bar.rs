@@ -4,6 +4,9 @@ use gpui::prelude::*;
 use gpui::{Context, Div, Empty, ParentElement, Rgba, Stateful, Styled, div, px, rgb};
 
 const ZOOM_TRACK_WIDTH: f32 = 142.0;
+const STATUS_PROGRESS_MIN_WIDTH: f32 = 320.0;
+const STATUS_ZOOM_MIN_WIDTH: f32 = 520.0;
+const STATUS_SPACE_MIN_WIDTH: f32 = 720.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ZoomSliderDrag {
@@ -14,6 +17,7 @@ struct ZoomSliderDrag {
 
 pub(crate) fn status_bar(
     pane_id: PaneId,
+    visible_width: f32,
     snapshot: StatusBarSnapshot,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -34,34 +38,81 @@ pub(crate) fn status_bar(
         format!("{item_summary} - {message}")
     };
     let has_progress = operation_progress.is_some();
+    let visible_width = visible_width.max(0.0).floor();
+    let show_progress = visible_width >= STATUS_PROGRESS_MIN_WIDTH;
+    let show_zoom = visible_width >= STATUS_ZOOM_MIN_WIDTH;
+    let show_space = visible_width >= STATUS_SPACE_MIN_WIDTH;
 
     div()
         .id(format!("status-bar-{}", pane_id.0))
         .h(px(28.0))
-        .flex()
-        .items_center()
-        .gap_3()
-        .px_3()
+        .w_full()
+        .max_w_full()
+        .min_w_0()
+        .flex_none()
+        .overflow_hidden()
         .border_t_1()
         .border_color(rgb(0xc8ced6))
         .bg(rgb(0xffffff))
         .text_color(rgb(0x59636e))
-        .child(div().flex_1().truncate().text_xs().child(status_text))
-        .when_some(operation_progress, |bar, progress| {
-            bar.child(operation_progress_view(pane_id, progress, cx))
-        })
-        .when(operation_pending && !has_progress, |bar| {
-            bar.child(operation_busy_view(pane_id))
-        })
-        .child(zoom_control(
-            pane_id,
-            zoom_level,
-            zoom_icon_size,
-            zoom_min,
-            zoom_max,
-            cx,
-        ))
-        .child(space_info(pane_id, free_space))
+        .child(
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .gap_3()
+                .w_full()
+                .max_w_full()
+                .min_w_0()
+                .flex_shrink_1()
+                .overflow_hidden()
+                .px_3()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .child(status_text),
+                )
+                .when(show_progress, |bar| {
+                    bar.when_some(operation_progress, |bar, progress| {
+                        bar.child(operation_progress_view(pane_id, progress, cx))
+                    })
+                })
+                .when(show_progress && operation_pending && !has_progress, |bar| {
+                    bar.child(operation_busy_view(pane_id))
+                })
+                .when(show_zoom, |bar| {
+                    bar.child(zoom_control(
+                        pane_id,
+                        zoom_level,
+                        zoom_icon_size,
+                        zoom_min,
+                        zoom_max,
+                        cx,
+                    ))
+                })
+                .when(show_space, |bar| bar.child(space_info(pane_id, free_space))),
+        )
+}
+
+fn status_section() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .flex_shrink_1()
+        .overflow_hidden()
+}
+
+fn fixed_status_text(width: f32, text: impl Into<String>) -> Div {
+    div()
+        .w(px(width))
+        .min_w_0()
+        .flex_shrink_1()
+        .truncate()
+        .child(text.into())
 }
 
 fn zoom_control(
@@ -72,13 +123,18 @@ fn zoom_control(
     zoom_max: i32,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    div()
+    status_section()
         .id(format!("status-zoom-{}", pane_id.0))
-        .flex()
-        .items_center()
         .gap_2()
         .text_xs()
-        .child(div().text_color(rgb(0x59636e)).child("Zoom:"))
+        .child(
+            div()
+                .min_w_0()
+                .flex_shrink_1()
+                .truncate()
+                .text_color(rgb(0x59636e))
+                .child("Zoom:"),
+        )
         .child(zoom_track(
             pane_id,
             zoom_level,
@@ -87,12 +143,10 @@ fn zoom_control(
             ZOOM_TRACK_WIDTH,
             cx,
         ))
-        .child(
-            div()
-                .w(px(44.0))
-                .text_color(rgb(0x59636e))
-                .child(format!("{}px", zoom_icon_size as i32)),
-        )
+        .child(fixed_status_text(
+            44.0,
+            format!("{}px", zoom_icon_size as i32),
+        ))
 }
 
 fn zoom_track(
@@ -110,6 +164,9 @@ fn zoom_track(
         .gap_1()
         .h(px(18.0))
         .w(px(track_width))
+        .min_w_0()
+        .flex_shrink_1()
+        .overflow_hidden()
         .on_drag(
             ZoomSliderDrag {
                 zoom_min,
@@ -192,23 +249,20 @@ fn operation_progress_view(
         Some(percent) => format!("{label} {percent}%"),
         None => label,
     };
-    div()
+    status_section()
         .id(format!("status-operation-progress-{}", pane_id.0))
-        .flex()
-        .items_center()
         .gap_2()
         .child(
-            div()
-                .w(px(132.0))
-                .truncate()
+            fixed_status_text(132.0, text)
                 .text_xs()
-                .text_color(rgb(0x59636e))
-                .child(text),
+                .text_color(rgb(0x59636e)),
         )
         .child(
             div()
                 .relative()
                 .w(px(96.0))
+                .min_w_0()
+                .flex_shrink_1()
                 .h(px(6.0))
                 .rounded_md()
                 .bg(rgb(0xdce3ee))
@@ -249,16 +303,16 @@ fn operation_progress_view(
 }
 
 fn operation_busy_view(pane_id: PaneId) -> Stateful<Div> {
-    div()
+    status_section()
         .id(format!("status-operation-progress-{}", pane_id.0))
-        .flex()
-        .items_center()
         .gap_1()
         .child(div().text_xs().text_color(rgb(0x59636e)).child("Working"))
         .child(
             div()
                 .relative()
                 .w(px(72.0))
+                .min_w_0()
+                .flex_shrink_1()
                 .h(px(6.0))
                 .rounded_md()
                 .bg(rgb(0xdce3ee))
@@ -279,18 +333,18 @@ fn space_info(pane_id: PaneId, space: Option<SpaceInfoSnapshot>) -> Stateful<Div
     match space {
         Some(space) => {
             let used_width = 72.0 * f32::from(space.used_percent) / 100.0;
-            div()
+            status_section()
                 .id(format!("status-space-info-{}", pane_id.0))
-                .flex()
-                .items_center()
                 .gap_2()
                 .text_xs()
                 .text_color(rgb(0x59636e))
-                .child(div().w(px(104.0)).truncate().child(space.free_label))
+                .child(fixed_status_text(104.0, space.free_label))
                 .child(
                     div()
                         .relative()
                         .w(px(72.0))
+                        .min_w_0()
+                        .flex_shrink_1()
                         .h(px(6.0))
                         .rounded_md()
                         .bg(rgb(0xe6e9ef))
@@ -305,17 +359,13 @@ fn space_info(pane_id: PaneId, space: Option<SpaceInfoSnapshot>) -> Stateful<Div
                                 .bg(space_usage_color(space.used_percent)),
                         ),
                 )
-                .child(
-                    div()
-                        .w(px(152.0))
-                        .truncate()
-                        .text_color(rgb(0x7a8494))
-                        .child(space.detail_label),
-                )
+                .child(fixed_status_text(152.0, space.detail_label).text_color(rgb(0x7a8494)))
         }
         None => div()
             .id(format!("status-space-info-{}", pane_id.0))
             .w(px(180.0))
+            .min_w_0()
+            .flex_shrink_1()
             .truncate()
             .text_xs()
             .text_color(rgb(0x7a8494))

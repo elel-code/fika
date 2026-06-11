@@ -19,6 +19,14 @@ pub use core::entries::{
 };
 pub use core::file_ops;
 pub use core::filter::{FilteredModel, NameFilter, NameFilterMode};
+pub use core::launcher::{
+    DesktopApplication, DesktopLaunchCommand, DesktopLaunchPlan, LauncherError, MimeApplication,
+    MimeApplicationCache, SystemdLaunchResult, SystemdLaunchUnit, launch_with_systemd_user,
+    systemd_launch_unit_name, systemd_units_for_launch_plan,
+};
+pub use core::mime::{
+    MimeDatabase, detect_mime_from_magic, generic_mime_icon_name, mime_icon_name,
+};
 pub use core::model::{
     ChangedRoles, DirectoryModel, DirectoryModelSignal, ItemRange, ItemRangeList, SortDescriptor,
     SortOrder, SortRole,
@@ -30,7 +38,7 @@ pub use core::operations::{
 pub use core::pane::{
     DEFAULT_ZOOM_LEVEL, Generation, MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL, PaneController,
     PaneGenerationCounter, PaneId, PaneIdAllocator, PaneState, RequestSerial, SelectionMove,
-    SelectionState, ViewState, ZoomChange, icon_size_for_zoom_level,
+    SelectionState, ViewState, ZoomChange, icon_size_for_zoom_level, normalize_viewport_extent,
 };
 pub use core::places::{
     UserPlace, default_user_places_path, load_user_places, parse_user_places_xbel,
@@ -43,5 +51,5 @@ pub use core::scroll::{
 };
 pub use core::view::{
     CompactColumnMetrics, CompactLayout, CompactLayoutOptions, HorizontalScrollBarLayout,
-    ItemLayout, RangeSelection, ViewPoint, ViewRect, ViewSize,
+    ItemLayout, RangeSelection, ViewPoint, ViewRect, ViewSize, horizontal_scroll_bar_layout,
 };

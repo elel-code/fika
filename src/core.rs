@@ -4,6 +4,8 @@ pub mod directory;
 pub mod entries;
 pub mod file_ops;
 pub mod filter;
+pub mod launcher;
+pub mod mime;
 pub mod model;
 pub mod operations;
 pub mod pane;

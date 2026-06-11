@@ -1,6 +1,9 @@
-use crate::{BreadcrumbSegment, FikaApp, FilterBarSnapshot, PaneSnapshot};
+use crate::{BreadcrumbSegment, FikaApp, FilterBarSnapshot, LocationDraftSnapshot, PaneSnapshot};
 use gpui::prelude::*;
-use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb};
+use gpui::{
+    Bounds, Context, Div, MouseButton, NavigationDirection, ParentElement, Pixels, SharedString,
+    Stateful, Styled, TextRun, Window, canvas, div, fill, point, px, rgb, size,
+};
 
 use super::file_grid::{FileGridMode, FileGridProps, file_grid};
 use super::status_bar::status_bar;
@@ -17,6 +20,7 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
     } = props;
     let PaneSnapshot {
         id: pane_id,
+        split_ratio,
         breadcrumbs,
         location_draft,
         filter_bar,
@@ -25,8 +29,10 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         visible_items,
         view,
         rubber_band,
+        drop_target,
         focused,
     } = snapshot;
+    let visible_width = view.viewport_width;
     let border = if focused {
         rgb(0x2f6fed)
     } else {
@@ -36,8 +42,12 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         .id(format!("pane-{}", pane_id.0))
         .flex()
         .flex_col()
-        .flex_1()
-        .min_w(px(280.0))
+        .flex_grow_0()
+        .flex_shrink_1()
+        .flex_basis(gpui::relative(split_ratio.max(0.001)))
+        .min_w_0()
+        .max_w_full()
+        .overflow_hidden()
         .border_1()
         .rounded_md()
         .border_color(border)
@@ -46,11 +56,32 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
             this.panes.focus(pane_id);
             cx.notify();
         }))
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Back),
+            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                this.panes.focus(pane_id);
+                this.go_back(pane_id);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Forward),
+            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                this.panes.focus(pane_id);
+                this.go_forward(pane_id);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap_1()
+                .min_w_0()
+                .max_w_full()
+                .overflow_hidden()
                 .px_2()
                 .py_1()
                 .border_b_1()
@@ -78,11 +109,12 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
                 visible_items,
                 view,
                 rubber_band,
+                drop_target,
                 mode: file_grid_mode,
             },
             cx,
         ))
-        .child(status_bar(pane_id, status_bar_snapshot, cx))
+        .child(status_bar(pane_id, visible_width, status_bar_snapshot, cx))
 }
 
 fn filter_bar_view(
@@ -220,26 +252,29 @@ fn filter_button(id: String, label: &'static str) -> Stateful<Div> {
 fn location_bar(
     pane_id: fika_core::PaneId,
     breadcrumbs: Vec<BreadcrumbSegment>,
-    location_draft: Option<String>,
+    location_draft: Option<LocationDraftSnapshot>,
     focused: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     match location_draft {
-        Some(draft) => editable_location_bar(pane_id, draft, focused),
+        Some(draft) => editable_location_bar(pane_id, draft, focused, cx),
         None => breadcrumb_location_bar(pane_id, breadcrumbs, focused, cx),
     }
 }
 
 fn editable_location_bar(
     pane_id: fika_core::PaneId,
-    draft: String,
+    draft: LocationDraftSnapshot,
     focused: bool,
+    cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     div()
         .id(format!("location-edit-{}", pane_id.0))
         .flex()
         .items_center()
         .flex_1()
+        .min_w_0()
+        .max_w_full()
         .h(px(28.0))
         .px_2()
         .border_1()
@@ -251,19 +286,169 @@ fn editable_location_bar(
         })
         .bg(rgb(0xffffff))
         .overflow_hidden()
-        .child(
-            div()
-                .flex_1()
-                .truncate()
-                .text_sm()
-                .text_color(rgb(0x111827))
-                .child(draft),
+        .cursor_text()
+        .text_sm()
+        .text_color(rgb(0x111827))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                this.set_location_caret_from_window_x(pane_id, event.position.x.as_f32());
+                cx.stop_propagation();
+                cx.notify();
+            }),
         )
-        .child(div().w(px(1.0)).h(px(18.0)).bg(if focused {
-            rgb(0x2f6fed)
-        } else {
-            rgb(0x94a3b8)
-        }))
+        .child(location_edit_text(pane_id, draft, focused, cx))
+}
+
+fn location_edit_text(
+    pane_id: fika_core::PaneId,
+    draft: LocationDraftSnapshot,
+    focused: bool,
+    cx: &mut Context<FikaApp>,
+) -> impl IntoElement {
+    let app = cx.weak_entity();
+    canvas(
+        move |bounds, window, cx| {
+            location_edit_prepaint(bounds, window, pane_id, draft, focused, app, cx)
+        },
+        move |bounds, state, window, cx| {
+            let origin = point(
+                bounds.origin.x + px(state.x_offset),
+                bounds.origin.y + px(state.y_offset),
+            );
+            state
+                .line
+                .paint(
+                    origin,
+                    state.line_height,
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                )
+                .unwrap();
+            if let Some(cursor) = state.cursor {
+                window.paint_quad(cursor);
+            }
+        },
+    )
+    .size_full()
+}
+
+struct LocationEditPrepaint {
+    line: gpui::ShapedLine,
+    cursor: Option<gpui::PaintQuad>,
+    x_offset: f32,
+    y_offset: f32,
+    line_height: Pixels,
+}
+
+fn location_edit_prepaint(
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+    pane_id: fika_core::PaneId,
+    draft: LocationDraftSnapshot,
+    focused: bool,
+    app: gpui::WeakEntity<FikaApp>,
+    cx: &mut gpui::App,
+) -> LocationEditPrepaint {
+    let style = window.text_style();
+    let caret = draft.caret.min(draft.value.len());
+    let text = SharedString::from(draft.value.clone());
+    let run = TextRun {
+        len: text.len(),
+        font: style.font(),
+        color: style.color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    let line = window
+        .text_system()
+        .shape_line(text.clone(), font_size, &[run], None);
+    let line_height = window.line_height();
+    let caret_x = line.x_for_index(caret).as_f32();
+    let available_width = bounds.size.width.as_f32().max(1.0);
+    let scroll_x = location_scroll_for_caret(
+        caret_x,
+        line.width().as_f32(),
+        available_width,
+        draft.scroll_x,
+    );
+    let x_offset = -scroll_x;
+    let y_offset = ((bounds.size.height - line_height).as_f32() / 2.0)
+        .max(0.0)
+        .floor();
+    let byte_positions = location_byte_positions(&draft.value, &line);
+    let _ = app.update(cx, |this, _cx| {
+        this.update_location_edit_metrics(
+            pane_id,
+            draft.value.clone(),
+            bounds.origin.x.as_f32(),
+            scroll_x,
+            available_width,
+            byte_positions,
+        );
+    });
+    let cursor = focused.then(|| {
+        let cursor_x = location_cursor_x(caret_x, scroll_x, available_width);
+        fill(
+            Bounds::new(
+                point(
+                    bounds.origin.x + px(cursor_x),
+                    bounds.origin.y + px(y_offset),
+                ),
+                size(px(2.0), line_height),
+            ),
+            rgb(0x2f6fed),
+        )
+    });
+    LocationEditPrepaint {
+        line,
+        cursor,
+        x_offset,
+        y_offset,
+        line_height,
+    }
+}
+
+fn location_scroll_for_caret(
+    caret_x: f32,
+    line_width: f32,
+    available_width: f32,
+    current_scroll_x: f32,
+) -> f32 {
+    if available_width <= 1.0 {
+        return 0.0;
+    }
+    let padding = 6.0_f32.min((available_width / 2.0).max(0.0));
+    let max_scroll_x = (line_width - available_width + padding).max(0.0);
+    let mut scroll_x = current_scroll_x.clamp(0.0, max_scroll_x);
+    if caret_x < scroll_x + padding {
+        scroll_x = (caret_x - padding).max(0.0);
+    }
+    if caret_x > scroll_x + available_width - padding {
+        scroll_x = (caret_x - available_width + padding).clamp(0.0, max_scroll_x);
+    }
+    scroll_x.floor()
+}
+
+fn location_cursor_x(caret_x: f32, scroll_x: f32, available_width: f32) -> f32 {
+    if available_width <= 2.0 {
+        return 0.0;
+    }
+    (caret_x - scroll_x).clamp(0.0, available_width - 2.0)
+}
+
+fn location_byte_positions(value: &str, line: &gpui::ShapedLine) -> Vec<(usize, f32)> {
+    let mut positions = Vec::with_capacity(value.chars().count() + 1);
+    positions.push((0, 0.0));
+    for (index, _) in value.char_indices().skip(1) {
+        positions.push((index, line.x_for_index(index).as_f32()));
+    }
+    positions.push((value.len(), line.x_for_index(value.len()).as_f32()));
+    positions
 }
 
 fn breadcrumb_location_bar(
@@ -279,6 +464,8 @@ fn breadcrumb_location_bar(
         .items_center()
         .gap_1()
         .flex_1()
+        .min_w_0()
+        .max_w_full()
         .h(px(28.0))
         .px_1()
         .rounded_md()
@@ -314,13 +501,19 @@ fn breadcrumb_segment(
         .flex()
         .items_center()
         .gap_1()
+        .min_w_0()
+        .flex_shrink_1()
+        .overflow_hidden()
         .child(
             div()
                 .id(format!("location-segment-button-{}-{index}", pane_id.0))
+                .min_w_0()
+                .flex_shrink_1()
                 .px_2()
                 .py_1()
                 .rounded_md()
                 .text_sm()
+                .truncate()
                 .text_color(rgb(0x1f2937))
                 .hover(|button| button.bg(rgb(0xe8eef7)))
                 .cursor_pointer()
@@ -338,4 +531,22 @@ fn breadcrumb_segment(
         .when(show_separator, |row| {
             row.child(div().text_sm().text_color(rgb(0x94a3b8)).child(">"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn location_cursor_x_handles_extremely_narrow_widths() {
+        assert_eq!(location_cursor_x(24.0, 0.0, 1.0), 0.0);
+        assert_eq!(location_cursor_x(24.0, 0.0, 2.0), 0.0);
+        assert_eq!(location_cursor_x(24.0, 0.0, 10.0), 8.0);
+    }
+
+    #[test]
+    fn location_scroll_for_caret_uses_narrow_safe_padding() {
+        assert_eq!(location_scroll_for_caret(50.0, 100.0, 4.0, 0.0), 48.0);
+        assert_eq!(location_scroll_for_caret(0.0, 100.0, 1.0, 80.0), 0.0);
+    }
 }

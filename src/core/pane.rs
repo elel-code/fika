@@ -852,14 +852,14 @@ impl PaneController {
         max_scroll_y: f32,
     ) -> Option<bool> {
         let pane = self.panes.get_mut(&pane_id)?;
-        let viewport_width = viewport_width.max(1.0);
-        let viewport_height = viewport_height.max(1.0);
+        let viewport_width = normalize_viewport_extent(viewport_width);
+        let viewport_height = normalize_viewport_extent(viewport_height);
         let scroll_x = pane.view.scroll_x.clamp(0.0, max_scroll_x.max(0.0));
         let scroll_y = pane.view.scroll_y.clamp(0.0, max_scroll_y.max(0.0));
-        if pane.view.viewport_width == viewport_width
-            && pane.view.viewport_height == viewport_height
-            && pane.view.scroll_x == scroll_x
-            && pane.view.scroll_y == scroll_y
+        if viewport_value_eq(pane.view.viewport_width, viewport_width)
+            && viewport_value_eq(pane.view.viewport_height, viewport_height)
+            && viewport_value_eq(pane.view.scroll_x, scroll_x)
+            && viewport_value_eq(pane.view.scroll_y, scroll_y)
         {
             return Some(false);
         }
@@ -896,6 +896,14 @@ impl PaneController {
         }
         Some(signals)
     }
+}
+
+pub fn normalize_viewport_extent(extent: f32) -> f32 {
+    extent.max(1.0).floor()
+}
+
+fn viewport_value_eq(left: f32, right: f32) -> bool {
+    (left - right).abs() < 0.5
 }
 
 fn apply_pane_sort(pane: &mut PaneState, sort: SortDescriptor) -> Vec<DirectoryModelSignal> {
@@ -1493,6 +1501,21 @@ mod tests {
     }
 
     #[test]
+    fn viewport_bounds_never_exceed_measured_pane_extent() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let pane_id = controller.focused().unwrap();
+
+        assert_eq!(
+            controller.set_viewport_bounds(pane_id, 320.9, 119.7, 1_000.0, 500.0),
+            Some(true)
+        );
+
+        let view = &controller.pane(pane_id).unwrap().view;
+        assert_eq!(view.viewport_width, 320.0);
+        assert_eq!(view.viewport_height, 119.0);
+    }
+
+    #[test]
     fn navigation_resets_scroll_but_reload_preserves_it() {
         let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
         let pane_id = controller.focused().unwrap();
@@ -1716,6 +1739,7 @@ mod tests {
             name_width_units,
             size_bytes: 0,
             modified_secs: None,
+            mime_type: None,
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,

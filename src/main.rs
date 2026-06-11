@@ -8,9 +8,13 @@ use fika_core::{
     TrashUndoItem, UndoPayload, UndoRecord, UserPlace, ViewPoint, ViewRect, ViewState, ZoomChange,
     decode_file_clipboard_text, encode_file_clipboard_text, file_ops, nearest_existing_ancestor,
 };
+use fika_core::{
+    DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, SystemdLaunchResult,
+    launch_with_systemd_user,
+};
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardEntry, ClipboardItem, Context, Div, IntoElement, MouseButton,
+    App, Bounds, ClipboardEntry, ClipboardItem, Context, Div, Empty, IntoElement, MouseButton,
     ParentElement, Render, Stateful, Styled, Window, WindowBounds, WindowOptions, div, px, rgb,
     rgba, size,
 };
@@ -24,6 +28,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, UNIX_EPOCH};
+
+const MIN_PANE_WIDTH: f32 = 1.0;
+const PANE_SPLITTER_WIDTH: f32 = 1.0;
+const PANE_SPLITTER_HITBOX_WIDTH: f32 = 8.0;
+const SPLIT_RATIO_EPSILON: f32 = 0.0005;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -174,14 +183,16 @@ struct ChooserState {
 #[derive(Clone, Debug)]
 struct PaneSnapshot {
     id: PaneId,
+    split_ratio: f32,
     breadcrumbs: Vec<BreadcrumbSegment>,
-    location_draft: Option<String>,
+    location_draft: Option<LocationDraftSnapshot>,
     filter_bar: Option<FilterBarSnapshot>,
     status_bar: StatusBarSnapshot,
     layout: CompactLayout,
     visible_items: Vec<VisibleItemSnapshot>,
     view: ViewState,
     rubber_band: Option<ViewRect>,
+    drop_target: bool,
     focused: bool,
 }
 
@@ -229,6 +240,13 @@ pub(crate) struct BreadcrumbSegment {
     pub(crate) path: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LocationDraftSnapshot {
+    pub(crate) value: String,
+    pub(crate) caret: usize,
+    pub(crate) scroll_x: f32,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct VisibleItemSnapshot {
     pub(crate) slot_id: u64,
@@ -239,38 +257,159 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) kind_label: String,
     pub(crate) icon: FileIconSnapshot,
     pub(crate) selected: bool,
+    pub(crate) selection_count: usize,
+    pub(crate) drop_target: bool,
     pub(crate) draft_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FileIconSnapshot {
-    pub(crate) marker: String,
-    pub(crate) fg: u32,
-    pub(crate) bg: u32,
+    pub(crate) icon_name: String,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) fallback_marker: String,
+    pub(crate) fallback_fg: u32,
+    pub(crate) fallback_bg: u32,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum FileIconKey {
+enum FileIconKind {
     Directory,
-    Extension(String),
-    File,
+    Mime {
+        mime: Arc<str>,
+        extension: Option<String>,
+    },
+    File {
+        extension: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FileIconCacheKey {
+    kind: FileIconKind,
+    size_px: u16,
 }
 
 #[derive(Clone, Debug, Default)]
 struct FileIconCache {
-    cached: HashMap<FileIconKey, FileIconSnapshot>,
+    cached: HashMap<FileIconCacheKey, FileIconSnapshot>,
+    theme: IconThemeResolver,
+    mime: fika_core::MimeDatabase,
 }
 
 impl FileIconCache {
-    fn icon_for(&mut self, path: &Path, is_dir: bool) -> FileIconSnapshot {
-        let key = file_icon_key(path, is_dir);
+    fn icon_for(
+        &mut self,
+        path: &Path,
+        is_dir: bool,
+        mime_type: Option<Arc<str>>,
+        icon_size: f32,
+    ) -> FileIconSnapshot {
+        let kind = file_icon_kind(path, is_dir, mime_type);
+        let key = FileIconCacheKey {
+            kind,
+            size_px: icon_cache_size(icon_size),
+        };
         if let Some(icon) = self.cached.get(&key) {
             return icon.clone();
         }
 
-        let icon = file_icon_snapshot(&key);
+        let icon = file_icon_snapshot(&key.kind, key.size_px, &mut self.theme, &self.mime);
         self.cached.insert(key, icon.clone());
         icon
+    }
+}
+
+#[derive(Clone, Debug)]
+struct IconThemeResolver {
+    roots: Vec<PathBuf>,
+    themes: Vec<String>,
+    path_cache: HashMap<(String, u16), Option<PathBuf>>,
+}
+
+impl Default for IconThemeResolver {
+    fn default() -> Self {
+        Self {
+            roots: icon_theme_roots(),
+            themes: icon_theme_names(),
+            path_cache: HashMap::new(),
+        }
+    }
+}
+
+impl IconThemeResolver {
+    fn find(&mut self, icon_name: &str, desired_size: u16) -> Option<PathBuf> {
+        let key = (icon_name.to_string(), desired_size);
+        if let Some(path) = self.path_cache.get(&key) {
+            return path.clone();
+        }
+
+        let path = self.find_uncached(icon_name, desired_size);
+        self.path_cache.insert(key, path.clone());
+        path
+    }
+
+    fn first_existing(
+        &mut self,
+        icon_names: &[String],
+        desired_size: u16,
+    ) -> Option<(String, PathBuf)> {
+        icon_names.iter().find_map(|name| {
+            self.find(name, desired_size)
+                .map(|path| (name.clone(), path))
+        })
+    }
+
+    fn find_uncached(&self, icon_name: &str, desired_size: u16) -> Option<PathBuf> {
+        for theme in self.theme_search_order() {
+            for root in &self.roots {
+                let theme_root = root.join(&theme);
+                if let Some(path) = find_icon_in_theme(&theme_root, icon_name, desired_size) {
+                    return Some(path);
+                }
+            }
+        }
+
+        [
+            Path::new("/usr/share/pixmaps"),
+            Path::new("/usr/local/share/pixmaps"),
+        ]
+        .into_iter()
+        .find_map(|root| find_icon_direct(root, icon_name))
+    }
+
+    fn theme_search_order(&self) -> Vec<String> {
+        let mut themes = Vec::new();
+        for theme in &self.themes {
+            self.push_theme_and_inherits(theme, &mut themes, 0);
+        }
+        themes
+    }
+
+    fn push_theme_and_inherits(&self, theme: &str, themes: &mut Vec<String>, depth: usize) {
+        if depth > 8 || theme.is_empty() {
+            return;
+        }
+        let already_seen = themes.iter().any(|existing| existing == theme);
+        push_unique_icon_theme(themes, theme);
+        if already_seen {
+            return;
+        }
+        for inherited in self.inherited_themes(theme) {
+            self.push_theme_and_inherits(&inherited, themes, depth + 1);
+        }
+    }
+
+    fn inherited_themes(&self, theme: &str) -> Vec<String> {
+        let mut inherited = Vec::new();
+        for root in &self.roots {
+            let Ok(contents) = fs::read_to_string(root.join(theme).join("index.theme")) else {
+                continue;
+            };
+            for theme in parse_icon_theme_inherits(&contents) {
+                push_unique_icon_theme(&mut inherited, &theme);
+            }
+        }
+        inherited
     }
 }
 
@@ -286,6 +425,35 @@ struct ContextMenuState {
 struct ContextMenuOpenSubmenu {
     submenu: ContextMenuSubmenu,
     parent_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ContextMenuOverlayRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    max_height: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ContextMenuOverlayLayout {
+    root: ContextMenuOverlayRect,
+    submenu: Option<ContextMenuOverlayRect>,
+}
+
+impl ContextMenuOverlayLayout {
+    fn contains(self, point: ViewPoint) -> bool {
+        self.root.contains(point) || self.submenu.is_some_and(|rect| rect.contains(point))
+    }
+}
+
+impl ContextMenuOverlayRect {
+    fn contains(self, point: ViewPoint) -> bool {
+        point.x >= self.x
+            && point.x < self.x + self.width
+            && point.y >= self.y
+            && point.y < self.y + self.max_height
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -313,13 +481,18 @@ enum ContextMenuTarget {
         selection_count: usize,
         trash_view: bool,
         trash_can_restore: bool,
+        mime_type: Option<Arc<str>>,
+        open_with_apps: Vec<MimeApplication>,
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ContextMenuAction {
     Open,
     OpenInNewPane,
+    OpenWithSubmenu,
+    OpenWithApplication { desktop_id: String },
+    OtherApplication,
     AddPlace,
     EditPlace,
     RemovePlace,
@@ -355,16 +528,17 @@ enum ContextMenuAction {
     Refresh,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ContextMenuItem {
     action: ContextMenuAction,
-    label: &'static str,
+    label: String,
     enabled: bool,
     submenu: Option<ContextMenuSubmenu>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContextMenuSubmenu {
+    OpenWith,
     SortBy,
     TrashSortBy,
     ViewMode,
@@ -379,6 +553,7 @@ enum ContextMenuRowScope {
 const CONTEXT_MENU_WIDTH: f32 = 196.0;
 const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
 const CONTEXT_MENU_VERTICAL_PADDING: f32 = 4.0;
+const CONTEXT_MENU_VIEWPORT_MARGIN: f32 = 8.0;
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -450,6 +625,12 @@ struct RubberBandDrag {
     pane_id: PaneId,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PaneSplitterDrag {
+    left: PaneId,
+    right: PaneId,
+}
+
 impl RubberBandState {
     fn rect(self) -> ViewRect {
         let x = self.start.x.min(self.current.x);
@@ -473,6 +654,42 @@ impl RubberBandState {
     }
 }
 
+fn width_value_eq(left: f32, right: f32) -> bool {
+    (left - right).abs() < 0.5
+}
+
+fn split_ratio_eq(left: f32, right: f32) -> bool {
+    (left - right).abs() < SPLIT_RATIO_EPSILON
+}
+
+fn pane_width_available(row_width: f32, pane_count: usize) -> f32 {
+    if pane_count == 0 {
+        return 0.0;
+    }
+    (row_width - pane_count.saturating_sub(1) as f32 * PANE_SPLITTER_WIDTH).max(0.0)
+}
+
+fn normalize_pane_ratios(mut ratios: Vec<f32>) -> Vec<f32> {
+    let count = ratios.len();
+    if count == 0 {
+        return ratios;
+    }
+    for ratio in &mut ratios {
+        if !ratio.is_finite() || *ratio <= 0.0 {
+            *ratio = 0.0;
+        }
+    }
+    let total = ratios.iter().sum::<f32>();
+    if total <= 0.0 {
+        ratios.fill(1.0 / count as f32);
+        return ratios;
+    }
+    for ratio in &mut ratios {
+        *ratio /= total;
+    }
+    ratios
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RenameDraft {
     pane_id: PaneId,
@@ -480,10 +697,117 @@ struct RenameDraft {
     draft_name: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct LocationDraft {
     pane_id: PaneId,
     value: String,
+    caret: usize,
+    scroll_x: f32,
+}
+
+impl LocationDraft {
+    fn new(pane_id: PaneId, value: String) -> Self {
+        let caret = value.len();
+        Self {
+            pane_id,
+            value,
+            caret,
+            scroll_x: 0.0,
+        }
+    }
+
+    fn snapshot(&self) -> LocationDraftSnapshot {
+        LocationDraftSnapshot {
+            value: self.value.clone(),
+            caret: self.caret,
+            scroll_x: self.scroll_x,
+        }
+    }
+
+    fn set_caret(&mut self, caret: usize) {
+        self.caret = clamp_text_boundary(&self.value, caret);
+    }
+
+    fn move_to_start(&mut self) {
+        self.caret = 0;
+        self.scroll_x = 0.0;
+    }
+
+    fn move_to_end(&mut self) {
+        self.caret = self.value.len();
+    }
+
+    fn move_backward(&mut self) {
+        self.caret = previous_text_boundary(&self.value, self.caret);
+    }
+
+    fn move_forward(&mut self) {
+        self.caret = next_text_boundary(&self.value, self.caret);
+    }
+
+    fn insert(&mut self, text: &str) {
+        let caret = clamp_text_boundary(&self.value, self.caret);
+        self.value.insert_str(caret, text);
+        self.caret = caret + text.len();
+    }
+
+    fn delete_backward(&mut self) {
+        let end = clamp_text_boundary(&self.value, self.caret);
+        let start = previous_text_boundary(&self.value, end);
+        if start == end {
+            return;
+        }
+        self.value.drain(start..end);
+        self.caret = start;
+    }
+
+    fn delete_forward(&mut self) {
+        let start = clamp_text_boundary(&self.value, self.caret);
+        let end = next_text_boundary(&self.value, start);
+        if start == end {
+            return;
+        }
+        self.value.drain(start..end);
+        self.caret = start;
+    }
+}
+
+fn clamp_text_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn previous_text_boundary(text: &str, index: usize) -> usize {
+    let index = clamp_text_boundary(text, index);
+    text[..index]
+        .char_indices()
+        .last()
+        .map(|(boundary, _)| boundary)
+        .unwrap_or(0)
+}
+
+fn next_text_boundary(text: &str, index: usize) -> usize {
+    let index = clamp_text_boundary(text, index);
+    if index >= text.len() {
+        return text.len();
+    }
+    text[index..]
+        .char_indices()
+        .nth(1)
+        .map(|(offset, _)| index + offset)
+        .unwrap_or(text.len())
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LocationEditMetrics {
+    value: String,
+    origin_x: f32,
+    scroll_x: f32,
+    visible_width: f32,
+    byte_positions: Vec<(usize, f32)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -548,16 +872,60 @@ impl PaneLayoutProjection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FileTransferMode {
+    Copy,
+    Move,
+    Link,
+}
+
+impl FileTransferMode {
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Move => "move",
+            Self::Link => "link",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Copy => "Copy",
+            Self::Move => "Move",
+            Self::Link => "Link",
+        }
+    }
+
+    fn progress_label(self, item_count: usize) -> String {
+        let verb = match self {
+            Self::Copy => "Copying",
+            Self::Move => "Moving",
+            Self::Link => "Linking",
+        };
+        format!("{verb} {item_count} item(s)")
+    }
+}
+
+pub(crate) fn file_transfer_mode_for_modifiers(modifiers: gpui::Modifiers) -> FileTransferMode {
+    if modifiers.alt || (modifiers.shift && modifiers.secondary()) {
+        FileTransferMode::Link
+    } else if modifiers.shift {
+        FileTransferMode::Move
+    } else {
+        FileTransferMode::Copy
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClipboardMode {
     Copy,
     Cut,
 }
 
 impl ClipboardMode {
-    fn operation(self) -> &'static str {
+    fn transfer_mode(self) -> FileTransferMode {
         match self {
-            Self::Copy => "copy",
-            Self::Cut => "move",
+            Self::Copy => FileTransferMode::Copy,
+            Self::Cut => FileTransferMode::Move,
         }
     }
 
@@ -687,9 +1055,28 @@ impl ClipboardState {
         if self.text.is_some() {
             "Pasting text".to_string()
         } else {
-            format!("{}ing {} item(s)", self.mode.label(), self.item_count())
+            self.mode.transfer_mode().progress_label(self.item_count())
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ItemDragPayload {
+    pub(crate) source_pane: PaneId,
+    pub(crate) source_path: PathBuf,
+    pub(crate) source_selected: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActiveItemDrag {
+    payload: ItemDragPayload,
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ItemDropTarget {
+    Pane { pane_id: PaneId },
+    Directory { pane_id: PaneId, path: PathBuf },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -786,10 +1173,11 @@ impl OperationProgressHandle {
 
 const PROGRESS_DISPLAY_DELAY: Duration = Duration::from_millis(500);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct LoadingPaneState {
     key: ListingRequestKey,
     started_at: Instant,
+    previous_summary: Option<String>,
 }
 
 fn progress_percent(bytes_done: u64, bytes_total: u64) -> Option<u8> {
@@ -874,7 +1262,6 @@ const AVERAGE_COMPACT_CHAR_WIDTH: f32 = 7.0;
 
 impl CompactColumnWidthCache {
     const MAX_CACHED_LAYOUTS: usize = 4;
-    const COLUMN_OVERSCAN: usize = 2;
 
     fn metrics_for_model(
         &mut self,
@@ -939,7 +1326,7 @@ impl CompactColumnWidthCache {
         };
 
         let entry = &mut self.cached[position];
-        entry.resolve_visible_columns(model, filtered, item_count, rows_per_column, options);
+        entry.resolve_all_columns(model, filtered, item_count, rows_per_column, options);
         entry.metrics(options)
     }
 }
@@ -973,7 +1360,7 @@ impl CompactColumnWidthCacheEntry {
         metrics
     }
 
-    fn resolve_visible_columns(
+    fn resolve_all_columns(
         &mut self,
         model: &fika_core::DirectoryModel,
         filtered: Option<&fika_core::FilteredModel>,
@@ -985,27 +1372,14 @@ impl CompactColumnWidthCacheEntry {
             return;
         }
 
-        for _ in 0..2 {
-            let metrics = self.metrics(options);
-            let layout = CompactLayout::new_with_column_metrics(item_count, options, metrics);
-            let range = overscanned_column_range(
-                layout.visible_column_range(),
-                self.widths.len(),
-                CompactColumnWidthCache::COLUMN_OVERSCAN,
-            );
-            if range.is_empty()
-                || !self.resolve_columns(
-                    model,
-                    filtered,
-                    item_count,
-                    rows_per_column,
-                    options,
-                    range,
-                )
-            {
-                break;
-            }
-        }
+        self.resolve_columns(
+            model,
+            filtered,
+            item_count,
+            rows_per_column,
+            options,
+            0..self.widths.len(),
+        );
     }
 
     fn resolve_columns(
@@ -1056,17 +1430,6 @@ impl CompactColumnWidthCacheEntry {
     }
 }
 
-fn overscanned_column_range(
-    range: std::ops::Range<usize>,
-    column_count: usize,
-    overscan: usize,
-) -> std::ops::Range<usize> {
-    if column_count == 0 || range.is_empty() {
-        return 0..0;
-    }
-    range.start.saturating_sub(overscan)..(range.end + overscan).min(column_count)
-}
-
 fn required_compact_item_width(entry: &fika_core::EntryData, options: CompactLayoutOptions) -> f32 {
     options.padding * 4.0 + options.icon_size + compact_text_width(entry.name_width_units)
 }
@@ -1104,70 +1467,450 @@ fn format_entry_kind_label(entry: &fika_core::EntryData) -> String {
     }
 }
 
-fn file_icon_key(path: &Path, is_dir: bool) -> FileIconKey {
+fn file_icon_kind(path: &Path, is_dir: bool, mime_type: Option<Arc<str>>) -> FileIconKind {
     if is_dir {
-        return FileIconKey::Directory;
+        return FileIconKind::Directory;
     }
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| FileIconKey::Extension(extension.to_ascii_lowercase()))
-        .unwrap_or(FileIconKey::File)
+    let extension = file_extension(path);
+    match mime_type {
+        Some(mime) => FileIconKind::Mime { mime, extension },
+        None => FileIconKind::File { extension },
+    }
 }
 
-fn file_icon_snapshot(key: &FileIconKey) -> FileIconSnapshot {
-    match key {
-        FileIconKey::Directory => FileIconSnapshot {
-            marker: "DIR".to_string(),
-            fg: 0x0f4c81,
-            bg: 0xe7f1fb,
-        },
-        FileIconKey::Extension(extension) if is_image_extension(extension) => FileIconSnapshot {
-            marker: "IMG".to_string(),
-            fg: 0x7c2d12,
-            bg: 0xffedd5,
-        },
-        FileIconKey::Extension(extension) if is_archive_extension(extension) => FileIconSnapshot {
-            marker: "ARC".to_string(),
-            fg: 0x713f12,
-            bg: 0xfef3c7,
-        },
-        FileIconKey::Extension(extension) if is_audio_extension(extension) => FileIconSnapshot {
-            marker: "AUD".to_string(),
-            fg: 0x6d28d9,
-            bg: 0xf3e8ff,
-        },
-        FileIconKey::Extension(extension) if is_video_extension(extension) => FileIconSnapshot {
-            marker: "VID".to_string(),
-            fg: 0x9f1239,
-            bg: 0xffe4e6,
-        },
-        FileIconKey::Extension(extension) if extension == "rs" => FileIconSnapshot {
-            marker: "RS".to_string(),
-            fg: 0x7c2d12,
-            bg: 0xfff7ed,
-        },
-        FileIconKey::Extension(extension) if extension == "pdf" => FileIconSnapshot {
-            marker: "PDF".to_string(),
-            fg: 0x991b1b,
-            bg: 0xfee2e2,
-        },
-        FileIconKey::Extension(extension) if extension == "md" || extension == "txt" => {
-            FileIconSnapshot {
-                marker: "TXT".to_string(),
-                fg: 0x334155,
-                bg: 0xf1f5f9,
+fn file_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+}
+
+fn icon_cache_size(icon_size: f32) -> u16 {
+    icon_size.round().clamp(16.0, 256.0) as u16
+}
+
+fn file_icon_snapshot(
+    kind: &FileIconKind,
+    desired_size: u16,
+    theme: &mut IconThemeResolver,
+    mime: &fika_core::MimeDatabase,
+) -> FileIconSnapshot {
+    let profile = file_icon_profile(kind, mime);
+    let (icon_name, path) = theme
+        .first_existing(&profile.icon_candidates, desired_size)
+        .or_else(|| theme.first_existing(&profile.generic_candidates, desired_size))
+        .or_else(|| {
+            theme.first_existing(
+                &[
+                    "unknown".to_string(),
+                    "application-octet-stream".to_string(),
+                ],
+                desired_size,
+            )
+        })
+        .map_or_else(
+            || {
+                (
+                    profile
+                        .icon_candidates
+                        .first()
+                        .or_else(|| profile.generic_candidates.first())
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    None,
+                )
+            },
+            |(name, path)| (name, Some(path)),
+        );
+
+    FileIconSnapshot {
+        icon_name,
+        path,
+        fallback_marker: profile.marker,
+        fallback_fg: profile.fg,
+        fallback_bg: profile.bg,
+    }
+}
+
+struct FileIconProfile {
+    icon_candidates: Vec<String>,
+    generic_candidates: Vec<String>,
+    marker: String,
+    fg: u32,
+    bg: u32,
+}
+
+fn file_icon_profile(kind: &FileIconKind, mime: &fika_core::MimeDatabase) -> FileIconProfile {
+    let (icon_candidates, generic_candidates, marker, fg, bg) = match kind {
+        FileIconKind::Directory => (
+            vec!["folder".to_string(), "inode-directory".to_string()],
+            Vec::new(),
+            "DIR".to_string(),
+            0x0f4c81,
+            0xe7f1fb,
+        ),
+        FileIconKind::Mime {
+            mime: mime_name,
+            extension,
+        } => {
+            let marker = file_marker(mime_name, extension.as_deref());
+            let (fg, bg) = file_fallback_colors(mime_name, extension.as_deref());
+            (
+                mime_icon_candidates(mime_name, extension.as_deref(), mime),
+                mime_generic_icon_candidates(mime_name, mime),
+                marker,
+                fg,
+                bg,
+            )
+        }
+        FileIconKind::File { extension } => {
+            let marker = file_marker("application/octet-stream", extension.as_deref());
+            let (fg, bg) = file_fallback_colors("application/octet-stream", extension.as_deref());
+            (
+                fallback_file_icon_candidates(extension.as_deref()),
+                mime_generic_icon_candidates("application/octet-stream", mime),
+                marker,
+                fg,
+                bg,
+            )
+        }
+    };
+
+    FileIconProfile {
+        icon_candidates,
+        generic_candidates,
+        marker,
+        fg,
+        bg,
+    }
+}
+
+fn mime_icon_candidates(
+    mime_name: &str,
+    extension: Option<&str>,
+    mime: &fika_core::MimeDatabase,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    for icon_name in mime_theme_icon_candidates(mime_name, extension) {
+        push_icon_candidate(&mut candidates, icon_name);
+    }
+    if let Some(icon_name) = mime.icon_name_for_mime(mime_name) {
+        push_icon_candidate(&mut candidates, icon_name);
+    }
+    candidates
+}
+
+fn fallback_file_icon_candidates(extension: Option<&str>) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(extension) = extension.filter(|extension| !extension.is_empty()) {
+        push_icon_candidate(&mut candidates, format!("text-x-{extension}"));
+        push_icon_candidate(&mut candidates, format!("application-x-{extension}"));
+    }
+    push_icon_candidate(&mut candidates, "application-octet-stream");
+    candidates
+}
+
+fn mime_generic_icon_candidates(mime_name: &str, mime: &fika_core::MimeDatabase) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(icon_name) = mime.generic_icon_name_for_mime(mime_name) {
+        push_icon_candidate(&mut candidates, icon_name);
+    }
+    candidates
+}
+
+fn mime_theme_icon_candidates(mime_name: &str, extension: Option<&str>) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(icon_name) = fika_core::mime_icon_name(mime_name) {
+        push_icon_candidate(&mut candidates, icon_name);
+    }
+    if let Some((family, subtype)) = mime_name.split_once('/')
+        && family == "text"
+    {
+        let subtype = subtype.strip_prefix("x-").unwrap_or(subtype);
+        if !subtype.is_empty() {
+            push_icon_candidate(&mut candidates, format!("text-x-{subtype}"));
+        }
+        if let Some(extension) = extension.filter(|extension| !extension.is_empty()) {
+            push_icon_candidate(&mut candidates, format!("text-x-{extension}"));
+        }
+    }
+    candidates
+}
+
+fn push_icon_candidate(candidates: &mut Vec<String>, icon_name: impl Into<String>) {
+    let icon_name = icon_name.into();
+    if !candidates.iter().any(|existing| existing == &icon_name) {
+        candidates.push(icon_name);
+    }
+}
+
+fn file_marker(mime: &str, extension: Option<&str>) -> String {
+    match extension {
+        Some(extension) if extension.len() <= 4 => extension.to_ascii_uppercase(),
+        _ if mime.starts_with("image/") => "IMG".to_string(),
+        _ if mime.starts_with("audio/") => "AUD".to_string(),
+        _ if mime.starts_with("video/") => "VID".to_string(),
+        _ if mime.starts_with("text/") => "TXT".to_string(),
+        _ => "FILE".to_string(),
+    }
+}
+
+fn file_fallback_colors(mime: &str, extension: Option<&str>) -> (u32, u32) {
+    if mime.starts_with("image/") || extension.is_some_and(is_image_extension) {
+        (0x7c2d12, 0xffedd5)
+    } else if mime.starts_with("audio/") || extension.is_some_and(is_audio_extension) {
+        (0x6d28d9, 0xf3e8ff)
+    } else if mime.starts_with("video/") || extension.is_some_and(is_video_extension) {
+        (0x9f1239, 0xffe4e6)
+    } else if extension.is_some_and(is_archive_extension) {
+        (0x713f12, 0xfef3c7)
+    } else if mime == "application/pdf" || extension == Some("pdf") {
+        (0x991b1b, 0xfee2e2)
+    } else {
+        (0x374151, 0xf3f4f6)
+    }
+}
+
+fn icon_theme_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) {
+        push_unique_icon_path(&mut roots, PathBuf::from(home).join(".local/share/icons"));
+    }
+    if let Some(data_home) = env::var_os("XDG_DATA_HOME").filter(|path| !path.is_empty()) {
+        push_unique_icon_path(&mut roots, PathBuf::from(data_home).join("icons"));
+    }
+
+    let data_dirs =
+        env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string());
+    for dir in data_dirs.split(':').filter(|dir| !dir.is_empty()) {
+        push_unique_icon_path(&mut roots, Path::new(dir).join("icons"));
+    }
+    push_unique_icon_path(&mut roots, PathBuf::from("/usr/share/icons"));
+    roots
+}
+
+fn icon_theme_names() -> Vec<String> {
+    let mut themes = Vec::new();
+    for theme in configured_icon_theme_names() {
+        push_unique_icon_theme(&mut themes, &theme);
+    }
+    if env::var_os("KDE_FULL_SESSION").is_some()
+        || env::var("XDG_CURRENT_DESKTOP")
+            .map(|desktop| desktop.to_ascii_lowercase().contains("kde"))
+            .unwrap_or(false)
+    {
+        push_unique_icon_theme(&mut themes, "breeze");
+        push_unique_icon_theme(&mut themes, "breeze-dark");
+    }
+    for key in [
+        "GTK_THEME",
+        "ICON_THEME",
+        "DESKTOP_SESSION",
+        "XDG_CURRENT_DESKTOP",
+    ] {
+        if let Ok(value) = env::var(key) {
+            for part in value.split([':', ';']) {
+                let theme = part.trim();
+                if !theme.is_empty() {
+                    push_unique_icon_theme(&mut themes, theme);
+                }
             }
         }
-        FileIconKey::Extension(extension) if extension.len() <= 3 => FileIconSnapshot {
-            marker: extension.to_ascii_uppercase(),
-            fg: 0x374151,
-            bg: 0xf3f4f6,
-        },
-        FileIconKey::Extension(_) | FileIconKey::File => FileIconSnapshot {
-            marker: "FILE".to_string(),
-            fg: 0x475569,
-            bg: 0xf1f5f9,
-        },
+    }
+    for fallback in [
+        "breeze",
+        "breeze-dark",
+        "Papirus",
+        "Papirus-Dark",
+        "Papirus-Light",
+        "Adwaita",
+        "hicolor",
+    ] {
+        push_unique_icon_theme(&mut themes, fallback);
+    }
+    themes
+}
+
+fn configured_icon_theme_names() -> Vec<String> {
+    let mut themes = Vec::new();
+    for path in icon_theme_config_paths() {
+        let Ok(contents) = fs::read_to_string(path) else {
+            continue;
+        };
+        for theme in parse_configured_icon_theme_names(&contents) {
+            push_unique_icon_theme(&mut themes, &theme);
+        }
+    }
+    themes
+}
+
+fn icon_theme_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(config_home) = env::var_os("XDG_CONFIG_HOME").filter(|path| !path.is_empty()) {
+        let config_home = PathBuf::from(config_home);
+        push_unique_icon_path(&mut paths, config_home.join("kdeglobals"));
+        push_unique_icon_path(&mut paths, config_home.join("gtk-4.0/settings.ini"));
+        push_unique_icon_path(&mut paths, config_home.join("gtk-3.0/settings.ini"));
+        push_unique_icon_path(&mut paths, config_home.join("gtkrc-2.0"));
+    }
+    if let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) {
+        let home = PathBuf::from(home);
+        let config_home = home.join(".config");
+        push_unique_icon_path(&mut paths, config_home.join("kdeglobals"));
+        push_unique_icon_path(&mut paths, config_home.join("gtk-4.0/settings.ini"));
+        push_unique_icon_path(&mut paths, config_home.join("gtk-3.0/settings.ini"));
+        push_unique_icon_path(&mut paths, config_home.join("gtkrc-2.0"));
+        push_unique_icon_path(&mut paths, home.join(".gtkrc-2.0"));
+    }
+    paths
+}
+
+fn parse_configured_icon_theme_names(contents: &str) -> Vec<String> {
+    let mut themes = Vec::new();
+    let mut in_icons_section = false;
+    let mut in_icon_theme_section = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            let section = &line[1..line.len() - 1];
+            in_icons_section = section.eq_ignore_ascii_case("Icons");
+            in_icon_theme_section = section.eq_ignore_ascii_case("Icon Theme");
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.eq_ignore_ascii_case("gtk-icon-theme-name")
+            || (in_icons_section && key.eq_ignore_ascii_case("Theme"))
+            || (in_icon_theme_section && key.eq_ignore_ascii_case("Name"))
+        {
+            let theme = value.trim().trim_matches('"');
+            if !theme.is_empty() {
+                push_unique_icon_theme(&mut themes, theme);
+            }
+        }
+    }
+    themes
+}
+
+fn parse_icon_theme_inherits(contents: &str) -> Vec<String> {
+    let mut themes = Vec::new();
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "Inherits" {
+            continue;
+        }
+        for theme in value
+            .split(',')
+            .map(str::trim)
+            .filter(|theme| !theme.is_empty())
+        {
+            push_unique_icon_theme(&mut themes, theme);
+        }
+    }
+    themes
+}
+
+fn find_icon_in_theme(theme_root: &Path, icon_name: &str, desired_size: u16) -> Option<PathBuf> {
+    const CATEGORIES: &[&str] = &[
+        "places",
+        "mimetypes",
+        "apps",
+        "actions",
+        "devices",
+        "status",
+    ];
+    if !theme_root.is_dir() {
+        return None;
+    }
+    if let Some(path) = find_icon_direct(theme_root, icon_name) {
+        return Some(path);
+    }
+    for size in preferred_icon_size_dirs(desired_size) {
+        for category in CATEGORIES {
+            for base in [
+                theme_root.join(&size).join(category),
+                theme_root.join(category).join(&size),
+            ] {
+                if let Some(path) = find_icon_direct(&base, icon_name) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    for category in CATEGORIES {
+        if let Some(path) = find_icon_direct(&theme_root.join(category), icon_name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn preferred_icon_size_dirs(desired_size: u16) -> Vec<String> {
+    let mut dirs = Vec::new();
+    let fixed_sizes = [256u16, 128, 96, 64, 48, 32, 24, 22, 16];
+    let desired = desired_size.max(16);
+    let mut ordered = fixed_sizes.into_iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|size| size.abs_diff(desired));
+    for size in ordered {
+        push_icon_size_dir(&mut dirs, format!("{size}x{size}"));
+        push_icon_size_dir(&mut dirs, size.to_string());
+    }
+    push_icon_size_dir(&mut dirs, "scalable".to_string());
+    push_icon_size_dir(&mut dirs, "symbolic".to_string());
+    dirs
+}
+
+fn push_icon_size_dir(dirs: &mut Vec<String>, value: String) {
+    if !dirs.iter().any(|existing| existing == &value) {
+        dirs.push(value);
+    }
+}
+
+fn find_icon_direct(root: &Path, icon_name: &str) -> Option<PathBuf> {
+    ["png", "svg", "webp", "jpg", "jpeg", "bmp", "gif", "ico"]
+        .into_iter()
+        .map(|extension| root.join(format!("{icon_name}.{extension}")))
+        .find(|path| is_renderable_icon_file(path))
+}
+
+fn is_renderable_icon_file(path: &Path) -> bool {
+    if !path.is_file()
+        || fs::metadata(path)
+            .map(|metadata| metadata.len() == 0)
+            .unwrap_or(true)
+    {
+        return false;
+    }
+
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("png" | "svg" | "webp" | "jpg" | "jpeg" | "bmp" | "gif" | "ico")
+    )
+}
+
+fn push_unique_icon_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+fn push_unique_icon_theme(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
     }
 }
 
@@ -1226,30 +1969,6 @@ fn compact_layout_for_model_view(
 ) -> CompactLayout {
     let item_count = filtered.map_or_else(|| model.len(), fika_core::FilteredModel::len);
     let options = ui::file_grid::compact_layout_options(view, 0.0);
-    let rows_per_column = CompactLayout::rows_per_column_for_options(options);
-    let metrics = match filtered {
-        Some(filtered) => cache.metrics_for_filtered_model(
-            model,
-            filtered,
-            source_revision,
-            rows_per_column,
-            options,
-        ),
-        None => cache.metrics_for_model(model, rows_per_column, options),
-    };
-    let layout = CompactLayout::new_with_column_metrics(item_count, options, metrics);
-
-    if layout
-        .horizontal_scroll_bar(
-            ui::file_grid::SCROLLBAR_THICKNESS,
-            ui::file_grid::SCROLLBAR_MIN_HANDLE_WIDTH,
-        )
-        .is_none()
-    {
-        return layout;
-    }
-
-    let options = ui::file_grid::compact_layout_options(view, ui::file_grid::SCROLLBAR_THICKNESS);
     let rows_per_column = CompactLayout::rows_per_column_for_options(options);
     let metrics = match filtered {
         Some(filtered) => cache.metrics_for_filtered_model(
@@ -1682,6 +2401,7 @@ fn update_loading_state_for_event(
     pane: Option<&fika_core::PaneState>,
     event: &DirectoryListerEvent,
     now: Instant,
+    previous_summary: Option<String>,
 ) {
     match event {
         DirectoryListerEvent::LoadingStarted {
@@ -1701,6 +2421,7 @@ fn update_loading_state_for_event(
                             request_serial: *request_serial,
                         },
                         started_at: now,
+                        previous_summary,
                     },
                 );
             } else {
@@ -1810,6 +2531,7 @@ pub(crate) struct FikaApp {
     hidden_place_sections: BTreeSet<&'static str>,
     user_places_path: PathBuf,
     file_icons: FileIconCache,
+    mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
     loading_panes: HashMap<PaneId, LoadingPaneState>,
@@ -1817,20 +2539,26 @@ pub(crate) struct FikaApp {
     scroll_drag_trackers: HashMap<PaneId, ScrollDragTracker>,
     smooth_scroll_tick_running: bool,
     viewport_origins: HashMap<PaneId, ViewPoint>,
+    pane_split_ratios: HashMap<PaneId, f32>,
+    pane_row_width: f32,
     visible_item_slots: HashMap<PaneId, VisibleItemSlotPool>,
     compact_column_widths: HashMap<PaneId, CompactColumnWidthCache>,
     pane_filters: HashMap<PaneId, PaneFilterState>,
     filtered_models: HashMap<PaneId, FilteredModelCacheEntry>,
     operations: OperationQueue,
     clipboard: Option<ClipboardState>,
+    active_item_drag: Option<ActiveItemDrag>,
+    item_drop_target: Option<ItemDropTarget>,
     rename_draft: Option<RenameDraft>,
     location_draft: Option<LocationDraft>,
+    location_edit_metrics: HashMap<PaneId, LocationEditMetrics>,
     place_draft: Option<PlaceDraft>,
     chooser: Option<ChooserState>,
     listing_worker: ListingWorker,
     _keystroke_subscription: Option<gpui::Subscription>,
     pub(crate) rubber_band: Option<RubberBandState>,
     context_menu: Option<ContextMenuState>,
+    context_menu_tree_hovered: bool,
     context_submenu_hide_generation: u64,
     properties_dialog: Option<PropertiesDialogState>,
     pane_statuses: HashMap<PaneId, String>,
@@ -1865,6 +2593,7 @@ impl FikaApp {
             hidden_place_sections: BTreeSet::new(),
             user_places_path,
             file_icons: FileIconCache::default(),
+            mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
@@ -1872,20 +2601,26 @@ impl FikaApp {
             scroll_drag_trackers: HashMap::new(),
             smooth_scroll_tick_running: false,
             viewport_origins: HashMap::new(),
+            pane_split_ratios: HashMap::new(),
+            pane_row_width: 0.0,
             visible_item_slots: HashMap::new(),
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),
             operations: OperationQueue::new(),
             clipboard: None,
+            active_item_drag: None,
+            item_drop_target: None,
             rename_draft: None,
             location_draft: None,
+            location_edit_metrics: HashMap::new(),
             place_draft: None,
             chooser,
             listing_worker: ListingWorker::new(),
             _keystroke_subscription: None,
             rubber_band: None,
             context_menu: None,
+            context_menu_tree_hovered: false,
             context_submenu_hide_generation: 0,
             properties_dialog: None,
             pane_statuses: HashMap::new(),
@@ -2166,6 +2901,11 @@ impl FikaApp {
             .into_iter()
             .filter_map(|pane_id| {
                 let filtered_model = self.filtered_model_for_pane(pane_id);
+                let split_ratio = self.pane_split_ratio(pane_id);
+                let projected_viewport_width = self.projected_pane_width(pane_id);
+                let item_drop_target = self.item_drop_target.clone();
+                let pane_drop_target =
+                    item_drop_target_matches_pane(item_drop_target.as_ref(), pane_id);
                 let (
                     breadcrumbs,
                     location_draft,
@@ -2174,9 +2914,16 @@ impl FikaApp {
                     view,
                     rubber_band,
                     focused,
+                    selection_count,
                     visible_data,
                 ) = {
                     let pane = self.panes.pane(pane_id)?;
+                    let mut view = pane.view.clone();
+                    if let Some(projected_viewport_width) = projected_viewport_width
+                        && projected_viewport_width > 0.0
+                    {
+                        view.viewport_width = projected_viewport_width.floor();
+                    }
                     let filtered = filtered_model.as_ref().map(|(model, _)| model);
                     let source_revision =
                         filtered_model.as_ref().map_or(0, |(_, revision)| *revision);
@@ -2188,21 +2935,22 @@ impl FikaApp {
                         .location_draft
                         .as_ref()
                         .filter(|draft| draft.pane_id == pane_id)
-                        .map(|draft| draft.value.clone());
+                        .map(LocationDraft::snapshot);
                     let layout = match filtered {
                         Some(filtered) => compact_layout_for_filtered_model(
                             self.compact_column_widths.entry(pane_id).or_default(),
                             &pane.model,
                             filtered,
                             source_revision,
-                            &pane.view,
+                            &view,
                         ),
                         None => compact_layout_for_model(
                             self.compact_column_widths.entry(pane_id).or_default(),
                             &pane.model,
-                            &pane.view,
+                            &view,
                         ),
                     };
+                    let selection_count = pane.selection.count_for_model(pane.model.len());
                     let visible_data = layout
                         .visible_items()
                         .filter_map(|visible_item| {
@@ -2215,6 +2963,11 @@ impl FikaApp {
                                 Some(compact_text_width(entry.name_width_units)),
                             )?;
                             let selected = pane.selection.is_selected(entry.id);
+                            let drop_target = item_drop_target_matches_directory(
+                                item_drop_target.as_ref(),
+                                pane_id,
+                                &path,
+                            );
                             let draft_name = rename_draft
                                 .filter(|draft| draft.original_path == path)
                                 .map(|draft| draft.draft_name.clone());
@@ -2225,7 +2978,9 @@ impl FikaApp {
                                 entry.is_dir,
                                 entry.name.clone(),
                                 format_entry_kind_label(entry),
+                                entry.mime_type.clone(),
                                 selected,
+                                drop_target,
                                 draft_name,
                             ))
                         })
@@ -2240,18 +2995,19 @@ impl FikaApp {
                                 .map_or_else(|| pane.model.len(), fika_core::FilteredModel::len),
                         ),
                         layout,
-                        pane.view.clone(),
+                        view.clone(),
                         self.rubber_band.and_then(|band| {
                             (band.pane_id == pane_id)
-                                .then(|| band.visible_rect(pane.view.scroll_x, pane.view.scroll_y))
+                                .then(|| band.visible_rect(view.scroll_x, view.scroll_y))
                         }),
                         focused_pane == Some(pane_id),
+                        selection_count,
                         visible_data,
                     )
                 };
                 let visible_ids = visible_data
                     .iter()
-                    .map(|(_, item_id, _, _, _, _, _, _)| *item_id);
+                    .map(|(_, item_id, _, _, _, _, _, _, _, _)| *item_id);
                 let slot_by_item_id = self
                     .visible_item_slots
                     .entry(pane_id)
@@ -2267,11 +3023,18 @@ impl FikaApp {
                             is_dir,
                             name,
                             kind_label,
+                            mime_type,
                             selected,
+                            drop_target,
                             draft_name,
                         )| {
                             let slot_id = slot_by_item_id.get(&item_id).copied()?;
-                            let icon = self.file_icons.icon_for(&path, is_dir);
+                            let icon = self.file_icons.icon_for(
+                                &path,
+                                is_dir,
+                                mime_type,
+                                layout.icon_rect.width,
+                            );
                             Some(VisibleItemSnapshot {
                                 slot_id,
                                 layout,
@@ -2281,6 +3044,8 @@ impl FikaApp {
                                 kind_label,
                                 icon,
                                 selected,
+                                selection_count,
+                                drop_target,
                                 draft_name,
                             })
                         },
@@ -2289,6 +3054,7 @@ impl FikaApp {
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 Some(PaneSnapshot {
                     id: pane_id,
+                    split_ratio,
                     breadcrumbs,
                     location_draft,
                     filter_bar,
@@ -2297,6 +3063,7 @@ impl FikaApp {
                     visible_items,
                     view,
                     rubber_band,
+                    drop_target: pane_drop_target,
                     focused,
                 })
             })
@@ -2335,11 +3102,15 @@ impl FikaApp {
         let operation_progress = self
             .operation_progress_snapshot_for_pane(pane_id, now)
             .or_else(|| self.loading_progress_snapshot(pane_id, now));
+        let item_summary = self
+            .loading_panes
+            .get(&pane_id)
+            .and_then(|loading| loading.previous_summary.clone())
+            .or_else(|| self.status_summary_for_pane(pane_id))
+            .unwrap_or_else(|| "0 folders, 0 files".to_string());
         StatusBarSnapshot {
             message,
-            item_summary: self
-                .status_summary_for_pane(pane_id)
-                .unwrap_or_else(|| "0 folders, 0 files".to_string()),
+            item_summary,
             free_space: self.space_info.snapshot_for(&path),
             zoom_level,
             zoom_icon_size,
@@ -2571,7 +3342,7 @@ impl FikaApp {
         let Some(pane_id) = self.panes.focused() else {
             return;
         };
-        self.context_menu = Some(ContextMenuState {
+        self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::Place {
                 path: place.path,
@@ -2599,7 +3370,7 @@ impl FikaApp {
         let Some(pane_id) = self.panes.focused() else {
             return;
         };
-        self.context_menu = Some(ContextMenuState {
+        self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::PlaceSection { group },
             position: ViewPoint {
@@ -2614,7 +3385,7 @@ impl FikaApp {
         let Some(pane_id) = self.panes.focused() else {
             return;
         };
-        self.context_menu = Some(ContextMenuState {
+        self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::PlacesBlank {
                 has_hidden_places: !self.hidden_place_sections.is_empty()
@@ -2629,6 +3400,7 @@ impl FikaApp {
     }
 
     fn load_pane(&mut self, pane_id: PaneId, path: PathBuf) {
+        let previous_summary = self.status_summary_for_pane(pane_id);
         let url_changed = self
             .panes
             .pane(pane_id)
@@ -2636,24 +3408,25 @@ impl FikaApp {
         let Some(event) = self.panes.load(pane_id, path.clone()) else {
             return;
         };
-        self.clear_pane_transient_state(pane_id);
+        self.clear_pane_content_state(pane_id);
         if url_changed {
             self.clear_filter_query_for_url_change(pane_id);
         }
         let cached_events = self.schedule_listing(&event);
-        self.apply_event(event);
+        self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
         self.set_pane_status(pane_id, format!("Loading {}", path.display()));
     }
 
     fn reload_pane(&mut self, pane_id: PaneId) {
+        let previous_summary = self.status_summary_for_pane(pane_id);
         let Some(event) = self.panes.reload(pane_id) else {
             return;
         };
-        self.clear_pane_transient_state(pane_id);
+        self.clear_pane_content_state(pane_id);
         let cached_events = self.schedule_listing(&event);
-        self.apply_event(event);
+        self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
         if let Some(path) = self
@@ -2666,28 +3439,30 @@ impl FikaApp {
     }
 
     fn go_back(&mut self, pane_id: PaneId) {
+        let previous_summary = self.status_summary_for_pane(pane_id);
         let Some(event) = self.panes.go_back(pane_id) else {
             return;
         };
-        self.clear_pane_transient_state(pane_id);
+        self.clear_pane_content_state(pane_id);
         self.clear_filter_query_for_url_change(pane_id);
         let path = event.path().to_path_buf();
         let cached_events = self.schedule_listing(&event);
-        self.apply_event(event);
+        self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
         self.set_pane_status(pane_id, format!("Loading {}", path.display()));
     }
 
     fn go_forward(&mut self, pane_id: PaneId) {
+        let previous_summary = self.status_summary_for_pane(pane_id);
         let Some(event) = self.panes.go_forward(pane_id) else {
             return;
         };
-        self.clear_pane_transient_state(pane_id);
+        self.clear_pane_content_state(pane_id);
         self.clear_filter_query_for_url_change(pane_id);
         let path = event.path().to_path_buf();
         let cached_events = self.schedule_listing(&event);
-        self.apply_event(event);
+        self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
         self.start_watcher(pane_id);
         self.set_pane_status(pane_id, format!("Loading {}", path.display()));
@@ -2708,6 +3483,7 @@ impl FikaApp {
         let Some(new_id) = self.panes.split(pane_id) else {
             return;
         };
+        self.split_pane_ratio(pane_id, new_id);
         self.start_watcher(new_id);
         self.set_pane_status(new_id, format!("Split pane {}", new_id.0));
     }
@@ -2716,21 +3492,23 @@ impl FikaApp {
         let Some(new_id) = self.panes.split(source_pane_id) else {
             return;
         };
+        self.split_pane_ratio(source_pane_id, new_id);
         self.load_pane(new_id, path);
     }
 
     fn close_pane(&mut self, pane_id: PaneId) {
         if self.panes.close(pane_id) {
             self.listing_worker.cancel_pane(pane_id);
-            self.clear_pane_transient_state(pane_id);
+            self.clear_pane_lifecycle_state(pane_id);
             self.pane_filters.remove(&pane_id);
+            self.normalize_current_pane_ratios();
             if let Some(focused_pane) = self.panes.focused() {
                 self.set_pane_status(focused_pane, format!("Closed pane {}", pane_id.0));
             }
         }
     }
 
-    fn clear_pane_transient_state(&mut self, pane_id: PaneId) {
+    fn clear_pane_content_state(&mut self, pane_id: PaneId) {
         self.visible_item_slots.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
@@ -2740,6 +3518,27 @@ impl FikaApp {
         self.scroll_drag_trackers.remove(&pane_id);
         self.viewport_origins.remove(&pane_id);
         self.pane_statuses.remove(&pane_id);
+        self.location_edit_metrics.remove(&pane_id);
+        if self
+            .active_item_drag
+            .as_ref()
+            .is_some_and(|drag| drag.payload.source_pane == pane_id)
+        {
+            self.active_item_drag = None;
+        }
+        if self
+            .item_drop_target
+            .as_ref()
+            .is_some_and(|target| match target {
+                ItemDropTarget::Pane { pane_id: target_pane }
+                | ItemDropTarget::Directory {
+                    pane_id: target_pane,
+                    ..
+                } => *target_pane == pane_id,
+            })
+        {
+            self.item_drop_target = None;
+        }
         if self
             .rubber_band
             .as_ref()
@@ -2752,12 +3551,17 @@ impl FikaApp {
             .as_ref()
             .is_some_and(|menu| menu.pane_id == pane_id)
         {
-            self.context_menu = None;
+            self.dismiss_context_menu();
         }
         self.properties_dialog = None;
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
+    }
+
+    fn clear_pane_lifecycle_state(&mut self, pane_id: PaneId) {
+        self.clear_pane_content_state(pane_id);
+        self.pane_split_ratios.remove(&pane_id);
     }
 
     fn select_only(&mut self, pane_id: PaneId, path: PathBuf) {
@@ -3067,28 +3871,36 @@ impl FikaApp {
             return;
         };
         let bounds = ScrollBounds::new(max_scroll_x, max_scroll_y);
-        let delta = ViewPoint {
-            x: delta_x,
-            y: delta_y,
-        };
-        let target = bounds.clamp(ViewPoint {
-            x: current.x + delta.x,
-            y: current.y + delta.y,
+        let scrollbar_value = self
+            .smooth_scrolls
+            .get(&pane_id)
+            .and_then(|scroll| scroll.target_offset())
+            .unwrap_or(current);
+        let target_scrollbar_value = bounds.clamp(ViewPoint {
+            x: scrollbar_value.x + delta_x,
+            y: scrollbar_value.y + delta_y,
         });
-        if target == current && !self.smooth_scrolls.contains_key(&pane_id) {
+        if target_scrollbar_value == scrollbar_value {
             return;
         }
 
+        let distance = ViewPoint {
+            x: scrollbar_value.x - target_scrollbar_value.x,
+            y: scrollbar_value.y - target_scrollbar_value.y,
+        };
         let now = Instant::now();
         let scroll = self.smooth_scrolls.remove(&pane_id).map_or_else(
-            || SmoothScroll::to_target(current, target, bounds, now),
-            |scroll| scroll.retarget(current, delta, bounds, now),
+            || SmoothScroll::from_scroll_contents_by(current, distance, bounds, now),
+            |scroll| scroll.scroll_contents_by(current, distance, bounds, now),
         );
-        if scroll
-            .target_offset()
-            .is_some_and(|target| target == current)
+        let start = scroll.offset_at(now).offset;
+        if let Some(view) =
+            self.panes
+                .set_view_scroll(pane_id, start.x, start.y, bounds.max_x, bounds.max_y)
+            && ((view.scroll_x - current.x).abs() > f32::EPSILON
+                || (view.scroll_y - current.y).abs() > f32::EPSILON)
         {
-            return;
+            cx.notify();
         }
         self.scroll_drag_trackers.remove(&pane_id);
         self.smooth_scrolls.insert(pane_id, scroll);
@@ -3136,6 +3948,20 @@ impl FikaApp {
             self.smooth_scrolls.insert(pane_id, scroll);
             self.schedule_smooth_scroll_tick(cx);
         }
+    }
+
+    pub(crate) fn finish_scrollbar_drag_for_content_width(
+        &mut self,
+        pane_id: PaneId,
+        content_width: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let visible_width = self
+            .panes
+            .pane(pane_id)
+            .map(|pane| pane.view.viewport_width)
+            .unwrap_or_default();
+        self.finish_scrollbar_drag(pane_id, (content_width - visible_width).max(0.0), 0.0, cx);
     }
 
     fn advance_smooth_scrolls(&mut self, now: Instant) -> bool {
@@ -3213,6 +4039,152 @@ impl FikaApp {
         true
     }
 
+    fn pane_split_ratio(&self, pane_id: PaneId) -> f32 {
+        let pane_ids = self.panes.pane_ids();
+        let ratios = self.normalized_pane_ratios_for_ids(pane_ids);
+        pane_ids
+            .iter()
+            .position(|id| *id == pane_id)
+            .and_then(|index| ratios.get(index).copied())
+            .unwrap_or(1.0)
+    }
+
+    fn projected_pane_width(&self, pane_id: PaneId) -> Option<f32> {
+        if self.pane_row_width <= 0.0 {
+            return None;
+        }
+        let pane_ids = self.panes.pane_ids();
+        let index = pane_ids.iter().position(|id| *id == pane_id)?;
+        let ratios = self.normalized_pane_ratios_for_ids(pane_ids);
+        let available = pane_width_available(self.pane_row_width, pane_ids.len());
+        (available > 0.0).then(|| ratios[index] * available)
+    }
+
+    fn normalized_pane_ratios_for_ids(&self, pane_ids: &[PaneId]) -> Vec<f32> {
+        if pane_ids.is_empty() {
+            return Vec::new();
+        }
+        let equal = 1.0 / pane_ids.len() as f32;
+        normalize_pane_ratios(
+            pane_ids
+                .iter()
+                .map(|pane_id| self.pane_split_ratios.get(pane_id).copied().unwrap_or(equal))
+                .collect(),
+        )
+    }
+
+    fn store_pane_ratios(&mut self, pane_ids: &[PaneId], ratios: Vec<f32>) {
+        let normalized = normalize_pane_ratios(ratios);
+        self.pane_split_ratios
+            .retain(|pane_id, _| pane_ids.contains(pane_id));
+        for (pane_id, ratio) in pane_ids.iter().copied().zip(normalized) {
+            self.pane_split_ratios.insert(pane_id, ratio);
+        }
+    }
+
+    fn normalize_current_pane_ratios(&mut self) {
+        let pane_ids = self.panes.pane_ids().to_vec();
+        let ratios = self.normalized_pane_ratios_for_ids(&pane_ids);
+        self.store_pane_ratios(&pane_ids, ratios);
+    }
+
+    fn split_pane_ratio(&mut self, source: PaneId, new_id: PaneId) {
+        let pane_ids = self.panes.pane_ids().to_vec();
+        let old_ids = pane_ids
+            .iter()
+            .copied()
+            .filter(|pane_id| *pane_id != new_id)
+            .collect::<Vec<_>>();
+        let old_ratios = self.normalized_pane_ratios_for_ids(&old_ids);
+        let old_ratio_for = |pane_id: PaneId| {
+            old_ids
+                .iter()
+                .position(|old_id| *old_id == pane_id)
+                .and_then(|index| old_ratios.get(index).copied())
+                .unwrap_or(1.0)
+        };
+        let source_ratio = old_ratio_for(source);
+        let ratios = pane_ids
+            .iter()
+            .map(|pane_id| {
+                if *pane_id == source || *pane_id == new_id {
+                    source_ratio / 2.0
+                } else {
+                    old_ratio_for(*pane_id)
+                }
+            })
+            .collect::<Vec<_>>();
+        self.store_pane_ratios(&pane_ids, ratios);
+    }
+
+    fn set_pane_row_width(&mut self, width: f32) -> bool {
+        let width = width.max(0.0).round();
+        if width_value_eq(self.pane_row_width, width) {
+            return false;
+        }
+        self.pane_row_width = width;
+        true
+    }
+
+    fn reset_pane_pair_ratio(&mut self, left: PaneId, right: PaneId) -> bool {
+        let pane_ids = self.panes.pane_ids().to_vec();
+        let Some(left_index) = pane_ids.windows(2).position(|pair| pair == [left, right]) else {
+            return false;
+        };
+        let mut ratios = self.normalized_pane_ratios_for_ids(&pane_ids);
+        let pair_ratio = ratios[left_index] + ratios[left_index + 1];
+        let next_ratio = pair_ratio / 2.0;
+        if split_ratio_eq(ratios[left_index], next_ratio)
+            && split_ratio_eq(ratios[left_index + 1], next_ratio)
+        {
+            return false;
+        }
+        ratios[left_index] = next_ratio;
+        ratios[left_index + 1] = next_ratio;
+        self.store_pane_ratios(&pane_ids, ratios);
+        true
+    }
+
+    fn resize_pane_pair_from_row_drag(
+        &mut self,
+        left: PaneId,
+        right: PaneId,
+        divider_x: f32,
+        row_x: f32,
+        row_width: f32,
+    ) -> bool {
+        let pane_ids = self.panes.pane_ids().to_vec();
+        let Some(left_index) = pane_ids.windows(2).position(|pair| pair == [left, right]) else {
+            return false;
+        };
+        let row_width = row_width.max(0.0).floor();
+        self.set_pane_row_width(row_width);
+        let available = pane_width_available(row_width, pane_ids.len());
+        if available <= 0.0 {
+            return false;
+        }
+        let mut ratios = self.normalized_pane_ratios_for_ids(&pane_ids);
+
+        let pair_start = row_x
+            + ratios[..left_index].iter().sum::<f32>() * available
+            + left_index as f32 * PANE_SPLITTER_WIDTH;
+        let pair_available = ((ratios[left_index] + ratios[left_index + 1]) * available).max(1.0);
+        let min_width = MIN_PANE_WIDTH.min(pair_available / 2.0);
+        let left_width = (divider_x - pair_start).clamp(min_width, pair_available - min_width);
+        let right_width = pair_available - left_width;
+        let left_ratio = left_width / available;
+        let right_ratio = right_width / available;
+        if split_ratio_eq(ratios[left_index], left_ratio)
+            && split_ratio_eq(ratios[left_index + 1], right_ratio)
+        {
+            return false;
+        }
+        ratios[left_index] = left_ratio;
+        ratios[left_index + 1] = right_ratio;
+        self.store_pane_ratios(&pane_ids, ratios);
+        true
+    }
+
     fn set_pane_viewport_bounds(
         &mut self,
         pane_id: PaneId,
@@ -3221,6 +4193,7 @@ impl FikaApp {
         max_scroll_x: f32,
         max_scroll_y: f32,
     ) -> bool {
+        let new_bounds = ScrollBounds::new(max_scroll_x, max_scroll_y);
         let changed = self
             .panes
             .set_viewport_bounds(
@@ -3231,7 +4204,11 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
-        if changed {
+        if self
+            .smooth_scrolls
+            .get(&pane_id)
+            .is_some_and(|scroll| !scroll.maximum_matches(new_bounds))
+        {
             self.smooth_scrolls.remove(&pane_id);
             self.scroll_drag_trackers.remove(&pane_id);
         }
@@ -3663,6 +4640,69 @@ impl FikaApp {
         fika_core::save_user_places(&self.user_places_path, &self.user_places())
     }
 
+    pub(crate) fn update_location_edit_metrics(
+        &mut self,
+        pane_id: PaneId,
+        value: String,
+        origin_x: f32,
+        scroll_x: f32,
+        visible_width: f32,
+        byte_positions: Vec<(usize, f32)>,
+    ) {
+        let Some(draft) = self
+            .location_draft
+            .as_mut()
+            .filter(|draft| draft.pane_id == pane_id && draft.value == value)
+        else {
+            self.location_edit_metrics.remove(&pane_id);
+            return;
+        };
+        draft.scroll_x = scroll_x.max(0.0);
+        self.location_edit_metrics.insert(
+            pane_id,
+            LocationEditMetrics {
+                value,
+                origin_x,
+                scroll_x,
+                visible_width,
+                byte_positions,
+            },
+        );
+    }
+
+    pub(crate) fn set_location_caret_from_window_x(&mut self, pane_id: PaneId, window_x: f32) {
+        self.panes.focus(pane_id);
+        self.dismiss_context_menu();
+        let Some(draft) = self
+            .location_draft
+            .as_mut()
+            .filter(|draft| draft.pane_id == pane_id)
+        else {
+            return;
+        };
+        let Some(metrics) = self
+            .location_edit_metrics
+            .get(&pane_id)
+            .filter(|metrics| metrics.value == draft.value)
+        else {
+            draft.move_to_end();
+            return;
+        };
+        let local_x =
+            (window_x - metrics.origin_x).clamp(0.0, metrics.visible_width) + metrics.scroll_x;
+        let caret = metrics
+            .byte_positions
+            .iter()
+            .min_by(|left, right| {
+                (left.1 - local_x)
+                    .abs()
+                    .total_cmp(&(right.1 - local_x).abs())
+            })
+            .map(|(index, _)| *index)
+            .unwrap_or(draft.value.len());
+        draft.set_caret(caret);
+    }
+
     pub(crate) fn start_location_edit(&mut self, pane_id: PaneId) {
         let Some(path) = self
             .panes
@@ -3675,10 +4715,7 @@ impl FikaApp {
         self.dismiss_context_menu();
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
-        self.location_draft = Some(LocationDraft {
-            pane_id,
-            value: path.display().to_string(),
-        });
+        self.location_draft = Some(LocationDraft::new(pane_id, path.display().to_string()));
         self.set_pane_status(pane_id, format!("Location {}", path.display()));
     }
 
@@ -3711,17 +4748,42 @@ impl FikaApp {
             }
             LocationInputAction::Commit => self.commit_location_draft(),
             LocationInputAction::Complete => self.complete_location_draft(),
+            LocationInputAction::MoveStart => {
+                if let Some(draft) = &mut self.location_draft {
+                    draft.move_to_start();
+                }
+            }
+            LocationInputAction::MoveEnd => {
+                if let Some(draft) = &mut self.location_draft {
+                    draft.move_to_end();
+                }
+            }
+            LocationInputAction::MoveBackward => {
+                if let Some(draft) = &mut self.location_draft {
+                    draft.move_backward();
+                }
+            }
+            LocationInputAction::MoveForward => {
+                if let Some(draft) = &mut self.location_draft {
+                    draft.move_forward();
+                }
+            }
             LocationInputAction::Backspace => {
                 if let Some(draft) = &mut self.location_draft {
-                    draft.value.pop();
+                    draft.delete_backward();
+                }
+            }
+            LocationInputAction::Delete => {
+                if let Some(draft) = &mut self.location_draft {
+                    draft.delete_forward();
                 }
             }
             LocationInputAction::Insert(text) => {
                 if let Some(draft) = &mut self.location_draft {
-                    draft.value.push_str(&text);
+                    draft.insert(&text);
                 }
             }
-            LocationInputAction::Ignore => return false,
+            LocationInputAction::Ignore => return true,
         }
         true
     }
@@ -3772,6 +4834,7 @@ impl FikaApp {
         };
         if let Some(active) = &mut self.location_draft {
             active.value = completed;
+            active.move_to_end();
         }
     }
 
@@ -4071,6 +5134,16 @@ impl FikaApp {
             self.set_pane_status(pane_id, "Nothing to paste");
             return;
         };
+        self.start_clipboard_transfer(pane_id, target_dir, clipboard, cx);
+    }
+
+    fn start_clipboard_transfer(
+        &mut self,
+        pane_id: PaneId,
+        target_dir: PathBuf,
+        clipboard: ClipboardState,
+        cx: &mut Context<Self>,
+    ) {
         if !target_dir.is_dir() {
             self.set_pane_status(
                 pane_id,
@@ -4098,7 +5171,7 @@ impl FikaApp {
                         })
                         .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_paste(result);
+                        app.finish_transfer(result);
                         cx.notify();
                     });
                 }
@@ -4107,12 +5180,171 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_paste(&mut self, result: PasteTaskResult) {
+    pub(crate) fn begin_item_drag(&mut self, payload: ItemDragPayload) {
+        let paths = item_drag_paths(&self.panes, &payload);
+        self.active_item_drag = Some(ActiveItemDrag { payload, paths });
+        self.item_drop_target = None;
+    }
+
+    fn active_item_drag_paths(&self, payload: &ItemDragPayload) -> Option<Vec<PathBuf>> {
+        self.active_item_drag
+            .as_ref()
+            .filter(|drag| drag.payload == *payload)
+            .map(|drag| drag.paths.clone())
+    }
+
+    fn clear_item_drag(&mut self, payload: &ItemDragPayload) {
+        if self
+            .active_item_drag
+            .as_ref()
+            .is_some_and(|drag| drag.payload == *payload)
+        {
+            self.active_item_drag = None;
+            self.item_drop_target = None;
+        }
+    }
+
+    pub(crate) fn set_item_drag_drop_target_for_pane(&mut self, pane_id: PaneId) -> bool {
+        let target = Some(ItemDropTarget::Pane { pane_id });
+        if self.item_drop_target == target {
+            return false;
+        }
+        self.item_drop_target = target;
+        true
+    }
+
+    pub(crate) fn set_item_drag_drop_target_for_directory(
+        &mut self,
+        pane_id: PaneId,
+        path: PathBuf,
+    ) -> bool {
+        let target = Some(ItemDropTarget::Directory { pane_id, path });
+        if self.item_drop_target == target {
+            return false;
+        }
+        self.item_drop_target = target;
+        true
+    }
+
+    fn clear_item_drop_target(&mut self) -> bool {
+        let had_target = self.item_drop_target.is_some();
+        self.item_drop_target = None;
+        had_target
+    }
+
+    pub(crate) fn drop_item_drag_to_pane(
+        &mut self,
+        target_pane: PaneId,
+        payload: ItemDragPayload,
+        mode: FileTransferMode,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target_dir) = self
+            .panes
+            .pane(target_pane)
+            .map(|pane| pane.current_dir.clone())
+        else {
+            return;
+        };
+        self.drop_item_drag_to_directory(target_pane, payload, target_dir, mode, cx);
+    }
+
+    pub(crate) fn drop_item_drag_to_directory(
+        &mut self,
+        target_pane: PaneId,
+        payload: ItemDragPayload,
+        target_dir: PathBuf,
+        mode: FileTransferMode,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chooser.is_some() {
+            self.clear_item_drag(&payload);
+            self.clear_item_drop_target();
+            return;
+        }
+        self.panes.focus(target_pane);
+        self.finish_rubber_band(target_pane);
+        self.dismiss_context_menu();
+        self.clear_item_drop_target();
+
+        if self.operation_pending {
+            self.clear_item_drag(&payload);
+            self.set_pane_status(target_pane, "File operation already running");
+            return;
+        }
+
+        let Some(paths) = self.active_item_drag_paths(&payload) else {
+            self.clear_item_drag(&payload);
+            self.set_pane_status(target_pane, "No active item drag");
+            return;
+        };
+        self.clear_item_drag(&payload);
+        if paths.is_empty() {
+            self.set_pane_status(target_pane, "No dragged items");
+            return;
+        }
+        if let Some(reason) = item_drop_reject_reason(&paths, &target_dir) {
+            self.set_pane_status(target_pane, reason);
+            return;
+        }
+
+        self.start_file_transfer(target_pane, target_dir, mode, paths, cx);
+    }
+
+    fn start_file_transfer(
+        &mut self,
+        pane_id: PaneId,
+        target_dir: PathBuf,
+        mode: FileTransferMode,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if !target_dir.is_dir() {
+            self.set_pane_status(
+                pane_id,
+                format!("Cannot drop into {}", target_dir.display()),
+            );
+            return;
+        }
+
+        let progress_label = mode.progress_label(paths.len());
+        self.begin_pane_operation(pane_id, progress_label.clone());
+        let (cancel, progress) = self.start_transfer_progress(pane_id, progress_label);
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_spawn(async move {
+                            transfer_paths_result(
+                                pane_id,
+                                target_dir,
+                                mode,
+                                paths,
+                                mode.label(),
+                                false,
+                                Some(cancel),
+                                Some(progress),
+                            )
+                        })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.finish_transfer(result);
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_transfer(&mut self, result: TransferTaskResult) {
         self.clear_operation_progress();
-        let PasteTaskResult {
+        let TransferTaskResult {
             pane_id,
             mode,
             label,
+            clear_clipboard,
             success_count,
             failure_count,
             affected_dirs,
@@ -4143,7 +5375,7 @@ impl FikaApp {
             if let Some(path) = created_selection {
                 let _ = self.panes.select_only(pane_id, path);
             }
-            if mode == ClipboardMode::Cut && has_transfer_items {
+            if clear_clipboard && has_transfer_items {
                 self.clipboard = None;
                 let _ = self.panes.clear_selection(pane_id);
             }
@@ -4434,7 +5666,7 @@ impl FikaApp {
 
     fn show_blank_context_menu(&mut self, pane_id: PaneId, position: ViewPoint) {
         let (trash_view, trash_has_items) = self.trash_view_state(pane_id);
-        self.context_menu = Some(ContextMenuState {
+        self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::Blank {
                 trash_view,
@@ -4460,11 +5692,18 @@ impl FikaApp {
         let selection_count = self.panes.selected_count(pane_id).unwrap_or(1).max(1);
         let trash_view = self.trash_view_state(pane_id).0;
         let trash_can_restore = trash_view && file_ops::trash_metadata(&path).is_ok();
+        let mime_type = (!is_dir)
+            .then(|| self.mime_type_for_pane_path(pane_id, &path))
+            .flatten();
+        let open_with_apps = mime_type
+            .as_deref()
+            .map(|mime| self.mime_applications.applications_for_mime(mime))
+            .unwrap_or_default();
         let menu_position = ViewPoint {
             x: position.x.as_f32(),
             y: position.y.as_f32(),
         };
-        self.context_menu = Some(ContextMenuState {
+        self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::Item {
                 path,
@@ -4472,10 +5711,18 @@ impl FikaApp {
                 selection_count,
                 trash_view,
                 trash_can_restore,
+                mime_type,
+                open_with_apps,
             },
             position: menu_position,
             active_submenu: None,
         });
+    }
+
+    fn mime_type_for_pane_path(&self, pane_id: PaneId, path: &Path) -> Option<Arc<str>> {
+        let pane = self.panes.pane(pane_id)?;
+        let index = pane.model.index_of_path(path)?;
+        pane.model.get(index)?.mime_type.clone()
     }
 
     fn trash_view_state(&self, pane_id: PaneId) -> (bool, bool) {
@@ -4491,17 +5738,38 @@ impl FikaApp {
 
     fn dismiss_context_menu(&mut self) {
         self.context_menu = None;
+        self.context_menu_tree_hovered = false;
+        self.context_submenu_hide_generation = self.context_submenu_hide_generation.wrapping_add(1);
+    }
+
+    fn set_context_menu(&mut self, menu: ContextMenuState) {
+        self.context_menu = Some(menu);
+        self.context_menu_tree_hovered = true;
         self.context_submenu_hide_generation = self.context_submenu_hide_generation.wrapping_add(1);
     }
 
     fn open_context_submenu(&mut self, submenu: ContextMenuSubmenu, parent_index: usize) {
         self.context_submenu_hide_generation = self.context_submenu_hide_generation.wrapping_add(1);
+        self.context_menu_tree_hovered = true;
         if let Some(menu) = self.context_menu.as_mut() {
             menu.active_submenu = Some(ContextMenuOpenSubmenu {
                 submenu,
                 parent_index,
             });
         }
+    }
+
+    fn set_context_menu_tree_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) -> bool {
+        if self.context_menu_tree_hovered == hovered {
+            return false;
+        }
+        self.context_menu_tree_hovered = hovered;
+        if hovered {
+            self.cancel_context_submenu_hide();
+        } else {
+            self.schedule_context_submenu_hide(cx);
+        }
+        true
     }
 
     fn cancel_context_submenu_hide(&mut self) {
@@ -4635,9 +5903,17 @@ impl FikaApp {
                 self.select_only(menu.pane_id, path.clone());
                 self.set_pane_status(
                     menu.pane_id,
-                    format!("Open with is not implemented for {}", path.display()),
+                    format!("Open With menu unavailable for {}", path.display()),
                 );
             }
+            (
+                ContextMenuAction::OpenWithApplication { desktop_id },
+                ContextMenuTarget::Item {
+                    path,
+                    is_dir: false,
+                    ..
+                },
+            ) => self.open_with_application(menu.pane_id, &desktop_id, path, cx),
             (ContextMenuAction::Open, ContextMenuTarget::Place { path, .. }) => {
                 self.open_place(path);
             }
@@ -4774,6 +6050,8 @@ impl FikaApp {
             }
             (
                 ContextMenuAction::SortBySubmenu
+                | ContextMenuAction::OpenWithSubmenu
+                | ContextMenuAction::OtherApplication
                 | ContextMenuAction::ViewModeSubmenu
                 | ContextMenuAction::ViewIcons
                 | ContextMenuAction::ViewDetails,
@@ -4809,7 +6087,87 @@ impl FikaApp {
             | (ContextMenuAction::Rename, ContextMenuTarget::Place { .. })
             | (ContextMenuAction::RestoreFromTrash, _)
             | (ContextMenuAction::DeletePermanently, _)
-            | (ContextMenuAction::EmptyTrash, _) => {}
+            | (ContextMenuAction::EmptyTrash, _)
+            | (ContextMenuAction::OpenWithApplication { .. }, _) => {}
+        }
+    }
+
+    fn open_with_launch_plan(
+        &self,
+        desktop_id: &str,
+        path: &Path,
+    ) -> Result<DesktopLaunchPlan, String> {
+        let Some(application) = self.mime_applications.application(desktop_id) else {
+            return Err(format!("Application not found: {desktop_id}"));
+        };
+        application
+            .launch_plan(&[path.to_path_buf()])
+            .ok_or_else(|| format!("Cannot build Open With command for {}", application.name))
+    }
+
+    fn open_with_application(
+        &mut self,
+        pane_id: PaneId,
+        desktop_id: &str,
+        path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        if self.operation_pending {
+            self.set_pane_status(pane_id, "File operation already running");
+            return;
+        }
+        let plan = match self.open_with_launch_plan(desktop_id, &path) {
+            Ok(plan) => plan,
+            Err(message) => {
+                self.set_pane_status(pane_id, message);
+                return;
+            }
+        };
+        let app_name = plan.app_name.clone();
+        let _ = self.panes.select_only(pane_id, path.clone());
+        self.begin_pane_operation(
+            pane_id,
+            format!("Opening {} with {}", path.display(), app_name),
+        );
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = launch_with_systemd_user(plan).await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.finish_open_with_application(OpenWithLaunchResult {
+                            pane_id,
+                            path,
+                            app_name,
+                            result,
+                        });
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_open_with_application(&mut self, result: OpenWithLaunchResult) {
+        match result.result {
+            Ok(launch) => self.finish_pane_operation(
+                result.pane_id,
+                format!(
+                    "Opened {} with {} via {} systemd unit(s)",
+                    result.path.display(),
+                    result.app_name,
+                    launch.units.len()
+                ),
+            ),
+            Err(err) => self.finish_pane_operation(
+                result.pane_id,
+                format!(
+                    "Cannot open {} with {}: {err}",
+                    result.path.display(),
+                    result.app_name
+                ),
+            ),
         }
     }
 
@@ -4925,7 +6283,15 @@ impl FikaApp {
     }
 
     fn apply_event(&mut self, event: DirectoryListerEvent) {
-        self.update_loading_state(&event);
+        self.apply_event_with_previous_summary(event, None);
+    }
+
+    fn apply_event_with_previous_summary(
+        &mut self,
+        event: DirectoryListerEvent,
+        previous_summary: Option<String>,
+    ) {
+        self.update_loading_state(&event, previous_summary);
         if let DirectoryListerEvent::CurrentDirectoryRemoved { pane_id, path, .. } = &event {
             self.listing_worker.remove_cached_directory(path);
             let still_current = self.panes.pane(*pane_id).is_some_and(|pane| {
@@ -4958,12 +6324,22 @@ impl FikaApp {
         }
     }
 
-    fn update_loading_state(&mut self, event: &DirectoryListerEvent) {
+    fn update_loading_state(
+        &mut self,
+        event: &DirectoryListerEvent,
+        previous_summary: Option<String>,
+    ) {
+        let previous_summary = previous_summary.or_else(|| {
+            matches!(event, DirectoryListerEvent::LoadingStarted { .. })
+                .then(|| self.status_summary_for_pane(event.pane_id()))
+                .flatten()
+        });
         update_loading_state_for_event(
             &mut self.loading_panes,
             self.panes.pane(event.pane_id()),
             event,
             Instant::now(),
+            previous_summary,
         );
     }
 
@@ -5034,6 +6410,48 @@ impl FikaApp {
     }
 }
 
+fn pane_splitter(left: PaneId, right: PaneId, cx: &mut Context<FikaApp>) -> Stateful<Div> {
+    div()
+        .id(format!("pane-splitter-{}-{}", left.0, right.0))
+        .relative()
+        .flex_none()
+        .w(px(PANE_SPLITTER_WIDTH))
+        .h_full()
+        .bg(rgb(0xc8ced6))
+        .child(
+            div()
+                .id(format!("pane-splitter-hitbox-{}-{}", left.0, right.0))
+                .absolute()
+                .top(px(0.0))
+                .bottom(px(0.0))
+                .left(px((PANE_SPLITTER_WIDTH - PANE_SPLITTER_HITBOX_WIDTH) / 2.0))
+                .w(px(PANE_SPLITTER_HITBOX_WIDTH))
+                .cursor_col_resize()
+                .block_mouse_except_scroll()
+                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                    if event.click_count() >= 2 && this.reset_pane_pair_ratio(left, right) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                }))
+                .on_drag(PaneSplitterDrag { left, right }, |_, _, _, cx| {
+                    cx.new(|_| Empty)
+                }),
+        )
+        .hover(|splitter| splitter.bg(rgb(0x2f6fed)))
+}
+
+fn pane_row_width_from_child_bounds(bounds: &[Bounds<gpui::Pixels>]) -> Option<f32> {
+    let first = bounds.first()?;
+    let mut left = first.left();
+    let mut right = first.right();
+    for bound in bounds.iter().skip(1) {
+        left = left.min(bound.left());
+        right = right.max(bound.right());
+    }
+    Some((right - left).as_f32().max(0.0))
+}
+
 impl Render for FikaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title = self
@@ -5042,6 +6460,7 @@ impl Render for FikaApp {
             .map(|chooser| chooser.title.as_str())
             .unwrap_or("Fika");
         window.set_window_title(title);
+        let viewport_size = window.viewport_size();
         let places = self.place_snapshots();
         let snapshots = self.snapshots(cx);
         let file_grid_mode =
@@ -5066,23 +6485,29 @@ impl Render for FikaApp {
             };
             format!("{} - {} {}", chooser.accept_label, count, target)
         });
-        let pane_elements = snapshots
-            .into_iter()
-            .map(|snapshot| {
-                ui::pane::pane_view(
-                    ui::pane::PaneProps {
-                        snapshot,
-                        file_grid_mode,
-                    },
-                    cx,
-                )
-            })
+        let pane_ids = snapshots
+            .iter()
+            .map(|snapshot| snapshot.id)
             .collect::<Vec<_>>();
+        let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
+        for (index, snapshot) in snapshots.into_iter().enumerate() {
+            let left = snapshot.id;
+            pane_elements.push(ui::pane::pane_view(
+                ui::pane::PaneProps {
+                    snapshot,
+                    file_grid_mode,
+                },
+                cx,
+            ));
+            if let Some(right) = pane_ids.get(index + 1).copied() {
+                pane_elements.push(pane_splitter(left, right, cx));
+            }
+        }
         let context_menu = self.context_menu.clone();
         let properties_dialog = self.properties_dialog.clone();
         let place_draft = self.place_draft.clone();
         let clipboard_available = self.clipboard.is_some();
-        let viewport_size = window.viewport_size();
+        let app = cx.weak_entity();
         div()
             .relative()
             .size_full()
@@ -5128,16 +6553,63 @@ impl Render for FikaApp {
                     .flex()
                     .flex_row()
                     .flex_1()
+                    .min_w_0()
                     .overflow_hidden()
                     .child(ui::places::places_sidebar(places, cx))
                     .child(
                         div()
                             .flex()
-                            .flex_row()
-                            .gap_2()
                             .p_2()
                             .flex_1()
-                            .children(pane_elements),
+                            .min_w_0()
+                            .min_h_0()
+                            .max_w_full()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .on_children_prepainted(move |bounds, _window, cx| {
+                                        let Some(width) = pane_row_width_from_child_bounds(&bounds)
+                                        else {
+                                            return;
+                                        };
+                                        let _ = app.update(cx, |this, cx| {
+                                            if this.set_pane_row_width(width) {
+                                                cx.notify();
+                                            }
+                                        });
+                                    })
+                                    .id("pane-row")
+                                    .flex()
+                                    .flex_row()
+                                    .size_full()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .on_drag_move::<PaneSplitterDrag>(cx.listener(
+                                        move |this,
+                                              event: &gpui::DragMoveEvent<PaneSplitterDrag>,
+                                              _window,
+                                              cx| {
+                                            let drag = *event.drag(cx);
+                                            if this.resize_pane_pair_from_row_drag(
+                                                drag.left,
+                                                drag.right,
+                                                event.event.position.x.as_f32(),
+                                                event.bounds.origin.x.as_f32(),
+                                                event.bounds.size.width.as_f32(),
+                                            ) {
+                                                cx.notify();
+                                            }
+                                            cx.stop_propagation();
+                                        },
+                                    ))
+                                    .on_drop::<PaneSplitterDrag>(cx.listener(
+                                        |_this, _drag: &PaneSplitterDrag, _window, cx| {
+                                            cx.stop_propagation();
+                                        },
+                                    ))
+                                    .children(pane_elements),
+                            ),
                     ),
             )
             .when_some(context_menu, |root, menu| {
@@ -5166,22 +6638,20 @@ fn context_menu_overlay(
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let actions = context_menu_actions(&menu.target, clipboard_available);
-    let submenu = menu.active_submenu.map(|open| {
-        let actions = context_submenu_actions(open.submenu);
-        let submenu_height =
-            CONTEXT_MENU_VERTICAL_PADDING * 2.0 + actions.len() as f32 * CONTEXT_MENU_ROW_HEIGHT;
-        let opens_right = menu.position.x + CONTEXT_MENU_WIDTH * 2.0 <= viewport_width;
-        let x = if opens_right {
-            menu.position.x + CONTEXT_MENU_WIDTH - 1.0
-        } else {
-            (menu.position.x - CONTEXT_MENU_WIDTH + 1.0).max(0.0)
-        };
-        let y = (menu.position.y
-            + CONTEXT_MENU_VERTICAL_PADDING
-            + open.parent_index as f32 * CONTEXT_MENU_ROW_HEIGHT)
-            .min((viewport_height - submenu_height).max(0.0));
-        (open, actions, x, y)
-    });
+    let submenu = menu
+        .active_submenu
+        .map(|open| (open, context_submenu_actions(open.submenu, &menu.target)));
+    let layout = context_menu_overlay_layout(
+        menu.position,
+        actions.len(),
+        menu.active_submenu,
+        submenu
+            .as_ref()
+            .map(|(_, actions)| actions.len())
+            .unwrap_or_default(),
+        viewport_width,
+        viewport_height,
+    );
     div()
         .id("context-menu-layer")
         .absolute()
@@ -5200,13 +6670,26 @@ fn context_menu_overlay(
                 cx.notify();
             }),
         )
+        .on_mouse_move(
+            cx.listener(move |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                let point = ViewPoint {
+                    x: event.position.x.as_f32(),
+                    y: event.position.y.as_f32(),
+                };
+                if this.set_context_menu_tree_hovered(layout.contains(point), cx) {
+                    cx.notify();
+                }
+            }),
+        )
         .child(
             div()
                 .id(format!("context-menu-{}", menu.pane_id.0))
                 .absolute()
-                .left(px(menu.position.x))
-                .top(px(menu.position.y))
-                .w(px(CONTEXT_MENU_WIDTH))
+                .left(px(layout.root.x))
+                .top(px(layout.root.y))
+                .w(px(layout.root.width))
+                .max_h(px(layout.root.max_height))
+                .overflow_y_scroll()
                 .py_1()
                 .rounded_md()
                 .border_1()
@@ -5219,13 +6702,86 @@ fn context_menu_overlay(
                 .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
                     cx.stop_propagation();
                 })
+                .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                    if *hovered {
+                        this.cancel_context_submenu_hide();
+                        cx.notify();
+                    }
+                }))
                 .children(actions.into_iter().enumerate().map(|(index, action)| {
                     context_menu_row(action, index, ContextMenuRowScope::Root, cx)
                 })),
         )
-        .when_some(submenu, |layer, (open, actions, x, y)| {
-            layer.child(context_submenu_overlay(open, actions, x, y, cx))
-        })
+        .when_some(
+            submenu.zip(layout.submenu),
+            |layer, ((open, actions), rect)| {
+                layer.child(context_submenu_overlay(open, actions, rect, cx))
+            },
+        )
+}
+
+fn context_menu_overlay_layout(
+    position: ViewPoint,
+    action_count: usize,
+    active_submenu: Option<ContextMenuOpenSubmenu>,
+    submenu_count: usize,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> ContextMenuOverlayLayout {
+    let root_width = context_menu_width_for_viewport(viewport_width);
+    let root_height = context_menu_height(action_count);
+    let root_max_height = context_menu_max_height_for_viewport(viewport_height).min(root_height);
+    let root = ContextMenuOverlayRect {
+        x: clamp_menu_axis(position.x, root_width, viewport_width),
+        y: clamp_menu_axis(position.y, root_max_height, viewport_height),
+        width: root_width,
+        max_height: root_max_height,
+    };
+    let submenu = active_submenu.map(|open| {
+        let submenu_width = context_menu_width_for_viewport(viewport_width);
+        let submenu_height = context_menu_height(submenu_count);
+        let submenu_max_height =
+            context_menu_max_height_for_viewport(viewport_height).min(submenu_height);
+        let right_x = root.x + root.width - 1.0;
+        let left_x = root.x - submenu_width + 1.0;
+        let right_edge_limit = (viewport_width - CONTEXT_MENU_VIEWPORT_MARGIN).max(0.0);
+        let x = if right_x + submenu_width <= right_edge_limit {
+            right_x
+        } else {
+            left_x
+        };
+        let parent_y = root.y
+            + CONTEXT_MENU_VERTICAL_PADDING
+            + open.parent_index as f32 * CONTEXT_MENU_ROW_HEIGHT;
+        ContextMenuOverlayRect {
+            x: clamp_menu_axis(x, submenu_width, viewport_width),
+            y: clamp_menu_axis(parent_y, submenu_max_height, viewport_height),
+            width: submenu_width,
+            max_height: submenu_max_height,
+        }
+    });
+
+    ContextMenuOverlayLayout { root, submenu }
+}
+
+fn context_menu_height(row_count: usize) -> f32 {
+    CONTEXT_MENU_VERTICAL_PADDING * 2.0 + row_count as f32 * CONTEXT_MENU_ROW_HEIGHT
+}
+
+fn context_menu_width_for_viewport(viewport_width: f32) -> f32 {
+    (viewport_width - CONTEXT_MENU_VIEWPORT_MARGIN * 2.0)
+        .max(1.0)
+        .min(CONTEXT_MENU_WIDTH)
+}
+
+fn context_menu_max_height_for_viewport(viewport_height: f32) -> f32 {
+    (viewport_height - CONTEXT_MENU_VIEWPORT_MARGIN * 2.0).max(1.0)
+}
+
+fn clamp_menu_axis(position: f32, size: f32, viewport_size: f32) -> f32 {
+    let min = CONTEXT_MENU_VIEWPORT_MARGIN.min((viewport_size - size).max(0.0));
+    let max = (viewport_size - size - CONTEXT_MENU_VIEWPORT_MARGIN).max(min);
+    position.clamp(min, max)
 }
 
 fn context_menu_actions(
@@ -5239,7 +6795,7 @@ fn context_menu_actions(
         } => vec![
             ContextMenuItem {
                 action: ContextMenuAction::EmptyTrash,
-                label: "Empty Trash",
+                label: "Empty Trash".to_string(),
                 enabled: *trash_has_items,
                 submenu: None,
             },
@@ -5263,7 +6819,7 @@ fn context_menu_actions(
             context_menu_item(ContextMenuAction::CreateFolder, "New Folder"),
             ContextMenuItem {
                 action: ContextMenuAction::Paste,
-                label: "Paste",
+                label: "Paste".to_string(),
                 enabled: clipboard_available,
                 submenu: None,
             },
@@ -5285,7 +6841,7 @@ fn context_menu_actions(
             let mut actions = vec![context_menu_item(ContextMenuAction::AddPlace, "Add Entry")];
             actions.push(ContextMenuItem {
                 action: ContextMenuAction::ShowHiddenPlaces,
-                label: "Show Hidden Places",
+                label: "Show Hidden Places".to_string(),
                 enabled: *has_hidden_places,
                 submenu: None,
             });
@@ -5306,7 +6862,7 @@ fn context_menu_actions(
             context_menu_item(ContextMenuAction::OpenInNewPane, "Open in New Pane"),
             ContextMenuItem {
                 action: ContextMenuAction::EmptyTrash,
-                label: "Empty Trash",
+                label: "Empty Trash".to_string(),
                 enabled: *trash_has_items,
                 submenu: None,
             },
@@ -5334,7 +6890,7 @@ fn context_menu_actions(
         } => vec![
             ContextMenuItem {
                 action: ContextMenuAction::RestoreFromTrash,
-                label: "Restore to Former Location",
+                label: "Restore to Former Location".to_string(),
                 enabled: *trash_can_restore,
                 submenu: None,
             },
@@ -5353,8 +6909,15 @@ fn context_menu_actions(
             context_menu_item(ContextMenuAction::Properties, "Properties"),
         ],
         ContextMenuTarget::Item { is_dir, .. } => {
-            let open_label = if *is_dir { "Open" } else { "Open With" };
-            let mut actions = vec![context_menu_item(ContextMenuAction::Open, open_label)];
+            let mut actions = if *is_dir {
+                vec![context_menu_item(ContextMenuAction::Open, "Open")]
+            } else {
+                vec![context_menu_submenu_item(
+                    ContextMenuAction::OpenWithSubmenu,
+                    "Open With",
+                    ContextMenuSubmenu::OpenWith,
+                )]
+            };
             if *is_dir {
                 actions.push(context_menu_item(
                     ContextMenuAction::OpenInNewPane,
@@ -5369,7 +6932,7 @@ fn context_menu_actions(
             if *is_dir {
                 actions.push(ContextMenuItem {
                     action: ContextMenuAction::Paste,
-                    label: "Paste",
+                    label: "Paste".to_string(),
                     enabled: clipboard_available,
                     submenu: None,
                 });
@@ -5384,10 +6947,10 @@ fn context_menu_actions(
     }
 }
 
-fn context_menu_item(action: ContextMenuAction, label: &'static str) -> ContextMenuItem {
+fn context_menu_item(action: ContextMenuAction, label: impl Into<String>) -> ContextMenuItem {
     ContextMenuItem {
         action,
-        label,
+        label: label.into(),
         enabled: true,
         submenu: None,
     }
@@ -5395,12 +6958,12 @@ fn context_menu_item(action: ContextMenuAction, label: &'static str) -> ContextM
 
 fn context_menu_item_enabled(
     action: ContextMenuAction,
-    label: &'static str,
+    label: impl Into<String>,
     enabled: bool,
 ) -> ContextMenuItem {
     ContextMenuItem {
         action,
-        label,
+        label: label.into(),
         enabled,
         submenu: None,
     }
@@ -5408,21 +6971,24 @@ fn context_menu_item_enabled(
 
 fn context_menu_submenu_item(
     action: ContextMenuAction,
-    label: &'static str,
+    label: impl Into<String>,
     submenu: ContextMenuSubmenu,
 ) -> ContextMenuItem {
     ContextMenuItem {
         action,
-        label,
+        label: label.into(),
         enabled: true,
         submenu: Some(submenu),
     }
 }
 
-fn disabled_context_menu_item(action: ContextMenuAction, label: &'static str) -> ContextMenuItem {
+fn disabled_context_menu_item(
+    action: ContextMenuAction,
+    label: impl Into<String>,
+) -> ContextMenuItem {
     ContextMenuItem {
         action,
-        label,
+        label: label.into(),
         enabled: false,
         submenu: None,
     }
@@ -5445,8 +7011,17 @@ fn sort_order_label(order: SortOrder) -> &'static str {
     }
 }
 
-fn context_submenu_actions(submenu: ContextMenuSubmenu) -> Vec<ContextMenuItem> {
+fn context_submenu_actions(
+    submenu: ContextMenuSubmenu,
+    target: &ContextMenuTarget,
+) -> Vec<ContextMenuItem> {
     match submenu {
+        ContextMenuSubmenu::OpenWith => match target {
+            ContextMenuTarget::Item { open_with_apps, .. } => {
+                open_with_menu_actions(open_with_apps)
+            }
+            _ => Vec::new(),
+        },
         ContextMenuSubmenu::SortBy => vec![
             context_menu_item(ContextMenuAction::SortByName, "Name"),
             context_menu_item(ContextMenuAction::SortByModified, "Modified"),
@@ -5473,11 +7048,35 @@ fn context_submenu_actions(submenu: ContextMenuSubmenu) -> Vec<ContextMenuItem> 
     }
 }
 
+fn open_with_menu_actions(apps: &[MimeApplication]) -> Vec<ContextMenuItem> {
+    let mut actions = if apps.is_empty() {
+        vec![disabled_context_menu_item(
+            ContextMenuAction::OpenWithSubmenu,
+            "No Applications",
+        )]
+    } else {
+        apps.iter()
+            .map(|app| {
+                context_menu_item(
+                    ContextMenuAction::OpenWithApplication {
+                        desktop_id: app.id.clone(),
+                    },
+                    app.name.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    actions.push(disabled_context_menu_item(
+        ContextMenuAction::OtherApplication,
+        "Other Application...",
+    ));
+    actions
+}
+
 fn context_submenu_overlay(
     open: ContextMenuOpenSubmenu,
     actions: Vec<ContextMenuItem>,
-    x: f32,
-    y: f32,
+    rect: ContextMenuOverlayRect,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     div()
@@ -5486,9 +7085,11 @@ fn context_submenu_overlay(
             open.submenu, open.parent_index
         ))
         .absolute()
-        .left(px(x))
-        .top(px(y))
-        .w(px(CONTEXT_MENU_WIDTH))
+        .left(px(rect.x))
+        .top(px(rect.y))
+        .w(px(rect.width))
+        .max_h(px(rect.max_height))
+        .overflow_y_scroll()
         .py_1()
         .rounded_md()
         .border_1()
@@ -5504,10 +7105,8 @@ fn context_submenu_overlay(
         .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
             if *hovered {
                 this.cancel_context_submenu_hide();
-            } else {
-                this.schedule_context_submenu_hide(cx);
+                cx.notify();
             }
-            cx.notify();
         }))
         .children(
             actions.into_iter().enumerate().map(|(index, item)| {
@@ -5522,8 +7121,9 @@ fn context_menu_row(
     scope: ContextMenuRowScope,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let action = item.action;
+    let action = item.action.clone();
     let submenu = item.submenu;
+    let click_action = action.clone();
     let mut row = div()
         .id(format!("context-menu-action-{action:?}"))
         .flex()
@@ -5545,7 +7145,7 @@ fn context_menu_row(
                     if let Some(submenu) = submenu {
                         this.open_context_submenu(submenu, index);
                     } else {
-                        this.run_context_menu_action(action, cx);
+                        this.run_context_menu_action(click_action.clone(), cx);
                     }
                     cx.stop_propagation();
                     cx.notify();
@@ -5560,9 +7160,6 @@ fn context_menu_row(
         row = row.on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
             if *hovered {
                 this.open_context_submenu(submenu, index);
-                cx.notify();
-            } else if scope == ContextMenuRowScope::Root {
-                this.schedule_context_submenu_hide(cx);
                 cx.notify();
             }
         }));
@@ -6017,7 +7614,12 @@ enum LocationInputAction {
     Cancel,
     Commit,
     Complete,
+    MoveStart,
+    MoveEnd,
+    MoveBackward,
+    MoveForward,
     Backspace,
+    Delete,
     Insert(String),
     Ignore,
 }
@@ -6028,7 +7630,12 @@ fn location_input_action(keystroke: &gpui::Keystroke) -> LocationInputAction {
             "escape" => LocationInputAction::Cancel,
             "enter" => LocationInputAction::Commit,
             "tab" => LocationInputAction::Complete,
+            "home" => LocationInputAction::MoveStart,
+            "end" => LocationInputAction::MoveEnd,
+            "left" => LocationInputAction::MoveBackward,
+            "right" => LocationInputAction::MoveForward,
             "backspace" => LocationInputAction::Backspace,
+            "delete" => LocationInputAction::Delete,
             _ => location_text_input_action(keystroke),
         };
     }
@@ -6190,10 +7797,11 @@ struct TrashViewOperationResult {
 }
 
 #[derive(Clone, Debug)]
-struct PasteTaskResult {
+struct TransferTaskResult {
     pane_id: PaneId,
-    mode: ClipboardMode,
+    mode: FileTransferMode,
     label: &'static str,
+    clear_clipboard: bool,
     success_count: usize,
     failure_count: usize,
     affected_dirs: Vec<PathBuf>,
@@ -6215,6 +7823,14 @@ struct CreateItemResult {
     kind: CreatedItemKind,
     affected_dirs: Vec<PathBuf>,
     result: Result<PathBuf, String>,
+}
+
+#[derive(Clone, Debug)]
+struct OpenWithLaunchResult {
+    pane_id: PaneId,
+    path: PathBuf,
+    app_name: String,
+    result: Result<SystemdLaunchResult, LauncherError>,
 }
 
 fn rename_item_result(
@@ -6281,13 +7897,14 @@ fn paste_clipboard_result(
     clipboard: ClipboardState,
     cancel: Option<Arc<AtomicBool>>,
     progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
-) -> PasteTaskResult {
-    let mode = clipboard.mode;
+) -> TransferTaskResult {
+    let clipboard_mode = clipboard.mode;
+    let mode = clipboard_mode.transfer_mode();
     let label = clipboard.action_label();
     let mut success_count = 0;
     let mut failure_count = 0;
     let mut affected_dirs = Vec::new();
-    let mut undo_items = Vec::new();
+    let undo_items = Vec::new();
     let mut created_items = Vec::new();
 
     if let Some(text) = clipboard.text.as_deref() {
@@ -6306,10 +7923,11 @@ fn paste_clipboard_result(
                 failure_count = 1;
             }
         }
-        return PasteTaskResult {
+        return TransferTaskResult {
             pane_id,
             mode,
             label,
+            clear_clipboard: false,
             success_count,
             failure_count,
             affected_dirs,
@@ -6318,9 +7936,35 @@ fn paste_clipboard_result(
         };
     }
 
-    let operation = mode.operation();
+    transfer_paths_result(
+        pane_id,
+        target_dir,
+        mode,
+        clipboard.paths,
+        label,
+        clipboard_mode == ClipboardMode::Cut,
+        cancel,
+        progress,
+    )
+}
 
-    for source in clipboard.paths {
+fn transfer_paths_result(
+    pane_id: PaneId,
+    target_dir: PathBuf,
+    mode: FileTransferMode,
+    paths: Vec<PathBuf>,
+    label: &'static str,
+    clear_clipboard: bool,
+    cancel: Option<Arc<AtomicBool>>,
+    progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
+) -> TransferTaskResult {
+    let operation = mode.operation();
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut affected_dirs = Vec::new();
+    let mut undo_items = Vec::new();
+
+    for source in paths {
         if cancel
             .as_ref()
             .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
@@ -6346,7 +7990,7 @@ fn paste_clipboard_result(
             Ok(outcome) => {
                 success_count += 1;
                 push_unique_path(&mut affected_dirs, target_dir.clone());
-                if mode == ClipboardMode::Cut
+                if mode == FileTransferMode::Move
                     && let Some(parent) = source
                         .parent()
                         .filter(|parent| !parent.as_os_str().is_empty())
@@ -6366,15 +8010,70 @@ fn paste_clipboard_result(
         }
     }
 
-    PasteTaskResult {
+    TransferTaskResult {
         pane_id,
         mode,
         label,
+        clear_clipboard,
         success_count,
         failure_count,
         affected_dirs,
         undo_items,
-        created_items,
+        created_items: Vec::new(),
+    }
+}
+
+fn item_drag_paths(controller: &PaneController, payload: &ItemDragPayload) -> Vec<PathBuf> {
+    if payload.source_selected && controller.is_selected(payload.source_pane, &payload.source_path)
+    {
+        let selected_paths = controller
+            .selected_paths(payload.source_pane)
+            .unwrap_or_default();
+        if !selected_paths.is_empty() {
+            return selected_paths;
+        }
+    }
+    vec![payload.source_path.clone()]
+}
+
+fn item_drop_reject_reason(paths: &[PathBuf], target_dir: &Path) -> Option<String> {
+    if paths.is_empty() {
+        return Some("No dragged items".to_string());
+    }
+    if !target_dir.is_dir() {
+        return Some(format!("Cannot drop into {}", target_dir.display()));
+    }
+    if paths.iter().any(|path| same_drop_url(path, target_dir)) {
+        return Some("Cannot drop an item onto itself".to_string());
+    }
+    None
+}
+
+fn item_drop_target_matches_pane(target: Option<&ItemDropTarget>, pane_id: PaneId) -> bool {
+    matches!(target, Some(ItemDropTarget::Pane { pane_id: target_pane }) if *target_pane == pane_id)
+}
+
+fn item_drop_target_matches_directory(
+    target: Option<&ItemDropTarget>,
+    pane_id: PaneId,
+    path: &Path,
+) -> bool {
+    matches!(
+        target,
+        Some(ItemDropTarget::Directory {
+            pane_id: target_pane,
+            path: target_path,
+        }) if *target_pane == pane_id && target_path == path
+    )
+}
+
+fn same_drop_url(path: &Path, target_dir: &Path) -> bool {
+    if path == target_dir {
+        return true;
+    }
+    match (path.canonicalize(), target_dir.canonicalize()) {
+        (Ok(path), Ok(target_dir)) => path == target_dir,
+        _ => false,
     }
 }
 
@@ -7295,7 +8994,8 @@ mod tests {
 
     #[test]
     fn context_submenu_actions_enable_sort_but_keep_unimplemented_view_modes_disabled() {
-        let sort_actions = context_submenu_actions(ContextMenuSubmenu::SortBy)
+        let target = context_blank_target();
+        let sort_actions = context_submenu_actions(ContextMenuSubmenu::SortBy, &target)
             .into_iter()
             .map(|item| (item.action, item.enabled))
             .collect::<Vec<_>>();
@@ -7312,7 +9012,7 @@ mod tests {
             ]
         );
 
-        let trash_sort_actions = context_submenu_actions(ContextMenuSubmenu::TrashSortBy)
+        let trash_sort_actions = context_submenu_actions(ContextMenuSubmenu::TrashSortBy, &target)
             .into_iter()
             .map(|item| (item.action, item.enabled))
             .collect::<Vec<_>>();
@@ -7329,7 +9029,7 @@ mod tests {
             ]
         );
 
-        let view_actions = context_submenu_actions(ContextMenuSubmenu::ViewMode)
+        let view_actions = context_submenu_actions(ContextMenuSubmenu::ViewMode, &target)
             .into_iter()
             .map(|item| (item.action, item.enabled))
             .collect::<Vec<_>>();
@@ -7341,6 +9041,52 @@ mod tests {
                 (ContextMenuAction::ViewDetails, false),
             ]
         );
+    }
+
+    #[test]
+    fn context_menu_layout_clamps_root_inside_viewport() {
+        let layout =
+            context_menu_overlay_layout(ViewPoint { x: 295.0, y: 190.0 }, 8, None, 0, 320.0, 220.0);
+
+        assert_eq!(layout.root.width, 196.0);
+        assert_eq!(layout.root.max_height, 204.0);
+        assert_eq!(layout.root.x, 116.0);
+        assert_eq!(layout.root.y, 8.0);
+        assert!(layout.submenu.is_none());
+    }
+
+    #[test]
+    fn context_menu_layout_shrinks_for_narrow_viewports() {
+        let layout =
+            context_menu_overlay_layout(ViewPoint { x: 0.0, y: 0.0 }, 2, None, 0, 80.0, 100.0);
+
+        assert_eq!(layout.root.width, 64.0);
+        assert_eq!(layout.root.x, 8.0);
+        assert_eq!(layout.root.max_height, 64.0);
+    }
+
+    #[test]
+    fn context_menu_layout_flips_submenu_left_at_right_edge() {
+        let layout = context_menu_overlay_layout(
+            ViewPoint { x: 170.0, y: 20.0 },
+            7,
+            Some(ContextMenuOpenSubmenu {
+                submenu: ContextMenuSubmenu::SortBy,
+                parent_index: 2,
+            }),
+            7,
+            420.0,
+            400.0,
+        );
+
+        let submenu = layout.submenu.unwrap();
+        assert!(submenu.x < layout.root.x);
+        assert_eq!(submenu.x, 8.0);
+        assert_eq!(
+            submenu.y,
+            layout.root.y + CONTEXT_MENU_VERTICAL_PADDING + 2.0 * CONTEXT_MENU_ROW_HEIGHT
+        );
+        assert!(submenu.x + submenu.width <= 420.0 - CONTEXT_MENU_VIEWPORT_MARGIN);
     }
 
     #[test]
@@ -7492,6 +9238,53 @@ mod tests {
     }
 
     #[test]
+    fn context_menu_actions_offer_open_with_submenu_for_single_files() {
+        let mut file_target = context_item_target("/tmp/readme.txt", false, 1);
+        if let ContextMenuTarget::Item {
+            mime_type,
+            open_with_apps,
+            ..
+        } = &mut file_target
+        {
+            *mime_type = Some(Arc::from("text/plain"));
+            open_with_apps.push(MimeApplication {
+                id: "viewer.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/viewer.desktop"),
+                name: "Viewer".to_string(),
+                exec: "viewer %f".to_string(),
+                icon: None,
+                is_default: true,
+            });
+        }
+
+        let actions = context_menu_actions(&file_target, false);
+        assert_eq!(
+            actions.first().map(|item| (&item.action, item.submenu)),
+            Some((
+                &ContextMenuAction::OpenWithSubmenu,
+                Some(ContextMenuSubmenu::OpenWith)
+            ))
+        );
+
+        let submenu = context_submenu_actions(ContextMenuSubmenu::OpenWith, &file_target);
+        assert_eq!(
+            submenu.first().map(|item| &item.action),
+            Some(&ContextMenuAction::OpenWithApplication {
+                desktop_id: "viewer.desktop".to_string()
+            })
+        );
+        assert_eq!(
+            submenu.first().map(|item| item.label.as_str()),
+            Some("Viewer")
+        );
+        assert!(
+            submenu
+                .iter()
+                .any(|item| item.action == ContextMenuAction::OtherApplication && !item.enabled)
+        );
+    }
+
+    #[test]
     fn context_menu_actions_offer_paste_only_for_single_directory_targets() {
         let dir_target = context_item_target("/tmp", true, 1);
         let file_target = context_item_target("/tmp/readme.txt", false, 1);
@@ -7508,6 +9301,51 @@ mod tests {
                 .iter()
                 .any(|item| item.action == ContextMenuAction::Paste)
         );
+    }
+
+    #[test]
+    fn open_with_application_builds_systemd_launch_plan() {
+        let mut app = test_app_with_entries("/tmp/fika-open-with", &["note.txt"]);
+        app.mime_applications = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![test_desktop_application(
+                "viewer.desktop",
+                "Viewer",
+                "viewer %f",
+                &["text/plain"],
+            )],
+            &[],
+        );
+
+        let plan = app
+            .open_with_launch_plan("viewer.desktop", Path::new("/tmp/fika-open-with/note.txt"))
+            .unwrap();
+
+        assert_eq!(plan.app_name, "Viewer");
+        assert_eq!(plan.commands.len(), 1);
+        assert_eq!(plan.commands[0].program, "viewer");
+        assert_eq!(plan.commands[0].args, vec!["/tmp/fika-open-with/note.txt"]);
+    }
+
+    #[test]
+    fn open_with_application_finish_reports_systemd_result_to_pane() {
+        let mut app = test_app_with_entries("/tmp/fika-open-with-finish", &["note.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        app.begin_pane_operation(pane_id, "Opening");
+
+        app.finish_open_with_application(OpenWithLaunchResult {
+            pane_id,
+            path: PathBuf::from("/tmp/fika-open-with-finish/note.txt"),
+            app_name: "Viewer".to_string(),
+            result: Ok(SystemdLaunchResult {
+                units: vec!["fika-open-with-viewer-0.service".to_string()],
+            }),
+        });
+
+        assert_eq!(
+            app.status_message_for_pane(pane_id),
+            "Opened /tmp/fika-open-with-finish/note.txt with Viewer via 1 systemd unit(s)"
+        );
+        assert!(!app.operation_pending);
     }
 
     #[test]
@@ -7562,6 +9400,8 @@ mod tests {
             selection_count: 2,
             trash_view: true,
             trash_can_restore: true,
+            mime_type: None,
+            open_with_apps: Vec::new(),
         };
         let item_actions = context_menu_actions(&item, false)
             .into_iter()
@@ -8242,6 +10082,334 @@ mod tests {
     }
 
     #[test]
+    fn pane_ratios_are_owned_by_splitter_state() {
+        let mut app = test_app_with_entries("/tmp/fika-panes", &[]);
+        let first = app.panes.focused().unwrap();
+        assert!(app.set_pane_row_width(820.0));
+        let second = app.panes.split(first).unwrap();
+        app.split_pane_ratio(first, second);
+        let third = app.panes.split(second).unwrap();
+        app.split_pane_ratio(second, third);
+        let pane_ids = app.panes.pane_ids().to_vec();
+
+        let available = pane_width_available(820.0, 3);
+        assert!(split_ratio_eq(app.pane_split_ratio(pane_ids[0]), 0.5));
+        assert!(split_ratio_eq(app.pane_split_ratio(pane_ids[1]), 0.25));
+        assert!(split_ratio_eq(app.pane_split_ratio(pane_ids[2]), 0.25));
+        assert!(width_value_eq(
+            app.projected_pane_width(pane_ids[0]).unwrap(),
+            available / 2.0
+        ));
+        assert!(width_value_eq(
+            app.projected_pane_width(pane_ids[1]).unwrap()
+                + app.projected_pane_width(pane_ids[2]).unwrap(),
+            available / 2.0
+        ));
+    }
+
+    #[test]
+    fn pane_row_width_is_derived_from_actual_child_bounds() {
+        let bounds = vec![
+            Bounds::new(gpui::point(px(18.0), px(0.0)), size(px(120.0), px(10.0))),
+            Bounds::new(gpui::point(px(138.0), px(0.0)), size(px(1.0), px(10.0))),
+            Bounds::new(gpui::point(px(139.0), px(0.0)), size(px(180.0), px(10.0))),
+        ];
+
+        assert_eq!(pane_row_width_from_child_bounds(&bounds), Some(301.0));
+        assert_eq!(pane_row_width_from_child_bounds(&[]), None);
+    }
+
+    #[test]
+    fn pane_splitter_resize_updates_only_adjacent_widths() {
+        let mut app = test_app_with_entries("/tmp/fika-panes", &[]);
+        let first = app.panes.focused().unwrap();
+        assert!(app.set_pane_row_width(820.0));
+        let second = app.panes.split(first).unwrap();
+        app.split_pane_ratio(first, second);
+        let third = app.panes.split(second).unwrap();
+        app.split_pane_ratio(second, third);
+        let pane_ids = app.panes.pane_ids().to_vec();
+
+        let first_ratio = app.pane_split_ratio(pane_ids[0]);
+        let pair_ratio = app.pane_split_ratio(pane_ids[1]) + app.pane_split_ratio(pane_ids[2]);
+        assert!(app.resize_pane_pair_from_row_drag(pane_ids[1], pane_ids[2], 700.0, 10.0, 820.0));
+
+        assert!(split_ratio_eq(app.pane_split_ratio(pane_ids[0]), first_ratio));
+        assert!(app.pane_split_ratio(pane_ids[1]) > app.pane_split_ratio(pane_ids[2]));
+        assert!(split_ratio_eq(
+            app.pane_split_ratio(pane_ids[1]) + app.pane_split_ratio(pane_ids[2]),
+            pair_ratio
+        ));
+    }
+
+    #[test]
+    fn pane_content_clear_preserves_split_geometry() {
+        let mut app = test_app_with_entries("/tmp/fika-panes-clear", &[]);
+        let first = app.panes.focused().unwrap();
+        assert!(app.set_pane_row_width(720.0));
+        let second = app.panes.split(first).unwrap();
+        app.split_pane_ratio(first, second);
+        let first_ratio = app.pane_split_ratio(first);
+        let second_ratio = app.pane_split_ratio(second);
+
+        app.clear_pane_content_state(second);
+
+        assert!(split_ratio_eq(app.pane_split_ratio(first), first_ratio));
+        assert!(split_ratio_eq(app.pane_split_ratio(second), second_ratio));
+    }
+
+    #[test]
+    fn pane_load_preserves_split_geometry() {
+        let mut app = test_app_with_entries("/tmp/fika-panes-load-a", &["short"]);
+        let first = app.panes.focused().unwrap();
+        assert!(app.set_pane_row_width(720.0));
+        let second = app.panes.split(first).unwrap();
+        app.split_pane_ratio(first, second);
+        assert!(app.resize_pane_pair_from_row_drag(first, second, 420.0, 10.0, 720.0));
+        let ratios = app.pane_split_ratios.clone();
+
+        app.load_pane(second, PathBuf::from("/tmp/fika-panes-load-b"));
+
+        assert_eq!(app.pane_split_ratios, ratios);
+    }
+
+    #[test]
+    fn mime_icon_candidates_follow_dolphin_icon_then_generic_order() {
+        let mime = fika_core::MimeDatabase::from_maps(
+            HashMap::new(),
+            HashMap::from([("text/rust".to_string(), "text-x-rust".to_string())]),
+            HashMap::from([("text/rust".to_string(), "text-x-source".to_string())]),
+        );
+
+        assert_eq!(
+            mime_icon_candidates("text/rust", Some("rs"), &mime),
+            &[
+                "text-rust".to_string(),
+                "text-x-rust".to_string(),
+                "text-x-rs".to_string()
+            ]
+        );
+        assert_eq!(
+            mime_generic_icon_candidates("text/rust", &mime),
+            &["text-x-source".to_string()]
+        );
+    }
+
+    #[test]
+    fn mime_icon_candidates_use_generic_when_specific_theme_icon_is_missing() {
+        let root = test_dir("icon-theme-generic-fallback");
+        std::fs::create_dir_all(root.join("theme/48x48/mimetypes")).unwrap();
+        std::fs::write(
+            root.join("theme/48x48/mimetypes/text-x-source.svg"),
+            test_svg(),
+        )
+        .unwrap();
+        let mut resolver = IconThemeResolver {
+            roots: vec![root.clone()],
+            themes: vec!["theme".to_string()],
+            path_cache: HashMap::new(),
+        };
+        let mime = fika_core::MimeDatabase::from_maps(
+            HashMap::new(),
+            HashMap::from([("text/rust".to_string(), "text-x-rust".to_string())]),
+            HashMap::from([("text/rust".to_string(), "text-x-source".to_string())]),
+        );
+
+        let icon = file_icon_snapshot(
+            &FileIconKind::Mime {
+                mime: Arc::from("text/rust"),
+                extension: Some("rs".to_string()),
+            },
+            48,
+            &mut resolver,
+            &mime,
+        );
+
+        assert_eq!(icon.icon_name, "text-x-source");
+        assert_eq!(
+            icon.path,
+            Some(root.join("theme/48x48/mimetypes/text-x-source.svg"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preferred_icon_size_dirs_prioritize_nearest_size() {
+        let dirs = preferred_icon_size_dirs(40);
+
+        assert_eq!(dirs[0], "48x48");
+        assert_eq!(dirs[1], "48");
+        assert_eq!(dirs[2], "32x32");
+        assert!(dirs.iter().position(|dir| dir == "16x16").unwrap() > 4);
+        assert!(dirs.contains(&"scalable".to_string()));
+    }
+
+    #[test]
+    fn icon_theme_inherits_are_parsed_from_index_theme() {
+        assert_eq!(
+            parse_icon_theme_inherits(
+                "\
+[Icon Theme]\n\
+Name=Child\n\
+Inherits=parent-one, parent-two ,hicolor\n"
+            ),
+            vec![
+                "parent-one".to_string(),
+                "parent-two".to_string(),
+                "hicolor".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn configured_icon_themes_parse_kde_and_gtk_settings() {
+        assert_eq!(
+            parse_configured_icon_theme_names(
+                "\
+[Icons]\n\
+Theme=Papirus\n\
+\n\
+[Settings]\n\
+gtk-icon-theme-name=breeze\n"
+            ),
+            vec!["Papirus".to_string(), "breeze".to_string()]
+        );
+        assert_eq!(
+            parse_configured_icon_theme_names("gtk-icon-theme-name=\"Papirus-Dark\"\n"),
+            vec!["Papirus-Dark".to_string()]
+        );
+    }
+
+    #[test]
+    fn icon_theme_resolver_searches_inherited_themes() {
+        let root = test_dir("icon-theme-inherits");
+        std::fs::create_dir_all(root.join("child")).unwrap();
+        std::fs::create_dir_all(root.join("parent/48x48/mimetypes")).unwrap();
+        std::fs::write(root.join("child/index.theme"), "Inherits=parent\n").unwrap();
+        std::fs::write(
+            root.join("parent/48x48/mimetypes/text-rust.svg"),
+            test_svg(),
+        )
+        .unwrap();
+        let mut resolver = IconThemeResolver {
+            roots: vec![root.clone()],
+            themes: vec!["child".to_string()],
+            path_cache: HashMap::new(),
+        };
+
+        assert_eq!(
+            resolver.find("text-rust", 40),
+            Some(root.join("parent/48x48/mimetypes/text-rust.svg"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn find_icon_in_theme_supports_breeze_category_size_layout() {
+        let root = test_dir("icon-theme-breeze-layout");
+        std::fs::create_dir_all(root.join("mimetypes/32")).unwrap();
+        std::fs::write(root.join("mimetypes/32/text-rust.svg"), test_svg()).unwrap();
+
+        assert_eq!(
+            find_icon_in_theme(&root, "text-rust", 40),
+            Some(root.join("mimetypes/32/text-rust.svg"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn find_icon_in_theme_chooses_nearest_requested_size() {
+        let root = test_dir("icon-theme-size");
+        std::fs::create_dir_all(root.join("32x32/mimetypes")).unwrap();
+        std::fs::create_dir_all(root.join("48x48/mimetypes")).unwrap();
+        std::fs::write(root.join("32x32/mimetypes/text-rust.svg"), test_svg()).unwrap();
+        std::fs::write(root.join("48x48/mimetypes/text-rust.svg"), test_svg()).unwrap();
+
+        assert_eq!(
+            find_icon_in_theme(&root, "text-rust", 40),
+            Some(root.join("48x48/mimetypes/text-rust.svg"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_icon_snapshot_uses_unknown_theme_icon_before_text_marker() {
+        let root = test_dir("icon-theme-unknown");
+        std::fs::create_dir_all(root.join("theme/48x48/mimetypes")).unwrap();
+        std::fs::write(root.join("theme/48x48/mimetypes/unknown.svg"), test_svg()).unwrap();
+        let mut resolver = IconThemeResolver {
+            roots: vec![root.clone()],
+            themes: vec!["theme".to_string()],
+            path_cache: HashMap::new(),
+        };
+        let mime =
+            fika_core::MimeDatabase::from_maps(HashMap::new(), HashMap::new(), HashMap::new());
+
+        let icon = file_icon_snapshot(&FileIconKind::Directory, 48, &mut resolver, &mime);
+
+        assert_eq!(icon.icon_name, "unknown");
+        assert_eq!(
+            icon.path,
+            Some(root.join("theme/48x48/mimetypes/unknown.svg"))
+        );
+        assert_eq!(icon.fallback_marker, "DIR");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_icon_cache_is_keyed_by_kind_and_size() {
+        let root = test_dir("icon-cache");
+        std::fs::create_dir_all(root.join("theme/32x32/mimetypes")).unwrap();
+        std::fs::create_dir_all(root.join("theme/48x48/mimetypes")).unwrap();
+        std::fs::write(root.join("theme/32x32/mimetypes/text-rust.svg"), test_svg()).unwrap();
+        std::fs::write(root.join("theme/48x48/mimetypes/text-rust.svg"), test_svg()).unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root.clone()],
+                themes: vec!["theme".to_string()],
+                path_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
+
+        let small = cache.icon_for(
+            Path::new("lib.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            32.0,
+        );
+        let small_again = cache.icon_for(
+            Path::new("main.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            32.0,
+        );
+        let large = cache.icon_for(
+            Path::new("main.rs"),
+            false,
+            Some(Arc::from("text/rust")),
+            48.0,
+        );
+
+        assert_eq!(small, small_again);
+        assert_eq!(
+            small.path,
+            Some(root.join("theme/32x32/mimetypes/text-rust.svg"))
+        );
+        assert_eq!(
+            large.path,
+            Some(root.join("theme/48x48/mimetypes/text-rust.svg"))
+        );
+        assert_eq!(cache.cached.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn status_bar_zoom_track_maps_drag_position_to_level() {
         assert_eq!(
             ui::status_bar::zoom_level_for_track_x(
@@ -8382,8 +10550,28 @@ mod tests {
             LocationInputAction::Complete
         );
         assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("home").unwrap()),
+            LocationInputAction::MoveStart
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("end").unwrap()),
+            LocationInputAction::MoveEnd
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("left").unwrap()),
+            LocationInputAction::MoveBackward
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("right").unwrap()),
+            LocationInputAction::MoveForward
+        );
+        assert_eq!(
             location_input_action(&gpui::Keystroke::parse("backspace").unwrap()),
             LocationInputAction::Backspace
+        );
+        assert_eq!(
+            location_input_action(&gpui::Keystroke::parse("delete").unwrap()),
+            LocationInputAction::Delete
         );
         assert_eq!(
             location_input_action(&gpui::Keystroke::parse("/->/").unwrap()),
@@ -8397,6 +10585,51 @@ mod tests {
             location_input_action(&gpui::Keystroke::parse("secondary-l").unwrap()),
             LocationInputAction::Ignore
         );
+    }
+
+    #[test]
+    fn location_draft_edits_at_caret_and_preserves_utf8_boundaries() {
+        let mut draft = LocationDraft::new(PaneId(7), "/tmp/\u{76ee}\u{5f55}".to_string());
+
+        draft.move_backward();
+        draft.move_backward();
+        draft.insert("new-");
+
+        assert_eq!(draft.value, "/tmp/new-\u{76ee}\u{5f55}");
+        assert_eq!(draft.caret, "/tmp/new-".len());
+
+        draft.delete_forward();
+        assert_eq!(draft.value, "/tmp/new-\u{5f55}");
+        assert_eq!(draft.caret, "/tmp/new-".len());
+
+        draft.delete_backward();
+        assert_eq!(draft.value, "/tmp/new\u{5f55}");
+        assert_eq!(draft.caret, "/tmp/new".len());
+
+        draft.scroll_x = 40.0;
+        draft.move_to_start();
+        assert_eq!(draft.caret, 0);
+        assert_eq!(draft.scroll_x, 0.0);
+    }
+
+    #[test]
+    fn location_caret_click_uses_recorded_text_metrics() {
+        let mut app = test_app_with_entries("/tmp/fika-location-click", &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.location_draft = Some(LocationDraft::new(pane_id, "abcd".to_string()));
+        app.update_location_edit_metrics(
+            pane_id,
+            "abcd".to_string(),
+            100.0,
+            12.0,
+            80.0,
+            vec![(0, 0.0), (1, 8.0), (2, 16.0), (3, 24.0), (4, 32.0)],
+        );
+
+        app.set_location_caret_from_window_x(pane_id, 106.0);
+
+        assert_eq!(app.location_draft.as_ref().unwrap().caret, 2);
+        assert_eq!(app.location_draft.as_ref().unwrap().scroll_x, 12.0);
     }
 
     #[test]
@@ -8770,7 +11003,8 @@ mod tests {
 
         let destination = target_dir.join("note.txt");
         assert_eq!(result.pane_id, PaneId(7));
-        assert_eq!(result.mode, ClipboardMode::Copy);
+        assert_eq!(result.mode, FileTransferMode::Copy);
+        assert!(!result.clear_clipboard);
         assert_eq!(result.success_count, 1);
         assert_eq!(result.failure_count, 0);
         assert_eq!(result.affected_dirs, vec![target_dir.clone()]);
@@ -8803,7 +11037,8 @@ mod tests {
 
         let destination = temp.join("Pasted Text.txt");
         assert_eq!(result.pane_id, PaneId(15));
-        assert_eq!(result.mode, ClipboardMode::Copy);
+        assert_eq!(result.mode, FileTransferMode::Copy);
+        assert!(!result.clear_clipboard);
         assert_eq!(result.label, "Paste");
         assert_eq!(result.success_count, 1);
         assert_eq!(result.failure_count, 0);
@@ -8947,6 +11182,8 @@ mod tests {
         );
 
         let destination = target_dir.join("note.txt");
+        assert_eq!(result.mode, FileTransferMode::Move);
+        assert!(result.clear_clipboard);
         assert_eq!(result.success_count, 1);
         assert_eq!(result.failure_count, 0);
         assert_eq!(
@@ -8958,6 +11195,102 @@ mod tests {
         assert_eq!(result.undo_items[0].destination, destination.clone());
         assert_eq!(std::fs::read_to_string(destination).unwrap(), "move");
         assert!(!source_dir.join("note.txt").exists());
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn item_drag_paths_resolve_selection_only_when_source_item_is_selected() {
+        let temp = test_dir("item-drag-paths");
+        std::fs::create_dir_all(&temp).unwrap();
+        let mut controller = PaneController::new(temp.clone());
+        let pane_id = controller.focused().unwrap();
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            temp.clone(),
+            test_entries(&["alpha.txt", "beta.txt", "gamma.txt"]),
+        );
+        let alpha = temp.join("alpha.txt");
+        let beta = temp.join("beta.txt");
+        let gamma = temp.join("gamma.txt");
+
+        assert!(controller.select_only(pane_id, alpha.clone()));
+        assert_eq!(
+            controller.toggle_selection(pane_id, beta.clone()),
+            Some(true)
+        );
+
+        let selected_drag = ItemDragPayload {
+            source_pane: pane_id,
+            source_path: alpha.clone(),
+            source_selected: true,
+        };
+        assert_eq!(
+            item_drag_paths(&controller, &selected_drag),
+            vec![alpha.clone(), beta.clone()]
+        );
+
+        let unselected_drag = ItemDragPayload {
+            source_pane: pane_id,
+            source_path: gamma.clone(),
+            source_selected: false,
+        };
+        assert_eq!(item_drag_paths(&controller, &unselected_drag), vec![gamma]);
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn item_drop_rejects_drop_onto_same_directory() {
+        let temp = test_dir("item-drop-same-directory");
+        let source = temp.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+
+        assert_eq!(
+            item_drop_reject_reason(std::slice::from_ref(&source), &source),
+            Some("Cannot drop an item onto itself".to_string())
+        );
+
+        let target = temp.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        assert_eq!(item_drop_reject_reason(&[source], &target), None);
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn item_drop_target_tracks_pane_directory_and_lifecycle_clear() {
+        let temp = test_dir("item-drop-target");
+        let target_dir = temp.join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
+        assert!(item_drop_target_matches_pane(
+            app.item_drop_target.as_ref(),
+            pane_id
+        ));
+        assert!(!item_drop_target_matches_directory(
+            app.item_drop_target.as_ref(),
+            pane_id,
+            &target_dir
+        ));
+        assert!(!app.set_item_drag_drop_target_for_pane(pane_id));
+
+        assert!(app.set_item_drag_drop_target_for_directory(
+            pane_id,
+            target_dir.clone()
+        ));
+        assert!(!item_drop_target_matches_pane(
+            app.item_drop_target.as_ref(),
+            pane_id
+        ));
+        assert!(item_drop_target_matches_directory(
+            app.item_drop_target.as_ref(),
+            pane_id,
+            &target_dir
+        ));
+
+        app.clear_pane_content_state(pane_id);
+
+        assert!(app.item_drop_target.is_none());
         let _ = std::fs::remove_dir_all(temp);
     }
 
@@ -9099,7 +11432,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_column_width_cache_resolves_only_visible_columns() {
+    fn compact_column_width_cache_resolves_all_columns_for_stable_scrollbar() {
         let mut model = fika_core::DirectoryModel::for_directory(PathBuf::from("/tmp"));
         let entries = (0..120)
             .map(|index| {
@@ -9117,6 +11450,7 @@ mod tests {
                     modified_secs: None,
                     trash_original_path: None,
                     trash_deletion_time: None,
+                    mime_type: None,
                     is_dir: false,
                 })
             })
@@ -9143,19 +11477,11 @@ mod tests {
             .filter(|resolved| **resolved)
             .count();
 
-        assert!(resolved_count < column_count);
+        assert_eq!(resolved_count, column_count);
         let far_column = 80 / rows_per_column;
-        assert_eq!(metrics.column_width(far_column), Some(options.item_width));
-
-        let scrolled_options = CompactLayoutOptions {
-            scroll_x: far_column as f32 * (options.item_width + options.gap),
-            ..options
-        };
-        let metrics = cache.metrics_for_model(&model, rows_per_column, scrolled_options);
-
         assert!(
             metrics.column_width(far_column).unwrap() > options.item_width,
-            "far column width should be resolved only after it enters the viewport"
+            "far column width should be resolved before scrolling reaches it"
         );
     }
 
@@ -9228,6 +11554,7 @@ mod tests {
             modified_secs: None,
             trash_original_path: None,
             trash_deletion_time: None,
+            mime_type: None,
             is_dir: false,
         })]);
         let events = vec![DirectoryListerEvent::ListingRefreshed {
@@ -9443,13 +11770,25 @@ mod tests {
         let mut loading = HashMap::new();
         let now = Instant::now();
 
-        update_loading_state_for_event(&mut loading, controller.pane(pane_id), &start, now);
+        update_loading_state_for_event(
+            &mut loading,
+            controller.pane(pane_id),
+            &start,
+            now,
+            Some("2 folders, 3 files".to_string()),
+        );
         assert_eq!(
             loading.get(&pane_id).map(|state| state.key),
             Some(ListingRequestKey {
                 generation: start.generation(),
                 request_serial: start.request_serial(),
             })
+        );
+        assert_eq!(
+            loading
+                .get(&pane_id)
+                .and_then(|state| state.previous_summary.as_deref()),
+            Some("2 folders, 3 files")
         );
 
         let stale = DirectoryListerEvent::ListingCompleted {
@@ -9458,7 +11797,7 @@ mod tests {
             request_serial: fika_core::RequestSerial(start.request_serial().0 + 1),
             path: start.path().to_path_buf(),
         };
-        update_loading_state_for_event(&mut loading, controller.pane(pane_id), &stale, now);
+        update_loading_state_for_event(&mut loading, controller.pane(pane_id), &stale, now, None);
         assert!(loading.contains_key(&pane_id));
 
         let completed = DirectoryListerEvent::ListingCompleted {
@@ -9467,7 +11806,13 @@ mod tests {
             request_serial: start.request_serial(),
             path: start.path().to_path_buf(),
         };
-        update_loading_state_for_event(&mut loading, controller.pane(pane_id), &completed, now);
+        update_loading_state_for_event(
+            &mut loading,
+            controller.pane(pane_id),
+            &completed,
+            now,
+            None,
+        );
         assert!(!loading.contains_key(&pane_id));
     }
 
@@ -9484,6 +11829,7 @@ mod tests {
             controller.pane(pane_id),
             &stale,
             Instant::now(),
+            None,
         );
 
         assert!(loading.is_empty());
@@ -9559,6 +11905,7 @@ mod tests {
             hidden_place_sections: BTreeSet::new(),
             user_places_path: test_dir("user-places").join("user-places.xbel"),
             file_icons: FileIconCache::default(),
+            mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
@@ -9566,20 +11913,26 @@ mod tests {
             scroll_drag_trackers: HashMap::new(),
             smooth_scroll_tick_running: false,
             viewport_origins: HashMap::new(),
+            pane_split_ratios: HashMap::new(),
+            pane_row_width: 0.0,
             visible_item_slots: HashMap::new(),
             compact_column_widths: HashMap::new(),
             pane_filters: HashMap::new(),
             filtered_models: HashMap::new(),
             operations: OperationQueue::new(),
             clipboard: None,
+            active_item_drag: None,
+            item_drop_target: None,
             rename_draft: None,
             location_draft: None,
+            location_edit_metrics: HashMap::new(),
             place_draft: None,
             chooser: None,
             listing_worker: ListingWorker::new(),
             _keystroke_subscription: None,
             rubber_band: None,
             context_menu: None,
+            context_menu_tree_hovered: false,
             context_submenu_hide_generation: 0,
             properties_dialog: None,
             pane_statuses: HashMap::new(),
@@ -9597,8 +11950,26 @@ mod tests {
             modified_secs: None,
             trash_original_path: None,
             trash_deletion_time: None,
+            mime_type: None,
             is_dir: false,
         })
+    }
+
+    fn test_desktop_application(
+        id: &str,
+        name: &str,
+        exec: &str,
+        mime_types: &[&str],
+    ) -> fika_core::DesktopApplication {
+        fika_core::DesktopApplication {
+            id: id.to_string(),
+            desktop_file: PathBuf::from(format!("/apps/{id}")),
+            name: name.to_string(),
+            exec: exec.to_string(),
+            icon: None,
+            mime_types: mime_types.iter().map(|mime| mime.to_string()).collect(),
+            actions: Vec::new(),
+        }
     }
 
     fn test_entries(names: &[&str]) -> Arc<Vec<fika_core::Entry>> {
@@ -9620,6 +11991,7 @@ mod tests {
                 modified_secs: None,
                 trash_original_path: None,
                 trash_deletion_time: None,
+                mime_type: None,
                 is_dir,
             }),
         }
@@ -9639,6 +12011,8 @@ mod tests {
             selection_count,
             trash_view: false,
             trash_can_restore: false,
+            mime_type: None,
+            open_with_apps: Vec::new(),
         }
     }
 
@@ -9662,5 +12036,9 @@ mod tests {
             .unwrap()
             .as_nanos();
         env::temp_dir().join(format!("fika-gpui-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    fn test_svg() -> &'static str {
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#2f6fed"/></svg>"##
     }
 }

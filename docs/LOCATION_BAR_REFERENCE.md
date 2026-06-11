@@ -22,6 +22,10 @@ Fika's pane-local location bar maps to Dolphin's `KUrlNavigator` path.
 - Dolphin active view container URL routing -> `FikaApp::load_pane(PaneId, PathBuf)`.
 - Dolphin editable URL mode -> pane-scoped `LocationDraft`.
 - Dolphin breadcrumb buttons -> `BreadcrumbSegment { label, path }` rendered by the reusable pane component.
+- Editable location mode uses pane-local caret and horizontal scroll state, so
+  long paths truncate inside the pane header instead of forcing pane width.
+- Editable text metrics include the current visible width, and cursor drawing
+  clamps safely when split panes are narrower than the cursor itself.
 
 ## Behavioral Rules
 
@@ -29,3 +33,7 @@ Fika's pane-local location bar maps to Dolphin's `KUrlNavigator` path.
 - Breadcrumb clicks navigate through the same path as other pane loads so history stays pane-local.
 - Ctrl+L and Alt+D switch the focused pane into editable location mode.
 - Enter commits the typed path, Escape exits editable mode, and Tab attempts filesystem completion.
+- Caret movement keeps the cursor visible without resetting the horizontal
+  scroll unless the caret crosses the visible edge.
+- Breadcrumb segment text is shrinkable and clipped inside the pane header; a
+  long path segment cannot impose a new minimum pane width.

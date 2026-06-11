@@ -32,6 +32,11 @@ Fika's pane-local status bar maps to Dolphin's view-container status bar flow.
 - Dolphin progress bar and stop button -> pane-bound `OperationProgressHandle` backed by core `TransferProgress` and an `AtomicBool` cancel flag for internal copy/move.
 - Dolphin directory loading stop -> pane loading state tracked by `PaneId + generation + request_serial`, routed to `ListingWorker::cancel_pane()`.
 - Dolphin delayed progress timer -> Fika progress snapshots become visible only after the same delayed-progress interval.
+- Dolphin small status bar width is bounded by the parent view width in
+  `DolphinStatusBar::updateWidthToContent()`. Fika mirrors that by making the
+  pane-local status bar fill the pane shell (`w_full + min_w_0`) while visibility
+  thresholds use the current pane allocation, so split panes do not keep an
+  older wider status bar and clip it.
 
 ## Behavioral Rules
 

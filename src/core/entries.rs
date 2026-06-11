@@ -1,11 +1,14 @@
-use super::file_ops;
+use super::{file_ops, mime::MimeDatabase};
 use std::cmp::Ordering;
 use std::fs::Metadata;
 use std::io;
+use std::io::Read;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const MIME_MAGIC_READ_LIMIT: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ItemId(pub u64);
@@ -24,6 +27,7 @@ pub struct EntryData {
     pub name_width_units: u16,
     pub size_bytes: u64,
     pub modified_secs: Option<u64>,
+    pub mime_type: Option<Arc<str>>,
     pub trash_original_path: Option<PathBuf>,
     pub trash_deletion_time: Option<Arc<str>>,
     pub is_dir: bool,
@@ -106,6 +110,7 @@ pub(crate) fn read_entries_sync_cancellable(
 
     let mut entries = Vec::new();
     let decorate_trash_metadata = file_ops::is_trash_files_dir(path);
+    let mime_database = MimeDatabase::shared();
 
     for (index, item) in std::fs::read_dir(path)?.enumerate() {
         if index % 64 == 0 && is_cancelled() {
@@ -120,7 +125,7 @@ pub(crate) fn read_entries_sync_cancellable(
             if name.is_empty() {
                 continue;
             }
-            let mut data = to_entry_data(name, metadata);
+            let mut data = to_entry_data(&item_path, name, metadata, mime_database);
             if decorate_trash_metadata {
                 decorate_trash_entry(&mut data, &item_path);
             }
@@ -149,7 +154,7 @@ pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
         .map(|name| name.to_string_lossy().trim().to_string())
         .filter(|name| !name.is_empty())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory item has no name"))?;
-    let mut data = to_entry_data(name, metadata);
+    let mut data = to_entry_data(&item_path, name, metadata, MimeDatabase::shared());
     if decorate_trash_metadata {
         decorate_trash_entry(&mut data, &item_path);
     }
@@ -280,21 +285,46 @@ fn name_width_units(name: &str) -> u16 {
         .min(u16::MAX as u32) as u16
 }
 
-fn to_entry_data(name: String, metadata: Metadata) -> EntryData {
+fn to_entry_data(path: &Path, name: String, metadata: Metadata, mime: &MimeDatabase) -> EntryData {
     let is_dir = metadata.is_dir();
     let size_bytes = if is_dir { 0 } else { metadata.len() };
     let modified_secs = metadata.modified().ok().map(system_time_secs);
     let name_width_units = name_width_units(&name);
+    let initial_mime_type = mime.mime_for_path(path, is_dir, None);
+    let magic = if should_read_mime_magic(is_dir, size_bytes, initial_mime_type.as_deref()) {
+        read_mime_magic(path).ok().flatten()
+    } else {
+        None
+    };
+    let mime_type = magic.as_deref().map_or(initial_mime_type, |magic| {
+        mime.mime_for_path(path, is_dir, Some(magic))
+    });
 
     EntryData {
         name: Arc::from(name),
         name_width_units,
         size_bytes,
         modified_secs,
+        mime_type,
         trash_original_path: None,
         trash_deletion_time: None,
         is_dir,
     }
+}
+
+fn should_read_mime_magic(is_dir: bool, size_bytes: u64, initial_mime_type: Option<&str>) -> bool {
+    !is_dir && size_bytes > 0 && initial_mime_type == Some("application/octet-stream")
+}
+
+fn read_mime_magic(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut bytes = vec![0; MIME_MAGIC_READ_LIMIT];
+    let read = file.read(&mut bytes)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    bytes.truncate(read);
+    Ok(Some(bytes))
 }
 
 fn system_time_secs(time: SystemTime) -> u64 {
@@ -350,6 +380,32 @@ mod tests {
             read_entries_sync_cancellable(Path::new("/definitely/missing/fika"), || true).unwrap();
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn extensionless_entry_uses_magic_mime_when_globs_are_generic() {
+        let dir = std::env::temp_dir().join(format!(
+            "fika-entry-mime-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        struct DirGuard(PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = DirGuard(dir.clone());
+        let path = dir.join("payload");
+        fs::write(&path, b"\x89PNG\r\n\x1a\nrest").unwrap();
+
+        let entry = read_entry_sync(&dir, &path).unwrap();
+
+        assert_eq!(entry.mime_type.as_deref(), Some("image/png"));
     }
 
     #[test]

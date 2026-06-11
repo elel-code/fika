@@ -73,10 +73,15 @@ item-vs-blank event boundaries, and later submenu behavior.
   - `ContextMenuSubmenu` mirrors Qt `QMenu` child menus for first-level
     cascading items. `context_menu_overlay()` opens the submenu on hover or
     click, positions it at the parent row, and flips it to the left when there
-    is not enough viewport space to the right. Submenu hide follows the Qt menu
-    grace-period model: leaving a root submenu row schedules a delayed hide,
-    entering the submenu cancels it, and stale delayed hides are ignored through
-    an app-local generation counter.
+    is not enough viewport space to the right. Root menus and submenus use a
+    shared viewport layout calculation that clamps x/y inside the window,
+    shrinks width for narrow panes, caps height to the viewport, and scrolls
+    overflowing menu rows instead of letting overlays be clipped by pane or
+    window edges. Submenu hide follows the Qt menu grace-period model: leaving a
+    root or submenu container schedules a delayed hide, entering either
+    container cancels it, and stale delayed hides are ignored through an
+    app-local generation counter. Individual rows only open or retarget
+    submenus; they do not close the menu tree on hover loss.
   - Blank viewport menus expose Dolphin-aligned `Sort By` and `View Mode`
     submenu entries. Sort actions route through pane-local
     `PaneController` sort methods into `DirectoryModel` sorting; each pane
@@ -118,7 +123,9 @@ item-vs-blank event boundaries, and later submenu behavior.
 ## Current Gap List
 
 - Implement Icons and Details view modes behind the existing View Mode submenu.
-- Add Open With submenu populated by MIME/application data.
+- Execute Open With launch plans through the systemd launcher path and add the
+  "Other Application..." chooser. The submenu population itself is now driven by
+  core MIME/application data.
 - Add Open in New Window.
 - Add remaining multi-selection differences such as Compress and batch rename.
 - Complete Trash-specific conflict handling and Details columns.
