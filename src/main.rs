@@ -9,8 +9,8 @@ use fika_core::{
     decode_file_clipboard_text, encode_file_clipboard_text, file_ops, nearest_existing_ancestor,
 };
 use fika_core::{
-    DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, SystemdLaunchResult,
-    launch_with_systemd_user,
+    DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, ServiceMenuAction,
+    SystemdLaunchResult, launch_with_systemd_user,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -485,6 +485,7 @@ enum ContextMenuTarget {
         trash_can_restore: bool,
         mime_type: Option<Arc<str>>,
         open_with_apps: Vec<MimeApplication>,
+        service_actions: Vec<ServiceMenuAction>,
     },
 }
 
@@ -495,6 +496,8 @@ enum ContextMenuAction {
     OpenWithSubmenu,
     OpenWithApplication { desktop_id: String },
     OtherApplication,
+    ServiceMenuSubmenu,
+    RunServiceMenuAction { action_id: String },
     AddPlace,
     EditPlace,
     RemovePlace,
@@ -541,6 +544,7 @@ struct ContextMenuItem {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContextMenuSubmenu {
     OpenWith,
+    ServiceMenu,
     SortBy,
     TrashSortBy,
     ViewMode,
@@ -6178,13 +6182,18 @@ impl FikaApp {
         let selection_count = self.panes.selected_count(pane_id).unwrap_or(1).max(1);
         let trash_view = self.trash_view_state(pane_id).0;
         let trash_can_restore = trash_view && file_ops::trash_metadata(&path).is_ok();
-        let mime_type = (!is_dir)
-            .then(|| self.mime_type_for_pane_path(pane_id, &path))
-            .flatten();
-        let open_with_apps = mime_type
-            .as_deref()
-            .map(|mime| self.mime_applications.applications_for_mime(mime))
+        let mime_type = self.mime_type_for_pane_path(pane_id, &path);
+        let open_with_apps = (!is_dir)
+            .then(|| {
+                mime_type
+                    .as_deref()
+                    .map(|mime| self.mime_applications.applications_for_mime(mime))
+                    .unwrap_or_default()
+            })
             .unwrap_or_default();
+        let service_actions = self
+            .mime_applications
+            .service_actions_for_target(mime_type.as_deref(), is_dir);
         let menu_position = ViewPoint {
             x: position.x.as_f32(),
             y: position.y.as_f32(),
@@ -6199,6 +6208,7 @@ impl FikaApp {
                 trash_can_restore,
                 mime_type,
                 open_with_apps,
+                service_actions,
             },
             position: menu_position,
             active_submenu: None,
@@ -6400,6 +6410,10 @@ impl FikaApp {
                     ..
                 },
             ) => self.open_with_application(menu.pane_id, &desktop_id, path, cx),
+            (
+                ContextMenuAction::RunServiceMenuAction { action_id },
+                ContextMenuTarget::Item { path, .. },
+            ) => self.run_service_menu_action(menu.pane_id, &action_id, path, cx),
             (ContextMenuAction::Open, ContextMenuTarget::Place { path, .. }) => {
                 self.open_place(path);
             }
@@ -6537,6 +6551,7 @@ impl FikaApp {
             (
                 ContextMenuAction::SortBySubmenu
                 | ContextMenuAction::OpenWithSubmenu
+                | ContextMenuAction::ServiceMenuSubmenu
                 | ContextMenuAction::OtherApplication
                 | ContextMenuAction::ViewModeSubmenu
                 | ContextMenuAction::ViewIcons
@@ -6574,7 +6589,8 @@ impl FikaApp {
             | (ContextMenuAction::RestoreFromTrash, _)
             | (ContextMenuAction::DeletePermanently, _)
             | (ContextMenuAction::EmptyTrash, _)
-            | (ContextMenuAction::OpenWithApplication { .. }, _) => {}
+            | (ContextMenuAction::OpenWithApplication { .. }, _)
+            | (ContextMenuAction::RunServiceMenuAction { .. }, _) => {}
         }
     }
 
@@ -6635,6 +6651,60 @@ impl FikaApp {
         .detach();
     }
 
+    fn service_menu_launch_plan(
+        &self,
+        action_id: &str,
+        path: &Path,
+    ) -> Result<DesktopLaunchPlan, String> {
+        self.mime_applications
+            .service_action_launch_plan(action_id, &[path.to_path_buf()])
+            .ok_or_else(|| format!("Service action not found: {action_id}"))
+    }
+
+    fn run_service_menu_action(
+        &mut self,
+        pane_id: PaneId,
+        action_id: &str,
+        path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        if self.operation_pending {
+            self.set_pane_status(pane_id, "File operation already running");
+            return;
+        }
+        let plan = match self.service_menu_launch_plan(action_id, &path) {
+            Ok(plan) => plan,
+            Err(message) => {
+                self.set_pane_status(pane_id, message);
+                return;
+            }
+        };
+        let app_name = plan.app_name.clone();
+        let _ = self.panes.select_only(pane_id, path.clone());
+        self.begin_pane_operation(
+            pane_id,
+            format!("Running {} for {}", app_name, path.display()),
+        );
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = launch_with_systemd_user(plan).await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.finish_service_menu_action(OpenWithLaunchResult {
+                            pane_id,
+                            path,
+                            app_name,
+                            result,
+                        });
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
     fn finish_open_with_application(&mut self, result: OpenWithLaunchResult) {
         match result.result {
             Ok(launch) => self.finish_pane_operation(
@@ -6652,6 +6722,28 @@ impl FikaApp {
                     "Cannot open {} with {}: {err}",
                     result.path.display(),
                     result.app_name
+                ),
+            ),
+        }
+    }
+
+    fn finish_service_menu_action(&mut self, result: OpenWithLaunchResult) {
+        match result.result {
+            Ok(launch) => self.finish_pane_operation(
+                result.pane_id,
+                format!(
+                    "Ran {} for {} via {} systemd unit(s)",
+                    result.app_name,
+                    result.path.display(),
+                    launch.units.len()
+                ),
+            ),
+            Err(err) => self.finish_pane_operation(
+                result.pane_id,
+                format!(
+                    "Cannot run {} for {}: {err}",
+                    result.app_name,
+                    result.path.display()
                 ),
             ),
         }
@@ -7396,7 +7488,11 @@ fn context_menu_actions(
             context_menu_item(ContextMenuAction::Trash, "Move to Trash"),
             context_menu_item(ContextMenuAction::Properties, "Properties"),
         ],
-        ContextMenuTarget::Item { is_dir, .. } => {
+        ContextMenuTarget::Item {
+            is_dir,
+            service_actions,
+            ..
+        } => {
             let mut actions = if *is_dir {
                 vec![context_menu_item(ContextMenuAction::Open, "Open")]
             } else {
@@ -7410,6 +7506,13 @@ fn context_menu_actions(
                 actions.push(context_menu_item(
                     ContextMenuAction::OpenInNewPane,
                     "Open in New Pane",
+                ));
+            }
+            if !service_actions.is_empty() {
+                actions.push(context_menu_submenu_item(
+                    ContextMenuAction::ServiceMenuSubmenu,
+                    "Actions",
+                    ContextMenuSubmenu::ServiceMenu,
                 ));
             }
             actions.extend([
@@ -7510,6 +7613,12 @@ fn context_submenu_actions(
             }
             _ => Vec::new(),
         },
+        ContextMenuSubmenu::ServiceMenu => match target {
+            ContextMenuTarget::Item {
+                service_actions, ..
+            } => service_menu_actions(service_actions),
+            _ => Vec::new(),
+        },
         ContextMenuSubmenu::SortBy => vec![
             context_menu_item(ContextMenuAction::SortByName, "Name"),
             context_menu_item(ContextMenuAction::SortByModified, "Modified"),
@@ -7559,6 +7668,26 @@ fn open_with_menu_actions(apps: &[MimeApplication]) -> Vec<ContextMenuItem> {
         "Other Application...",
     ));
     actions
+}
+
+fn service_menu_actions(actions: &[ServiceMenuAction]) -> Vec<ContextMenuItem> {
+    if actions.is_empty() {
+        return vec![disabled_context_menu_item(
+            ContextMenuAction::ServiceMenuSubmenu,
+            "No Actions",
+        )];
+    }
+    actions
+        .iter()
+        .map(|action| {
+            context_menu_item(
+                ContextMenuAction::RunServiceMenuAction {
+                    action_id: action.id.clone(),
+                },
+                action.label.clone(),
+            )
+        })
+        .collect()
 }
 
 fn context_submenu_overlay(
@@ -9781,6 +9910,42 @@ mod tests {
     }
 
     #[test]
+    fn context_menu_actions_offer_service_menu_submenu_when_actions_exist() {
+        let mut file_target = context_item_target("/tmp/readme.txt", false, 1);
+        if let ContextMenuTarget::Item {
+            service_actions, ..
+        } = &mut file_target
+        {
+            service_actions.push(ServiceMenuAction {
+                id: "service-menu:archive.desktop::compress".to_string(),
+                label: "Compress".to_string(),
+                source_name: "Archive Tools".to_string(),
+            });
+        }
+
+        let actions = context_menu_actions(&file_target, false);
+        assert_eq!(
+            actions
+                .iter()
+                .find(|item| item.action == ContextMenuAction::ServiceMenuSubmenu)
+                .and_then(|item| item.submenu),
+            Some(ContextMenuSubmenu::ServiceMenu)
+        );
+
+        let submenu = context_submenu_actions(ContextMenuSubmenu::ServiceMenu, &file_target);
+        assert_eq!(
+            submenu.first().map(|item| &item.action),
+            Some(&ContextMenuAction::RunServiceMenuAction {
+                action_id: "service-menu:archive.desktop::compress".to_string(),
+            })
+        );
+        assert_eq!(
+            submenu.first().map(|item| item.label.as_str()),
+            Some("Compress")
+        );
+    }
+
+    #[test]
     fn context_menu_actions_offer_paste_only_for_single_directory_targets() {
         let dir_target = context_item_target("/tmp", true, 1);
         let file_target = context_item_target("/tmp/readme.txt", false, 1);
@@ -9820,6 +9985,43 @@ mod tests {
         assert_eq!(plan.commands.len(), 1);
         assert_eq!(plan.commands[0].program, "viewer");
         assert_eq!(plan.commands[0].args, vec!["/tmp/fika-open-with/note.txt"]);
+    }
+
+    #[test]
+    fn service_menu_action_builds_systemd_launch_plan() {
+        let mut app = test_app_with_entries("/tmp/fika-service-menu", &["note.txt"]);
+        app.mime_applications = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
+            Vec::new(),
+            vec![fika_core::DesktopServiceMenu {
+                id: "archive.desktop".to_string(),
+                desktop_file: PathBuf::from("/menus/archive.desktop"),
+                name: "Archive Tools".to_string(),
+                mime_types: vec!["all/allfiles".to_string()],
+                service_types: vec!["KonqPopupMenu/Plugin".to_string()],
+                actions: vec![fika_core::DesktopAction {
+                    id: "compress".to_string(),
+                    name: "Compress".to_string(),
+                    exec: "ark --add %F".to_string(),
+                }],
+            }],
+            &[],
+        );
+        let action_id = app
+            .mime_applications
+            .service_actions_for_target(Some("text/plain"), false)
+            .remove(0)
+            .id;
+
+        let plan = app
+            .service_menu_launch_plan(&action_id, Path::new("/tmp/fika-service-menu/note.txt"))
+            .unwrap();
+
+        assert_eq!(plan.app_name, "Archive Tools: Compress");
+        assert_eq!(plan.commands[0].program, "ark");
+        assert_eq!(
+            plan.commands[0].args,
+            vec!["--add", "/tmp/fika-service-menu/note.txt"]
+        );
     }
 
     #[test]
@@ -9898,6 +10100,7 @@ mod tests {
             trash_can_restore: true,
             mime_type: None,
             open_with_apps: Vec::new(),
+            service_actions: Vec::new(),
         };
         let item_actions = context_menu_actions(&item, false)
             .into_iter()
@@ -12772,6 +12975,7 @@ gtk-icon-theme-name=breeze\n"
             trash_can_restore: false,
             mime_type: None,
             open_with_apps: Vec::new(),
+            service_actions: Vec::new(),
         }
     }
 

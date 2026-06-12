@@ -20,6 +20,16 @@ pub struct DesktopApplication {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesktopServiceMenu {
+    pub id: String,
+    pub desktop_file: PathBuf,
+    pub name: String,
+    pub mime_types: Vec<String>,
+    pub service_types: Vec<String>,
+    pub actions: Vec<DesktopAction>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DesktopAction {
     pub id: String,
     pub name: String,
@@ -34,6 +44,13 @@ pub struct MimeApplication {
     pub exec: String,
     pub icon: Option<String>,
     pub is_default: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceMenuAction {
+    pub id: String,
+    pub label: String,
+    pub source_name: String,
 }
 
 impl From<(&DesktopApplication, bool)> for MimeApplication {
@@ -59,6 +76,7 @@ pub struct MimeAppsList {
 #[derive(Clone, Debug, Default)]
 pub struct MimeApplicationCache {
     apps: Vec<DesktopApplication>,
+    service_menus: Vec<DesktopServiceMenu>,
     apps_by_id: HashMap<String, usize>,
     apps_by_filename: HashMap<String, usize>,
     apps_by_mime: HashMap<String, Vec<usize>>,
@@ -150,13 +168,45 @@ impl Error for LauncherError {}
 
 impl DesktopApplication {
     pub fn launch_plan(&self, paths: &[PathBuf]) -> Option<DesktopLaunchPlan> {
-        let commands = exec_to_launch_commands(&self.exec, &self.name, &self.desktop_file, paths)?;
-        Some(DesktopLaunchPlan {
-            desktop_id: self.id.clone(),
-            desktop_file: self.desktop_file.clone(),
-            app_name: self.name.clone(),
-            commands,
-        })
+        desktop_launch_plan_for_exec(
+            self.id.clone(),
+            self.desktop_file.clone(),
+            self.name.clone(),
+            &self.exec,
+            paths,
+        )
+    }
+
+    pub fn action_launch_plan(
+        &self,
+        action_id: &str,
+        paths: &[PathBuf],
+    ) -> Option<DesktopLaunchPlan> {
+        let action = self.actions.iter().find(|action| action.id == action_id)?;
+        desktop_launch_plan_for_exec(
+            service_action_launch_desktop_id(&self.id, &action.id),
+            self.desktop_file.clone(),
+            service_action_display_name(&self.name, &action.name),
+            &action.exec,
+            paths,
+        )
+    }
+}
+
+impl DesktopServiceMenu {
+    pub fn action_launch_plan(
+        &self,
+        action_id: &str,
+        paths: &[PathBuf],
+    ) -> Option<DesktopLaunchPlan> {
+        let action = self.actions.iter().find(|action| action.id == action_id)?;
+        desktop_launch_plan_for_exec(
+            service_action_launch_desktop_id(&self.id, &action.id),
+            self.desktop_file.clone(),
+            service_action_display_name(&self.name, &action.name),
+            &action.exec,
+            paths,
+        )
     }
 }
 
@@ -199,12 +249,13 @@ pub async fn launch_with_systemd_user(
 impl MimeApplicationCache {
     pub fn load() -> Self {
         let applications = load_desktop_applications();
+        let service_menus = load_desktop_service_menus();
         let lists = mimeapps_list_paths()
             .into_iter()
             .filter_map(|path| fs::read_to_string(path).ok())
             .map(|contents| parse_mimeapps_list(&contents))
             .collect::<Vec<_>>();
-        Self::from_applications_and_mimeapps(applications, &lists)
+        Self::from_applications_service_menus_and_mimeapps(applications, service_menus, &lists)
     }
 
     pub fn shared() -> &'static Self {
@@ -217,11 +268,21 @@ impl MimeApplicationCache {
     }
 
     pub fn from_applications_and_mimeapps(
+        apps: Vec<DesktopApplication>,
+        lists: &[MimeAppsList],
+    ) -> Self {
+        Self::from_applications_service_menus_and_mimeapps(apps, Vec::new(), lists)
+    }
+
+    pub fn from_applications_service_menus_and_mimeapps(
         mut apps: Vec<DesktopApplication>,
+        mut service_menus: Vec<DesktopServiceMenu>,
         lists: &[MimeAppsList],
     ) -> Self {
         apps.sort_by(desktop_application_cmp);
+        service_menus.sort_by(desktop_service_menu_cmp);
         let mut cache = Self::default();
+        cache.service_menus = service_menus;
         for app in apps {
             cache.insert_application(app);
         }
@@ -261,6 +322,98 @@ impl MimeApplicationCache {
     pub fn application(&self, desktop_id: &str) -> Option<&DesktopApplication> {
         self.application_index(desktop_id)
             .and_then(|index| self.apps.get(index))
+    }
+
+    pub fn service_actions_for_target(
+        &self,
+        mime: Option<&str>,
+        is_dir: bool,
+    ) -> Vec<ServiceMenuAction> {
+        let mut actions = Vec::new();
+        let mut seen = HashSet::new();
+        let normalized_mime = target_mime(mime, is_dir);
+
+        for app in self.application_indexes_for_target(normalized_mime, is_dir) {
+            let Some(app) = self.apps.get(app) else {
+                continue;
+            };
+            for action in &app.actions {
+                let id = application_service_action_id(&app.id, &action.id);
+                if seen.insert(id.clone()) {
+                    actions.push(ServiceMenuAction {
+                        id,
+                        label: action.name.clone(),
+                        source_name: app.name.clone(),
+                    });
+                }
+            }
+        }
+
+        for menu in &self.service_menus {
+            if !service_menu_matches_target(menu, normalized_mime, is_dir) {
+                continue;
+            }
+            for action in &menu.actions {
+                let id = desktop_service_menu_action_id(&menu.id, &action.id);
+                if seen.insert(id.clone()) {
+                    actions.push(ServiceMenuAction {
+                        id,
+                        label: action.name.clone(),
+                        source_name: menu.name.clone(),
+                    });
+                }
+            }
+        }
+
+        actions
+    }
+
+    pub fn service_action_launch_plan(
+        &self,
+        action_id: &str,
+        paths: &[PathBuf],
+    ) -> Option<DesktopLaunchPlan> {
+        for app in &self.apps {
+            for action in &app.actions {
+                if application_service_action_id(&app.id, &action.id) == action_id {
+                    return app.action_launch_plan(&action.id, paths);
+                }
+            }
+        }
+        for menu in &self.service_menus {
+            for action in &menu.actions {
+                if desktop_service_menu_action_id(&menu.id, &action.id) == action_id {
+                    return menu.action_launch_plan(&action.id, paths);
+                }
+            }
+        }
+        None
+    }
+
+    fn application_indexes_for_target(&self, mime: Option<&str>, is_dir: bool) -> Vec<usize> {
+        let mut indexes = Vec::new();
+        let mut seen = HashSet::new();
+        if let Some(mime) = mime
+            && let Some(mime_indexes) = self.apps_by_mime.get(mime)
+        {
+            for index in mime_indexes {
+                if seen.insert(*index) {
+                    indexes.push(*index);
+                }
+            }
+        }
+        for (index, app) in self.apps.iter().enumerate() {
+            if app.actions.is_empty() {
+                continue;
+            }
+            if seen.contains(&index) {
+                continue;
+            }
+            if desktop_mimes_match_target(&app.mime_types, mime, is_dir) && seen.insert(index) {
+                indexes.push(index);
+            }
+        }
+        indexes
     }
 
     fn insert_application(&mut self, app: DesktopApplication) {
@@ -430,6 +583,74 @@ pub fn parse_desktop_application(
     })
 }
 
+pub fn parse_desktop_service_menu(
+    id: impl Into<String>,
+    desktop_file: impl Into<PathBuf>,
+    contents: &str,
+) -> Option<DesktopServiceMenu> {
+    let sections = parse_desktop_sections(contents);
+    let entry = sections.get("Desktop Entry")?;
+    if entry.get("Hidden").is_some_and(|value| desktop_bool(value)) {
+        return None;
+    }
+    if entry.get("Type").map(String::as_str) != Some("Service") {
+        return None;
+    }
+
+    let service_types = entry
+        .get("X-KDE-ServiceTypes")
+        .or_else(|| entry.get("ServiceTypes"))
+        .map(|value| desktop_list(value))
+        .unwrap_or_default();
+    if !service_types.iter().any(|service| {
+        matches!(
+            service.as_str(),
+            "KonqPopupMenu/Plugin" | "KFileItemAction/Plugin"
+        )
+    }) {
+        return None;
+    }
+
+    let action_ids = entry
+        .get("Actions")
+        .map(|value| desktop_list(value))
+        .unwrap_or_default();
+    let actions = action_ids
+        .into_iter()
+        .filter_map(|action_id| {
+            let section = sections.get(&format!("Desktop Action {action_id}"))?;
+            let name = section.get("Name")?.trim();
+            let exec = section.get("Exec")?.trim();
+            (!name.is_empty() && !exec.is_empty()).then(|| DesktopAction {
+                id: action_id,
+                name: name.to_string(),
+                exec: exec.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if actions.is_empty() {
+        return None;
+    }
+
+    let id = id.into();
+    Some(DesktopServiceMenu {
+        id: id.clone(),
+        desktop_file: desktop_file.into(),
+        name: entry
+            .get("Name")
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&id)
+            .to_string(),
+        mime_types: entry
+            .get("MimeType")
+            .map(|value| desktop_list(value))
+            .unwrap_or_default(),
+        service_types,
+        actions,
+    })
+}
+
 pub fn parse_mimeapps_list(contents: &str) -> MimeAppsList {
     let mut list = MimeAppsList::default();
     let mut section = "";
@@ -492,6 +713,22 @@ pub fn exec_to_launch_commands(
         return Some(vec![DesktopLaunchCommand { program, args }]);
     }
     Some(vec![DesktopLaunchCommand { program, args }])
+}
+
+fn desktop_launch_plan_for_exec(
+    desktop_id: String,
+    desktop_file: PathBuf,
+    app_name: String,
+    exec: &str,
+    paths: &[PathBuf],
+) -> Option<DesktopLaunchPlan> {
+    let commands = exec_to_launch_commands(exec, &app_name, &desktop_file, paths)?;
+    Some(DesktopLaunchPlan {
+        desktop_id,
+        desktop_file,
+        app_name,
+        commands,
+    })
 }
 
 fn systemd_units_for_launch_plan_with_nonce(
@@ -709,6 +946,14 @@ fn load_desktop_applications() -> Vec<DesktopApplication> {
     applications
 }
 
+fn load_desktop_service_menus() -> Vec<DesktopServiceMenu> {
+    let mut service_menus = Vec::new();
+    for service_menu_dir in desktop_service_menu_dirs() {
+        collect_desktop_service_menus(&service_menu_dir, &service_menu_dir, &mut service_menus);
+    }
+    service_menus
+}
+
 fn collect_desktop_applications(
     root: &Path,
     dir: &Path,
@@ -734,6 +979,35 @@ fn collect_desktop_applications(
         };
         if let Some(application) = parse_desktop_application(id, path, &contents) {
             applications.push(application);
+        }
+    }
+}
+
+fn collect_desktop_service_menus(
+    root: &Path,
+    dir: &Path,
+    service_menus: &mut Vec<DesktopServiceMenu>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_desktop_service_menus(root, &path, service_menus);
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("desktop") {
+            continue;
+        }
+        let Some(id) = desktop_id_for_path(root, &path) else {
+            continue;
+        };
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(service_menu) = parse_desktop_service_menu(id, path, &contents) {
+            service_menus.push(service_menu);
         }
     }
 }
@@ -765,6 +1039,34 @@ fn desktop_application_dirs() -> Vec<PathBuf> {
         push_unique_path(&mut dirs, data_dir);
     }
     dirs
+}
+
+fn desktop_service_menu_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(data_home) = env::var_os("XDG_DATA_HOME").filter(|path| !path.is_empty()) {
+        push_service_menu_roots(&mut dirs, PathBuf::from(data_home));
+    } else if let Some(home) = env::var_os("HOME").filter(|path| !path.is_empty()) {
+        push_service_menu_roots(&mut dirs, PathBuf::from(home).join(".local/share"));
+    }
+    for data_dir in env::var_os("XDG_DATA_DIRS")
+        .filter(|path| !path.is_empty())
+        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_else(|| {
+            vec![
+                PathBuf::from("/usr/local/share"),
+                PathBuf::from("/usr/share"),
+            ]
+        })
+    {
+        push_service_menu_roots(&mut dirs, data_dir);
+    }
+    dirs
+}
+
+fn push_service_menu_roots(dirs: &mut Vec<PathBuf>, root: PathBuf) {
+    push_unique_path(dirs, root.join("kio/servicemenus"));
+    push_unique_path(dirs, root.join("kservices5/ServiceMenus"));
+    push_unique_path(dirs, root.join("konqueror/servicemenus"));
 }
 
 fn mimeapps_list_paths() -> Vec<PathBuf> {
@@ -900,6 +1202,84 @@ fn desktop_application_cmp(
         .then_with(|| left.id.cmp(&right.id))
 }
 
+fn desktop_service_menu_cmp(
+    left: &DesktopServiceMenu,
+    right: &DesktopServiceMenu,
+) -> std::cmp::Ordering {
+    left.name
+        .to_ascii_lowercase()
+        .cmp(&right.name.to_ascii_lowercase())
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn target_mime(mime: Option<&str>, is_dir: bool) -> Option<&str> {
+    if is_dir {
+        Some("inode/directory")
+    } else {
+        mime.map(str::trim).filter(|mime| !mime.is_empty())
+    }
+}
+
+fn desktop_mimes_match_target(
+    mime_types: &[String],
+    target_mime: Option<&str>,
+    is_dir: bool,
+) -> bool {
+    mime_types
+        .iter()
+        .any(|mime| desktop_mime_matches_target(mime, target_mime, is_dir))
+}
+
+fn service_menu_matches_target(
+    menu: &DesktopServiceMenu,
+    target_mime: Option<&str>,
+    is_dir: bool,
+) -> bool {
+    desktop_mimes_match_target(&menu.mime_types, target_mime, is_dir)
+}
+
+fn desktop_mime_matches_target(pattern: &str, target_mime: Option<&str>, is_dir: bool) -> bool {
+    let pattern = pattern.trim();
+    if pattern == "all/all" {
+        return true;
+    }
+    if pattern == "all/allfiles" {
+        return !is_dir;
+    }
+    let Some(target_mime) = target_mime else {
+        return false;
+    };
+    if pattern == target_mime {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        return target_mime
+            .split_once('/')
+            .is_some_and(|(target_prefix, _)| target_prefix == prefix);
+    }
+    false
+}
+
+fn application_service_action_id(desktop_id: &str, action_id: &str) -> String {
+    format!("application:{desktop_id}::{action_id}")
+}
+
+fn desktop_service_menu_action_id(menu_id: &str, action_id: &str) -> String {
+    format!("service-menu:{menu_id}::{action_id}")
+}
+
+fn service_action_launch_desktop_id(source_id: &str, action_id: &str) -> String {
+    format!("{source_id}-{action_id}")
+}
+
+fn service_action_display_name(source_name: &str, action_name: &str) -> String {
+    if source_name.is_empty() {
+        action_name.to_string()
+    } else {
+        format!("{source_name}: {action_name}")
+    }
+}
+
 fn split_exec_line(exec: &str) -> Option<Vec<String>> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -1010,6 +1390,21 @@ mod tests {
         }
     }
 
+    fn service_menu(id: &str, name: &str, mime_types: &[&str]) -> DesktopServiceMenu {
+        DesktopServiceMenu {
+            id: id.to_string(),
+            desktop_file: PathBuf::from(format!("/servicemenus/{id}")),
+            name: name.to_string(),
+            mime_types: mime_types.iter().map(|mime| mime.to_string()).collect(),
+            service_types: vec!["KonqPopupMenu/Plugin".to_string()],
+            actions: vec![DesktopAction {
+                id: "compress".to_string(),
+                name: "Compress".to_string(),
+                exec: "ark --add %F".to_string(),
+            }],
+        }
+    }
+
     #[test]
     fn desktop_entry_parser_reads_application_mime_and_actions() {
         let entry = parse_desktop_application(
@@ -1036,6 +1431,31 @@ Exec=viewer --print %f\n",
     }
 
     #[test]
+    fn desktop_service_menu_parser_reads_kde_popup_actions() {
+        let entry = parse_desktop_service_menu(
+            "compress.desktop",
+            "/menus/compress.desktop",
+            "\
+[Desktop Entry]\n\
+Type=Service\n\
+Name=Archive Tools\n\
+MimeType=all/allfiles;inode/directory;\n\
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin\n\
+Actions=compress;\n\
+\n\
+[Desktop Action compress]\n\
+Name=Compress\n\
+Exec=ark --add %F\n",
+        )
+        .unwrap();
+
+        assert_eq!(entry.name, "Archive Tools");
+        assert_eq!(entry.mime_types, vec!["all/allfiles", "inode/directory"]);
+        assert_eq!(entry.service_types, vec!["KonqPopupMenu/Plugin"]);
+        assert_eq!(entry.actions[0].name, "Compress");
+    }
+
+    #[test]
     fn hidden_desktop_entries_are_not_applications() {
         assert!(
             parse_desktop_application(
@@ -1045,6 +1465,79 @@ Exec=viewer --print %f\n",
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn service_actions_include_application_and_kde_service_menu_actions() {
+        let mut app = desktop_app("viewer.desktop", "Viewer", &["text/plain"]);
+        app.actions.push(DesktopAction {
+            id: "print".to_string(),
+            name: "Print".to_string(),
+            exec: "viewer --print %f".to_string(),
+        });
+        let mut added_app = desktop_app("sender.desktop", "Send To", &[]);
+        added_app.actions.push(DesktopAction {
+            id: "send".to_string(),
+            name: "Send".to_string(),
+            exec: "sender %f".to_string(),
+        });
+        let list = parse_mimeapps_list(
+            "\
+[Added Associations]\n\
+text/plain=sender.desktop;\n",
+        );
+        let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
+            vec![app, added_app],
+            vec![service_menu(
+                "archive.desktop",
+                "Archive Tools",
+                &["all/allfiles"],
+            )],
+            &[list],
+        );
+
+        let actions = cache
+            .service_actions_for_target(Some("text/plain"), false)
+            .into_iter()
+            .map(|action| (action.label, action.source_name))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                ("Send".to_string(), "Send To".to_string()),
+                ("Print".to_string(), "Viewer".to_string()),
+                ("Compress".to_string(), "Archive Tools".to_string()),
+            ]
+        );
+        assert!(
+            cache
+                .service_actions_for_target(Some("inode/directory"), true)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn service_action_launch_plan_uses_action_exec() {
+        let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
+            Vec::new(),
+            vec![service_menu(
+                "archive.desktop",
+                "Archive Tools",
+                &["all/allfiles"],
+            )],
+            &[],
+        );
+        let action = cache
+            .service_actions_for_target(Some("text/plain"), false)
+            .remove(0);
+        let plan = cache
+            .service_action_launch_plan(&action.id, &[PathBuf::from("/tmp/a.txt")])
+            .unwrap();
+
+        assert_eq!(plan.app_name, "Archive Tools: Compress");
+        assert_eq!(plan.commands[0].program, "ark");
+        assert_eq!(plan.commands[0].args, vec!["--add", "/tmp/a.txt"]);
     }
 
     #[test]

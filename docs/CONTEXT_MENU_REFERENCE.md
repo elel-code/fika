@@ -116,6 +116,11 @@ item-vs-blank event boundaries, and later submenu behavior.
     resolve an original target. Trash blank menus use a Trash-specific Sort By
     submenu for Name, Original Path, and Deletion Time, matching Dolphin's
     Trash Details roles `text`, `path`, and `deletiontime`.
+  - Single item context menus expose an Actions submenu when core launcher data
+    provides matching service actions. The actions come from associated
+    application `.desktop` `Actions=` entries and KDE service menu files with
+    `X-KDE-ServiceTypes=KonqPopupMenu/Plugin`; execution goes through the same
+    systemd transient unit launcher path as Open With.
   - `properties_for_path()` and `properties_for_selection()` build the current
     GPUI Properties dialog data from `symlink_metadata()` only. Directory sizes
     are not recursively scanned on the UI path.
@@ -123,10 +128,11 @@ item-vs-blank event boundaries, and later submenu behavior.
 ## Current Gap List
 
 - Implement Icons and Details view modes behind the existing View Mode submenu.
-- Execute Open With launch plans through the systemd launcher path and add the
-  "Other Application..." chooser. The submenu population itself is now driven by
-  core MIME/application data.
+- Add the "Other Application..." chooser and default-app update flow. Open With
+  execution and service menu action execution are now driven by core launcher
+  data and the systemd launcher path.
 - Add Open in New Window.
-- Add remaining multi-selection differences such as Compress and batch rename.
+- Add remaining multi-selection differences such as Compress, service action
+  intersections, and batch rename.
 - Complete Trash-specific conflict handling and Details columns.
 - Complete removable device actions and Places drop/reorder behavior.

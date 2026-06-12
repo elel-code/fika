@@ -70,6 +70,11 @@ icon selection, Open With menu, and future process launching path.
 - Core launcher and application discovery lives in `src/core/launcher.rs`.
   - It parses `.desktop` `[Desktop Entry]` application records, `MimeType=`,
     `Exec=`, `Actions=`, and `[Desktop Action ...]` groups.
+  - It discovers KDE service menu desktop files from XDG data service menu
+    directories and accepts `Type=Service` records with
+    `X-KDE-ServiceTypes=KonqPopupMenu/Plugin` or `KFileItemAction/Plugin`.
+  - Service menu actions are filtered by target MIME using exact MIME,
+    `type/*`, `all/all`, `all/allfiles`, and `inode/directory` matching.
   - It parses `mimeapps.list` `[Default Applications]`,
     `[Added Associations]`, and `[Removed Associations]`.
   - Application ordering mirrors the desktop association stack: default
@@ -82,14 +87,17 @@ icon selection, Open With menu, and future process launching path.
 - Open With UI integration lives in `src/main.rs`.
   - The item context menu stores core-derived `MimeApplication` values on the
     menu target.
-  - GPUI rows only render the Open With submenu and route the selected desktop
-    id back to core launcher data.
+  - GPUI rows only render the Open With and Actions submenus and route the
+    selected desktop or service action id back to core launcher data.
   - The selected application is launched through `launch_with_systemd_user()`;
     success and structured launcher errors are reported back to the originating
     pane status bar.
+  - Service menu action execution uses the same `DesktopLaunchPlan` and systemd
+    transient unit path as Open With.
 
 ## Remaining Work
 
 - Add parent MIME lookup for application fallback.
-- Add service menu discovery and execution based on desktop action metadata.
+- Add service menu submenu grouping, priority/order hints, multi-selection
+  action intersection, and additional `X-KDE-*` condition handling.
 - Add the "Other Application..." chooser and default-app update flow.
