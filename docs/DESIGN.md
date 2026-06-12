@@ -92,13 +92,14 @@ All outputs carry `PaneId`, `generation`, and path context so stale events can b
 
 `DirectoryModel` owns entries and emits model signals:
 
-- reset on new listing
+- keep the previous listing visible on `LoadingStarted`
+- reset/replace only when the current request delivers a new `ListingRefreshed`
 - insert item ranges
 - delete item ranges
 - refresh item ranges
 - report loading/error state
 
-The GPUI pane consumes snapshots and signals. It does not decide whether a filesystem event is an add, delete, refresh, or full reload.
+The GPUI pane consumes snapshots and signals. It does not decide whether a filesystem event is an add, delete, refresh, or full reload. During navigation it cancels transient interactions but retains the old model/layout until the new listing is ready, matching Dolphin's no-blank-frame loading behavior.
 
 ## GPUI Layer
 

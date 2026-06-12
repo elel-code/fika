@@ -52,32 +52,64 @@ item-vs-blank event boundaries, and later submenu behavior.
     snapshots.
   - The item hitbox is the child positioned at `visual_rect`, not the full item
     slot.
-  - Blank click, blank right-click, and rubber-band drag are attached to the
-    viewport; item click, item right-click, and item drag are attached to the
-    item visual rect.
+  - Blank press, blank right-click, and rubber-band drag are attached to the
+    viewport; item left press, item right-click, and item drag are attached to
+    the item visual rect. Item visual rects are mouse occlusion hitboxes so
+    single-click selection cannot leak into blank viewport handlers underneath.
+  - When a context menu or modal overlay is open, the file grid receives
+    `mouse_overlay_active` and does not apply item hover styling. This keeps
+    menu overlays from visually highlighting items below them even on GPUI paths
+    where hover invalidation lags behind the occlusion hitbox update.
 - `src/main.rs`
   - `item_at_content_point()` performs model hit testing and then filters by
     `visual_rect`.
   - `start_rubber_band_from_blank()` refuses to start if the pointer is inside
-    an item visual rect.
+    an item visual rect, and blank left press clears the current selection
+    before entering rubber-band state so blank-click clear does not depend on a
+    later synthesized click event.
+  - Rubber-band selection records a pane-local selection origin. While that
+    origin is active, a context-menu press only opens the selection/item menu
+    when the press lands on an already-selected item visual rect. A right press
+    on blank viewport space or on an unselected item clears the rubber-band
+    selection and does not reuse it for a menu.
+  - The rubber-band context hit-test uses the item visual/core rect, not the
+    whole compact-view item cell. A right press in padding around a selected
+    item is treated as outside selected content and clears the rubber-band
+    selection without opening a menu.
   - `show_blank_context_menu_if_blank()` only opens the blank menu after blank
     hit testing.
   - `show_item_context_menu()` focuses the pane, selects the item when needed,
     cancels rubber-band state, and opens the item menu.
-  - `context_menu_overlay()` is the current GPUI overlay implementation.
+  - `context_menu_overlay()` is the current GPUI overlay implementation. The
+    full-window layer is a mouse occlusion hitbox and stops mouse move, wheel,
+    left-click and right-click propagation, so menu hover/click cannot pass
+    through to file items underneath. Root, submenu, and nested submenu panels
+    also stop mouse move propagation. Modal overlays follow the same event
+    barrier rule.
   - `context_menu_actions()` generates Paste enabled state from the internal
     clipboard, adds Open in New Pane only for directory item targets, and keeps
     Copy Location on single item targets only. It appends Properties to blank,
     single-item, and multi-item menus, matching Dolphin's final properties
-    action placement.
+    action placement. Blank menus carry the current directory as an
+    `inode/directory` service-menu target, so service-provided entries such as
+    terminal actions appear with their service icons instead of being hard-coded
+    as built-ins. Menu rows have a stable leading icon slot; common file, place,
+    trash, sort/view, clipboard and service actions resolve system theme icons
+    first and use compact markers only as a fallback instead of rendering
+    all-text rows. Root menu generation also marks Dolphin-style visual groups:
+    blank menus separate create/paste/service actions/sort-view/
+    select-refresh/properties groups, while item menus separate open,
+    clipboard/paste, service actions, rename/delete, and properties groups.
   - `ContextMenuSubmenu` mirrors Qt `QMenu` child menus for first-level
     cascading items. `context_menu_overlay()` opens the submenu on hover or
     click, positions it at the parent row, and flips it to the left when there
-    is not enough viewport space to the right. Root menus and submenus use a
-    shared viewport layout calculation that clamps x/y inside the window,
-    shrinks width for narrow panes, caps height to the viewport, and scrolls
-    overflowing menu rows instead of letting overlays be clipped by pane or
-    window edges. Submenu hide follows the Qt menu grace-period model: leaving a
+    is not enough viewport space to the right. Root menus use the mouse position
+    as a popup anchor: they open down/right first, flip left/up against the same
+    anchor when the opposite side has room, and only then clamp to the viewport
+    when neither side fully fits. Root menus and submenus share the same viewport
+    layout calculation for narrow panes, capped height, and scrollable overflow
+    instead of letting overlays be clipped by pane or window edges. Submenu hide
+    follows the Qt menu grace-period model: leaving a
     root or submenu container schedules a delayed hide, entering either
     container cancels it, and stale delayed hides are ignored through an
     app-local generation counter. Individual rows only open or retarget
@@ -92,6 +124,15 @@ item-vs-blank event boundaries, and later submenu behavior.
   - `run_context_menu_action()` routes Open in New Pane through the same
     pane-splitting path as keyboard split actions, then loads the target
     directory into the new pane.
+  - `run_context_menu_action()` routes Open in New Window through
+    `current_executable_launch_plan()` and `launch_with_systemd_user()`. This
+    starts a separate Fika process for the target directory through a systemd
+    user transient unit, matching the launcher boundary used by Open With and
+    service menu actions rather than spawning a child process directly.
+  - Fika no longer adds a built-in `Open Terminal Here` item. Terminal entries
+    are expected to come from KDE service menus or application `.desktop`
+    actions, and those actions execute through the same systemd user transient
+    unit launcher path as Open With.
   - `run_context_menu_action()` writes Copy Location through GPUI's
     `ClipboardItem`/`write_to_clipboard` API.
   - `run_context_menu_action()` routes Paste on a single directory target into
@@ -100,35 +141,62 @@ item-vs-blank event boundaries, and later submenu behavior.
   - Places sidebar context menus follow Dolphin `PlacesPanel` on top of
     `KFilePlacesView`: blank sidebar space exposes Add Entry and Show Hidden
     Places; section headings expose Hide Section; normal places expose Open,
-    Open in New Pane, Edit Entry, Remove Entry, Hide, Copy Location, and
-    Properties; built-in places keep Edit/Remove disabled; user bookmarks keep
-    Edit/Remove enabled; Trash places expose Open, Open in New Pane, Empty
-    Trash, Hide, Copy Location, and Properties. Place and section hiding are
-    view state only: they filter the sidebar snapshot without deleting
+    Open in New Pane, Open in New Window, Edit Entry, Remove Entry, Hide, Copy
+    Location, and Properties; built-in places keep Edit/Remove disabled; user
+    bookmarks keep Edit/Remove enabled; Trash places expose Open, Open in New
+    Pane, Open in New Window, Empty Trash, Hide, Copy Location, and Properties.
+    Place and section hiding are view state only: they filter the sidebar
+    snapshot without deleting
     `PlaceEntry` values or rewriting `user-places.xbel`. User bookmarks are
     persisted through
     `src/core/places.rs` using a KDE/Dolphin-style `user-places.xbel` bookmark
     file under `$XDG_DATA_HOME` with `~/.local/share` fallback; built-in paths
-    keep priority over persisted bookmarks.
+    keep priority over persisted bookmarks. Places rows render theme-resolved
+    semantic icons (`user-home`, `folder-download`, `user-trash`,
+    `drive-harddisk`, and related fallbacks) in a fixed icon slot; when no
+    theme icon exists, the fallback is a small drawn place glyph rather than a
+    repeated text marker such as `H`, `Doc`, or `Down`.
   - Trash context menus follow Dolphin's trash branch: blank trash view menus
     expose Empty Trash, trash item menus expose Restore to Former Location and
     Delete Permanently, and Restore is enabled only when the trash metadata can
     resolve an original target. Trash blank menus use a Trash-specific Sort By
     submenu for Name, Original Path, and Deletion Time, matching Dolphin's
     Trash Details roles `text`, `path`, and `deletiontime`.
-  - Single item context menus expose an Actions submenu when core launcher data
-    provides matching service actions. The actions come from associated
+  - Single item context menus expose small or common service action sets directly
+    in the root menu. When many service actions match, important labels such as
+    Compress, Extract, Terminal, Send To, Copy To and Move To remain promoted and
+    the remaining actions move into a `More Actions` submenu. KDE service menus
+    with `X-KDE-Priority=TopLevel` are also promoted to the root menu, while
+    protocol, URL-count, and executable-presence conditions are filtered in the
+    core launcher before the UI sees the action. `X-KDE-Submenu` labels render
+    as real nested submenu rows inside `More Actions`; actions with a KDE
+    submenu are kept nested even when the service set is small, unless the
+    action explicitly requests `TopLevel`. The actions come from associated
     application `.desktop` `Actions=` entries and KDE service menu files with
-    `X-KDE-ServiceTypes=KonqPopupMenu/Plugin`; execution goes through the same
-    systemd transient unit launcher path as Open With.
+    `X-KDE-ServiceTypes=KonqPopupMenu/Plugin`; action, application, and service
+    menu `Icon=` values are preserved as named theme icons and rendered in the
+    menu row icon slot before falling back to compact markers. Execution goes
+    through the same systemd transient unit launcher path as Open With. When
+    Ark service menus are missing, built-in archive fallbacks fill only the
+    equivalent gaps: non-archive files/directories and multi-selections get
+    `Compress...`, while a single recognized archive file gets `Extract Here`
+    and `Extract To...`; these fallback rows are suppressed as soon as matching
+    Compress/Extract service actions exist.
   - Open With's "Other Application..." row opens a GPUI application chooser
-    backed by the core launcher cache. Choosing an application reuses the same
+    backed by the core launcher cache. The Open With submenu deduplicates by
+    desktop id and display name before rendering, so default and added
+    associations cannot show the same application twice. Open With submenu rows
+    and application chooser rows both use the `.desktop Icon=` value as a named
+    theme icon when available, falling back to the generic application icon only
+    when the launcher cache has no icon. Choosing an application reuses the same
     `DesktopLaunchPlan` and `launch_with_systemd_user()` path as direct Open
-    With rows.
-  - Multi-selection context menus expose the same Actions submenu only when the
-    core launcher finds actions that match every selected item and support
-    multi-path Exec field codes (`%F`/`%U`). Execution passes the pane-local
-    selected path list through the service menu launch plan.
+    With rows. When a MIME type is known, chooser rows also expose Set Default:
+    the action updates the user `mimeapps.list`, reloads launcher associations,
+    and refreshes the chooser's Default badge without launching the application.
+  - Multi-selection context menus use the same service-action promotion rule
+    only when the core launcher finds actions that match every selected item and
+    support multi-path Exec field codes (`%F`/`%U`). Execution passes the
+    pane-local selected path list through the service menu launch plan.
   - `properties_for_path()` and `properties_for_selection()` build the current
     GPUI Properties dialog data from `symlink_metadata()` only. Directory sizes
     are not recursively scanned on the UI path.
@@ -136,11 +204,11 @@ item-vs-blank event boundaries, and later submenu behavior.
 ## Current Gap List
 
 - Implement Icons and Details view modes behind the existing View Mode submenu.
-- Add default-app update flow from the application chooser. Open With execution,
-  Other Application execution, and service menu action execution are now driven
-  by core launcher data and the systemd launcher path.
-- Add Open in New Window.
-- Add remaining multi-selection differences such as built-in Compress fallback
-  when no service menu exists and batch rename.
+- Open With execution, Other Application execution, default-app updates, and
+  service menu action execution are now driven by core launcher data and the
+  systemd launcher path.
+- Add remaining multi-selection differences such as batch rename and all-folder
+  batch helpers. Built-in Compress and single-archive Extract fallbacks are now
+  present when no matching service menu exists.
 - Complete Trash-specific conflict handling and Details columns.
-- Complete removable device actions and Places drop/reorder behavior.
+- Complete removable device actions.

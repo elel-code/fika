@@ -2,12 +2,29 @@ mod core;
 
 pub const CHOOSER_CANCEL_EXIT_CODE: i32 = 75;
 
+pub use core::archive::{
+    ARK_DND_EXTRACT_INTERFACE, ARK_DND_EXTRACT_METHOD, ARK_DND_EXTRACT_PATH_MIME,
+    ARK_DND_EXTRACT_SERVICE_MIME, ArkDndExtractError, ArkDndExtractPayload, ArkDndExtractRequest,
+    ark_dnd_extract_payload, ark_dnd_extract_request, execute_ark_dnd_extract,
+    execute_ark_dnd_extract_with_bus, is_archive_mime_or_path,
+};
+pub use core::bus::{BusCallTarget, BusConfig, BusController, BusError, BusKind};
 pub use core::cache::{
     DirectoryCache, DirectoryCacheLimits, DirectoryCacheSnapshot, DirectoryCacheState,
     DirectoryCacheStats, normalize_cache_path,
 };
 pub use core::clipboard::{
     FileClipboardPayload, FileClipboardRole, decode_file_clipboard_text, encode_file_clipboard_text,
+};
+pub use core::devices::{
+    DBUS_OBJECT_MANAGER_INTERFACE, DeviceDiscoveryError, DeviceEvent, DeviceInfo, MountInfoEntry,
+    PROC_SELF_MOUNTINFO, UDISKS2_BLOCK_INTERFACE, UDISKS2_DRIVE_INTERFACE,
+    UDISKS2_FILESYSTEM_INTERFACE, UDISKS2_OBJECT_MANAGER_PATH, UDISKS2_SERVICE, Udisks2BlockDevice,
+    Udisks2InterfaceMap, Udisks2PropertyMap, Udisks2RawObject, Udisks2Snapshot,
+    device_events_between, devices_from_mount_entries, devices_from_mountinfo,
+    devices_from_udisks2_snapshot, parse_mountinfo, read_mountinfo_devices, read_udisks2_devices,
+    read_udisks2_devices_with_bus, read_udisks2_snapshot_with_bus,
+    udisks2_snapshot_from_managed_objects, udisks2_snapshot_from_raw_objects,
 };
 pub use core::directory::{
     ClassifiedWatcherDelta, DirectoryLister, DirectoryListerEvent, LoadMode, RefreshPair,
@@ -21,9 +38,12 @@ pub use core::file_ops;
 pub use core::filter::{FilteredModel, NameFilter, NameFilterMode};
 pub use core::launcher::{
     DesktopAction, DesktopApplication, DesktopLaunchCommand, DesktopLaunchPlan, DesktopServiceMenu,
-    LauncherError, MimeApplication, MimeApplicationCache, ServiceMenuAction, ServiceMenuTarget,
-    SystemdLaunchResult, SystemdLaunchUnit, launch_with_systemd_user, systemd_launch_unit_name,
-    systemd_units_for_launch_plan,
+    LauncherError, MimeApplication, MimeApplicationCache, MimeAppsList, ServiceMenuAction,
+    ServiceMenuPriority, ServiceMenuTarget, SystemdLaunchResult, SystemdLaunchUnit,
+    current_executable_launch_plan, default_mimeapps_list_path, launch_with_systemd_user,
+    parse_mimeapps_list, set_default_mime_application, set_default_mime_application_at,
+    set_default_mime_application_in_contents, systemd_launch_unit_name,
+    systemd_units_for_launch_plan, terminal_launch_plan_for_directory,
 };
 pub use core::mime::{
     MimeDatabase, detect_mime_from_magic, generic_mime_icon_name, mime_icon_name,

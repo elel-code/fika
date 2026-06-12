@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use super::bus::{BusController, BusKind};
 use super::file_ops;
 use std::env;
 use std::fs;
@@ -256,16 +257,12 @@ async fn start_session_helper_and_call(
 }
 
 async fn call_dbus_command_on_system_bus(command: &PrivilegedCommand) -> Result<String, String> {
-    let connection = Connection::system()
-        .await
-        .map_err(|err| format!("cannot connect to system D-Bus: {err}"))?;
+    let connection = privileged_bus_connection(BusKind::System).await?;
     call_dbus_command(command, &connection).await
 }
 
 async fn call_dbus_command_on_session_bus(command: &PrivilegedCommand) -> Result<String, String> {
-    let connection = Connection::session()
-        .await
-        .map_err(|err| format!("cannot connect to session D-Bus: {err}"))?;
+    let connection = privileged_bus_connection(BusKind::Session).await?;
     call_dbus_command(command, &connection).await
 }
 
@@ -315,16 +312,12 @@ async fn call_dbus_command(
 }
 
 async fn prepare_external_edit_via_system_bus(path: &Path) -> Result<ExternalEditSession, String> {
-    let connection = Connection::system()
-        .await
-        .map_err(|err| format!("cannot connect to system D-Bus: {err}"))?;
+    let connection = privileged_bus_connection(BusKind::System).await?;
     prepare_external_edit_call(&connection, path).await
 }
 
 async fn prepare_external_edit_via_session_bus(path: &Path) -> Result<ExternalEditSession, String> {
-    let connection = Connection::session()
-        .await
-        .map_err(|err| format!("cannot connect to session D-Bus: {err}"))?;
+    let connection = privileged_bus_connection(BusKind::Session).await?;
     prepare_external_edit_call(&connection, path).await
 }
 
@@ -356,20 +349,16 @@ pub(crate) async fn commit_external_edit_via_dbus(
     session: &ExternalEditSession,
 ) -> Result<PathBuf, String> {
     let system_result = async {
-        let connection = Connection::system()
-            .await
-            .map_err(|err| format!("cannot connect to system D-Bus: {err}"))?;
+        let connection = privileged_bus_connection(BusKind::System).await?;
         commit_external_edit_call(session, &connection).await
     }
     .await;
     match system_result {
         Ok(path) => Ok(path),
         Err(system_error) => {
-            let connection = Connection::session().await.map_err(|err| {
-                format!(
-                    "cannot connect to session D-Bus: {err}; system bus call failed: {system_error}"
-                )
-            })?;
+            let connection = privileged_bus_connection(BusKind::Session)
+                .await
+                .map_err(|err| format!("{err}; system bus call failed: {system_error}"))?;
             commit_external_edit_call(session, &connection).await
         }
     }
@@ -379,20 +368,16 @@ pub(crate) async fn discard_external_edit_via_dbus(
     session: &ExternalEditSession,
 ) -> Result<PathBuf, String> {
     let system_result = async {
-        let connection = Connection::system()
-            .await
-            .map_err(|err| format!("cannot connect to system D-Bus: {err}"))?;
+        let connection = privileged_bus_connection(BusKind::System).await?;
         discard_external_edit_call(session, &connection).await
     }
     .await;
     match system_result {
         Ok(path) => Ok(path),
         Err(system_error) => {
-            let connection = Connection::session().await.map_err(|err| {
-                format!(
-                    "cannot connect to session D-Bus: {err}; system bus call failed: {system_error}"
-                )
-            })?;
+            let connection = privileged_bus_connection(BusKind::Session)
+                .await
+                .map_err(|err| format!("{err}; system bus call failed: {system_error}"))?;
             discard_external_edit_call(session, &connection).await
         }
     }
@@ -406,20 +391,16 @@ pub(crate) async fn associate_external_edit_unit_via_dbus(
     };
     let session_bus_address = env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
     let system_result = async {
-        let connection = Connection::system()
-            .await
-            .map_err(|err| format!("cannot connect to system D-Bus: {err}"))?;
+        let connection = privileged_bus_connection(BusKind::System).await?;
         associate_external_edit_unit_call(session, unit, &session_bus_address, &connection).await
     }
     .await;
     match system_result {
         Ok(()) => Ok(()),
         Err(system_error) => {
-            let connection = Connection::session().await.map_err(|err| {
-                format!(
-                    "cannot connect to session D-Bus: {err}; system bus call failed: {system_error}"
-                )
-            })?;
+            let connection = privileged_bus_connection(BusKind::Session)
+                .await
+                .map_err(|err| format!("{err}; system bus call failed: {system_error}"))?;
             associate_external_edit_unit_call(session, unit, &session_bus_address, &connection)
                 .await
         }
@@ -500,7 +481,7 @@ async fn wait_for_service() -> Result<(), String> {
         if tokio::time::Instant::now() >= deadline {
             return Err("timed out waiting for privileged D-Bus helper".to_string());
         }
-        if let Ok(connection) = Connection::session().await
+        if let Ok(connection) = privileged_bus_connection(BusKind::Session).await
             && let Ok(dbus) = DBusProxy::new(&connection).await
             && dbus.get_name_owner(service_name.clone()).await.is_ok()
         {
@@ -508,6 +489,13 @@ async fn wait_for_service() -> Result<(), String> {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+async fn privileged_bus_connection(kind: BusKind) -> Result<Connection, String> {
+    BusController::shared()
+        .connection(kind)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 fn start_dbus_helper() -> Result<Child, String> {

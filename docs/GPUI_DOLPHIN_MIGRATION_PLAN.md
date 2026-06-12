@@ -87,6 +87,13 @@ enum DirectoryListerEvent {
 }
 ```
 
+`LoadingStarted` is a request/lifecycle signal, not a visual model reset. Fika
+keeps the previous `DirectoryModel` and pane layout visible while the current
+request is pending, cancels only transient UI interactions, and swaps the model
+when the matching `ListingRefreshed` arrives. This follows Dolphin's practical
+no-blank-frame behavior during directory changes and avoids flicker when async
+listing is slower than the UI frame.
+
 ### Model to View
 
 `../dolphin/src/kitemviews/kitemlistview.cpp:1812` connects the model to item view slots for item changes, insertions, removals, moves, groups, and sorting.

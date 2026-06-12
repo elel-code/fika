@@ -1,5 +1,6 @@
 use crate::{
-    FikaApp, ItemDragPayload, RubberBandDrag, VisibleItemSnapshot, file_transfer_mode_for_modifiers,
+    FikaApp, FileTransferMode, ItemDragPayload, RubberBandDrag, VisibleItemSnapshot,
+    file_transfer_mode_for_modifiers,
 };
 use fika_core::{
     CompactLayout, CompactLayoutOptions, HorizontalScrollBarLayout, ItemLayout, PaneId, ViewPoint,
@@ -7,9 +8,9 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    Bounds, Context, Div, Empty, ExternalPaths, MouseButton, ParentElement, Pixels, Render, Rgba,
-    ScrollDelta, Stateful, Styled, StyledImage, Window, canvas, div, fill, img, point, px, rgb,
-    rgba, size,
+    Bounds, Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement,
+    Pixels, Render, Rgba, ScrollDelta, Stateful, Styled, StyledImage, Window, canvas, div, fill,
+    img, point, px, rgb, rgba, size,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,8 +32,9 @@ pub(crate) struct FileGridProps {
     pub(crate) visible_items: Vec<VisibleItemSnapshot>,
     pub(crate) view: ViewState,
     pub(crate) rubber_band: Option<ViewRect>,
-    pub(crate) drop_target: bool,
+    pub(crate) drop_target: Option<FileTransferMode>,
     pub(crate) mode: FileGridMode,
+    pub(crate) mouse_overlay_active: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,6 +43,12 @@ pub(crate) struct ActiveScrollBarDrag {
     pub(crate) content_width: f32,
     pub(crate) initial_scroll_x: f32,
     pub(crate) start_track_x: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HorizontalScrollBarTrack {
+    pub(crate) origin_x: f32,
+    pub(crate) width: f32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,6 +83,7 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
         rubber_band,
         drop_target,
         mode,
+        mouse_overlay_active,
     } = props;
     let content_size = layout.content_size();
     let visible_width = view.viewport_width;
@@ -88,6 +97,8 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
             SCROLLBAR_MIN_HANDLE_WIDTH,
         )
         .is_some();
+    let viewport_wheel_layout = layout.clone();
+    let scrollbar_wheel_layout = layout.clone();
     let app = cx.weak_entity();
     let drag_view = view.clone();
 
@@ -135,45 +146,97 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
-                .bg(if drop_target {
-                    rgba(0x16a34a18)
-                } else {
-                    rgba(0x00000000)
-                })
+                .bg(drop_target.map_or(rgba(0x00000000), drop_target_viewport_background))
+                .occlude()
                 .overflow_hidden()
                 .on_scroll_wheel(cx.listener(
                     move |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                        let horizontal_delta = horizontal_wheel_scroll_delta(
-                            event.delta,
-                            window.line_height(),
-                            &layout,
-                            visible_width,
-                        );
-                        this.scroll_pane_smooth(
+                        handle_file_grid_wheel(
+                            this,
                             pane_id,
-                            horizontal_delta,
-                            0.0,
+                            event,
+                            window,
+                            &viewport_wheel_layout,
+                            visible_width,
                             max_scroll_x,
                             max_scroll_y,
                             cx,
                         );
-                        cx.stop_propagation();
                     },
                 ))
+                .on_mouse_down(
+                    MouseButton::Navigate(NavigationDirection::Back),
+                    cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                        handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Back);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Navigate(NavigationDirection::Forward),
+                    cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                        handle_pane_navigation_mouse_down(
+                            this,
+                            pane_id,
+                            NavigationDirection::Forward,
+                        );
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                        let started =
+                            this.start_rubber_band_from_window_if_blank(pane_id, event.position);
+                        cx.stop_propagation();
+                        if started {
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event: &gpui::MouseUpEvent, _window, cx| {
+                        this.finish_rubber_band(pane_id);
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event: &gpui::MouseUpEvent, _window, cx| {
+                        this.finish_rubber_band(pane_id);
+                        cx.notify();
+                    }),
+                )
                 .on_click(
                     cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                         if event.standard_click()
                             && this.handle_blank_click(pane_id, event.position())
                         {
-                            cx.stop_propagation();
                             cx.notify();
+                        }
+                        if event.standard_click() {
+                            cx.stop_propagation();
                         }
                     }),
                 )
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                        if this.show_blank_context_menu_if_blank(pane_id, event.position) {
+                        let shown = this.show_blank_context_menu_if_blank(pane_id, event.position);
+                        cx.stop_propagation();
+                        if shown {
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                        if matches!(mode, FileGridMode::Manager)
+                            && this.paste_primary_into_pane_if_blank(pane_id, event.position, cx)
+                        {
                             cx.stop_propagation();
                             cx.notify();
                         }
@@ -187,11 +250,10 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                             event.bounds,
                             &drag_view,
                         );
-                        if this
+                        if !this
                             .rubber_band
                             .as_ref()
-                            .is_none_or(|band| band.pane_id != pane_id)
-                            && !this.start_rubber_band_from_blank(pane_id, current)
+                            .is_some_and(|band| band.pane_id == pane_id)
                         {
                             return;
                         }
@@ -206,39 +268,57 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                     },
                 ))
                 .on_drag_move::<ItemDrag>(cx.listener(
-                    move |this, _event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
-                        let changed = this.set_item_drag_drop_target_for_pane(pane_id);
-                        this.schedule_drop_target_stale_clear(cx);
+                    move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                        let contains = event.bounds.contains(&event.event.position)
+                            && this.window_position_is_blank_in_pane(pane_id, event.event.position);
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                        let changed =
+                            contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                        if contains {
+                            this.schedule_drop_target_stale_clear(cx);
+                        }
                         if changed {
                             cx.notify();
                         }
-                        cx.stop_propagation();
+                        if contains {
+                            cx.stop_propagation();
+                        }
                     },
                 ))
                 .on_drag_move::<ExternalPaths>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
-                        let changed = event.bounds.contains(&event.event.position)
-                            && this.set_item_drag_drop_target_for_pane(pane_id);
-                        if changed || event.bounds.contains(&event.event.position) {
+                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                        let contains = event.bounds.contains(&event.event.position)
+                            && this.window_position_is_blank_in_pane(pane_id, event.event.position);
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                        let changed =
+                            contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                        if contains {
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {
                             cx.notify();
                         }
-                        cx.stop_propagation();
+                        if contains {
+                            cx.stop_propagation();
+                        }
                     },
                 ))
                 .on_drag_move::<PlaceDrag>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
-                        let changed = event.bounds.contains(&event.event.position)
-                            && this.set_item_drag_drop_target_for_pane(pane_id);
-                        if changed || event.bounds.contains(&event.event.position) {
+                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
+                        let contains = event.bounds.contains(&event.event.position)
+                            && this.window_position_is_blank_in_pane(pane_id, event.event.position);
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                        let changed =
+                            contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                        if contains {
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {
                             cx.notify();
                         }
-                        cx.stop_propagation();
+                        if contains {
+                            cx.stop_propagation();
+                        }
                     },
                 ))
                 .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
@@ -248,10 +328,12 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                     cx.notify();
                 }))
                 .on_drop::<ExternalPaths>(cx.listener(
-                    move |this, external_paths: &ExternalPaths, _window, cx| {
+                    move |this, external_paths: &ExternalPaths, window, cx| {
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
                         this.drop_external_paths_to_pane(
                             pane_id,
                             external_paths.paths().to_vec(),
+                            mode,
                             cx,
                         );
                         cx.stop_propagation();
@@ -271,18 +353,31 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                         .w(px(content_size.width))
                         .h(px(content_size.height))
                         .children(
-                            visible_items
-                                .into_iter()
-                                .map(|item| item_tile(pane_id, item, mode, cx)),
+                            visible_items.into_iter().map(|item| {
+                                item_tile(pane_id, item, mode, mouse_overlay_active, cx)
+                            }),
                         ),
                 )
                 .when_some(rubber_band, |viewport, rect| {
-                    viewport.child(rubber_band_overlay(rect))
+                    viewport.child(rubber_band_overlay(rect, view.scroll_x, view.scroll_y))
                 }),
         )
         .when(scroll_bar_visible, |grid| {
+            let scrollbar_track_app = cx.weak_entity();
             grid.child(
                 div()
+                    .on_children_prepainted(move |bounds, _window, cx| {
+                        let Some(bounds) = bounds.first() else {
+                            return;
+                        };
+                        let _ = scrollbar_track_app.update(cx, |this, _cx| {
+                            this.set_horizontal_scrollbar_track(
+                                pane_id,
+                                bounds.origin.x.as_f32(),
+                                bounds.size.width.as_f32(),
+                            );
+                        });
+                    })
                     .id(format!("scrollbar-x-reserve-{}", pane_id.0))
                     .h(px(SCROLLBAR_THICKNESS))
                     .w_full()
@@ -290,6 +385,61 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                     .min_w_0()
                     .flex_shrink_1()
                     .overflow_hidden()
+                    .occlude()
+                    .on_mouse_down(
+                        MouseButton::Navigate(NavigationDirection::Back),
+                        cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                            handle_pane_navigation_mouse_down(
+                                this,
+                                pane_id,
+                                NavigationDirection::Back,
+                            );
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Navigate(NavigationDirection::Forward),
+                        cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                            handle_pane_navigation_mouse_down(
+                                this,
+                                pane_id,
+                                NavigationDirection::Forward,
+                            );
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .on_scroll_wheel(cx.listener(
+                        move |this, event: &gpui::ScrollWheelEvent, window, cx| {
+                            handle_file_grid_wheel(
+                                this,
+                                pane_id,
+                                event,
+                                window,
+                                &scrollbar_wheel_layout,
+                                visible_width,
+                                max_scroll_x,
+                                max_scroll_y,
+                                cx,
+                            );
+                        },
+                    ))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                            let started = this.begin_horizontal_scrollbar_drag_from_window(
+                                pane_id,
+                                content_size.width,
+                                view.scroll_x,
+                                event.position,
+                            );
+                            cx.stop_propagation();
+                            if started {
+                                cx.notify();
+                            }
+                        }),
+                    )
                     .child(horizontal_scroll_bar(
                         pane_id,
                         content_size.width,
@@ -316,12 +466,89 @@ fn horizontal_scroll_bar(
         .overflow_hidden()
         .h(px(SCROLLBAR_THICKNESS))
         .bg(rgb(0xe6e9ef))
+        .occlude()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                let started = this.begin_horizontal_scrollbar_drag_from_window(
+                    pane_id,
+                    content_width,
+                    scroll_x,
+                    event.position,
+                );
+                cx.stop_propagation();
+                if started {
+                    cx.notify();
+                }
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Back),
+            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Back);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Forward),
+            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Forward);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
         .child(scroll_bar_handle_canvas(
             pane_id,
             content_width,
             scroll_x,
             cx,
         ))
+}
+
+fn handle_pane_navigation_mouse_down(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    direction: NavigationDirection,
+) {
+    app.panes.focus(pane_id);
+    match direction {
+        NavigationDirection::Back => app.go_back(pane_id),
+        NavigationDirection::Forward => app.go_forward(pane_id),
+    }
+}
+
+fn handle_file_grid_wheel(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    event: &gpui::ScrollWheelEvent,
+    window: &mut Window,
+    layout: &CompactLayout,
+    visible_width: f32,
+    max_scroll_x: f32,
+    max_scroll_y: f32,
+    cx: &mut Context<FikaApp>,
+) {
+    if event.modifiers.control {
+        app.finish_rubber_band(pane_id);
+        app.zoom_pane_from_wheel(pane_id, event.delta);
+        cx.stop_propagation();
+        cx.notify();
+        return;
+    }
+
+    app.finish_rubber_band(pane_id);
+    let horizontal_delta =
+        horizontal_wheel_scroll_delta(event.delta, window.line_height(), layout, visible_width);
+    app.scroll_pane_smooth(
+        pane_id,
+        horizontal_delta,
+        0.0,
+        max_scroll_x,
+        max_scroll_y,
+        cx,
+    );
+    cx.stop_propagation();
 }
 
 fn horizontal_wheel_scroll_delta(
@@ -401,6 +628,35 @@ fn scroll_x_for_scrollbar_drag_start(
 }
 
 impl FikaApp {
+    pub(crate) fn set_horizontal_scrollbar_track(
+        &mut self,
+        pane_id: PaneId,
+        origin_x: f32,
+        width: f32,
+    ) -> bool {
+        let width = normalize_viewport_extent(width).max(0.0);
+        let track = HorizontalScrollBarTrack { origin_x, width };
+        if self.horizontal_scrollbar_tracks.get(&pane_id) == Some(&track) {
+            return false;
+        }
+        self.horizontal_scrollbar_tracks.insert(pane_id, track);
+        true
+    }
+
+    pub(crate) fn begin_horizontal_scrollbar_drag_from_window(
+        &mut self,
+        pane_id: PaneId,
+        content_width: f32,
+        scroll_x: f32,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> bool {
+        let Some(track) = self.horizontal_scrollbar_tracks.get(&pane_id).copied() else {
+            return false;
+        };
+        let track_x = (position.x.as_f32() - track.origin_x).clamp(0.0, track.width);
+        self.begin_horizontal_scrollbar_drag(pane_id, content_width, scroll_x, track_x, track.width)
+    }
+
     pub(crate) fn begin_horizontal_scrollbar_drag(
         &mut self,
         pane_id: PaneId,
@@ -415,6 +671,7 @@ impl FikaApp {
             return false;
         };
         let max_scroll_x = (content_width - track_width).max(0.0);
+        self.finish_rubber_band(pane_id);
         self.active_scrollbar_drag = Some(ActiveScrollBarDrag {
             pane_id,
             content_width,
@@ -480,6 +737,7 @@ impl FikaApp {
         {
             self.active_scrollbar_drag = None;
         }
+        self.horizontal_scrollbar_tracks.remove(&pane_id);
     }
 }
 
@@ -490,8 +748,18 @@ fn scroll_bar_handle_canvas(
     cx: &mut Context<FikaApp>,
 ) -> impl IntoElement {
     let app = cx.weak_entity();
+    let app_for_prepaint = app.clone();
     canvas(
-        move |bounds, _window, _cx| scroll_bar_layout_for_bounds(content_width, scroll_x, bounds),
+        move |bounds, _window, cx| {
+            let _ = app_for_prepaint.update(cx, |this, _cx| {
+                this.set_horizontal_scrollbar_track(
+                    pane_id,
+                    bounds.origin.x.as_f32(),
+                    bounds.size.width.as_f32(),
+                );
+            });
+            scroll_bar_layout_for_bounds(content_width, scroll_x, bounds)
+        },
         move |bounds, bar, window, _cx| {
             let Some(bar) = bar else {
                 return;
@@ -500,7 +768,7 @@ fn scroll_bar_handle_canvas(
             let track_width = normalize_viewport_extent(bounds.size.width.as_f32());
             let app_for_down = app.clone();
             window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, _window, cx| {
-                if !phase.bubble()
+                if !phase.capture()
                     || event.button != MouseButton::Left
                     || !bounds.contains(&event.position)
                 {
@@ -518,33 +786,52 @@ fn scroll_bar_handle_canvas(
                         cx.notify();
                     }
                 });
+                cx.stop_propagation();
             });
 
             let app_for_move = app.clone();
             window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
-                if !phase.bubble() || !event.dragging() {
+                if !phase.capture() {
                     return;
                 }
                 let track_x = (event.position.x - track_origin_x).as_f32();
-                let _ = app_for_move.update(cx, |this, cx| {
-                    if this.update_horizontal_scrollbar_drag(pane_id, track_x, track_width) {
-                        cx.notify();
-                    }
-                });
+                let handled = app_for_move
+                    .update(cx, |this, cx| {
+                        let active = this
+                            .active_scrollbar_drag
+                            .is_some_and(|drag| drag.pane_id == pane_id);
+                        if active
+                            && this.update_horizontal_scrollbar_drag(pane_id, track_x, track_width)
+                        {
+                            cx.notify();
+                        }
+                        active
+                    })
+                    .unwrap_or(false);
+                if handled {
+                    cx.stop_propagation();
+                }
             });
 
             let app_for_up = app.clone();
             window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _window, cx| {
-                if !phase.bubble() || event.button != MouseButton::Left {
+                if !phase.capture() || event.button != MouseButton::Left {
                     return;
                 }
-                let _ = app_for_up.update(cx, |this, cx| {
-                    if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
-                        cx.notify();
-                    }
-                });
+                let handled = app_for_up
+                    .update(cx, |this, cx| {
+                        if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                            cx.notify();
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
+                if handled {
+                    cx.stop_propagation();
+                }
             });
-
             let handle = bar.handle_rect;
             window.paint_quad(
                 fill(
@@ -579,31 +866,32 @@ fn scroll_bar_layout_for_bounds(
     )
 }
 
-fn handle_item_click(
+fn handle_item_mouse_down(
     app: &mut FikaApp,
     pane_id: PaneId,
     path: PathBuf,
     is_dir: bool,
     mode: FileGridMode,
-    event: &gpui::ClickEvent,
-) {
+    event: &gpui::MouseDownEvent,
+) -> bool {
     app.dismiss_context_menu();
     app.panes.focus(pane_id);
 
-    let extend = event.modifiers().shift;
-    let toggle = event.modifiers().secondary();
-    let double_click = event.click_count() >= 2;
-
+    let extend = event.modifiers.shift;
+    let toggle = event.modifiers.secondary();
+    let double_click = event.click_count >= 2;
     match mode {
         FileGridMode::Manager => {
             if double_click && is_dir {
                 app.load_pane(pane_id, path);
-            } else if extend {
-                app.select_range_to(pane_id, path);
-            } else if toggle {
-                app.toggle_selection(pane_id, path);
-            } else {
-                app.select_only(pane_id, path);
+            } else if !double_click {
+                if extend {
+                    app.select_range_to(pane_id, path);
+                } else if toggle {
+                    app.toggle_selection(pane_id, path);
+                } else {
+                    app.select_only(pane_id, path);
+                }
             }
         }
         FileGridMode::Chooser {
@@ -614,8 +902,24 @@ fn handle_item_click(
                 app.load_pane(pane_id, path);
             } else if directories {
                 if !is_dir {
-                    return;
+                    return true;
                 }
+                if !double_click {
+                    if extend {
+                        app.select_range_to(pane_id, path);
+                    } else if toggle || multiple {
+                        app.toggle_selection(pane_id, path);
+                    } else {
+                        app.select_only(pane_id, path);
+                    }
+                }
+            } else if is_dir {
+                if !double_click {
+                    app.select_only(pane_id, path);
+                }
+            } else if double_click && !multiple {
+                app.choose_path(path);
+            } else if !double_click {
                 if extend {
                     app.select_range_to(pane_id, path);
                 } else if toggle || multiple {
@@ -623,25 +927,22 @@ fn handle_item_click(
                 } else {
                     app.select_only(pane_id, path);
                 }
-            } else if is_dir {
-                app.select_only(pane_id, path);
-            } else if double_click && !multiple {
-                app.choose_path(path);
-            } else if extend {
-                app.select_range_to(pane_id, path);
-            } else if toggle || multiple {
-                app.toggle_selection(pane_id, path);
-            } else {
-                app.select_only(pane_id, path);
             }
         }
     }
+    true
+}
+
+#[cfg(test)]
+fn item_mouse_down_opens_directory(is_dir: bool, _mode: FileGridMode, click_count: usize) -> bool {
+    is_dir && click_count >= 2
 }
 
 fn item_tile(
     pane_id: PaneId,
     item: VisibleItemSnapshot,
     mode: FileGridMode,
+    mouse_overlay_active: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let id = format!("item-slot-{}-{}", pane_id.0, item.slot_id);
@@ -653,7 +954,7 @@ fn item_tile(
         .unwrap_or_else(|| item.name.to_string());
     let item_rect = item.layout.item_rect;
     let visual = item.layout.visual_rect;
-    let path_for_click = item.path.clone();
+    let path_for_mouse_down = item.path.clone();
     let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
     let target_dir_for_drop = item.path.clone();
@@ -687,20 +988,27 @@ fn item_tile(
                 .w(px(visual.width))
                 .h(px(visual.height))
                 .rounded_md()
+                .border_1()
+                .border_color(item_tile_border_color(selected, drop_target))
                 .bg(item_tile_background(selected, drop_target))
-                .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
+                .occlude()
+                .when(!mouse_overlay_active, |tile| {
+                    tile.hover(move |tile| {
+                        tile.bg(item_tile_hover_background(selected, drop_target))
+                    })
+                })
                 .cursor_pointer()
-                .on_click(
-                    cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
-                        if event.standard_click() {
-                            handle_item_click(
-                                this,
-                                pane_id,
-                                path_for_click.clone(),
-                                is_dir_for_click,
-                                mode,
-                                event,
-                            );
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                        if handle_item_mouse_down(
+                            this,
+                            pane_id,
+                            path_for_mouse_down.clone(),
+                            is_dir_for_click,
+                            mode,
+                            event,
+                        ) {
                             cx.stop_propagation();
                             cx.notify();
                         }
@@ -732,13 +1040,20 @@ fn item_tile(
                     })
                 })
                 .on_drag_move::<PlaceDrag>(cx.listener(
-                    move |this, _event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
-                        let changed = this.set_item_drag_drop_target_for_pane(pane_id);
-                        this.schedule_drop_target_stale_clear(cx);
+                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
+                        let contains = event.bounds.contains(&event.event.position);
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                        let changed =
+                            contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                        if contains {
+                            this.schedule_drop_target_stale_clear(cx);
+                        }
                         if changed {
                             cx.notify();
                         }
-                        cx.stop_propagation();
+                        if contains {
+                            cx.stop_propagation();
+                        }
                     },
                 ))
                 .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, _window, cx| {
@@ -750,33 +1065,61 @@ fn item_tile(
                     let target_dir_for_move = target_dir_for_drop.clone();
                     let target_dir_for_external_move = target_dir_for_drop.clone();
                     let target_dir_for_external_drop = target_dir_for_drop.clone();
-                    tile.on_drag_move::<ItemDrag>(cx.listener(
-                        move |this, _event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
-                            let changed = this.set_item_drag_drop_target_for_directory(
-                                pane_id,
-                                target_dir_for_move.clone(),
-                            );
-                            this.schedule_drop_target_stale_clear(cx);
-                            if changed {
+                    let target_dir_for_primary_paste = target_dir_for_drop.clone();
+                    tile.on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                            if matches!(mode, FileGridMode::Manager) {
+                                this.paste_primary_into_directory(
+                                    pane_id,
+                                    target_dir_for_primary_paste.clone(),
+                                    cx,
+                                );
+                                cx.stop_propagation();
                                 cx.notify();
                             }
-                            cx.stop_propagation();
-                        },
-                    ))
-                    .on_drag_move::<ExternalPaths>(cx.listener(
-                        move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
-                            let changed = event.bounds.contains(&event.event.position)
+                        }),
+                    )
+                    .on_drag_move::<ItemDrag>(cx.listener(
+                        move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                            let contains = event.bounds.contains(&event.event.position);
+                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                            let changed = contains
                                 && this.set_item_drag_drop_target_for_directory(
                                     pane_id,
-                                    target_dir_for_external_move.clone(),
+                                    target_dir_for_move.clone(),
+                                    mode,
                                 );
-                            if changed || event.bounds.contains(&event.event.position) {
+                            if contains {
                                 this.schedule_drop_target_stale_clear(cx);
                             }
                             if changed {
                                 cx.notify();
                             }
-                            cx.stop_propagation();
+                            if contains {
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                    .on_drag_move::<ExternalPaths>(cx.listener(
+                        move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                            let contains = event.bounds.contains(&event.event.position);
+                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                            let changed = contains
+                                && this.set_item_drag_drop_target_for_directory(
+                                    pane_id,
+                                    target_dir_for_external_move.clone(),
+                                    mode,
+                                );
+                            if contains {
+                                this.schedule_drop_target_stale_clear(cx);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                            if contains {
+                                cx.stop_propagation();
+                            }
                         },
                     ))
                     .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
@@ -792,11 +1135,13 @@ fn item_tile(
                         cx.notify();
                     }))
                     .on_drop::<ExternalPaths>(cx.listener(
-                        move |this, external_paths: &ExternalPaths, _window, cx| {
+                        move |this, external_paths: &ExternalPaths, window, cx| {
+                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
                             this.drop_external_paths_to_directory(
                                 pane_id,
                                 external_paths.paths().to_vec(),
                                 target_dir_for_external_drop.clone(),
+                                mode,
                                 cx,
                             );
                             cx.stop_propagation();
@@ -806,26 +1151,37 @@ fn item_tile(
                 })
                 .when(!is_dir_for_drop, |tile| {
                     tile.on_drag_move::<ItemDrag>(cx.listener(
-                        move |this, _event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
-                            let changed = this.set_item_drag_drop_target_for_pane(pane_id);
-                            this.schedule_drop_target_stale_clear(cx);
-                            if changed {
-                                cx.notify();
-                            }
-                            cx.stop_propagation();
-                        },
-                    ))
-                    .on_drag_move::<ExternalPaths>(cx.listener(
-                        move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
-                            let changed = event.bounds.contains(&event.event.position)
-                                && this.set_item_drag_drop_target_for_pane(pane_id);
-                            if changed || event.bounds.contains(&event.event.position) {
+                        move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                            let contains = event.bounds.contains(&event.event.position);
+                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                            let changed =
+                                contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                            if contains {
                                 this.schedule_drop_target_stale_clear(cx);
                             }
                             if changed {
                                 cx.notify();
                             }
-                            cx.stop_propagation();
+                            if contains {
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                    .on_drag_move::<ExternalPaths>(cx.listener(
+                        move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                            let contains = event.bounds.contains(&event.event.position);
+                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                            let changed =
+                                contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                            if contains {
+                                this.schedule_drop_target_stale_clear(cx);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                            if contains {
+                                cx.stop_propagation();
+                            }
                         },
                     ))
                     .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
@@ -835,10 +1191,12 @@ fn item_tile(
                         cx.notify();
                     }))
                     .on_drop::<ExternalPaths>(cx.listener(
-                        move |this, external_paths: &ExternalPaths, _window, cx| {
+                        move |this, external_paths: &ExternalPaths, window, cx| {
+                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
                             this.drop_external_paths_to_pane(
                                 pane_id,
                                 external_paths.paths().to_vec(),
+                                mode,
                                 cx,
                             );
                             cx.stop_propagation();
@@ -857,9 +1215,9 @@ fn item_tile(
         )
 }
 
-fn item_tile_background(selected: bool, drop_target: bool) -> Rgba {
-    if drop_target {
-        rgba(0x16a34a2e)
+fn item_tile_background(selected: bool, drop_target: Option<FileTransferMode>) -> Rgba {
+    if let Some(mode) = drop_target {
+        drop_target_item_background(mode)
     } else if selected {
         rgb(0xdbeafe)
     } else {
@@ -867,13 +1225,55 @@ fn item_tile_background(selected: bool, drop_target: bool) -> Rgba {
     }
 }
 
-fn item_tile_hover_background(selected: bool, drop_target: bool) -> Rgba {
-    if drop_target {
-        rgba(0x16a34a3d)
+fn item_tile_border_color(selected: bool, drop_target: Option<FileTransferMode>) -> Rgba {
+    if let Some(mode) = drop_target {
+        drop_target_border_color(mode)
+    } else if selected {
+        rgb(0xbfdbfe)
+    } else {
+        rgba(0x00000000)
+    }
+}
+
+fn item_tile_hover_background(selected: bool, drop_target: Option<FileTransferMode>) -> Rgba {
+    if let Some(mode) = drop_target {
+        drop_target_item_hover_background(mode)
     } else if selected {
         rgb(0xdbeafe)
     } else {
         rgb(0xf1f5f9)
+    }
+}
+
+fn drop_target_viewport_background(mode: FileTransferMode) -> Rgba {
+    match mode {
+        FileTransferMode::Copy => rgba(0x16a34a24),
+        FileTransferMode::Move => rgba(0xd9770624),
+        FileTransferMode::Link => rgba(0x7c3aed24),
+    }
+}
+
+fn drop_target_item_background(mode: FileTransferMode) -> Rgba {
+    match mode {
+        FileTransferMode::Copy => rgba(0x16a34a34),
+        FileTransferMode::Move => rgba(0xd9770634),
+        FileTransferMode::Link => rgba(0x7c3aed34),
+    }
+}
+
+fn drop_target_item_hover_background(mode: FileTransferMode) -> Rgba {
+    match mode {
+        FileTransferMode::Copy => rgba(0x16a34a4a),
+        FileTransferMode::Move => rgba(0xd977064a),
+        FileTransferMode::Link => rgba(0x7c3aed4a),
+    }
+}
+
+fn drop_target_border_color(mode: FileTransferMode) -> Rgba {
+    match mode {
+        FileTransferMode::Copy => rgb(0x16a34a),
+        FileTransferMode::Move => rgb(0xd97706),
+        FileTransferMode::Link => rgb(0x7c3aed),
     }
 }
 
@@ -987,8 +1387,11 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::{drag_preview_label, horizontal_wheel_scroll_delta, scroll_x_for_scrollbar_drag};
-    use fika_core::{CompactLayout, CompactLayoutOptions};
+    use super::{
+        FileGridMode, drag_preview_label, horizontal_wheel_scroll_delta,
+        item_mouse_down_opens_directory, rubber_band_viewport_rect, scroll_x_for_scrollbar_drag,
+    };
+    use fika_core::{CompactLayout, CompactLayoutOptions, ViewRect};
     use gpui::{ScrollDelta, point, px};
 
     #[test]
@@ -1030,6 +1433,25 @@ mod tests {
     }
 
     #[test]
+    fn double_mouse_down_opens_directory_before_click_synthesis() {
+        assert!(item_mouse_down_opens_directory(
+            true,
+            FileGridMode::Manager,
+            2
+        ));
+        assert!(!item_mouse_down_opens_directory(
+            true,
+            FileGridMode::Manager,
+            1
+        ));
+        assert!(!item_mouse_down_opens_directory(
+            false,
+            FileGridMode::Manager,
+            2
+        ));
+    }
+
+    #[test]
     fn scrollbar_drag_preserves_initial_handle_grab_offset() {
         let content_width = 1200.0;
         let track_width = 180.0;
@@ -1059,6 +1481,30 @@ mod tests {
             "drag start should not re-center the handle under the cursor"
         );
         assert!(moved_scroll_x > initial_scroll_x + 100.0);
+    }
+
+    #[test]
+    fn rubber_band_overlay_uses_viewport_coordinates_after_scroll() {
+        let rect = rubber_band_viewport_rect(
+            ViewRect {
+                x: 320.0,
+                y: 24.0,
+                width: 80.0,
+                height: 48.0,
+            },
+            128.4,
+            2.0,
+        );
+
+        assert_eq!(
+            rect,
+            ViewRect {
+                x: 192.0,
+                y: 22.0,
+                width: 80.0,
+                height: 48.0,
+            }
+        );
     }
 }
 
@@ -1097,7 +1543,8 @@ fn content_point_from_window(
     }
 }
 
-fn rubber_band_overlay(rect: ViewRect) -> Stateful<Div> {
+fn rubber_band_overlay(rect: ViewRect, scroll_x: f32, scroll_y: f32) -> Stateful<Div> {
+    let rect = rubber_band_viewport_rect(rect, scroll_x, scroll_y);
     div()
         .id("rubber-band")
         .absolute()
@@ -1109,4 +1556,13 @@ fn rubber_band_overlay(rect: ViewRect) -> Stateful<Div> {
         .border_color(rgb(0x2f6fed))
         .bg(rgb(0x2f6fed))
         .opacity(0.18)
+}
+
+fn rubber_band_viewport_rect(rect: ViewRect, scroll_x: f32, scroll_y: f32) -> ViewRect {
+    ViewRect {
+        x: rect.x - scroll_x.round(),
+        y: rect.y - scroll_y.round(),
+        width: rect.width,
+        height: rect.height,
+    }
 }

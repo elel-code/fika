@@ -59,6 +59,9 @@ GPUI's public clipboard API.
 - Copy and cut write the payload to GPUI clipboard and, on Linux/FreeBSD, the
   primary selection.
 - Paste imports GPUI clipboard first, then primary selection on Linux/FreeBSD.
+- Middle-click paste is primary-selection-only: blank pane space pastes into the
+  current directory, and middle-clicking a directory item pastes into that
+  directory without falling back to the normal clipboard.
 - URI-list payloads paste as file transfers. Plain text payloads paste as a new
   `Pasted Text.txt` file using the same keep-both naming path as file creation.
 - Paste result handling records transfer undo for copied/moved files and create
@@ -72,7 +75,5 @@ GPUI's public clipboard API.
 - GPUI's Wayland clipboard read path currently reads allowed text MIME types;
   a peer that offers only `text/uri-list` as clipboard data may still need
   backend support before Fika can import it directly.
-- Primary selection paste exists through import fallback, but there is not yet a
-  dedicated middle-click paste interaction.
 - Drag-and-drop data offers are still separate from Fika's pane file operation
   pipeline and need to be unified with the same `FileClipboardPayload` model.

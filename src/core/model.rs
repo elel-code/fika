@@ -170,6 +170,16 @@ impl DirectoryModel {
         &self.data.entries
     }
 
+    pub fn listing_snapshot(&self) -> Arc<Vec<Entry>> {
+        Arc::new(
+            self.data
+                .entries
+                .iter()
+                .map(|entry| entry.entry.clone())
+                .collect(),
+        )
+    }
+
     pub fn sort_descriptor(&self) -> SortDescriptor {
         self.data.sort
     }
@@ -730,6 +740,24 @@ mod tests {
         assert_eq!(model.entries()[0].name.as_ref(), "a");
         assert_eq!(model.path_for_index(1), Some(PathBuf::from("/tmp/b.txt")));
         assert_eq!(model.index_of_path(Path::new("/tmp/b.txt")), Some(1));
+    }
+
+    #[test]
+    fn listing_snapshot_exports_entry_payload_without_item_identity() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry("b.txt", false), entry("a", true)]),
+        );
+        let first_id = model.entries()[0].id;
+
+        let snapshot = model.listing_snapshot();
+
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].name.as_ref(), "a");
+        assert_eq!(snapshot[1].name.as_ref(), "b.txt");
+        assert!(Entry::ptr_eq(&snapshot[0], &model.entries()[0].entry));
+        assert_eq!(model.entries()[0].id, first_id);
     }
 
     #[test]

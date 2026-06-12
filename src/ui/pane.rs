@@ -14,12 +14,14 @@ use super::status_bar::status_bar;
 pub(crate) struct PaneProps {
     pub snapshot: PaneSnapshot,
     pub file_grid_mode: FileGridMode,
+    pub mouse_overlay_active: bool,
 }
 
 pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful<Div> {
     let PaneProps {
         snapshot,
         file_grid_mode,
+        mouse_overlay_active,
     } = props;
     let PaneSnapshot {
         id: pane_id,
@@ -114,6 +116,7 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
                 rubber_band,
                 drop_target,
                 mode: file_grid_mode,
+                mouse_overlay_active,
             },
             cx,
         ))
@@ -536,12 +539,14 @@ fn breadcrumb_segment(
                     }),
                 )
                 .on_drag_move::<ItemDrag>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
+                    move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
                         let changed = contains
                             && this.set_item_drag_drop_target_for_directory(
                                 pane_id,
                                 path_for_internal_move.clone(),
+                                mode,
                             );
                         if contains {
                             this.schedule_drop_target_stale_clear(cx);
@@ -553,12 +558,14 @@ fn breadcrumb_segment(
                     },
                 ))
                 .on_drag_move::<ExternalPaths>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
+                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
                         let changed = contains
                             && this.set_item_drag_drop_target_for_directory(
                                 pane_id,
                                 path_for_external_move.clone(),
+                                mode,
                             );
                         if contains {
                             this.schedule_drop_target_stale_clear(cx);
@@ -582,11 +589,13 @@ fn breadcrumb_segment(
                     cx.notify();
                 }))
                 .on_drop::<ExternalPaths>(cx.listener(
-                    move |this, external_paths: &ExternalPaths, _window, cx| {
+                    move |this, external_paths: &ExternalPaths, window, cx| {
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
                         this.drop_external_paths_to_location(
                             pane_id,
                             external_paths.paths().to_vec(),
                             path_for_external_drop.clone(),
+                            mode,
                             cx,
                         );
                         cx.stop_propagation();

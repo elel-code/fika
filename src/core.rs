@@ -1,5 +1,8 @@
+pub mod archive;
+pub mod bus;
 pub mod cache;
 pub mod clipboard;
+pub mod devices;
 pub mod directory;
 pub mod entries;
 pub mod file_ops;

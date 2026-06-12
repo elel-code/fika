@@ -1,3 +1,4 @@
+use super::bus::{BusCallTarget, BusController, BusError, BusKind};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::error::Error;
@@ -24,8 +25,16 @@ pub struct DesktopServiceMenu {
     pub id: String,
     pub desktop_file: PathBuf,
     pub name: String,
+    pub icon: Option<String>,
     pub mime_types: Vec<String>,
     pub service_types: Vec<String>,
+    pub protocols: Vec<String>,
+    pub submenu: Option<String>,
+    pub priority: ServiceMenuPriority,
+    pub required_url_count: Option<usize>,
+    pub min_url_count: Option<usize>,
+    pub max_url_count: Option<usize>,
+    pub show_if_executable: Option<String>,
     pub actions: Vec<DesktopAction>,
 }
 
@@ -34,6 +43,7 @@ pub struct DesktopAction {
     pub id: String,
     pub name: String,
     pub exec: String,
+    pub icon: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +61,16 @@ pub struct ServiceMenuAction {
     pub id: String,
     pub label: String,
     pub source_name: String,
+    pub icon: Option<String>,
+    pub submenu: Option<String>,
+    pub priority: ServiceMenuPriority,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ServiceMenuPriority {
+    #[default]
+    Normal,
+    TopLevel,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -99,6 +119,7 @@ pub struct MimeApplicationCache {
     apps_by_filename: HashMap<String, usize>,
     apps_by_mime: HashMap<String, Vec<usize>>,
     default_by_mime: HashMap<String, String>,
+    removed_by_mime: HashMap<String, HashSet<usize>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -135,6 +156,10 @@ pub enum LauncherError {
     EmptyCommand {
         app_name: String,
     },
+    CurrentExecutable {
+        message: String,
+    },
+    TerminalNotFound,
     ProgramNotFound {
         program: String,
     },
@@ -162,6 +187,12 @@ impl fmt::Display for LauncherError {
             }
             LauncherError::EmptyCommand { app_name } => {
                 write!(f, "{app_name} produced an empty launch command")
+            }
+            LauncherError::CurrentExecutable { message } => {
+                write!(f, "cannot resolve current executable: {message}")
+            }
+            LauncherError::TerminalNotFound => {
+                write!(f, "cannot find a supported terminal emulator")
             }
             LauncherError::ProgramNotFound { program } => {
                 write!(f, "cannot find executable {program}")
@@ -245,17 +276,21 @@ pub async fn launch_with_systemd_user(
     plan: DesktopLaunchPlan,
 ) -> Result<SystemdLaunchResult, LauncherError> {
     let units = systemd_units_for_launch_plan(&plan)?;
+    let bus = BusController::shared();
+    let target = systemd_manager_target().map_err(|err| LauncherError::SystemdManager {
+        message: err.to_string(),
+    })?;
     let connection =
-        zbus::Connection::session()
+        bus.connection(BusKind::Session)
             .await
             .map_err(|err| LauncherError::SessionBus {
                 message: err.to_string(),
             })?;
     let manager = zbus::Proxy::new(
         &connection,
-        "org.freedesktop.systemd1",
-        "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager",
+        target.service(),
+        target.path(),
+        target.interface(),
     )
     .await
     .map_err(|err| LauncherError::SystemdManager {
@@ -264,10 +299,35 @@ pub async fn launch_with_systemd_user(
 
     let mut started = Vec::with_capacity(units.len());
     for unit in &units {
-        start_systemd_launch_unit(&manager, unit).await?;
+        start_systemd_launch_unit(bus, &target, &manager, unit).await?;
         started.push(unit.unit_name.clone());
     }
     Ok(SystemdLaunchResult { units: started })
+}
+
+pub fn current_executable_launch_plan(
+    desktop_id: impl Into<String>,
+    app_name: impl Into<String>,
+    args: Vec<String>,
+) -> Result<DesktopLaunchPlan, LauncherError> {
+    let executable = env::current_exe().map_err(|err| LauncherError::CurrentExecutable {
+        message: err.to_string(),
+    })?;
+    Ok(DesktopLaunchPlan {
+        desktop_id: desktop_id.into(),
+        desktop_file: executable.clone(),
+        app_name: app_name.into(),
+        commands: vec![DesktopLaunchCommand {
+            program: executable.display().to_string(),
+            args,
+        }],
+    })
+}
+
+pub fn terminal_launch_plan_for_directory(
+    directory: &Path,
+) -> Result<DesktopLaunchPlan, LauncherError> {
+    terminal_launch_plan_for_commands(terminal_launch_commands_for_directory(directory))
 }
 
 impl MimeApplicationCache {
@@ -321,21 +381,13 @@ impl MimeApplicationCache {
         }
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
-        let default_id = self.default_by_mime.get(mime);
 
-        if let Some(default_id) = default_id
-            && let Some(index) = self.application_index(default_id)
-            && seen.insert(index)
-        {
-            ordered.push(MimeApplication::from((&self.apps[index], true)));
-        }
-
-        if let Some(indexes) = self.apps_by_mime.get(mime) {
-            for index in indexes {
-                if seen.insert(*index) {
-                    let is_default =
-                        default_id.is_some_and(|id| self.application_matches(*index, id));
-                    ordered.push(MimeApplication::from((&self.apps[*index], is_default)));
+        self.append_applications_for_mime(mime, &mut seen, &mut ordered);
+        if ordered.is_empty() {
+            for parent in mime_parent_candidates(mime) {
+                self.append_applications_for_mime(&parent, &mut seen, &mut ordered);
+                if !ordered.is_empty() {
+                    break;
                 }
             }
         }
@@ -399,15 +451,16 @@ impl MimeApplicationCache {
                         id,
                         label: action.name.clone(),
                         source_name: app.name.clone(),
+                        icon: action.icon.clone().or_else(|| app.icon.clone()),
+                        submenu: None,
+                        priority: ServiceMenuPriority::Normal,
                     });
                 }
             }
         }
 
         for menu in &self.service_menus {
-            if !targets.iter().all(|target| {
-                service_menu_matches_target(menu, target.mime_type.as_deref(), target.is_dir)
-            }) {
+            if !service_menu_matches_targets(menu, targets) {
                 continue;
             }
             for action in &menu.actions {
@@ -420,6 +473,9 @@ impl MimeApplicationCache {
                         id,
                         label: action.name.clone(),
                         source_name: menu.name.clone(),
+                        icon: action.icon.clone().or_else(|| menu.icon.clone()),
+                        submenu: menu.submenu.clone(),
+                        priority: menu.priority,
                     });
                 }
             }
@@ -470,6 +526,31 @@ impl MimeApplicationCache {
                 continue;
             }
             if desktop_mimes_match_target(&app.mime_types, mime, is_dir) && seen.insert(index) {
+                indexes.push(index);
+            }
+        }
+        indexes
+    }
+
+    fn application_indexes_for_mime_application(&self, mime: &str) -> Vec<usize> {
+        let mut indexes = Vec::new();
+        let mut seen = HashSet::new();
+        if let Some(mime_indexes) = self.apps_by_mime.get(mime) {
+            for index in mime_indexes {
+                if !self.application_removed_for_mime(*index, mime) && seen.insert(*index) {
+                    indexes.push(*index);
+                }
+            }
+        }
+        for (index, app) in self.apps.iter().enumerate() {
+            if seen.contains(&index) {
+                continue;
+            }
+            if self.application_removed_for_mime(index, mime) {
+                continue;
+            }
+            if desktop_mimes_match_target(&app.mime_types, Some(mime), false) && seen.insert(index)
+            {
                 indexes.push(index);
             }
         }
@@ -549,6 +630,10 @@ impl MimeApplicationCache {
                 .iter()
                 .filter_map(|id| self.application_index(id))
                 .collect::<HashSet<_>>();
+            if !removed_indexes.is_empty() {
+                self.removed_by_mime
+                    .insert(mime.clone(), removed_indexes.clone());
+            }
             if let Some(indexes) = self.apps_by_mime.get_mut(&mime) {
                 indexes.retain(|index| !removed_indexes.contains(index));
             }
@@ -605,6 +690,36 @@ impl MimeApplicationCache {
     fn application_matches(&self, index: usize, desktop_id: &str) -> bool {
         self.application_index(desktop_id) == Some(index)
     }
+
+    fn application_removed_for_mime(&self, index: usize, mime: &str) -> bool {
+        self.removed_by_mime
+            .get(mime)
+            .is_some_and(|removed| removed.contains(&index))
+    }
+
+    fn append_applications_for_mime(
+        &self,
+        mime: &str,
+        seen: &mut HashSet<usize>,
+        ordered: &mut Vec<MimeApplication>,
+    ) {
+        let default_id = self.default_by_mime.get(mime);
+
+        if let Some(default_id) = default_id
+            && let Some(index) = self.application_index(default_id)
+            && !self.application_removed_for_mime(index, mime)
+            && seen.insert(index)
+        {
+            ordered.push(MimeApplication::from((&self.apps[index], true)));
+        }
+
+        for index in self.application_indexes_for_mime_application(mime) {
+            if seen.insert(index) {
+                let is_default = default_id.is_some_and(|id| self.application_matches(index, id));
+                ordered.push(MimeApplication::from((&self.apps[index], is_default)));
+            }
+        }
+    }
 }
 
 pub fn parse_desktop_application(
@@ -640,6 +755,7 @@ pub fn parse_desktop_application(
                 id: action_id,
                 name: name.to_string(),
                 exec: exec.to_string(),
+                icon: section.get("Icon").filter(|icon| !icon.is_empty()).cloned(),
             })
         })
         .collect();
@@ -700,6 +816,7 @@ pub fn parse_desktop_service_menu(
                 id: action_id,
                 name: name.to_string(),
                 exec: exec.to_string(),
+                icon: section.get("Icon").filter(|icon| !icon.is_empty()).cloned(),
             })
         })
         .collect::<Vec<_>>();
@@ -717,11 +834,39 @@ pub fn parse_desktop_service_menu(
             .filter(|name| !name.is_empty())
             .unwrap_or(&id)
             .to_string(),
+        icon: entry.get("Icon").filter(|icon| !icon.is_empty()).cloned(),
         mime_types: entry
             .get("MimeType")
             .map(|value| desktop_list(value))
             .unwrap_or_default(),
         service_types,
+        protocols: entry
+            .get("X-KDE-Protocols")
+            .map(|value| desktop_list(value))
+            .unwrap_or_default(),
+        submenu: entry
+            .get("X-KDE-Submenu")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        priority: entry
+            .get("X-KDE-Priority")
+            .map(|value| service_menu_priority(value))
+            .unwrap_or_default(),
+        required_url_count: entry
+            .get("X-KDE-RequiredNumberOfUrls")
+            .and_then(|value| desktop_usize(value)),
+        min_url_count: entry
+            .get("X-KDE-MinNumberOfUrls")
+            .and_then(|value| desktop_usize(value)),
+        max_url_count: entry
+            .get("X-KDE-MaxNumberOfUrls")
+            .and_then(|value| desktop_usize(value)),
+        show_if_executable: entry
+            .get("X-KDE-ShowIfExecutable")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         actions,
     })
 }
@@ -753,6 +898,100 @@ pub fn parse_mimeapps_list(contents: &str) -> MimeAppsList {
         }
     }
     list
+}
+
+pub fn default_mimeapps_list_path() -> PathBuf {
+    if let Some(config_home) = env::var_os("XDG_CONFIG_HOME").filter(|path| !path.is_empty()) {
+        PathBuf::from(config_home).join("mimeapps.list")
+    } else if let Some(home) = env::var_os("HOME").filter(|path| !path.is_empty()) {
+        PathBuf::from(home).join(".config/mimeapps.list")
+    } else {
+        PathBuf::from("mimeapps.list")
+    }
+}
+
+pub fn set_default_mime_application(mime: &str, desktop_id: &str) -> Result<PathBuf, String> {
+    let path = default_mimeapps_list_path();
+    set_default_mime_application_at(&path, mime, desktop_id)?;
+    Ok(path)
+}
+
+pub fn set_default_mime_application_at(
+    path: &Path,
+    mime: &str,
+    desktop_id: &str,
+) -> Result<(), String> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(format!(
+                "failed to read mimeapps list {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let updated = set_default_mime_application_in_contents(&contents, mime, desktop_id)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create mimeapps list directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::write(path, updated)
+        .map_err(|error| format!("failed to write mimeapps list {}: {error}", path.display()))
+}
+
+pub fn set_default_mime_application_in_contents(
+    contents: &str,
+    mime: &str,
+    desktop_id: &str,
+) -> Result<String, String> {
+    let mime = validate_mimeapps_key(mime)?;
+    let desktop_id = validate_mimeapps_desktop_id(desktop_id)?;
+    let mut lines = contents.lines().map(str::to_string).collect::<Vec<_>>();
+
+    rewrite_mimeapps_key(
+        &mut lines,
+        "Default Applications",
+        &mime,
+        Some(mimeapps_value(std::slice::from_ref(&desktop_id))),
+        true,
+    );
+
+    let mut added = mimeapps_key_value(&lines, "Added Associations", &mime)
+        .map(|value| desktop_list(&value))
+        .unwrap_or_default();
+    added.retain(|id| id != &desktop_id);
+    added.insert(0, desktop_id.clone());
+    rewrite_mimeapps_key(
+        &mut lines,
+        "Added Associations",
+        &mime,
+        Some(mimeapps_value(&added)),
+        true,
+    );
+
+    let mut removed = mimeapps_key_value(&lines, "Removed Associations", &mime)
+        .map(|value| desktop_list(&value))
+        .unwrap_or_default();
+    removed.retain(|id| id != &desktop_id);
+    rewrite_mimeapps_key(
+        &mut lines,
+        "Removed Associations",
+        &mime,
+        (!removed.is_empty()).then(|| mimeapps_value(&removed)),
+        false,
+    );
+
+    let mut updated = lines.join("\n");
+    updated.push('\n');
+    Ok(updated)
 }
 
 pub fn exec_to_launch_commands(
@@ -804,6 +1043,69 @@ fn desktop_launch_plan_for_exec(
         app_name,
         commands,
     })
+}
+
+fn terminal_launch_plan_for_commands(
+    commands: Vec<DesktopLaunchCommand>,
+) -> Result<DesktopLaunchPlan, LauncherError> {
+    let Some(command) = commands
+        .into_iter()
+        .find(|command| executable_path_for_systemd(&command.program).is_ok())
+    else {
+        return Err(LauncherError::TerminalNotFound);
+    };
+    Ok(DesktopLaunchPlan {
+        desktop_id: "fika-terminal".to_string(),
+        desktop_file: PathBuf::from("fika-terminal"),
+        app_name: "Terminal".to_string(),
+        commands: vec![command],
+    })
+}
+
+fn terminal_launch_commands_for_directory(directory: &Path) -> Vec<DesktopLaunchCommand> {
+    let directory = directory.display().to_string();
+    vec![
+        terminal_command("konsole", ["--workdir", directory.as_str()]),
+        terminal_command(
+            "gnome-terminal",
+            [format!("--working-directory={directory}")],
+        ),
+        terminal_command("kgx", [format!("--working-directory={directory}")]),
+        terminal_command("tilix", [format!("--working-directory={directory}")]),
+        terminal_command(
+            "xfce4-terminal",
+            [format!("--working-directory={directory}")],
+        ),
+        terminal_command(
+            "mate-terminal",
+            [format!("--working-directory={directory}")],
+        ),
+        terminal_command("foot", ["--working-directory", directory.as_str()]),
+        terminal_command("alacritty", ["--working-directory", directory.as_str()]),
+        terminal_command("kitty", ["--directory", directory.as_str()]),
+        terminal_command("wezterm", ["start", "--cwd", directory.as_str()]),
+        terminal_command(
+            "xterm",
+            [
+                "-e",
+                "sh",
+                "-lc",
+                "cd \"$1\" && exec \"${SHELL:-sh}\"",
+                "sh",
+                directory.as_str(),
+            ],
+        ),
+    ]
+}
+
+fn terminal_command(
+    program: impl Into<String>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> DesktopLaunchCommand {
+    DesktopLaunchCommand {
+        program: program.into(),
+        args: args.into_iter().map(Into::into).collect(),
+    }
 }
 
 fn systemd_units_for_launch_plan_with_nonce(
@@ -995,22 +1297,41 @@ fn systemd_launch_environment() -> Vec<String> {
         .collect()
 }
 
+fn systemd_manager_target() -> Result<BusCallTarget, BusError> {
+    BusCallTarget::new(
+        BusKind::Session,
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "StartTransientUnit",
+    )
+}
+
 async fn start_systemd_launch_unit(
+    bus: &BusController,
+    target: &BusCallTarget,
     manager: &zbus::Proxy<'_>,
     unit: &SystemdLaunchUnit,
 ) -> Result<OwnedObjectPath, LauncherError> {
     let properties = systemd_properties_for_launch_unit(unit)?;
     let aux: Vec<SystemdAuxUnit> = Vec::new();
-    manager
-        .call(
-            "StartTransientUnit",
-            &(unit.unit_name.as_str(), "fail", properties, aux),
-        )
-        .await
-        .map_err(|err| LauncherError::StartTransientUnit {
-            unit_name: unit.unit_name.clone(),
-            message: err.to_string(),
-        })
+    bus.call_with_retry(target, || {
+        let properties = properties.clone();
+        let aux = aux.clone();
+        async move {
+            manager
+                .call(
+                    target.method(),
+                    &(unit.unit_name.as_str(), "fail", properties, aux),
+                )
+                .await
+        }
+    })
+    .await
+    .map_err(|err| LauncherError::StartTransientUnit {
+        unit_name: unit.unit_name.clone(),
+        message: err.to_string(),
+    })
 }
 
 fn load_desktop_applications() -> Vec<DesktopApplication> {
@@ -1263,8 +1584,129 @@ fn append_mimeapps(target: &mut HashMap<String, Vec<String>>, mime: &str, apps: 
         .extend(apps);
 }
 
+fn validate_mimeapps_key(mime: &str) -> Result<String, String> {
+    let mime = mime.trim();
+    if mime.is_empty()
+        || !mime.contains('/')
+        || mime
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'=' | b';' | b'[' | b']'))
+    {
+        Err(format!("invalid MIME type for mimeapps.list: {mime:?}"))
+    } else {
+        Ok(mime.to_string())
+    }
+}
+
+fn validate_mimeapps_desktop_id(desktop_id: &str) -> Result<String, String> {
+    let desktop_id = desktop_id.trim();
+    if desktop_id.is_empty()
+        || !desktop_id.ends_with(".desktop")
+        || desktop_id
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'=' | b';' | b'[' | b']'))
+    {
+        Err(format!(
+            "invalid desktop id for mimeapps.list: {desktop_id:?}"
+        ))
+    } else {
+        Ok(desktop_id.to_string())
+    }
+}
+
+fn mimeapps_value(apps: &[String]) -> String {
+    let mut value = apps.join(";");
+    value.push(';');
+    value
+}
+
+fn mimeapps_key_value(lines: &[String], section: &str, key: &str) -> Option<String> {
+    let (start, end) = mimeapps_section_range(lines, section)?;
+    lines[start + 1..end].iter().find_map(|line| {
+        let trimmed = line.trim();
+        let (line_key, value) = trimmed.split_once('=')?;
+        (line_key.trim() == key).then(|| value.trim().to_string())
+    })
+}
+
+fn rewrite_mimeapps_key(
+    lines: &mut Vec<String>,
+    section: &str,
+    key: &str,
+    value: Option<String>,
+    insert_if_missing: bool,
+) {
+    let Some((start, end)) = mimeapps_section_range(lines, section) else {
+        if insert_if_missing && let Some(value) = value {
+            if !lines.is_empty() && lines.last().is_some_and(|line| !line.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(format!("[{section}]"));
+            lines.push(format!("{key}={value}"));
+        }
+        return;
+    };
+
+    let key_indexes = (start + 1..end)
+        .filter(|index| {
+            lines[*index]
+                .trim()
+                .split_once('=')
+                .is_some_and(|(line_key, _)| line_key.trim() == key)
+        })
+        .collect::<Vec<_>>();
+
+    match (key_indexes.first().copied(), value) {
+        (Some(first), Some(value)) => {
+            lines[first] = format!("{key}={value}");
+            for index in key_indexes
+                .into_iter()
+                .rev()
+                .filter(|index| *index != first)
+            {
+                lines.remove(index);
+            }
+        }
+        (Some(_), None) => {
+            for index in key_indexes.into_iter().rev() {
+                lines.remove(index);
+            }
+        }
+        (None, Some(value)) if insert_if_missing => {
+            lines.insert(end, format!("{key}={value}"));
+        }
+        _ => {}
+    }
+}
+
+fn mimeapps_section_range(lines: &[String], section: &str) -> Option<(usize, usize)> {
+    let start = lines
+        .iter()
+        .position(|line| line.trim() == format!("[{section}]"))?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with('[') && trimmed.ends_with(']')
+        })
+        .map_or(lines.len(), |offset| start + 1 + offset);
+    Some((start, end))
+}
+
 fn desktop_bool(value: &str) -> bool {
     value.eq_ignore_ascii_case("true") || value == "1"
+}
+
+fn desktop_usize(value: &str) -> Option<usize> {
+    value.trim().parse().ok()
+}
+
+fn service_menu_priority(value: &str) -> ServiceMenuPriority {
+    if value.trim().eq_ignore_ascii_case("TopLevel") {
+        ServiceMenuPriority::TopLevel
+    } else {
+        ServiceMenuPriority::Normal
+    }
 }
 
 fn desktop_application_cmp(
@@ -1281,10 +1723,21 @@ fn desktop_service_menu_cmp(
     left: &DesktopServiceMenu,
     right: &DesktopServiceMenu,
 ) -> std::cmp::Ordering {
-    left.name
-        .to_ascii_lowercase()
-        .cmp(&right.name.to_ascii_lowercase())
+    service_menu_priority_rank(right.priority)
+        .cmp(&service_menu_priority_rank(left.priority))
+        .then_with(|| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        })
         .then_with(|| left.id.cmp(&right.id))
+}
+
+fn service_menu_priority_rank(priority: ServiceMenuPriority) -> usize {
+    match priority {
+        ServiceMenuPriority::Normal => 0,
+        ServiceMenuPriority::TopLevel => 1,
+    }
 }
 
 fn target_mime(mime: Option<&str>, is_dir: bool) -> Option<&str> {
@@ -1293,6 +1746,34 @@ fn target_mime(mime: Option<&str>, is_dir: bool) -> Option<&str> {
     } else {
         mime.map(str::trim).filter(|mime| !mime.is_empty())
     }
+}
+
+fn mime_parent_candidates(mime: &str) -> Vec<String> {
+    let mime = mime.trim().to_ascii_lowercase();
+    let Some((top, subtype)) = mime.split_once('/') else {
+        return Vec::new();
+    };
+    let mut parents = Vec::new();
+
+    if mime != "text/plain"
+        && (top == "text"
+            || subtype.ends_with("+json")
+            || subtype.ends_with("+xml")
+            || matches!(
+                mime.as_str(),
+                "application/json"
+                    | "application/xml"
+                    | "application/javascript"
+                    | "application/x-shellscript"
+                    | "application/x-python"
+                    | "application/x-perl"
+                    | "application/x-ruby"
+            ))
+    {
+        parents.push("text/plain".to_string());
+    }
+
+    parents
 }
 
 fn desktop_mimes_match_target(
@@ -1312,6 +1793,54 @@ fn service_menu_matches_target(
 ) -> bool {
     let target_mime = target_mime(mime, is_dir);
     desktop_mimes_match_target(&menu.mime_types, target_mime, is_dir)
+}
+
+fn service_menu_matches_targets(menu: &DesktopServiceMenu, targets: &[ServiceMenuTarget]) -> bool {
+    if targets.is_empty() {
+        return false;
+    }
+    if !service_menu_protocols_match(menu) {
+        return false;
+    }
+    if !service_menu_url_count_matches(menu, targets.len()) {
+        return false;
+    }
+    if !service_menu_executable_condition_matches(menu) {
+        return false;
+    }
+    targets
+        .iter()
+        .all(|target| service_menu_matches_target(menu, target.mime_type.as_deref(), target.is_dir))
+}
+
+fn service_menu_protocols_match(menu: &DesktopServiceMenu) -> bool {
+    menu.protocols.is_empty()
+        || menu
+            .protocols
+            .iter()
+            .any(|protocol| protocol.eq_ignore_ascii_case("file"))
+}
+
+fn service_menu_url_count_matches(menu: &DesktopServiceMenu, count: usize) -> bool {
+    if menu
+        .required_url_count
+        .is_some_and(|required| count != required)
+    {
+        return false;
+    }
+    if menu.min_url_count.is_some_and(|minimum| count < minimum) {
+        return false;
+    }
+    if menu.max_url_count.is_some_and(|maximum| count > maximum) {
+        return false;
+    }
+    true
+}
+
+fn service_menu_executable_condition_matches(menu: &DesktopServiceMenu) -> bool {
+    menu.show_if_executable
+        .as_deref()
+        .is_none_or(|program| executable_path_for_systemd(program).is_ok())
 }
 
 fn desktop_mime_matches_target(pattern: &str, target_mime: Option<&str>, is_dir: bool) -> bool {
@@ -1498,12 +2027,21 @@ mod tests {
             id: id.to_string(),
             desktop_file: PathBuf::from(format!("/servicemenus/{id}")),
             name: name.to_string(),
+            icon: None,
             mime_types: mime_types.iter().map(|mime| mime.to_string()).collect(),
             service_types: vec!["KonqPopupMenu/Plugin".to_string()],
+            protocols: Vec::new(),
+            submenu: None,
+            priority: ServiceMenuPriority::Normal,
+            required_url_count: None,
+            min_url_count: None,
+            max_url_count: None,
+            show_if_executable: None,
             actions: vec![DesktopAction {
                 id: "compress".to_string(),
                 name: "Compress".to_string(),
                 exec: "ark --add %F".to_string(),
+                icon: None,
             }],
         }
     }
@@ -1524,6 +2062,7 @@ Actions=print;\n\
 \n\
 [Desktop Action print]\n\
 Name=Print\n\
+Icon=document-print\n\
 Exec=viewer --print %f\n",
         )
         .unwrap();
@@ -1531,6 +2070,7 @@ Exec=viewer --print %f\n",
         assert_eq!(entry.name, "Example Viewer");
         assert_eq!(entry.mime_types, vec!["text/plain", "image/png"]);
         assert_eq!(entry.actions[0].name, "Print");
+        assert_eq!(entry.actions[0].icon.as_deref(), Some("document-print"));
     }
 
     #[test]
@@ -1542,12 +2082,19 @@ Exec=viewer --print %f\n",
 [Desktop Entry]\n\
 Type=Service\n\
 Name=Archive Tools\n\
+Icon=ark\n\
 MimeType=all/allfiles;inode/directory;\n\
 X-KDE-ServiceTypes=KonqPopupMenu/Plugin\n\
+X-KDE-Protocols=file\n\
+X-KDE-Priority=TopLevel\n\
+X-KDE-Submenu=Archive\n\
+X-KDE-MinNumberOfUrls=1\n\
+X-KDE-MaxNumberOfUrls=8\n\
 Actions=compress;\n\
 \n\
 [Desktop Action compress]\n\
 Name=Compress\n\
+Icon=archive-insert\n\
 Exec=ark --add %F\n",
         )
         .unwrap();
@@ -1555,7 +2102,14 @@ Exec=ark --add %F\n",
         assert_eq!(entry.name, "Archive Tools");
         assert_eq!(entry.mime_types, vec!["all/allfiles", "inode/directory"]);
         assert_eq!(entry.service_types, vec!["KonqPopupMenu/Plugin"]);
+        assert_eq!(entry.protocols, vec!["file"]);
+        assert_eq!(entry.priority, ServiceMenuPriority::TopLevel);
+        assert_eq!(entry.submenu.as_deref(), Some("Archive"));
+        assert_eq!(entry.min_url_count, Some(1));
+        assert_eq!(entry.max_url_count, Some(8));
+        assert_eq!(entry.icon.as_deref(), Some("ark"));
         assert_eq!(entry.actions[0].name, "Compress");
+        assert_eq!(entry.actions[0].icon.as_deref(), Some("archive-insert"));
     }
 
     #[test]
@@ -1577,12 +2131,14 @@ Exec=ark --add %F\n",
             id: "print".to_string(),
             name: "Print".to_string(),
             exec: "viewer --print %f".to_string(),
+            icon: None,
         });
         let mut added_app = desktop_app("sender.desktop", "Send To", &[]);
         added_app.actions.push(DesktopAction {
             id: "send".to_string(),
             name: "Send".to_string(),
             exec: "sender %f".to_string(),
+            icon: None,
         });
         let list = parse_mimeapps_list(
             "\
@@ -1650,28 +2206,40 @@ text/plain=sender.desktop;\n",
             id: "send-many".to_string(),
             name: "Send Many".to_string(),
             exec: "sender %F".to_string(),
+            icon: None,
         });
         app.actions.push(DesktopAction {
             id: "send-one".to_string(),
             name: "Send One".to_string(),
             exec: "sender %f".to_string(),
+            icon: None,
         });
         let menu = DesktopServiceMenu {
             id: "archive.desktop".to_string(),
             desktop_file: PathBuf::from("/servicemenus/archive.desktop"),
             name: "Archive Tools".to_string(),
+            icon: None,
             mime_types: vec!["all/allfiles".to_string()],
             service_types: vec!["KonqPopupMenu/Plugin".to_string()],
+            protocols: Vec::new(),
+            submenu: None,
+            priority: ServiceMenuPriority::Normal,
+            required_url_count: None,
+            min_url_count: None,
+            max_url_count: None,
+            show_if_executable: None,
             actions: vec![
                 DesktopAction {
                     id: "compress".to_string(),
                     name: "Compress".to_string(),
                     exec: "ark --add %F".to_string(),
+                    icon: None,
                 },
                 DesktopAction {
                     id: "inspect".to_string(),
                     name: "Inspect One".to_string(),
                     exec: "inspector %f".to_string(),
+                    icon: None,
                 },
             ],
         };
@@ -1698,12 +2266,103 @@ text/plain=sender.desktop;\n",
     }
 
     #[test]
+    fn service_menu_conditions_filter_protocol_url_count_and_executable() {
+        let (dir, executable) = launcher_test_executable("available-tool");
+        let matching = DesktopServiceMenu {
+            id: "matching.desktop".to_string(),
+            desktop_file: PathBuf::from("/servicemenus/matching.desktop"),
+            name: "Matching".to_string(),
+            icon: None,
+            mime_types: vec!["all/allfiles".to_string()],
+            service_types: vec!["KonqPopupMenu/Plugin".to_string()],
+            protocols: vec!["file".to_string()],
+            submenu: Some("Tools".to_string()),
+            priority: ServiceMenuPriority::TopLevel,
+            required_url_count: None,
+            min_url_count: Some(2),
+            max_url_count: Some(3),
+            show_if_executable: Some(executable.display().to_string()),
+            actions: vec![DesktopAction {
+                id: "run".to_string(),
+                name: "Run Matching".to_string(),
+                exec: "available-tool %F".to_string(),
+                icon: None,
+            }],
+        };
+        let remote_only = DesktopServiceMenu {
+            id: "remote.desktop".to_string(),
+            desktop_file: PathBuf::from("/servicemenus/remote.desktop"),
+            name: "Remote".to_string(),
+            icon: None,
+            mime_types: vec!["all/allfiles".to_string()],
+            service_types: vec!["KonqPopupMenu/Plugin".to_string()],
+            protocols: vec!["smb".to_string()],
+            submenu: None,
+            priority: ServiceMenuPriority::Normal,
+            required_url_count: None,
+            min_url_count: None,
+            max_url_count: None,
+            show_if_executable: None,
+            actions: vec![DesktopAction {
+                id: "remote".to_string(),
+                name: "Remote Only".to_string(),
+                exec: "remote %F".to_string(),
+                icon: None,
+            }],
+        };
+        let missing_executable = DesktopServiceMenu {
+            id: "missing.desktop".to_string(),
+            desktop_file: PathBuf::from("/servicemenus/missing.desktop"),
+            name: "Missing".to_string(),
+            icon: None,
+            mime_types: vec!["all/allfiles".to_string()],
+            service_types: vec!["KonqPopupMenu/Plugin".to_string()],
+            protocols: Vec::new(),
+            submenu: None,
+            priority: ServiceMenuPriority::Normal,
+            required_url_count: None,
+            min_url_count: None,
+            max_url_count: None,
+            show_if_executable: Some("/definitely/missing/fika-tool".to_string()),
+            actions: vec![DesktopAction {
+                id: "missing".to_string(),
+                name: "Missing Tool".to_string(),
+                exec: "missing %F".to_string(),
+                icon: None,
+            }],
+        };
+        let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
+            Vec::new(),
+            vec![remote_only, missing_executable, matching],
+            &[],
+        );
+        let targets = vec![
+            ServiceMenuTarget::new(Some("text/plain"), false),
+            ServiceMenuTarget::new(Some("image/png"), false),
+        ];
+
+        let actions = cache.service_actions_for_targets(&targets);
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].label, "Run Matching");
+        assert_eq!(actions[0].submenu.as_deref(), Some("Tools"));
+        assert_eq!(actions[0].priority, ServiceMenuPriority::TopLevel);
+        assert!(
+            cache
+                .service_actions_for_target(Some("text/plain"), false)
+                .is_empty()
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn service_action_launch_plan_rejects_multi_paths_for_single_file_exec() {
         let mut app = desktop_app("sender.desktop", "Sender", &["text/plain"]);
         app.actions.push(DesktopAction {
             id: "send-one".to_string(),
             name: "Send One".to_string(),
             exec: "sender %f".to_string(),
+            icon: None,
         });
         let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
             vec![app],
@@ -1748,6 +2407,85 @@ text/plain=other.desktop;\n",
     }
 
     #[test]
+    fn set_default_mime_application_updates_mimeapps_contents() {
+        let updated = set_default_mime_application_in_contents(
+            "\
+[Default Applications]\n\
+text/plain=old.desktop;\n\
+image/png=image.desktop;\n\
+\n\
+[Added Associations]\n\
+text/plain=old.desktop;viewer.desktop;\n\
+\n\
+[Removed Associations]\n\
+text/plain=viewer.desktop;blocked.desktop;\n",
+            "text/plain",
+            "viewer.desktop",
+        )
+        .unwrap();
+
+        assert!(updated.contains("[Default Applications]\ntext/plain=viewer.desktop;\n"));
+        assert!(updated.contains("image/png=image.desktop;"));
+        assert!(updated.contains("[Added Associations]\ntext/plain=viewer.desktop;old.desktop;"));
+        assert!(updated.contains("[Removed Associations]\ntext/plain=blocked.desktop;"));
+        let parsed = parse_mimeapps_list(&updated);
+        assert_eq!(
+            parsed.default_apps["text/plain"],
+            vec!["viewer.desktop".to_string()]
+        );
+        assert_eq!(
+            parsed.added_associations["text/plain"],
+            vec!["viewer.desktop".to_string(), "old.desktop".to_string()]
+        );
+        assert_eq!(
+            parsed.removed_associations["text/plain"],
+            vec!["blocked.desktop".to_string()]
+        );
+    }
+
+    #[test]
+    fn set_default_mime_application_creates_missing_sections() {
+        let updated =
+            set_default_mime_application_in_contents("", "text/plain", "viewer.desktop").unwrap();
+
+        assert_eq!(
+            updated,
+            "[Default Applications]\ntext/plain=viewer.desktop;\n\n[Added Associations]\ntext/plain=viewer.desktop;\n"
+        );
+    }
+
+    #[test]
+    fn set_default_mime_application_rejects_invalid_values() {
+        assert!(
+            set_default_mime_application_in_contents("", "not-a-mime", "viewer.desktop").is_err()
+        );
+        assert!(
+            set_default_mime_application_in_contents("", "text/plain", "viewer;bad.desktop")
+                .is_err()
+        );
+        assert!(set_default_mime_application_in_contents("", "text/plain", "viewer").is_err());
+    }
+
+    #[test]
+    fn set_default_mime_application_at_writes_user_file() {
+        let temp = env::temp_dir().join(format!(
+            "fika-mimeapps-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = temp.join("config/mimeapps.list");
+
+        set_default_mime_application_at(&path, "text/plain", "viewer.desktop").unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("text/plain=viewer.desktop;"));
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
     fn mime_application_cache_orders_default_added_and_declared_apps() {
         let apps = vec![
             desktop_app("declared.desktop", "Declared", &["text/plain"]),
@@ -1780,6 +2518,80 @@ text/plain=removed.desktop;\n",
                 ("Declared".to_string(), false),
             ]
         );
+    }
+
+    #[test]
+    fn mime_application_cache_matches_wildcard_before_parent_fallback() {
+        let apps = vec![
+            desktop_app("generic-text.desktop", "Generic Text", &["text/plain"]),
+            desktop_app("image-viewer.desktop", "Image Viewer", &["image/*"]),
+        ];
+
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(apps, &[]);
+        let names = cache
+            .applications_for_mime("image/heic")
+            .into_iter()
+            .map(|app| app.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Image Viewer".to_string()]);
+    }
+
+    #[test]
+    fn mime_application_cache_respects_removed_associations_for_wildcard_apps() {
+        let apps = vec![desktop_app(
+            "image-viewer.desktop",
+            "Image Viewer",
+            &["image/*"],
+        )];
+        let list = parse_mimeapps_list(
+            "\
+[Removed Associations]\n\
+image/heic=image-viewer.desktop;\n",
+        );
+
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(apps, &[list]);
+        let apps = cache.applications_for_mime("image/heic");
+
+        assert!(apps.is_empty());
+    }
+
+    #[test]
+    fn mime_application_cache_falls_back_to_parent_text_plain_apps() {
+        let apps = vec![desktop_app(
+            "text-editor.desktop",
+            "Text Editor",
+            &["text/plain"],
+        )];
+        let list = parse_mimeapps_list(
+            "\
+[Default Applications]\n\
+text/plain=text-editor.desktop;\n",
+        );
+
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(apps, &[list]);
+        let apps = cache.applications_for_mime("text/x-rust");
+
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "Text Editor");
+        assert!(apps[0].is_default);
+    }
+
+    #[test]
+    fn mime_application_cache_keeps_exact_mime_over_parent_apps() {
+        let apps = vec![
+            desktop_app("rust-ide.desktop", "Rust IDE", &["text/x-rust"]),
+            desktop_app("text-editor.desktop", "Text Editor", &["text/plain"]),
+        ];
+
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(apps, &[]);
+        let names = cache
+            .applications_for_mime("text/x-rust")
+            .into_iter()
+            .map(|app| app.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Rust IDE".to_string()]);
     }
 
     #[test]
@@ -1858,6 +2670,59 @@ text/plain=removed.desktop;\n",
         assert_eq!(units[0].command.program, executable.display().to_string());
         assert_eq!(units[0].command.args, vec!["/tmp/file.txt"]);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn current_executable_launch_plan_targets_running_binary() {
+        let plan = current_executable_launch_plan(
+            "fika-new-window",
+            "Fika",
+            vec!["/tmp/fika-window".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(plan.desktop_id, "fika-new-window");
+        assert_eq!(plan.app_name, "Fika");
+        assert_eq!(plan.commands.len(), 1);
+        assert!(Path::new(&plan.commands[0].program).is_absolute());
+        assert_eq!(plan.commands[0].args, vec!["/tmp/fika-window"]);
+    }
+
+    #[test]
+    fn terminal_launch_plan_selects_first_supported_terminal_command() {
+        let (dir, executable) = launcher_test_executable("terminal");
+        let plan = terminal_launch_plan_for_commands(vec![
+            DesktopLaunchCommand {
+                program: "/definitely/missing/fika-terminal".to_string(),
+                args: Vec::new(),
+            },
+            DesktopLaunchCommand {
+                program: executable.display().to_string(),
+                args: vec!["--workdir".to_string(), "/tmp/fika-terminal".to_string()],
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(plan.desktop_id, "fika-terminal");
+        assert_eq!(plan.app_name, "Terminal");
+        assert_eq!(plan.commands.len(), 1);
+        assert_eq!(plan.commands[0].program, executable.display().to_string());
+        assert_eq!(
+            plan.commands[0].args,
+            vec!["--workdir".to_string(), "/tmp/fika-terminal".to_string()]
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn terminal_launch_plan_reports_missing_terminal() {
+        assert_eq!(
+            terminal_launch_plan_for_commands(vec![DesktopLaunchCommand {
+                program: "/definitely/missing/fika-terminal".to_string(),
+                args: Vec::new(),
+            }]),
+            Err(LauncherError::TerminalNotFound)
+        );
     }
 
     #[test]

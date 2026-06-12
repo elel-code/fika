@@ -82,9 +82,10 @@ model, and file operations are launched only after a drop target is resolved.
   checks should accept current directory blank space, writable directories,
   desktop files and local executables, and reject no-op drops onto their own
   source directory.
-- Dolphin `KItemListView::showDropIndicator()` -> future Fika pane drop target
-  should keep directory-hover highlight separate from insertion indicators and
-  from normal selection highlight.
+- Dolphin `KItemListView::showDropIndicator()` -> Fika pane drop target keeps
+  directory-hover highlight separate from insertion indicators and from normal
+  selection highlight. GPUI `on_drag_move` handlers must check their own bounds:
+  capture-phase drag move is not a reliable hover test by itself.
 - Dolphin `PlacesPanel::slotUrlsDropped()` -> future Fika Places drop should
   distinguish drop-on-place file operations from drop-between-place bookmark
   insertion.
@@ -92,9 +93,41 @@ model, and file operations are launched only after a drop target is resolved.
 ## Current Fika State
 
 - Item drag is already attached to each rendered item's `visual_rect`, so
-  dragging an item does not start blank-area rubber-band selection.
+  dragging an item does not start blank-area rubber-band selection. The item
+  visual rect is also a mouse occlusion hitbox, and item left press handles
+  single selection before stopping propagation to the viewport.
+- Blank left press clears the current selection and arms rubber-band selection
+  only after the content hit-test confirms that the pointer is not inside an
+  item visual rect.
 - Drag preview now reflects the current pane selection count for selected items,
   matching Dolphin's "drag selected item means drag selected set" behavior.
+- Pane-background drop target updates only when the pointer is inside the file
+  viewport and the content hit-test says the pointer is on blank space. Directory
+  item, file item, Places row and Places heading targets update only when the
+  pointer is inside their GPUI bounds, so the active drop target tracks the
+  actual endpoint in real time instead of being overwritten by sibling handlers.
+- Pane, directory item and Places row drop targets carry the current
+  `FileTransferMode`, recomputed from `Window::modifiers()` on every drag move
+  and again on drop. No modifier or secondary/Ctrl means Copy, Shift means Move,
+  and Shift+secondary/Ctrl or Alt means Link. This applies to internal item
+  drags and GPUI `ExternalPaths` drags.
+- Directory item, pane background and Places row drop targets use action-specific
+  colors while hovered: green for Copy, amber for Move, and purple for Link.
+  This visual state is separate from selection, hover and active place state.
+- Ark drag-extract MIME parsing exists in core as
+  `ark_dnd_extract_payload()`. It requires both
+  `application/x-kde-ark-dndextract-service` and
+  `application/x-kde-ark-dndextract-path`, validates the D-Bus service/object
+  path pair, and returns an `ArkDndExtractPayload`. `ArkDndExtractRequest` then
+  combines that payload with an absolute destination directory and
+  `execute_ark_dnd_extract_with_bus()` calls
+  `org.kde.ark.DndExtract.extractSelectedFilesTo(destination)` through the
+  shared session bus helper. The UI/backend still needs a multi-MIME external
+  offer path before this executor can be reached from a real Ark drag.
+- Internal `PlaceDrag` can reorder editable/removable user bookmarks by dropping
+  on a Places insertion line. Reorder targets are clamped to the persisted user
+  bookmark block, built-in Home/Trash/Root and future device places are refused,
+  and successful moves are written back to `user-places.xbel`.
 - External Wayland/X11 drag MIME publication is not complete yet. GPUI's current
   app-level drag value is sufficient for internal drop targets, but system MIME
   data still needs a backend path capable of publishing `text/uri-list` and
@@ -102,10 +135,9 @@ model, and file operations are launched only after a drop target is resolved.
 
 ## Remaining Work
 
-- Carry a pane-local internal drag payload that resolves to selected paths at
-  drag start without cloning the full selection into every rendered item.
-- Implement item and blank viewport drop targets with no-op drop rejection,
-  copy/move/link action choice, and current-directory refresh.
-- Implement Places drag source, place drop target, and insertion-line feedback.
+- Complete external item and blank viewport drop targets for backend MIME data
+  offers that do not yet arrive as GPUI `ExternalPaths`.
 - Integrate external drag MIME data with the same URI-list encoder used by
   clipboard operations.
+- Feed Ark DnD service/path MIME offers into the core parser/executor instead
+  of ordinary copy/move/link when that payload is present.

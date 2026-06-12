@@ -1,7 +1,9 @@
 # Smooth Scroll Reference
 
-Fika's pane-local smooth scrolling maps to Dolphin's item-list container
-smooth scroller rather than to a generic GPUI scroll view.
+This document records Dolphin's item-list smooth scrolling model and how Fika
+maps it. Fika keeps the Dolphin-style core scroll math in `src/core/scroll.rs`,
+but the GPUI UI path currently disables smooth/kinetic animation while the
+basic mouse-wheel and scrollbar hitbox behavior is being stabilized.
 
 ## Dolphin Source
 
@@ -41,7 +43,7 @@ smooth scroller rather than to a generic GPUI scroll view.
 
 - Dolphin `KItemListSmoothScroller` -> `src/core/scroll.rs::SmoothScroll`.
 - Dolphin scrollbar maximum invalidation -> `FikaApp::set_pane_viewport_bounds()`
-  clears pane-local smooth scroll state when viewport/content bounds change.
+  clears pane-local scroll animation state when viewport/content bounds change.
 - Dolphin `KItemListContainer::updateGeometries()` keeps the item view geometry
   separate from the scrollbar extent. Fika mirrors this by rendering the file
   content viewport and the horizontal scrollbar as sibling slots: the item
@@ -52,19 +54,20 @@ smooth scroller rather than to a generic GPUI scroll view.
   extent so it never exceeds the measured width, and feeds that same width to
   `ViewState`, `CompactLayout::horizontal_scroll_bar()`, max-scroll clamping and
   drag mapping.
-- Dolphin interrupted animation handling -> `SmoothScroll::scroll_contents_by()`
-  carries the old target forward and advances the new start by Dolphin's exact
+- Dolphin interrupted animation handling remains encoded in
+  `SmoothScroll::scroll_contents_by()`, which carries the old target forward and
+  advances the new start by Dolphin's exact
   `distance/currentOffset/oldEndOffset/endOffset/startOffset` sequence from
   `KItemListSmoothScroller::scrollContentsBy()`.
-- Dolphin fresh/retarget easing -> `InOutQuad` for new wheel animations and
-  `OutQuad` for retargeted wheel animations.
-- Dolphin `QScroller` kinetic gesture path -> Fika samples scrollbar drag
-  velocity with `ScrollDragTracker` and starts a pane-local kinetic `SmoothScroll`
-  on drag release.
-- Dolphin `setScrollOffset()` synchronous layout path -> Fika's animation tick
-  writes `ViewState.scroll_x/scroll_y`, so `compact_layout_for_model()` and
-  visible-item virtualization are recalculated from the current animated
-  offset, not from a full-model render path.
+- Dolphin fresh/retarget easing remains available in core as `InOutQuad` for
+  new wheel animations and `OutQuad` for retargeted wheel animations.
+- Dolphin `QScroller` kinetic gesture path is represented in core by
+  `ScrollDragTracker` plus kinetic `SmoothScroll`, but the UI drag-release path
+  currently clears the tracker instead of starting inertia.
+- Dolphin `setScrollOffset()` synchronous layout path maps to Fika's current UI
+  behavior: wheel events and scrollbar drags write `ViewState.scroll_x/scroll_y`
+  immediately, so `compact_layout_for_model()` and visible-item virtualization
+  are recalculated from the current offset without waiting for animation ticks.
 - Zed `SplitEditorView` / `PaneGroup` resize behavior -> splitter drag is
   resolved against the parent row bounds and pane flex allocation. Fika projects
   that allocation into `viewport_width` before building the compact layout, so
@@ -73,11 +76,15 @@ smooth scroller rather than to a generic GPUI scroll view.
 
 ## Implementation Notes
 
-- Smooth scroll state is stored per `PaneId`; split panes never share animation
-  state.
+- Smooth scroll state remains pane-local when present; split panes never share
+  animation state.
+- Current UI isolation mode disables smooth and kinetic animation: ordinary
+  wheel events call `scroll_pane_smooth()`, but that function now clamps and
+  writes the new offset immediately; scrollbar drag release calls
+  `finish_scrollbar_drag()` only to clear drag tracking and stale smooth state.
 - Directory navigation/back/forward resets `ViewState` scroll to `0,0` in core.
 - Directory switching, pane close, zoom changes and viewport bound changes clear
-  smooth scroll and scrollbar drag trackers.
+  smooth scroll state and scrollbar drag trackers.
 - Viewport width/height are normalized from GPUI's measured pane bounds before
   layout. Fractional widths are rounded down, not up, so the horizontal scrollbar
   cannot become wider than the current pane visible width and then be clipped by
@@ -90,7 +97,31 @@ smooth scroller rather than to a generic GPUI scroll view.
   reads its actual GPUI bounds for drag mapping. It does not rely on clipping an
   oversized flex child; the rendered control's layout width is the same visible
   pane area used for scrollbar math.
-- The model remains unchanged: smooth scrolling only changes view offset and does
-  not allocate extra visible items beyond the existing virtualized range.
+- The scrollbar slot and scrollbar widget are GPUI mouse occlusion hitboxes.
+  Starting a scrollbar drag cancels any rubber-band selection, and the low-level
+  scrollbar mouse down/move/up listeners stop propagation so the item viewport
+  below cannot start selection or hover work "through" the scrollbar.
+  Scrollbar left-button down is handled during GPUI capture phase, matching the
+  intent of Zed's own scrollbar component, so `occlude()` and bubble-phase
+  blockers cannot prevent a drag from starting.
+  The scrollbar reserve child prepaint and scrollbar canvas both cache the
+  measured track origin and width into pane-local UI state. The scrollbar
+  container can therefore start a drag from a normal left-button down using
+  window coordinates even if the canvas-level listener is bypassed.
+  The reserve slot and the scrollbar widget consume left-button down even when
+  the cached track bounds are temporarily unavailable, so the file viewport
+  cannot receive a selection, rubber-band, or item press through the scrollbar.
+  Active drag movement is handled from capture-phase window mouse move/up
+  events and no longer depends on `MouseMoveEvent::dragging()`, because some
+  platform paths do not keep `pressed_button` populated for every move event.
+  The track/reserve must not use a scroll-only mouse blocker: wheel events still
+  route through the scrollbar, but left-button drag needs normal mouse hit
+  testing so the canvas-level down/move/up listeners can start and update the
+  active scrollbar drag.
+- Ordinary wheel events enter the pane-local scroll path and write the offset
+  immediately. Ctrl+wheel is routed to pane-local zoom instead, cancels active
+  rubber-band selection, and does not update horizontal scroll state.
+- The model remains unchanged: scrolling only changes view offset and does not
+  allocate extra visible items beyond the existing virtualized range.
 - Scroll state stays as `f32`; GPUI rendering rounds the translated content
   offset to whole pixels.

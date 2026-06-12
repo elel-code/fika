@@ -258,11 +258,7 @@ impl DirectoryLister {
         }
 
         match event {
-            DirectoryListerEvent::LoadingStarted { path, mode, .. } => match mode {
-                LoadMode::Load => model.clear_for_directory(path),
-                LoadMode::Reload if model.directory() != path => model.clear_for_directory(path),
-                LoadMode::Reload => Vec::new(),
-            },
+            DirectoryListerEvent::LoadingStarted { .. } => Vec::new(),
             DirectoryListerEvent::ListingCompleted { .. }
             | DirectoryListerEvent::CurrentDirectoryRemoved { .. }
             | DirectoryListerEvent::Error { .. } => Vec::new(),

@@ -1070,6 +1070,50 @@ mod tests {
     }
 
     #[test]
+    fn loading_started_keeps_previous_model_until_listing_refresh() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let pane_id = controller.focused().unwrap();
+        let generation = controller.pane(pane_id).unwrap().generation;
+        controller.apply_lister_event(DirectoryListerEvent::ListingRefreshed {
+            pane_id,
+            generation,
+            request_serial: RequestSerial(1),
+            path: PathBuf::from("/tmp/a"),
+            entries: Arc::new(vec![test_entry_at("/tmp/a", "old.txt")]),
+        });
+
+        let started = controller.load(pane_id, PathBuf::from("/tmp/b")).unwrap();
+        let signals = controller.apply_lister_event(started.clone()).unwrap();
+
+        assert!(signals.is_empty());
+        let pane = controller.pane(pane_id).unwrap();
+        assert_eq!(pane.current_dir, PathBuf::from("/tmp/b"));
+        assert_eq!(pane.model.directory(), Path::new("/tmp/a"));
+        assert_eq!(
+            pane.model.path_for_index(0),
+            Some(PathBuf::from("/tmp/a/old.txt"))
+        );
+
+        let signals = controller
+            .apply_lister_event(DirectoryListerEvent::ListingRefreshed {
+                pane_id,
+                generation: started.generation(),
+                request_serial: started.request_serial(),
+                path: PathBuf::from("/tmp/b"),
+                entries: Arc::new(vec![test_entry_at("/tmp/b", "new.txt")]),
+            })
+            .unwrap();
+
+        assert_eq!(signals, vec![DirectoryModelSignal::ModelReset]);
+        let pane = controller.pane(pane_id).unwrap();
+        assert_eq!(pane.model.directory(), Path::new("/tmp/b"));
+        assert_eq!(
+            pane.model.path_for_index(0),
+            Some(PathBuf::from("/tmp/b/new.txt"))
+        );
+    }
+
+    #[test]
     fn history_navigation_is_pane_scoped() {
         let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
         let first = controller.focused().unwrap();
