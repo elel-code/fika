@@ -84,12 +84,14 @@ use ui::pane::{
 };
 use ui::place_draft::{PlaceDraft, PlaceDraftField, place_draft_overlay};
 use ui::places::{
-    DEVICES_GROUP, PlaceEntry, PlaceSnapshot, REMOVABLE_DEVICES_GROUP, build_places,
-    default_place_label, place_snapshots_for, read_live_device_snapshot,
-    removable_device_place_entries,
+    PlaceEntry, PlaceSnapshot, build_places, default_place_label, place_snapshots_for,
+    read_live_device_snapshot,
 };
 #[cfg(test)]
-use ui::places::{NETWORK_GROUP, active_place_index, build_places_with_devices, place_is_mounted};
+use ui::places::{
+    DEVICES_GROUP, NETWORK_GROUP, REMOVABLE_DEVICES_GROUP, active_place_index,
+    build_places_with_devices, place_is_mounted,
+};
 use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
@@ -1042,34 +1044,7 @@ impl FikaApp {
     }
 
     fn replace_removable_device_places(&mut self, devices: &[DeviceInfo]) -> bool {
-        let existing_paths = self
-            .places
-            .iter()
-            .filter(|place| place.group != REMOVABLE_DEVICES_GROUP)
-            .map(|place| place.path.clone())
-            .collect::<BTreeSet<_>>();
-        let entries = removable_device_place_entries(devices, &existing_paths);
-        let old_entries = self
-            .places
-            .iter()
-            .filter(|place| place.group == REMOVABLE_DEVICES_GROUP)
-            .cloned()
-            .collect::<Vec<_>>();
-        if old_entries == entries {
-            return false;
-        }
-
-        self.places
-            .retain(|place| place.group != REMOVABLE_DEVICES_GROUP);
-        let insert_at = self
-            .places
-            .iter()
-            .position(|place| place.group == DEVICES_GROUP)
-            .unwrap_or(self.places.len());
-        for entry in entries.into_iter().rev() {
-            self.places.insert(insert_at, entry);
-        }
-        true
+        ui::places::replace_removable_device_places(&mut self.places, devices)
     }
 
     fn open_place(&mut self, path: PathBuf) {
