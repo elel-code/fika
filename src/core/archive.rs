@@ -175,18 +175,7 @@ pub async fn execute_ark_dnd_extract_with_bus(
     destination: &Path,
 ) -> Result<(), ArkDndExtractError> {
     let request = ark_dnd_extract_request(payload, destination)?;
-    let connection = bus.connection(request.target.kind()).await?;
-    let proxy = zbus::Proxy::new(
-        &connection,
-        request.target.service(),
-        request.target.path(),
-        request.target.interface(),
-    )
-    .await
-    .map_err(|err| BusError::Proxy {
-        target: request.target.clone(),
-        message: err.to_string(),
-    })?;
+    let proxy = bus.proxy(&request.target).await?;
     let method = request.target.method().to_string();
     bus.call_with_retry(&request.target, || {
         let destination = request.destination.clone();

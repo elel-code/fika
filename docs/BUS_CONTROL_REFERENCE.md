@@ -64,8 +64,19 @@ helper, devices, Ark DnD, and future FileManager1 integration.
     `BusController`, and structured `BusError`.
   - Lazily caches session and system `zbus::Connection` handles behind a shared
     controller, with a 30s default idle timeout.
-  - Provides a timeout/retry method-call helper with target context preserved in
-    error messages.
+  - Fika's direct `zbus` dependency disables default features and enables only
+    `tokio`; `zbus_polkit` also disables defaults and uses its `tokio` feature.
+    The shared bus layer does not opt into zbus `async-io` or `blocking-api`.
+    Cargo feature unification can still show `async-io` in `cargo tree` because
+    GPUI's transitive `ashpd`/accessibility stack depends on zbus with default
+    features; Fika's own D-Bus calls still compile against zbus' Tokio
+    abstractions and are always polled inside `with_bus_tokio_context()`.
+  - Connection creation, generic proxy creation, and timeout/retry method calls
+    all poll inside a Tokio runtime context when called from GPUI tasks, so
+    shared D-Bus/systemd paths do not panic when the caller thread has no Tokio
+    reactor.
+  - `BusController::proxy()` returns an owned zbus proxy and keeps connection
+    ownership/proxy creation out of launcher, Ark, and UDisks2 feature modules.
 - `src/core/launcher.rs`
   - `launch_with_systemd_user()` now uses `BusController::shared()` for the
     session bus, builds an `org.freedesktop.systemd1.Manager` proxy, then calls
@@ -76,6 +87,11 @@ helper, devices, Ark DnD, and future FileManager1 integration.
 - `src/core/privilege.rs`
   - Client helpers for privileged file operations and external-edit lifecycle
     now acquire system/session connections through `BusController::shared()`.
+  - Client-side helper proxy calls and session-helper readiness polling also
+    run inside the bus Tokio context, including `tokio::time::sleep` while
+    waiting for a pkexec-started session helper to appear.
+  - The helper service's external-edit unit watcher now uses async zbus proxies
+    on a local Tokio runtime instead of `zbus::blocking`.
   - The installable helper service owns
     `org.fika.FileManager1.Privileged` at
     `/org/fika/FileManager1/Privileged`.
@@ -102,8 +118,14 @@ helper, devices, Ark DnD, and future FileManager1 integration.
     `org.freedesktop.UDisks2`.
   - Converts UDisks2 Block/Drive/Filesystem properties into a core snapshot and
     merges it with `/proc/self/mountinfo`.
-  - Signal subscriptions for InterfacesAdded/InterfacesRemoved and
-    PropertiesChanged are still pending.
+  - `Udisks2MonitorState` can apply ObjectManager `InterfacesAdded` /
+    `InterfacesRemoved` and Properties `PropertiesChanged` payloads to the raw
+    UDisks2 object map, then emit `DeviceEvent` diffs from the rederived
+    snapshot.
+  - `watch_udisks2_devices()` uses the shared system bus connection with a zbus
+    `MessageStream` match on `/org/freedesktop/UDisks2` path namespace, converts
+    ObjectManager/Properties signal messages into `Udisks2Signal`, and publishes
+    `DeviceMonitorMessage` snapshots/events over a core channel boundary.
 - `src/main.rs`
   - UI actions call launcher/privilege helpers but should not create or own
     D-Bus connections directly.

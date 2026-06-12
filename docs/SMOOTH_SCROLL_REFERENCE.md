@@ -42,6 +42,10 @@ basic mouse-wheel and scrollbar hitbox behavior is being stabilized.
 ## Fika Mapping
 
 - Dolphin `KItemListSmoothScroller` -> `src/core/scroll.rs::SmoothScroll`.
+- Dolphin `KItemListContainer` owned scrollbars -> `src/ui/scrollbar.rs`.
+  Fika keeps horizontal scrollbar state, drawing, measured track bounds, drag
+  capture, and drag math outside `src/ui/file_grid.rs`; the file grid composes
+  the item viewport and a scrollbar slot as siblings.
 - Dolphin scrollbar maximum invalidation -> `FikaApp::set_pane_viewport_bounds()`
   clears pane-local scroll animation state when viewport/content bounds change.
 - Dolphin `KItemListContainer::updateGeometries()` keeps the item view geometry
@@ -98,31 +102,29 @@ basic mouse-wheel and scrollbar hitbox behavior is being stabilized.
   oversized flex child; the rendered control's layout width is the same visible
   pane area used for scrollbar math.
 - The scrollbar slot and scrollbar widget are GPUI mouse occlusion hitboxes.
-  Starting a scrollbar drag cancels any rubber-band selection, and the low-level
-  scrollbar mouse down/move/up listeners stop propagation so the item viewport
-  below cannot start selection or hover work "through" the scrollbar.
-  Scrollbar left-button down is handled during GPUI capture phase, matching the
-  intent of Zed's own scrollbar component, so `occlude()` and bubble-phase
-  blockers cannot prevent a drag from starting.
-  The scrollbar reserve child prepaint and scrollbar canvas both cache the
-  measured track origin and width into pane-local UI state. The scrollbar
-  container can therefore start a drag from a normal left-button down using
-  window coordinates even if the canvas-level listener is bypassed.
-  The reserve slot and the scrollbar widget consume left-button down even when
-  the cached track bounds are temporarily unavailable, so the file viewport
-  cannot receive a selection, rubber-band, or item press through the scrollbar.
-  Active drag movement is handled from capture-phase window mouse move/up
-  events and no longer depends on `MouseMoveEvent::dragging()`, because some
-  platform paths do not keep `pressed_button` populated for every move event.
-  The track/reserve must not use a scroll-only mouse blocker: wheel events still
-  route through the scrollbar, but left-button drag needs normal mouse hit
-  testing so the canvas-level down/move/up listeners can start and update the
-  active scrollbar drag.
-  While a scrollbar drag is active, pane snapshots render a full-pane mouse
-  capture layer that forwards window-coordinate move/up events back through the
-  cached track bounds. Dragging no longer depends on the pointer staying inside
-  the 12px scrollbar strip after the initial press.
-- Ordinary wheel events enter the pane-local scroll path and write the offset
+  The reserve slot stops left-button down propagation so the item viewport below
+  cannot start selection or hover work "through" the scrollbar. Drag start is
+  owned by `src/ui/scrollbar.rs`: the handle canvas reads the actual GPUI canvas
+  bounds during paint, converts them to a window-space track rect, and registers
+  capture-phase mouse handlers for left down/move/up. The reserve slot also
+  calls the scrollbar module's measured-track start path as a fallback, so GPUI
+  hit-test ordering cannot turn the scrollbar strip into a dead mouse blocker.
+  A drag can only start when the initial window point is inside the measured
+  track rect on both axes. Points above or below the 12px strip are ignored even
+  if their x coordinate overlaps the scrollbar.
+  Starting a scrollbar drag cancels any rubber-band selection. The active drag
+  session owns the live window-space track rect and the cursor's handle grab
+  offset. Move events update scroll from that original drag geometry and do not
+  depend on hover state, a fresh prepaint, or `MouseMoveEvent::dragging()`.
+  The app root installs a capture-phase window mouse listener on each render; it
+  checks the current active scrollbar drag session at event time and forwards
+  window-coordinate move/up events before pane children can consume them. Pane
+  snapshots still render the temporary full-pane capture layer during active
+  drags, but dragging no longer depends on that layer being the current hitbox,
+  a fresh scrollbar canvas, or the pointer staying inside the 12px strip after
+  the initial press.
+- Ordinary wheel events enter the pane-local scroll path from both blank
+  viewport space and item visual rect hitboxes, then write the offset
   immediately. Ctrl/secondary+wheel is routed to pane-local zoom instead,
   cancels active rubber-band selection, and does not update horizontal scroll
   state.

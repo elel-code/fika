@@ -1784,6 +1784,7 @@ mod tests {
             size_bytes: 0,
             modified_secs: None,
             mime_type: None,
+            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,

@@ -1,8 +1,10 @@
+use futures_lite::{future, pin};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+use tokio::runtime::{Builder as TokioRuntimeBuilder, Handle, Runtime};
 use tokio::sync::Mutex;
 
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -164,6 +166,31 @@ pub struct BusController {
     system: Mutex<Option<CachedBusConnection>>,
 }
 
+pub(crate) async fn with_bus_tokio_context<F: Future>(future: F) -> F::Output {
+    let handle = current_or_bus_tokio_handle();
+    pin!(future);
+    future::poll_fn(|cx| {
+        let _guard = handle.enter();
+        future.as_mut().poll(cx)
+    })
+    .await
+}
+
+fn current_or_bus_tokio_handle() -> Handle {
+    Handle::try_current().unwrap_or_else(|_| fallback_bus_tokio_runtime().handle().clone())
+}
+
+fn fallback_bus_tokio_runtime() -> &'static Runtime {
+    static BUS_TOKIO_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    BUS_TOKIO_RUNTIME.get_or_init(|| {
+        TokioRuntimeBuilder::new_multi_thread()
+            .enable_all()
+            .thread_name("fika-bus-tokio")
+            .build()
+            .expect("failed to create Fika bus Tokio runtime")
+    })
+}
+
 #[derive(Debug)]
 struct CachedBusConnection {
     connection: zbus::Connection,
@@ -195,28 +222,49 @@ impl BusController {
     }
 
     pub async fn connection(&self, kind: BusKind) -> Result<zbus::Connection, BusError> {
-        let now = Instant::now();
-        let mut guard = self.cache(kind).lock().await;
-        if let Some(cached) = guard.as_mut()
-            && !bus_connection_expired(cached.last_used, now, self.config.idle_timeout)
-        {
-            cached.last_used = now;
-            return Ok(cached.connection.clone());
-        }
+        with_bus_tokio_context(async move {
+            let now = Instant::now();
+            let mut guard = self.cache(kind).lock().await;
+            if let Some(cached) = guard.as_mut()
+                && !bus_connection_expired(cached.last_used, now, self.config.idle_timeout)
+            {
+                cached.last_used = now;
+                return Ok(cached.connection.clone());
+            }
 
-        let connection = match kind {
-            BusKind::Session => zbus::Connection::session().await,
-            BusKind::System => zbus::Connection::system().await,
-        }
-        .map_err(|err| BusError::Connect {
-            kind,
-            message: err.to_string(),
-        })?;
-        *guard = Some(CachedBusConnection {
-            connection: connection.clone(),
-            last_used: now,
-        });
-        Ok(connection)
+            let connection = match kind {
+                BusKind::Session => zbus::Connection::session().await,
+                BusKind::System => zbus::Connection::system().await,
+            }
+            .map_err(|err| BusError::Connect {
+                kind,
+                message: err.to_string(),
+            })?;
+            *guard = Some(CachedBusConnection {
+                connection: connection.clone(),
+                last_used: now,
+            });
+            Ok(connection)
+        })
+        .await
+    }
+
+    pub async fn proxy(&self, target: &BusCallTarget) -> Result<zbus::Proxy<'static>, BusError> {
+        with_bus_tokio_context(async move {
+            let connection = self.connection(target.kind()).await?;
+            zbus::Proxy::new_owned(
+                connection,
+                target.service().to_string(),
+                target.path().to_string(),
+                target.interface().to_string(),
+            )
+            .await
+            .map_err(|err| BusError::Proxy {
+                target: target.clone(),
+                message: err.to_string(),
+            })
+        })
+        .await
     }
 
     pub async fn call_with_retry<T, F, Fut>(
@@ -228,33 +276,36 @@ impl BusController {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, zbus::Error>>,
     {
-        let attempts = self.config.retry_attempts.max(1);
-        let mut last_error = None;
-        for attempt in 0..attempts {
-            let result = tokio::time::timeout(self.config.call_timeout, call()).await;
-            match result {
-                Ok(Ok(value)) => return Ok(value),
-                Ok(Err(error)) => {
-                    last_error = Some(BusError::Call {
-                        target: target.clone(),
-                        message: error.to_string(),
-                    });
+        with_bus_tokio_context(async move {
+            let attempts = self.config.retry_attempts.max(1);
+            let mut last_error = None;
+            for attempt in 0..attempts {
+                let result = tokio::time::timeout(self.config.call_timeout, call()).await;
+                match result {
+                    Ok(Ok(value)) => return Ok(value),
+                    Ok(Err(error)) => {
+                        last_error = Some(BusError::Call {
+                            target: target.clone(),
+                            message: error.to_string(),
+                        });
+                    }
+                    Err(_) => {
+                        last_error = Some(BusError::Timeout {
+                            target: target.clone(),
+                            timeout: self.config.call_timeout,
+                        });
+                    }
                 }
-                Err(_) => {
-                    last_error = Some(BusError::Timeout {
-                        target: target.clone(),
-                        timeout: self.config.call_timeout,
-                    });
+                if attempt + 1 < attempts && !self.config.retry_backoff.is_zero() {
+                    tokio::time::sleep(self.config.retry_backoff).await;
                 }
             }
-            if attempt + 1 < attempts && !self.config.retry_backoff.is_zero() {
-                tokio::time::sleep(self.config.retry_backoff).await;
-            }
-        }
-        Err(last_error.unwrap_or_else(|| BusError::Call {
-            target: target.clone(),
-            message: "D-Bus call was not attempted".to_string(),
-        }))
+            Err(last_error.unwrap_or_else(|| BusError::Call {
+                target: target.clone(),
+                message: "D-Bus call was not attempted".to_string(),
+            }))
+        })
+        .await
     }
 
     fn cache(&self, kind: BusKind) -> &Mutex<Option<CachedBusConnection>> {
@@ -528,6 +579,58 @@ mod tests {
 
         assert_eq!(value, "done");
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn call_with_retry_does_not_require_tokio_reactor() {
+        let controller = BusController::new(BusConfig {
+            retry_attempts: 1,
+            retry_backoff: Duration::ZERO,
+            call_timeout: Duration::from_secs(1),
+            idle_timeout: Duration::from_secs(30),
+        });
+        let target = BusCallTarget::new(
+            BusKind::Session,
+            "org.example.Service",
+            "/org/example",
+            "org.example.Service",
+            "Run",
+        )
+        .unwrap();
+
+        let value = futures_lite::future::block_on(
+            controller.call_with_retry(&target, || async { Ok::<_, zbus::Error>("done") }),
+        )
+        .unwrap();
+
+        assert_eq!(value, "done");
+    }
+
+    #[test]
+    fn call_with_retry_timeout_wakes_without_tokio_reactor() {
+        let controller = BusController::new(BusConfig {
+            retry_attempts: 1,
+            retry_backoff: Duration::ZERO,
+            call_timeout: Duration::from_millis(10),
+            idle_timeout: Duration::from_secs(30),
+        });
+        let target = BusCallTarget::new(
+            BusKind::Session,
+            "org.example.Service",
+            "/org/example",
+            "org.example.Service",
+            "Run",
+        )
+        .unwrap();
+
+        let started = Instant::now();
+        let error = futures_lite::future::block_on(controller.call_with_retry(&target, || async {
+            std::future::pending::<Result<&'static str, zbus::Error>>().await
+        }))
+        .unwrap_err();
+
+        assert!(matches!(error, BusError::Timeout { .. }));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[tokio::test]

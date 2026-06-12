@@ -1,6 +1,6 @@
 use crate::{
     BreadcrumbSegment, FikaApp, FilterBarSnapshot, LocationDraftSnapshot, PaneSnapshot,
-    file_transfer_mode_for_modifiers,
+    file_transfer_mode_for_modifiers, refresh_active_drag_cursor_for_transfer_mode,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -551,6 +551,7 @@ fn breadcrumb_segment(
                                 mode,
                             );
                         if contains {
+                            refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {
@@ -570,6 +571,7 @@ fn breadcrumb_segment(
                                 mode,
                             );
                         if contains {
+                            refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {

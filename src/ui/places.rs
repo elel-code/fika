@@ -1,5 +1,6 @@
 use crate::{
     FikaApp, FileIconSnapshot, FileTransferMode, PlaceSnapshot, file_transfer_mode_for_modifiers,
+    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -148,11 +149,16 @@ fn group_heading(
                     }),
                 )
                 .on_drag_move::<ItemDrag>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
+                    move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
                         let changed =
                             contains && this.set_place_drag_drop_target_for_insert(insert_index);
                         if contains {
+                            refresh_active_drag_cursor_for_transfer_mode(
+                                FileTransferMode::Copy,
+                                window,
+                                cx,
+                            );
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {
@@ -164,11 +170,16 @@ fn group_heading(
                     },
                 ))
                 .on_drag_move::<ExternalPaths>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
+                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
                         let changed =
                             contains && this.set_place_drag_drop_target_for_insert(insert_index);
                         if contains {
+                            refresh_active_drag_cursor_for_transfer_mode(
+                                FileTransferMode::Copy,
+                                window,
+                                cx,
+                            );
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {
@@ -195,14 +206,25 @@ fn group_heading(
                     },
                 ))
                 .on_drag_move::<PlaceDrag>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
+                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
                         let drag = event.drag(cx);
                         let changed = contains
                             && drag.movable()
                             && this.set_place_drag_drop_target_for_insert(insert_index);
                         if contains && drag.movable() {
+                            refresh_active_drag_cursor_for_transfer_mode(
+                                FileTransferMode::Move,
+                                window,
+                                cx,
+                            );
                             this.schedule_drop_target_stale_clear(cx);
+                        } else if contains {
+                            let cleared = this.clear_drag_drop_targets();
+                            refresh_active_drag_cursor_not_allowed(window, cx);
+                            if cleared {
+                                cx.notify();
+                            }
                         }
                         if changed {
                             cx.notify();
@@ -244,6 +266,9 @@ fn place_row(
     let insert_after_index = place.index + 1;
     let row_drop_target = place.drop_target;
     let active = place.active;
+    let mounted = place.mounted;
+    let device = place.device;
+    let network = place.network;
     div()
         .id(format!("place-wrap-{visible_index}"))
         .flex()
@@ -266,7 +291,7 @@ fn place_row(
                 .border_color(place_row_border_color(active, row_drop_target))
                 .bg(place_row_background(active, row_drop_target))
                 .hover(move |row| row.bg(place_row_hover_background(active, row_drop_target)))
-                .cursor_pointer()
+                .when(mounted || device || network, |row| row.cursor_pointer())
                 .on_drag(place_drag, |drag, _, _, cx| {
                     cx.new(|_| PlaceDragPreview {
                         label: drag.label.clone(),
@@ -274,7 +299,7 @@ fn place_row(
                     })
                 })
                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.open_place(path.clone());
+                    this.activate_place(path.clone(), mounted, device, network, cx);
                     cx.stop_propagation();
                     cx.notify();
                 }))
@@ -292,18 +317,33 @@ fn place_row(
                             return;
                         }
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        let changed = match place_drop_zone(event) {
+                        let drop_zone = place_drop_zone(event);
+                        let cursor_mode = match drop_zone {
+                            PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => {
+                                Some(FileTransferMode::Copy)
+                            }
+                            PlaceDropZone::OnPlace if mounted => Some(mode),
+                            PlaceDropZone::OnPlace => None,
+                        };
+                        let changed = match drop_zone {
                             PlaceDropZone::InsertBefore => {
                                 this.set_place_drag_drop_target_for_insert(insert_before_index)
                             }
                             PlaceDropZone::InsertAfter => {
                                 this.set_place_drag_drop_target_for_insert(insert_after_index)
                             }
-                            PlaceDropZone::OnPlace => this.set_place_drag_drop_target_for_path(
-                                path_for_internal_target.clone(),
-                                mode,
-                            ),
+                            PlaceDropZone::OnPlace if mounted => this
+                                .set_place_drag_drop_target_for_path(
+                                    path_for_internal_target.clone(),
+                                    mode,
+                                ),
+                            PlaceDropZone::OnPlace => this.clear_drag_drop_targets(),
                         };
+                        if let Some(cursor_mode) = cursor_mode {
+                            refresh_active_drag_cursor_for_transfer_mode(cursor_mode, window, cx);
+                        } else {
+                            refresh_active_drag_cursor_not_allowed(window, cx);
+                        }
                         this.schedule_drop_target_stale_clear(cx);
                         if changed {
                             cx.notify();
@@ -317,18 +357,33 @@ fn place_row(
                             return;
                         }
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        let changed = match place_drop_zone(event) {
+                        let drop_zone = place_drop_zone(event);
+                        let cursor_mode = match drop_zone {
+                            PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => {
+                                Some(FileTransferMode::Copy)
+                            }
+                            PlaceDropZone::OnPlace if mounted => Some(mode),
+                            PlaceDropZone::OnPlace => None,
+                        };
+                        let changed = match drop_zone {
                             PlaceDropZone::InsertBefore => {
                                 this.set_place_drag_drop_target_for_insert(insert_before_index)
                             }
                             PlaceDropZone::InsertAfter => {
                                 this.set_place_drag_drop_target_for_insert(insert_after_index)
                             }
-                            PlaceDropZone::OnPlace => this.set_place_drag_drop_target_for_path(
-                                path_for_external_target.clone(),
-                                mode,
-                            ),
+                            PlaceDropZone::OnPlace if mounted => this
+                                .set_place_drag_drop_target_for_path(
+                                    path_for_external_target.clone(),
+                                    mode,
+                                ),
+                            PlaceDropZone::OnPlace => this.clear_drag_drop_targets(),
                         };
+                        if let Some(cursor_mode) = cursor_mode {
+                            refresh_active_drag_cursor_for_transfer_mode(cursor_mode, window, cx);
+                        } else {
+                            refresh_active_drag_cursor_not_allowed(window, cx);
+                        }
                         this.schedule_drop_target_stale_clear(cx);
                         if changed {
                             cx.notify();
@@ -337,7 +392,7 @@ fn place_row(
                     },
                 ))
                 .on_drag_move::<PlaceDrag>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
+                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
                         if !event.bounds.contains(&event.event.position) {
                             return;
                         }
@@ -347,13 +402,28 @@ fn place_row(
                             insert_before_index,
                             place_drop_zone(event),
                         ) else {
+                            let changed = this.clear_drag_drop_targets();
+                            refresh_active_drag_cursor_not_allowed(window, cx);
+                            if changed {
+                                cx.notify();
+                            }
                             cx.stop_propagation();
                             return;
                         };
-                        let changed = drag.movable()
-                            && this.set_place_drag_drop_target_for_insert(insert_index);
+                        let changed = if drag.movable() {
+                            this.set_place_drag_drop_target_for_insert(insert_index)
+                        } else {
+                            this.clear_drag_drop_targets()
+                        };
                         if drag.movable() {
+                            refresh_active_drag_cursor_for_transfer_mode(
+                                FileTransferMode::Move,
+                                window,
+                                cx,
+                            );
                             this.schedule_drop_target_stale_clear(cx);
+                        } else {
+                            refresh_active_drag_cursor_not_allowed(window, cx);
                         }
                         if changed {
                             cx.notify();
@@ -363,24 +433,28 @@ fn place_row(
                 ))
                 .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
                     let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                    this.drop_item_drag_to_current_place_target(
-                        drag.payload(),
-                        path_for_internal_drop.clone(),
-                        mode,
-                        cx,
-                    );
+                    if mounted {
+                        this.drop_item_drag_to_current_place_target(
+                            drag.payload(),
+                            path_for_internal_drop.clone(),
+                            mode,
+                            cx,
+                        );
+                    }
                     cx.stop_propagation();
                     cx.notify();
                 }))
                 .on_drop::<ExternalPaths>(cx.listener(
                     move |this, external_paths: &ExternalPaths, window, cx| {
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        this.drop_external_paths_to_current_place_target(
-                            external_paths.paths().to_vec(),
-                            path_for_external_drop.clone(),
-                            mode,
-                            cx,
-                        );
+                        if mounted {
+                            this.drop_external_paths_to_current_place_target(
+                                external_paths.paths().to_vec(),
+                                path_for_external_drop.clone(),
+                                mode,
+                                cx,
+                            );
+                        }
                         cx.stop_propagation();
                         cx.notify();
                     },
@@ -401,6 +475,8 @@ fn place_row(
                         .text_sm()
                         .text_color(if place.active {
                             rgb(0x1f4fbf)
+                        } else if !place.mounted {
+                            rgb(0x6b7280)
                         } else {
                             rgb(0x24292f)
                         })

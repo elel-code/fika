@@ -9,10 +9,10 @@ default-run = "fika"
 name = "fika_core"
 
 [dependencies]
-futures-lite = "*"
+futures-lite = "2"
 gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", features = ["wayland", "x11"] }
-notify = "*"
-tokio = { version = "*", features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
-zbus = "*"
-zbus_polkit = "*"
+notify = "8"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+zbus_polkit = { version = "5", default-features = false, features = ["tokio"] }

@@ -17,14 +17,24 @@ pub use core::clipboard::{
     FileClipboardPayload, FileClipboardRole, decode_file_clipboard_text, encode_file_clipboard_text,
 };
 pub use core::devices::{
-    DBUS_OBJECT_MANAGER_INTERFACE, DeviceDiscoveryError, DeviceEvent, DeviceInfo, MountInfoEntry,
-    PROC_SELF_MOUNTINFO, UDISKS2_BLOCK_INTERFACE, UDISKS2_DRIVE_INTERFACE,
-    UDISKS2_FILESYSTEM_INTERFACE, UDISKS2_OBJECT_MANAGER_PATH, UDISKS2_SERVICE, Udisks2BlockDevice,
-    Udisks2InterfaceMap, Udisks2PropertyMap, Udisks2RawObject, Udisks2Snapshot,
-    device_events_between, devices_from_mount_entries, devices_from_mountinfo,
-    devices_from_udisks2_snapshot, parse_mountinfo, read_mountinfo_devices, read_udisks2_devices,
-    read_udisks2_devices_with_bus, read_udisks2_snapshot_with_bus,
-    udisks2_snapshot_from_managed_objects, udisks2_snapshot_from_raw_objects,
+    DBUS_OBJECT_MANAGER_INTERFACE, DeviceActionError, DeviceDiscoveryError, DeviceEvent,
+    DeviceInfo, DeviceMonitorMessage, MountInfoEntry, PROC_SELF_MOUNTINFO, UDISKS2_BLOCK_INTERFACE,
+    UDISKS2_DRIVE_EJECT_METHOD, UDISKS2_DRIVE_INTERFACE, UDISKS2_DRIVE_POWER_OFF_METHOD,
+    UDISKS2_FILESYSTEM_INTERFACE, UDISKS2_FILESYSTEM_MOUNT_METHOD,
+    UDISKS2_FILESYSTEM_UNMOUNT_METHOD, UDISKS2_OBJECT_MANAGER_PATH, UDISKS2_SERVICE,
+    Udisks2BlockDevice, Udisks2DeviceActionTarget, Udisks2InterfaceMap, Udisks2MonitorState,
+    Udisks2MountResult, Udisks2PropertyMap, Udisks2RawObject, Udisks2Signal, Udisks2Snapshot,
+    device_events_between, device_events_for_udisks2_signal, devices_from_mount_entries,
+    devices_from_mountinfo, devices_from_udisks2_snapshot, eject_udisks2_device,
+    eject_udisks2_device_with_bus, mount_udisks2_device, mount_udisks2_device_with_bus,
+    parse_mountinfo, read_mountinfo_devices, read_udisks2_devices, read_udisks2_devices_with_bus,
+    read_udisks2_snapshot_with_bus, resolve_udisks2_device_action_target,
+    resolve_udisks2_device_action_target_with_bus, safely_remove_udisks2_device,
+    safely_remove_udisks2_device_with_bus, udisks2_device_action_targets,
+    udisks2_monitor_state_from_managed_objects, udisks2_raw_objects_from_managed_objects,
+    udisks2_signal_from_message, udisks2_snapshot_from_managed_objects,
+    udisks2_snapshot_from_raw_objects, unmount_udisks2_device, unmount_udisks2_device_with_bus,
+    watch_udisks2_devices, watch_udisks2_devices_with_bus,
 };
 pub use core::directory::{
     ClassifiedWatcherDelta, DirectoryLister, DirectoryListerEvent, LoadMode, RefreshPair,
@@ -52,6 +62,13 @@ pub use core::model::{
     ChangedRoles, DirectoryModel, DirectoryModelSignal, ItemRange, ItemRangeList, SortDescriptor,
     SortOrder, SortRole,
 };
+pub use core::network::{
+    DOLPHIN_REMOTE_ROOT_URI, NETWORK_ROOT_ICON, NETWORK_ROOT_LABEL, NETWORK_ROOT_URI, NetworkAuth,
+    NetworkFilesystemKind, NetworkLocation, NetworkUrlError, classify_network_filesystem,
+    filesystem_type_is_remote, is_network_root_path, is_network_root_uri,
+    is_supported_network_scheme, network_root_location, network_root_path, normalize_network_uri,
+    parse_network_location, supported_network_schemes,
+};
 pub use core::operations::{
     AffectedDirectoryRefresh, CreateUndoItem, CreatedItemKind, OperationQueue, RenameUndoItem,
     TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord, UndoSerial,
@@ -69,6 +86,14 @@ pub use core::privilege::{HelperBus, run_dbus_service};
 pub use core::scroll::{
     SMOOTH_SCROLL_DURATION, SMOOTH_SCROLL_FRAME, ScrollAdvance, ScrollBounds, ScrollDragTracker,
     SmoothScroll,
+};
+pub use core::thumbnails::{
+    ThumbnailCacheHit, ThumbnailCachePaths, ThumbnailMetadata, ThumbnailRequest,
+    ThumbnailRequestPriority, ThumbnailRequestQueue, ThumbnailSize, cached_thumbnail_for_path,
+    cached_thumbnail_for_uri, default_thumbnail_cache_root, record_thumbnail_failure,
+    thumbnail_cache_key, thumbnail_cache_path, thumbnail_cache_paths_for_uri, thumbnail_cache_root,
+    thumbnail_failure_is_cached, thumbnail_failure_path, thumbnail_metadata,
+    thumbnail_uri_for_path,
 };
 pub use core::view::{
     CompactColumnMetrics, CompactLayout, CompactLayoutOptions, HorizontalScrollBarLayout,

@@ -70,16 +70,22 @@ icon selection, Open With menu, and future process launching path.
 - Core launcher and application discovery lives in `src/core/launcher.rs`.
   - It parses `.desktop` `[Desktop Entry]` application records, `MimeType=`,
     `Exec=`, `Actions=`, and `[Desktop Action ...]` groups.
+    Application action groups are retained as application metadata only; they
+    are not promoted into Fika service menu rows.
   - `launch_with_systemd_user()` starts launch plans as user systemd transient
     units through the shared `src/core/bus.rs` session-bus helper, so Open
     With, service menu, Ark fallback, and Open in New Window use one D-Bus
     timeout/retry boundary.
-  - It preserves `Icon=` from application desktop entries, `[Desktop Action ...]`
-    groups, and KDE service menu desktop entries. A service action uses its own
-    action icon first, then falls back to the parent application/service icon,
-    matching Dolphin's action-layer icon propagation.
-  - It discovers KDE service menu desktop files from XDG data service menu
-    directories and accepts `Type=Service` records with
+  - It preserves `Icon=` from application desktop entries for Open With rows and
+    from KDE/Fika service menu desktop entries for service rows. A service
+    action uses its own action icon first, then falls back to the parent service
+    icon, matching Dolphin's action-layer icon propagation.
+  - It discovers service menu desktop files only from dedicated XDG service menu
+    directories: `$XDG_DATA_HOME/fika/servicemenus` or
+    `~/.local/share/fika/servicemenus`, then `kio/servicemenus`,
+    `kservices5/ServiceMenus`, and `konqueror/servicemenus` under each XDG data
+    root. It does not scan `applications/` for service menu actions.
+  - It accepts `Type=Service` records with
     `X-KDE-ServiceTypes=KonqPopupMenu/Plugin` or `KFileItemAction/Plugin`.
   - Service menu actions are filtered by target MIME using exact MIME,
     `type/*`, `all/all`, `all/allfiles`, and `inode/directory` matching.
@@ -118,9 +124,9 @@ icon selection, Open With menu, and future process launching path.
   - The selected application is launched through `launch_with_systemd_user()`;
     success and structured launcher errors are reported back to the originating
     pane status bar.
-  - Service menu and desktop action rows render the core-provided icon name
-    through the same named theme icon resolver used by file/place icons, with
-    compact marker fallback only when the theme cannot resolve the name.
+  - Service menu rows render the core-provided icon name through the same named
+    theme icon resolver used by file/place icons, with compact marker fallback
+    only when the theme cannot resolve the name.
   - The "Other Application..." dialog lists every application from the same
     core desktop application cache, including apps that do not declare the
     current MIME type. Selecting one still builds a `DesktopLaunchPlan` and

@@ -1,17 +1,22 @@
 mod ui;
 
+#[cfg(test)]
+use fika_core::ServiceMenuAction;
 use fika_core::{
     CompactColumnMetrics, CompactLayout, CompactLayoutOptions, CreateUndoItem, CreatedItemKind,
-    DeviceInfo, DirectoryCache, DirectoryLister, DirectoryListerEvent, FileClipboardRole,
-    OperationQueue, PaneController, PaneId, RenameUndoItem, ScrollBounds, ScrollDragTracker,
-    SelectionMove, SmoothScroll, SortDescriptor, SortOrder, SortRole, TransferUndoItem,
-    TrashUndoItem, UndoPayload, UndoRecord, UserPlace, ViewPoint, ViewRect, ViewState, ZoomChange,
-    decode_file_clipboard_text, encode_file_clipboard_text, file_ops, nearest_existing_ancestor,
+    DeviceActionError, DeviceInfo, DeviceMonitorMessage, DirectoryCache, DirectoryLister,
+    DirectoryListerEvent, FileClipboardRole, OperationQueue, PaneController, PaneId,
+    RenameUndoItem, ScrollBounds, ScrollDragTracker, SelectionMove, SmoothScroll, SortDescriptor,
+    SortOrder, SortRole, TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord, UserPlace,
+    ViewPoint, ViewRect, ViewState, ZoomChange, decode_file_clipboard_text, eject_udisks2_device,
+    encode_file_clipboard_text, file_ops, is_network_root_path, mount_udisks2_device,
+    nearest_existing_ancestor, network_root_path, safely_remove_udisks2_device,
+    unmount_udisks2_device,
 };
 use fika_core::{
     DesktopLaunchCommand, DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache,
-    ServiceMenuAction, ServiceMenuTarget, SystemdLaunchResult, current_executable_launch_plan,
-    is_archive_mime_or_path, launch_with_systemd_user, set_default_mime_application,
+    ServiceMenuTarget, SystemdLaunchResult, current_executable_launch_plan,
+    launch_with_systemd_user, set_default_mime_application,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -26,16 +31,30 @@ use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, UNIX_EPOCH};
-use ui::file_grid::{ActiveScrollBarDrag, HorizontalScrollBarTrack};
+use ui::application_chooser::{ApplicationChooserState, application_chooser_overlay};
+use ui::context_menu::{
+    CONTEXT_MENU_ROW_HEIGHT, ContextMenuAction, ContextMenuIcon, ContextMenuItem,
+    ContextMenuNestedSubmenu, ContextMenuOpenSubmenu, ContextMenuOverlayRect, ContextMenuSubmenu,
+    ContextMenuTarget, context_menu_actions, context_menu_overlay_layout, context_submenu_actions,
+};
+#[cfg(test)]
+use ui::context_menu::{CONTEXT_MENU_VERTICAL_PADDING, CONTEXT_MENU_VIEWPORT_MARGIN};
+use ui::file_grid::PaneViewportGeometry;
+use ui::place_draft::{PlaceDraft, PlaceDraftField, place_draft_overlay};
+use ui::properties_dialog::{PropertiesDialogState, PropertyRow, properties_dialog_overlay};
+use ui::scrollbar::{ActiveScrollBarDrag, HorizontalScrollBarTrack};
 
 const MIN_PANE_WIDTH: f32 = 1.0;
 const PANE_SPLITTER_WIDTH: f32 = 1.0;
 const PANE_SPLITTER_HITBOX_WIDTH: f32 = 8.0;
 const SPLIT_RATIO_EPSILON: f32 = 0.0005;
 const DROP_TARGET_STALE_TIMEOUT: Duration = Duration::from_millis(3000);
+const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+const NETWORK_GROUP: &str = "Network";
 const DEVICES_GROUP: &str = "Devices";
 const REMOVABLE_DEVICES_GROUP: &str = "Removable Devices";
 
@@ -261,6 +280,7 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) is_dir: bool,
     pub(crate) name: Arc<str>,
     pub(crate) kind_label: String,
+    pub(crate) thumbnail_path: Option<PathBuf>,
     pub(crate) icon: FileIconSnapshot,
     pub(crate) selected: bool,
     pub(crate) selection_count: usize,
@@ -302,7 +322,7 @@ struct NamedIconCacheKey {
 }
 
 #[derive(Clone, Debug, Default)]
-struct FileIconCache {
+pub(crate) struct FileIconCache {
     cached: HashMap<FileIconCacheKey, FileIconSnapshot>,
     named_cached: HashMap<NamedIconCacheKey, FileIconSnapshot>,
     theme: IconThemeResolver,
@@ -331,7 +351,7 @@ impl FileIconCache {
         icon
     }
 
-    fn named_icon(
+    pub(crate) fn named_icon(
         &mut self,
         name: &str,
         candidates: &[&str],
@@ -482,177 +502,40 @@ struct ContextMenuState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ContextMenuOpenSubmenu {
-    submenu: ContextMenuSubmenu,
-    parent_index: usize,
-    nested: Option<ContextMenuNestedSubmenu>,
+enum DevicePlaceOperation {
+    Mount,
+    Unmount,
+    Eject,
+    SafelyRemove,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ContextMenuNestedSubmenu {
-    submenu: ContextMenuSubmenu,
-    parent_index: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ContextMenuOverlayRect {
-    x: f32,
-    y: f32,
-    width: f32,
-    max_height: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ContextMenuOverlayLayout {
-    root: ContextMenuOverlayRect,
-    submenu: Option<ContextMenuOverlayRect>,
-    nested_submenu: Option<ContextMenuOverlayRect>,
-}
-
-impl ContextMenuOverlayLayout {
-    fn contains(self, point: ViewPoint) -> bool {
-        self.root.contains(point)
-            || self.submenu.is_some_and(|rect| rect.contains(point))
-            || self.nested_submenu.is_some_and(|rect| rect.contains(point))
+impl DevicePlaceOperation {
+    fn in_progress_message(self, path: &Path) -> String {
+        match self {
+            Self::Mount => format!("Mounting {}", path.display()),
+            Self::Unmount => format!("Unmounting {}", path.display()),
+            Self::Eject => format!("Ejecting {}", path.display()),
+            Self::SafelyRemove => format!("Safely removing {}", path.display()),
+        }
     }
-}
 
-impl ContextMenuOverlayRect {
-    fn contains(self, point: ViewPoint) -> bool {
-        point.x >= self.x
-            && point.x < self.x + self.width
-            && point.y >= self.y
-            && point.y < self.y + self.max_height
+    fn success_message(self, path: &Path) -> String {
+        match self {
+            Self::Mount => format!("Mounted {}", path.display()),
+            Self::Unmount => format!("Unmounted {}", path.display()),
+            Self::Eject => format!("Ejected {}", path.display()),
+            Self::SafelyRemove => format!("Safely removed {}", path.display()),
+        }
     }
-}
 
-#[derive(Clone, Debug, PartialEq)]
-enum ContextMenuTarget {
-    Blank {
-        trash_view: bool,
-        trash_has_items: bool,
-        service_actions: Vec<ServiceMenuAction>,
-    },
-    PlacesBlank {
-        has_hidden_places: bool,
-    },
-    PlaceSection {
-        group: &'static str,
-    },
-    Place {
-        path: PathBuf,
-        trash_place: bool,
-        trash_has_items: bool,
-        editable: bool,
-        removable: bool,
-    },
-    Item {
-        path: PathBuf,
-        is_dir: bool,
-        selection_count: usize,
-        trash_view: bool,
-        trash_can_restore: bool,
-        mime_type: Option<Arc<str>>,
-        open_with_apps: Vec<MimeApplication>,
-        service_actions: Vec<ServiceMenuAction>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ContextMenuAction {
-    Open,
-    OpenInNewPane,
-    OpenInNewWindow,
-    OpenWithSubmenu,
-    OpenWithApplication { desktop_id: String },
-    OtherApplication,
-    ServiceMenuSubmenu,
-    ServiceMenuGroupSubmenu { group_index: usize },
-    RunServiceMenuAction { action_id: String },
-    CompressWithArk,
-    ExtractHereWithArk,
-    ExtractToWithArk,
-    AddPlace,
-    EditPlace,
-    RemovePlace,
-    HidePlace,
-    HidePlaceSection,
-    ShowHiddenPlaces,
-    SortBySubmenu,
-    ViewModeSubmenu,
-    SortByName,
-    SortByModified,
-    SortBySize,
-    SortByOriginalPath,
-    SortByDeletionTime,
-    SortAscending,
-    SortDescending,
-    SortFoldersFirst,
-    SortHiddenLast,
-    ViewCompact,
-    ViewIcons,
-    ViewDetails,
-    Rename,
-    Copy,
-    CopyLocation,
-    Cut,
-    Trash,
-    RestoreFromTrash,
-    DeletePermanently,
-    EmptyTrash,
-    Properties,
-    CreateFolder,
-    Paste,
-    SelectAll,
-    Refresh,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ContextMenuItem {
-    action: ContextMenuAction,
-    label: String,
-    enabled: bool,
-    submenu: Option<ContextMenuSubmenu>,
-    icon: Option<ContextMenuIcon>,
-    separator_before: bool,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum ContextMenuIcon {
-    Named(String),
-    Open,
-    OpenWith,
-    Application,
-    Service,
-    Archive,
-    NewFolder,
-    Edit,
-    Remove,
-    Hide,
-    Sort,
-    View,
-    Rename,
-    Copy,
-    Cut,
-    Paste,
-    Location,
-    Trash,
-    Restore,
-    Delete,
-    Properties,
-    Select,
-    Refresh,
-    Place,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ContextMenuSubmenu {
-    OpenWith,
-    ServiceMenu,
-    ServiceMenuGroup(usize),
-    SortBy,
-    TrashSortBy,
-    ViewMode,
+    fn error_message(self, path: &Path, error: &DeviceActionError) -> String {
+        match self {
+            Self::Mount => format!("Cannot mount {}: {error}", path.display()),
+            Self::Unmount => format!("Cannot unmount {}: {error}", path.display()),
+            Self::Eject => format!("Cannot eject {}: {error}", path.display()),
+            Self::SafelyRemove => format!("Cannot safely remove {}: {error}", path.display()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -662,32 +545,7 @@ enum ContextMenuRowScope {
     NestedSubmenu,
 }
 
-const CONTEXT_MENU_WIDTH: f32 = 196.0;
-const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
-const CONTEXT_MENU_VERTICAL_PADDING: f32 = 4.0;
-const CONTEXT_MENU_VIEWPORT_MARGIN: f32 = 8.0;
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PropertiesDialogState {
-    title: String,
-    rows: Vec<PropertyRow>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ApplicationChooserState {
-    pane_id: PaneId,
-    path: PathBuf,
-    mime_type: Option<Arc<str>>,
-    applications: Vec<MimeApplication>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PropertyRow {
-    label: &'static str,
-    value: String,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ContentItemHit {
     model_index: usize,
@@ -706,6 +564,7 @@ pub(crate) enum PlaceIcon {
     Videos,
     Trash,
     Root,
+    Network,
     Device,
     Bookmark,
     Folder,
@@ -718,6 +577,11 @@ pub(crate) struct PlaceSnapshot {
     pub(crate) icon: FileIconSnapshot,
     pub(crate) label: String,
     pub(crate) path: PathBuf,
+    pub(crate) mounted: bool,
+    pub(crate) device: bool,
+    pub(crate) network: bool,
+    pub(crate) device_ejectable: bool,
+    pub(crate) device_can_power_off: bool,
     pub(crate) active: bool,
     pub(crate) drop_target: Option<FileTransferMode>,
     pub(crate) insert_before: bool,
@@ -736,21 +600,8 @@ struct PlaceEntry {
     path: PathBuf,
     editable: bool,
     removable: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PlaceDraft {
-    pane_id: PaneId,
-    editing_path: Option<PathBuf>,
-    focus: PlaceDraftField,
-    label: String,
-    path: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PlaceDraftField {
-    Label,
-    Path,
+    device_ejectable: bool,
+    device_can_power_off: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -783,13 +634,23 @@ impl RubberBandState {
         }
     }
 
-    fn visible_rect(self, scroll_x: f32, scroll_y: f32) -> ViewRect {
+    fn viewport_rect(self, view: &ViewState) -> ViewRect {
         let rect = self.rect();
+        let viewport = ViewRect {
+            x: view.scroll_x,
+            y: view.scroll_y,
+            width: view.viewport_width.max(0.0),
+            height: view.viewport_height.max(0.0),
+        };
+        let x = rect.x.max(viewport.x);
+        let y = rect.y.max(viewport.y);
+        let right = rect.right().min(viewport.right());
+        let bottom = rect.bottom().min(viewport.bottom());
         ViewRect {
-            x: rect.x - scroll_x,
-            y: rect.y - scroll_y,
-            width: rect.width,
-            height: rect.height,
+            x: (x - view.scroll_x).round(),
+            y: (y - view.scroll_y).round(),
+            width: (right - x).max(0.0),
+            height: (bottom - y).max(0.0),
         }
     }
 }
@@ -1052,6 +913,35 @@ pub(crate) fn file_transfer_mode_for_modifiers(modifiers: gpui::Modifiers) -> Fi
         FileTransferMode::Move
     } else {
         FileTransferMode::Copy
+    }
+}
+
+pub(crate) fn drag_cursor_style_for_transfer_mode(mode: FileTransferMode) -> gpui::CursorStyle {
+    match mode {
+        FileTransferMode::Copy => gpui::CursorStyle::DragCopy,
+        FileTransferMode::Move => gpui::CursorStyle::Arrow,
+        FileTransferMode::Link => gpui::CursorStyle::DragLink,
+    }
+}
+
+pub(crate) fn refresh_active_drag_cursor_for_transfer_mode(
+    mode: FileTransferMode,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    let new_cursor = drag_cursor_style_for_transfer_mode(mode);
+    if cx.active_drag_cursor_style() != Some(new_cursor) {
+        cx.set_active_drag_cursor_style(new_cursor, window);
+    }
+}
+
+pub(crate) fn refresh_active_drag_cursor_not_allowed(
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    let new_cursor = gpui::CursorStyle::OperationNotAllowed;
+    if cx.active_drag_cursor_style() != Some(new_cursor) {
+        cx.set_active_drag_cursor_style(new_cursor, window);
     }
 }
 
@@ -1635,6 +1525,14 @@ fn format_entry_kind_label(entry: &fika_core::EntryData) -> String {
         "Folder".to_string()
     } else {
         fika_core::format_size(entry.size_bytes)
+    }
+}
+
+fn visible_item_thumbnail_path(entry: &fika_core::EntryData) -> Option<PathBuf> {
+    if entry.is_dir {
+        None
+    } else {
+        entry.thumbnail_path.clone()
     }
 }
 
@@ -2714,6 +2612,11 @@ pub(crate) struct FikaApp {
     hidden_places: BTreeSet<PathBuf>,
     hidden_place_sections: BTreeSet<&'static str>,
     user_places_path: PathBuf,
+    device_refresh_pending: bool,
+    next_device_refresh_at: Instant,
+    device_monitor_rx: Option<mpsc::Receiver<DeviceMonitorMessage>>,
+    device_monitor_active: bool,
+    next_device_monitor_start_at: Instant,
     file_icons: FileIconCache,
     mime_applications: MimeApplicationCache,
     space_info: SpaceInfoCache,
@@ -2723,7 +2626,7 @@ pub(crate) struct FikaApp {
     scroll_drag_trackers: HashMap<PaneId, ScrollDragTracker>,
     active_scrollbar_drag: Option<ActiveScrollBarDrag>,
     horizontal_scrollbar_tracks: HashMap<PaneId, HorizontalScrollBarTrack>,
-    viewport_origins: HashMap<PaneId, ViewPoint>,
+    pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
     pane_split_ratios: HashMap<PaneId, f32>,
     pane_row_width: f32,
     visible_item_slots: HashMap<PaneId, VisibleItemSlotPool>,
@@ -2783,6 +2686,11 @@ impl FikaApp {
             hidden_places: BTreeSet::new(),
             hidden_place_sections: BTreeSet::new(),
             user_places_path,
+            device_refresh_pending: false,
+            next_device_refresh_at: Instant::now(),
+            device_monitor_rx: None,
+            device_monitor_active: false,
+            next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
             mime_applications: MimeApplicationCache::load(),
             space_info: SpaceInfoCache::default(),
@@ -2792,7 +2700,7 @@ impl FikaApp {
             scroll_drag_trackers: HashMap::new(),
             active_scrollbar_drag: None,
             horizontal_scrollbar_tracks: HashMap::new(),
-            viewport_origins: HashMap::new(),
+            pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
             pane_row_width: 0.0,
             visible_item_slots: HashMap::new(),
@@ -2834,6 +2742,7 @@ impl FikaApp {
         let first = app.panes.focused().expect("initial pane exists");
         app.load_pane(first, args.start_dir);
         app.start_watchers();
+        app.maybe_start_device_monitor(cx);
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -2846,11 +2755,14 @@ impl FikaApp {
                             .update(&mut cx, |app, cx| {
                                 if app.drain_background_listing_results()
                                     | app.drain_watchers()
+                                    | app.drain_device_monitor_messages()
                                     | app.operation_progress.is_some()
                                     | !app.loading_panes.is_empty()
                                 {
                                     cx.notify();
                                 }
+                                app.maybe_start_device_monitor(cx);
+                                app.maybe_start_device_refresh(cx);
                             })
                             .is_err()
                         {
@@ -3178,6 +3090,7 @@ impl FikaApp {
                                 entry.is_dir,
                                 entry.name.clone(),
                                 format_entry_kind_label(entry),
+                                visible_item_thumbnail_path(entry),
                                 entry.mime_type.clone(),
                                 selected,
                                 drop_target,
@@ -3197,8 +3110,7 @@ impl FikaApp {
                         layout,
                         view.clone(),
                         self.rubber_band.and_then(|band| {
-                            (band.pane_id == pane_id)
-                                .then(|| band.visible_rect(view.scroll_x, view.scroll_y))
+                            (band.pane_id == pane_id).then(|| band.viewport_rect(&view))
                         }),
                         focused_pane == Some(pane_id),
                         selection_count,
@@ -3207,7 +3119,7 @@ impl FikaApp {
                 };
                 let visible_ids = visible_data
                     .iter()
-                    .map(|(_, item_id, _, _, _, _, _, _, _, _)| *item_id);
+                    .map(|(_, item_id, _, _, _, _, _, _, _, _, _)| *item_id);
                 let slot_by_item_id = self
                     .visible_item_slots
                     .entry(pane_id)
@@ -3223,6 +3135,7 @@ impl FikaApp {
                             is_dir,
                             name,
                             kind_label,
+                            thumbnail_path,
                             mime_type,
                             selected,
                             drop_target,
@@ -3242,6 +3155,7 @@ impl FikaApp {
                                 is_dir,
                                 name,
                                 kind_label,
+                                thumbnail_path,
                                 icon,
                                 selected,
                                 selection_count,
@@ -3495,6 +3409,112 @@ impl FikaApp {
         self.space_info.finish_request(&path, snapshot)
     }
 
+    fn maybe_start_device_monitor(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        if self.device_monitor_active || now < self.next_device_monitor_start_at {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.device_monitor_rx = Some(receiver);
+        self.device_monitor_active = true;
+        self.next_device_monitor_start_at = now + DEVICE_MONITOR_RETRY_INTERVAL;
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_spawn(
+                            async move { fika_core::watch_udisks2_devices(sender).await },
+                        )
+                        .await;
+                    let _ = this.update(&mut cx, |app, _| {
+                        app.device_monitor_active = false;
+                        app.next_device_monitor_start_at =
+                            Instant::now() + DEVICE_MONITOR_RETRY_INTERVAL;
+                        let _ = result;
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn drain_device_monitor_messages(&mut self) -> bool {
+        let mut messages = Vec::new();
+        let mut disconnected = false;
+        loop {
+            let Some(receiver) = self.device_monitor_rx.as_ref() else {
+                break;
+            };
+            match receiver.try_recv() {
+                Ok(message) => messages.push(message),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        if disconnected {
+            self.device_monitor_rx = None;
+        }
+        let mut changed = false;
+        for message in messages {
+            match message {
+                DeviceMonitorMessage::Snapshot(devices) => {
+                    changed |= self.apply_device_snapshot(&devices);
+                }
+                DeviceMonitorMessage::Events { devices, .. } => {
+                    changed |= self.apply_device_snapshot(&devices);
+                }
+            }
+        }
+        changed
+    }
+
+    fn maybe_start_device_refresh(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        if self.device_monitor_active
+            || self.device_refresh_pending
+            || now < self.next_device_refresh_at
+        {
+            return;
+        }
+        self.next_device_refresh_at = now + DEVICE_REFRESH_INTERVAL;
+        self.request_device_snapshot_refresh(cx);
+    }
+
+    fn request_device_snapshot_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.device_refresh_pending {
+            return;
+        }
+        self.device_refresh_pending = true;
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let devices = cx.background_spawn(read_live_device_snapshot()).await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        if app.finish_device_refresh(devices) {
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_device_refresh(&mut self, devices: Vec<DeviceInfo>) -> bool {
+        self.device_refresh_pending = false;
+        self.apply_device_snapshot(&devices)
+    }
+
+    fn apply_device_snapshot(&mut self, devices: &[DeviceInfo]) -> bool {
+        self.replace_removable_device_places(devices)
+    }
+
     fn place_snapshots(&mut self) -> Vec<PlaceSnapshot> {
         let current_dir = self
             .panes
@@ -3514,6 +3534,9 @@ impl FikaApp {
             })
             .map(|(index, place)| {
                 let trash_place = file_ops::is_trash_files_dir(&place.path);
+                let network = place_is_network_root(place);
+                let mounted = place_is_mounted(place);
+                let device = place.group == REMOVABLE_DEVICES_GROUP;
                 let place_icon = place_icon_for(place, trash_place);
                 let icon = place_icon_snapshot(&mut self.file_icons, place_icon);
                 PlaceSnapshot {
@@ -3522,8 +3545,15 @@ impl FikaApp {
                     icon,
                     label: place.label.clone(),
                     path: place.path.clone(),
+                    mounted,
+                    device,
+                    network,
+                    device_ejectable: place.device_ejectable,
+                    device_can_power_off: place.device_can_power_off,
                     active: active_index == Some(index),
-                    drop_target: place_drop_target_mode_for_place(place_drop_target, &place.path),
+                    drop_target: (mounted && !network)
+                        .then(|| place_drop_target_mode_for_place(place_drop_target, &place.path))
+                        .flatten(),
                     insert_before: place_drop_target_matches_insert(place_drop_target, index),
                     insert_after: index == last_index
                         && place_drop_target_matches_insert(place_drop_target, self.places.len()),
@@ -3577,6 +3607,104 @@ impl FikaApp {
         self.load_pane(pane_id, path);
     }
 
+    pub(crate) fn activate_place(
+        &mut self,
+        path: PathBuf,
+        mounted: bool,
+        device: bool,
+        network: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane_id) = self.panes.focused() else {
+            return;
+        };
+        if network {
+            self.set_pane_status(pane_id, "Network locations are not connected yet");
+            return;
+        }
+        if mounted {
+            self.open_place(path);
+        } else if device {
+            self.run_device_place_operation(pane_id, path, DevicePlaceOperation::Mount, cx);
+        }
+    }
+
+    fn run_device_place_operation(
+        &mut self,
+        pane_id: PaneId,
+        path: PathBuf,
+        operation: DevicePlaceOperation,
+        cx: &mut Context<Self>,
+    ) {
+        if self.operation_pending {
+            self.set_pane_status(pane_id, "File operation already running");
+            return;
+        }
+        self.begin_pane_operation(pane_id, operation.in_progress_message(&path));
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = match operation {
+                        DevicePlaceOperation::Mount => mount_udisks2_device(&path)
+                            .await
+                            .map(|result| Some(result.mount_point)),
+                        DevicePlaceOperation::Unmount => {
+                            unmount_udisks2_device(&path).await.map(|()| None)
+                        }
+                        DevicePlaceOperation::Eject => {
+                            eject_udisks2_device(&path).await.map(|()| None)
+                        }
+                        DevicePlaceOperation::SafelyRemove => {
+                            safely_remove_udisks2_device(&path).await.map(|()| None)
+                        }
+                    };
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.finish_device_place_operation(
+                            DevicePlaceOperationResult {
+                                pane_id,
+                                path,
+                                operation,
+                                result,
+                            },
+                            cx,
+                        );
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_device_place_operation(
+        &mut self,
+        result: DevicePlaceOperationResult,
+        cx: &mut Context<Self>,
+    ) {
+        match result.result {
+            Ok(Some(mount_point)) => {
+                self.finish_pane_operation(
+                    result.pane_id,
+                    format!("Mounted {}", result.path.display()),
+                );
+                self.request_device_snapshot_refresh(cx);
+                self.load_pane(result.pane_id, mount_point);
+            }
+            Ok(None) => {
+                self.finish_pane_operation(
+                    result.pane_id,
+                    result.operation.success_message(&result.path),
+                );
+                self.request_device_snapshot_refresh(cx);
+            }
+            Err(error) => self.finish_pane_operation(
+                result.pane_id,
+                result.operation.error_message(&result.path, &error),
+            ),
+        }
+    }
+
     pub(crate) fn drop_place_drag_to_pane(&mut self, target_pane: PaneId, path: PathBuf) {
         if path == file_ops::trash_files_dir() {
             let _ = file_ops::ensure_trash_dirs();
@@ -3625,6 +3753,10 @@ impl FikaApp {
             pane_id,
             target: ContextMenuTarget::Place {
                 path: place.path,
+                mounted: place.mounted,
+                device: place.device,
+                device_ejectable: place.device_ejectable,
+                device_can_power_off: place.device_can_power_off,
                 trash_place: place.trash_place,
                 trash_has_items: place.trash_has_items,
                 editable: place.editable,
@@ -3805,7 +3937,7 @@ impl FikaApp {
         self.smooth_scrolls.remove(&pane_id);
         self.scroll_drag_trackers.remove(&pane_id);
         self.clear_horizontal_scrollbar_drag_for_pane(pane_id);
-        self.viewport_origins.remove(&pane_id);
+        self.pane_viewport_geometries.remove(&pane_id);
         self.rubber_band_selection_panes.remove(&pane_id);
         self.pane_statuses.remove(&pane_id);
         self.location_edit_metrics.remove(&pane_id);
@@ -4313,11 +4445,22 @@ impl FikaApp {
         self.finish_scrollbar_drag(pane_id, (content_width - visible_width).max(0.0), 0.0, cx);
     }
 
-    fn set_viewport_origin(&mut self, pane_id: PaneId, origin: ViewPoint) -> bool {
-        if self.viewport_origins.get(&pane_id) == Some(&origin) {
+    pub(crate) fn set_pane_viewport_geometry(
+        &mut self,
+        pane_id: PaneId,
+        window_rect: ViewRect,
+    ) -> bool {
+        let window_rect = ViewRect {
+            x: window_rect.x,
+            y: window_rect.y,
+            width: fika_core::normalize_viewport_extent(window_rect.width).max(0.0),
+            height: fika_core::normalize_viewport_extent(window_rect.height).max(0.0),
+        };
+        let geometry = PaneViewportGeometry { window_rect };
+        if self.pane_viewport_geometries.get(&pane_id) == Some(&geometry) {
             return false;
         }
-        self.viewport_origins.insert(pane_id, origin);
+        self.pane_viewport_geometries.insert(pane_id, geometry);
         true
     }
 
@@ -4508,17 +4651,34 @@ impl FikaApp {
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
     ) -> Option<ViewPoint> {
-        let origin = *self.viewport_origins.get(&pane_id)?;
+        let geometry = *self.pane_viewport_geometries.get(&pane_id)?;
         let view = &self.panes.pane(pane_id)?.view;
-        let local_x = position.x.as_f32() - origin.x;
-        let local_y = position.y.as_f32() - origin.y;
-        if local_x < 0.0
-            || local_y < 0.0
-            || local_x > view.viewport_width
-            || local_y > view.viewport_height
-        {
+        let window_point = ViewPoint {
+            x: position.x.as_f32(),
+            y: position.y.as_f32(),
+        };
+        if !geometry.window_rect.contains(window_point) {
             return None;
         }
+        let local_x = window_point.x - geometry.window_rect.x;
+        let local_y = window_point.y - geometry.window_rect.y;
+        Some(ViewPoint {
+            x: local_x + view.scroll_x,
+            y: local_y + view.scroll_y,
+        })
+    }
+
+    fn clamped_content_point_from_window(
+        &self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> Option<ViewPoint> {
+        let geometry = *self.pane_viewport_geometries.get(&pane_id)?;
+        let view = &self.panes.pane(pane_id)?.view;
+        let local_x =
+            (position.x.as_f32() - geometry.window_rect.x).clamp(0.0, geometry.window_rect.width);
+        let local_y =
+            (position.y.as_f32() - geometry.window_rect.y).clamp(0.0, geometry.window_rect.height);
         Some(ViewPoint {
             x: local_x + view.scroll_x,
             y: local_y + view.scroll_y,
@@ -4640,6 +4800,25 @@ impl FikaApp {
             return false;
         };
         self.start_rubber_band_from_blank(pane_id, start)
+    }
+
+    pub(crate) fn update_rubber_band_from_window(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> bool {
+        if !self
+            .rubber_band
+            .as_ref()
+            .is_some_and(|band| band.pane_id == pane_id)
+        {
+            return false;
+        }
+        let Some(current) = self.clamped_content_point_from_window(pane_id, position) else {
+            return false;
+        };
+        self.update_rubber_band(pane_id, current);
+        true
     }
 
     pub(crate) fn window_position_is_blank_in_pane(
@@ -4854,7 +5033,7 @@ impl FikaApp {
         true
     }
 
-    fn commit_place_draft(&mut self) {
+    pub(crate) fn commit_place_draft(&mut self) {
         let Some(draft) = self.place_draft.take() else {
             return;
         };
@@ -4930,6 +5109,8 @@ impl FikaApp {
             path,
             editable: true,
             removable: true,
+            device_ejectable: false,
+            device_can_power_off: false,
         };
         let insert_at = self.user_place_insert_index(index);
         self.places.insert(insert_at, entry);
@@ -5419,6 +5600,23 @@ impl FikaApp {
             return;
         };
 
+        self.create_item_in_directory(pane_id, parent_dir, kind, cx);
+    }
+
+    fn create_item_in_directory(
+        &mut self,
+        pane_id: PaneId,
+        parent_dir: PathBuf,
+        kind: CreatedItemKind,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chooser.is_some() {
+            return;
+        }
+        if self.operation_pending {
+            self.set_pane_status(pane_id, "File operation already running");
+            return;
+        }
         self.begin_pane_operation(
             pane_id,
             format!("Creating {}", created_item_label(kind).to_ascii_lowercase()),
@@ -5752,6 +5950,16 @@ impl FikaApp {
 
     fn clear_place_drop_target(&mut self) -> bool {
         let had_target = self.place_drop_target.is_some();
+        self.place_drop_target = None;
+        if had_target {
+            self.touch_drop_target_stale_generation();
+        }
+        had_target
+    }
+
+    pub(crate) fn clear_drag_drop_targets(&mut self) -> bool {
+        let had_target = self.item_drop_target.is_some() || self.place_drop_target.is_some();
+        self.item_drop_target = None;
         self.place_drop_target = None;
         if had_target {
             self.touch_drop_target_stale_generation();
@@ -6597,14 +6805,12 @@ impl FikaApp {
         let selection_count = self.panes.selected_count(pane_id).unwrap_or(1).max(1);
         let trash_view = self.trash_view_state(pane_id).0;
         let trash_can_restore = trash_view && file_ops::trash_metadata(&path).is_ok();
-        let mime_type = self.mime_type_for_pane_path(pane_id, &path);
-        let open_with_apps = (!is_dir)
-            .then(|| {
-                mime_type
-                    .as_deref()
-                    .map(|mime| self.mime_applications.applications_for_mime(mime))
-                    .unwrap_or_default()
-            })
+        let mime_type = self
+            .mime_type_for_pane_path(pane_id, &path)
+            .or_else(|| is_dir.then(|| Arc::from("inode/directory")));
+        let open_with_apps = mime_type
+            .as_deref()
+            .map(|mime| self.mime_applications.applications_for_mime(mime))
             .unwrap_or_default();
         let service_actions = self.mime_applications.service_actions_for_targets(
             &self.service_menu_targets_for_context(pane_id, &path, is_dir, selection_count),
@@ -6814,17 +7020,17 @@ impl FikaApp {
         true
     }
 
-    fn dismiss_place_draft(&mut self) {
+    pub(crate) fn dismiss_place_draft(&mut self) {
         self.place_draft = None;
     }
 
-    fn set_place_draft_focus(&mut self, field: PlaceDraftField) {
+    pub(crate) fn set_place_draft_focus(&mut self, field: PlaceDraftField) {
         if let Some(draft) = &mut self.place_draft {
             draft.focus = field;
         }
     }
 
-    fn dismiss_properties_dialog(&mut self) {
+    pub(crate) fn dismiss_properties_dialog(&mut self) {
         self.properties_dialog = None;
     }
 
@@ -6848,6 +7054,7 @@ impl FikaApp {
             path,
             mime_type,
             applications,
+            scroll_handle: gpui::UniformListScrollHandle::new(),
         });
     }
 
@@ -6989,19 +7196,12 @@ impl FikaApp {
             }
             (
                 ContextMenuAction::OpenWithApplication { desktop_id },
-                ContextMenuTarget::Item {
-                    path,
-                    is_dir: false,
-                    ..
-                },
+                ContextMenuTarget::Item { path, .. },
             ) => self.open_with_application(menu.pane_id, &desktop_id, path, cx),
             (
                 ContextMenuAction::OtherApplication,
                 ContextMenuTarget::Item {
-                    path,
-                    is_dir: false,
-                    mime_type,
-                    ..
+                    path, mime_type, ..
                 },
             ) => self.show_application_chooser(menu.pane_id, path, mime_type),
             (
@@ -7056,15 +7256,80 @@ impl FikaApp {
                     ..
                 },
             ) => self.run_ark_extract_to_fallback(menu.pane_id, path, cx),
-            (ContextMenuAction::Open, ContextMenuTarget::Place { path, .. }) => {
+            (
+                ContextMenuAction::Open,
+                ContextMenuTarget::Place {
+                    path,
+                    mounted: true,
+                    ..
+                },
+            ) => {
                 self.open_place(path);
             }
-            (ContextMenuAction::OpenInNewPane, ContextMenuTarget::Place { path, .. }) => {
+            (
+                ContextMenuAction::OpenInNewPane,
+                ContextMenuTarget::Place {
+                    path,
+                    mounted: true,
+                    ..
+                },
+            ) => {
                 self.open_path_in_new_pane(menu.pane_id, path);
             }
-            (ContextMenuAction::OpenInNewWindow, ContextMenuTarget::Place { path, .. }) => {
+            (
+                ContextMenuAction::OpenInNewWindow,
+                ContextMenuTarget::Place {
+                    path,
+                    mounted: true,
+                    ..
+                },
+            ) => {
                 self.open_path_in_new_window(menu.pane_id, path, cx);
             }
+            (
+                ContextMenuAction::Open
+                | ContextMenuAction::OpenInNewPane
+                | ContextMenuAction::OpenInNewWindow,
+                ContextMenuTarget::Place { mounted: false, .. },
+            ) => {}
+            (
+                ContextMenuAction::MountDevice,
+                ContextMenuTarget::Place {
+                    path, device: true, ..
+                },
+            ) => {
+                self.run_device_place_operation(menu.pane_id, path, DevicePlaceOperation::Mount, cx)
+            }
+            (
+                ContextMenuAction::UnmountDevice,
+                ContextMenuTarget::Place {
+                    path, device: true, ..
+                },
+            ) => self.run_device_place_operation(
+                menu.pane_id,
+                path,
+                DevicePlaceOperation::Unmount,
+                cx,
+            ),
+            (
+                ContextMenuAction::EjectDevice,
+                ContextMenuTarget::Place {
+                    path, device: true, ..
+                },
+            ) => {
+                self.run_device_place_operation(menu.pane_id, path, DevicePlaceOperation::Eject, cx)
+            }
+            (
+                ContextMenuAction::SafelyRemoveDevice,
+                ContextMenuTarget::Place {
+                    path, device: true, ..
+                },
+            ) => self.run_device_place_operation(
+                menu.pane_id,
+                path,
+                DevicePlaceOperation::SafelyRemove,
+                cx,
+            ),
             (ContextMenuAction::AddPlace, ContextMenuTarget::PlacesBlank { .. }) => {
                 self.start_add_place(menu.pane_id);
             }
@@ -7137,13 +7402,31 @@ impl FikaApp {
             (ContextMenuAction::Properties, target) => {
                 self.show_properties_for_context(menu.pane_id, target)
             }
-            (ContextMenuAction::CreateFolder, ContextMenuTarget::Place { .. })
+            (
+                ContextMenuAction::CreateFolder,
+                ContextMenuTarget::Item {
+                    path, is_dir: true, ..
+                },
+            ) => self.create_item_in_directory(menu.pane_id, path, CreatedItemKind::Folder, cx),
+            (
+                ContextMenuAction::CreateFile,
+                ContextMenuTarget::Item {
+                    path, is_dir: true, ..
+                },
+            ) => self.create_item_in_directory(menu.pane_id, path, CreatedItemKind::File, cx),
+            (ContextMenuAction::CreateFolder, ContextMenuTarget::Blank { .. }) => {
+                self.create_item_in_pane(menu.pane_id, CreatedItemKind::Folder, cx)
+            }
+            (ContextMenuAction::CreateFile, ContextMenuTarget::Blank { .. }) => {
+                self.create_item_in_pane(menu.pane_id, CreatedItemKind::File, cx)
+            }
+            (
+                ContextMenuAction::CreateFolder | ContextMenuAction::CreateFile,
+                ContextMenuTarget::Place { .. },
+            )
             | (ContextMenuAction::Paste, ContextMenuTarget::Place { .. })
             | (ContextMenuAction::SelectAll, ContextMenuTarget::Place { .. })
             | (ContextMenuAction::Refresh, ContextMenuTarget::Place { .. }) => {}
-            (ContextMenuAction::CreateFolder, _) => {
-                self.create_item_in_pane(menu.pane_id, CreatedItemKind::Folder, cx)
-            }
             (
                 ContextMenuAction::Paste,
                 ContextMenuTarget::Item {
@@ -7194,7 +7477,10 @@ impl FikaApp {
                 self.set_pane_sort_hidden_last(menu.pane_id, hidden_last);
             }
             (
-                ContextMenuAction::SortBySubmenu
+                ContextMenuAction::CreateNewSubmenu
+                | ContextMenuAction::CreateFolder
+                | ContextMenuAction::CreateFile
+                | ContextMenuAction::SortBySubmenu
                 | ContextMenuAction::OpenWithSubmenu
                 | ContextMenuAction::ServiceMenuSubmenu
                 | ContextMenuAction::ServiceMenuGroupSubmenu { .. }
@@ -7242,7 +7528,11 @@ impl FikaApp {
             | (ContextMenuAction::RunServiceMenuAction { .. }, _)
             | (ContextMenuAction::CompressWithArk, _)
             | (ContextMenuAction::ExtractHereWithArk, _)
-            | (ContextMenuAction::ExtractToWithArk, _) => {}
+            | (ContextMenuAction::ExtractToWithArk, _)
+            | (ContextMenuAction::MountDevice, _)
+            | (ContextMenuAction::UnmountDevice, _)
+            | (ContextMenuAction::EjectDevice, _)
+            | (ContextMenuAction::SafelyRemoveDevice, _) => {}
         }
     }
 
@@ -7949,11 +8239,8 @@ impl Render for FikaApp {
                 context_menu_icon_snapshots(&mut self.file_icons, menu, clipboard_available)
             })
             .unwrap_or_default();
-        let application_chooser_icons = application_chooser
-            .as_ref()
-            .map(|chooser| application_chooser_icon_snapshots(&mut self.file_icons, chooser))
-            .unwrap_or_default();
         let app = cx.weak_entity();
+        ui::scrollbar::install_scrollbar_drag_window_capture(app.clone(), window);
         div()
             .relative()
             .size_full()
@@ -8072,11 +8359,7 @@ impl Render for FikaApp {
                 root.child(properties_dialog_overlay(dialog, cx))
             })
             .when_some(application_chooser, |root, chooser| {
-                root.child(application_chooser_overlay(
-                    chooser,
-                    application_chooser_icons,
-                    cx,
-                ))
+                root.child(application_chooser_overlay(chooser, cx))
             })
             .when_some(place_draft, |root, draft| {
                 root.child(place_draft_overlay(draft, cx))
@@ -8125,6 +8408,19 @@ fn context_menu_overlay(
         .inset_0()
         .occlude()
         .bg(rgba(0x00000001))
+        .capture_any_mouse_down(cx.listener(
+            move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                let point = ViewPoint {
+                    x: event.position.x.as_f32(),
+                    y: event.position.y.as_f32(),
+                };
+                if !layout.contains(point) {
+                    this.dismiss_context_menu();
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            },
+        ))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
@@ -8224,512 +8520,6 @@ fn context_menu_overlay(
         )
 }
 
-fn context_menu_overlay_layout(
-    position: ViewPoint,
-    action_count: usize,
-    active_submenu: Option<ContextMenuOpenSubmenu>,
-    submenu_count: usize,
-    nested_submenu_count: usize,
-    viewport_width: f32,
-    viewport_height: f32,
-) -> ContextMenuOverlayLayout {
-    let root_width = context_menu_width_for_viewport(viewport_width);
-    let root_height = context_menu_height(action_count);
-    let root_max_height = context_menu_max_height_for_viewport(viewport_height).min(root_height);
-    let root = ContextMenuOverlayRect {
-        x: popup_menu_axis(position.x, root_width, viewport_width),
-        y: popup_menu_axis(position.y, root_max_height, viewport_height),
-        width: root_width,
-        max_height: root_max_height,
-    };
-    let submenu = active_submenu.map(|open| {
-        cascading_menu_rect(
-            root,
-            open.parent_index,
-            submenu_count,
-            viewport_width,
-            viewport_height,
-        )
-    });
-    let nested_submenu = active_submenu
-        .and_then(|open| open.nested)
-        .zip(submenu)
-        .map(|(nested, parent)| {
-            cascading_menu_rect(
-                parent,
-                nested.parent_index,
-                nested_submenu_count,
-                viewport_width,
-                viewport_height,
-            )
-        });
-
-    ContextMenuOverlayLayout {
-        root,
-        submenu,
-        nested_submenu,
-    }
-}
-
-fn cascading_menu_rect(
-    parent: ContextMenuOverlayRect,
-    parent_index: usize,
-    child_count: usize,
-    viewport_width: f32,
-    viewport_height: f32,
-) -> ContextMenuOverlayRect {
-    let width = context_menu_width_for_viewport(viewport_width);
-    let height = context_menu_height(child_count);
-    let max_height = context_menu_max_height_for_viewport(viewport_height).min(height);
-    let right_x = parent.x + parent.width - 1.0;
-    let left_x = parent.x - width + 1.0;
-    let right_edge_limit = (viewport_width - CONTEXT_MENU_VIEWPORT_MARGIN).max(0.0);
-    let x = if right_x + width <= right_edge_limit {
-        right_x
-    } else {
-        left_x
-    };
-    let parent_y =
-        parent.y + CONTEXT_MENU_VERTICAL_PADDING + parent_index as f32 * CONTEXT_MENU_ROW_HEIGHT;
-    ContextMenuOverlayRect {
-        x: clamp_menu_axis(x, width, viewport_width),
-        y: clamp_menu_axis(parent_y, max_height, viewport_height),
-        width,
-        max_height,
-    }
-}
-
-fn context_menu_height(row_count: usize) -> f32 {
-    CONTEXT_MENU_VERTICAL_PADDING * 2.0 + row_count as f32 * CONTEXT_MENU_ROW_HEIGHT
-}
-
-fn context_menu_width_for_viewport(viewport_width: f32) -> f32 {
-    (viewport_width - CONTEXT_MENU_VIEWPORT_MARGIN * 2.0)
-        .max(1.0)
-        .min(CONTEXT_MENU_WIDTH)
-}
-
-fn context_menu_max_height_for_viewport(viewport_height: f32) -> f32 {
-    (viewport_height - CONTEXT_MENU_VIEWPORT_MARGIN * 2.0).max(1.0)
-}
-
-fn clamp_menu_axis(position: f32, size: f32, viewport_size: f32) -> f32 {
-    let min = CONTEXT_MENU_VIEWPORT_MARGIN.min((viewport_size - size).max(0.0));
-    let max = (viewport_size - size - CONTEXT_MENU_VIEWPORT_MARGIN).max(min);
-    position.clamp(min, max)
-}
-
-fn popup_menu_axis(anchor: f32, size: f32, viewport_size: f32) -> f32 {
-    let min = CONTEXT_MENU_VIEWPORT_MARGIN.min((viewport_size - size).max(0.0));
-    let max = (viewport_size - size - CONTEXT_MENU_VIEWPORT_MARGIN).max(min);
-    anchor.clamp(min, max)
-}
-
-fn context_menu_actions(
-    target: &ContextMenuTarget,
-    clipboard_available: bool,
-) -> Vec<ContextMenuItem> {
-    match target {
-        ContextMenuTarget::Blank {
-            trash_view: true,
-            trash_has_items,
-            ..
-        } => vec![
-            context_menu_item_enabled(
-                ContextMenuAction::EmptyTrash,
-                "Empty Trash",
-                *trash_has_items,
-            ),
-            context_menu_separator_before(context_menu_submenu_item(
-                ContextMenuAction::SortBySubmenu,
-                "Sort By",
-                ContextMenuSubmenu::TrashSortBy,
-            )),
-            context_menu_submenu_item(
-                ContextMenuAction::ViewModeSubmenu,
-                "View Mode",
-                ContextMenuSubmenu::ViewMode,
-            ),
-            context_menu_separator_before(context_menu_item(
-                ContextMenuAction::SelectAll,
-                "Select All",
-            )),
-            context_menu_item(ContextMenuAction::Refresh, "Refresh"),
-            context_menu_separator_before(context_menu_item(
-                ContextMenuAction::Properties,
-                "Properties",
-            )),
-        ],
-        ContextMenuTarget::Blank {
-            trash_view: false,
-            service_actions,
-            ..
-        } => {
-            let mut actions = vec![
-                context_menu_item(ContextMenuAction::CreateFolder, "New Folder"),
-                context_menu_separator_before(context_menu_item_enabled(
-                    ContextMenuAction::Paste,
-                    "Paste",
-                    clipboard_available,
-                )),
-            ];
-            let service_root_actions =
-                context_menu_group_items(service_menu_root_actions(service_actions));
-            let has_service_root_actions = !service_root_actions.is_empty();
-            actions.extend(service_root_actions);
-            if service_menu_has_more_actions(service_actions) {
-                let more_actions = context_menu_submenu_item(
-                    ContextMenuAction::ServiceMenuSubmenu,
-                    "More Actions",
-                    ContextMenuSubmenu::ServiceMenu,
-                );
-                actions.push(if has_service_root_actions {
-                    more_actions
-                } else {
-                    context_menu_separator_before(more_actions)
-                });
-            }
-            actions.extend([
-                context_menu_separator_before(context_menu_submenu_item(
-                    ContextMenuAction::SortBySubmenu,
-                    "Sort By",
-                    ContextMenuSubmenu::SortBy,
-                )),
-                context_menu_submenu_item(
-                    ContextMenuAction::ViewModeSubmenu,
-                    "View Mode",
-                    ContextMenuSubmenu::ViewMode,
-                ),
-                context_menu_separator_before(context_menu_item(
-                    ContextMenuAction::SelectAll,
-                    "Select All",
-                )),
-                context_menu_item(ContextMenuAction::Refresh, "Refresh"),
-                context_menu_separator_before(context_menu_item(
-                    ContextMenuAction::Properties,
-                    "Properties",
-                )),
-            ]);
-            actions
-        }
-        ContextMenuTarget::PlacesBlank { has_hidden_places } => {
-            let mut actions = vec![context_menu_item(ContextMenuAction::AddPlace, "Add Entry")];
-            actions.push(context_menu_item_enabled(
-                ContextMenuAction::ShowHiddenPlaces,
-                "Show Hidden Places",
-                *has_hidden_places,
-            ));
-            actions
-        }
-        ContextMenuTarget::PlaceSection { .. } => {
-            vec![context_menu_item(
-                ContextMenuAction::HidePlaceSection,
-                "Hide Section",
-            )]
-        }
-        ContextMenuTarget::Place {
-            trash_place: true,
-            trash_has_items,
-            ..
-        } => vec![
-            context_menu_item(ContextMenuAction::Open, "Open"),
-            context_menu_item(ContextMenuAction::OpenInNewPane, "Open in New Pane"),
-            context_menu_item(ContextMenuAction::OpenInNewWindow, "Open in New Window"),
-            context_menu_item_enabled(
-                ContextMenuAction::EmptyTrash,
-                "Empty Trash",
-                *trash_has_items,
-            ),
-            context_menu_item(ContextMenuAction::HidePlace, "Hide"),
-            context_menu_item(ContextMenuAction::CopyLocation, "Copy Location"),
-            context_menu_separator_before(context_menu_item(
-                ContextMenuAction::Properties,
-                "Properties",
-            )),
-        ],
-        ContextMenuTarget::Place {
-            editable,
-            removable,
-            ..
-        } => vec![
-            context_menu_item(ContextMenuAction::Open, "Open"),
-            context_menu_item(ContextMenuAction::OpenInNewPane, "Open in New Pane"),
-            context_menu_item(ContextMenuAction::OpenInNewWindow, "Open in New Window"),
-            context_menu_item_enabled(ContextMenuAction::EditPlace, "Edit Entry", *editable),
-            context_menu_item_enabled(ContextMenuAction::RemovePlace, "Remove Entry", *removable),
-            context_menu_item(ContextMenuAction::HidePlace, "Hide"),
-            context_menu_item(ContextMenuAction::CopyLocation, "Copy Location"),
-            context_menu_separator_before(context_menu_item(
-                ContextMenuAction::Properties,
-                "Properties",
-            )),
-        ],
-        ContextMenuTarget::Item {
-            trash_view: true,
-            trash_can_restore,
-            ..
-        } => vec![
-            context_menu_item_enabled(
-                ContextMenuAction::RestoreFromTrash,
-                "Restore to Former Location",
-                *trash_can_restore,
-            ),
-            context_menu_item(ContextMenuAction::Copy, "Copy"),
-            context_menu_item(ContextMenuAction::DeletePermanently, "Delete Permanently"),
-            context_menu_separator_before(context_menu_item(
-                ContextMenuAction::Properties,
-                "Properties",
-            )),
-        ],
-        ContextMenuTarget::Item {
-            selection_count,
-            service_actions,
-            ..
-        } if *selection_count > 1 => {
-            let mut actions = vec![
-                context_menu_item(ContextMenuAction::Cut, "Cut"),
-                context_menu_item(ContextMenuAction::Copy, "Copy"),
-            ];
-            let service_root_actions =
-                context_menu_group_items(service_menu_root_actions(service_actions));
-            let has_service_root_actions = !service_root_actions.is_empty();
-            actions.extend(service_root_actions);
-            if service_menu_has_more_actions(service_actions) {
-                let more_actions = context_menu_submenu_item(
-                    ContextMenuAction::ServiceMenuSubmenu,
-                    "More Actions",
-                    ContextMenuSubmenu::ServiceMenu,
-                );
-                actions.push(if has_service_root_actions {
-                    more_actions
-                } else {
-                    context_menu_separator_before(more_actions)
-                });
-            }
-            if should_offer_compress_fallback(service_actions) {
-                actions.extend(context_menu_group_items(vec![context_menu_item(
-                    ContextMenuAction::CompressWithArk,
-                    "Compress...",
-                )]));
-            }
-            actions.push(context_menu_separator_before(context_menu_item(
-                ContextMenuAction::Trash,
-                "Move to Trash",
-            )));
-            actions.push(context_menu_separator_before(context_menu_item(
-                ContextMenuAction::Properties,
-                "Properties",
-            )));
-            actions
-        }
-        ContextMenuTarget::Item {
-            path,
-            is_dir,
-            mime_type,
-            service_actions,
-            ..
-        } => {
-            let mut actions = if *is_dir {
-                vec![context_menu_item(ContextMenuAction::Open, "Open")]
-            } else {
-                vec![context_menu_submenu_item(
-                    ContextMenuAction::OpenWithSubmenu,
-                    "Open With",
-                    ContextMenuSubmenu::OpenWith,
-                )]
-            };
-            if *is_dir {
-                actions.push(context_menu_item(
-                    ContextMenuAction::OpenInNewPane,
-                    "Open in New Pane",
-                ));
-                actions.push(context_menu_item(
-                    ContextMenuAction::OpenInNewWindow,
-                    "Open in New Window",
-                ));
-            }
-            actions.extend([
-                context_menu_separator_before(context_menu_item(ContextMenuAction::Cut, "Cut")),
-                context_menu_item(ContextMenuAction::Copy, "Copy"),
-                context_menu_item(ContextMenuAction::CopyLocation, "Copy Location"),
-            ]);
-            if *is_dir {
-                actions.push(context_menu_item_enabled(
-                    ContextMenuAction::Paste,
-                    "Paste",
-                    clipboard_available,
-                ));
-            }
-            let service_root_actions =
-                context_menu_group_items(service_menu_root_actions(service_actions));
-            let has_service_root_actions = !service_root_actions.is_empty();
-            actions.extend(service_root_actions);
-            if service_menu_has_more_actions(service_actions) {
-                let more_actions = context_menu_submenu_item(
-                    ContextMenuAction::ServiceMenuSubmenu,
-                    "More Actions",
-                    ContextMenuSubmenu::ServiceMenu,
-                );
-                actions.push(if has_service_root_actions {
-                    more_actions
-                } else {
-                    context_menu_separator_before(more_actions)
-                });
-            }
-            if should_offer_compress_fallback(service_actions)
-                && (*is_dir || !is_archive_mime_or_path(mime_type.as_deref(), path))
-            {
-                actions.extend(context_menu_group_items(vec![context_menu_item(
-                    ContextMenuAction::CompressWithArk,
-                    "Compress...",
-                )]));
-            }
-            if !*is_dir
-                && is_archive_mime_or_path(mime_type.as_deref(), path)
-                && should_offer_extract_fallback(service_actions)
-            {
-                actions.extend(context_menu_group_items(vec![
-                    context_menu_item(ContextMenuAction::ExtractHereWithArk, "Extract Here"),
-                    context_menu_item(ContextMenuAction::ExtractToWithArk, "Extract To..."),
-                ]));
-            }
-            actions.extend([
-                context_menu_separator_before(context_menu_item(
-                    ContextMenuAction::Rename,
-                    "Rename",
-                )),
-                context_menu_item(ContextMenuAction::Trash, "Move to Trash"),
-                context_menu_separator_before(context_menu_item(
-                    ContextMenuAction::Properties,
-                    "Properties",
-                )),
-            ]);
-            actions
-        }
-    }
-}
-
-fn context_menu_item(action: ContextMenuAction, label: impl Into<String>) -> ContextMenuItem {
-    let icon = context_menu_icon_for_action(&action);
-    ContextMenuItem {
-        action,
-        label: label.into(),
-        enabled: true,
-        submenu: None,
-        icon,
-        separator_before: false,
-    }
-}
-
-fn context_menu_item_enabled(
-    action: ContextMenuAction,
-    label: impl Into<String>,
-    enabled: bool,
-) -> ContextMenuItem {
-    let icon = context_menu_icon_for_action(&action);
-    ContextMenuItem {
-        action,
-        label: label.into(),
-        enabled,
-        submenu: None,
-        icon,
-        separator_before: false,
-    }
-}
-
-fn context_menu_submenu_item(
-    action: ContextMenuAction,
-    label: impl Into<String>,
-    submenu: ContextMenuSubmenu,
-) -> ContextMenuItem {
-    let icon = context_menu_icon_for_action(&action);
-    ContextMenuItem {
-        action,
-        label: label.into(),
-        enabled: true,
-        submenu: Some(submenu),
-        icon,
-        separator_before: false,
-    }
-}
-
-fn disabled_context_menu_item(
-    action: ContextMenuAction,
-    label: impl Into<String>,
-) -> ContextMenuItem {
-    let icon = context_menu_icon_for_action(&action);
-    ContextMenuItem {
-        action,
-        label: label.into(),
-        enabled: false,
-        submenu: None,
-        icon,
-        separator_before: false,
-    }
-}
-
-fn context_menu_separator_before(mut item: ContextMenuItem) -> ContextMenuItem {
-    item.separator_before = true;
-    item
-}
-
-fn context_menu_group_items(mut items: Vec<ContextMenuItem>) -> Vec<ContextMenuItem> {
-    if let Some(first) = items.first_mut() {
-        first.separator_before = true;
-    }
-    items
-}
-
-fn context_menu_icon_for_action(action: &ContextMenuAction) -> Option<ContextMenuIcon> {
-    match action {
-        ContextMenuAction::Open
-        | ContextMenuAction::OpenInNewPane
-        | ContextMenuAction::OpenInNewWindow => Some(ContextMenuIcon::Open),
-        ContextMenuAction::OpenWithSubmenu => Some(ContextMenuIcon::OpenWith),
-        ContextMenuAction::OpenWithApplication { .. } | ContextMenuAction::OtherApplication => {
-            Some(ContextMenuIcon::Application)
-        }
-        ContextMenuAction::ServiceMenuSubmenu
-        | ContextMenuAction::ServiceMenuGroupSubmenu { .. }
-        | ContextMenuAction::RunServiceMenuAction { .. } => Some(ContextMenuIcon::Service),
-        ContextMenuAction::CompressWithArk
-        | ContextMenuAction::ExtractHereWithArk
-        | ContextMenuAction::ExtractToWithArk => Some(ContextMenuIcon::Archive),
-        ContextMenuAction::AddPlace => Some(ContextMenuIcon::Place),
-        ContextMenuAction::EditPlace => Some(ContextMenuIcon::Edit),
-        ContextMenuAction::RemovePlace => Some(ContextMenuIcon::Remove),
-        ContextMenuAction::HidePlace
-        | ContextMenuAction::HidePlaceSection
-        | ContextMenuAction::ShowHiddenPlaces => Some(ContextMenuIcon::Hide),
-        ContextMenuAction::SortBySubmenu
-        | ContextMenuAction::SortByName
-        | ContextMenuAction::SortByModified
-        | ContextMenuAction::SortBySize
-        | ContextMenuAction::SortByOriginalPath
-        | ContextMenuAction::SortByDeletionTime
-        | ContextMenuAction::SortAscending
-        | ContextMenuAction::SortDescending
-        | ContextMenuAction::SortFoldersFirst
-        | ContextMenuAction::SortHiddenLast => Some(ContextMenuIcon::Sort),
-        ContextMenuAction::ViewModeSubmenu
-        | ContextMenuAction::ViewCompact
-        | ContextMenuAction::ViewIcons
-        | ContextMenuAction::ViewDetails => Some(ContextMenuIcon::View),
-        ContextMenuAction::Rename => Some(ContextMenuIcon::Rename),
-        ContextMenuAction::Copy => Some(ContextMenuIcon::Copy),
-        ContextMenuAction::CopyLocation => Some(ContextMenuIcon::Location),
-        ContextMenuAction::Cut => Some(ContextMenuIcon::Cut),
-        ContextMenuAction::Trash | ContextMenuAction::EmptyTrash => Some(ContextMenuIcon::Trash),
-        ContextMenuAction::RestoreFromTrash => Some(ContextMenuIcon::Restore),
-        ContextMenuAction::DeletePermanently => Some(ContextMenuIcon::Delete),
-        ContextMenuAction::Properties => Some(ContextMenuIcon::Properties),
-        ContextMenuAction::CreateFolder => Some(ContextMenuIcon::NewFolder),
-        ContextMenuAction::Paste => Some(ContextMenuIcon::Paste),
-        ContextMenuAction::SelectAll => Some(ContextMenuIcon::Select),
-        ContextMenuAction::Refresh => Some(ContextMenuIcon::Refresh),
-    }
-}
-
 fn sort_role_label(role: SortRole) -> &'static str {
     match role {
         SortRole::Name => "Name",
@@ -8744,61 +8534,6 @@ fn sort_order_label(order: SortOrder) -> &'static str {
     match order {
         SortOrder::Ascending => "Ascending",
         SortOrder::Descending => "Descending",
-    }
-}
-
-fn context_submenu_actions(
-    submenu: ContextMenuSubmenu,
-    target: &ContextMenuTarget,
-) -> Vec<ContextMenuItem> {
-    match submenu {
-        ContextMenuSubmenu::OpenWith => match target {
-            ContextMenuTarget::Item { open_with_apps, .. } => {
-                open_with_menu_actions(open_with_apps)
-            }
-            _ => Vec::new(),
-        },
-        ContextMenuSubmenu::ServiceMenu => match target {
-            ContextMenuTarget::Blank {
-                service_actions, ..
-            }
-            | ContextMenuTarget::Item {
-                service_actions, ..
-            } => service_menu_more_actions(service_actions),
-            _ => Vec::new(),
-        },
-        ContextMenuSubmenu::ServiceMenuGroup(group_index) => match target {
-            ContextMenuTarget::Blank {
-                service_actions, ..
-            }
-            | ContextMenuTarget::Item {
-                service_actions, ..
-            } => service_menu_group_actions(service_actions, group_index),
-            _ => Vec::new(),
-        },
-        ContextMenuSubmenu::SortBy => vec![
-            context_menu_item(ContextMenuAction::SortByName, "Name"),
-            context_menu_item(ContextMenuAction::SortByModified, "Modified"),
-            context_menu_item(ContextMenuAction::SortBySize, "Size"),
-            context_menu_item(ContextMenuAction::SortAscending, "Ascending"),
-            context_menu_item(ContextMenuAction::SortDescending, "Descending"),
-            context_menu_item(ContextMenuAction::SortFoldersFirst, "Folders First"),
-            context_menu_item(ContextMenuAction::SortHiddenLast, "Hidden Files Last"),
-        ],
-        ContextMenuSubmenu::TrashSortBy => vec![
-            context_menu_item(ContextMenuAction::SortByName, "Name"),
-            context_menu_item(ContextMenuAction::SortByOriginalPath, "Original Path"),
-            context_menu_item(ContextMenuAction::SortByDeletionTime, "Deletion Time"),
-            context_menu_item(ContextMenuAction::SortAscending, "Ascending"),
-            context_menu_item(ContextMenuAction::SortDescending, "Descending"),
-            context_menu_item(ContextMenuAction::SortFoldersFirst, "Folders First"),
-            context_menu_item(ContextMenuAction::SortHiddenLast, "Hidden Files Last"),
-        ],
-        ContextMenuSubmenu::ViewMode => vec![
-            context_menu_item(ContextMenuAction::ViewCompact, "Compact"),
-            disabled_context_menu_item(ContextMenuAction::ViewIcons, "Icons"),
-            disabled_context_menu_item(ContextMenuAction::ViewDetails, "Details"),
-        ],
     }
 }
 
@@ -8868,6 +8603,7 @@ fn context_menu_theme_icon_candidates(icon: &ContextMenuIcon) -> (String, Vec<St
                 .map(str::to_string)
                 .collect(),
         ),
+        ContextMenuIcon::NewWindow => icon_candidates("context-new-window", &["window-new"]),
         ContextMenuIcon::OpenWith => (
             "context-open-with".to_string(),
             [
@@ -8904,6 +8640,7 @@ fn context_menu_theme_icon_candidates(icon: &ContextMenuIcon) -> (String, Vec<St
                 .map(str::to_string)
                 .collect(),
         ),
+        ContextMenuIcon::CreateNew => icon_candidates("context-create-new", &["list-add"]),
         ContextMenuIcon::NewFolder => (
             "context-new-folder".to_string(),
             ["folder-new", "document-new", "folder"]
@@ -8911,6 +8648,7 @@ fn context_menu_theme_icon_candidates(icon: &ContextMenuIcon) -> (String, Vec<St
                 .map(str::to_string)
                 .collect(),
         ),
+        ContextMenuIcon::NewFile => icon_candidates("context-new-file", &["document-new"]),
         ContextMenuIcon::Edit => icon_candidates("context-edit", &["document-edit", "edit-rename"]),
         ContextMenuIcon::Remove => {
             icon_candidates("context-remove", &["list-remove", "edit-delete"])
@@ -8981,210 +8719,6 @@ fn icon_candidates(name: &str, candidates: &[&str]) -> (String, Vec<String>) {
     )
 }
 
-fn open_with_menu_actions(apps: &[MimeApplication]) -> Vec<ContextMenuItem> {
-    let apps = dedup_open_with_apps(apps);
-    let mut actions = if apps.is_empty() {
-        vec![disabled_context_menu_item(
-            ContextMenuAction::OpenWithSubmenu,
-            "No Applications",
-        )]
-    } else {
-        apps.into_iter()
-            .map(|app| {
-                let mut item = context_menu_item(
-                    ContextMenuAction::OpenWithApplication {
-                        desktop_id: app.id.clone(),
-                    },
-                    app.name.clone(),
-                );
-                if let Some(icon) = app.icon.as_ref().filter(|icon| !icon.trim().is_empty()) {
-                    item.icon = Some(ContextMenuIcon::Named(icon.trim().to_string()));
-                }
-                item
-            })
-            .collect::<Vec<_>>()
-    };
-    actions.push(context_menu_item(
-        ContextMenuAction::OtherApplication,
-        "Other Application...",
-    ));
-    actions
-}
-
-fn dedup_open_with_apps(apps: &[MimeApplication]) -> Vec<&MimeApplication> {
-    let mut seen_ids = HashSet::new();
-    let mut seen_names = HashSet::new();
-    let mut deduped = Vec::new();
-    for app in apps {
-        let id = app.id.to_ascii_lowercase();
-        let name = app.name.trim().to_ascii_lowercase();
-        if seen_ids.insert(id) && seen_names.insert(name) {
-            deduped.push(app);
-        }
-    }
-    deduped
-}
-
-fn service_menu_root_actions(actions: &[ServiceMenuAction]) -> Vec<ContextMenuItem> {
-    actions
-        .iter()
-        .filter(|action| service_menu_action_promoted(action, actions.len()))
-        .map(service_menu_action_item)
-        .collect()
-}
-
-fn service_menu_has_more_actions(actions: &[ServiceMenuAction]) -> bool {
-    actions
-        .iter()
-        .any(|action| !service_menu_action_promoted(action, actions.len()))
-}
-
-fn service_menu_more_actions(actions: &[ServiceMenuAction]) -> Vec<ContextMenuItem> {
-    if actions.is_empty() {
-        return vec![disabled_context_menu_item(
-            ContextMenuAction::ServiceMenuSubmenu,
-            "No Actions",
-        )];
-    }
-    let more_actions = service_menu_more_action_refs(actions);
-    if more_actions.is_empty() {
-        return vec![disabled_context_menu_item(
-            ContextMenuAction::ServiceMenuSubmenu,
-            "No More Actions",
-        )];
-    }
-
-    let (ungrouped, groups) = service_menu_partition_grouped_actions(more_actions);
-    let mut items = ungrouped
-        .into_iter()
-        .map(service_menu_action_item)
-        .collect::<Vec<_>>();
-    for (group_index, (label, _)) in groups.iter().enumerate() {
-        let mut group_item = context_menu_submenu_item(
-            ContextMenuAction::ServiceMenuGroupSubmenu { group_index },
-            label.clone(),
-            ContextMenuSubmenu::ServiceMenuGroup(group_index),
-        );
-        group_item.separator_before = !items.is_empty() && group_index == 0;
-        items.push(group_item);
-    }
-    items
-}
-
-fn service_menu_group_actions(
-    actions: &[ServiceMenuAction],
-    group_index: usize,
-) -> Vec<ContextMenuItem> {
-    let more_actions = service_menu_more_action_refs(actions);
-    let (_, groups) = service_menu_partition_grouped_actions(more_actions);
-    let Some((_, group_actions)) = groups.into_iter().nth(group_index) else {
-        return vec![disabled_context_menu_item(
-            ContextMenuAction::ServiceMenuGroupSubmenu { group_index },
-            "No Actions",
-        )];
-    };
-    group_actions
-        .into_iter()
-        .map(service_menu_action_item)
-        .collect()
-}
-
-fn service_menu_more_action_refs(actions: &[ServiceMenuAction]) -> Vec<&ServiceMenuAction> {
-    actions
-        .iter()
-        .filter(|action| !service_menu_action_promoted(action, actions.len()))
-        .collect()
-}
-
-fn service_menu_partition_grouped_actions(
-    actions: Vec<&ServiceMenuAction>,
-) -> (
-    Vec<&ServiceMenuAction>,
-    Vec<(String, Vec<&ServiceMenuAction>)>,
-) {
-    let mut grouped: Vec<(String, Vec<&ServiceMenuAction>)> = Vec::new();
-    let ungrouped = actions
-        .iter()
-        .copied()
-        .filter(|action| action.submenu.is_none())
-        .collect::<Vec<_>>();
-
-    for action in actions
-        .into_iter()
-        .filter(|action| action.submenu.is_some())
-    {
-        let group = action.submenu.as_deref().unwrap_or_default().to_string();
-        if let Some((_, group_actions)) = grouped
-            .iter_mut()
-            .find(|(existing, _)| existing.eq_ignore_ascii_case(&group))
-        {
-            group_actions.push(action);
-        } else {
-            grouped.push((group, vec![action]));
-        }
-    }
-
-    (ungrouped, grouped)
-}
-
-fn service_menu_action_promoted(action: &ServiceMenuAction, action_count: usize) -> bool {
-    if action.priority == fika_core::ServiceMenuPriority::TopLevel {
-        return true;
-    }
-    if action.submenu.is_some() {
-        return false;
-    }
-    if action_count <= 4 {
-        return true;
-    }
-    let label = action.label.to_ascii_lowercase();
-    [
-        "compress", "extract", "archive", "terminal", "send to", "copy to", "move to",
-    ]
-    .iter()
-    .any(|keyword| label.contains(keyword))
-}
-
-fn should_offer_compress_fallback(actions: &[ServiceMenuAction]) -> bool {
-    !actions.iter().any(service_menu_action_is_compress)
-}
-
-fn service_menu_action_is_compress(action: &ServiceMenuAction) -> bool {
-    let label = action.label.to_ascii_lowercase();
-    let id = action.id.to_ascii_lowercase();
-    label.contains("compress")
-        || id.contains("compress")
-        || label.contains("create archive")
-        || id.contains("create-archive")
-        || id.contains("create_archive")
-}
-
-fn should_offer_extract_fallback(actions: &[ServiceMenuAction]) -> bool {
-    !actions.iter().any(service_menu_action_is_extract)
-}
-
-fn service_menu_action_is_extract(action: &ServiceMenuAction) -> bool {
-    let label = action.label.to_ascii_lowercase();
-    let id = action.id.to_ascii_lowercase();
-    label.contains("extract")
-        || id.contains("extract")
-        || label.contains("unarchive")
-        || id.contains("unarchive")
-}
-
-fn service_menu_action_item(action: &ServiceMenuAction) -> ContextMenuItem {
-    let mut item = context_menu_item(
-        ContextMenuAction::RunServiceMenuAction {
-            action_id: action.id.clone(),
-        },
-        action.label.clone(),
-    );
-    if let Some(icon) = action.icon.as_ref().filter(|icon| !icon.trim().is_empty()) {
-        item.icon = Some(ContextMenuIcon::Named(icon.trim().to_string()));
-    }
-    item
-}
-
 fn ark_extract_launch_plan(
     desktop_id: &str,
     app_name: &str,
@@ -9225,7 +8759,7 @@ fn service_menu_target_label(paths: &[PathBuf]) -> String {
     }
 }
 
-fn sanitize_element_id(value: &str) -> String {
+pub(crate) fn sanitize_element_id(value: &str) -> String {
     let sanitized = value
         .chars()
         .map(|ch| {
@@ -9243,7 +8777,7 @@ fn sanitize_element_id(value: &str) -> String {
     }
 }
 
-fn application_marker(name: &str) -> String {
+pub(crate) fn application_marker(name: &str) -> String {
     let marker = name
         .chars()
         .filter(|ch| ch.is_alphanumeric())
@@ -9522,11 +9056,14 @@ fn context_menu_icon_style(icon: &ContextMenuIcon, enabled: bool) -> (&'static s
     let (marker, fg, bg) = match icon {
         ContextMenuIcon::Named(_) => ("S", 0x0f766e, 0xe6fffb),
         ContextMenuIcon::Open => ("O", 0x1d4ed8, 0xeaf1ff),
+        ContextMenuIcon::NewWindow => ("W", 0x1d4ed8, 0xeaf1ff),
         ContextMenuIcon::OpenWith => ("W", 0x4338ca, 0xeeedff),
         ContextMenuIcon::Application => ("A", 0x4f46e5, 0xeeedff),
         ContextMenuIcon::Service => ("S", 0x0f766e, 0xe6fffb),
         ContextMenuIcon::Archive => ("Z", 0x7c2d12, 0xffefe8),
+        ContextMenuIcon::CreateNew => ("+", 0x0f4c81, 0xe7f1fb),
         ContextMenuIcon::NewFolder => ("+", 0x0f4c81, 0xe7f1fb),
+        ContextMenuIcon::NewFile => ("F", 0x0f4c81, 0xe7f1fb),
         ContextMenuIcon::Edit => ("E", 0x6d28d9, 0xf2edff),
         ContextMenuIcon::Remove => ("-", 0xb91c1c, 0xffe8e8),
         ContextMenuIcon::Hide => ("H", 0x59636e, 0xeef1f5),
@@ -9550,600 +9087,6 @@ fn context_menu_icon_style(icon: &ContextMenuIcon, enabled: bool) -> (&'static s
     } else {
         (marker, 0x8b95a1, 0xf1f3f5)
     }
-}
-
-fn application_chooser_icon_snapshots(
-    cache: &mut FileIconCache,
-    chooser: &ApplicationChooserState,
-) -> HashMap<String, FileIconSnapshot> {
-    let mut snapshots = HashMap::new();
-    for app in &chooser.applications {
-        snapshots
-            .entry(app.id.clone())
-            .or_insert_with(|| application_chooser_icon_snapshot(cache, app));
-    }
-    snapshots
-}
-
-fn application_chooser_icon_snapshot(
-    cache: &mut FileIconCache,
-    app: &MimeApplication,
-) -> FileIconSnapshot {
-    let mut candidates = Vec::new();
-    if let Some(icon) = app
-        .icon
-        .as_ref()
-        .map(|icon| icon.trim())
-        .filter(|icon| !icon.is_empty())
-    {
-        candidates.push(icon.to_string());
-    }
-    candidates.extend([
-        "application-x-executable".to_string(),
-        "system-run".to_string(),
-        "application-default-icon".to_string(),
-    ]);
-
-    let cache_name = format!("application-chooser-{}", sanitize_element_id(&app.id));
-    let marker = application_marker(&app.name);
-    let candidate_refs = candidates.iter().map(String::as_str).collect::<Vec<_>>();
-    cache.named_icon(
-        &cache_name,
-        &candidate_refs,
-        &marker,
-        0x2f6fed,
-        0xe8eef7,
-        28.0,
-    )
-}
-
-fn properties_dialog_overlay(
-    dialog: PropertiesDialogState,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    let title = dialog.title;
-    div()
-        .id("properties-dialog-layer")
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .occlude()
-        .bg(rgba(0x00000066))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
-                this.dismiss_properties_dialog();
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .on_mouse_move(|_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .on_scroll_wheel(|_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .child(
-            div()
-                .id("properties-dialog")
-                .w(px(440.0))
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(0xc8ced6))
-                .bg(rgb(0xffffff))
-                .shadow_md()
-                .occlude()
-                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-                    cx.stop_propagation();
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_4()
-                        .py_3()
-                        .border_b_1()
-                        .border_color(rgb(0xd5d9df))
-                        .child(
-                            div()
-                                .flex_1()
-                                .truncate()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(rgb(0x1f2328))
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .text_sm()
-                                .text_color(rgb(0x59636e))
-                                .hover(|button| button.bg(rgb(0xeaf1ff)))
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(
-                                        |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                                            this.dismiss_properties_dialog();
-                                            cx.stop_propagation();
-                                            cx.notify();
-                                        },
-                                    ),
-                                )
-                                .child("Close"),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .px_4()
-                        .py_3()
-                        .children(dialog.rows.into_iter().map(property_dialog_row)),
-                ),
-        )
-}
-
-fn application_chooser_overlay(
-    chooser: ApplicationChooserState,
-    icon_snapshots: HashMap<String, FileIconSnapshot>,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    let title = chooser
-        .path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| format!("Open With - {name}"))
-        .unwrap_or_else(|| "Open With".to_string());
-    let detail = chooser
-        .mime_type
-        .as_deref()
-        .map(|mime| format!("{} - {}", chooser.path.display(), mime))
-        .unwrap_or_else(|| chooser.path.display().to_string());
-    let can_set_default = chooser.mime_type.is_some();
-
-    div()
-        .id("application-chooser-layer")
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .occlude()
-        .bg(rgba(0x00000066))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
-                this.dismiss_application_chooser();
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .on_mouse_move(|_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .on_scroll_wheel(|_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .child(
-            div()
-                .id("application-chooser-dialog")
-                .w(px(520.0))
-                .max_h(px(560.0))
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(0xc8ced6))
-                .bg(rgb(0xffffff))
-                .shadow_md()
-                .occlude()
-                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-                    cx.stop_propagation();
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_4()
-                        .py_3()
-                        .border_b_1()
-                        .border_color(rgb(0xd5d9df))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(rgb(0x1f2328))
-                                        .child(title),
-                                )
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_xs()
-                                        .text_color(rgb(0x59636e))
-                                        .child(detail),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .text_sm()
-                                .text_color(rgb(0x59636e))
-                                .hover(|button| button.bg(rgb(0xeaf1ff)))
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(
-                                        |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                                            this.dismiss_application_chooser();
-                                            cx.notify();
-                                        },
-                                    ),
-                                )
-                                .child("Close"),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("application-chooser-list")
-                        .max_h(px(480.0))
-                        .overflow_y_scroll()
-                        .py_1()
-                        .children(chooser.applications.into_iter().map(|app| {
-                            let icon = icon_snapshots.get(&app.id).cloned();
-                            application_chooser_row(app, icon, can_set_default, cx)
-                        })),
-                ),
-        )
-}
-
-fn application_chooser_row(
-    app: MimeApplication,
-    icon: Option<FileIconSnapshot>,
-    can_set_default: bool,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    let desktop_id = app.id.clone();
-    let default_desktop_id = app.id.clone();
-    let is_default = app.is_default;
-    div()
-        .id(format!(
-            "application-choice-{}",
-            sanitize_element_id(&app.id)
-        ))
-        .flex()
-        .items_center()
-        .gap_3()
-        .px_4()
-        .py_2()
-        .min_w_0()
-        .hover(|row| row.bg(rgb(0xeaf1ff)))
-        .cursor_pointer()
-        .on_click(cx.listener(move |this, _event, _window, cx| {
-            this.choose_application_for_open_with(desktop_id.clone(), cx);
-            cx.notify();
-        }))
-        .child(application_chooser_icon_slot(&app.name, icon))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .truncate()
-                        .text_sm()
-                        .text_color(rgb(0x1f2328))
-                        .child(app.name),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_xs()
-                        .text_color(rgb(0x59636e))
-                        .child(app.desktop_file.display().to_string()),
-                ),
-        )
-        .when(can_set_default && !is_default, |row| {
-            row.child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .text_xs()
-                    .text_color(rgb(0x1f4fbf))
-                    .bg(rgb(0xeaf1ff))
-                    .hover(|button| button.bg(rgb(0xdbe7fb)))
-                    .cursor_pointer()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                            this.set_default_open_with_application(default_desktop_id.clone());
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    )
-                    .child("Set Default"),
-            )
-        })
-        .when(can_set_default && is_default, |row| {
-            row.child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .text_xs()
-                    .text_color(rgb(0x047857))
-                    .bg(rgb(0xe7f8ef))
-                    .child("Default"),
-            )
-        })
-}
-
-fn application_chooser_icon_slot(app_name: &str, icon: Option<FileIconSnapshot>) -> Div {
-    let snapshot = icon.unwrap_or_else(|| FileIconSnapshot {
-        icon_name: "application-x-executable".to_string(),
-        path: None,
-        fallback_marker: application_marker(app_name),
-        fallback_fg: 0x2f6fed,
-        fallback_bg: 0xe8eef7,
-    });
-    let fallback = snapshot.fallback_marker.clone();
-    let fallback_fg = snapshot.fallback_fg;
-    let fallback_bg = snapshot.fallback_bg;
-    let container = div()
-        .w(px(28.0))
-        .h(px(28.0))
-        .rounded_md()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .overflow_hidden();
-
-    match snapshot.path {
-        Some(path) => container.child(img(path).size_full().with_fallback(move || {
-            application_chooser_fallback_icon(fallback.clone(), fallback_fg, fallback_bg)
-        })),
-        None => container.child(application_chooser_fallback_icon(
-            fallback,
-            fallback_fg,
-            fallback_bg,
-        )),
-    }
-}
-
-fn application_chooser_fallback_icon(marker: String, fg: u32, bg: u32) -> gpui::AnyElement {
-    div()
-        .size_full()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(rgb(bg))
-        .text_sm()
-        .text_color(rgb(fg))
-        .child(marker)
-        .into_any_element()
-}
-
-fn place_draft_overlay(draft: PlaceDraft, cx: &mut Context<FikaApp>) -> Stateful<Div> {
-    let title = if draft.editing_path.is_some() {
-        "Edit Place"
-    } else {
-        "Add Place"
-    };
-    div()
-        .id("place-draft-layer")
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .occlude()
-        .bg(rgba(0x00000066))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
-                this.dismiss_place_draft();
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .on_mouse_move(|_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .on_scroll_wheel(|_event, _window, cx| {
-            cx.stop_propagation();
-        })
-        .child(
-            div()
-                .id("place-draft-dialog")
-                .w(px(460.0))
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(0xc8ced6))
-                .bg(rgb(0xffffff))
-                .shadow_md()
-                .occlude()
-                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-                    cx.stop_propagation();
-                })
-                .child(
-                    div()
-                        .px_4()
-                        .py_3()
-                        .border_b_1()
-                        .border_color(rgb(0xd5d9df))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(rgb(0x1f2328))
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .px_4()
-                        .py_3()
-                        .child(place_draft_field(
-                            PlaceDraftField::Label,
-                            "Label",
-                            draft.label,
-                            draft.focus == PlaceDraftField::Label,
-                            cx,
-                        ))
-                        .child(place_draft_field(
-                            PlaceDraftField::Path,
-                            "Path",
-                            draft.path,
-                            draft.focus == PlaceDraftField::Path,
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .flex()
-                                .justify_end()
-                                .gap_2()
-                                .pt_1()
-                                .child(
-                                    div()
-                                        .px_3()
-                                        .py_1()
-                                        .rounded_md()
-                                        .text_sm()
-                                        .text_color(rgb(0x59636e))
-                                        .hover(|button| button.bg(rgb(0xeaf1ff)))
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(
-                                                |this,
-                                                 _event: &gpui::MouseDownEvent,
-                                                 _window,
-                                                 cx| {
-                                                    this.dismiss_place_draft();
-                                                    cx.stop_propagation();
-                                                    cx.notify();
-                                                },
-                                            ),
-                                        )
-                                        .child("Cancel"),
-                                )
-                                .child(
-                                    div()
-                                        .px_3()
-                                        .py_1()
-                                        .rounded_md()
-                                        .bg(rgb(0x2f6fed))
-                                        .text_sm()
-                                        .text_color(rgb(0xffffff))
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(
-                                                |this,
-                                                 _event: &gpui::MouseDownEvent,
-                                                 _window,
-                                                 cx| {
-                                                    this.commit_place_draft();
-                                                    cx.stop_propagation();
-                                                    cx.notify();
-                                                },
-                                            ),
-                                        )
-                                        .child("Save"),
-                                ),
-                        ),
-                ),
-        )
-}
-
-fn place_draft_field(
-    field: PlaceDraftField,
-    label: &'static str,
-    value: String,
-    focused: bool,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    div()
-        .id(format!("place-draft-field-{field:?}"))
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(div().text_xs().text_color(rgb(0x6b7280)).child(label))
-        .child(
-            div()
-                .min_h(px(30.0))
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(if focused {
-                    rgb(0x2f6fed)
-                } else {
-                    rgb(0xc8ced6)
-                })
-                .bg(if focused {
-                    rgb(0xf3f7ff)
-                } else {
-                    rgb(0xffffff)
-                })
-                .text_sm()
-                .text_color(rgb(0x24292f))
-                .cursor_pointer()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                        this.set_place_draft_focus(field);
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                )
-                .child(if focused { format!("{value}|") } else { value }),
-        )
-}
-
-fn property_dialog_row(row: PropertyRow) -> Stateful<Div> {
-    div()
-        .id(format!("property-row-{}", row.label))
-        .flex()
-        .items_center()
-        .gap_3()
-        .py_1()
-        .child(
-            div()
-                .w(px(92.0))
-                .text_sm()
-                .text_color(rgb(0x6b7280))
-                .child(row.label),
-        )
-        .child(
-            div()
-                .flex_1()
-                .truncate()
-                .text_sm()
-                .text_color(rgb(0x24292f))
-                .child(row.value),
-        )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10567,6 +9510,14 @@ struct ServiceMenuLaunchResult {
     target_label: String,
     app_name: String,
     result: Result<SystemdLaunchResult, LauncherError>,
+}
+
+#[derive(Debug)]
+struct DevicePlaceOperationResult {
+    pane_id: PaneId,
+    path: PathBuf,
+    operation: DevicePlaceOperation,
+    result: Result<Option<PathBuf>, DeviceActionError>,
 }
 
 fn rename_item_result(
@@ -11331,6 +10282,13 @@ fn build_places(user_places_path: &Path) -> Vec<PlaceEntry> {
     build_places_with_devices(user_places_path, &[])
 }
 
+async fn read_live_device_snapshot() -> Vec<DeviceInfo> {
+    match fika_core::read_udisks2_devices().await {
+        Ok(devices) => devices,
+        Err(_) => fika_core::read_mountinfo_devices().unwrap_or_default(),
+    }
+}
+
 fn build_places_with_devices(user_places_path: &Path, devices: &[DeviceInfo]) -> Vec<PlaceEntry> {
     let home = home_dir();
     let mut places = Vec::new();
@@ -11346,12 +10304,20 @@ fn build_places_with_devices(user_places_path: &Path, devices: &[DeviceInfo]) ->
         .iter()
         .map(|place| place.path.clone())
         .chain(std::iter::once(PathBuf::from("/")))
+        .chain(std::iter::once(network_root_path()))
         .collect::<BTreeSet<_>>();
     for place in fika_core::load_user_places(user_places_path).unwrap_or_default() {
         if !built_in_paths.contains(&place.path) {
             push_user_place(&mut places, place.label, place.path);
         }
     }
+    push_place(
+        &mut places,
+        NETWORK_GROUP,
+        "Net",
+        fika_core::NETWORK_ROOT_LABEL,
+        network_root_path(),
+    );
     append_removable_device_places(&mut places, devices);
     push_place(&mut places, DEVICES_GROUP, "/", "Root", PathBuf::from("/"));
     places
@@ -11375,22 +10341,27 @@ fn removable_device_place_entries(
         .iter()
         .filter(|device| device.removable)
         .filter_map(|device| {
-            let mount_point = device.mount_point.clone()?;
-            if !seen_paths.insert(mount_point.clone()) {
+            let path = device
+                .mount_point
+                .clone()
+                .unwrap_or_else(|| device.device_path.clone());
+            if !seen_paths.insert(path.clone()) {
                 return None;
             }
             let label = device
                 .label
                 .clone()
                 .filter(|label| !label.trim().is_empty())
-                .unwrap_or_else(|| default_place_label(&mount_point));
+                .unwrap_or_else(|| default_place_label(&path));
             Some(PlaceEntry {
                 group: REMOVABLE_DEVICES_GROUP,
                 marker: "D",
                 label,
-                path: mount_point,
+                path,
                 editable: false,
                 removable: false,
+                device_ejectable: device.ejectable,
+                device_can_power_off: device.can_power_off,
             })
         })
         .collect::<Vec<_>>();
@@ -11431,6 +10402,8 @@ fn push_place(
         path,
         editable: false,
         removable: false,
+        device_ejectable: false,
+        device_can_power_off: false,
     });
 }
 
@@ -11445,12 +10418,17 @@ fn push_user_place(places: &mut Vec<PlaceEntry>, label: String, path: PathBuf) {
         path,
         editable: true,
         removable: true,
+        device_ejectable: false,
+        device_can_power_off: false,
     });
 }
 
 fn place_icon_for(place: &PlaceEntry, trash_place: bool) -> PlaceIcon {
     if trash_place {
         return PlaceIcon::Trash;
+    }
+    if place_is_network_root(place) {
+        return PlaceIcon::Network;
     }
     if place.path == PathBuf::from("/") {
         return PlaceIcon::Root;
@@ -11536,6 +10514,18 @@ fn place_icon_snapshot(cache: &mut FileIconCache, icon: PlaceIcon) -> FileIconSn
             0x334155,
             0xe8eef7,
         ),
+        PlaceIcon::Network => (
+            "place-network",
+            &[
+                "folder-remote",
+                "network-workgroup",
+                "network-server",
+                "folder",
+            ][..],
+            "N",
+            0x0369a1,
+            0xe0f2fe,
+        ),
         PlaceIcon::Device => (
             "place-device",
             &[
@@ -11578,9 +10568,19 @@ fn active_place_index(places: &[PlaceEntry], current_dir: &Path) -> Option<usize
     places
         .iter()
         .enumerate()
+        .filter(|(_, place)| place_is_mounted(place))
         .filter(|(_, place)| current_dir == place.path || current_dir.starts_with(&place.path))
         .max_by_key(|(_, place)| place.path.components().count())
         .map(|(index, _)| index)
+}
+
+fn place_is_mounted(place: &PlaceEntry) -> bool {
+    !place_is_network_root(place)
+        && (place.group != REMOVABLE_DEVICES_GROUP || !place.path.starts_with("/dev"))
+}
+
+fn place_is_network_root(place: &PlaceEntry) -> bool {
+    is_network_root_path(&place.path)
 }
 
 fn breadcrumb_segments(path: &Path) -> Vec<BreadcrumbSegment> {
@@ -11789,6 +10789,8 @@ mod tests {
                 path: PathBuf::from("/"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -11797,6 +10799,8 @@ mod tests {
                 path: PathBuf::from("/home/yk"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -11805,6 +10809,8 @@ mod tests {
                 path: PathBuf::from("/home/yk/Downloads"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
 
@@ -11952,7 +10958,7 @@ mod tests {
     }
 
     #[test]
-    fn blank_context_menu_without_origin_keeps_directory_service_actions() {
+    fn blank_context_menu_requires_viewport_geometry_and_keeps_directory_service_actions() {
         let mut app = test_app_with_entries("/tmp/fika-blank-menu-service", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
         app.mime_applications = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
@@ -11981,6 +10987,17 @@ mod tests {
             &[],
         );
 
+        assert!(!app.show_blank_context_menu_if_blank(pane_id, gpui::point(px(500.0), px(300.0))));
+        assert!(app.context_menu.is_none());
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            }
+        ));
         assert!(app.show_blank_context_menu_if_blank(pane_id, gpui::point(px(500.0), px(300.0))));
 
         let Some(ContextMenuState {
@@ -12026,13 +11043,68 @@ mod tests {
         assert_eq!(
             separators,
             vec![
-                (ContextMenuAction::CreateFolder, false),
+                (ContextMenuAction::CreateNewSubmenu, false),
                 (ContextMenuAction::Paste, true),
                 (ContextMenuAction::SortBySubmenu, true),
                 (ContextMenuAction::ViewModeSubmenu, false),
                 (ContextMenuAction::SelectAll, true),
                 (ContextMenuAction::Refresh, false),
                 (ContextMenuAction::Properties, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn context_menu_actions_offer_create_new_submenu_for_blank_and_directories() {
+        let blank = context_blank_target();
+        let blank_actions = context_menu_actions(&blank, false);
+        assert_eq!(
+            blank_actions
+                .iter()
+                .find(|item| item.action == ContextMenuAction::CreateNewSubmenu)
+                .and_then(|item| item.submenu),
+            Some(ContextMenuSubmenu::CreateNew)
+        );
+
+        let dir_target = context_item_target("/tmp/project", true, 1);
+        let dir_actions = context_menu_actions(&dir_target, false);
+        assert_eq!(
+            dir_actions
+                .iter()
+                .find(|item| item.action == ContextMenuAction::CreateNewSubmenu)
+                .and_then(|item| item.submenu),
+            Some(ContextMenuSubmenu::CreateNew)
+        );
+
+        let file_target = context_item_target("/tmp/readme.txt", false, 1);
+        assert!(
+            !context_menu_actions(&file_target, false)
+                .iter()
+                .any(|item| item.action == ContextMenuAction::CreateNewSubmenu)
+        );
+    }
+
+    #[test]
+    fn context_submenu_actions_offer_dolphin_create_new_entries() {
+        let blank = context_blank_target();
+        let actions = context_submenu_actions(ContextMenuSubmenu::CreateNew, &blank)
+            .into_iter()
+            .map(|item| (item.action, item.label, item.icon))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                (
+                    ContextMenuAction::CreateFolder,
+                    "Folder".to_string(),
+                    Some(ContextMenuIcon::NewFolder),
+                ),
+                (
+                    ContextMenuAction::CreateFile,
+                    "Text File".to_string(),
+                    Some(ContextMenuIcon::NewFile),
+                ),
             ]
         );
     }
@@ -12102,13 +11174,13 @@ mod tests {
 
         assert_eq!(layout.root.width, 196.0);
         assert_eq!(layout.root.max_height, 204.0);
-        assert_eq!(layout.root.x, 116.0);
+        assert_eq!(layout.root.x, 99.0);
         assert_eq!(layout.root.y, 8.0);
         assert!(layout.submenu.is_none());
     }
 
     #[test]
-    fn context_menu_layout_clamps_root_near_anchor_at_viewport_edges() {
+    fn context_menu_layout_flips_root_around_mouse_when_space_exists() {
         let horizontal = context_menu_overlay_layout(
             ViewPoint { x: 280.0, y: 24.0 },
             2,
@@ -12118,7 +11190,7 @@ mod tests {
             420.0,
             240.0,
         );
-        assert_eq!(horizontal.root.x, 216.0);
+        assert_eq!(horizontal.root.x, 84.0);
         assert_eq!(horizontal.root.y, 24.0);
 
         let vertical = context_menu_overlay_layout(
@@ -12131,7 +11203,7 @@ mod tests {
             260.0,
         );
         assert_eq!(vertical.root.x, 24.0);
-        assert_eq!(vertical.root.y, 132.0);
+        assert_eq!(vertical.root.y, 100.0);
     }
 
     #[test]
@@ -12303,10 +11375,14 @@ mod tests {
     fn places_user_bookmark_context_menu_enables_edit_and_remove() {
         let target = ContextMenuTarget::Place {
             path: PathBuf::from("/tmp/fika-user-place"),
+            mounted: true,
+            device: false,
             trash_place: false,
             trash_has_items: false,
             editable: true,
             removable: true,
+            device_ejectable: false,
+            device_can_power_off: false,
         };
         let actions = context_menu_actions(&target, false)
             .into_iter()
@@ -12321,6 +11397,111 @@ mod tests {
                 (ContextMenuAction::OpenInNewWindow, true),
                 (ContextMenuAction::EditPlace, true),
                 (ContextMenuAction::RemovePlace, true),
+                (ContextMenuAction::HidePlace, true),
+                (ContextMenuAction::CopyLocation, true),
+                (ContextMenuAction::Properties, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn unmounted_device_place_context_menu_disables_open_actions() {
+        let target = ContextMenuTarget::Place {
+            path: PathBuf::from("/dev/sdz1"),
+            mounted: false,
+            device: true,
+            trash_place: false,
+            trash_has_items: false,
+            editable: false,
+            removable: false,
+            device_ejectable: false,
+            device_can_power_off: false,
+        };
+        let actions = context_menu_actions(&target, false)
+            .into_iter()
+            .map(|item| (item.action, item.enabled))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                (ContextMenuAction::Open, false),
+                (ContextMenuAction::OpenInNewPane, false),
+                (ContextMenuAction::OpenInNewWindow, false),
+                (ContextMenuAction::MountDevice, true),
+                (ContextMenuAction::EditPlace, false),
+                (ContextMenuAction::RemovePlace, false),
+                (ContextMenuAction::HidePlace, true),
+                (ContextMenuAction::CopyLocation, true),
+                (ContextMenuAction::Properties, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn mounted_device_place_context_menu_offers_unmount_and_eject() {
+        let target = ContextMenuTarget::Place {
+            path: PathBuf::from("/run/media/yk/USB"),
+            mounted: true,
+            device: true,
+            trash_place: false,
+            trash_has_items: false,
+            editable: false,
+            removable: false,
+            device_ejectable: true,
+            device_can_power_off: false,
+        };
+        let actions = context_menu_actions(&target, false)
+            .into_iter()
+            .map(|item| (item.action, item.enabled))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                (ContextMenuAction::Open, true),
+                (ContextMenuAction::OpenInNewPane, true),
+                (ContextMenuAction::OpenInNewWindow, true),
+                (ContextMenuAction::UnmountDevice, true),
+                (ContextMenuAction::EjectDevice, true),
+                (ContextMenuAction::EditPlace, false),
+                (ContextMenuAction::RemovePlace, false),
+                (ContextMenuAction::HidePlace, true),
+                (ContextMenuAction::CopyLocation, true),
+                (ContextMenuAction::Properties, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn device_place_context_menu_offers_safely_remove_when_power_off_supported() {
+        let target = ContextMenuTarget::Place {
+            path: PathBuf::from("/run/media/yk/USB"),
+            mounted: true,
+            device: true,
+            trash_place: false,
+            trash_has_items: false,
+            editable: false,
+            removable: false,
+            device_ejectable: true,
+            device_can_power_off: true,
+        };
+        let actions = context_menu_actions(&target, false)
+            .into_iter()
+            .map(|item| (item.action, item.enabled))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                (ContextMenuAction::Open, true),
+                (ContextMenuAction::OpenInNewPane, true),
+                (ContextMenuAction::OpenInNewWindow, true),
+                (ContextMenuAction::UnmountDevice, true),
+                (ContextMenuAction::EjectDevice, true),
+                (ContextMenuAction::SafelyRemoveDevice, true),
+                (ContextMenuAction::EditPlace, false),
+                (ContextMenuAction::RemovePlace, false),
                 (ContextMenuAction::HidePlace, true),
                 (ContextMenuAction::CopyLocation, true),
                 (ContextMenuAction::Properties, true),
@@ -12473,6 +11654,28 @@ mod tests {
             "accessories-text-editor".to_string()
         )));
         assert!(snapshots.contains_key(&ContextMenuIcon::Cut));
+    }
+
+    #[test]
+    fn context_menu_icon_snapshots_include_dolphin_window_and_create_new_icons() {
+        let menu = ContextMenuState {
+            pane_id: PaneId(1),
+            target: context_item_target("/tmp/project", true, 1),
+            position: ViewPoint { x: 0.0, y: 0.0 },
+            active_submenu: Some(ContextMenuOpenSubmenu {
+                submenu: ContextMenuSubmenu::CreateNew,
+                parent_index: 3,
+                nested: None,
+            }),
+        };
+        let mut cache = FileIconCache::default();
+
+        let snapshots = context_menu_icon_snapshots(&mut cache, &menu, false);
+
+        assert!(snapshots.contains_key(&ContextMenuIcon::NewWindow));
+        assert!(snapshots.contains_key(&ContextMenuIcon::CreateNew));
+        assert!(snapshots.contains_key(&ContextMenuIcon::NewFolder));
+        assert!(snapshots.contains_key(&ContextMenuIcon::NewFile));
     }
 
     #[test]
@@ -12810,6 +12013,7 @@ mod tests {
                 (ContextMenuAction::Open, false),
                 (ContextMenuAction::OpenInNewPane, false),
                 (ContextMenuAction::OpenInNewWindow, false),
+                (ContextMenuAction::CreateNewSubmenu, false),
                 (ContextMenuAction::Cut, true),
                 (ContextMenuAction::Copy, false),
                 (ContextMenuAction::CopyLocation, false),
@@ -13123,38 +12327,45 @@ mod tests {
     }
 
     #[test]
-    fn application_chooser_icon_snapshots_use_desktop_icons() {
-        let chooser = ApplicationChooserState {
-            pane_id: PaneId(1),
-            path: PathBuf::from("/tmp/fika-open-with-other/note.txt"),
-            mime_type: Some(Arc::from("text/plain")),
-            applications: vec![
-                MimeApplication {
-                    id: "viewer.desktop".to_string(),
-                    desktop_file: PathBuf::from("/apps/viewer.desktop"),
-                    name: "Viewer".to_string(),
-                    exec: "viewer %f".to_string(),
-                    icon: Some("accessories-text-editor".to_string()),
-                    is_default: true,
-                },
-                MimeApplication {
-                    id: "writer.desktop".to_string(),
-                    desktop_file: PathBuf::from("/apps/writer.desktop"),
-                    name: "Writer".to_string(),
-                    exec: "writer %f".to_string(),
-                    icon: None,
-                    is_default: false,
-                },
-            ],
-        };
+    fn application_chooser_visible_icon_snapshots_use_desktop_icons_only_for_visible_rows() {
+        let applications = vec![
+            MimeApplication {
+                id: "viewer.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/viewer.desktop"),
+                name: "Viewer".to_string(),
+                exec: "viewer %f".to_string(),
+                icon: Some("accessories-text-editor".to_string()),
+                is_default: true,
+            },
+            MimeApplication {
+                id: "writer.desktop".to_string(),
+                desktop_file: PathBuf::from("/apps/writer.desktop"),
+                name: "Writer".to_string(),
+                exec: "writer %f".to_string(),
+                icon: None,
+                is_default: false,
+            },
+        ];
         let mut cache = FileIconCache::default();
 
-        let snapshots = application_chooser_icon_snapshots(&mut cache, &chooser);
+        let snapshots = ui::application_chooser::application_chooser_visible_icon_snapshots(
+            &mut cache,
+            &applications,
+            0..1,
+        );
 
-        let viewer = snapshots.get("viewer.desktop").unwrap();
+        assert_eq!(snapshots.len(), 1);
+        let viewer = snapshots.get(&0).unwrap();
         assert_eq!(viewer.icon_name, "accessories-text-editor");
         assert_eq!(viewer.fallback_marker, "VI");
-        let writer = snapshots.get("writer.desktop").unwrap();
+        assert!(!snapshots.contains_key(&1));
+
+        let snapshots = ui::application_chooser::application_chooser_visible_icon_snapshots(
+            &mut cache,
+            &applications,
+            1..2,
+        );
+        let writer = snapshots.get(&1).unwrap();
         assert_eq!(writer.icon_name, "application-x-executable");
         assert_eq!(writer.fallback_marker, "WR");
     }
@@ -13459,6 +12670,55 @@ text/plain=writer.desktop;\n",
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn build_places_adds_network_root_before_devices_without_persisting() {
+        let root = test_dir("places-network-root");
+        let bookmark = root.join("bookmark");
+        std::fs::create_dir_all(&bookmark).unwrap();
+        let path = root.join("user-places.xbel");
+        fika_core::save_user_places(
+            &path,
+            &[
+                UserPlace::new("Bookmark".to_string(), bookmark.clone()),
+                UserPlace::new("Duplicate Network".to_string(), network_root_path()),
+            ],
+        )
+        .unwrap();
+
+        let places = build_places(&path);
+        let bookmark_index = places
+            .iter()
+            .position(|place| place.path == bookmark)
+            .expect("persistent bookmark should be loaded");
+        let network_index = places
+            .iter()
+            .position(|place| is_network_root_path(&place.path))
+            .expect("network root should exist");
+        let root_index = places
+            .iter()
+            .position(|place| place.path == PathBuf::from("/"))
+            .expect("root device place should exist");
+        let network = &places[network_index];
+
+        assert!(bookmark_index < network_index);
+        assert!(network_index < root_index);
+        assert_eq!(network.group, NETWORK_GROUP);
+        assert_eq!(network.marker, "Net");
+        assert_eq!(network.label, fika_core::NETWORK_ROOT_LABEL);
+        assert!(!network.editable);
+        assert!(!network.removable);
+        assert!(!place_is_mounted(network));
+        assert_eq!(
+            places
+                .iter()
+                .filter(|place| is_network_root_path(&place.path))
+                .count(),
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn test_device(path: &str, label: &str, removable: bool) -> DeviceInfo {
         DeviceInfo {
             device_path: PathBuf::from(format!("/dev/{label}")),
@@ -13467,6 +12727,8 @@ text/plain=writer.desktop;\n",
             label: Some(label.to_string()),
             capacity_bytes: Some(1024),
             removable,
+            ejectable: false,
+            can_power_off: false,
         }
     }
 
@@ -13492,6 +12754,8 @@ text/plain=writer.desktop;\n",
                 label: Some("Unmounted".to_string()),
                 capacity_bytes: Some(1024),
                 removable: true,
+                ejectable: true,
+                can_power_off: true,
             },
             test_device(bookmark.to_str().unwrap(), "Duplicate Bookmark", true),
         ];
@@ -13523,7 +12787,25 @@ text/plain=writer.desktop;\n",
                 .filter(|(group, _, _, _)| *group == REMOVABLE_DEVICES_GROUP)
                 .map(|(_, label, editable, removable)| (*label, *editable, *removable))
                 .collect::<Vec<_>>(),
-            vec![("Alpha", false, false), ("Zed", false, false)]
+            vec![
+                ("Alpha", false, false),
+                ("Unmounted", false, false),
+                ("Zed", false, false),
+            ]
+        );
+        assert_eq!(
+            places
+                .iter()
+                .find(|place| place.label == "Unmounted")
+                .map(|place| {
+                    (
+                        place.path.clone(),
+                        place_is_mounted(place),
+                        place.device_ejectable,
+                        place.device_can_power_off,
+                    )
+                }),
+            Some((PathBuf::from("/dev/sdz1"), false, true, true))
         );
         let alpha_index = places
             .iter()
@@ -13552,6 +12834,8 @@ text/plain=writer.desktop;\n",
                 path: current.clone(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -13560,6 +12844,8 @@ text/plain=writer.desktop;\n",
                 path: user.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: DEVICES_GROUP,
@@ -13568,6 +12854,8 @@ text/plain=writer.desktop;\n",
                 path: PathBuf::from("/"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
         app.save_user_places().unwrap();
@@ -13615,6 +12903,84 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
+    fn finish_device_refresh_updates_places_and_clears_pending_state() {
+        let current = test_dir("places-device-refresh-current");
+        let current_arg = current.display().to_string();
+        let mut app = test_app_with_entries(&current_arg, &[]);
+        app.places = vec![PlaceEntry {
+            group: DEVICES_GROUP,
+            marker: "/",
+            label: "Root".to_string(),
+            path: PathBuf::from("/"),
+            editable: false,
+            removable: false,
+            device_ejectable: false,
+            device_can_power_off: false,
+        }];
+        app.device_refresh_pending = true;
+
+        let devices = vec![test_device("/run/media/yk/USB", "USB", true)];
+
+        assert!(app.finish_device_refresh(devices.clone()));
+        assert!(!app.device_refresh_pending);
+        assert_eq!(
+            app.places
+                .iter()
+                .map(|place| (place.group, place.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(REMOVABLE_DEVICES_GROUP, "USB"), (DEVICES_GROUP, "Root")]
+        );
+
+        app.device_refresh_pending = true;
+        assert!(!app.finish_device_refresh(devices));
+        assert!(!app.device_refresh_pending);
+
+        let _ = std::fs::remove_dir_all(current);
+    }
+
+    #[test]
+    fn drain_device_monitor_messages_updates_dynamic_places() {
+        let current = test_dir("places-device-monitor-current");
+        let current_arg = current.display().to_string();
+        let mut app = test_app_with_entries(&current_arg, &[]);
+        app.places = vec![PlaceEntry {
+            group: DEVICES_GROUP,
+            marker: "/",
+            label: "Root".to_string(),
+            path: PathBuf::from("/"),
+            editable: false,
+            removable: false,
+            device_ejectable: false,
+            device_can_power_off: false,
+        }];
+        let (sender, receiver) = mpsc::channel();
+        app.device_monitor_rx = Some(receiver);
+        sender
+            .send(DeviceMonitorMessage::Events {
+                events: vec![fika_core::DeviceEvent::Added(test_device(
+                    "/run/media/yk/USB",
+                    "USB",
+                    true,
+                ))],
+                devices: vec![test_device("/run/media/yk/USB", "USB", true)],
+            })
+            .unwrap();
+        drop(sender);
+
+        assert!(app.drain_device_monitor_messages());
+        assert!(app.device_monitor_rx.is_none());
+        assert_eq!(
+            app.places
+                .iter()
+                .map(|place| (place.group, place.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(REMOVABLE_DEVICES_GROUP, "USB"), (DEVICES_GROUP, "Root")]
+        );
+
+        let _ = std::fs::remove_dir_all(current);
+    }
+
+    #[test]
     fn hiding_place_section_filters_snapshots_without_persisting_or_deleting_places() {
         let current = test_dir("places-hide-current");
         let user = test_dir("places-hide-user");
@@ -13629,6 +12995,8 @@ text/plain=writer.desktop;\n",
                 path: current.clone(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -13637,6 +13005,8 @@ text/plain=writer.desktop;\n",
                 path: user.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "Devices",
@@ -13645,6 +13015,8 @@ text/plain=writer.desktop;\n",
                 path: PathBuf::from("/"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
         app.save_user_places().unwrap();
@@ -13704,6 +13076,8 @@ text/plain=writer.desktop;\n",
                 path: current.clone(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -13712,6 +13086,8 @@ text/plain=writer.desktop;\n",
                 path: user.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
         app.save_user_places().unwrap();
@@ -13762,6 +13138,8 @@ text/plain=writer.desktop;\n",
             path: current,
             editable: false,
             removable: false,
+            device_ejectable: false,
+            device_can_power_off: false,
         }];
 
         app.hide_place_section(pane_id, "");
@@ -13794,6 +13172,8 @@ text/plain=writer.desktop;\n",
                 path: home_dir(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "Devices",
@@ -13802,6 +13182,8 @@ text/plain=writer.desktop;\n",
                 path: PathBuf::from("/"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
 
@@ -13856,6 +13238,8 @@ text/plain=writer.desktop;\n",
                 path: current.clone(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -13864,6 +13248,8 @@ text/plain=writer.desktop;\n",
                 path: user.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "Devices",
@@ -13872,6 +13258,8 @@ text/plain=writer.desktop;\n",
                 path: PathBuf::from("/"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
 
@@ -13973,6 +13361,8 @@ text/plain=writer.desktop;\n",
                 path: current.clone(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -13981,6 +13371,8 @@ text/plain=writer.desktop;\n",
                 path: existing.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "Devices",
@@ -13989,6 +13381,8 @@ text/plain=writer.desktop;\n",
                 path: PathBuf::from("/"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
         let payload = ItemDragPayload {
@@ -14078,6 +13472,8 @@ text/plain=writer.desktop;\n",
                 path: current.clone(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -14086,6 +13482,8 @@ text/plain=writer.desktop;\n",
                 path: alpha.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -14094,6 +13492,8 @@ text/plain=writer.desktop;\n",
                 path: beta.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "Devices",
@@ -14102,6 +13502,8 @@ text/plain=writer.desktop;\n",
                 path: PathBuf::from("/"),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
 
@@ -14158,6 +13560,8 @@ text/plain=writer.desktop;\n",
                 path: current.clone(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -14166,6 +13570,8 @@ text/plain=writer.desktop;\n",
                 path: user.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
         app.save_user_places().unwrap();
@@ -14251,6 +13657,8 @@ text/plain=writer.desktop;\n",
                 path: original.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -14259,6 +13667,8 @@ text/plain=writer.desktop;\n",
                 path: duplicate.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
 
@@ -14314,6 +13724,8 @@ text/plain=writer.desktop;\n",
                 path: current.clone(),
                 editable: false,
                 removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
             PlaceEntry {
                 group: "",
@@ -14322,6 +13734,8 @@ text/plain=writer.desktop;\n",
                 path: user.clone(),
                 editable: true,
                 removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
             },
         ];
         app.place_draft = Some(PlaceDraft {
@@ -14995,6 +14409,36 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
+    fn visible_item_thumbnail_path_uses_file_cache_hit_only() {
+        let thumbnail = PathBuf::from("/tmp/fika-thumbnail-cache/normal/hash.png");
+        let file = fika_core::EntryData {
+            name: Arc::from("photo.jpg"),
+            name_width_units: 9,
+            size_bytes: 12,
+            modified_secs: Some(42),
+            mime_type: Some(Arc::from("image/jpeg")),
+            thumbnail_path: Some(thumbnail.clone()),
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir: false,
+        };
+        let dir = fika_core::EntryData {
+            name: Arc::from("Pictures"),
+            name_width_units: 8,
+            size_bytes: 0,
+            modified_secs: Some(42),
+            mime_type: None,
+            thumbnail_path: Some(thumbnail.clone()),
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir: true,
+        };
+
+        assert_eq!(visible_item_thumbnail_path(&file), Some(thumbnail));
+        assert_eq!(visible_item_thumbnail_path(&dir), None);
+    }
+
+    #[test]
     fn status_bar_zoom_track_maps_drag_position_to_level() {
         assert_eq!(
             ui::status_bar::zoom_level_for_track_x(
@@ -15466,6 +14910,23 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
+    fn create_item_result_uses_requested_parent_directory() {
+        let temp = test_dir("create-item-parent");
+        let current_dir = temp.join("current");
+        let directory_target = temp.join("directory-target");
+        std::fs::create_dir_all(&current_dir).unwrap();
+        std::fs::create_dir_all(&directory_target).unwrap();
+
+        let result = create_item_result(PaneId(7), directory_target.clone(), CreatedItemKind::File);
+
+        assert_eq!(result.result, Ok(directory_target.join("New File.txt")));
+        assert!(directory_target.join("New File.txt").exists());
+        assert!(!current_dir.join("New File.txt").exists());
+        assert_eq!(result.affected_dirs, vec![directory_target]);
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
     fn status_summary_reports_current_model_without_selection() {
         let entries = vec![
             status_entry(1, "folder", true, 0),
@@ -15933,14 +15394,22 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
-    fn blank_window_press_uses_viewport_origin_for_rubber_band() {
+    fn blank_window_press_uses_viewport_geometry_for_rubber_band() {
         let mut app = test_app_with_entries("/tmp/fika-blank-window-press", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
         app.select_only(
             pane_id,
             PathBuf::from("/tmp/fika-blank-window-press/alpha.txt"),
         );
-        assert!(app.set_viewport_origin(pane_id, ViewPoint { x: 100.0, y: 50.0 }));
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 50.0,
+                width: 800.0,
+                height: 600.0,
+            }
+        ));
 
         assert!(
             app.start_rubber_band_from_window_if_blank(pane_id, gpui::point(px(500.0), px(300.0)))
@@ -15953,7 +15422,68 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
-    fn blank_window_press_without_origin_does_not_clear_selection() {
+    fn blank_window_press_outside_viewport_does_not_clear_selection() {
+        let mut app = test_app_with_entries("/tmp/fika-blank-window-outside", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        app.select_only(
+            pane_id,
+            PathBuf::from("/tmp/fika-blank-window-outside/alpha.txt"),
+        );
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 50.0,
+                width: 300.0,
+                height: 200.0,
+            }
+        ));
+
+        assert!(!app.start_rubber_band_from_window_if_blank(
+            pane_id,
+            gpui::point(px(500.0), px(300.0)),
+        ));
+
+        assert_eq!(app.panes.selected_count(pane_id), Some(1));
+        assert!(app.rubber_band.is_none());
+    }
+
+    #[test]
+    fn rubber_band_window_update_clamps_to_viewport() {
+        let mut app = test_app_with_entries("/tmp/fika-rubber-clamp", &[]);
+        let pane_id = app.panes.focused().unwrap();
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 50.0,
+                width: 300.0,
+                height: 200.0,
+            }
+        ));
+        assert!(app.set_pane_viewport_bounds(pane_id, 300.0, 200.0, 0.0, 0.0));
+        assert!(
+            app.start_rubber_band_from_window_if_blank(pane_id, gpui::point(px(120.0), px(70.0)),)
+        );
+
+        assert!(app.update_rubber_band_from_window(pane_id, gpui::point(px(1000.0), px(900.0)),));
+
+        let band = app.rubber_band.unwrap();
+        assert_eq!(band.current, ViewPoint { x: 300.0, y: 200.0 });
+        let view = &app.panes.pane(pane_id).unwrap().view;
+        assert_eq!(
+            band.viewport_rect(view),
+            ViewRect {
+                x: 20.0,
+                y: 20.0,
+                width: 280.0,
+                height: 180.0,
+            }
+        );
+    }
+
+    #[test]
+    fn blank_window_press_without_viewport_geometry_does_not_clear_selection() {
         let mut app = test_app_with_entries("/tmp/fika-blank-missing-origin", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
         app.select_only(
@@ -15983,7 +15513,15 @@ gtk-icon-theme-name=breeze\n"
             PathBuf::from("/tmp/fika-rubber-context-blank/beta.txt"),
         );
         app.rubber_band_selection_panes.insert(pane_id);
-        assert!(app.set_viewport_origin(pane_id, ViewPoint { x: 0.0, y: 0.0 }));
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            }
+        ));
 
         assert!(!app.show_blank_context_menu_if_blank(pane_id, gpui::point(px(500.0), px(300.0))));
 
@@ -16038,7 +15576,15 @@ gtk-icon-theme-name=breeze\n"
             PathBuf::from("/tmp/fika-rubber-context-visual/alpha.txt"),
         );
         app.rubber_band_selection_panes.insert(pane_id);
-        assert!(app.set_viewport_origin(pane_id, ViewPoint { x: 0.0, y: 0.0 }));
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            }
+        ));
 
         let name_width_units = app
             .panes
@@ -16092,19 +15638,78 @@ gtk-icon-theme-name=breeze\n"
         let mut app = test_app_with_entries("/tmp/fika-scrollbar-track", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
 
-        assert!(app.set_horizontal_scrollbar_track(pane_id, 100.0, 240.0));
-        assert!(app.begin_horizontal_scrollbar_drag_from_window(
+        assert!(app.set_horizontal_scrollbar_track(
             pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
             1600.0,
             0.0,
-            gpui::point(px(180.0), px(10.0)),
+        ));
+        assert!(app.begin_horizontal_scrollbar_drag_from_window(
+            pane_id,
+            gpui::point(px(180.0), px(406.0)),
         ));
 
         assert!(app.active_scrollbar_drag.is_some_and(|drag| {
-            drag.pane_id == pane_id && (drag.start_track_x - 80.0).abs() <= f32::EPSILON
+            drag.pane_id == pane_id
+                && (drag.track_window_rect.x - 100.0).abs() <= 0.01
+                && (drag.handle_grab_x - 18.0).abs() <= 0.01
         }));
         app.clear_horizontal_scrollbar_drag_for_pane(pane_id);
         assert!(!app.horizontal_scrollbar_tracks.contains_key(&pane_id));
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drag_can_start_from_live_track_bounds() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-live-track", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.begin_horizontal_scrollbar_drag_from_window_track(
+            pane_id,
+            1600.0,
+            0.0,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
+            gpui::point(px(180.0), px(406.0)),
+        ));
+
+        assert!(app.active_scrollbar_drag.is_some_and(|drag| {
+            drag.pane_id == pane_id
+                && (drag.track_window_rect.x - 100.0).abs() <= 0.01
+                && (drag.track_window_rect.y - 400.0).abs() <= 0.01
+        }));
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drag_rejects_points_outside_track_height() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-track-y", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.set_horizontal_scrollbar_track(
+            pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
+            1600.0,
+            0.0,
+        ));
+
+        assert!(!app.begin_horizontal_scrollbar_drag_from_window(
+            pane_id,
+            gpui::point(px(180.0), px(390.0)),
+        ));
+        assert!(app.active_scrollbar_drag.is_none());
     }
 
     #[test]
@@ -16112,16 +15717,24 @@ gtk-icon-theme-name=breeze\n"
         let mut app = test_app_with_entries("/tmp/fika-scrollbar-window", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
 
-        assert!(app.set_horizontal_scrollbar_track(pane_id, 100.0, 240.0));
-        assert!(app.begin_horizontal_scrollbar_drag_from_window(
+        assert!(app.set_horizontal_scrollbar_track(
             pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
             1600.0,
             0.0,
-            gpui::point(px(180.0), px(12.0)),
+        ));
+        assert!(app.begin_horizontal_scrollbar_drag_from_window(
+            pane_id,
+            gpui::point(px(180.0), px(406.0)),
         ));
         assert!(app.update_horizontal_scrollbar_drag_from_window(
             pane_id,
-            gpui::point(px(260.0), px(12.0)),
+            gpui::point(px(260.0), px(406.0)),
         ));
 
         assert!(
@@ -16185,6 +15798,22 @@ gtk-icon-theme-name=breeze\n"
                 ..Default::default()
             }),
             FileTransferMode::Link
+        );
+    }
+
+    #[test]
+    fn drag_cursor_style_tracks_transfer_mode() {
+        assert_eq!(
+            drag_cursor_style_for_transfer_mode(FileTransferMode::Copy),
+            gpui::CursorStyle::DragCopy
+        );
+        assert_eq!(
+            drag_cursor_style_for_transfer_mode(FileTransferMode::Move),
+            gpui::CursorStyle::Arrow
+        );
+        assert_eq!(
+            drag_cursor_style_for_transfer_mode(FileTransferMode::Link),
+            gpui::CursorStyle::DragLink
         );
     }
 
@@ -16342,6 +15971,7 @@ gtk-icon-theme-name=breeze\n"
                     name_width_units: name.len() as u16,
                     size_bytes: 0,
                     modified_secs: None,
+                    thumbnail_path: None,
                     trash_original_path: None,
                     trash_deletion_time: None,
                     mime_type: None,
@@ -16446,6 +16076,7 @@ gtk-icon-theme-name=breeze\n"
             name_width_units: 10,
             size_bytes: 4,
             modified_secs: None,
+            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             mime_type: None,
@@ -16824,6 +16455,11 @@ gtk-icon-theme-name=breeze\n"
             hidden_places: BTreeSet::new(),
             hidden_place_sections: BTreeSet::new(),
             user_places_path: test_dir("user-places").join("user-places.xbel"),
+            device_refresh_pending: false,
+            next_device_refresh_at: Instant::now(),
+            device_monitor_rx: None,
+            device_monitor_active: false,
+            next_device_monitor_start_at: Instant::now(),
             file_icons: FileIconCache::default(),
             mime_applications: MimeApplicationCache::empty(),
             space_info: SpaceInfoCache::default(),
@@ -16833,7 +16469,7 @@ gtk-icon-theme-name=breeze\n"
             scroll_drag_trackers: HashMap::new(),
             active_scrollbar_drag: None,
             horizontal_scrollbar_tracks: HashMap::new(),
-            viewport_origins: HashMap::new(),
+            pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
             pane_row_width: 0.0,
             visible_item_slots: HashMap::new(),
@@ -16874,6 +16510,7 @@ gtk-icon-theme-name=breeze\n"
             name_width_units: name.len() as u16,
             size_bytes: 0,
             modified_secs: None,
+            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             mime_type: None,
@@ -16915,6 +16552,7 @@ gtk-icon-theme-name=breeze\n"
                 name_width_units: name.len() as u16,
                 size_bytes,
                 modified_secs: None,
+                thumbnail_path: None,
                 trash_original_path: None,
                 trash_deletion_time: None,
                 mime_type: None,
@@ -16951,10 +16589,14 @@ gtk-icon-theme-name=breeze\n"
     ) -> ContextMenuTarget {
         ContextMenuTarget::Place {
             path,
+            mounted: true,
+            device: false,
             trash_place,
             trash_has_items,
             editable: false,
             removable: false,
+            device_ejectable: false,
+            device_can_power_off: false,
         }
     }
 

@@ -1,5 +1,10 @@
+pub(crate) mod application_chooser;
+pub(crate) mod context_menu;
 pub(crate) mod controls;
 pub(crate) mod file_grid;
 pub(crate) mod pane;
+pub(crate) mod place_draft;
 pub(crate) mod places;
+pub(crate) mod properties_dialog;
+pub(crate) mod scrollbar;
 pub(crate) mod status_bar;

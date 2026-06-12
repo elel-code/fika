@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
-use super::bus::{BusController, BusKind};
+use super::bus::{BusController, BusKind, with_bus_tokio_context};
 use super::file_ops;
+use futures_lite::StreamExt;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -270,45 +271,48 @@ async fn call_dbus_command(
     command: &PrivilegedCommand,
     connection: &Connection,
 ) -> Result<String, String> {
-    let proxy = PrivilegedProxy::new(connection)
-        .await
-        .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
+    with_bus_tokio_context(async move {
+        let proxy = PrivilegedProxy::new(connection)
+            .await
+            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
 
-    match command {
-        PrivilegedCommand::CreateFolder { parent, name } => proxy
-            .create_folder(&parent.display().to_string(), name)
-            .await
-            .map_err(|err| err.to_string()),
-        PrivilegedCommand::CreateFile { parent, name } => proxy
-            .create_file(&parent.display().to_string(), name)
-            .await
-            .map_err(|err| err.to_string()),
-        PrivilegedCommand::Rename { path, new_name } => proxy
-            .rename(&path.display().to_string(), new_name)
-            .await
-            .map_err(|err| err.to_string()),
-        PrivilegedCommand::Trash { paths } => proxy
-            .trash(
-                paths
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect(),
-            )
-            .await
-            .map_err(|err| err.to_string()),
-        PrivilegedCommand::Transfer {
-            operation,
-            source,
-            target_dir,
-        } => proxy
-            .transfer(
+        match command {
+            PrivilegedCommand::CreateFolder { parent, name } => proxy
+                .create_folder(&parent.display().to_string(), name)
+                .await
+                .map_err(|err| err.to_string()),
+            PrivilegedCommand::CreateFile { parent, name } => proxy
+                .create_file(&parent.display().to_string(), name)
+                .await
+                .map_err(|err| err.to_string()),
+            PrivilegedCommand::Rename { path, new_name } => proxy
+                .rename(&path.display().to_string(), new_name)
+                .await
+                .map_err(|err| err.to_string()),
+            PrivilegedCommand::Trash { paths } => proxy
+                .trash(
+                    paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect(),
+                )
+                .await
+                .map_err(|err| err.to_string()),
+            PrivilegedCommand::Transfer {
                 operation,
-                &source.display().to_string(),
-                &target_dir.display().to_string(),
-            )
-            .await
-            .map_err(|err| err.to_string()),
-    }
+                source,
+                target_dir,
+            } => proxy
+                .transfer(
+                    operation,
+                    &source.display().to_string(),
+                    &target_dir.display().to_string(),
+                )
+                .await
+                .map_err(|err| err.to_string()),
+        }
+    })
+    .await
 }
 
 async fn prepare_external_edit_via_system_bus(path: &Path) -> Result<ExternalEditSession, String> {
@@ -411,31 +415,37 @@ async fn commit_external_edit_call(
     session: &ExternalEditSession,
     connection: &Connection,
 ) -> Result<PathBuf, String> {
-    let proxy = PrivilegedProxy::new(connection)
-        .await
-        .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
-    proxy
-        .commit_external_edit(
-            &session.token,
-            session.scratch_path.display().to_string().as_str(),
-        )
-        .await
-        .map(PathBuf::from)
-        .map_err(|err| err.to_string())
+    with_bus_tokio_context(async move {
+        let proxy = PrivilegedProxy::new(connection)
+            .await
+            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
+        proxy
+            .commit_external_edit(
+                &session.token,
+                session.scratch_path.display().to_string().as_str(),
+            )
+            .await
+            .map(PathBuf::from)
+            .map_err(|err| err.to_string())
+    })
+    .await
 }
 
 async fn discard_external_edit_call(
     session: &ExternalEditSession,
     connection: &Connection,
 ) -> Result<PathBuf, String> {
-    let proxy = PrivilegedProxy::new(connection)
-        .await
-        .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
-    proxy
-        .discard_external_edit(&session.token)
-        .await
-        .map(|()| session.original_path.clone())
-        .map_err(|err| err.to_string())
+    with_bus_tokio_context(async move {
+        let proxy = PrivilegedProxy::new(connection)
+            .await
+            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
+        proxy
+            .discard_external_edit(&session.token)
+            .await
+            .map(|()| session.original_path.clone())
+            .map_err(|err| err.to_string())
+    })
+    .await
 }
 
 async fn associate_external_edit_unit_call(
@@ -444,51 +454,60 @@ async fn associate_external_edit_unit_call(
     session_bus_address: &str,
     connection: &Connection,
 ) -> Result<(), String> {
-    let proxy = PrivilegedProxy::new(connection)
-        .await
-        .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
-    proxy
-        .associate_external_edit_unit(&session.token, unit, session_bus_address)
-        .await
-        .map_err(|err| err.to_string())
+    with_bus_tokio_context(async move {
+        let proxy = PrivilegedProxy::new(connection)
+            .await
+            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
+        proxy
+            .associate_external_edit_unit(&session.token, unit, session_bus_address)
+            .await
+            .map_err(|err| err.to_string())
+    })
+    .await
 }
 
 async fn prepare_external_edit_call(
     connection: &Connection,
     path: &Path,
 ) -> Result<ExternalEditSession, String> {
-    let proxy = PrivilegedProxy::new(connection)
-        .await
-        .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
-    let (scratch_path, token) = proxy
-        .prepare_external_edit(path.display().to_string().as_str())
-        .await
-        .map_err(|err| err.to_string())?;
-    Ok(ExternalEditSession {
-        original_path: path.to_path_buf(),
-        scratch_path: PathBuf::from(scratch_path),
-        token,
-        unit: None,
+    with_bus_tokio_context(async move {
+        let proxy = PrivilegedProxy::new(connection)
+            .await
+            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
+        let (scratch_path, token) = proxy
+            .prepare_external_edit(path.display().to_string().as_str())
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(ExternalEditSession {
+            original_path: path.to_path_buf(),
+            scratch_path: PathBuf::from(scratch_path),
+            token,
+            unit: None,
+        })
     })
+    .await
 }
 
 async fn wait_for_service() -> Result<(), String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
-    let service_name: BusName<'_> = SERVICE_NAME
-        .try_into()
-        .map_err(|err| format!("invalid privileged helper bus name: {err}"))?;
-    loop {
-        if tokio::time::Instant::now() >= deadline {
-            return Err("timed out waiting for privileged D-Bus helper".to_string());
+    with_bus_tokio_context(async move {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
+        let service_name: BusName<'_> = SERVICE_NAME
+            .try_into()
+            .map_err(|err| format!("invalid privileged helper bus name: {err}"))?;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err("timed out waiting for privileged D-Bus helper".to_string());
+            }
+            if let Ok(connection) = privileged_bus_connection(BusKind::Session).await
+                && let Ok(dbus) = DBusProxy::new(&connection).await
+                && dbus.get_name_owner(service_name.clone()).await.is_ok()
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        if let Ok(connection) = privileged_bus_connection(BusKind::Session).await
-            && let Ok(dbus) = DBusProxy::new(&connection).await
-            && dbus.get_name_owner(service_name.clone()).await.is_ok()
-        {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+    })
+    .await
 }
 
 async fn privileged_bus_connection(kind: BusKind) -> Result<Connection, String> {
@@ -1223,54 +1242,76 @@ fn sync_external_edit(edit: &mut ExternalEdit) -> Result<PathBuf, String> {
 }
 
 fn wait_for_user_unit_to_finish(unit: &str, session_bus_address: Option<&str>) {
-    if let Err(err) = wait_for_user_unit_to_finish_by_signal(unit, session_bus_address) {
-        eprintln!(
-            "[fika privileged helper] cannot subscribe to unit {unit} lifecycle, falling back to polling: {err}"
-        );
-        wait_for_user_unit_to_finish_by_poll(unit, session_bus_address);
+    let unit = unit.to_string();
+    let session_bus_address = session_bus_address.map(str::to_string);
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(wait_for_user_unit_to_finish_async(
+            &unit,
+            session_bus_address.as_deref(),
+        )),
+        Err(err) => eprintln!(
+            "[fika privileged helper] cannot initialize Tokio unit watcher for {unit}: {err}"
+        ),
     }
 }
 
-fn wait_for_user_unit_to_finish_by_signal(
+async fn wait_for_user_unit_to_finish_async(unit: &str, session_bus_address: Option<&str>) {
+    if let Err(err) = wait_for_user_unit_to_finish_by_signal(unit, session_bus_address).await {
+        eprintln!(
+            "[fika privileged helper] cannot subscribe to unit {unit} lifecycle, falling back to polling: {err}"
+        );
+        wait_for_user_unit_to_finish_by_poll(unit, session_bus_address).await;
+    }
+}
+
+async fn wait_for_user_unit_to_finish_by_signal(
     unit: &str,
     session_bus_address: Option<&str>,
 ) -> Result<(), String> {
-    let connection = user_bus_connection(session_bus_address)?;
-    let manager = zbus::blocking::Proxy::new(
+    let connection = user_bus_connection(session_bus_address).await?;
+    let manager = zbus::Proxy::new(
         &connection,
         "org.freedesktop.systemd1",
         "/org/freedesktop/systemd1",
         "org.freedesktop.systemd1.Manager",
     )
+    .await
     .map_err(|err| format!("cannot create systemd manager proxy: {err}"))?;
     let _: () = manager
         .call("Subscribe", &())
+        .await
         .map_err(|err| format!("Subscribe failed: {err}"))?;
-    let unit_path: OwnedObjectPath = match manager.call("GetUnit", &(unit)) {
+    let unit_path: OwnedObjectPath = match manager.call("GetUnit", &(unit)).await {
         Ok(path) => path,
         Err(err) if err.to_string().contains("NoSuchUnit") => return Ok(()),
         Err(err) => return Err(format!("GetUnit failed: {err}")),
     };
-    let unit_proxy = zbus::blocking::Proxy::new(
+    let unit_proxy = zbus::Proxy::new(
         &connection,
         "org.freedesktop.systemd1",
         unit_path.as_str(),
         "org.freedesktop.systemd1.Unit",
     )
+    .await
     .map_err(|err| format!("cannot create systemd unit proxy: {err}"))?;
 
     let deadline = unit_watch_deadline();
-    let mut active_state_changes = unit_proxy.receive_property_changed::<String>("ActiveState");
+    let mut active_state_changes = unit_proxy
+        .receive_property_changed::<String>("ActiveState")
+        .await;
     loop {
         if SystemTime::now() >= deadline {
             eprintln!("[fika privileged helper] external edit unit watch timed out: {unit}");
             return Ok(());
         }
 
-        let Some(change) = active_state_changes.next() else {
+        let Some(change) = active_state_changes.next().await else {
             return Ok(());
         };
-        match change.get() {
+        match change.get().await {
             Ok(state) if is_finished_unit_state(&state) => return Ok(()),
             Ok(_) => {}
             Err(err) => return Err(format!("ActiveState signal read failed: {err}")),
@@ -1278,7 +1319,7 @@ fn wait_for_user_unit_to_finish_by_signal(
     }
 }
 
-fn wait_for_user_unit_to_finish_by_poll(unit: &str, session_bus_address: Option<&str>) {
+async fn wait_for_user_unit_to_finish_by_poll(unit: &str, session_bus_address: Option<&str>) {
     let deadline = SystemTime::now()
         .checked_add(Duration::from_secs(24 * 60 * 60))
         .unwrap_or_else(SystemTime::now);
@@ -1288,13 +1329,13 @@ fn wait_for_user_unit_to_finish_by_poll(unit: &str, session_bus_address: Option<
             return;
         }
 
-        match user_unit_active_state(unit, session_bus_address) {
+        match user_unit_active_state(unit, session_bus_address).await {
             Ok(Some(state)) if is_finished_unit_state(&state) => return,
             Ok(None) => return,
             Ok(Some(_)) => {}
             Err(err) => eprintln!("[fika privileged helper] cannot query unit {unit}: {err}"),
         }
-        std::thread::sleep(Duration::from_secs(2));
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 
@@ -1304,47 +1345,50 @@ fn unit_watch_deadline() -> SystemTime {
         .unwrap_or_else(SystemTime::now)
 }
 
-fn user_unit_active_state(
+async fn user_unit_active_state(
     unit: &str,
     session_bus_address: Option<&str>,
 ) -> Result<Option<String>, String> {
-    let connection = user_bus_connection(session_bus_address)?;
-    let manager = zbus::blocking::Proxy::new(
+    let connection = user_bus_connection(session_bus_address).await?;
+    let manager = zbus::Proxy::new(
         &connection,
         "org.freedesktop.systemd1",
         "/org/freedesktop/systemd1",
         "org.freedesktop.systemd1.Manager",
     )
+    .await
     .map_err(|err| format!("cannot create systemd manager proxy: {err}"))?;
-    let unit_path: OwnedObjectPath = match manager.call("GetUnit", &(unit)) {
+    let unit_path: OwnedObjectPath = match manager.call("GetUnit", &(unit)).await {
         Ok(path) => path,
         Err(err) if err.to_string().contains("NoSuchUnit") => return Ok(None),
         Err(err) => return Err(format!("GetUnit failed: {err}")),
     };
-    let properties = zbus::blocking::Proxy::new(
+    let properties = zbus::Proxy::new(
         &connection,
         "org.freedesktop.systemd1",
         unit_path.as_str(),
         "org.freedesktop.DBus.Properties",
     )
+    .await
     .map_err(|err| format!("cannot create systemd unit properties proxy: {err}"))?;
     let value: OwnedValue = properties
         .call("Get", &("org.freedesktop.systemd1.Unit", "ActiveState"))
+        .await
         .map_err(|err| format!("Get ActiveState failed: {err}"))?;
     String::try_from(value)
         .map(Some)
         .map_err(|err| format!("ActiveState was not a string: {err}"))
 }
 
-fn user_bus_connection(
-    session_bus_address: Option<&str>,
-) -> Result<zbus::blocking::Connection, String> {
+async fn user_bus_connection(session_bus_address: Option<&str>) -> Result<Connection, String> {
     match session_bus_address {
-        Some(address) => zbus::blocking::connection::Builder::address(address)
+        Some(address) => zbus::connection::Builder::address(address)
             .map_err(|err| format!("cannot use provided session bus address: {err}"))?
             .build()
+            .await
             .map_err(|err| format!("cannot connect to provided session bus: {err}")),
-        None => zbus::blocking::Connection::session()
+        None => Connection::session()
+            .await
             .map_err(|err| format!("cannot connect to session bus: {err}")),
     }
 }

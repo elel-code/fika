@@ -225,24 +225,6 @@ impl DesktopApplication {
             paths,
         )
     }
-
-    pub fn action_launch_plan(
-        &self,
-        action_id: &str,
-        paths: &[PathBuf],
-    ) -> Option<DesktopLaunchPlan> {
-        let action = self.actions.iter().find(|action| action.id == action_id)?;
-        if !desktop_action_supports_path_count(action, paths.len()) {
-            return None;
-        }
-        desktop_launch_plan_for_exec(
-            service_action_launch_desktop_id(&self.id, &action.id),
-            self.desktop_file.clone(),
-            service_action_display_name(&self.name, &action.name),
-            &action.exec,
-            paths,
-        )
-    }
 }
 
 impl DesktopServiceMenu {
@@ -280,21 +262,12 @@ pub async fn launch_with_systemd_user(
     let target = systemd_manager_target().map_err(|err| LauncherError::SystemdManager {
         message: err.to_string(),
     })?;
-    let connection =
-        bus.connection(BusKind::Session)
-            .await
-            .map_err(|err| LauncherError::SessionBus {
-                message: err.to_string(),
-            })?;
-    let manager = zbus::Proxy::new(
-        &connection,
-        target.service(),
-        target.path(),
-        target.interface(),
-    )
-    .await
-    .map_err(|err| LauncherError::SystemdManager {
-        message: err.to_string(),
+    let manager = bus.proxy(&target).await.map_err(|err| {
+        let message = err.to_string();
+        match err {
+            BusError::Connect { .. } => LauncherError::SessionBus { message },
+            _ => LauncherError::SystemdManager { message },
+        }
     })?;
 
     let mut started = Vec::with_capacity(units.len());
@@ -425,39 +398,6 @@ impl MimeApplicationCache {
         let mut actions = Vec::new();
         let mut seen = HashSet::new();
         let multi_target_count = targets.len();
-        let first = &targets[0];
-        let first_mime = target_mime(first.mime_type.as_deref(), first.is_dir);
-
-        for app_index in self.application_indexes_for_target(first_mime, first.is_dir) {
-            let Some(app) = self.apps.get(app_index) else {
-                continue;
-            };
-            if !targets.iter().all(|target| {
-                self.application_matches_target(
-                    app_index,
-                    target.mime_type.as_deref(),
-                    target.is_dir,
-                )
-            }) {
-                continue;
-            }
-            for action in &app.actions {
-                if !desktop_action_supports_path_count(action, multi_target_count) {
-                    continue;
-                }
-                let id = application_service_action_id(&app.id, &action.id);
-                if seen.insert(id.clone()) {
-                    actions.push(ServiceMenuAction {
-                        id,
-                        label: action.name.clone(),
-                        source_name: app.name.clone(),
-                        icon: action.icon.clone().or_else(|| app.icon.clone()),
-                        submenu: None,
-                        priority: ServiceMenuPriority::Normal,
-                    });
-                }
-            }
-        }
 
         for menu in &self.service_menus {
             if !service_menu_matches_targets(menu, targets) {
@@ -481,7 +421,7 @@ impl MimeApplicationCache {
             }
         }
 
-        actions
+        dedup_service_actions(actions)
     }
 
     pub fn service_action_launch_plan(
@@ -489,13 +429,6 @@ impl MimeApplicationCache {
         action_id: &str,
         paths: &[PathBuf],
     ) -> Option<DesktopLaunchPlan> {
-        for app in &self.apps {
-            for action in &app.actions {
-                if application_service_action_id(&app.id, &action.id) == action_id {
-                    return app.action_launch_plan(&action.id, paths);
-                }
-            }
-        }
         for menu in &self.service_menus {
             for action in &menu.actions {
                 if desktop_service_menu_action_id(&menu.id, &action.id) == action_id {
@@ -504,32 +437,6 @@ impl MimeApplicationCache {
             }
         }
         None
-    }
-
-    fn application_indexes_for_target(&self, mime: Option<&str>, is_dir: bool) -> Vec<usize> {
-        let mut indexes = Vec::new();
-        let mut seen = HashSet::new();
-        if let Some(mime) = mime
-            && let Some(mime_indexes) = self.apps_by_mime.get(mime)
-        {
-            for index in mime_indexes {
-                if seen.insert(*index) {
-                    indexes.push(*index);
-                }
-            }
-        }
-        for (index, app) in self.apps.iter().enumerate() {
-            if app.actions.is_empty() {
-                continue;
-            }
-            if seen.contains(&index) {
-                continue;
-            }
-            if desktop_mimes_match_target(&app.mime_types, mime, is_dir) && seen.insert(index) {
-                indexes.push(index);
-            }
-        }
-        indexes
     }
 
     fn application_indexes_for_mime_application(&self, mime: &str) -> Vec<usize> {
@@ -555,21 +462,6 @@ impl MimeApplicationCache {
             }
         }
         indexes
-    }
-
-    fn application_matches_target(&self, index: usize, mime: Option<&str>, is_dir: bool) -> bool {
-        let normalized_mime = target_mime(mime, is_dir);
-        if let Some(mime) = normalized_mime
-            && self
-                .apps_by_mime
-                .get(mime)
-                .is_some_and(|indexes| indexes.iter().any(|candidate| *candidate == index))
-        {
-            return true;
-        }
-        self.apps
-            .get(index)
-            .is_some_and(|app| desktop_mimes_match_target(&app.mime_types, normalized_mime, is_dir))
     }
 
     fn insert_application(&mut self, app: DesktopApplication) {
@@ -1460,6 +1352,7 @@ fn desktop_service_menu_dirs() -> Vec<PathBuf> {
 }
 
 fn push_service_menu_roots(dirs: &mut Vec<PathBuf>, root: PathBuf) {
+    push_unique_path(dirs, root.join("fika/servicemenus"));
     push_unique_path(dirs, root.join("kio/servicemenus"));
     push_unique_path(dirs, root.join("kservices5/ServiceMenus"));
     push_unique_path(dirs, root.join("konqueror/servicemenus"));
@@ -1892,8 +1785,57 @@ fn exec_token_contains_multi_file_code(token: &str) -> bool {
     false
 }
 
-fn application_service_action_id(desktop_id: &str, action_id: &str) -> String {
-    format!("application:{desktop_id}::{action_id}")
+fn dedup_service_actions(actions: Vec<ServiceMenuAction>) -> Vec<ServiceMenuAction> {
+    let mut deduped: Vec<ServiceMenuAction> = Vec::new();
+    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+    for action in actions {
+        if service_action_duplicates_builtin_menu_item(&action) {
+            continue;
+        }
+        let key = service_action_display_key(&action);
+        if let Some(existing_index) = seen.get(&key).copied() {
+            if deduped[existing_index].priority != ServiceMenuPriority::TopLevel
+                && action.priority == ServiceMenuPriority::TopLevel
+            {
+                deduped[existing_index] = action;
+            }
+            continue;
+        }
+        seen.insert(key, deduped.len());
+        deduped.push(action);
+    }
+    deduped
+}
+
+fn service_action_display_key(action: &ServiceMenuAction) -> (String, String) {
+    (
+        action
+            .submenu
+            .as_deref()
+            .map(normalize_service_action_label)
+            .unwrap_or_default(),
+        normalize_service_action_label(&action.label),
+    )
+}
+
+fn service_action_duplicates_builtin_menu_item(action: &ServiceMenuAction) -> bool {
+    matches!(
+        normalize_service_action_label(&action.label).as_str(),
+        "open in new window"
+            | "open new window"
+            | "open in new tab"
+            | "open new tab"
+            | "open in new pane"
+            | "open new pane"
+    )
+}
+
+fn normalize_service_action_label(label: &str) -> String {
+    label
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 fn desktop_service_menu_action_id(menu_id: &str, action_id: &str) -> String {
@@ -2113,6 +2055,24 @@ Exec=ark --add %F\n",
     }
 
     #[test]
+    fn service_menu_roots_are_dedicated_service_directories() {
+        let mut dirs = Vec::new();
+
+        push_service_menu_roots(&mut dirs, PathBuf::from("/xdg/share"));
+
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/xdg/share/fika/servicemenus"),
+                PathBuf::from("/xdg/share/kio/servicemenus"),
+                PathBuf::from("/xdg/share/kservices5/ServiceMenus"),
+                PathBuf::from("/xdg/share/konqueror/servicemenus"),
+            ]
+        );
+        assert!(!dirs.contains(&PathBuf::from("/xdg/share/applications")));
+    }
+
+    #[test]
     fn hidden_desktop_entries_are_not_applications() {
         assert!(
             parse_desktop_application(
@@ -2125,7 +2085,7 @@ Exec=ark --add %F\n",
     }
 
     #[test]
-    fn service_actions_include_application_and_kde_service_menu_actions() {
+    fn service_actions_only_include_kde_service_menu_actions() {
         let mut app = desktop_app("viewer.desktop", "Viewer", &["text/plain"]);
         app.actions.push(DesktopAction {
             id: "print".to_string(),
@@ -2163,17 +2123,42 @@ text/plain=sender.desktop;\n",
 
         assert_eq!(
             actions,
-            vec![
-                ("Send".to_string(), "Send To".to_string()),
-                ("Print".to_string(), "Viewer".to_string()),
-                ("Compress".to_string(), "Archive Tools".to_string()),
-            ]
+            vec![("Compress".to_string(), "Archive Tools".to_string())]
         );
         assert!(
             cache
                 .service_actions_for_target(Some("inode/directory"), true)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn service_actions_do_not_promote_application_desktop_actions() {
+        let mut app = desktop_app("dev.zed.Zed.desktop", "Zed", &["inode/directory"]);
+        app.actions.push(DesktopAction {
+            id: "new-workspace".to_string(),
+            name: "Open New Workspace".to_string(),
+            exec: "zeditor --new %F".to_string(),
+            icon: Some("zed".to_string()),
+        });
+        app.actions.push(DesktopAction {
+            id: "new-window".to_string(),
+            name: "New Window".to_string(),
+            exec: "zeditor --new-window %F".to_string(),
+            icon: Some("zed".to_string()),
+        });
+        let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
+            vec![app],
+            Vec::new(),
+            &[],
+        );
+
+        assert!(
+            cache
+                .service_actions_for_target(Some("inode/directory"), true)
+                .is_empty()
+        );
+        assert_eq!(cache.applications_for_mime("inode/directory").len(), 1);
     }
 
     #[test]
@@ -2201,19 +2186,6 @@ text/plain=sender.desktop;\n",
 
     #[test]
     fn service_actions_for_targets_intersect_targets_and_require_multi_exec() {
-        let mut app = desktop_app("sender.desktop", "Sender", &["text/plain"]);
-        app.actions.push(DesktopAction {
-            id: "send-many".to_string(),
-            name: "Send Many".to_string(),
-            exec: "sender %F".to_string(),
-            icon: None,
-        });
-        app.actions.push(DesktopAction {
-            id: "send-one".to_string(),
-            name: "Send One".to_string(),
-            exec: "sender %f".to_string(),
-            icon: None,
-        });
         let menu = DesktopServiceMenu {
             id: "archive.desktop".to_string(),
             desktop_file: PathBuf::from("/servicemenus/archive.desktop"),
@@ -2244,7 +2216,7 @@ text/plain=sender.desktop;\n",
             ],
         };
         let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
-            vec![app],
+            Vec::new(),
             vec![menu],
             &[],
         );
@@ -2259,10 +2231,52 @@ text/plain=sender.desktop;\n",
             .map(|action| action.label)
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            actions,
-            vec!["Send Many".to_string(), "Compress".to_string()]
+        assert_eq!(actions, vec!["Compress".to_string()]);
+    }
+
+    #[test]
+    fn service_actions_deduplicate_labels_and_filter_builtin_window_actions() {
+        let mut normal = service_menu("normal.desktop", "Normal Tools", &["inode/directory"]);
+        normal.actions = vec![
+            DesktopAction {
+                id: "duplicate".to_string(),
+                name: "Duplicate Action".to_string(),
+                exec: "normal %f".to_string(),
+                icon: None,
+            },
+            DesktopAction {
+                id: "window".to_string(),
+                name: "Open New Window".to_string(),
+                exec: "not-fika %f".to_string(),
+                icon: None,
+            },
+            DesktopAction {
+                id: "open-window".to_string(),
+                name: "Open New Window".to_string(),
+                exec: "not-fika-open-window %f".to_string(),
+                icon: None,
+            },
+        ];
+        let mut top_level = service_menu("top.desktop", "Top Tools", &["inode/directory"]);
+        top_level.priority = ServiceMenuPriority::TopLevel;
+        top_level.actions = vec![DesktopAction {
+            id: "duplicate".to_string(),
+            name: "Duplicate   Action".to_string(),
+            exec: "top %f".to_string(),
+            icon: Some("top-icon".to_string()),
+        }];
+
+        let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
+            Vec::new(),
+            vec![normal, top_level],
+            &[],
         );
+        let actions = cache.service_actions_for_target(Some("inode/directory"), true);
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].label, "Duplicate   Action");
+        assert_eq!(actions[0].source_name, "Top Tools");
+        assert_eq!(actions[0].icon.as_deref(), Some("top-icon"));
     }
 
     #[test]
@@ -2357,16 +2371,16 @@ text/plain=sender.desktop;\n",
 
     #[test]
     fn service_action_launch_plan_rejects_multi_paths_for_single_file_exec() {
-        let mut app = desktop_app("sender.desktop", "Sender", &["text/plain"]);
-        app.actions.push(DesktopAction {
+        let mut menu = service_menu("sender.desktop", "Sender", &["all/allfiles"]);
+        menu.actions = vec![DesktopAction {
             id: "send-one".to_string(),
             name: "Send One".to_string(),
             exec: "sender %f".to_string(),
             icon: None,
-        });
+        }];
         let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
-            vec![app],
             Vec::new(),
+            vec![menu],
             &[],
         );
         let action = cache

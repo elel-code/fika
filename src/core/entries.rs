@@ -1,4 +1,4 @@
-use super::{file_ops, mime::MimeDatabase};
+use super::{file_ops, mime::MimeDatabase, thumbnails};
 use std::cmp::Ordering;
 use std::fs::Metadata;
 use std::io;
@@ -28,6 +28,7 @@ pub struct EntryData {
     pub size_bytes: u64,
     pub modified_secs: Option<u64>,
     pub mime_type: Option<Arc<str>>,
+    pub thumbnail_path: Option<PathBuf>,
     pub trash_original_path: Option<PathBuf>,
     pub trash_deletion_time: Option<Arc<str>>,
     pub is_dir: bool,
@@ -286,6 +287,17 @@ fn name_width_units(name: &str) -> u16 {
 }
 
 fn to_entry_data(path: &Path, name: String, metadata: Metadata, mime: &MimeDatabase) -> EntryData {
+    let thumbnail_root = thumbnails::default_thumbnail_cache_root();
+    to_entry_data_with_thumbnail_root(path, name, metadata, mime, &thumbnail_root)
+}
+
+fn to_entry_data_with_thumbnail_root(
+    path: &Path,
+    name: String,
+    metadata: Metadata,
+    mime: &MimeDatabase,
+    thumbnail_root: &Path,
+) -> EntryData {
     let is_dir = metadata.is_dir();
     let size_bytes = if is_dir { 0 } else { metadata.len() };
     let modified_secs = metadata.modified().ok().map(system_time_secs);
@@ -306,10 +318,18 @@ fn to_entry_data(path: &Path, name: String, metadata: Metadata, mime: &MimeDatab
         size_bytes,
         modified_secs,
         mime_type,
+        thumbnail_path: cached_thumbnail_path_for_entry(path, is_dir, thumbnail_root),
         trash_original_path: None,
         trash_deletion_time: None,
         is_dir,
     }
+}
+
+fn cached_thumbnail_path_for_entry(path: &Path, is_dir: bool, root: &Path) -> Option<PathBuf> {
+    if is_dir {
+        return None;
+    }
+    thumbnails::cached_thumbnail_for_path(root, path).map(|hit| hit.path().to_path_buf())
 }
 
 fn should_read_mime_magic(is_dir: bool, size_bytes: u64, initial_mime_type: Option<&str>) -> bool {
@@ -406,6 +426,84 @@ mod tests {
         let entry = read_entry_sync(&dir, &path).unwrap();
 
         assert_eq!(entry.mime_type.as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn entry_data_keeps_cached_thumbnail_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "fika-entry-thumbnail-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        struct DirGuard(PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = DirGuard(dir.clone());
+        let path = dir.join("image.png");
+        let thumbnail_root = dir.join("thumbnail-cache");
+        fs::write(&path, b"\x89PNG\r\n\x1a\nrest").unwrap();
+        let mtime = fs::metadata(&path)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let uri = thumbnails::thumbnail_uri_for_path(&path).unwrap();
+        let thumbnail_path = thumbnails::thumbnail_cache_path(
+            &thumbnail_root,
+            thumbnails::ThumbnailSize::Normal,
+            &uri,
+        );
+        fs::create_dir_all(thumbnail_path.parent().unwrap()).unwrap();
+        fs::write(&thumbnail_path, test_thumbnail_png(&uri, mtime)).unwrap();
+
+        let entry = to_entry_data_with_thumbnail_root(
+            &path,
+            "image.png".to_string(),
+            fs::metadata(&path).unwrap(),
+            MimeDatabase::shared(),
+            &thumbnail_root,
+        );
+
+        assert_eq!(
+            entry.thumbnail_path.as_deref(),
+            Some(thumbnail_path.as_path())
+        );
+    }
+
+    fn test_thumbnail_png(uri: &str, mtime: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(b"\x89PNG\r\n\x1a\n");
+        bytes.extend(test_png_chunk(b"IHDR", &[0; 13]));
+        bytes.extend(test_png_text_chunk("Thumb::URI", uri));
+        bytes.extend(test_png_text_chunk("Thumb::MTime", &mtime.to_string()));
+        bytes.extend(test_png_chunk(b"IEND", &[]));
+        bytes
+    }
+
+    fn test_png_text_chunk(key: &str, value: &str) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend(key.as_bytes());
+        data.push(0);
+        data.extend(value.as_bytes());
+        test_png_chunk(b"tEXt", &data)
+    }
+
+    fn test_png_chunk(chunk_type: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend((data.len() as u32).to_be_bytes());
+        chunk.extend(chunk_type);
+        chunk.extend(data);
+        chunk.extend([0; 4]);
+        chunk
     }
 
     #[test]

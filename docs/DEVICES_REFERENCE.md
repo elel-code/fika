@@ -63,36 +63,70 @@ mount-state model, and future Places sidebar integration.
   - Parses `org.freedesktop.UDisks2.Block`, `.Drive`, and `.Filesystem`
     properties into `Udisks2Snapshot`, then merges block/drive metadata with
     mountinfo mount points.
-  - Uses UDisks2 labels, filesystem type, size, removable, and ejectable
-    metadata when present, while keeping mountinfo as a fallback for mounted
-    devices.
+  - Uses UDisks2 labels, filesystem type, size, removable, ejectable, and
+    `CanPowerOff` metadata when present, while keeping mountinfo as a fallback
+    for mounted devices.
   - Treats `Block.HintIgnore=true` as authoritative, so ignored UDisks2
     devices are not reintroduced by mountinfo fallback.
   - Provides `device_events_between()` to convert old/new `DeviceInfo`
     snapshots into deterministic Added/Removed/Changed events.
+  - Adds `Udisks2MonitorState` and `Udisks2Signal` so core can apply
+    ObjectManager `InterfacesAdded`/`InterfacesRemoved` and Properties
+    `PropertiesChanged` payloads to the raw UDisks2 object map, rederive the
+    snapshot, and emit deterministic `DeviceEvent` diffs without exposing
+    D-Bus payload structure to Places UI code.
+  - `watch_udisks2_devices()` subscribes to the system bus with a
+    `path_namespace=/org/freedesktop/UDisks2` zbus `MessageStream`, converts
+    ObjectManager and Properties signals with `udisks2_signal_from_message()`,
+    re-reads mountinfo for each accepted signal, and publishes
+    `DeviceMonitorMessage::{Snapshot,Events}` through a core channel boundary.
+  - `Udisks2DeviceActionTarget` is resolved at operation time from the current
+    UDisks2 ObjectManager snapshot plus mountinfo. Fika keeps the block object
+    path for `Filesystem.Mount()` / `Filesystem.Unmount()` and the drive object
+    path for `Drive.Eject()` / `Drive.PowerOff()` out of the UI layer, together
+    with `Ejectable` and `CanPowerOff` capability flags.
+  - `mount_udisks2_device()`, `unmount_udisks2_device()`, and
+    `eject_udisks2_device()` call UDisks2 through the shared system bus with
+    empty `a{sv}` options. `safely_remove_udisks2_device()` optionally unmounts
+    the filesystem and then calls `Drive.PowerOff(a{sv})`. These APIs return
+    structured errors for missing devices, unmounted filesystem targets, missing
+    drive objects, and unsupported eject/power-off capabilities.
 - `src/main.rs`
   - Places has static built-ins, persisted user bookmarks, a dynamic
-    "Removable Devices" section for mounted removable `DeviceInfo` rows, and a
-    static Root entry under Devices.
+    "Removable Devices" section for removable `DeviceInfo` rows, and a static
+    Root entry under Devices.
   - Startup reads `/proc/self/mountinfo` and projects mounted removable devices
     into Places without writing them to `user-places.xbel`.
+  - A low-frequency background refresh reads a fresh UDisks2 snapshot through
+    `read_udisks2_devices()` and falls back to mountinfo if the system bus is
+    unavailable. The result is applied through the same dynamic Places
+    replacement path and never writes removable devices into `user-places.xbel`.
+  - Startup also starts a live UDisks2 device monitor. The GPUI background loop
+    drains `DeviceMonitorMessage` snapshots/events and applies them through
+    `finish_device_refresh()` / `replace_removable_device_places()`. While the
+    live monitor is active, the low-frequency snapshot refresh is paused; if the
+    monitor cannot run, the snapshot refresh remains the fallback.
   - `replace_removable_device_places()` replaces only the dynamic removable
     device section, keeps user bookmarks before grouped sections, skips paths
     already covered by built-ins/user bookmarks, and gives device rows a drive
     icon instead of bookmark/folder styling.
-  - Future UDisks2 signal handling should feed fresh `DeviceInfo` snapshots
-    into the same replacement path.
+  - Unmounted removable devices are preserved as grey device rows using their
+    block device path as a non-navigable placeholder. Click runs the UDisks2
+    mount action and navigates to the returned mount point; row-middle drop and
+    Open/Open in New Pane/Open in New Window context actions remain disabled so
+    `/dev/*` is never treated as a directory.
+  - Device rows add Dolphin/Solid-style actions to the Places context menu:
+    unmounted rows show Mount plus capability-gated Eject/Safely Remove, and
+    mounted rows show Unmount plus capability-gated Eject/Safely Remove.
+    Successful operations force a device snapshot refresh in addition to
+    relying on the live UDisks2 monitor.
 - `src/core/bus.rs`
-  - Future UDisks2 ObjectManager and Properties signal subscriptions should use
-    the shared system-bus controller.
+  - UDisks2 ObjectManager and Properties signal streams use the shared
+    system-bus controller.
 
 ## Remaining Work
 
-- Subscribe to `InterfacesAdded`, `InterfacesRemoved`, and
-  `PropertiesChanged`, then update the snapshot incrementally instead of
-  only reading the initial ObjectManager state.
-- Route device add/remove/change events through the core event channel.
-- Route UDisks2 add/remove/change results into
-  `replace_removable_device_places()` so the "Removable Devices" section
-  updates live while Fika is running.
-- Add mount/unmount/eject actions for unmounted or mounted device rows.
+- Verify mount/unmount/eject/power-off against real removable devices and
+  Polkit prompts, including failures and user cancellation paths.
+- Continue refining Solid parity for multi-partition drives and teardown flows
+  such as "Safely Remove" when sibling filesystems are mounted.

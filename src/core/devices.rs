@@ -1,10 +1,14 @@
 use super::bus::{BusCallTarget, BusController, BusError, BusKind};
-use std::collections::{BTreeMap, BTreeSet};
+use futures_lite::StreamExt;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
+use zbus::message::Type as DbusMessageType;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::{MatchRule, MessageStream};
 
 pub const PROC_SELF_MOUNTINFO: &str = "/proc/self/mountinfo";
 pub const UDISKS2_SERVICE: &str = "org.freedesktop.UDisks2";
@@ -13,6 +17,10 @@ pub const DBUS_OBJECT_MANAGER_INTERFACE: &str = "org.freedesktop.DBus.ObjectMana
 pub const UDISKS2_BLOCK_INTERFACE: &str = "org.freedesktop.UDisks2.Block";
 pub const UDISKS2_DRIVE_INTERFACE: &str = "org.freedesktop.UDisks2.Drive";
 pub const UDISKS2_FILESYSTEM_INTERFACE: &str = "org.freedesktop.UDisks2.Filesystem";
+pub const UDISKS2_FILESYSTEM_MOUNT_METHOD: &str = "Mount";
+pub const UDISKS2_FILESYSTEM_UNMOUNT_METHOD: &str = "Unmount";
+pub const UDISKS2_DRIVE_EJECT_METHOD: &str = "Eject";
+pub const UDISKS2_DRIVE_POWER_OFF_METHOD: &str = "PowerOff";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MountInfoEntry {
@@ -36,6 +44,8 @@ pub struct DeviceInfo {
     pub label: Option<String>,
     pub capacity_bytes: Option<u64>,
     pub removable: bool,
+    pub ejectable: bool,
+    pub can_power_off: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,6 +53,15 @@ pub enum DeviceEvent {
     Added(DeviceInfo),
     Removed(PathBuf),
     Changed(DeviceInfo),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeviceMonitorMessage {
+    Snapshot(Vec<DeviceInfo>),
+    Events {
+        events: Vec<DeviceEvent>,
+        devices: Vec<DeviceInfo>,
+    },
 }
 
 #[derive(Debug)]
@@ -70,13 +89,77 @@ impl From<BusError> for DeviceDiscoveryError {
     }
 }
 
+#[derive(Debug)]
+pub enum DeviceActionError {
+    Discovery(DeviceDiscoveryError),
+    Bus(BusError),
+    DeviceNotFound(PathBuf),
+    NotMounted(PathBuf),
+    MissingDrive(PathBuf),
+    CannotEject(PathBuf),
+    CannotPowerOff(PathBuf),
+}
+
+impl fmt::Display for DeviceActionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Discovery(error) => write!(f, "{error}"),
+            Self::Bus(error) => write!(f, "{error}"),
+            Self::DeviceNotFound(path) => {
+                write!(f, "no UDisks2 filesystem device matches {}", path.display())
+            }
+            Self::NotMounted(path) => write!(f, "device is not mounted: {}", path.display()),
+            Self::MissingDrive(path) => {
+                write!(f, "device has no UDisks2 drive object: {}", path.display())
+            }
+            Self::CannotEject(path) => write!(f, "device cannot be ejected: {}", path.display()),
+            Self::CannotPowerOff(path) => {
+                write!(f, "device cannot be safely removed: {}", path.display())
+            }
+        }
+    }
+}
+
+impl Error for DeviceActionError {}
+
+impl From<DeviceDiscoveryError> for DeviceActionError {
+    fn from(error: DeviceDiscoveryError) -> Self {
+        Self::Discovery(error)
+    }
+}
+
+impl From<BusError> for DeviceActionError {
+    fn from(error: BusError) -> Self {
+        Self::Bus(error)
+    }
+}
+
 pub type Udisks2PropertyMap = BTreeMap<String, OwnedValue>;
 pub type Udisks2InterfaceMap = BTreeMap<String, Udisks2PropertyMap>;
+type Udisks2ObjectMap = BTreeMap<String, Udisks2InterfaceMap>;
 
 #[derive(Debug)]
 pub struct Udisks2RawObject {
     pub object_path: String,
     pub interfaces: Udisks2InterfaceMap,
+}
+
+#[derive(Debug)]
+pub enum Udisks2Signal {
+    InterfacesAdded {
+        object_path: String,
+        interfaces: Udisks2InterfaceMap,
+    },
+    InterfacesRemoved {
+        object_path: String,
+        interfaces: Vec<String>,
+    },
+    PropertiesChanged {
+        object_path: String,
+        interface: String,
+        changed: Udisks2PropertyMap,
+        invalidated: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,15 +171,39 @@ pub struct Udisks2BlockDevice {
     pub id_type: Option<String>,
     pub size_bytes: Option<u64>,
     pub mount_points: Vec<PathBuf>,
+    pub has_filesystem: bool,
     pub hint_ignore: bool,
     pub hint_system: bool,
     pub removable: bool,
     pub ejectable: bool,
+    pub can_power_off: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Udisks2Snapshot {
     pub block_devices: Vec<Udisks2BlockDevice>,
+}
+
+#[derive(Debug)]
+pub struct Udisks2MonitorState {
+    raw_objects: Udisks2ObjectMap,
+    snapshot: Udisks2Snapshot,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Udisks2DeviceActionTarget {
+    pub device_path: PathBuf,
+    pub mount_point: Option<PathBuf>,
+    pub block_object_path: String,
+    pub drive_object_path: Option<String>,
+    pub ejectable: bool,
+    pub can_power_off: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Udisks2MountResult {
+    pub target: Udisks2DeviceActionTarget,
+    pub mount_point: PathBuf,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -105,6 +212,7 @@ struct Udisks2DriveInfo {
     removable: bool,
     media_removable: bool,
     ejectable: bool,
+    can_power_off: bool,
     size_bytes: Option<u64>,
 }
 
@@ -118,15 +226,219 @@ pub async fn read_udisks2_devices() -> Result<Vec<DeviceInfo>, DeviceDiscoveryEr
     read_udisks2_devices_with_bus(BusController::shared()).await
 }
 
+pub async fn watch_udisks2_devices(
+    sender: Sender<DeviceMonitorMessage>,
+) -> Result<(), DeviceDiscoveryError> {
+    watch_udisks2_devices_with_bus(BusController::shared(), sender).await
+}
+
+pub async fn watch_udisks2_devices_with_bus(
+    bus: &BusController,
+    sender: Sender<DeviceMonitorMessage>,
+) -> Result<(), DeviceDiscoveryError> {
+    let mut state = read_udisks2_monitor_state_with_bus(bus).await?;
+    let mut mount_entries = read_current_mount_entries()?;
+    let initial_devices = devices_from_udisks2_snapshot(state.snapshot(), &mount_entries);
+    if sender
+        .send(DeviceMonitorMessage::Snapshot(initial_devices))
+        .is_err()
+    {
+        return Ok(());
+    }
+
+    let connection = bus.connection(BusKind::System).await?;
+    let rule = MatchRule::builder()
+        .msg_type(DbusMessageType::Signal)
+        .path_namespace(UDISKS2_OBJECT_MANAGER_PATH)
+        .map_err(|error| DeviceDiscoveryError::Udisks2(error.to_string()))?
+        .build();
+    let mut stream = MessageStream::for_match_rule(rule, &connection, Some(256))
+        .await
+        .map_err(|error| {
+            DeviceDiscoveryError::Udisks2(format!(
+                "failed to subscribe to UDisks2 signals: {error}"
+            ))
+        })?;
+
+    while let Some(message) = stream.next().await {
+        let message = message.map_err(|error| {
+            DeviceDiscoveryError::Udisks2(format!("failed to receive UDisks2 signal: {error}"))
+        })?;
+        let Some(signal) = udisks2_signal_from_message(&message)? else {
+            continue;
+        };
+        mount_entries = read_current_mount_entries()?;
+        let events = device_events_for_udisks2_signal(&mut state, signal, &mount_entries)?;
+        if events.is_empty() {
+            continue;
+        }
+        let devices = devices_from_udisks2_snapshot(state.snapshot(), &mount_entries);
+        if sender
+            .send(DeviceMonitorMessage::Events { events, devices })
+            .is_err()
+        {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 pub async fn read_udisks2_devices_with_bus(
     bus: &BusController,
 ) -> Result<Vec<DeviceInfo>, DeviceDiscoveryError> {
     let snapshot = read_udisks2_snapshot_with_bus(bus).await?;
-    let contents = fs::read_to_string(PROC_SELF_MOUNTINFO).map_err(|error| {
-        DeviceDiscoveryError::MountInfo(format!("failed to read {PROC_SELF_MOUNTINFO}: {error}"))
-    })?;
-    let mount_entries = parse_mountinfo(&contents).map_err(DeviceDiscoveryError::MountInfo)?;
+    let mount_entries = read_current_mount_entries()?;
     Ok(devices_from_udisks2_snapshot(&snapshot, &mount_entries))
+}
+
+pub async fn mount_udisks2_device(path: &Path) -> Result<Udisks2MountResult, DeviceActionError> {
+    mount_udisks2_device_with_bus(BusController::shared(), path).await
+}
+
+pub async fn mount_udisks2_device_with_bus(
+    bus: &BusController,
+    path: &Path,
+) -> Result<Udisks2MountResult, DeviceActionError> {
+    let target = resolve_udisks2_device_action_target_with_bus(bus, path).await?;
+    let bus_target = BusCallTarget::new(
+        BusKind::System,
+        UDISKS2_SERVICE,
+        target.block_object_path.clone(),
+        UDISKS2_FILESYSTEM_INTERFACE,
+        UDISKS2_FILESYSTEM_MOUNT_METHOD,
+    )?;
+    let proxy = bus.proxy(&bus_target).await?;
+    let method = bus_target.method().to_string();
+    let mount_point = bus
+        .call_with_retry(&bus_target, || {
+            let proxy = &proxy;
+            let method = method.clone();
+            async move {
+                let options = HashMap::<String, OwnedValue>::new();
+                proxy.call::<_, _, String>(method.as_str(), &options).await
+            }
+        })
+        .await?;
+    Ok(Udisks2MountResult {
+        target,
+        mount_point: PathBuf::from(mount_point),
+    })
+}
+
+pub async fn unmount_udisks2_device(path: &Path) -> Result<(), DeviceActionError> {
+    unmount_udisks2_device_with_bus(BusController::shared(), path).await
+}
+
+pub async fn unmount_udisks2_device_with_bus(
+    bus: &BusController,
+    path: &Path,
+) -> Result<(), DeviceActionError> {
+    let target = resolve_udisks2_device_action_target_with_bus(bus, path).await?;
+    if target.mount_point.is_none() {
+        return Err(DeviceActionError::NotMounted(path.to_path_buf()));
+    }
+    call_udisks2_void_action(
+        bus,
+        &target.block_object_path,
+        UDISKS2_FILESYSTEM_INTERFACE,
+        UDISKS2_FILESYSTEM_UNMOUNT_METHOD,
+    )
+    .await
+}
+
+pub async fn eject_udisks2_device(path: &Path) -> Result<(), DeviceActionError> {
+    eject_udisks2_device_with_bus(BusController::shared(), path).await
+}
+
+pub async fn eject_udisks2_device_with_bus(
+    bus: &BusController,
+    path: &Path,
+) -> Result<(), DeviceActionError> {
+    let target = resolve_udisks2_device_action_target_with_bus(bus, path).await?;
+    if !target.ejectable {
+        return Err(DeviceActionError::CannotEject(path.to_path_buf()));
+    }
+    let drive_object_path = target
+        .drive_object_path
+        .ok_or_else(|| DeviceActionError::MissingDrive(path.to_path_buf()))?;
+    call_udisks2_void_action(
+        bus,
+        &drive_object_path,
+        UDISKS2_DRIVE_INTERFACE,
+        UDISKS2_DRIVE_EJECT_METHOD,
+    )
+    .await
+}
+
+pub async fn safely_remove_udisks2_device(path: &Path) -> Result<(), DeviceActionError> {
+    safely_remove_udisks2_device_with_bus(BusController::shared(), path).await
+}
+
+pub async fn safely_remove_udisks2_device_with_bus(
+    bus: &BusController,
+    path: &Path,
+) -> Result<(), DeviceActionError> {
+    let target = resolve_udisks2_device_action_target_with_bus(bus, path).await?;
+    if !target.can_power_off {
+        return Err(DeviceActionError::CannotPowerOff(path.to_path_buf()));
+    }
+    let drive_object_path = target
+        .drive_object_path
+        .as_deref()
+        .ok_or_else(|| DeviceActionError::MissingDrive(path.to_path_buf()))?;
+    if target.mount_point.is_some() {
+        call_udisks2_void_action(
+            bus,
+            &target.block_object_path,
+            UDISKS2_FILESYSTEM_INTERFACE,
+            UDISKS2_FILESYSTEM_UNMOUNT_METHOD,
+        )
+        .await?;
+    }
+    call_udisks2_void_action(
+        bus,
+        drive_object_path,
+        UDISKS2_DRIVE_INTERFACE,
+        UDISKS2_DRIVE_POWER_OFF_METHOD,
+    )
+    .await
+}
+
+async fn call_udisks2_void_action(
+    bus: &BusController,
+    object_path: &str,
+    interface: &str,
+    method_name: &str,
+) -> Result<(), DeviceActionError> {
+    let target = BusCallTarget::new(
+        BusKind::System,
+        UDISKS2_SERVICE,
+        object_path,
+        interface,
+        method_name,
+    )?;
+    let proxy = bus.proxy(&target).await?;
+    let method = target.method().to_string();
+    bus.call_with_retry(&target, || {
+        let proxy = &proxy;
+        let method = method.clone();
+        async move {
+            let options = HashMap::<String, OwnedValue>::new();
+            proxy.call::<_, _, ()>(method.as_str(), &options).await
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+pub async fn resolve_udisks2_device_action_target_with_bus(
+    bus: &BusController,
+    path: &Path,
+) -> Result<Udisks2DeviceActionTarget, DeviceActionError> {
+    let snapshot = read_udisks2_snapshot_with_bus(bus).await?;
+    let mount_entries = read_current_mount_entries()?;
+    resolve_udisks2_device_action_target(&snapshot, &mount_entries, path)
+        .ok_or_else(|| DeviceActionError::DeviceNotFound(path.to_path_buf()))
 }
 
 pub async fn read_udisks2_snapshot_with_bus(
@@ -139,25 +451,110 @@ pub async fn read_udisks2_snapshot_with_bus(
         DBUS_OBJECT_MANAGER_INTERFACE,
         "GetManagedObjects",
     )?;
-    let connection = bus.connection(BusKind::System).await?;
-    let proxy = zbus::fdo::ObjectManagerProxy::new(
-        &connection,
-        UDISKS2_SERVICE,
-        UDISKS2_OBJECT_MANAGER_PATH,
-    )
-    .await
-    .map_err(|error| {
-        DeviceDiscoveryError::Bus(BusError::Proxy {
-            target: target.clone(),
-            message: error.to_string(),
-        })
-    })?;
+    let proxy = bus.proxy(&target).await?;
+    let method = target.method().to_string();
     let objects = bus
-        .call_with_retry(&target, || async {
-            proxy.get_managed_objects().await.map_err(zbus::Error::from)
+        .call_with_retry(&target, || {
+            let proxy = &proxy;
+            let method = method.clone();
+            async move {
+                proxy
+                    .call::<_, _, zbus::fdo::ManagedObjects>(method.as_str(), &())
+                    .await
+            }
         })
         .await?;
     udisks2_snapshot_from_managed_objects(&objects).map_err(DeviceDiscoveryError::Udisks2)
+}
+
+pub async fn read_udisks2_monitor_state_with_bus(
+    bus: &BusController,
+) -> Result<Udisks2MonitorState, DeviceDiscoveryError> {
+    let target = BusCallTarget::new(
+        BusKind::System,
+        UDISKS2_SERVICE,
+        UDISKS2_OBJECT_MANAGER_PATH,
+        DBUS_OBJECT_MANAGER_INTERFACE,
+        "GetManagedObjects",
+    )?;
+    let proxy = bus.proxy(&target).await?;
+    let method = target.method().to_string();
+    let objects = bus
+        .call_with_retry(&target, || {
+            let proxy = &proxy;
+            let method = method.clone();
+            async move {
+                proxy
+                    .call::<_, _, zbus::fdo::ManagedObjects>(method.as_str(), &())
+                    .await
+            }
+        })
+        .await?;
+    udisks2_monitor_state_from_managed_objects(&objects).map_err(DeviceDiscoveryError::Udisks2)
+}
+
+pub fn udisks2_monitor_state_from_managed_objects(
+    objects: &zbus::fdo::ManagedObjects,
+) -> Result<Udisks2MonitorState, String> {
+    Udisks2MonitorState::from_raw_objects(udisks2_raw_objects_from_managed_objects(objects)?)
+}
+
+pub fn udisks2_signal_from_message(
+    message: &zbus::Message,
+) -> Result<Option<Udisks2Signal>, DeviceDiscoveryError> {
+    let header = message.header();
+    let interface = header.interface().map(ToString::to_string);
+    let member = header.member().map(ToString::to_string);
+    match (interface.as_deref(), member.as_deref()) {
+        (Some(DBUS_OBJECT_MANAGER_INTERFACE), Some("InterfacesAdded")) => {
+            let (object_path, interfaces): (
+                OwnedObjectPath,
+                HashMap<zbus::names::OwnedInterfaceName, HashMap<String, OwnedValue>>,
+            ) = message.body().deserialize().map_err(|error| {
+                DeviceDiscoveryError::Udisks2(format!("invalid InterfacesAdded payload: {error}"))
+            })?;
+            Ok(Some(Udisks2Signal::InterfacesAdded {
+                object_path: object_path.to_string(),
+                interfaces: owned_interfaces_to_udisks2_map(interfaces),
+            }))
+        }
+        (Some(DBUS_OBJECT_MANAGER_INTERFACE), Some("InterfacesRemoved")) => {
+            let (object_path, interfaces): (OwnedObjectPath, Vec<zbus::names::OwnedInterfaceName>) =
+                message.body().deserialize().map_err(|error| {
+                    DeviceDiscoveryError::Udisks2(format!(
+                        "invalid InterfacesRemoved payload: {error}"
+                    ))
+                })?;
+            Ok(Some(Udisks2Signal::InterfacesRemoved {
+                object_path: object_path.to_string(),
+                interfaces: interfaces
+                    .into_iter()
+                    .map(|interface| interface.to_string())
+                    .collect(),
+            }))
+        }
+        (Some("org.freedesktop.DBus.Properties"), Some("PropertiesChanged")) => {
+            let object_path = header.path().map(ToString::to_string).ok_or_else(|| {
+                DeviceDiscoveryError::Udisks2(
+                    "PropertiesChanged signal missing object path".to_string(),
+                )
+            })?;
+            let (interface, changed, invalidated): (
+                zbus::names::OwnedInterfaceName,
+                HashMap<String, OwnedValue>,
+                Vec<String>,
+            ) = message.body().deserialize().map_err(|error| {
+                DeviceDiscoveryError::Udisks2(format!("invalid PropertiesChanged payload: {error}"))
+            })?;
+            Ok(Some(Udisks2Signal::PropertiesChanged {
+                object_path,
+                interface: interface.to_string(),
+                changed: changed.into_iter().collect(),
+                invalidated,
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 pub fn devices_from_mountinfo(contents: &str) -> Result<Vec<DeviceInfo>, String> {
@@ -179,6 +576,8 @@ pub fn devices_from_mount_entries(entries: &[MountInfoEntry]) -> Vec<DeviceInfo>
             label: device_label(entry),
             capacity_bytes: None,
             removable: likely_removable(entry),
+            ejectable: false,
+            can_power_off: false,
         };
         devices
             .entry(device_path)
@@ -195,6 +594,15 @@ pub fn devices_from_mount_entries(entries: &[MountInfoEntry]) -> Vec<DeviceInfo>
 pub fn udisks2_snapshot_from_managed_objects(
     objects: &zbus::fdo::ManagedObjects,
 ) -> Result<Udisks2Snapshot, String> {
+    Ok(
+        Udisks2MonitorState::from_raw_objects(udisks2_raw_objects_from_managed_objects(objects)?)?
+            .into_snapshot(),
+    )
+}
+
+pub fn udisks2_raw_objects_from_managed_objects(
+    objects: &zbus::fdo::ManagedObjects,
+) -> Result<Vec<Udisks2RawObject>, String> {
     let mut raw_objects = Vec::with_capacity(objects.len());
     for (object_path, interfaces) in objects {
         let mut raw_interfaces = Udisks2InterfaceMap::new();
@@ -218,7 +626,23 @@ pub fn udisks2_snapshot_from_managed_objects(
             interfaces: raw_interfaces,
         });
     }
-    Ok(udisks2_snapshot_from_raw_objects(&raw_objects))
+    Ok(raw_objects)
+}
+
+fn read_current_mount_entries() -> Result<Vec<MountInfoEntry>, DeviceDiscoveryError> {
+    let contents = fs::read_to_string(PROC_SELF_MOUNTINFO).map_err(|error| {
+        DeviceDiscoveryError::MountInfo(format!("failed to read {PROC_SELF_MOUNTINFO}: {error}"))
+    })?;
+    parse_mountinfo(&contents).map_err(DeviceDiscoveryError::MountInfo)
+}
+
+fn owned_interfaces_to_udisks2_map(
+    interfaces: HashMap<zbus::names::OwnedInterfaceName, HashMap<String, OwnedValue>>,
+) -> Udisks2InterfaceMap {
+    interfaces
+        .into_iter()
+        .map(|(interface, properties)| (interface.to_string(), properties.into_iter().collect()))
+        .collect()
 }
 
 pub fn udisks2_snapshot_from_raw_objects(objects: &[Udisks2RawObject]) -> Udisks2Snapshot {
@@ -239,9 +663,11 @@ pub fn udisks2_snapshot_from_raw_objects(objects: &[Udisks2RawObject]) -> Udisks
         let size_bytes = property_owned::<u64>(block, "Size")
             .filter(|size| *size > 0)
             .or_else(|| drive.and_then(|info| info.size_bytes));
-        let removable =
-            drive.is_some_and(|info| info.removable || info.media_removable || info.ejectable);
+        let removable = drive.is_some_and(|info| {
+            info.removable || info.media_removable || info.ejectable || info.can_power_off
+        });
         let ejectable = drive.is_some_and(|info| info.ejectable);
+        let can_power_off = drive.is_some_and(|info| info.can_power_off);
         block_devices.push(Udisks2BlockDevice {
             object_path: object.object_path.clone(),
             device_path,
@@ -252,14 +678,110 @@ pub fn udisks2_snapshot_from_raw_objects(objects: &[Udisks2RawObject]) -> Udisks
             mount_points: filesystem
                 .map(|properties| property_byte_path_array(properties, "MountPoints"))
                 .unwrap_or_default(),
+            has_filesystem: filesystem.is_some(),
             hint_ignore: property_owned::<bool>(block, "HintIgnore").unwrap_or(false),
             hint_system: property_owned::<bool>(block, "HintSystem").unwrap_or(false),
             removable,
             ejectable,
+            can_power_off,
         });
     }
     block_devices.sort_by(|left, right| left.device_path.cmp(&right.device_path));
     Udisks2Snapshot { block_devices }
+}
+
+impl Udisks2MonitorState {
+    pub fn from_raw_objects(objects: Vec<Udisks2RawObject>) -> Result<Self, String> {
+        let mut state = Self {
+            raw_objects: objects
+                .into_iter()
+                .map(|object| (object.object_path, object.interfaces))
+                .collect(),
+            snapshot: Udisks2Snapshot::default(),
+        };
+        state.refresh_snapshot()?;
+        Ok(state)
+    }
+
+    pub fn snapshot(&self) -> &Udisks2Snapshot {
+        &self.snapshot
+    }
+
+    pub fn into_snapshot(self) -> Udisks2Snapshot {
+        self.snapshot
+    }
+
+    pub fn apply_signal(&mut self, signal: Udisks2Signal) -> Result<(), String> {
+        match signal {
+            Udisks2Signal::InterfacesAdded {
+                object_path,
+                interfaces,
+            } => {
+                let object = self.raw_objects.entry(object_path).or_default();
+                for (interface, properties) in interfaces {
+                    object.insert(interface, properties);
+                }
+            }
+            Udisks2Signal::InterfacesRemoved {
+                object_path,
+                interfaces,
+            } => {
+                let remove_object = if let Some(object) = self.raw_objects.get_mut(&object_path) {
+                    for interface in interfaces {
+                        object.remove(&interface);
+                    }
+                    object.is_empty()
+                } else {
+                    false
+                };
+                if remove_object {
+                    self.raw_objects.remove(&object_path);
+                }
+            }
+            Udisks2Signal::PropertiesChanged {
+                object_path,
+                interface,
+                changed,
+                invalidated,
+            } => {
+                let properties = self
+                    .raw_objects
+                    .entry(object_path)
+                    .or_default()
+                    .entry(interface)
+                    .or_default();
+                for name in invalidated {
+                    properties.remove(&name);
+                }
+                for (name, value) in changed {
+                    properties.insert(name, value);
+                }
+            }
+        }
+        self.refresh_snapshot()
+    }
+
+    fn refresh_snapshot(&mut self) -> Result<(), String> {
+        self.snapshot = udisks2_snapshot_from_raw_objects(&self.raw_objects_vec()?);
+        Ok(())
+    }
+
+    fn raw_objects_vec(&self) -> Result<Vec<Udisks2RawObject>, String> {
+        raw_objects_from_map(&self.raw_objects)
+    }
+}
+
+pub fn device_events_for_udisks2_signal(
+    state: &mut Udisks2MonitorState,
+    signal: Udisks2Signal,
+    mount_entries: &[MountInfoEntry],
+) -> Result<Vec<DeviceEvent>, DeviceDiscoveryError> {
+    let previous = devices_from_udisks2_snapshot(state.snapshot(), mount_entries);
+    state
+        .apply_signal(signal)
+        .map_err(DeviceDiscoveryError::Udisks2)?;
+    let current = devices_from_udisks2_snapshot(state.snapshot(), mount_entries);
+    Ok(device_events_between(&previous, &current))
 }
 
 pub fn devices_from_udisks2_snapshot(
@@ -297,6 +819,7 @@ pub fn devices_from_udisks2_snapshot(
             .or_else(|| label_from_device_path(&block.device_path));
         let removable = block.removable
             || block.ejectable
+            || block.can_power_off
             || mount_point
                 .as_deref()
                 .is_some_and(mount_point_likely_removable);
@@ -309,6 +832,8 @@ pub fn devices_from_udisks2_snapshot(
                 label,
                 capacity_bytes: block.size_bytes,
                 removable,
+                ejectable: block.ejectable,
+                can_power_off: block.can_power_off,
             },
         );
     }
@@ -321,6 +846,54 @@ pub fn devices_from_udisks2_snapshot(
     }
 
     devices.into_values().collect()
+}
+
+pub fn udisks2_device_action_targets(
+    snapshot: &Udisks2Snapshot,
+    mount_entries: &[MountInfoEntry],
+) -> Vec<Udisks2DeviceActionTarget> {
+    let mount_by_source = mount_entries
+        .iter()
+        .filter(|entry| is_device_mount(entry))
+        .map(|entry| (PathBuf::from(&entry.source), entry))
+        .collect::<BTreeMap<_, _>>();
+
+    snapshot
+        .block_devices
+        .iter()
+        .filter(|block| block.has_filesystem && !block.hint_ignore)
+        .map(|block| {
+            let mount_point = block.mount_points.first().cloned().or_else(|| {
+                mount_by_source
+                    .get(&block.device_path)
+                    .map(|entry| entry.mount_point.clone())
+            });
+            Udisks2DeviceActionTarget {
+                device_path: block.device_path.clone(),
+                mount_point,
+                block_object_path: block.object_path.clone(),
+                drive_object_path: block.drive_path.clone(),
+                ejectable: block.ejectable,
+                can_power_off: block.can_power_off,
+            }
+        })
+        .collect()
+}
+
+pub fn resolve_udisks2_device_action_target(
+    snapshot: &Udisks2Snapshot,
+    mount_entries: &[MountInfoEntry],
+    path: &Path,
+) -> Option<Udisks2DeviceActionTarget> {
+    udisks2_device_action_targets(snapshot, mount_entries)
+        .into_iter()
+        .find(|target| {
+            target.device_path == path
+                || target
+                    .mount_point
+                    .as_deref()
+                    .is_some_and(|mount_point| mount_point == path)
+        })
 }
 
 pub fn device_events_between(previous: &[DeviceInfo], current: &[DeviceInfo]) -> Vec<DeviceEvent> {
@@ -511,11 +1084,38 @@ fn udisks2_drives_from_raw_objects(
                 media_removable: property_owned::<bool>(properties, "MediaRemovable")
                     .unwrap_or(false),
                 ejectable: property_owned::<bool>(properties, "Ejectable").unwrap_or(false),
+                can_power_off: property_owned::<bool>(properties, "CanPowerOff").unwrap_or(false),
                 size_bytes: property_owned::<u64>(properties, "Size").filter(|size| *size > 0),
             },
         );
     }
     drives
+}
+
+fn raw_objects_from_map(objects: &Udisks2ObjectMap) -> Result<Vec<Udisks2RawObject>, String> {
+    let mut raw_objects = Vec::with_capacity(objects.len());
+    for (object_path, interfaces) in objects {
+        let mut raw_interfaces = Udisks2InterfaceMap::new();
+        for (interface, properties) in interfaces {
+            let mut raw_properties = Udisks2PropertyMap::new();
+            for (name, value) in properties {
+                raw_properties.insert(
+                    name.clone(),
+                    value.try_clone().map_err(|error| {
+                        format!(
+                            "failed to clone UDisks2 property {name} on {object_path} {interface}: {error}"
+                        )
+                    })?,
+                );
+            }
+            raw_interfaces.insert(interface.clone(), raw_properties);
+        }
+        raw_objects.push(Udisks2RawObject {
+            object_path: object_path.clone(),
+            interfaces: raw_interfaces,
+        });
+    }
+    Ok(raw_objects)
 }
 
 fn property_owned<T>(properties: &Udisks2PropertyMap, name: &str) -> Option<T>
@@ -625,6 +1225,23 @@ mod tests {
         }
     }
 
+    fn interface_map(interfaces: &[(&str, Udisks2PropertyMap)]) -> Udisks2InterfaceMap {
+        interfaces
+            .iter()
+            .map(|(name, properties)| {
+                let properties = properties
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.try_clone().unwrap()))
+                    .collect();
+                ((*name).to_string(), properties)
+            })
+            .collect()
+    }
+
+    fn interface_name(name: &'static str) -> zbus::names::InterfaceName<'static> {
+        zbus::names::InterfaceName::try_from(name).unwrap()
+    }
+
     #[test]
     fn parse_mountinfo_decodes_escaped_mount_point() {
         let entries = parse_mountinfo(
@@ -663,6 +1280,8 @@ mod tests {
                 label: Some("sda1".to_string()),
                 capacity_bytes: None,
                 removable: false,
+                ejectable: false,
+                can_power_off: false,
             }]
         );
     }
@@ -683,6 +1302,8 @@ mod tests {
                 label: Some("My USB".to_string()),
                 capacity_bytes: None,
                 removable: true,
+                ejectable: false,
+                can_power_off: false,
             }]
         );
     }
@@ -697,6 +1318,88 @@ mod tests {
     }
 
     #[test]
+    fn udisks2_signal_parser_reads_interfaces_added_message() {
+        let mut block_properties = HashMap::new();
+        block_properties.insert(
+            "PreferredDevice",
+            zbus::zvariant::Value::from(path_bytes("/dev/sdb1")),
+        );
+        let mut interfaces = HashMap::new();
+        interfaces.insert(interface_name(UDISKS2_BLOCK_INTERFACE), block_properties);
+        let object_path =
+            zbus::zvariant::ObjectPath::try_from("/org/freedesktop/UDisks2/block_devices/sdb1")
+                .unwrap();
+        let message = zbus::Message::signal(
+            UDISKS2_OBJECT_MANAGER_PATH,
+            DBUS_OBJECT_MANAGER_INTERFACE,
+            "InterfacesAdded",
+        )
+        .unwrap()
+        .build(&(object_path, interfaces))
+        .unwrap();
+
+        let signal = udisks2_signal_from_message(&message).unwrap().unwrap();
+
+        match signal {
+            Udisks2Signal::InterfacesAdded {
+                object_path,
+                interfaces,
+            } => {
+                assert_eq!(object_path, "/org/freedesktop/UDisks2/block_devices/sdb1");
+                assert_eq!(
+                    property_bytes_path(
+                        interfaces.get(UDISKS2_BLOCK_INTERFACE).unwrap(),
+                        "PreferredDevice"
+                    ),
+                    Some(PathBuf::from("/dev/sdb1"))
+                );
+            }
+            other => panic!("unexpected signal: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn udisks2_signal_parser_reads_properties_changed_message_path() {
+        let mut changed = HashMap::new();
+        changed.insert(
+            "MountPoints",
+            zbus::zvariant::Value::from(Vec::<Vec<u8>>::new()),
+        );
+        let message = zbus::Message::signal(
+            "/org/freedesktop/UDisks2/block_devices/sdb1",
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+        )
+        .unwrap()
+        .build(&(
+            interface_name(UDISKS2_FILESYSTEM_INTERFACE),
+            changed,
+            vec!["Size"],
+        ))
+        .unwrap();
+
+        let signal = udisks2_signal_from_message(&message).unwrap().unwrap();
+
+        match signal {
+            Udisks2Signal::PropertiesChanged {
+                object_path,
+                interface,
+                changed,
+                invalidated,
+            } => {
+                assert_eq!(object_path, "/org/freedesktop/UDisks2/block_devices/sdb1");
+                assert_eq!(interface, UDISKS2_FILESYSTEM_INTERFACE);
+                assert_eq!(
+                    changed,
+                    properties(&[("MountPoints", owned_value(Vec::<Vec<u8>>::new()))])
+                );
+                assert_eq!(invalidated, vec!["Size".to_string()]);
+            }
+            other => panic!("unexpected signal: {other:?}"),
+        }
+    }
+
+    #[test]
     fn udisks2_snapshot_merges_block_drive_filesystem_and_mountinfo() {
         let objects = vec![
             raw_object(
@@ -707,6 +1410,7 @@ mod tests {
                         ("Removable", owned_value(false)),
                         ("MediaRemovable", owned_value(true)),
                         ("Ejectable", owned_value(true)),
+                        ("CanPowerOff", owned_value(true)),
                         ("Size", owned_value(128_u64)),
                     ]),
                 )],
@@ -756,10 +1460,12 @@ mod tests {
                 id_type: Some("exfat".to_string()),
                 size_bytes: Some(64),
                 mount_points: vec![PathBuf::from("/run/media/yk/Backup")],
+                has_filesystem: true,
                 hint_ignore: false,
                 hint_system: false,
                 removable: true,
                 ejectable: true,
+                can_power_off: true,
             }]
         );
         assert_eq!(
@@ -771,8 +1477,97 @@ mod tests {
                 label: Some("Backup".to_string()),
                 capacity_bytes: Some(64),
                 removable: true,
+                ejectable: true,
+                can_power_off: true,
             }]
         );
+    }
+
+    #[test]
+    fn udisks2_device_action_targets_keep_block_and_drive_paths() {
+        let objects = vec![
+            raw_object(
+                "/org/freedesktop/UDisks2/drives/USB",
+                &[(
+                    UDISKS2_DRIVE_INTERFACE,
+                    properties(&[
+                        ("Removable", owned_value(true)),
+                        ("Ejectable", owned_value(true)),
+                        ("CanPowerOff", owned_value(true)),
+                    ]),
+                )],
+            ),
+            raw_object(
+                "/org/freedesktop/UDisks2/block_devices/sdb1",
+                &[
+                    (
+                        UDISKS2_BLOCK_INTERFACE,
+                        properties(&[
+                            ("PreferredDevice", owned_value(path_bytes("/dev/sdb1"))),
+                            (
+                                "Drive",
+                                object_path_value("/org/freedesktop/UDisks2/drives/USB"),
+                            ),
+                            ("HintIgnore", owned_value(false)),
+                        ]),
+                    ),
+                    (
+                        UDISKS2_FILESYSTEM_INTERFACE,
+                        properties(&[(
+                            "MountPoints",
+                            owned_value(vec![path_bytes("/run/media/yk/Backup")]),
+                        )]),
+                    ),
+                ],
+            ),
+        ];
+        let snapshot = udisks2_snapshot_from_raw_objects(&objects);
+
+        assert_eq!(
+            udisks2_device_action_targets(&snapshot, &[]),
+            vec![Udisks2DeviceActionTarget {
+                device_path: PathBuf::from("/dev/sdb1"),
+                mount_point: Some(PathBuf::from("/run/media/yk/Backup")),
+                block_object_path: "/org/freedesktop/UDisks2/block_devices/sdb1".to_string(),
+                drive_object_path: Some("/org/freedesktop/UDisks2/drives/USB".to_string()),
+                ejectable: true,
+                can_power_off: true,
+            }]
+        );
+        assert_eq!(
+            resolve_udisks2_device_action_target(&snapshot, &[], Path::new("/run/media/yk/Backup"))
+                .map(|target| target.block_object_path),
+            Some("/org/freedesktop/UDisks2/block_devices/sdb1".to_string())
+        );
+    }
+
+    #[test]
+    fn udisks2_device_action_targets_skip_non_filesystems_and_hint_ignore() {
+        let objects = vec![
+            raw_object(
+                "/org/freedesktop/UDisks2/block_devices/sdb",
+                &[(
+                    UDISKS2_BLOCK_INTERFACE,
+                    properties(&[("PreferredDevice", owned_value(path_bytes("/dev/sdb")))]),
+                )],
+            ),
+            raw_object(
+                "/org/freedesktop/UDisks2/block_devices/sdc1",
+                &[
+                    (
+                        UDISKS2_BLOCK_INTERFACE,
+                        properties(&[
+                            ("PreferredDevice", owned_value(path_bytes("/dev/sdc1"))),
+                            ("HintIgnore", owned_value(true)),
+                        ]),
+                    ),
+                    (UDISKS2_FILESYSTEM_INTERFACE, properties(&[])),
+                ],
+            ),
+        ];
+        let snapshot = udisks2_snapshot_from_raw_objects(&objects);
+
+        assert!(udisks2_device_action_targets(&snapshot, &[]).is_empty());
     }
 
     #[test]
@@ -804,6 +1599,8 @@ mod tests {
                 label: Some("USB".to_string()),
                 capacity_bytes: None,
                 removable: true,
+                ejectable: false,
+                can_power_off: false,
             }]
         );
     }
@@ -818,6 +1615,8 @@ mod tests {
                 label: Some("Old".to_string()),
                 capacity_bytes: Some(64),
                 removable: true,
+                ejectable: false,
+                can_power_off: false,
             },
             DeviceInfo {
                 device_path: PathBuf::from("/dev/sdc1"),
@@ -826,6 +1625,8 @@ mod tests {
                 label: Some("Removed".to_string()),
                 capacity_bytes: None,
                 removable: true,
+                ejectable: false,
+                can_power_off: false,
             },
         ];
         let current = vec![
@@ -836,6 +1637,8 @@ mod tests {
                 label: Some("New".to_string()),
                 capacity_bytes: Some(64),
                 removable: true,
+                ejectable: false,
+                can_power_off: false,
             },
             DeviceInfo {
                 device_path: PathBuf::from("/dev/sdd1"),
@@ -844,6 +1647,8 @@ mod tests {
                 label: Some("Added".to_string()),
                 capacity_bytes: Some(128),
                 removable: true,
+                ejectable: false,
+                can_power_off: false,
             },
         ];
 
@@ -854,6 +1659,184 @@ mod tests {
                 DeviceEvent::Changed(current[0].clone()),
                 DeviceEvent::Added(current[1].clone()),
             ]
+        );
+    }
+
+    #[test]
+    fn udisks2_monitor_interfaces_added_and_removed_emit_device_events() {
+        let mut state = Udisks2MonitorState::from_raw_objects(Vec::new()).unwrap();
+        let mount_entries = Vec::new();
+
+        let drive_events = device_events_for_udisks2_signal(
+            &mut state,
+            Udisks2Signal::InterfacesAdded {
+                object_path: "/org/freedesktop/UDisks2/drives/USB".to_string(),
+                interfaces: interface_map(&[(
+                    UDISKS2_DRIVE_INTERFACE,
+                    properties(&[
+                        ("Removable", owned_value(false)),
+                        ("MediaRemovable", owned_value(true)),
+                        ("Ejectable", owned_value(true)),
+                    ]),
+                )]),
+            },
+            &mount_entries,
+        )
+        .unwrap();
+        assert!(drive_events.is_empty());
+
+        let added_events = device_events_for_udisks2_signal(
+            &mut state,
+            Udisks2Signal::InterfacesAdded {
+                object_path: "/org/freedesktop/UDisks2/block_devices/sdb1".to_string(),
+                interfaces: interface_map(&[
+                    (
+                        UDISKS2_BLOCK_INTERFACE,
+                        properties(&[
+                            ("PreferredDevice", owned_value(path_bytes("/dev/sdb1"))),
+                            (
+                                "Drive",
+                                object_path_value("/org/freedesktop/UDisks2/drives/USB"),
+                            ),
+                            ("IdLabel", owned_value("Backup")),
+                            ("IdType", owned_value("exfat")),
+                            ("Size", owned_value(64_u64)),
+                            ("HintIgnore", owned_value(false)),
+                        ]),
+                    ),
+                    (
+                        UDISKS2_FILESYSTEM_INTERFACE,
+                        properties(&[(
+                            "MountPoints",
+                            owned_value(vec![path_bytes("/run/media/yk/Backup")]),
+                        )]),
+                    ),
+                ]),
+            },
+            &mount_entries,
+        )
+        .unwrap();
+
+        let added = DeviceInfo {
+            device_path: PathBuf::from("/dev/sdb1"),
+            mount_point: Some(PathBuf::from("/run/media/yk/Backup")),
+            filesystem_type: Some("exfat".to_string()),
+            label: Some("Backup".to_string()),
+            capacity_bytes: Some(64),
+            removable: true,
+            ejectable: true,
+            can_power_off: false,
+        };
+        assert_eq!(added_events, vec![DeviceEvent::Added(added.clone())]);
+
+        let removed_events = device_events_for_udisks2_signal(
+            &mut state,
+            Udisks2Signal::InterfacesRemoved {
+                object_path: "/org/freedesktop/UDisks2/block_devices/sdb1".to_string(),
+                interfaces: vec![UDISKS2_BLOCK_INTERFACE.to_string()],
+            },
+            &mount_entries,
+        )
+        .unwrap();
+
+        assert_eq!(
+            removed_events,
+            vec![DeviceEvent::Removed(PathBuf::from("/dev/sdb1"))]
+        );
+    }
+
+    #[test]
+    fn udisks2_monitor_properties_changed_updates_derived_device() {
+        let mut state = Udisks2MonitorState::from_raw_objects(vec![
+            raw_object(
+                "/org/freedesktop/UDisks2/drives/USB",
+                &[(
+                    UDISKS2_DRIVE_INTERFACE,
+                    properties(&[
+                        ("MediaRemovable", owned_value(true)),
+                        ("Ejectable", owned_value(true)),
+                    ]),
+                )],
+            ),
+            raw_object(
+                "/org/freedesktop/UDisks2/block_devices/sdb1",
+                &[
+                    (
+                        UDISKS2_BLOCK_INTERFACE,
+                        properties(&[
+                            ("PreferredDevice", owned_value(path_bytes("/dev/sdb1"))),
+                            (
+                                "Drive",
+                                object_path_value("/org/freedesktop/UDisks2/drives/USB"),
+                            ),
+                            ("IdLabel", owned_value("Old Label")),
+                            ("IdType", owned_value("exfat")),
+                            ("Size", owned_value(64_u64)),
+                        ]),
+                    ),
+                    (
+                        UDISKS2_FILESYSTEM_INTERFACE,
+                        properties(&[("MountPoints", owned_value(Vec::<Vec<u8>>::new()))]),
+                    ),
+                ],
+            ),
+        ])
+        .unwrap();
+        let mount_entries = Vec::new();
+
+        let mount_events = device_events_for_udisks2_signal(
+            &mut state,
+            Udisks2Signal::PropertiesChanged {
+                object_path: "/org/freedesktop/UDisks2/block_devices/sdb1".to_string(),
+                interface: UDISKS2_FILESYSTEM_INTERFACE.to_string(),
+                changed: properties(&[(
+                    "MountPoints",
+                    owned_value(vec![path_bytes("/run/media/yk/Backup")]),
+                )]),
+                invalidated: Vec::new(),
+            },
+            &mount_entries,
+        )
+        .unwrap();
+
+        assert_eq!(
+            mount_events,
+            vec![DeviceEvent::Changed(DeviceInfo {
+                device_path: PathBuf::from("/dev/sdb1"),
+                mount_point: Some(PathBuf::from("/run/media/yk/Backup")),
+                filesystem_type: Some("exfat".to_string()),
+                label: Some("Old Label".to_string()),
+                capacity_bytes: Some(64),
+                removable: true,
+                ejectable: true,
+                can_power_off: false,
+            })]
+        );
+
+        let label_events = device_events_for_udisks2_signal(
+            &mut state,
+            Udisks2Signal::PropertiesChanged {
+                object_path: "/org/freedesktop/UDisks2/block_devices/sdb1".to_string(),
+                interface: UDISKS2_BLOCK_INTERFACE.to_string(),
+                changed: Udisks2PropertyMap::new(),
+                invalidated: vec!["IdLabel".to_string()],
+            },
+            &mount_entries,
+        )
+        .unwrap();
+
+        assert_eq!(
+            label_events,
+            vec![DeviceEvent::Changed(DeviceInfo {
+                device_path: PathBuf::from("/dev/sdb1"),
+                mount_point: Some(PathBuf::from("/run/media/yk/Backup")),
+                filesystem_type: Some("exfat".to_string()),
+                label: Some("Backup".to_string()),
+                capacity_bytes: Some(64),
+                removable: true,
+                ejectable: true,
+                can_power_off: false,
+            })]
         );
     }
 }
