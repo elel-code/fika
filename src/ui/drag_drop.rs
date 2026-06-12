@@ -1,7 +1,8 @@
 mod state;
 
+pub(crate) use fika_core::FileTransferMode;
 pub(crate) use state::{
-    ActiveItemDrag, FileTransferMode, ItemDragPayload, ItemDropTarget, PlaceDropTarget,
+    ActiveItemDrag, ItemDragPayload, ItemDropTarget, PlaceDropTarget,
     drag_cursor_style_for_transfer_mode, file_transfer_mode_for_modifiers, item_drag_paths,
     item_drop_reject_reason, item_drop_target_mode_for_directory, item_drop_target_mode_for_pane,
     place_drop_target_matches_insert, place_drop_target_mode_for_place,

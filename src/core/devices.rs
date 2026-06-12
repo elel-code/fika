@@ -10,6 +10,12 @@ use zbus::message::Type as DbusMessageType;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 use zbus::{MatchRule, MessageStream};
 
+mod actions;
+
+pub use actions::{
+    DevicePlaceOperation, DevicePlaceOperationResult, perform_device_place_operation,
+};
+
 pub const PROC_SELF_MOUNTINFO: &str = "/proc/self/mountinfo";
 pub const UDISKS2_SERVICE: &str = "org.freedesktop.UDisks2";
 pub const UDISKS2_OBJECT_MANAGER_PATH: &str = "/org/freedesktop/UDisks2";

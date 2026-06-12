@@ -1,4 +1,5 @@
 mod state;
+mod summary;
 
 pub(crate) use state::{
     OperationProgressHandle, OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot,
@@ -9,6 +10,7 @@ pub(crate) use state::{
 pub(crate) use state::{
     PROGRESS_DISPLAY_DELAY, parse_df_space_output, progress_percent, space_info_snapshot,
 };
+pub(crate) use summary::{status_summary_for_model, status_summary_for_model_indexes};
 
 use crate::FikaApp;
 use fika_core::PaneId;

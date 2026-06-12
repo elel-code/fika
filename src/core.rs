@@ -8,6 +8,7 @@ pub mod entries;
 pub mod file_ops;
 pub mod filter;
 pub mod launcher;
+pub mod listing_worker;
 pub mod location;
 pub mod mime;
 pub mod model;

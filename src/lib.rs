@@ -18,23 +18,25 @@ pub use core::clipboard::{
 };
 pub use core::devices::{
     DBUS_OBJECT_MANAGER_INTERFACE, DeviceActionError, DeviceDiscoveryError, DeviceEvent,
-    DeviceInfo, DeviceMonitorMessage, MountInfoEntry, PROC_SELF_MOUNTINFO, UDISKS2_BLOCK_INTERFACE,
-    UDISKS2_DRIVE_EJECT_METHOD, UDISKS2_DRIVE_INTERFACE, UDISKS2_DRIVE_POWER_OFF_METHOD,
-    UDISKS2_FILESYSTEM_INTERFACE, UDISKS2_FILESYSTEM_MOUNT_METHOD,
-    UDISKS2_FILESYSTEM_UNMOUNT_METHOD, UDISKS2_OBJECT_MANAGER_PATH, UDISKS2_SERVICE,
-    Udisks2BlockDevice, Udisks2DeviceActionTarget, Udisks2InterfaceMap, Udisks2MonitorState,
-    Udisks2MountResult, Udisks2PropertyMap, Udisks2RawObject, Udisks2Signal, Udisks2Snapshot,
-    device_events_between, device_events_for_udisks2_signal, devices_from_mount_entries,
-    devices_from_mountinfo, devices_from_udisks2_snapshot, eject_udisks2_device,
-    eject_udisks2_device_with_bus, mount_udisks2_device, mount_udisks2_device_with_bus,
-    parse_mountinfo, read_mountinfo_devices, read_udisks2_devices, read_udisks2_devices_with_bus,
-    read_udisks2_snapshot_with_bus, resolve_udisks2_device_action_target,
-    resolve_udisks2_device_action_target_with_bus, safely_remove_udisks2_device,
-    safely_remove_udisks2_device_with_bus, udisks2_device_action_targets,
-    udisks2_monitor_state_from_managed_objects, udisks2_raw_objects_from_managed_objects,
-    udisks2_signal_from_message, udisks2_snapshot_from_managed_objects,
-    udisks2_snapshot_from_raw_objects, unmount_udisks2_device, unmount_udisks2_device_with_bus,
-    watch_udisks2_devices, watch_udisks2_devices_with_bus,
+    DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation, DevicePlaceOperationResult,
+    MountInfoEntry, PROC_SELF_MOUNTINFO, UDISKS2_BLOCK_INTERFACE, UDISKS2_DRIVE_EJECT_METHOD,
+    UDISKS2_DRIVE_INTERFACE, UDISKS2_DRIVE_POWER_OFF_METHOD, UDISKS2_FILESYSTEM_INTERFACE,
+    UDISKS2_FILESYSTEM_MOUNT_METHOD, UDISKS2_FILESYSTEM_UNMOUNT_METHOD,
+    UDISKS2_OBJECT_MANAGER_PATH, UDISKS2_SERVICE, Udisks2BlockDevice, Udisks2DeviceActionTarget,
+    Udisks2InterfaceMap, Udisks2MonitorState, Udisks2MountResult, Udisks2PropertyMap,
+    Udisks2RawObject, Udisks2Signal, Udisks2Snapshot, device_events_between,
+    device_events_for_udisks2_signal, devices_from_mount_entries, devices_from_mountinfo,
+    devices_from_udisks2_snapshot, eject_udisks2_device, eject_udisks2_device_with_bus,
+    mount_udisks2_device, mount_udisks2_device_with_bus, parse_mountinfo,
+    perform_device_place_operation, read_mountinfo_devices, read_udisks2_devices,
+    read_udisks2_devices_with_bus, read_udisks2_snapshot_with_bus,
+    resolve_udisks2_device_action_target, resolve_udisks2_device_action_target_with_bus,
+    safely_remove_udisks2_device, safely_remove_udisks2_device_with_bus,
+    udisks2_device_action_targets, udisks2_monitor_state_from_managed_objects,
+    udisks2_raw_objects_from_managed_objects, udisks2_signal_from_message,
+    udisks2_snapshot_from_managed_objects, udisks2_snapshot_from_raw_objects,
+    unmount_udisks2_device, unmount_udisks2_device_with_bus, watch_udisks2_devices,
+    watch_udisks2_devices_with_bus,
 };
 pub use core::directory::{
     ClassifiedWatcherDelta, DirectoryLister, DirectoryListerEvent, LoadMode, RefreshPair,
@@ -48,12 +50,18 @@ pub use core::file_ops;
 pub use core::filter::{FilteredModel, NameFilter, NameFilterMode};
 pub use core::launcher::{
     DesktopAction, DesktopApplication, DesktopLaunchCommand, DesktopLaunchPlan, DesktopServiceMenu,
-    LauncherError, MimeApplication, MimeApplicationCache, MimeAppsList, ServiceMenuAction,
-    ServiceMenuPriority, ServiceMenuTarget, SystemdLaunchResult, SystemdLaunchUnit,
-    current_executable_launch_plan, default_mimeapps_list_path, launch_with_systemd_user,
-    parse_mimeapps_list, set_default_mime_application, set_default_mime_application_at,
+    LauncherError, MimeApplication, MimeApplicationCache, MimeAppsList, NewWindowLaunchResult,
+    OpenWithLaunchResult, ServiceMenuAction, ServiceMenuLaunchResult, ServiceMenuPriority,
+    ServiceMenuTarget, SystemdLaunchResult, SystemdLaunchUnit, ark_compress_launch_plan,
+    ark_extract_here_launch_plan, ark_extract_to_launch_plan, current_executable_launch_plan,
+    default_mimeapps_list_path, launch_with_systemd_user, parse_mimeapps_list,
+    service_menu_target_label, set_default_mime_application, set_default_mime_application_at,
     set_default_mime_application_in_contents, systemd_launch_unit_name,
     systemd_units_for_launch_plan, terminal_launch_plan_for_directory,
+};
+pub use core::listing_worker::{
+    ListingRequest, ListingRequestKey, ListingWorker, LoadingPaneState,
+    listing_requests_from_events, update_loading_state_for_event,
 };
 pub use core::location::{
     BreadcrumbSegment, breadcrumb_segments, complete_location_input, expand_user_path, home_dir,
@@ -74,8 +82,13 @@ pub use core::network::{
     parse_network_location, supported_network_schemes,
 };
 pub use core::operations::{
-    AffectedDirectoryRefresh, CreateUndoItem, CreatedItemKind, OperationQueue, RenameUndoItem,
-    TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord, UndoSerial,
+    AffectedDirectoryRefresh, CreateItemResult, CreateUndoItem, CreatedItemKind, FileTransferMode,
+    OperationQueue, RenameItemResult, RenameUndoItem, TransferTaskResult, TransferUndoItem,
+    TrashSelectionResult, TrashUndoItem, TrashViewOperation, TrashViewOperationResult, UndoPayload,
+    UndoRecord, UndoSerial, UndoTaskResult, action_status, create_item_result, created_item_label,
+    default_created_item_name, parent_dirs, paste_text_result, push_unique_path,
+    rename_item_result, transfer_paths_result, trash_selection_result, trash_view_operation_result,
+    undo_record_result,
 };
 pub use core::pane::{
     DEFAULT_ZOOM_LEVEL, Generation, MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL, PaneController,

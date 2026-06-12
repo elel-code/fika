@@ -3,6 +3,16 @@ use super::pane::{PaneController, PaneId};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
+mod tasks;
+
+pub use tasks::{
+    CreateItemResult, FileTransferMode, RenameItemResult, TransferTaskResult, TrashSelectionResult,
+    TrashViewOperation, TrashViewOperationResult, UndoTaskResult, action_status,
+    create_item_result, created_item_label, default_created_item_name, parent_dirs,
+    paste_text_result, push_unique_path, rename_item_result, transfer_paths_result,
+    trash_selection_result, trash_view_operation_result, undo_record_result,
+};
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct UndoSerial(pub u64);
 

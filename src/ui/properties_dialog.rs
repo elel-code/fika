@@ -1,3 +1,7 @@
+mod metadata;
+
+pub(crate) use metadata::{properties_for_path, properties_for_selection};
+
 use crate::FikaApp;
 use gpui::prelude::*;
 use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb, rgba};

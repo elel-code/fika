@@ -1,40 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use fika_core::{PaneController, PaneId};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FileTransferMode {
-    Copy,
-    Move,
-    Link,
-}
-
-impl FileTransferMode {
-    pub(crate) fn operation(self) -> &'static str {
-        match self {
-            Self::Copy => "copy",
-            Self::Move => "move",
-            Self::Link => "link",
-        }
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Copy => "Copy",
-            Self::Move => "Move",
-            Self::Link => "Link",
-        }
-    }
-
-    pub(crate) fn progress_label(self, item_count: usize) -> String {
-        let verb = match self {
-            Self::Copy => "Copying",
-            Self::Move => "Moving",
-            Self::Link => "Linking",
-        };
-        format!("{verb} {item_count} item(s)")
-    }
-}
+use fika_core::{FileTransferMode, PaneController, PaneId};
 
 pub(crate) fn file_transfer_mode_for_modifiers(modifiers: gpui::Modifiers) -> FileTransferMode {
     if modifiers.alt || (modifiers.shift && modifiers.secondary()) {
