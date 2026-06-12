@@ -4,25 +4,25 @@ mod ui;
 use cli::{Args, Mode};
 #[cfg(test)]
 use fika_core::SystemdLaunchResult;
-use fika_core::{
-    CompactLayout, CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage,
-    DevicePlaceOperation, DevicePlaceOperationResult, DirectoryListerEvent, ListingRequest,
-    ListingWorker, LoadingPaneState, OperationQueue, PaneController, PaneId, RenameUndoItem,
-    ScrollBounds, ScrollDragTracker, SelectionMove, SmoothScroll, SortDescriptor, SortOrder,
-    SortRole, UndoPayload, UserPlace, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
-    complete_location_input, file_ops, listing_requests_from_events, nearest_existing_ancestor,
-    perform_device_place_operation, resolve_location_input, update_loading_state_for_event,
-};
 #[cfg(test)]
 use fika_core::{
-    CompactLayoutOptions, ServiceMenuAction, ViewState, home_dir, is_network_root_path,
-    network_root_path,
+    CompactLayout, CompactLayoutOptions, ServiceMenuAction, ViewState, home_dir,
+    is_network_root_path, network_root_path,
 };
 use fika_core::{
     CreateItemResult, FileTransferMode, RenameItemResult, TransferTaskResult, TrashSelectionResult,
     TrashViewOperation, TrashViewOperationResult, UndoTaskResult, action_status,
     create_item_result, created_item_label, rename_item_result, transfer_paths_result,
     trash_selection_result, trash_view_operation_result, undo_record_result,
+};
+use fika_core::{
+    CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
+    DevicePlaceOperationResult, DirectoryListerEvent, ListingRequest, ListingWorker,
+    LoadingPaneState, OperationQueue, PaneController, PaneId, RenameUndoItem, ScrollBounds,
+    ScrollDragTracker, SelectionMove, SmoothScroll, SortDescriptor, SortOrder, SortRole,
+    UndoPayload, UserPlace, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
+    complete_location_input, file_ops, listing_requests_from_events, nearest_existing_ancestor,
+    perform_device_place_operation, resolve_location_input, update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -59,14 +59,17 @@ use ui::context_menu::{
 use ui::drag_drop::{
     ActiveItemDrag, ItemDragPayload, ItemDropTarget, PlaceDropTarget, item_drag_paths,
     item_drop_reject_reason, item_drop_target_mode_for_directory, item_drop_target_mode_for_pane,
-    place_drop_target_matches_insert, place_drop_target_mode_for_place,
 };
 #[cfg(test)]
-use ui::drag_drop::{drag_cursor_style_for_transfer_mode, file_transfer_mode_for_modifiers};
+use ui::drag_drop::{
+    drag_cursor_style_for_transfer_mode, file_transfer_mode_for_modifiers,
+    place_drop_target_matches_insert, place_drop_target_mode_for_place,
+};
 use ui::file_grid::{
-    CompactColumnWidthCache, PaneViewportGeometry, VisibleItemSlotPool, VisibleItemSnapshot,
-    compact_layout_for_filtered_model, compact_layout_for_model, compact_text_width,
-    format_entry_kind_label, model_index_for_layout_index, visible_item_thumbnail_path,
+    CompactColumnWidthCache, ContentItemHit, PaneLayoutProjection, PaneViewportGeometry,
+    VisibleItemSlotPool, VisibleItemSnapshot, compact_layout_for_filtered_model,
+    compact_layout_for_model, compact_text_width, format_entry_kind_label,
+    model_index_for_layout_index, visible_item_thumbnail_path,
 };
 use ui::filter_bar::{
     FilterBarSnapshot, FilteredModelCacheEntry, FilteredModelCacheKey, PaneFilterState,
@@ -76,17 +79,17 @@ use ui::icons::FileIconCache;
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSnapshot, PaneSplitterDrag, normalize_pane_ratios,
-    pane_row_width_from_child_bounds, pane_splitter, pane_width_available, split_ratio_eq,
-    width_value_eq,
+    pane_row_width_from_child_bounds, pane_splitter, pane_width_available, sort_order_label,
+    sort_role_label, split_ratio_eq, width_value_eq,
 };
 use ui::place_draft::{PlaceDraft, PlaceDraftField, place_draft_overlay};
 use ui::places::{
-    DEVICES_GROUP, PlaceEntry, PlaceSnapshot, REMOVABLE_DEVICES_GROUP, active_place_index,
-    build_places, default_place_label, place_icon_for, place_icon_snapshot, place_is_mounted,
-    place_is_network_root, read_live_device_snapshot, removable_device_place_entries,
+    DEVICES_GROUP, PlaceEntry, PlaceSnapshot, REMOVABLE_DEVICES_GROUP, build_places,
+    default_place_label, place_snapshots_for, read_live_device_snapshot,
+    removable_device_place_entries,
 };
 #[cfg(test)]
-use ui::places::{NETWORK_GROUP, build_places_with_devices};
+use ui::places::{NETWORK_GROUP, active_place_index, build_places_with_devices, place_is_mounted};
 use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
@@ -113,25 +116,6 @@ const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ContentItemHit {
-    model_index: usize,
-    path: PathBuf,
-    is_dir: bool,
-}
-
-#[derive(Clone, Debug)]
-struct PaneLayoutProjection {
-    layout: CompactLayout,
-    filtered: Option<fika_core::FilteredModel>,
-}
-
-impl PaneLayoutProjection {
-    fn model_index_for_layout_index(&self, layout_index: usize) -> Option<usize> {
-        model_index_for_layout_index(self.filtered.as_ref(), layout_index)
-    }
-}
-
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
     places: Vec<PlaceEntry>,
@@ -1047,49 +1031,14 @@ impl FikaApp {
             .focused()
             .and_then(|pane_id| self.panes.pane(pane_id))
             .map(|pane| pane.current_dir.as_path());
-        let active_index = current_dir.and_then(|path| active_place_index(&self.places, path));
-        let place_drop_target = self.place_drop_target.as_ref();
-        let last_index = self.places.len().saturating_sub(1);
-
-        self.places
-            .iter()
-            .enumerate()
-            .filter(|(_, place)| {
-                !self.hidden_place_sections.contains(place.group)
-                    && !self.hidden_places.contains(&place.path)
-            })
-            .map(|(index, place)| {
-                let trash_place = file_ops::is_trash_files_dir(&place.path);
-                let network = place_is_network_root(place);
-                let mounted = place_is_mounted(place);
-                let device = place.group == REMOVABLE_DEVICES_GROUP;
-                let place_icon = place_icon_for(place, trash_place);
-                let icon = place_icon_snapshot(&mut self.file_icons, place_icon);
-                PlaceSnapshot {
-                    index,
-                    group: place.group,
-                    icon,
-                    label: place.label.clone(),
-                    path: place.path.clone(),
-                    mounted,
-                    device,
-                    network,
-                    device_ejectable: place.device_ejectable,
-                    device_can_power_off: place.device_can_power_off,
-                    active: active_index == Some(index),
-                    drop_target: (mounted && !network)
-                        .then(|| place_drop_target_mode_for_place(place_drop_target, &place.path))
-                        .flatten(),
-                    insert_before: place_drop_target_matches_insert(place_drop_target, index),
-                    insert_after: index == last_index
-                        && place_drop_target_matches_insert(place_drop_target, self.places.len()),
-                    trash_place,
-                    trash_has_items: trash_place && file_ops::trash_has_items(),
-                    editable: place.editable,
-                    removable: place.removable,
-                }
-            })
-            .collect()
+        place_snapshots_for(
+            &self.places,
+            current_dir,
+            &self.hidden_place_sections,
+            &self.hidden_places,
+            self.place_drop_target.as_ref(),
+            &mut self.file_icons,
+        )
     }
 
     fn replace_removable_device_places(&mut self, devices: &[DeviceInfo]) -> bool {
@@ -2207,10 +2156,10 @@ impl FikaApp {
                 &pane.view,
             ),
         };
-        Some(PaneLayoutProjection {
+        Some(PaneLayoutProjection::new(
             layout,
-            filtered: filtered_model.map(|(filtered, _)| filtered),
-        })
+            filtered_model.map(|(filtered, _)| filtered),
+        ))
     }
 
     fn item_at_content_point(
@@ -5751,23 +5700,6 @@ impl Render for FikaApp {
             .when_some(place_draft, |root, draft| {
                 root.child(place_draft_overlay(draft, cx))
             })
-    }
-}
-
-fn sort_role_label(role: SortRole) -> &'static str {
-    match role {
-        SortRole::Name => "Name",
-        SortRole::Modified => "Modified",
-        SortRole::Size => "Size",
-        SortRole::TrashOriginalPath => "Original Path",
-        SortRole::TrashDeletionTime => "Deletion Time",
-    }
-}
-
-fn sort_order_label(order: SortOrder) -> &'static str {
-    match order {
-        SortOrder::Ascending => "Ascending",
-        SortOrder::Descending => "Descending",
     }
 }
 

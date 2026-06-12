@@ -1,7 +1,9 @@
 mod snapshot;
+mod sort;
 mod splitter;
 
 pub(crate) use snapshot::PaneSnapshot;
+pub(crate) use sort::{sort_order_label, sort_role_label};
 pub(crate) use splitter::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSplitterDrag, normalize_pane_ratios,
     pane_row_width_from_child_bounds, pane_splitter, pane_width_available, split_ratio_eq,

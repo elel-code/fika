@@ -1,4 +1,5 @@
 mod layout;
+mod projection;
 mod slots;
 mod snapshot;
 
@@ -6,6 +7,7 @@ pub(crate) use layout::{
     CompactColumnWidthCache, compact_layout_for_filtered_model, compact_layout_for_model,
     compact_text_width, model_index_for_layout_index,
 };
+pub(crate) use projection::{ContentItemHit, PaneLayoutProjection};
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
     VisibleItemSnapshot, format_entry_kind_label, visible_item_thumbnail_path,

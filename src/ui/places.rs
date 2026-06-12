@@ -1,13 +1,18 @@
+mod devices;
 mod model;
+mod projection;
 mod snapshot;
 
+pub(crate) use devices::replace_removable_device_places;
 pub(crate) use model::{
-    DEVICES_GROUP, PlaceEntry, REMOVABLE_DEVICES_GROUP, active_place_index, build_places,
-    default_place_label, place_icon_for, place_icon_snapshot, place_is_mounted,
-    place_is_network_root, read_live_device_snapshot, removable_device_place_entries,
+    DEVICES_GROUP, PlaceEntry, REMOVABLE_DEVICES_GROUP, build_places, default_place_label,
+    read_live_device_snapshot, removable_device_place_entries,
 };
 #[cfg(test)]
-pub(crate) use model::{NETWORK_GROUP, build_places_with_devices};
+pub(crate) use model::{
+    NETWORK_GROUP, active_place_index, build_places_with_devices, place_is_mounted,
+};
+pub(crate) use projection::place_snapshots_for;
 pub(crate) use snapshot::{PlaceIcon, PlaceSnapshot};
 
 use crate::FikaApp;
