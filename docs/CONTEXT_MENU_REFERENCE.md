@@ -121,6 +121,14 @@ item-vs-blank event boundaries, and later submenu behavior.
     application `.desktop` `Actions=` entries and KDE service menu files with
     `X-KDE-ServiceTypes=KonqPopupMenu/Plugin`; execution goes through the same
     systemd transient unit launcher path as Open With.
+  - Open With's "Other Application..." row opens a GPUI application chooser
+    backed by the core launcher cache. Choosing an application reuses the same
+    `DesktopLaunchPlan` and `launch_with_systemd_user()` path as direct Open
+    With rows.
+  - Multi-selection context menus expose the same Actions submenu only when the
+    core launcher finds actions that match every selected item and support
+    multi-path Exec field codes (`%F`/`%U`). Execution passes the pane-local
+    selected path list through the service menu launch plan.
   - `properties_for_path()` and `properties_for_selection()` build the current
     GPUI Properties dialog data from `symlink_metadata()` only. Directory sizes
     are not recursively scanned on the UI path.
@@ -128,11 +136,11 @@ item-vs-blank event boundaries, and later submenu behavior.
 ## Current Gap List
 
 - Implement Icons and Details view modes behind the existing View Mode submenu.
-- Add the "Other Application..." chooser and default-app update flow. Open With
-  execution and service menu action execution are now driven by core launcher
-  data and the systemd launcher path.
+- Add default-app update flow from the application chooser. Open With execution,
+  Other Application execution, and service menu action execution are now driven
+  by core launcher data and the systemd launcher path.
 - Add Open in New Window.
-- Add remaining multi-selection differences such as Compress, service action
-  intersections, and batch rename.
+- Add remaining multi-selection differences such as built-in Compress fallback
+  when no service menu exists and batch rename.
 - Complete Trash-specific conflict handling and Details columns.
 - Complete removable device actions and Places drop/reorder behavior.

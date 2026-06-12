@@ -53,6 +53,24 @@ pub struct ServiceMenuAction {
     pub source_name: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceMenuTarget {
+    pub mime_type: Option<String>,
+    pub is_dir: bool,
+}
+
+impl ServiceMenuTarget {
+    pub fn new(mime_type: Option<&str>, is_dir: bool) -> Self {
+        Self {
+            mime_type: mime_type
+                .map(str::trim)
+                .filter(|mime| !mime.is_empty())
+                .map(str::to_string),
+            is_dir,
+        }
+    }
+}
+
 impl From<(&DesktopApplication, bool)> for MimeApplication {
     fn from((app, is_default): (&DesktopApplication, bool)) -> Self {
         Self {
@@ -183,6 +201,9 @@ impl DesktopApplication {
         paths: &[PathBuf],
     ) -> Option<DesktopLaunchPlan> {
         let action = self.actions.iter().find(|action| action.id == action_id)?;
+        if !desktop_action_supports_path_count(action, paths.len()) {
+            return None;
+        }
         desktop_launch_plan_for_exec(
             service_action_launch_desktop_id(&self.id, &action.id),
             self.desktop_file.clone(),
@@ -200,6 +221,9 @@ impl DesktopServiceMenu {
         paths: &[PathBuf],
     ) -> Option<DesktopLaunchPlan> {
         let action = self.actions.iter().find(|action| action.id == action_id)?;
+        if !desktop_action_supports_path_count(action, paths.len()) {
+            return None;
+        }
         desktop_launch_plan_for_exec(
             service_action_launch_desktop_id(&self.id, &action.id),
             self.desktop_file.clone(),
@@ -324,20 +348,51 @@ impl MimeApplicationCache {
             .and_then(|index| self.apps.get(index))
     }
 
+    pub fn all_applications(&self) -> Vec<MimeApplication> {
+        self.apps
+            .iter()
+            .map(|app| MimeApplication::from((app, false)))
+            .collect()
+    }
+
     pub fn service_actions_for_target(
         &self,
         mime: Option<&str>,
         is_dir: bool,
     ) -> Vec<ServiceMenuAction> {
+        self.service_actions_for_targets(&[ServiceMenuTarget::new(mime, is_dir)])
+    }
+
+    pub fn service_actions_for_targets(
+        &self,
+        targets: &[ServiceMenuTarget],
+    ) -> Vec<ServiceMenuAction> {
+        if targets.is_empty() {
+            return Vec::new();
+        }
         let mut actions = Vec::new();
         let mut seen = HashSet::new();
-        let normalized_mime = target_mime(mime, is_dir);
+        let multi_target_count = targets.len();
+        let first = &targets[0];
+        let first_mime = target_mime(first.mime_type.as_deref(), first.is_dir);
 
-        for app in self.application_indexes_for_target(normalized_mime, is_dir) {
-            let Some(app) = self.apps.get(app) else {
+        for app_index in self.application_indexes_for_target(first_mime, first.is_dir) {
+            let Some(app) = self.apps.get(app_index) else {
                 continue;
             };
+            if !targets.iter().all(|target| {
+                self.application_matches_target(
+                    app_index,
+                    target.mime_type.as_deref(),
+                    target.is_dir,
+                )
+            }) {
+                continue;
+            }
             for action in &app.actions {
+                if !desktop_action_supports_path_count(action, multi_target_count) {
+                    continue;
+                }
                 let id = application_service_action_id(&app.id, &action.id);
                 if seen.insert(id.clone()) {
                     actions.push(ServiceMenuAction {
@@ -350,10 +405,15 @@ impl MimeApplicationCache {
         }
 
         for menu in &self.service_menus {
-            if !service_menu_matches_target(menu, normalized_mime, is_dir) {
+            if !targets.iter().all(|target| {
+                service_menu_matches_target(menu, target.mime_type.as_deref(), target.is_dir)
+            }) {
                 continue;
             }
             for action in &menu.actions {
+                if !desktop_action_supports_path_count(action, multi_target_count) {
+                    continue;
+                }
                 let id = desktop_service_menu_action_id(&menu.id, &action.id);
                 if seen.insert(id.clone()) {
                     actions.push(ServiceMenuAction {
@@ -414,6 +474,21 @@ impl MimeApplicationCache {
             }
         }
         indexes
+    }
+
+    fn application_matches_target(&self, index: usize, mime: Option<&str>, is_dir: bool) -> bool {
+        let normalized_mime = target_mime(mime, is_dir);
+        if let Some(mime) = normalized_mime
+            && self
+                .apps_by_mime
+                .get(mime)
+                .is_some_and(|indexes| indexes.iter().any(|candidate| *candidate == index))
+        {
+            return true;
+        }
+        self.apps
+            .get(index)
+            .is_some_and(|app| desktop_mimes_match_target(&app.mime_types, normalized_mime, is_dir))
     }
 
     fn insert_application(&mut self, app: DesktopApplication) {
@@ -1232,9 +1307,10 @@ fn desktop_mimes_match_target(
 
 fn service_menu_matches_target(
     menu: &DesktopServiceMenu,
-    target_mime: Option<&str>,
+    mime: Option<&str>,
     is_dir: bool,
 ) -> bool {
+    let target_mime = target_mime(mime, is_dir);
     desktop_mimes_match_target(&menu.mime_types, target_mime, is_dir)
 }
 
@@ -1256,6 +1332,33 @@ fn desktop_mime_matches_target(pattern: &str, target_mime: Option<&str>, is_dir:
         return target_mime
             .split_once('/')
             .is_some_and(|(target_prefix, _)| target_prefix == prefix);
+    }
+    false
+}
+
+fn desktop_action_supports_path_count(action: &DesktopAction, path_count: usize) -> bool {
+    path_count <= 1 || exec_supports_multiple_paths(&action.exec)
+}
+
+fn exec_supports_multiple_paths(exec: &str) -> bool {
+    split_exec_line(exec).is_some_and(|tokens| {
+        tokens
+            .iter()
+            .any(|token| exec_token_contains_multi_file_code(token))
+    })
+}
+
+fn exec_token_contains_multi_file_code(token: &str) -> bool {
+    let mut chars = token.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            continue;
+        }
+        match chars.next() {
+            Some('%') => {}
+            Some('F' | 'U') => return true,
+            Some(_) | None => {}
+        }
     }
     false
 }
@@ -1541,6 +1644,87 @@ text/plain=sender.desktop;\n",
     }
 
     #[test]
+    fn service_actions_for_targets_intersect_targets_and_require_multi_exec() {
+        let mut app = desktop_app("sender.desktop", "Sender", &["text/plain"]);
+        app.actions.push(DesktopAction {
+            id: "send-many".to_string(),
+            name: "Send Many".to_string(),
+            exec: "sender %F".to_string(),
+        });
+        app.actions.push(DesktopAction {
+            id: "send-one".to_string(),
+            name: "Send One".to_string(),
+            exec: "sender %f".to_string(),
+        });
+        let menu = DesktopServiceMenu {
+            id: "archive.desktop".to_string(),
+            desktop_file: PathBuf::from("/servicemenus/archive.desktop"),
+            name: "Archive Tools".to_string(),
+            mime_types: vec!["all/allfiles".to_string()],
+            service_types: vec!["KonqPopupMenu/Plugin".to_string()],
+            actions: vec![
+                DesktopAction {
+                    id: "compress".to_string(),
+                    name: "Compress".to_string(),
+                    exec: "ark --add %F".to_string(),
+                },
+                DesktopAction {
+                    id: "inspect".to_string(),
+                    name: "Inspect One".to_string(),
+                    exec: "inspector %f".to_string(),
+                },
+            ],
+        };
+        let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
+            vec![app],
+            vec![menu],
+            &[],
+        );
+        let targets = vec![
+            ServiceMenuTarget::new(Some("text/plain"), false),
+            ServiceMenuTarget::new(Some("text/plain"), false),
+        ];
+
+        let actions = cache
+            .service_actions_for_targets(&targets)
+            .into_iter()
+            .map(|action| action.label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec!["Send Many".to_string(), "Compress".to_string()]
+        );
+    }
+
+    #[test]
+    fn service_action_launch_plan_rejects_multi_paths_for_single_file_exec() {
+        let mut app = desktop_app("sender.desktop", "Sender", &["text/plain"]);
+        app.actions.push(DesktopAction {
+            id: "send-one".to_string(),
+            name: "Send One".to_string(),
+            exec: "sender %f".to_string(),
+        });
+        let cache = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
+            vec![app],
+            Vec::new(),
+            &[],
+        );
+        let action = cache
+            .service_actions_for_target(Some("text/plain"), false)
+            .remove(0);
+
+        assert!(
+            cache
+                .service_action_launch_plan(
+                    &action.id,
+                    &[PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")]
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
     fn mimeapps_parser_reads_default_added_and_removed_groups() {
         let list = parse_mimeapps_list(
             "\
@@ -1596,6 +1780,23 @@ text/plain=removed.desktop;\n",
                 ("Declared".to_string(), false),
             ]
         );
+    }
+
+    #[test]
+    fn mime_application_cache_lists_all_applications_for_other_application_picker() {
+        let apps = vec![
+            desktop_app("writer.desktop", "Writer", &[]),
+            desktop_app("viewer.desktop", "Viewer", &["text/plain"]),
+        ];
+
+        let cache = MimeApplicationCache::from_applications_and_mimeapps(apps, &[]);
+        let names = cache
+            .all_applications()
+            .into_iter()
+            .map(|app| app.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Viewer".to_string(), "Writer".to_string()]);
     }
 
     #[test]

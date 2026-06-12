@@ -117,13 +117,13 @@
   - 参考：Dolphin 在空白目录区域右键弹出 `DolphinContextMenu`（包含 Paste、Sort By、View Mode、Properties 等）。
   - 剩余验收：补 Icons/Details view mode、打开终端和完整 Dolphin-like action grouping。
 - [~] 实现文件/目录右键菜单。
-  - 已完成：item core 区域右键弹出菜单；未选中 item 先按 `PaneId` 选中；菜单包含 Open/Open With、Rename、Copy、Copy Location、Cut、Move to Trash、Properties；Copy Location 使用 GPUI clipboard 写入真实系统剪贴板；目录 item 增加 Open in New Pane；单目录右键 Paste 目标为该目录，和 Dolphin `createPasteAction()` 一致；文件 item 的 Open With 走 core `MimeApplicationCache`，按 `mimeapps.list` default/added/removed 规则和 `.desktop` `MimeType=` 生成动态子菜单；右键 item 停止 rubber-band；单项右键菜单已增加 core 驱动的 Actions 子菜单，来自应用 `.desktop` `Actions=` 和 KDE `Type=Service` + `X-KDE-ServiceTypes=KonqPopupMenu/Plugin` service menu，action 执行复用 systemd launcher。
+  - 已完成：item core 区域右键弹出菜单；未选中 item 先按 `PaneId` 选中；菜单包含 Open/Open With、Rename、Copy、Copy Location、Cut、Move to Trash、Properties；Copy Location 使用 GPUI clipboard 写入真实系统剪贴板；目录 item 增加 Open in New Pane；单目录右键 Paste 目标为该目录，和 Dolphin `createPasteAction()` 一致；文件 item 的 Open With 走 core `MimeApplicationCache`，按 `mimeapps.list` default/added/removed 规则和 `.desktop` `MimeType=` 生成动态子菜单；右键 item 停止 rubber-band；单项右键菜单已增加 core 驱动的 Actions 子菜单，来自应用 `.desktop` `Actions=` 和 KDE `Type=Service` + `X-KDE-ServiceTypes=KonqPopupMenu/Plugin` service menu，action 执行复用 systemd launcher；多选右键菜单也会显示整组选中项共同匹配且支持 `%F/%U` 多路径 Exec 的 Actions。
   - 参考：Dolphin 选中单文件时右键菜单包含 Open With、Cut/Copy、Rename、Move to Trash、Properties 等；选中目录时额外包含 Open in New Tab/Window。
-  - 剩余验收：补 Other Application chooser、Open in New Window、multi-select 差异菜单、service menu 分组/优先级和按文件类型动态 action state。
+  - 剩余验收：补 Open in New Window、更多 multi-select 差异菜单、service menu 分组/优先级和按文件类型动态 action state。
 - [~] 实现多选右键菜单。
-  - 已完成：右键目标属于多选时，菜单生成批量 Copy、Cut、Move to Trash、Properties，不再显示单文件/单目录专属 Open、Open With、Rename 或 Open in New Pane；Properties 汇总数量、类型计数和非目录文件大小，不递归扫描目录。
+  - 已完成：右键目标属于多选时，菜单生成批量 Copy、Cut、Move to Trash、Properties，不再显示单文件/单目录专属 Open、Open With、Rename 或 Open in New Pane；Properties 汇总数量、类型计数和非目录文件大小，不递归扫描目录；多选 Actions 子菜单只显示所有选中项共同匹配并支持多路径 Exec field code 的 service actions，执行时把整组选中路径传给 systemd launcher。
   - 参考：Dolphin 多选时右键菜单不包含单文件专属项（如 Open With），只显示批量操作。
-  - 剩余验收：补 Compress 和“全是目录”的批量专属操作。
+  - 剩余验收：补无系统 service menu 时的内置 Compress fallback 和“全是目录”的批量专属操作。
 - [~] 实现子菜单定位。
   - 参考：Dolphin 使用 `QMenu::popup()` 时传入 `QPoint` 指定弹出位置，子菜单（Open With、Sort By 等）由 Qt 自动处理级联定位；Dolphin 不对子菜单做自定义偏移。
   - 已完成：当前 GPUI overlay 支持一级 `ContextMenuSubmenu`，父菜单项 hover/点击打开右侧子菜单；根据窗口宽度自动翻转到左侧，并按父菜单行计算垂直位置；Sort By / View Mode 已接入该结构。
@@ -225,14 +225,14 @@
   - 参考：cosmic-files `src/mime_icon.rs` 的 `xdg_mime::SharedMimeInfo` / fallback MIME 识别；Dolphin `KFileItemModel::retrieveData()`、`KFileItemModelRolesUpdater` 和 `KFileItemListView` 的 iconName/genericIconName 执行流；`xdg-mime` / `shared-mime-info` 数据库。
   - 已完成：新增 `src/core/mime.rs`，读取系统 shared-mime-info 的 `globs2`、`icons`、`generic-icons` 和 MIME XML 图标声明；支持 literal filename、multi-suffix、extension 和常见 magic bytes 双重识别；`EntryData` 已携带 `mime_type: Option<Arc<str>>`；目录 entry 构建先走 filename/glob 快路径，只有 fallback 到 `application/octet-stream` 的文件才读取少量文件头做 magic sniff，避免大目录普通文件全部打开；图标候选使用 MIME-specific icon、shared-mime-info icon、generic icon 和 unknown fallback。
   - 已完成补充：新增 `src/core/launcher.rs`，解析 `.desktop` `Desktop Entry`、`Desktop Action`、`MimeType=`、Exec field code 和 `mimeapps.list` 的 Default/Added/Removed Associations；`src/main.rs` 只消费 core 输出的 `MimeApplication` 列表生成 Open With 子菜单，不在 GPUI widget 内解析 desktop 文件；Open With launch plan 已转换为 systemd user transient unit 并通过 session bus `StartTransientUnit()` 启动；core 已发现 KDE service menu 目录，解析 `Type=Service` + `X-KDE-ServiceTypes=KonqPopupMenu/Plugin` + `Actions=`，并按目标 MIME/目录类型生成右键 Actions 子菜单项，点击后通过同一 systemd launcher 执行。
-  - 剩余验收：继续对齐 Dolphin `KFileItemModelRolesUpdater`，把昂贵 MIME/thumbnail/preview 角色拆到可取消的后台 role updater；支持 parent MIME 查询；Service Menu 仍需补分组/优先级、多选交集和更多 `X-KDE-*` 条件。
+  - 剩余验收：继续对齐 Dolphin `KFileItemModelRolesUpdater`，把昂贵 MIME/thumbnail/preview 角色拆到可取消的后台 role updater；支持 parent MIME 查询；Service Menu 仍需补分组/优先级和更多 `X-KDE-*` 条件。
 - [x] 通过 systemd 创建子进程（Open With / 应用启动）。
   - 参考：cosmic-files 中 `process.rs` / `exec.rs` 使用 systemd `busctl` / `org.freedesktop.systemd1` 启动应用进程；`zbus` crate 的 systemd Manager interface。
   - 验收：`fika-core` 新增 `src/core/launcher.rs`，通过 D-Bus 调用 `org.freedesktop.systemd1.Manager.StartTransientUnit()` 启动应用进程；`Open With` action 接受 desktop file path / MIME type，查找关联的 `.desktop` 文件，通过 launcher 启动；进程生命周期由 systemd user instance 管理，fika 不持有子进程句柄；启动失败时返回结构化错误（找不到应用、权限不足等）。
   - 已完成：`DesktopLaunchPlan` 现在生成 `SystemdLaunchUnit`，解析可执行文件绝对路径，构造 `Description`、`Type=exec`、`ExecStart` 和必要桌面环境变量属性；`launch_with_systemd_user()` 通过 session bus 创建 systemd manager proxy 并调用 `StartTransientUnit()`；Open With action 从 pane-local context menu 路由到该 launcher，成功/失败都回写触发 pane 的状态栏；没有 `std::process::Command` fallback。
 - [~] Open With / Service Menu 完整实现。
   - 参考：Dolphin 的 `KFileItemActions` 和 service menu（`.desktop` 文件的 `Actions=` key）；`xdg-mime` 的 `mimeapps.list` 关联。
-  - 已完成：Open With 子菜单动态列出可打开单文件 MIME 类型的应用，默认应用排在顶部，`mimeapps.list` Added Associations 排在 desktop 自声明关联之前，Removed Associations 会从菜单中移除；`.desktop` `Actions=` 已在 core parser 中保留为结构化 `DesktopAction`；点击具体应用会生成 core launch plan 并通过 systemd user transient unit 启动，pane-local 状态反馈真实 launch 结果，不直接 `std::process::Command` 启动；应用 `.desktop` action 和 KDE service menu action 已统一为 core `ServiceMenuAction`，单项右键 Actions 子菜单可执行匹配当前 MIME/目录类型的 action。
+  - 已完成：Open With 子菜单动态列出可打开单文件 MIME 类型的应用，默认应用排在顶部，`mimeapps.list` Added Associations 排在 desktop 自声明关联之前，Removed Associations 会从菜单中移除；`.desktop` `Actions=` 已在 core parser 中保留为结构化 `DesktopAction`；点击具体应用会生成 core launch plan 并通过 systemd user transient unit 启动，pane-local 状态反馈真实 launch 结果，不直接 `std::process::Command` 启动；Other Application 选择器列出 core desktop application cache 中的所有应用，选择后复用同一 `DesktopLaunchPlan` + systemd launcher 路径；应用 `.desktop` action 和 KDE service menu action 已统一为 core `ServiceMenuAction`，单项右键 Actions 子菜单可执行匹配当前 MIME/目录类型的 action；多选 Actions 子菜单按选中项 MIME/目录类型取交集，且只显示支持 `%F/%U` 的多路径 action。
   - 验收：右键菜单 Open With 子菜单动态列出可打开该 MIME 类型的应用（按 `mimeapps.list` 优先级排序）；顶部显示默认应用，底部显示 "Other Application..." 选项弹出应用选择列表；Service Menu 根据 desktop file `Actions=` 和 `X-KDE-ServiceTypes=` 动态生成额外操作项（如 "Send To"、"Compress"）；service menu action 执行通过 systemd launcher 启动对应进程。
 - [ ] Ark 压缩文件集成。
   - 参考：Dolphin 通过 `kerfuffle`（Ark 核心库）和 service menu 实现压缩/解压集成；`KFileItemActions` 的 `Compress` / `Extract` action；Ark 的 D-Bus 接口（`org.kde.ark`）或命令行调用（`ark --extract` / `ark --add`）；KIO slave（`tar:/`、`zip:/`）实现压缩文件内部浏览。

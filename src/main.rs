@@ -10,7 +10,7 @@ use fika_core::{
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, ServiceMenuAction,
-    SystemdLaunchResult, launch_with_systemd_user,
+    ServiceMenuTarget, SystemdLaunchResult, launch_with_systemd_user,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -566,6 +566,14 @@ const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
 struct PropertiesDialogState {
     title: String,
     rows: Vec<PropertyRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ApplicationChooserState {
+    pane_id: PaneId,
+    path: PathBuf,
+    mime_type: Option<Arc<str>>,
+    applications: Vec<MimeApplication>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2581,6 +2589,7 @@ pub(crate) struct FikaApp {
     context_menu_tree_hovered: bool,
     context_submenu_hide_generation: u64,
     properties_dialog: Option<PropertiesDialogState>,
+    application_chooser: Option<ApplicationChooserState>,
     pane_statuses: HashMap<PaneId, String>,
     operation_pending: bool,
     operation_pane: Option<PaneId>,
@@ -2647,6 +2656,7 @@ impl FikaApp {
             context_menu_tree_hovered: false,
             context_submenu_hide_generation: 0,
             properties_dialog: None,
+            application_chooser: None,
             pane_statuses: HashMap::new(),
             operation_pending: false,
             operation_pane: None,
@@ -3602,6 +3612,7 @@ impl FikaApp {
             self.dismiss_context_menu();
         }
         self.properties_dialog = None;
+        self.clear_application_chooser_for_pane(pane_id);
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
@@ -4455,6 +4466,16 @@ impl FikaApp {
             .is_some_and(|draft| draft.pane_id == pane_id)
         {
             self.place_draft = None;
+        }
+    }
+
+    fn clear_application_chooser_for_pane(&mut self, pane_id: PaneId) {
+        if self
+            .application_chooser
+            .as_ref()
+            .is_some_and(|chooser| chooser.pane_id == pane_id)
+        {
+            self.application_chooser = None;
         }
     }
 
@@ -6191,9 +6212,9 @@ impl FikaApp {
                     .unwrap_or_default()
             })
             .unwrap_or_default();
-        let service_actions = self
-            .mime_applications
-            .service_actions_for_target(mime_type.as_deref(), is_dir);
+        let service_actions = self.mime_applications.service_actions_for_targets(
+            &self.service_menu_targets_for_context(pane_id, &path, is_dir, selection_count),
+        );
         let menu_position = ViewPoint {
             x: position.x.as_f32(),
             y: position.y.as_f32(),
@@ -6219,6 +6240,51 @@ impl FikaApp {
         let pane = self.panes.pane(pane_id)?;
         let index = pane.model.index_of_path(path)?;
         pane.model.get(index)?.mime_type.clone()
+    }
+
+    fn service_menu_targets_for_context(
+        &self,
+        pane_id: PaneId,
+        path: &Path,
+        is_dir: bool,
+        selection_count: usize,
+    ) -> Vec<ServiceMenuTarget> {
+        if selection_count > 1
+            && let Some(pane) = self.panes.pane(pane_id)
+        {
+            let targets = pane
+                .model
+                .entries()
+                .iter()
+                .filter(|entry| pane.selection.is_selected(entry.id))
+                .map(|entry| ServiceMenuTarget {
+                    mime_type: entry.mime_type.as_deref().map(str::to_string),
+                    is_dir: entry.is_dir,
+                })
+                .collect::<Vec<_>>();
+            if !targets.is_empty() {
+                return targets;
+            }
+        }
+        vec![ServiceMenuTarget::new(
+            self.mime_type_for_pane_path(pane_id, path).as_deref(),
+            is_dir,
+        )]
+    }
+
+    fn service_menu_paths_for_context(
+        &self,
+        pane_id: PaneId,
+        path: PathBuf,
+        selection_count: usize,
+    ) -> Vec<PathBuf> {
+        if selection_count > 1 {
+            let selected_paths = self.panes.selected_paths(pane_id).unwrap_or_default();
+            if !selected_paths.is_empty() {
+                return selected_paths;
+            }
+        }
+        vec![path]
     }
 
     fn trash_view_state(&self, pane_id: PaneId) -> (bool, bool) {
@@ -6335,6 +6401,36 @@ impl FikaApp {
         self.properties_dialog = None;
     }
 
+    fn dismiss_application_chooser(&mut self) {
+        self.application_chooser = None;
+    }
+
+    fn show_application_chooser(
+        &mut self,
+        pane_id: PaneId,
+        path: PathBuf,
+        mime_type: Option<Arc<str>>,
+    ) {
+        let applications = self.mime_applications.all_applications();
+        if applications.is_empty() {
+            self.set_pane_status(pane_id, "No applications found");
+            return;
+        }
+        self.application_chooser = Some(ApplicationChooserState {
+            pane_id,
+            path,
+            mime_type,
+            applications,
+        });
+    }
+
+    fn choose_application_for_open_with(&mut self, desktop_id: String, cx: &mut Context<Self>) {
+        let Some(chooser) = self.application_chooser.take() else {
+            return;
+        };
+        self.open_with_application(chooser.pane_id, &desktop_id, chooser.path, cx);
+    }
+
     fn show_properties_for_context(&mut self, pane_id: PaneId, target: ContextMenuTarget) {
         let dialog = match target {
             ContextMenuTarget::Blank { .. } => {
@@ -6411,9 +6507,26 @@ impl FikaApp {
                 },
             ) => self.open_with_application(menu.pane_id, &desktop_id, path, cx),
             (
+                ContextMenuAction::OtherApplication,
+                ContextMenuTarget::Item {
+                    path,
+                    is_dir: false,
+                    mime_type,
+                    ..
+                },
+            ) => self.show_application_chooser(menu.pane_id, path, mime_type),
+            (
                 ContextMenuAction::RunServiceMenuAction { action_id },
-                ContextMenuTarget::Item { path, .. },
-            ) => self.run_service_menu_action(menu.pane_id, &action_id, path, cx),
+                ContextMenuTarget::Item {
+                    path,
+                    selection_count,
+                    ..
+                },
+            ) => {
+                let paths =
+                    self.service_menu_paths_for_context(menu.pane_id, path, selection_count);
+                self.run_service_menu_action(menu.pane_id, &action_id, paths, cx);
+            }
             (ContextMenuAction::Open, ContextMenuTarget::Place { path, .. }) => {
                 self.open_place(path);
             }
@@ -6552,7 +6665,6 @@ impl FikaApp {
                 ContextMenuAction::SortBySubmenu
                 | ContextMenuAction::OpenWithSubmenu
                 | ContextMenuAction::ServiceMenuSubmenu
-                | ContextMenuAction::OtherApplication
                 | ContextMenuAction::ViewModeSubmenu
                 | ContextMenuAction::ViewIcons
                 | ContextMenuAction::ViewDetails,
@@ -6590,6 +6702,7 @@ impl FikaApp {
             | (ContextMenuAction::DeletePermanently, _)
             | (ContextMenuAction::EmptyTrash, _)
             | (ContextMenuAction::OpenWithApplication { .. }, _)
+            | (ContextMenuAction::OtherApplication, _)
             | (ContextMenuAction::RunServiceMenuAction { .. }, _) => {}
         }
     }
@@ -6654,10 +6767,10 @@ impl FikaApp {
     fn service_menu_launch_plan(
         &self,
         action_id: &str,
-        path: &Path,
+        paths: &[PathBuf],
     ) -> Result<DesktopLaunchPlan, String> {
         self.mime_applications
-            .service_action_launch_plan(action_id, &[path.to_path_buf()])
+            .service_action_launch_plan(action_id, paths)
             .ok_or_else(|| format!("Service action not found: {action_id}"))
     }
 
@@ -6665,14 +6778,18 @@ impl FikaApp {
         &mut self,
         pane_id: PaneId,
         action_id: &str,
-        path: PathBuf,
+        paths: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
         if self.operation_pending {
             self.set_pane_status(pane_id, "File operation already running");
             return;
         }
-        let plan = match self.service_menu_launch_plan(action_id, &path) {
+        if paths.is_empty() {
+            self.set_pane_status(pane_id, "No item selected");
+            return;
+        }
+        let plan = match self.service_menu_launch_plan(action_id, &paths) {
             Ok(plan) => plan,
             Err(message) => {
                 self.set_pane_status(pane_id, message);
@@ -6680,10 +6797,10 @@ impl FikaApp {
             }
         };
         let app_name = plan.app_name.clone();
-        let _ = self.panes.select_only(pane_id, path.clone());
+        let target_label = service_menu_target_label(&paths);
         self.begin_pane_operation(
             pane_id,
-            format!("Running {} for {}", app_name, path.display()),
+            format!("Running {} for {}", app_name, target_label),
         );
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
@@ -6691,9 +6808,9 @@ impl FikaApp {
                 async move {
                     let result = launch_with_systemd_user(plan).await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.finish_service_menu_action(OpenWithLaunchResult {
+                        app.finish_service_menu_action(ServiceMenuLaunchResult {
                             pane_id,
-                            path,
+                            target_label,
                             app_name,
                             result,
                         });
@@ -6727,14 +6844,14 @@ impl FikaApp {
         }
     }
 
-    fn finish_service_menu_action(&mut self, result: OpenWithLaunchResult) {
+    fn finish_service_menu_action(&mut self, result: ServiceMenuLaunchResult) {
         match result.result {
             Ok(launch) => self.finish_pane_operation(
                 result.pane_id,
                 format!(
                     "Ran {} for {} via {} systemd unit(s)",
                     result.app_name,
-                    result.path.display(),
+                    result.target_label,
                     launch.units.len()
                 ),
             ),
@@ -6742,8 +6859,7 @@ impl FikaApp {
                 result.pane_id,
                 format!(
                     "Cannot run {} for {}: {err}",
-                    result.app_name,
-                    result.path.display()
+                    result.app_name, result.target_label
                 ),
             ),
         }
@@ -6752,6 +6868,11 @@ impl FikaApp {
     fn handle_keystroke(&mut self, event: &gpui::KeystrokeEvent, cx: &mut Context<Self>) -> bool {
         if event.keystroke.key.eq_ignore_ascii_case("escape") && self.properties_dialog.is_some() {
             self.dismiss_properties_dialog();
+            return true;
+        }
+        if event.keystroke.key.eq_ignore_ascii_case("escape") && self.application_chooser.is_some()
+        {
+            self.dismiss_application_chooser();
             return true;
         }
         if event.keystroke.key.eq_ignore_ascii_case("escape") && self.context_menu.is_some() {
@@ -7085,6 +7206,7 @@ impl Render for FikaApp {
         }
         let context_menu = self.context_menu.clone();
         let properties_dialog = self.properties_dialog.clone();
+        let application_chooser = self.application_chooser.clone();
         let place_draft = self.place_draft.clone();
         let clipboard_available = self.clipboard.is_some();
         let app = cx.weak_entity();
@@ -7203,6 +7325,9 @@ impl Render for FikaApp {
             })
             .when_some(properties_dialog, |root, dialog| {
                 root.child(properties_dialog_overlay(dialog, cx))
+            })
+            .when_some(application_chooser, |root, chooser| {
+                root.child(application_chooser_overlay(chooser, cx))
             })
             .when_some(place_draft, |root, draft| {
                 root.child(place_draft_overlay(draft, cx))
@@ -7479,15 +7604,26 @@ fn context_menu_actions(
             context_menu_item(ContextMenuAction::Properties, "Properties"),
         ],
         ContextMenuTarget::Item {
-            is_dir,
             selection_count,
+            service_actions,
             ..
-        } if *selection_count > 1 => vec![
-            context_menu_item(ContextMenuAction::Copy, "Copy"),
-            context_menu_item(ContextMenuAction::Cut, "Cut"),
-            context_menu_item(ContextMenuAction::Trash, "Move to Trash"),
-            context_menu_item(ContextMenuAction::Properties, "Properties"),
-        ],
+        } if *selection_count > 1 => {
+            let mut actions = Vec::new();
+            if !service_actions.is_empty() {
+                actions.push(context_menu_submenu_item(
+                    ContextMenuAction::ServiceMenuSubmenu,
+                    "Actions",
+                    ContextMenuSubmenu::ServiceMenu,
+                ));
+            }
+            actions.extend([
+                context_menu_item(ContextMenuAction::Copy, "Copy"),
+                context_menu_item(ContextMenuAction::Cut, "Cut"),
+                context_menu_item(ContextMenuAction::Trash, "Move to Trash"),
+                context_menu_item(ContextMenuAction::Properties, "Properties"),
+            ]);
+            actions
+        }
         ContextMenuTarget::Item {
             is_dir,
             service_actions,
@@ -7663,7 +7799,7 @@ fn open_with_menu_actions(apps: &[MimeApplication]) -> Vec<ContextMenuItem> {
             })
             .collect::<Vec<_>>()
     };
-    actions.push(disabled_context_menu_item(
+    actions.push(context_menu_item(
         ContextMenuAction::OtherApplication,
         "Other Application...",
     ));
@@ -7688,6 +7824,45 @@ fn service_menu_actions(actions: &[ServiceMenuAction]) -> Vec<ContextMenuItem> {
             )
         })
         .collect()
+}
+
+fn service_menu_target_label(paths: &[PathBuf]) -> String {
+    match paths {
+        [path] => path.display().to_string(),
+        paths => format!("{} items", paths.len()),
+    }
+}
+
+fn sanitize_element_id(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "application".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn application_marker(name: &str) -> String {
+    let marker = name
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .take(2)
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if marker.is_empty() {
+        "APP".to_string()
+    } else {
+        marker
+    }
 }
 
 fn context_submenu_overlay(
@@ -7870,6 +8045,168 @@ fn properties_dialog_overlay(
                         .px_4()
                         .py_3()
                         .children(dialog.rows.into_iter().map(property_dialog_row)),
+                ),
+        )
+}
+
+fn application_chooser_overlay(
+    chooser: ApplicationChooserState,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    let title = chooser
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("Open With - {name}"))
+        .unwrap_or_else(|| "Open With".to_string());
+    let detail = chooser
+        .mime_type
+        .as_deref()
+        .map(|mime| format!("{} - {}", chooser.path.display(), mime))
+        .unwrap_or_else(|| chooser.path.display().to_string());
+
+    div()
+        .id("application-chooser-layer")
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x00000066))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
+                this.dismiss_application_chooser();
+                cx.notify();
+            }),
+        )
+        .child(
+            div()
+                .id("application-chooser-dialog")
+                .w(px(520.0))
+                .max_h(px(560.0))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0xc8ced6))
+                .bg(rgb(0xffffff))
+                .shadow_md()
+                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_4()
+                        .py_3()
+                        .border_b_1()
+                        .border_color(rgb(0xd5d9df))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(0x1f2328))
+                                        .child(title),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(rgb(0x59636e))
+                                        .child(detail),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .text_sm()
+                                .text_color(rgb(0x59636e))
+                                .hover(|button| button.bg(rgb(0xeaf1ff)))
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                                            this.dismiss_application_chooser();
+                                            cx.notify();
+                                        },
+                                    ),
+                                )
+                                .child("Close"),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("application-chooser-list")
+                        .max_h(px(480.0))
+                        .overflow_y_scroll()
+                        .py_1()
+                        .children(
+                            chooser
+                                .applications
+                                .into_iter()
+                                .map(|app| application_chooser_row(app, cx)),
+                        ),
+                ),
+        )
+}
+
+fn application_chooser_row(app: MimeApplication, cx: &mut Context<FikaApp>) -> Stateful<Div> {
+    let desktop_id = app.id.clone();
+    div()
+        .id(format!(
+            "application-choice-{}",
+            sanitize_element_id(&app.id)
+        ))
+        .flex()
+        .items_center()
+        .gap_3()
+        .px_4()
+        .py_2()
+        .min_w_0()
+        .hover(|row| row.bg(rgb(0xeaf1ff)))
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.choose_application_for_open_with(desktop_id.clone(), cx);
+            cx.notify();
+        }))
+        .child(
+            div()
+                .w(px(28.0))
+                .h(px(28.0))
+                .rounded_md()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgb(0xe8eef7))
+                .text_sm()
+                .text_color(rgb(0x2f6fed))
+                .child(application_marker(&app.name)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .truncate()
+                        .text_sm()
+                        .text_color(rgb(0x1f2328))
+                        .child(app.name),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(rgb(0x59636e))
+                        .child(app.desktop_file.display().to_string()),
                 ),
         )
 }
@@ -8446,6 +8783,14 @@ struct CreateItemResult {
 struct OpenWithLaunchResult {
     pane_id: PaneId,
     path: PathBuf,
+    app_name: String,
+    result: Result<SystemdLaunchResult, LauncherError>,
+}
+
+#[derive(Clone, Debug)]
+struct ServiceMenuLaunchResult {
+    pane_id: PaneId,
+    target_label: String,
     app_name: String,
     result: Result<SystemdLaunchResult, LauncherError>,
 }
@@ -9905,7 +10250,7 @@ mod tests {
         assert!(
             submenu
                 .iter()
-                .any(|item| item.action == ContextMenuAction::OtherApplication && !item.enabled)
+                .any(|item| item.action == ContextMenuAction::OtherApplication && item.enabled)
         );
     }
 
@@ -9942,6 +10287,40 @@ mod tests {
         assert_eq!(
             submenu.first().map(|item| item.label.as_str()),
             Some("Compress")
+        );
+    }
+
+    #[test]
+    fn context_menu_actions_offer_service_menu_submenu_for_multi_selection() {
+        let mut target = context_item_target("/tmp/readme.txt", false, 3);
+        if let ContextMenuTarget::Item {
+            service_actions, ..
+        } = &mut target
+        {
+            service_actions.push(ServiceMenuAction {
+                id: "service-menu:archive.desktop::compress".to_string(),
+                label: "Compress".to_string(),
+                source_name: "Archive Tools".to_string(),
+            });
+        }
+
+        let actions = context_menu_actions(&target, false)
+            .into_iter()
+            .map(|item| (item.action, item.submenu))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                (
+                    ContextMenuAction::ServiceMenuSubmenu,
+                    Some(ContextMenuSubmenu::ServiceMenu)
+                ),
+                (ContextMenuAction::Copy, None),
+                (ContextMenuAction::Cut, None),
+                (ContextMenuAction::Trash, None),
+                (ContextMenuAction::Properties, None),
+            ]
         );
     }
 
@@ -9988,6 +10367,46 @@ mod tests {
     }
 
     #[test]
+    fn other_application_picker_lists_all_apps_and_reuses_systemd_launch_plan() {
+        let mut app = test_app_with_entries("/tmp/fika-open-with-other", &["note.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        app.mime_applications = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![
+                test_desktop_application("viewer.desktop", "Viewer", "viewer %f", &["text/plain"]),
+                test_desktop_application("writer.desktop", "Writer", "writer %f", &[]),
+            ],
+            &[],
+        );
+
+        app.show_application_chooser(
+            pane_id,
+            PathBuf::from("/tmp/fika-open-with-other/note.txt"),
+            Some(Arc::from("text/plain")),
+        );
+
+        let chooser = app.application_chooser.as_ref().unwrap();
+        assert_eq!(chooser.pane_id, pane_id);
+        assert_eq!(chooser.mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(
+            chooser
+                .applications
+                .iter()
+                .map(|app| app.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Viewer", "Writer"]
+        );
+
+        let plan = app
+            .open_with_launch_plan(
+                "writer.desktop",
+                Path::new("/tmp/fika-open-with-other/note.txt"),
+            )
+            .unwrap();
+        assert_eq!(plan.app_name, "Writer");
+        assert_eq!(plan.commands[0].program, "writer");
+    }
+
+    #[test]
     fn service_menu_action_builds_systemd_launch_plan() {
         let mut app = test_app_with_entries("/tmp/fika-service-menu", &["note.txt"]);
         app.mime_applications = MimeApplicationCache::from_applications_service_menus_and_mimeapps(
@@ -10013,14 +10432,24 @@ mod tests {
             .id;
 
         let plan = app
-            .service_menu_launch_plan(&action_id, Path::new("/tmp/fika-service-menu/note.txt"))
+            .service_menu_launch_plan(
+                &action_id,
+                &[
+                    PathBuf::from("/tmp/fika-service-menu/note.txt"),
+                    PathBuf::from("/tmp/fika-service-menu/todo.txt"),
+                ],
+            )
             .unwrap();
 
         assert_eq!(plan.app_name, "Archive Tools: Compress");
         assert_eq!(plan.commands[0].program, "ark");
         assert_eq!(
             plan.commands[0].args,
-            vec!["--add", "/tmp/fika-service-menu/note.txt"]
+            vec![
+                "--add",
+                "/tmp/fika-service-menu/note.txt",
+                "/tmp/fika-service-menu/todo.txt"
+            ]
         );
     }
 
@@ -12897,6 +13326,7 @@ gtk-icon-theme-name=breeze\n"
             context_menu_tree_hovered: false,
             context_submenu_hide_generation: 0,
             properties_dialog: None,
+            application_chooser: None,
             pane_statuses: HashMap::new(),
             operation_pending: false,
             operation_pane: None,

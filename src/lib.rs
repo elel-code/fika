@@ -21,8 +21,8 @@ pub use core::file_ops;
 pub use core::filter::{FilteredModel, NameFilter, NameFilterMode};
 pub use core::launcher::{
     DesktopAction, DesktopApplication, DesktopLaunchCommand, DesktopLaunchPlan, DesktopServiceMenu,
-    LauncherError, MimeApplication, MimeApplicationCache, ServiceMenuAction, SystemdLaunchResult,
-    SystemdLaunchUnit, launch_with_systemd_user, systemd_launch_unit_name,
+    LauncherError, MimeApplication, MimeApplicationCache, ServiceMenuAction, ServiceMenuTarget,
+    SystemdLaunchResult, SystemdLaunchUnit, launch_with_systemd_user, systemd_launch_unit_name,
     systemd_units_for_launch_plan,
 };
 pub use core::mime::{

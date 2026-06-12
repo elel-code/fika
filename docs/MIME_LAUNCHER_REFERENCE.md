@@ -75,6 +75,10 @@ icon selection, Open With menu, and future process launching path.
     `X-KDE-ServiceTypes=KonqPopupMenu/Plugin` or `KFileItemAction/Plugin`.
   - Service menu actions are filtered by target MIME using exact MIME,
     `type/*`, `all/all`, `all/allfiles`, and `inode/directory` matching.
+  - Multi-selection service menu actions are an intersection across all
+    selected targets and require an Exec field that accepts multiple paths
+    (`%F` or `%U`), so single-file `%f/%u` actions are not offered for batch
+    operations.
   - It parses `mimeapps.list` `[Default Applications]`,
     `[Added Associations]`, and `[Removed Associations]`.
   - Application ordering mirrors the desktop association stack: default
@@ -92,12 +96,17 @@ icon selection, Open With menu, and future process launching path.
   - The selected application is launched through `launch_with_systemd_user()`;
     success and structured launcher errors are reported back to the originating
     pane status bar.
+  - The "Other Application..." dialog lists every application from the same
+    core desktop application cache, including apps that do not declare the
+    current MIME type. Selecting one still builds a `DesktopLaunchPlan` and
+    launches it through `launch_with_systemd_user()`.
   - Service menu action execution uses the same `DesktopLaunchPlan` and systemd
-    transient unit path as Open With.
+    transient unit path as Open With. Multi-selection actions pass the selected
+    path list to the launch plan instead of re-reading filesystem state.
 
 ## Remaining Work
 
 - Add parent MIME lookup for application fallback.
-- Add service menu submenu grouping, priority/order hints, multi-selection
-  action intersection, and additional `X-KDE-*` condition handling.
-- Add the "Other Application..." chooser and default-app update flow.
+- Add service menu submenu grouping, priority/order hints, and additional
+  `X-KDE-*` condition handling.
+- Add default-app update flow from the application chooser.
