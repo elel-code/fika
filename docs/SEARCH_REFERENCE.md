@@ -41,6 +41,10 @@ render-layer search.
 - Core model identity remains unchanged: `DirectoryModel` still stores all
   entries and stable `ItemId`s.
 - A pane-local filter state mirrors Dolphin's view-container filter state.
+- Filter bar UI state is split as a directory-style Rust module:
+  `src/ui/filter_bar.rs` is the module entry, and
+  `src/ui/filter_bar/state.rs` owns `FilterBarSnapshot`, `PaneFilterState`,
+  and filtered model cache key/entry structs.
 - The active filter produces a cached visible-index mapping from layout index
   to `DirectoryModel` index. The cache key is the pane id, model generation,
   filter mode, case sensitivity, and query.

@@ -1,7 +1,8 @@
 use crate::{
-    BreadcrumbSegment, FikaApp, FilterBarSnapshot, LocationDraftSnapshot, PaneSnapshot,
-    file_transfer_mode_for_modifiers, refresh_active_drag_cursor_for_transfer_mode,
+    FikaApp, PaneSnapshot, file_transfer_mode_for_modifiers,
+    refresh_active_drag_cursor_for_transfer_mode,
 };
+use fika_core::BreadcrumbSegment;
 use gpui::prelude::*;
 use gpui::{
     Bounds, Context, Div, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Pixels,
@@ -9,6 +10,8 @@ use gpui::{
 };
 
 use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
+use super::filter_bar::FilterBarSnapshot;
+use super::location_bar::LocationDraftSnapshot;
 use super::status_bar::status_bar;
 
 pub(crate) struct PaneProps {

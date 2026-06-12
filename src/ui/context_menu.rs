@@ -1,10 +1,16 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::FikaApp;
 use fika_core::{
-    MimeApplication, ServiceMenuAction, ServiceMenuPriority, ViewPoint, is_archive_mime_or_path,
+    MimeApplication, PaneId, ServiceMenuAction, ServiceMenuPriority, ViewPoint,
+    is_archive_mime_or_path,
 };
+use gpui::prelude::*;
+use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, img, px, rgb, rgba};
+
+use super::icons::{FileIconCache, FileIconSnapshot};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ContextMenuSubmenu {
@@ -28,6 +34,14 @@ pub(crate) struct ContextMenuOpenSubmenu {
 pub(crate) struct ContextMenuNestedSubmenu {
     pub(crate) submenu: ContextMenuSubmenu,
     pub(crate) parent_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ContextMenuState {
+    pub(crate) pane_id: PaneId,
+    pub(crate) target: ContextMenuTarget,
+    pub(crate) position: ViewPoint,
+    pub(crate) active_submenu: Option<ContextMenuOpenSubmenu>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -198,6 +212,646 @@ const CONTEXT_MENU_WIDTH: f32 = 196.0;
 pub(crate) const CONTEXT_MENU_ROW_HEIGHT: f32 = 28.0;
 pub(crate) const CONTEXT_MENU_VERTICAL_PADDING: f32 = 4.0;
 pub(crate) const CONTEXT_MENU_VIEWPORT_MARGIN: f32 = 8.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContextMenuRowScope {
+    Root,
+    Submenu,
+    NestedSubmenu,
+}
+
+pub(crate) fn context_menu_overlay(
+    menu: ContextMenuState,
+    clipboard_available: bool,
+    icon_snapshots: HashMap<ContextMenuIcon, FileIconSnapshot>,
+    viewport_width: f32,
+    viewport_height: f32,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    let actions = context_menu_actions(&menu.target, clipboard_available);
+    let submenu = menu
+        .active_submenu
+        .map(|open| (open, context_submenu_actions(open.submenu, &menu.target)));
+    let nested_submenu = menu.active_submenu.and_then(|open| {
+        open.nested.map(|nested| {
+            (
+                nested,
+                context_submenu_actions(nested.submenu, &menu.target),
+            )
+        })
+    });
+    let layout = context_menu_overlay_layout(
+        menu.position,
+        actions.len(),
+        menu.active_submenu,
+        submenu
+            .as_ref()
+            .map(|(_, actions)| actions.len())
+            .unwrap_or_default(),
+        nested_submenu
+            .as_ref()
+            .map(|(_, actions)| actions.len())
+            .unwrap_or_default(),
+        viewport_width,
+        viewport_height,
+    );
+    div()
+        .id("context-menu-layer")
+        .absolute()
+        .inset_0()
+        .occlude()
+        .bg(rgba(0x00000001))
+        .capture_any_mouse_down(cx.listener(
+            move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                let point = ViewPoint {
+                    x: event.position.x.as_f32(),
+                    y: event.position.y.as_f32(),
+                };
+                if !layout.contains(point) {
+                    this.dismiss_context_menu();
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            },
+        ))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
+                this.dismiss_context_menu();
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
+                this.dismiss_context_menu();
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_scroll_wheel(|_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_mouse_move(
+            cx.listener(move |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                let point = ViewPoint {
+                    x: event.position.x.as_f32(),
+                    y: event.position.y.as_f32(),
+                };
+                if this.set_context_menu_tree_hovered(layout.contains(point), cx) {
+                    cx.notify();
+                }
+                cx.stop_propagation();
+            }),
+        )
+        .child(
+            div()
+                .id(format!("context-menu-{}", menu.pane_id.0))
+                .absolute()
+                .left(px(layout.root.x))
+                .top(px(layout.root.y))
+                .w(px(layout.root.width))
+                .max_h(px(layout.root.max_height))
+                .overflow_y_scroll()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0xc8ced6))
+                .bg(rgb(0xffffff))
+                .shadow_md()
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_move(|_event, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                    if *hovered {
+                        this.cancel_context_submenu_hide();
+                        cx.notify();
+                    }
+                }))
+                .children(actions.into_iter().enumerate().map(|(index, action)| {
+                    context_menu_row(
+                        action,
+                        index,
+                        ContextMenuRowScope::Root,
+                        &icon_snapshots,
+                        cx,
+                    )
+                })),
+        )
+        .when_some(
+            submenu.zip(layout.submenu),
+            |layer, ((open, actions), rect)| {
+                layer.child(context_submenu_overlay(
+                    open,
+                    actions,
+                    rect,
+                    ContextMenuRowScope::Submenu,
+                    &icon_snapshots,
+                    cx,
+                ))
+            },
+        )
+        .when_some(
+            nested_submenu.zip(layout.nested_submenu),
+            |layer, ((open, actions), rect)| {
+                layer.child(context_nested_submenu_overlay(
+                    open,
+                    actions,
+                    rect,
+                    &icon_snapshots,
+                    cx,
+                ))
+            },
+        )
+}
+
+pub(crate) fn context_menu_icon_snapshots(
+    cache: &mut FileIconCache,
+    menu: &ContextMenuState,
+    clipboard_available: bool,
+) -> HashMap<ContextMenuIcon, FileIconSnapshot> {
+    let mut snapshots = HashMap::new();
+    collect_context_menu_icon_snapshots(
+        cache,
+        &context_menu_actions(&menu.target, clipboard_available),
+        &mut snapshots,
+    );
+    if let Some(open) = menu.active_submenu {
+        collect_context_menu_icon_snapshots(
+            cache,
+            &context_submenu_actions(open.submenu, &menu.target),
+            &mut snapshots,
+        );
+        if let Some(nested) = open.nested {
+            collect_context_menu_icon_snapshots(
+                cache,
+                &context_submenu_actions(nested.submenu, &menu.target),
+                &mut snapshots,
+            );
+        }
+    }
+    snapshots
+}
+
+fn collect_context_menu_icon_snapshots(
+    cache: &mut FileIconCache,
+    actions: &[ContextMenuItem],
+    snapshots: &mut HashMap<ContextMenuIcon, FileIconSnapshot>,
+) {
+    for icon in actions.iter().filter_map(|action| action.icon.clone()) {
+        snapshots
+            .entry(icon.clone())
+            .or_insert_with(|| context_menu_icon_snapshot(cache, icon));
+    }
+}
+
+fn context_menu_icon_snapshot(
+    cache: &mut FileIconCache,
+    icon: ContextMenuIcon,
+) -> FileIconSnapshot {
+    let (name, candidates) = context_menu_theme_icon_candidates(&icon);
+    let (marker, fg, bg) = context_menu_icon_style(&icon, true);
+    let candidate_refs = candidates.iter().map(String::as_str).collect::<Vec<_>>();
+    cache.named_icon(&name, &candidate_refs, marker, fg, bg, 18.0)
+}
+
+fn context_menu_theme_icon_candidates(icon: &ContextMenuIcon) -> (String, Vec<String>) {
+    match icon {
+        ContextMenuIcon::Named(name) => {
+            let name = name.trim();
+            (
+                name.to_string(),
+                vec![name.to_string(), "application-x-executable".to_string()],
+            )
+        }
+        ContextMenuIcon::Open => (
+            "context-open".to_string(),
+            ["document-open", "folder-open", "system-file-manager"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        ContextMenuIcon::NewWindow => icon_candidates("context-new-window", &["window-new"]),
+        ContextMenuIcon::OpenWith => (
+            "context-open-with".to_string(),
+            [
+                "preferences-desktop-default-applications",
+                "application-x-executable",
+                "system-run",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+        ContextMenuIcon::Application => (
+            "context-application".to_string(),
+            [
+                "application-x-executable",
+                "system-run",
+                "application-default-icon",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+        ContextMenuIcon::Service => (
+            "context-service".to_string(),
+            ["configure", "preferences-system", "system-run"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        ContextMenuIcon::Archive => (
+            "context-archive".to_string(),
+            ["ark", "package-x-generic", "application-x-archive"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        ContextMenuIcon::CreateNew => icon_candidates("context-create-new", &["list-add"]),
+        ContextMenuIcon::NewFolder => (
+            "context-new-folder".to_string(),
+            ["folder-new", "document-new", "folder"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        ContextMenuIcon::NewFile => icon_candidates("context-new-file", &["document-new"]),
+        ContextMenuIcon::Edit => icon_candidates("context-edit", &["document-edit", "edit-rename"]),
+        ContextMenuIcon::Remove => {
+            icon_candidates("context-remove", &["list-remove", "edit-delete"])
+        }
+        ContextMenuIcon::Hide => {
+            icon_candidates("context-hide", &["hint", "view-hidden", "visibility"])
+        }
+        ContextMenuIcon::Sort => (
+            "context-sort".to_string(),
+            ["view-sort-ascending", "view-sort-descending", "sort-name"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        ContextMenuIcon::View => (
+            "context-view".to_string(),
+            ["view-list-icons", "view-list-details", "view-list-tree"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        ContextMenuIcon::Rename => {
+            icon_candidates("context-rename", &["edit-rename", "document-edit"])
+        }
+        ContextMenuIcon::Copy => icon_candidates("context-copy", &["edit-copy"]),
+        ContextMenuIcon::Cut => icon_candidates("context-cut", &["edit-cut"]),
+        ContextMenuIcon::Paste => icon_candidates("context-paste", &["edit-paste"]),
+        ContextMenuIcon::Location => (
+            "context-location".to_string(),
+            ["edit-copy-path", "edit-copy", "folder-open"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        ContextMenuIcon::Trash => icon_candidates("context-trash", &["user-trash", "edit-delete"]),
+        ContextMenuIcon::Restore => {
+            icon_candidates("context-restore", &["edit-undo", "user-trash"])
+        }
+        ContextMenuIcon::Delete => {
+            icon_candidates("context-delete", &["edit-delete", "edit-delete-shred"])
+        }
+        ContextMenuIcon::Properties => (
+            "context-properties".to_string(),
+            ["document-properties", "dialog-information"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        ContextMenuIcon::Select => icon_candidates("context-select", &["edit-select-all"]),
+        ContextMenuIcon::Refresh => icon_candidates("context-refresh", &["view-refresh"]),
+        ContextMenuIcon::Place => (
+            "context-place".to_string(),
+            ["bookmark-new", "folder-favorites", "folder"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+    }
+}
+
+fn icon_candidates(name: &str, candidates: &[&str]) -> (String, Vec<String>) {
+    (
+        name.to_string(),
+        candidates
+            .iter()
+            .map(|candidate| (*candidate).to_string())
+            .collect(),
+    )
+}
+
+fn context_submenu_overlay(
+    open: ContextMenuOpenSubmenu,
+    actions: Vec<ContextMenuItem>,
+    rect: ContextMenuOverlayRect,
+    scope: ContextMenuRowScope,
+    icon_snapshots: &HashMap<ContextMenuIcon, FileIconSnapshot>,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    div()
+        .id(format!(
+            "context-submenu-{:?}-{}",
+            open.submenu, open.parent_index
+        ))
+        .absolute()
+        .left(px(rect.x))
+        .top(px(rect.y))
+        .w(px(rect.width))
+        .max_h(px(rect.max_height))
+        .overflow_y_scroll()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0xc8ced6))
+        .bg(rgb(0xffffff))
+        .shadow_md()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_mouse_move(|_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+            if *hovered {
+                this.cancel_context_submenu_hide();
+                cx.notify();
+            }
+        }))
+        .children(
+            actions
+                .into_iter()
+                .enumerate()
+                .map(|(index, item)| context_menu_row(item, index, scope, icon_snapshots, cx)),
+        )
+}
+
+fn context_nested_submenu_overlay(
+    open: ContextMenuNestedSubmenu,
+    actions: Vec<ContextMenuItem>,
+    rect: ContextMenuOverlayRect,
+    icon_snapshots: &HashMap<ContextMenuIcon, FileIconSnapshot>,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    div()
+        .id(format!(
+            "context-nested-submenu-{:?}-{}",
+            open.submenu, open.parent_index
+        ))
+        .absolute()
+        .left(px(rect.x))
+        .top(px(rect.y))
+        .w(px(rect.width))
+        .max_h(px(rect.max_height))
+        .overflow_y_scroll()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0xc8ced6))
+        .bg(rgb(0xffffff))
+        .shadow_md()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_mouse_move(|_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+            if *hovered {
+                this.cancel_context_submenu_hide();
+                cx.notify();
+            }
+        }))
+        .children(actions.into_iter().enumerate().map(|(index, item)| {
+            context_menu_row(
+                item,
+                index,
+                ContextMenuRowScope::NestedSubmenu,
+                icon_snapshots,
+                cx,
+            )
+        }))
+}
+
+fn context_menu_row(
+    item: ContextMenuItem,
+    index: usize,
+    scope: ContextMenuRowScope,
+    icon_snapshots: &HashMap<ContextMenuIcon, FileIconSnapshot>,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    let action = item.action.clone();
+    let submenu = item.submenu;
+    let click_action = action.clone();
+    let mut row = div()
+        .id(format!("context-menu-action-{action:?}"))
+        .flex()
+        .items_center()
+        .justify_between()
+        .h(px(CONTEXT_MENU_ROW_HEIGHT))
+        .px_2()
+        .gap_2()
+        .text_sm()
+        .text_color(if item.enabled {
+            rgb(0x24292f)
+        } else {
+            rgb(0x9aa4b2)
+        })
+        .when(item.separator_before, |row| {
+            row.border_t_1().border_color(rgb(0xe5e7eb))
+        })
+        .when(item.enabled, |row| {
+            row.hover(|row| row.bg(rgb(0xeaf1ff)))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    if let Some(submenu) = submenu {
+                        match scope {
+                            ContextMenuRowScope::Root => {
+                                this.open_context_submenu(submenu, index);
+                            }
+                            ContextMenuRowScope::Submenu => {
+                                this.open_context_nested_submenu(submenu, index);
+                            }
+                            ContextMenuRowScope::NestedSubmenu => {}
+                        }
+                    } else {
+                        this.run_context_menu_action(click_action.clone(), cx);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+        })
+        .child(context_menu_icon_slot(
+            item.icon,
+            item.enabled,
+            icon_snapshots,
+        ))
+        .child(div().flex_1().truncate().child(item.label))
+        .when(item.submenu.is_some(), |row| {
+            row.child(div().text_color(rgb(0x6b7280)).child(">"))
+        });
+
+    if let Some(submenu) = item.submenu {
+        row = row.on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+            if *hovered {
+                match scope {
+                    ContextMenuRowScope::Root => {
+                        this.open_context_submenu(submenu, index);
+                    }
+                    ContextMenuRowScope::Submenu => {
+                        this.open_context_nested_submenu(submenu, index);
+                    }
+                    ContextMenuRowScope::NestedSubmenu => {}
+                }
+                cx.notify();
+            }
+        }));
+    } else if item.enabled && scope == ContextMenuRowScope::Root {
+        row = row.on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+            if *hovered {
+                this.schedule_context_submenu_hide(cx);
+                cx.notify();
+            }
+        }));
+    } else if item.enabled && scope == ContextMenuRowScope::Submenu {
+        row = row.on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+            if *hovered && this.clear_context_nested_submenu() {
+                cx.notify();
+            }
+        }));
+    }
+    row
+}
+
+fn context_menu_icon_slot(
+    icon: Option<ContextMenuIcon>,
+    enabled: bool,
+    icon_snapshots: &HashMap<ContextMenuIcon, FileIconSnapshot>,
+) -> Div {
+    let Some(icon) = icon else {
+        return div().w(px(18.0)).h(px(18.0)).flex_none();
+    };
+    let snapshot = icon_snapshots
+        .get(&icon)
+        .cloned()
+        .unwrap_or_else(|| context_menu_icon_fallback_snapshot(icon));
+    let fallback = snapshot.fallback_marker.clone();
+    let fallback_fg = if enabled {
+        snapshot.fallback_fg
+    } else {
+        0x8b95a1
+    };
+    let fallback_bg = if enabled {
+        snapshot.fallback_bg
+    } else {
+        0xf1f3f5
+    };
+    let container = div()
+        .w(px(18.0))
+        .h(px(18.0))
+        .flex_none()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .overflow_hidden();
+
+    match snapshot.path {
+        Some(path) => container.child(img(path).size_full().with_fallback(move || {
+            context_menu_fallback_icon(fallback.clone(), fallback_fg, fallback_bg)
+        })),
+        None => container.child(context_menu_fallback_icon(
+            fallback,
+            fallback_fg,
+            fallback_bg,
+        )),
+    }
+}
+
+fn context_menu_icon_fallback_snapshot(icon: ContextMenuIcon) -> FileIconSnapshot {
+    let (marker, fg, bg) = context_menu_icon_style(&icon, true);
+    FileIconSnapshot {
+        icon_name: format!("{icon:?}"),
+        path: None,
+        fallback_marker: marker.to_string(),
+        fallback_fg: fg,
+        fallback_bg: bg,
+    }
+}
+
+fn context_menu_fallback_icon(marker: String, fg: u32, bg: u32) -> gpui::AnyElement {
+    div()
+        .size_full()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(rgb(fg))
+        .bg(rgb(bg))
+        .child(marker)
+        .into_any_element()
+}
+
+fn context_menu_icon_style(icon: &ContextMenuIcon, enabled: bool) -> (&'static str, u32, u32) {
+    let (marker, fg, bg) = match icon {
+        ContextMenuIcon::Named(_) => ("S", 0x0f766e, 0xe6fffb),
+        ContextMenuIcon::Open => ("O", 0x1d4ed8, 0xeaf1ff),
+        ContextMenuIcon::NewWindow => ("W", 0x1d4ed8, 0xeaf1ff),
+        ContextMenuIcon::OpenWith => ("W", 0x4338ca, 0xeeedff),
+        ContextMenuIcon::Application => ("A", 0x4f46e5, 0xeeedff),
+        ContextMenuIcon::Service => ("S", 0x0f766e, 0xe6fffb),
+        ContextMenuIcon::Archive => ("Z", 0x7c2d12, 0xffefe8),
+        ContextMenuIcon::CreateNew => ("+", 0x0f4c81, 0xe7f1fb),
+        ContextMenuIcon::NewFolder => ("+", 0x0f4c81, 0xe7f1fb),
+        ContextMenuIcon::NewFile => ("F", 0x0f4c81, 0xe7f1fb),
+        ContextMenuIcon::Edit => ("E", 0x6d28d9, 0xf2edff),
+        ContextMenuIcon::Remove => ("-", 0xb91c1c, 0xffe8e8),
+        ContextMenuIcon::Hide => ("H", 0x59636e, 0xeef1f5),
+        ContextMenuIcon::Sort => ("S", 0x92400e, 0xfff3df),
+        ContextMenuIcon::View => ("V", 0x1f4fbf, 0xeaf1ff),
+        ContextMenuIcon::Rename => ("R", 0x6d28d9, 0xf2edff),
+        ContextMenuIcon::Copy => ("C", 0x2563eb, 0xeaf1ff),
+        ContextMenuIcon::Cut => ("X", 0xb45309, 0xfff3df),
+        ContextMenuIcon::Paste => ("P", 0x047857, 0xe7f8ef),
+        ContextMenuIcon::Location => ("L", 0x334155, 0xe8eef7),
+        ContextMenuIcon::Trash => ("T", 0xb91c1c, 0xffe8e8),
+        ContextMenuIcon::Restore => ("U", 0x047857, 0xe7f8ef),
+        ContextMenuIcon::Delete => ("D", 0xb91c1c, 0xffe8e8),
+        ContextMenuIcon::Properties => ("I", 0x374151, 0xeef1f5),
+        ContextMenuIcon::Select => ("A", 0x1f4fbf, 0xeaf1ff),
+        ContextMenuIcon::Refresh => ("R", 0x0f766e, 0xe6fffb),
+        ContextMenuIcon::Place => ("P", 0x0f766e, 0xe6fffb),
+    };
+    if enabled {
+        (marker, fg, bg)
+    } else {
+        (marker, 0x8b95a1, 0xf1f3f5)
+    }
+}
 
 pub(crate) fn context_menu_actions(
     target: &ContextMenuTarget,

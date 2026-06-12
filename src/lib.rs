@@ -55,6 +55,10 @@ pub use core::launcher::{
     set_default_mime_application_in_contents, systemd_launch_unit_name,
     systemd_units_for_launch_plan, terminal_launch_plan_for_directory,
 };
+pub use core::location::{
+    BreadcrumbSegment, breadcrumb_segments, complete_location_input, expand_user_path, home_dir,
+    normalize_start_dir, resolve_location_input,
+};
 pub use core::mime::{
     MimeDatabase, detect_mime_from_magic, generic_mime_icon_name, mime_icon_name,
 };

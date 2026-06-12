@@ -62,7 +62,7 @@ icon selection, Open With menu, and future process launching path.
   - Only generic `application/octet-stream` files read a small prefix for magic
     sniffing, so common extension-mapped files do not open file contents during
     listing.
-- UI icon selection lives in `src/main.rs`.
+- UI icon selection lives in `src/ui/icons.rs` and `src/ui/icons/cache.rs`.
   - File icons are cached by MIME/file kind and icon size.
   - Candidate order mirrors Dolphin: specific MIME icon names first, then
     shared-mime-info icon names, then generic MIME icon names, then unknown file

@@ -21,7 +21,15 @@ Fika's pane-local location bar maps to Dolphin's `KUrlNavigator` path.
 - Dolphin `KUrlNavigator` -> Fika pane header location bar.
 - Dolphin active view container URL routing -> `FikaApp::load_pane(PaneId, PathBuf)`.
 - Dolphin editable URL mode -> pane-scoped `LocationDraft`.
-- Dolphin breadcrumb buttons -> `BreadcrumbSegment { label, path }` rendered by the reusable pane component.
+- Editable draft/caret/snapshot state -> `src/ui/location_bar.rs` as the module
+  entry and `src/ui/location_bar/draft.rs` as the directory-style child module.
+- Dolphin breadcrumb buttons -> core `BreadcrumbSegment { label, path }`
+  built by `src/core/location.rs` and rendered by the reusable pane component.
+- Dolphin URL parsing/completion behavior -> `src/core/location.rs`, which owns
+  `~` expansion, startup directory normalization, absolute/relative path
+  resolution, breadcrumb segment construction, and filesystem completion strings
+  shared by startup path parsing, Places Add/Edit path input, and the pane
+  location bar.
 - Editable location mode uses pane-local caret and horizontal scroll state, so
   long paths truncate inside the pane header instead of forcing pane width.
 - Editable text metrics include the current visible width, and cursor drawing
@@ -33,6 +41,8 @@ Fika's pane-local location bar maps to Dolphin's `KUrlNavigator` path.
 - Breadcrumb clicks navigate through the same path as other pane loads so history stays pane-local.
 - Ctrl+L and Alt+D switch the focused pane into editable location mode.
 - Enter commits the typed path, Escape exits editable mode, and Tab attempts filesystem completion.
+- Path text parsing and completion are UI-neutral core behavior; the GPUI app
+  only owns the active draft, caret metrics, and pane navigation dispatch.
 - Caret movement keeps the cursor visible without resetting the horizontal
   scroll unless the caret crosses the visible edge.
 - Breadcrumb segment text is shrinkable and clipped inside the pane header; a

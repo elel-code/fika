@@ -64,13 +64,17 @@ helper, devices, Ark DnD, and future FileManager1 integration.
     `BusController`, and structured `BusError`.
   - Lazily caches session and system `zbus::Connection` handles behind a shared
     controller, with a 30s default idle timeout.
-  - Fika's direct `zbus` dependency disables default features and enables only
-    `tokio`; `zbus_polkit` also disables defaults and uses its `tokio` feature.
-    The shared bus layer does not opt into zbus `async-io` or `blocking-api`.
-    Cargo feature unification can still show `async-io` in `cargo tree` because
-    GPUI's transitive `ashpd`/accessibility stack depends on zbus with default
-    features; Fika's own D-Bus calls still compile against zbus' Tokio
-    abstractions and are always polled inside `with_bus_tokio_context()`.
+  - Fika's direct `zbus` and `zbus_polkit` dependencies disable default
+    features and do not request `zbus/tokio`, `zbus/async-io`, or
+    `zbus/blocking-api` themselves. This is deliberate: zbus executor features
+    are crate-global, and forcing `zbus/tokio` would also switch GPUI's
+    transitive `ashpd`/accessibility zbus calls onto Tokio even though those
+    futures are polled by GPUI/accesskit executors.
+  - Cargo feature unification can still show `zbus/async-io` in `cargo tree`
+    because GPUI's Linux portal/accessibility stack requests it. Fika does not
+    add a direct `async-io` dependency; Fika-owned timeout/retry/sleep logic is
+    still polled inside `with_bus_tokio_context()` so Tokio timers are only used
+    at Fika's bus-control boundary.
   - Connection creation, generic proxy creation, and timeout/retry method calls
     all poll inside a Tokio runtime context when called from GPUI tasks, so
     shared D-Bus/systemd paths do not panic when the caller thread has no Tokio

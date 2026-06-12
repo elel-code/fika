@@ -1,5 +1,5 @@
 use crate::{
-    FikaApp, FileIconSnapshot, FileTransferMode, PlaceSnapshot, file_transfer_mode_for_modifiers,
+    FikaApp, FileTransferMode, PlaceSnapshot, file_transfer_mode_for_modifiers,
     refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
 use gpui::prelude::*;
@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::file_grid::ItemDrag;
+use super::icons::FileIconSnapshot;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlaceDrag {

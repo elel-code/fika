@@ -5,61 +5,12 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    Bounds, Context, Div, MouseButton, ParentElement, Pixels, Stateful, Styled, Window, canvas,
-    div, fill, point, px, rgb, size,
+    Bounds, Context, Div, MouseButton, ParentElement, Pixels, Stateful, Styled, canvas, div, fill,
+    point, px, rgb, size,
 };
 
 pub(crate) const SCROLLBAR_THICKNESS: f32 = 12.0;
 pub(crate) const SCROLLBAR_MIN_HANDLE_WIDTH: f32 = 36.0;
-
-pub(crate) fn install_scrollbar_drag_window_capture(
-    app: gpui::WeakEntity<FikaApp>,
-    window: &mut Window,
-) {
-    let app_for_move = app.clone();
-    window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
-        if !phase.capture() {
-            return;
-        }
-        let handled = app_for_move
-            .update(cx, |this, cx| {
-                let Some(drag) = this.active_scrollbar_drag else {
-                    return false;
-                };
-                if this.update_horizontal_scrollbar_drag_from_window(drag.pane_id, event.position) {
-                    cx.notify();
-                }
-                true
-            })
-            .unwrap_or(false);
-        if handled {
-            cx.stop_propagation();
-        }
-    });
-
-    let app_for_up = app;
-    window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _window, cx| {
-        if !phase.capture() || event.button != MouseButton::Left {
-            return;
-        }
-        let handled = app_for_up
-            .update(cx, |this, cx| {
-                let Some(drag) = this.active_scrollbar_drag else {
-                    return false;
-                };
-                if this.finish_horizontal_scrollbar_drag(drag.pane_id, cx) {
-                    cx.notify();
-                    true
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false);
-        if handled {
-            cx.stop_propagation();
-        }
-    });
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ActiveScrollBarDrag {

@@ -1,4 +1,4 @@
-use crate::{FikaApp, FileIconCache, FileIconSnapshot, application_marker, sanitize_element_id};
+use crate::{FikaApp, application_marker, sanitize_element_id};
 use fika_core::{MimeApplication, PaneId};
 use gpui::prelude::*;
 use gpui::{
@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use super::icons::{FileIconCache, FileIconSnapshot};
 
 const APPLICATION_CHOOSER_ROW_HEIGHT: f32 = 44.0;
 const APPLICATION_CHOOSER_LIST_MAX_HEIGHT: f32 = 480.0;

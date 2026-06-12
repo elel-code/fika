@@ -135,8 +135,9 @@ item-vs-blank event boundaries, and later submenu behavior.
     `ContextMenuIcon`, `ContextMenuSubmenu`, root/submenu/nested-submenu action
     generation, Open With de-duplication, service-menu promotion and grouping,
     Ark fallback visibility, open submenu state, overlay rects, viewport
-    clamp/flip, and menu placement math. `src/main.rs` keeps GPUI overlay
-    rendering, icon snapshot loading, app state routing, and action execution.
+    clamp/flip, menu placement math, icon snapshot collection, and GPUI
+    overlay/row rendering. `src/main.rs` keeps app state construction and action
+    execution.
   - `context_menu_actions()` generates Paste enabled state from the internal
     clipboard, adds Open in New Pane only for directory item targets, and keeps
     Copy Location on single item targets only. It appends Properties to blank,
