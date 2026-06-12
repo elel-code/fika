@@ -1,7 +1,8 @@
-use crate::{
-    FikaApp, FileTransferMode, PlaceSnapshot, file_transfer_mode_for_modifiers,
-    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
-};
+mod snapshot;
+
+pub(crate) use snapshot::{PlaceIcon, PlaceSnapshot};
+
+use crate::FikaApp;
 use gpui::prelude::*;
 use gpui::{
     Context, Div, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Stateful, Styled,
@@ -10,6 +11,10 @@ use gpui::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::drag_drop::{
+    FileTransferMode, file_transfer_mode_for_modifiers,
+    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
+};
 use super::file_grid::ItemDrag;
 use super::icons::FileIconSnapshot;
 

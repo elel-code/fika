@@ -3,16 +3,15 @@ mod ui;
 #[cfg(test)]
 use fika_core::ServiceMenuAction;
 use fika_core::{
-    BreadcrumbSegment, CompactColumnMetrics, CompactLayout, CompactLayoutOptions, CreateUndoItem,
-    CreatedItemKind, DeviceActionError, DeviceInfo, DeviceMonitorMessage, DirectoryCache,
-    DirectoryLister, DirectoryListerEvent, FileClipboardRole, OperationQueue, PaneController,
-    PaneId, RenameUndoItem, ScrollBounds, ScrollDragTracker, SelectionMove, SmoothScroll,
-    SortDescriptor, SortOrder, SortRole, TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord,
-    UserPlace, ViewPoint, ViewRect, ViewState, ZoomChange, breadcrumb_segments,
-    complete_location_input, decode_file_clipboard_text, eject_udisks2_device,
-    encode_file_clipboard_text, expand_user_path, file_ops, home_dir, is_network_root_path,
-    mount_udisks2_device, nearest_existing_ancestor, network_root_path, normalize_start_dir,
-    resolve_location_input, safely_remove_udisks2_device, unmount_udisks2_device,
+    CompactColumnMetrics, CompactLayout, CompactLayoutOptions, CreateUndoItem, CreatedItemKind,
+    DeviceActionError, DeviceInfo, DeviceMonitorMessage, DirectoryCache, DirectoryLister,
+    DirectoryListerEvent, OperationQueue, PaneController, PaneId, RenameUndoItem, ScrollBounds,
+    ScrollDragTracker, SelectionMove, SmoothScroll, SortDescriptor, SortOrder, SortRole,
+    TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord, UserPlace, ViewPoint, ViewRect,
+    ViewState, ZoomChange, breadcrumb_segments, complete_location_input, eject_udisks2_device,
+    expand_user_path, file_ops, home_dir, is_network_root_path, mount_udisks2_device,
+    nearest_existing_ancestor, network_root_path, normalize_start_dir, resolve_location_input,
+    safely_remove_udisks2_device, unmount_udisks2_device,
 };
 use fika_core::{
     DesktopLaunchCommand, DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache,
@@ -21,20 +20,22 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardEntry, ClipboardItem, Context, Div, Empty, IntoElement, ParentElement,
-    Render, ScrollDelta, Stateful, Styled, Window, WindowBounds, WindowOptions, div, px, rgb, size,
+    App, Bounds, ClipboardItem, Context, Div, Empty, IntoElement, ParentElement, Render,
+    ScrollDelta, Stateful, Styled, Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::DefaultHasher};
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use ui::application_chooser::{ApplicationChooserState, application_chooser_overlay};
+use ui::clipboard::{
+    ClipboardMode, ClipboardState, primary_paste_clipboard_state, standard_paste_clipboard_state,
+};
 #[cfg(test)]
 use ui::context_menu::{
     CONTEXT_MENU_ROW_HEIGHT, CONTEXT_MENU_VERTICAL_PADDING, CONTEXT_MENU_VIEWPORT_MARGIN,
@@ -44,19 +45,40 @@ use ui::context_menu::{
     ContextMenuAction, ContextMenuNestedSubmenu, ContextMenuOpenSubmenu, ContextMenuState,
     ContextMenuSubmenu, ContextMenuTarget, context_menu_icon_snapshots, context_menu_overlay,
 };
-use ui::file_grid::PaneViewportGeometry;
+use ui::drag_drop::{
+    ActiveItemDrag, FileTransferMode, ItemDragPayload, ItemDropTarget, PlaceDropTarget,
+    item_drag_paths, item_drop_reject_reason, item_drop_target_mode_for_directory,
+    item_drop_target_mode_for_pane, place_drop_target_matches_insert,
+    place_drop_target_mode_for_place,
+};
+#[cfg(test)]
+use ui::drag_drop::{drag_cursor_style_for_transfer_mode, file_transfer_mode_for_modifiers};
+use ui::file_grid::{PaneViewportGeometry, VisibleItemSnapshot};
 use ui::filter_bar::{
     FilterBarSnapshot, FilteredModelCacheEntry, FilteredModelCacheKey, PaneFilterState,
 };
 use ui::icons::{FileIconCache, FileIconSnapshot};
-use ui::location_bar::{LocationDraft, LocationDraftSnapshot};
+use ui::location_bar::{LocationDraft, LocationEditMetrics};
+use ui::pane::PaneSnapshot;
 use ui::place_draft::{PlaceDraft, PlaceDraftField, place_draft_overlay};
+use ui::places::{PlaceIcon, PlaceSnapshot};
 use ui::properties_dialog::{PropertiesDialogState, PropertyRow, properties_dialog_overlay};
+use ui::rename::RenameDraft;
+use ui::rubber_band::RubberBandState;
 use ui::scrollbar::{ActiveScrollBarDrag, HorizontalScrollBarTrack};
 use ui::shortcuts::{
     FilterInputAction, LocationInputAction, PaneShortcut, PlaceInputAction, RenameInputAction,
     filter_input_action, location_input_action, pane_shortcut, place_input_action,
     rename_input_action, zoom_change_for_wheel_delta,
+};
+use ui::status_bar::{
+    OperationProgressHandle, OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot,
+    StatusBarSnapshot, StatusSummaryCacheEntry, StatusSummaryCacheKey, filesystem_space_info,
+    progress_delay_elapsed,
+};
+#[cfg(test)]
+use ui::status_bar::{
+    PROGRESS_DISPLAY_DELAY, parse_df_space_output, progress_percent, space_info_snapshot,
 };
 
 const MIN_PANE_WIDTH: f32 = 1.0;
@@ -216,68 +238,6 @@ struct ChooserState {
     return_choices: bool,
 }
 
-#[derive(Clone, Debug)]
-struct PaneSnapshot {
-    id: PaneId,
-    split_ratio: f32,
-    breadcrumbs: Vec<BreadcrumbSegment>,
-    location_draft: Option<LocationDraftSnapshot>,
-    filter_bar: Option<FilterBarSnapshot>,
-    status_bar: StatusBarSnapshot,
-    layout: CompactLayout,
-    visible_items: Vec<VisibleItemSnapshot>,
-    view: ViewState,
-    rubber_band: Option<ViewRect>,
-    drop_target: Option<FileTransferMode>,
-    scrollbar_drag_active: bool,
-    focused: bool,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct StatusBarSnapshot {
-    pub(crate) message: String,
-    pub(crate) item_summary: String,
-    pub(crate) free_space: Option<SpaceInfoSnapshot>,
-    pub(crate) zoom_level: i32,
-    pub(crate) zoom_icon_size: f32,
-    pub(crate) zoom_min: i32,
-    pub(crate) zoom_max: i32,
-    pub(crate) operation_pending: bool,
-    pub(crate) operation_progress: Option<OperationProgressSnapshot>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SpaceInfoSnapshot {
-    pub(crate) free_label: String,
-    pub(crate) detail_label: String,
-    pub(crate) used_percent: u8,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct OperationProgressSnapshot {
-    pub(crate) label: String,
-    pub(crate) bytes_done: u64,
-    pub(crate) bytes_total: u64,
-    pub(crate) percent: Option<u8>,
-    pub(crate) cancellable: bool,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct VisibleItemSnapshot {
-    pub(crate) slot_id: u64,
-    pub(crate) layout: fika_core::ItemLayout,
-    pub(crate) path: PathBuf,
-    pub(crate) is_dir: bool,
-    pub(crate) name: Arc<str>,
-    pub(crate) kind_label: String,
-    pub(crate) thumbnail_path: Option<PathBuf>,
-    pub(crate) icon: FileIconSnapshot,
-    pub(crate) selected: bool,
-    pub(crate) selection_count: usize,
-    pub(crate) drop_target: Option<FileTransferMode>,
-    pub(crate) draft_name: Option<String>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DevicePlaceOperation {
     Mount,
@@ -323,45 +283,6 @@ struct ContentItemHit {
     is_dir: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum PlaceIcon {
-    Home,
-    Desktop,
-    Documents,
-    Downloads,
-    Music,
-    Pictures,
-    Videos,
-    Trash,
-    Root,
-    Network,
-    Device,
-    Bookmark,
-    Folder,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PlaceSnapshot {
-    pub(crate) index: usize,
-    pub(crate) group: &'static str,
-    pub(crate) icon: FileIconSnapshot,
-    pub(crate) label: String,
-    pub(crate) path: PathBuf,
-    pub(crate) mounted: bool,
-    pub(crate) device: bool,
-    pub(crate) network: bool,
-    pub(crate) device_ejectable: bool,
-    pub(crate) device_can_power_off: bool,
-    pub(crate) active: bool,
-    pub(crate) drop_target: Option<FileTransferMode>,
-    pub(crate) insert_before: bool,
-    pub(crate) insert_after: bool,
-    pub(crate) trash_place: bool,
-    pub(crate) trash_has_items: bool,
-    pub(crate) editable: bool,
-    pub(crate) removable: bool,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PlaceEntry {
     group: &'static str,
@@ -374,55 +295,10 @@ struct PlaceEntry {
     device_can_power_off: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct RubberBandState {
-    pane_id: PaneId,
-    start: ViewPoint,
-    current: ViewPoint,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RubberBandDrag {
-    pane_id: PaneId,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PaneSplitterDrag {
     left: PaneId,
     right: PaneId,
-}
-
-impl RubberBandState {
-    fn rect(self) -> ViewRect {
-        let x = self.start.x.min(self.current.x);
-        let y = self.start.y.min(self.current.y);
-        ViewRect {
-            x,
-            y,
-            width: self.start.x.max(self.current.x) - x,
-            height: self.start.y.max(self.current.y) - y,
-        }
-    }
-
-    fn viewport_rect(self, view: &ViewState) -> ViewRect {
-        let rect = self.rect();
-        let viewport = ViewRect {
-            x: view.scroll_x,
-            y: view.scroll_y,
-            width: view.viewport_width.max(0.0),
-            height: view.viewport_height.max(0.0),
-        };
-        let x = rect.x.max(viewport.x);
-        let y = rect.y.max(viewport.y);
-        let right = rect.right().min(viewport.right());
-        let bottom = rect.bottom().min(viewport.bottom());
-        ViewRect {
-            x: (x - view.scroll_x).round(),
-            y: (y - view.scroll_y).round(),
-            width: (right - x).max(0.0),
-            height: (bottom - y).max(0.0),
-        }
-    }
 }
 
 fn width_value_eq(left: f32, right: f32) -> bool {
@@ -461,22 +337,6 @@ fn normalize_pane_ratios(mut ratios: Vec<f32>) -> Vec<f32> {
     ratios
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RenameDraft {
-    pane_id: PaneId,
-    original_path: PathBuf,
-    draft_name: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct LocationEditMetrics {
-    value: String,
-    origin_x: f32,
-    scroll_x: f32,
-    visible_width: f32,
-    byte_positions: Vec<(usize, f32)>,
-}
-
 #[derive(Clone, Debug)]
 struct PaneLayoutProjection {
     layout: CompactLayout,
@@ -489,384 +349,11 @@ impl PaneLayoutProjection {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FileTransferMode {
-    Copy,
-    Move,
-    Link,
-}
-
-impl FileTransferMode {
-    fn operation(self) -> &'static str {
-        match self {
-            Self::Copy => "copy",
-            Self::Move => "move",
-            Self::Link => "link",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Copy => "Copy",
-            Self::Move => "Move",
-            Self::Link => "Link",
-        }
-    }
-
-    fn progress_label(self, item_count: usize) -> String {
-        let verb = match self {
-            Self::Copy => "Copying",
-            Self::Move => "Moving",
-            Self::Link => "Linking",
-        };
-        format!("{verb} {item_count} item(s)")
-    }
-}
-
-pub(crate) fn file_transfer_mode_for_modifiers(modifiers: gpui::Modifiers) -> FileTransferMode {
-    if modifiers.alt || (modifiers.shift && modifiers.secondary()) {
-        FileTransferMode::Link
-    } else if modifiers.shift {
-        FileTransferMode::Move
-    } else {
-        FileTransferMode::Copy
-    }
-}
-
-pub(crate) fn drag_cursor_style_for_transfer_mode(mode: FileTransferMode) -> gpui::CursorStyle {
-    match mode {
-        FileTransferMode::Copy => gpui::CursorStyle::DragCopy,
-        FileTransferMode::Move => gpui::CursorStyle::Arrow,
-        FileTransferMode::Link => gpui::CursorStyle::DragLink,
-    }
-}
-
-pub(crate) fn refresh_active_drag_cursor_for_transfer_mode(
-    mode: FileTransferMode,
-    window: &mut Window,
-    cx: &mut Context<FikaApp>,
-) {
-    let new_cursor = drag_cursor_style_for_transfer_mode(mode);
-    if cx.active_drag_cursor_style() != Some(new_cursor) {
-        cx.set_active_drag_cursor_style(new_cursor, window);
-    }
-}
-
-pub(crate) fn refresh_active_drag_cursor_not_allowed(
-    window: &mut Window,
-    cx: &mut Context<FikaApp>,
-) {
-    let new_cursor = gpui::CursorStyle::OperationNotAllowed;
-    if cx.active_drag_cursor_style() != Some(new_cursor) {
-        cx.set_active_drag_cursor_style(new_cursor, window);
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ClipboardMode {
-    Copy,
-    Cut,
-}
-
-impl ClipboardMode {
-    fn transfer_mode(self) -> FileTransferMode {
-        match self {
-            Self::Copy => FileTransferMode::Copy,
-            Self::Cut => FileTransferMode::Move,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Copy => "Copy",
-            Self::Cut => "Move",
-        }
-    }
-
-    fn file_clipboard_role(self) -> FileClipboardRole {
-        match self {
-            Self::Copy => FileClipboardRole::Copy,
-            Self::Cut => FileClipboardRole::Cut,
-        }
-    }
-
-    fn from_file_clipboard_role(role: FileClipboardRole) -> Self {
-        match role {
-            FileClipboardRole::Copy => Self::Copy,
-            FileClipboardRole::Cut => Self::Cut,
-        }
-    }
-
-    fn metadata_tag(self) -> &'static str {
-        match self {
-            Self::Copy => "fika-file-clipboard:copy",
-            Self::Cut => "fika-file-clipboard:cut",
-        }
-    }
-
-    fn from_metadata_tag(tag: &str) -> Option<Self> {
-        match tag {
-            "fika-file-clipboard:copy" => Some(Self::Copy),
-            "fika-file-clipboard:cut" => Some(Self::Cut),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ClipboardState {
-    mode: ClipboardMode,
-    paths: Vec<PathBuf>,
-    text: Option<String>,
-}
-
-impl ClipboardState {
-    fn files(mode: ClipboardMode, paths: Vec<PathBuf>) -> Self {
-        Self {
-            mode,
-            paths,
-            text: None,
-        }
-    }
-
-    fn text(text: String) -> Option<Self> {
-        (!text.is_empty()).then_some(Self {
-            mode: ClipboardMode::Copy,
-            paths: Vec::new(),
-            text: Some(text),
-        })
-    }
-
-    fn to_clipboard_item(&self) -> ClipboardItem {
-        if let Some(text) = &self.text {
-            return ClipboardItem::new_string(text.clone());
-        }
-        ClipboardItem::new_string_with_metadata(
-            encode_file_clipboard_text(self.mode.file_clipboard_role(), &self.paths),
-            self.mode.metadata_tag().to_string(),
-        )
-    }
-
-    fn from_clipboard_item(item: &ClipboardItem) -> Option<Self> {
-        let metadata_mode = item
-            .metadata()
-            .and_then(|tag| ClipboardMode::from_metadata_tag(tag.as_str()));
-        let external_paths = item
-            .entries()
-            .iter()
-            .filter_map(|entry| match entry {
-                ClipboardEntry::ExternalPaths(paths) => Some(paths.paths()),
-                _ => None,
-            })
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>();
-        if !external_paths.is_empty() {
-            return Some(Self {
-                mode: metadata_mode.unwrap_or(ClipboardMode::Copy),
-                paths: external_paths,
-                text: None,
-            });
-        }
-
-        let text = item.text()?;
-        if let Some(payload) = decode_file_clipboard_text(&text) {
-            return Some(Self {
-                mode: metadata_mode
-                    .unwrap_or_else(|| ClipboardMode::from_file_clipboard_role(payload.role)),
-                paths: payload.paths,
-                text: None,
-            });
-        }
-
-        Self::text(text)
-    }
-
-    fn item_count(&self) -> usize {
-        if self.text.is_some() {
-            1
-        } else {
-            self.paths.len()
-        }
-    }
-
-    fn action_label(&self) -> &'static str {
-        if self.text.is_some() {
-            "Paste"
-        } else {
-            self.mode.label()
-        }
-    }
-
-    fn progress_label(&self) -> String {
-        if self.text.is_some() {
-            "Pasting text".to_string()
-        } else {
-            self.mode.transfer_mode().progress_label(self.item_count())
-        }
-    }
-}
-
-fn standard_paste_clipboard_state(
-    clipboard: Option<&ClipboardItem>,
-    primary: Option<&ClipboardItem>,
-) -> Option<ClipboardState> {
-    clipboard
-        .and_then(ClipboardState::from_clipboard_item)
-        .or_else(|| primary.and_then(ClipboardState::from_clipboard_item))
-}
-
-fn primary_paste_clipboard_state(primary: Option<&ClipboardItem>) -> Option<ClipboardState> {
-    primary.and_then(ClipboardState::from_clipboard_item)
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ItemDragPayload {
-    pub(crate) source_pane: PaneId,
-    pub(crate) source_path: PathBuf,
-    pub(crate) source_selected: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ActiveItemDrag {
-    payload: ItemDragPayload,
-    paths: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ItemDropTarget {
-    Pane {
-        pane_id: PaneId,
-        mode: FileTransferMode,
-    },
-    Directory {
-        pane_id: PaneId,
-        path: PathBuf,
-        mode: FileTransferMode,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum PlaceDropTarget {
-    Place {
-        path: PathBuf,
-        mode: FileTransferMode,
-    },
-    Insert {
-        index: usize,
-    },
-}
-
-#[derive(Clone, Debug, Default)]
-struct SpaceInfoCache {
-    path: Option<PathBuf>,
-    snapshot: Option<SpaceInfoSnapshot>,
-    request_in_flight: bool,
-    last_requested: Option<Instant>,
-}
-
-impl SpaceInfoCache {
-    const RETRY_AFTER: Duration = Duration::from_secs(30);
-
-    fn snapshot_for(&self, path: &Path) -> Option<SpaceInfoSnapshot> {
-        (self.path.as_deref() == Some(path))
-            .then(|| self.snapshot.clone())
-            .flatten()
-    }
-
-    fn should_request(&self, path: &Path, now: Instant) -> bool {
-        if self.request_in_flight && self.path.as_deref() == Some(path) {
-            return false;
-        }
-        if self.path.as_deref() != Some(path) {
-            return true;
-        }
-        if self.snapshot.is_some() {
-            return false;
-        }
-        self.last_requested
-            .is_none_or(|last_requested| now.duration_since(last_requested) >= Self::RETRY_AFTER)
-    }
-
-    fn start_request(&mut self, path: PathBuf, now: Instant) {
-        self.path = Some(path);
-        self.snapshot = None;
-        self.request_in_flight = true;
-        self.last_requested = Some(now);
-    }
-
-    fn finish_request(&mut self, path: &Path, snapshot: Option<SpaceInfoSnapshot>) -> bool {
-        if self.path.as_deref() != Some(path) {
-            return false;
-        }
-        self.request_in_flight = false;
-        self.snapshot = snapshot;
-        true
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct StatusSummaryCacheKey {
-    model_generation: u64,
-    model_len: usize,
-    filter_revision: u64,
-    visible_len: usize,
-    selection_count: usize,
-    selection_revision: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct StatusSummaryCacheEntry {
-    key: StatusSummaryCacheKey,
-    summary: String,
-}
-
-#[derive(Clone, Debug)]
-struct OperationProgressHandle {
-    pane_id: PaneId,
-    label: String,
-    progress: Arc<Mutex<file_ops::TransferProgress>>,
-    cancel: Option<Arc<AtomicBool>>,
-    started_at: Instant,
-}
-
-impl OperationProgressHandle {
-    fn snapshot(&self, now: Instant) -> Option<OperationProgressSnapshot> {
-        if !progress_delay_elapsed(self.started_at, now) {
-            return None;
-        }
-        let progress = *self
-            .progress
-            .lock()
-            .expect("operation progress state poisoned");
-        Some(OperationProgressSnapshot {
-            label: self.label.clone(),
-            bytes_done: progress.bytes_done,
-            bytes_total: progress.bytes_total,
-            percent: progress_percent(progress.bytes_done, progress.bytes_total),
-            cancellable: self.cancel.is_some(),
-        })
-    }
-}
-
-const PROGRESS_DISPLAY_DELAY: Duration = Duration::from_millis(500);
-
 #[derive(Clone, Debug)]
 struct LoadingPaneState {
     key: ListingRequestKey,
     started_at: Instant,
     previous_summary: Option<String>,
-}
-
-fn progress_percent(bytes_done: u64, bytes_total: u64) -> Option<u8> {
-    if bytes_total == 0 {
-        return None;
-    }
-    Some(((bytes_done.saturating_mul(100) + (bytes_total / 2)) / bytes_total).min(100) as u8)
-}
-
-fn progress_delay_elapsed(started_at: Instant, now: Instant) -> bool {
-    now.duration_since(started_at) >= PROGRESS_DISPLAY_DELAY
 }
 
 #[derive(Clone, Debug, Default)]
@@ -7890,87 +7377,6 @@ fn transfer_paths_result(
     }
 }
 
-fn item_drag_paths(controller: &PaneController, payload: &ItemDragPayload) -> Vec<PathBuf> {
-    if payload.source_selected && controller.is_selected(payload.source_pane, &payload.source_path)
-    {
-        let selected_paths = controller
-            .selected_paths(payload.source_pane)
-            .unwrap_or_default();
-        if !selected_paths.is_empty() {
-            return selected_paths;
-        }
-    }
-    vec![payload.source_path.clone()]
-}
-
-fn item_drop_reject_reason(paths: &[PathBuf], target_dir: &Path) -> Option<String> {
-    if paths.is_empty() {
-        return Some("No dragged items".to_string());
-    }
-    if !target_dir.is_dir() {
-        return Some(format!("Cannot drop into {}", target_dir.display()));
-    }
-    if paths.iter().any(|path| same_drop_url(path, target_dir)) {
-        return Some("Cannot drop an item onto itself".to_string());
-    }
-    None
-}
-
-fn item_drop_target_mode_for_pane(
-    target: Option<&ItemDropTarget>,
-    pane_id: PaneId,
-) -> Option<FileTransferMode> {
-    match target {
-        Some(ItemDropTarget::Pane {
-            pane_id: target_pane,
-            mode,
-        }) if *target_pane == pane_id => Some(*mode),
-        _ => None,
-    }
-}
-
-fn item_drop_target_mode_for_directory(
-    target: Option<&ItemDropTarget>,
-    pane_id: PaneId,
-    path: &Path,
-) -> Option<FileTransferMode> {
-    match target {
-        Some(ItemDropTarget::Directory {
-            pane_id: target_pane,
-            path: target_path,
-            mode,
-        }) if *target_pane == pane_id && target_path == path => Some(*mode),
-        _ => None,
-    }
-}
-
-fn place_drop_target_mode_for_place(
-    target: Option<&PlaceDropTarget>,
-    path: &Path,
-) -> Option<FileTransferMode> {
-    match target {
-        Some(PlaceDropTarget::Place {
-            path: target_path,
-            mode,
-        }) if target_path == path => Some(*mode),
-        _ => None,
-    }
-}
-
-fn place_drop_target_matches_insert(target: Option<&PlaceDropTarget>, index: usize) -> bool {
-    matches!(target, Some(PlaceDropTarget::Insert { index: target_index }) if *target_index == index)
-}
-
-fn same_drop_url(path: &Path, target_dir: &Path) -> bool {
-    if path == target_dir {
-        return true;
-    }
-    match (path.canonicalize(), target_dir.canonicalize()) {
-        (Ok(path), Ok(target_dir)) => path == target_dir,
-        _ => false,
-    }
-}
-
 fn trash_selection_result(pane_id: PaneId, selected_paths: Vec<PathBuf>) -> TrashSelectionResult {
     let summary = file_ops::trash_paths(&selected_paths);
     let success_count = summary.successes.len();
@@ -8240,48 +7646,6 @@ fn count_label(count: usize, singular: &'static str) -> String {
         }
     };
     format!("{count} {suffix}")
-}
-
-fn filesystem_space_info(path: PathBuf) -> Option<SpaceInfoSnapshot> {
-    let output = Command::new("df")
-        .arg("-B1")
-        .arg("--output=size,avail")
-        .arg(path)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_df_space_output(std::str::from_utf8(&output.stdout).ok()?)
-}
-
-fn parse_df_space_output(output: &str) -> Option<SpaceInfoSnapshot> {
-    let values = output.lines().skip(1).find_map(|line| {
-        let mut parts = line.split_whitespace();
-        let total = parts.next()?.parse::<u64>().ok()?;
-        let available = parts.next()?.parse::<u64>().ok()?;
-        Some((total, available))
-    })?;
-    space_info_snapshot(values.0, values.1)
-}
-
-fn space_info_snapshot(total: u64, available: u64) -> Option<SpaceInfoSnapshot> {
-    if total == 0 {
-        return None;
-    }
-    let available = available.min(total);
-    let used = total.saturating_sub(available);
-    let used_percent = ((used.saturating_mul(100) + (total / 2)) / total).min(100) as u8;
-    Some(SpaceInfoSnapshot {
-        free_label: format!("{} free", fika_core::format_size(available)),
-        detail_label: format!(
-            "{} free out of {} ({}% used)",
-            fika_core::format_size(available),
-            fika_core::format_size(total),
-            used_percent
-        ),
-        used_percent,
-    })
 }
 
 fn properties_for_path(path: &Path) -> PropertiesDialogState {
@@ -12719,62 +12083,6 @@ text/plain=writer.desktop;\n",
     }
 
     #[test]
-    fn clipboard_state_round_trips_file_clipboard_item_metadata() {
-        let paths = vec![
-            PathBuf::from("/tmp/fika-copy-a.txt"),
-            PathBuf::from("/tmp/fika-copy-b.txt"),
-        ];
-        let clipboard = ClipboardState::files(ClipboardMode::Cut, paths.clone());
-        let item = clipboard.to_clipboard_item();
-
-        assert_eq!(
-            ClipboardState::from_clipboard_item(&item),
-            Some(ClipboardState::files(ClipboardMode::Cut, paths))
-        );
-    }
-
-    #[test]
-    fn clipboard_state_imports_uri_list_text_and_plain_text() {
-        let uri_list =
-            ClipboardItem::new_string("copy\nfile:///tmp/fika%20clipboard.txt\n".to_string());
-        assert_eq!(
-            ClipboardState::from_clipboard_item(&uri_list),
-            Some(ClipboardState::files(
-                ClipboardMode::Copy,
-                vec![PathBuf::from("/tmp/fika clipboard.txt")]
-            ))
-        );
-
-        let plain = ClipboardItem::new_string("hello from clipboard".to_string());
-        assert_eq!(
-            ClipboardState::from_clipboard_item(&plain),
-            ClipboardState::text("hello from clipboard".to_string())
-        );
-    }
-
-    #[test]
-    fn standard_paste_clipboard_state_prefers_clipboard_over_primary() {
-        let clipboard = ClipboardItem::new_string("regular clipboard".to_string());
-        let primary = ClipboardItem::new_string("primary selection".to_string());
-
-        assert_eq!(
-            standard_paste_clipboard_state(Some(&clipboard), Some(&primary)),
-            ClipboardState::text("regular clipboard".to_string())
-        );
-    }
-
-    #[test]
-    fn primary_paste_clipboard_state_reads_only_primary_selection() {
-        let primary = ClipboardItem::new_string("primary selection".to_string());
-
-        assert_eq!(
-            primary_paste_clipboard_state(Some(&primary)),
-            ClipboardState::text("primary selection".to_string())
-        );
-        assert_eq!(primary_paste_clipboard_state(None), None);
-    }
-
-    #[test]
     fn paste_clipboard_result_copies_item_and_records_transfer_undo() {
         let temp = test_dir("paste-copy");
         let source_dir = temp.join("source");
@@ -14329,9 +13637,5 @@ text/plain=writer.desktop;\n",
             .unwrap()
             .as_nanos();
         env::temp_dir().join(format!("fika-gpui-{name}-{}-{nanos}", std::process::id()))
-    }
-
-    fn test_svg() -> &'static str {
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#2f6fed"/></svg>"##
     }
 }

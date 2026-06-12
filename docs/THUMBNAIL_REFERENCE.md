@@ -56,10 +56,11 @@ GPUI should only render the resolved image path for visible items.
   - Directory loading resolves existing cache hits for ordinary files and keeps
     only the thumbnail path in core entries after URI/mtime validation. Pixel
     data belongs in the GPUI image cache, not in core model entries.
-- `src/main.rs`
+- `src/main.rs` and `src/ui/file_grid/snapshot.rs`
   - Pane snapshots copy ordinary-file thumbnail cache hits into
-    `VisibleItemSnapshot::thumbnail_path`. Directories ignore thumbnail paths
-    even if malformed test data supplies one.
+    `VisibleItemSnapshot::thumbnail_path`. The snapshot type lives in
+    `src/ui/file_grid/snapshot.rs`. Directories ignore thumbnail paths even if
+    malformed test data supplies one.
 - `src/ui/file_grid.rs`
   - Item rendering tries `thumbnail_path` first, then falls back to the resolved
     theme/MIME icon image, then to the compact text marker. Thumbnail images do

@@ -86,6 +86,10 @@ model, and file operations are launched only after a drop target is resolved.
   directory-hover highlight separate from insertion indicators and from normal
   selection highlight. GPUI `on_drag_move` handlers must check their own bounds:
   capture-phase drag move is not a reliable hover test by itself.
+- Dolphin drag/drop transient state -> `src/ui/drag_drop.rs` as the module
+  entry and `src/ui/drag_drop/state.rs` as the directory-style child module for
+  transfer modes, item/place drag payloads, drop target state and target helper
+  queries.
 - Dolphin `PlacesPanel::slotUrlsDropped()` -> future Fika Places drop should
   distinguish drop-on-place file operations from drop-between-place bookmark
   insertion.
@@ -111,6 +115,12 @@ model, and file operations are launched only after a drop target is resolved.
   and again on drop. No modifier or secondary/Ctrl means Copy, Shift means Move,
   and Shift+secondary/Ctrl or Alt means Link. This applies to internal item
   drags and GPUI `ExternalPaths` drags.
+- `src/ui/drag_drop.rs` now owns the DnD UI module boundary, while
+  `src/ui/drag_drop/state.rs` owns `FileTransferMode`, `ItemDragPayload`,
+  `ActiveItemDrag`, `ItemDropTarget`, `PlaceDropTarget`, modifier-to-mode
+  mapping, cursor style mapping, no-op drop rejection and drop target matching
+  helpers. `main.rs` still performs the app-level operation routing after a
+  target is resolved.
 - Directory item, pane background and Places row drop targets use action-specific
   colors while hovered: green for Copy, amber for Move, and purple for Link.
   This visual state is separate from selection, hover and active place state.

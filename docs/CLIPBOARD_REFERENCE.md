@@ -54,8 +54,8 @@ GPUI's public clipboard API.
   first-line markers.
 - `decode_file_clipboard_text()` accepts `file://` URI-list text and plain
   absolute paths.
-- `ClipboardState` in `src/main.rs` bridges the core payload to GPUI
-  `ClipboardItem`.
+- `ClipboardState` in `src/ui/clipboard.rs` and `src/ui/clipboard/state.rs`
+  bridges the core payload to GPUI `ClipboardItem`.
 - Copy and cut write the payload to GPUI clipboard and, on Linux/FreeBSD, the
   primary selection.
 - Paste imports GPUI clipboard first, then primary selection on Linux/FreeBSD.

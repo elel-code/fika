@@ -82,9 +82,9 @@ item-vs-blank event boundaries, and later submenu behavior.
     not converted into service menu rows, so application actions such as Zed
     workspaces or Nautilus new-window entries cannot appear in Fika's blank
     service menu.
-- `src/ui/file_grid.rs`
+- `src/ui/file_grid.rs` and `src/ui/file_grid/snapshot.rs`
   - `file_grid()` renders only `VisibleItemSnapshot` values provided by pane
-    snapshots.
+    snapshots. The item snapshot type lives in `src/ui/file_grid/snapshot.rs`.
   - The item hitbox is the child positioned at `visual_rect`, not the full item
     slot.
   - Blank press, blank right-click, and rubber-band drag are attached to the

@@ -23,6 +23,8 @@ Fika's pane-local location bar maps to Dolphin's `KUrlNavigator` path.
 - Dolphin editable URL mode -> pane-scoped `LocationDraft`.
 - Editable draft/caret/snapshot state -> `src/ui/location_bar.rs` as the module
   entry and `src/ui/location_bar/draft.rs` as the directory-style child module.
+- Editable metrics/caret hit-test state -> `src/ui/location_bar/metrics.rs` as a
+  directory-style child module.
 - Dolphin breadcrumb buttons -> core `BreadcrumbSegment { label, path }`
   built by `src/core/location.rs` and rendered by the reusable pane component.
 - Dolphin URL parsing/completion behavior -> `src/core/location.rs`, which owns

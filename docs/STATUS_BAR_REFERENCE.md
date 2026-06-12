@@ -26,7 +26,12 @@ Fika's pane-local status bar maps to Dolphin's view-container status bar flow.
 ## Fika Mapping
 
 - Dolphin view-container status bar -> reusable pane-local GPUI status bar in `src/ui/status_bar.rs`, rendered by `src/ui/pane.rs`.
-- Dolphin status text -> each `PaneSnapshot` carries its own `StatusBarSnapshot`, derived from that pane's `DirectoryModel` entries and `SelectionState`.
+- Dolphin status snapshot/cache/progress state -> `src/ui/status_bar.rs` as the
+  module entry and `src/ui/status_bar/state.rs` as the directory-style child
+  module.
+- Dolphin status text -> each `src/ui/pane/snapshot.rs` `PaneSnapshot`
+  carries its own `StatusBarSnapshot`, derived from that pane's
+  `DirectoryModel` entries and `SelectionState`.
 - Dolphin zoom slider -> status bar draggable segmented zoom control routed through `FikaApp::set_zoom_level(pane_id, ...)`.
 - Dolphin space info -> pane path space snapshot cached by `FikaApp` and refreshed on a background task.
 - Dolphin progress bar and stop button -> pane-bound `OperationProgressHandle` backed by core `TransferProgress` and an `AtomicBool` cancel flag for internal copy/move.

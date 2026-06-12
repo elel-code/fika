@@ -1,7 +1,8 @@
-use crate::{
-    FikaApp, PaneSnapshot, file_transfer_mode_for_modifiers,
-    refresh_active_drag_cursor_for_transfer_mode,
-};
+mod snapshot;
+
+pub(crate) use snapshot::PaneSnapshot;
+
+use crate::FikaApp;
 use fika_core::BreadcrumbSegment;
 use gpui::prelude::*;
 use gpui::{
@@ -9,6 +10,9 @@ use gpui::{
     SharedString, Stateful, Styled, TextRun, Window, canvas, div, fill, point, px, rgb, rgba, size,
 };
 
+use super::drag_drop::{
+    file_transfer_mode_for_modifiers, refresh_active_drag_cursor_for_transfer_mode,
+};
 use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
 use super::filter_bar::FilterBarSnapshot;
 use super::location_bar::LocationDraftSnapshot;

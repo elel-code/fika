@@ -1,7 +1,8 @@
-use crate::{
-    FikaApp, FileTransferMode, ItemDragPayload, RubberBandDrag, VisibleItemSnapshot,
-    file_transfer_mode_for_modifiers, refresh_active_drag_cursor_for_transfer_mode,
-};
+mod snapshot;
+
+pub(crate) use snapshot::VisibleItemSnapshot;
+
+use crate::FikaApp;
 use fika_core::{
     CompactLayout, CompactLayoutOptions, ItemLayout, PaneId, ViewRect, ViewState,
     normalize_viewport_extent,
@@ -14,7 +15,12 @@ use gpui::{
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::drag_drop::{
+    FileTransferMode, ItemDragPayload, file_transfer_mode_for_modifiers,
+    refresh_active_drag_cursor_for_transfer_mode,
+};
 use super::places::PlaceDrag;
+use super::rubber_band::RubberBandDrag;
 use super::scrollbar::{
     SCROLLBAR_MIN_HANDLE_WIDTH, SCROLLBAR_THICKNESS, horizontal_scroll_bar,
     scrollbar_drag_capture_overlay,

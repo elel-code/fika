@@ -1,4 +1,16 @@
-use crate::{FikaApp, OperationProgressSnapshot, SpaceInfoSnapshot, StatusBarSnapshot};
+mod state;
+
+pub(crate) use state::{
+    OperationProgressHandle, OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot,
+    StatusBarSnapshot, StatusSummaryCacheEntry, StatusSummaryCacheKey, filesystem_space_info,
+    progress_delay_elapsed,
+};
+#[cfg(test)]
+pub(crate) use state::{
+    PROGRESS_DISPLAY_DELAY, parse_df_space_output, progress_percent, space_info_snapshot,
+};
+
+use crate::FikaApp;
 use fika_core::PaneId;
 use gpui::prelude::*;
 use gpui::{Context, Div, Empty, ParentElement, Rgba, Stateful, Styled, div, px, rgb};
