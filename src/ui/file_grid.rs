@@ -33,6 +33,7 @@ pub(crate) struct FileGridProps {
     pub(crate) view: ViewState,
     pub(crate) rubber_band: Option<ViewRect>,
     pub(crate) drop_target: Option<FileTransferMode>,
+    pub(crate) scrollbar_drag_active: bool,
     pub(crate) mode: FileGridMode,
     pub(crate) mouse_overlay_active: bool,
 }
@@ -82,6 +83,7 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
         view,
         rubber_band,
         drop_target,
+        scrollbar_drag_active,
         mode,
         mouse_overlay_active,
     } = props;
@@ -224,11 +226,9 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                        let shown = this.show_blank_context_menu_if_blank(pane_id, event.position);
+                        let _shown = this.show_blank_context_menu_if_blank(pane_id, event.position);
                         cx.stop_propagation();
-                        if shown {
-                            cx.notify();
-                        }
+                        cx.notify();
                     }),
                 )
                 .on_mouse_down(
@@ -440,6 +440,42 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                             }
                         }),
                     )
+                    .on_mouse_move(cx.listener(
+                        move |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                            let handled = this
+                                .active_scrollbar_drag
+                                .is_some_and(|drag| drag.pane_id == pane_id);
+                            if handled
+                                && this.update_horizontal_scrollbar_drag_from_window(
+                                    pane_id,
+                                    event.position,
+                                )
+                            {
+                                cx.notify();
+                            }
+                            if handled {
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event: &gpui::MouseUpEvent, _window, cx| {
+                            if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event: &gpui::MouseUpEvent, _window, cx| {
+                            if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }),
+                    )
                     .child(horizontal_scroll_bar(
                         pane_id,
                         content_size.width,
@@ -447,6 +483,9 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                         cx,
                     )),
             )
+        })
+        .when(scrollbar_drag_active, |grid| {
+            grid.child(scrollbar_drag_capture_overlay(pane_id, cx))
         })
 }
 
@@ -482,6 +521,39 @@ fn horizontal_scroll_bar(
                 }
             }),
         )
+        .on_mouse_move(
+            cx.listener(move |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                let handled = this
+                    .active_scrollbar_drag
+                    .is_some_and(|drag| drag.pane_id == pane_id);
+                if handled
+                    && this.update_horizontal_scrollbar_drag_from_window(pane_id, event.position)
+                {
+                    cx.notify();
+                }
+                if handled {
+                    cx.stop_propagation();
+                }
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |this, _event: &gpui::MouseUpEvent, _window, cx| {
+                if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(move |this, _event: &gpui::MouseUpEvent, _window, cx| {
+                if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
         .on_mouse_down(
             MouseButton::Navigate(NavigationDirection::Back),
             cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
@@ -504,6 +576,107 @@ fn horizontal_scroll_bar(
             scroll_x,
             cx,
         ))
+}
+
+fn scrollbar_drag_capture_overlay(pane_id: PaneId, cx: &mut Context<FikaApp>) -> Stateful<Div> {
+    let app = cx.weak_entity();
+    div()
+        .id(format!("scrollbar-drag-capture-{}", pane_id.0))
+        .absolute()
+        .inset_0()
+        .occlude()
+        .on_mouse_move(
+            cx.listener(move |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                let handled = this
+                    .active_scrollbar_drag
+                    .is_some_and(|drag| drag.pane_id == pane_id);
+                if handled
+                    && this.update_horizontal_scrollbar_drag_from_window(pane_id, event.position)
+                {
+                    cx.notify();
+                }
+                if handled {
+                    cx.stop_propagation();
+                }
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |this, _event: &gpui::MouseUpEvent, _window, cx| {
+                if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(move |this, _event: &gpui::MouseUpEvent, _window, cx| {
+                if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        .on_scroll_wheel(|_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .child(
+            canvas(
+                |_bounds, _window, _cx| (),
+                move |_bounds, _state, window, _cx| {
+                    let app_for_move = app.clone();
+                    window.on_mouse_event(
+                        move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
+                            if !phase.capture() {
+                                return;
+                            }
+                            let handled = app_for_move
+                                .update(cx, |this, cx| {
+                                    let active = this
+                                        .active_scrollbar_drag
+                                        .is_some_and(|drag| drag.pane_id == pane_id);
+                                    if active
+                                        && this.update_horizontal_scrollbar_drag_from_window(
+                                            pane_id,
+                                            event.position,
+                                        )
+                                    {
+                                        cx.notify();
+                                    }
+                                    active
+                                })
+                                .unwrap_or(false);
+                            if handled {
+                                cx.stop_propagation();
+                            }
+                        },
+                    );
+
+                    let app_for_up = app.clone();
+                    window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _window, cx| {
+                        if !phase.capture() || event.button != MouseButton::Left {
+                            return;
+                        }
+                        let handled = app_for_up
+                            .update(cx, |this, cx| {
+                                if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                                    cx.notify();
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
+                            .unwrap_or(false);
+                        if handled {
+                            cx.stop_propagation();
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
 }
 
 fn handle_pane_navigation_mouse_down(
@@ -529,7 +702,7 @@ fn handle_file_grid_wheel(
     max_scroll_y: f32,
     cx: &mut Context<FikaApp>,
 ) {
-    if event.modifiers.control {
+    if wheel_modifiers_request_zoom(event.modifiers) {
         app.finish_rubber_band(pane_id);
         app.zoom_pane_from_wheel(pane_id, event.delta);
         cx.stop_propagation();
@@ -549,6 +722,10 @@ fn handle_file_grid_wheel(
         cx,
     );
     cx.stop_propagation();
+}
+
+fn wheel_modifiers_request_zoom(modifiers: gpui::Modifiers) -> bool {
+    modifiers.control || modifiers.secondary()
 }
 
 fn horizontal_wheel_scroll_delta(
@@ -655,6 +832,18 @@ impl FikaApp {
         };
         let track_x = (position.x.as_f32() - track.origin_x).clamp(0.0, track.width);
         self.begin_horizontal_scrollbar_drag(pane_id, content_width, scroll_x, track_x, track.width)
+    }
+
+    pub(crate) fn update_horizontal_scrollbar_drag_from_window(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> bool {
+        let Some(track) = self.horizontal_scrollbar_tracks.get(&pane_id).copied() else {
+            return false;
+        };
+        let track_x = (position.x.as_f32() - track.origin_x).clamp(0.0, track.width);
+        self.update_horizontal_scrollbar_drag(pane_id, track_x, track.width)
     }
 
     pub(crate) fn begin_horizontal_scrollbar_drag(
@@ -1027,6 +1216,26 @@ fn item_tile(
                         cx.notify();
                     }),
                 )
+                .on_mouse_down(
+                    MouseButton::Navigate(NavigationDirection::Back),
+                    cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                        handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Back);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Navigate(NavigationDirection::Forward),
+                    cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                        handle_pane_navigation_mouse_down(
+                            this,
+                            pane_id,
+                            NavigationDirection::Forward,
+                        );
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
                 .on_drag(drag_value, move |drag, _, _, cx| {
                     let _ = app.update(cx, |this, _cx| {
                         this.begin_item_drag(drag.payload());
@@ -1390,9 +1599,10 @@ mod tests {
     use super::{
         FileGridMode, drag_preview_label, horizontal_wheel_scroll_delta,
         item_mouse_down_opens_directory, rubber_band_viewport_rect, scroll_x_for_scrollbar_drag,
+        wheel_modifiers_request_zoom,
     };
     use fika_core::{CompactLayout, CompactLayoutOptions, ViewRect};
-    use gpui::{ScrollDelta, point, px};
+    use gpui::{Modifiers, ScrollDelta, point, px};
 
     #[test]
     fn drag_preview_uses_selection_count_only_for_selected_items() {
@@ -1430,6 +1640,16 @@ mod tests {
             "line wheel events should move by compact-view columns, not text lines"
         );
         assert_eq!(precise_delta, 32.0);
+    }
+
+    #[test]
+    fn wheel_zoom_accepts_control_or_secondary_modifier() {
+        assert!(wheel_modifiers_request_zoom(Modifiers::secondary_key()));
+        assert!(wheel_modifiers_request_zoom(Modifiers {
+            control: true,
+            ..Modifiers::none()
+        }));
+        assert!(!wheel_modifiers_request_zoom(Modifiers::none()));
     }
 
     #[test]

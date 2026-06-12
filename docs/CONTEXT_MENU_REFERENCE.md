@@ -67,6 +67,10 @@ item-vs-blank event boundaries, and later submenu behavior.
     an item visual rect, and blank left press clears the current selection
     before entering rubber-band state so blank-click clear does not depend on a
     later synthesized click event.
+  - Window-coordinate blank press/click/right-click must map into the measured
+    file viewport before it can clear selection, start rubber-band, or open a
+    blank menu. Missing viewport origin, scrollbar space, pane chrome, and other
+    non-viewport regions are ignored instead of being treated as blank content.
   - Rubber-band selection records a pane-local selection origin. While that
     origin is active, a context-menu press only opens the selection/item menu
     when the press lands on an already-selected item visual rect. A right press
@@ -104,11 +108,12 @@ item-vs-blank event boundaries, and later submenu behavior.
     cascading items. `context_menu_overlay()` opens the submenu on hover or
     click, positions it at the parent row, and flips it to the left when there
     is not enough viewport space to the right. Root menus use the mouse position
-    as a popup anchor: they open down/right first, flip left/up against the same
-    anchor when the opposite side has room, and only then clamp to the viewport
-    when neither side fully fits. Root menus and submenus share the same viewport
-    layout calculation for narrow panes, capped height, and scrollable overflow
-    instead of letting overlays be clipped by pane or window edges. Submenu hide
+    as a popup anchor and then clamp the top-left corner to the viewport, which
+    matches Qt/Dolphin's "stay near the cursor" behavior better than mirroring
+    the menu to the opposite side of the pointer. Root menus and submenus share
+    the same viewport layout calculation for narrow panes, capped height, and
+    scrollable overflow instead of letting overlays be clipped by pane or window
+    edges. Submenu hide
     follows the Qt menu grace-period model: leaving a
     root or submenu container schedules a delayed hide, entering either
     container cancels it, and stale delayed hides are ignored through an

@@ -35,6 +35,7 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         view,
         rubber_band,
         drop_target,
+        scrollbar_drag_active,
         focused,
     } = snapshot;
     let visible_width = view.viewport_width;
@@ -115,6 +116,7 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
                 view,
                 rubber_band,
                 drop_target,
+                scrollbar_drag_active,
                 mode: file_grid_mode,
                 mouse_overlay_active,
             },

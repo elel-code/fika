@@ -198,6 +198,7 @@ struct PaneSnapshot {
     view: ViewState,
     rubber_band: Option<ViewRect>,
     drop_target: Option<FileTransferMode>,
+    scrollbar_drag_active: bool,
     focused: bool,
 }
 
@@ -3263,6 +3264,9 @@ impl FikaApp {
                     view,
                     rubber_band,
                     drop_target: pane_drop_target,
+                    scrollbar_drag_active: self
+                        .active_scrollbar_drag
+                        .is_some_and(|drag| drag.pane_id == pane_id),
                     focused,
                 })
             })
@@ -4602,10 +4606,11 @@ impl FikaApp {
     fn handle_blank_click(&mut self, pane_id: PaneId, position: gpui::Point<gpui::Pixels>) -> bool {
         self.panes.focus(pane_id);
         self.dismiss_context_menu();
-        if let Some(point) = self.content_point_from_window(pane_id, position) {
-            if self.item_at_content_point(pane_id, point).is_some() {
-                return false;
-            }
+        let Some(point) = self.content_point_from_window(pane_id, position) else {
+            return false;
+        };
+        if self.item_at_content_point(pane_id, point).is_some() {
+            return false;
         }
         self.clear_selection_from_blank(pane_id);
         true
@@ -4632,10 +4637,7 @@ impl FikaApp {
         position: gpui::Point<gpui::Pixels>,
     ) -> bool {
         let Some(start) = self.content_point_from_window(pane_id, position) else {
-            self.panes.focus(pane_id);
-            self.dismiss_context_menu();
-            self.clear_selection_from_blank(pane_id);
-            return true;
+            return false;
         };
         self.start_rubber_band_from_blank(pane_id, start)
     }
@@ -6533,10 +6535,11 @@ impl FikaApp {
     ) -> bool {
         self.panes.focus(pane_id);
         self.finish_rubber_band(pane_id);
-        if let Some(point) = self.content_point_from_window(pane_id, position) {
-            if self.item_at_content_point(pane_id, point).is_some() {
-                return false;
-            }
+        let Some(point) = self.content_point_from_window(pane_id, position) else {
+            return false;
+        };
+        if self.item_at_content_point(pane_id, point).is_some() {
+            return false;
         }
         if self.rubber_band_selection_active(pane_id) {
             self.dismiss_context_menu();
@@ -8319,15 +8322,7 @@ fn clamp_menu_axis(position: f32, size: f32, viewport_size: f32) -> f32 {
 fn popup_menu_axis(anchor: f32, size: f32, viewport_size: f32) -> f32 {
     let min = CONTEXT_MENU_VIEWPORT_MARGIN.min((viewport_size - size).max(0.0));
     let max = (viewport_size - size - CONTEXT_MENU_VIEWPORT_MARGIN).max(min);
-    let forward_edge = (viewport_size - CONTEXT_MENU_VIEWPORT_MARGIN).max(0.0);
-
-    if anchor + size <= forward_edge {
-        anchor.clamp(min, max)
-    } else if anchor - size >= min {
-        anchor - size
-    } else {
-        max
-    }
+    anchor.clamp(min, max)
 }
 
 fn context_menu_actions(
@@ -12107,13 +12102,13 @@ mod tests {
 
         assert_eq!(layout.root.width, 196.0);
         assert_eq!(layout.root.max_height, 204.0);
-        assert_eq!(layout.root.x, 99.0);
+        assert_eq!(layout.root.x, 116.0);
         assert_eq!(layout.root.y, 8.0);
         assert!(layout.submenu.is_none());
     }
 
     #[test]
-    fn context_menu_layout_flips_root_to_anchor_left_or_above_when_it_fits() {
+    fn context_menu_layout_clamps_root_near_anchor_at_viewport_edges() {
         let horizontal = context_menu_overlay_layout(
             ViewPoint { x: 280.0, y: 24.0 },
             2,
@@ -12123,7 +12118,7 @@ mod tests {
             420.0,
             240.0,
         );
-        assert_eq!(horizontal.root.x, 84.0);
+        assert_eq!(horizontal.root.x, 216.0);
         assert_eq!(horizontal.root.y, 24.0);
 
         let vertical = context_menu_overlay_layout(
@@ -12136,7 +12131,7 @@ mod tests {
             260.0,
         );
         assert_eq!(vertical.root.x, 24.0);
-        assert_eq!(vertical.root.y, 100.0);
+        assert_eq!(vertical.root.y, 132.0);
     }
 
     #[test]
@@ -15958,7 +15953,7 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
-    fn blank_window_press_without_origin_still_clears_selection() {
+    fn blank_window_press_without_origin_does_not_clear_selection() {
         let mut app = test_app_with_entries("/tmp/fika-blank-missing-origin", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
         app.select_only(
@@ -15967,10 +15962,10 @@ gtk-icon-theme-name=breeze\n"
         );
 
         assert!(
-            app.start_rubber_band_from_window_if_blank(pane_id, gpui::point(px(500.0), px(300.0)))
+            !app.start_rubber_band_from_window_if_blank(pane_id, gpui::point(px(500.0), px(300.0)))
         );
 
-        assert_eq!(app.panes.selected_count(pane_id), Some(0));
+        assert_eq!(app.panes.selected_count(pane_id), Some(1));
         assert!(app.rubber_band.is_none());
     }
 
@@ -15988,6 +15983,7 @@ gtk-icon-theme-name=breeze\n"
             PathBuf::from("/tmp/fika-rubber-context-blank/beta.txt"),
         );
         app.rubber_band_selection_panes.insert(pane_id);
+        assert!(app.set_viewport_origin(pane_id, ViewPoint { x: 0.0, y: 0.0 }));
 
         assert!(!app.show_blank_context_menu_if_blank(pane_id, gpui::point(px(500.0), px(300.0))));
 
@@ -16109,6 +16105,30 @@ gtk-icon-theme-name=breeze\n"
         }));
         app.clear_horizontal_scrollbar_drag_for_pane(pane_id);
         assert!(!app.horizontal_scrollbar_tracks.contains_key(&pane_id));
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drag_updates_from_window_position() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-window", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.set_horizontal_scrollbar_track(pane_id, 100.0, 240.0));
+        assert!(app.begin_horizontal_scrollbar_drag_from_window(
+            pane_id,
+            1600.0,
+            0.0,
+            gpui::point(px(180.0), px(12.0)),
+        ));
+        assert!(app.update_horizontal_scrollbar_drag_from_window(
+            pane_id,
+            gpui::point(px(260.0), px(12.0)),
+        ));
+
+        assert!(
+            app.panes
+                .pane(pane_id)
+                .is_some_and(|pane| pane.view.scroll_x > 0.0)
+        );
     }
 
     #[test]

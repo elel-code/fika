@@ -118,9 +118,14 @@ basic mouse-wheel and scrollbar hitbox behavior is being stabilized.
   route through the scrollbar, but left-button drag needs normal mouse hit
   testing so the canvas-level down/move/up listeners can start and update the
   active scrollbar drag.
+  While a scrollbar drag is active, pane snapshots render a full-pane mouse
+  capture layer that forwards window-coordinate move/up events back through the
+  cached track bounds. Dragging no longer depends on the pointer staying inside
+  the 12px scrollbar strip after the initial press.
 - Ordinary wheel events enter the pane-local scroll path and write the offset
-  immediately. Ctrl+wheel is routed to pane-local zoom instead, cancels active
-  rubber-band selection, and does not update horizontal scroll state.
+  immediately. Ctrl/secondary+wheel is routed to pane-local zoom instead,
+  cancels active rubber-band selection, and does not update horizontal scroll
+  state.
 - The model remains unchanged: scrolling only changes view offset and does not
   allocate extra visible items beyond the existing virtualized range.
 - Scroll state stays as `f32`; GPUI rendering rounds the translated content

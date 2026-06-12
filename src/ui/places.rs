@@ -275,6 +275,7 @@ fn place_row(
                 })
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.open_place(path.clone());
+                    cx.stop_propagation();
                     cx.notify();
                 }))
                 .on_mouse_down(
