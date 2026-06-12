@@ -4,6 +4,11 @@
 **状态**: 已定位并修复  
 **结论**: 真实原因不是 Slint `set_row_data` 对嵌套模型字段传播失败，而是启动阶段过早发布了一个空的 pane/virtual view。
 
+> 2026-06 注：此 bug 的 root cause（过早发布空模型快照）在 GPUI 主线中已通过 `DirectoryModel` 的
+> "keep previous listing on LoadingStarted" 策略和 `ListingRefreshed` 到达前保留旧模型的机制
+> 一并修复。参见 `docs/DESIGN.md` 的 Directory Model 节和 `docs/TODO.md` 的
+> "pane load 保留旧模型直到 ListingRefreshed" 条目。本文档保留为历史问题记录。
+
 ## 问题描述
 
 fika 启动时或切换到未缓存目录后，目录区域显示为空白，不渲染任何文件条目。触发分屏后内容恢复正常。

@@ -7,7 +7,9 @@ pub(crate) use layout::{
     compact_text_width, model_index_for_layout_index,
 };
 pub(crate) use slots::VisibleItemSlotPool;
-pub(crate) use snapshot::VisibleItemSnapshot;
+pub(crate) use snapshot::{
+    VisibleItemSnapshot, format_entry_kind_label, visible_item_thumbnail_path,
+};
 
 use crate::FikaApp;
 use fika_core::{

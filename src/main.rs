@@ -1,5 +1,7 @@
+mod cli;
 mod ui;
 
+use cli::{Args, Mode};
 #[cfg(test)]
 use fika_core::SystemdLaunchResult;
 use fika_core::{
@@ -8,14 +10,13 @@ use fika_core::{
     ListingWorker, LoadingPaneState, OperationQueue, PaneController, PaneId, RenameUndoItem,
     ScrollBounds, ScrollDragTracker, SelectionMove, SmoothScroll, SortDescriptor, SortOrder,
     SortRole, UndoPayload, UserPlace, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
-    complete_location_input, expand_user_path, file_ops, home_dir, listing_requests_from_events,
-    nearest_existing_ancestor, normalize_start_dir, perform_device_place_operation,
-    resolve_location_input, update_loading_state_for_event,
+    complete_location_input, file_ops, listing_requests_from_events, nearest_existing_ancestor,
+    perform_device_place_operation, resolve_location_input, update_loading_state_for_event,
 };
 #[cfg(test)]
 use fika_core::{
-    CompactLayoutOptions, ServiceMenuAction, TransferUndoItem, ViewState, is_network_root_path,
-    network_root_path,
+    CompactLayoutOptions, ServiceMenuAction, TransferUndoItem, ViewState, home_dir,
+    is_network_root_path, network_root_path,
 };
 use fika_core::{
     CreateItemResult, FileTransferMode, RenameItemResult, TransferTaskResult, TrashSelectionResult,
@@ -34,9 +35,8 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, IntoElement, ParentElement, Render, ScrollDelta, Styled,
     Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
-use std::collections::{BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -65,10 +65,11 @@ use ui::drag_drop::{drag_cursor_style_for_transfer_mode, file_transfer_mode_for_
 use ui::file_grid::{
     CompactColumnWidthCache, PaneViewportGeometry, VisibleItemSlotPool, VisibleItemSnapshot,
     compact_layout_for_filtered_model, compact_layout_for_model, compact_text_width,
-    model_index_for_layout_index,
+    format_entry_kind_label, model_index_for_layout_index, visible_item_thumbnail_path,
 };
 use ui::filter_bar::{
     FilterBarSnapshot, FilteredModelCacheEntry, FilteredModelCacheKey, PaneFilterState,
+    filter_source_revision,
 };
 use ui::icons::FileIconCache;
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
@@ -110,140 +111,6 @@ const DROP_TARGET_STALE_TIMEOUT: Duration = Duration::from_millis(3000);
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Mode {
-    Manager,
-    Chooser,
-}
-
-#[derive(Clone, Debug)]
-struct Args {
-    mode: Mode,
-    start_dir: PathBuf,
-    chooser_directories: bool,
-    chooser_multiple: bool,
-    chooser_title: Option<String>,
-    chooser_accept_label: Option<String>,
-    chooser_filter_index: usize,
-    chooser_return_filter: bool,
-    chooser_choices: Vec<String>,
-    chooser_return_choices: bool,
-}
-
-impl Args {
-    fn parse(args: impl Iterator<Item = String>) -> Self {
-        let mut mode = Mode::Manager;
-        let mut start_dir = None;
-        let mut chooser_directories = false;
-        let mut chooser_multiple = false;
-        let mut chooser_title = None;
-        let mut chooser_accept_label = None;
-        let mut chooser_filter_index = 0usize;
-        let mut chooser_return_filter = false;
-        let mut chooser_choices = Vec::new();
-        let mut chooser_return_choices = false;
-        let mut pending_title = false;
-        let mut pending_accept_label = false;
-        let mut pending_filter_index = false;
-        let mut pending_choices = false;
-        let mut skip_next = false;
-
-        for arg in args {
-            if skip_next {
-                skip_next = false;
-                continue;
-            }
-            if pending_title {
-                chooser_title = (!arg.is_empty()).then_some(arg);
-                pending_title = false;
-                continue;
-            }
-            if pending_accept_label {
-                chooser_accept_label = (!arg.is_empty()).then_some(arg);
-                pending_accept_label = false;
-                continue;
-            }
-            if pending_filter_index {
-                chooser_filter_index = arg.parse().unwrap_or_default();
-                pending_filter_index = false;
-                continue;
-            }
-            if pending_choices {
-                chooser_choices = arg
-                    .split('\n')
-                    .filter(|choice| !choice.is_empty())
-                    .map(str::to_string)
-                    .collect();
-                pending_choices = false;
-                continue;
-            }
-
-            match arg.as_str() {
-                "-h" | "--help" => {
-                    print_help();
-                    std::process::exit(0);
-                }
-                "--chooser" => mode = Mode::Chooser,
-                "--chooser-directory" => {
-                    mode = Mode::Chooser;
-                    chooser_directories = true;
-                }
-                "--chooser-multiple" => {
-                    mode = Mode::Chooser;
-                    chooser_multiple = true;
-                }
-                "--chooser-save"
-                | "--chooser-save-files"
-                | "--chooser-filters"
-                | "--chooser-parent-window" => {
-                    mode = Mode::Chooser;
-                    skip_next = true;
-                }
-                "--chooser-title" => {
-                    mode = Mode::Chooser;
-                    pending_title = true;
-                }
-                "--chooser-accept-label" => {
-                    mode = Mode::Chooser;
-                    pending_accept_label = true;
-                }
-                "--chooser-filter-index" => {
-                    mode = Mode::Chooser;
-                    pending_filter_index = true;
-                }
-                "--chooser-return-filter" => {
-                    mode = Mode::Chooser;
-                    chooser_return_filter = true;
-                }
-                "--chooser-choices" => {
-                    mode = Mode::Chooser;
-                    pending_choices = true;
-                }
-                "--chooser-return-choices" => {
-                    mode = Mode::Chooser;
-                    chooser_return_choices = true;
-                }
-                _ if start_dir.is_none() => start_dir = Some(expand_user_path(&arg)),
-                _ => {}
-            }
-        }
-
-        let start_dir = normalize_start_dir(start_dir.unwrap_or_else(home_dir));
-        Self {
-            mode,
-            start_dir,
-            chooser_directories,
-            chooser_multiple,
-            chooser_title,
-            chooser_accept_label,
-            chooser_filter_index,
-            chooser_return_filter,
-            chooser_choices,
-            chooser_return_choices,
-        }
-    }
-}
-
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ContentItemHit {
@@ -261,34 +128,6 @@ struct PaneLayoutProjection {
 impl PaneLayoutProjection {
     fn model_index_for_layout_index(&self, layout_index: usize) -> Option<usize> {
         model_index_for_layout_index(self.filtered.as_ref(), layout_index)
-    }
-}
-
-fn filter_source_revision(filter: &fika_core::NameFilter) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    filter.hash(&mut hasher);
-    match hasher.finish() {
-        0 => 1,
-        revision => revision,
-    }
-}
-
-fn format_entry_kind_label(entry: &fika_core::EntryData) -> String {
-    if let Some(deletion_time) = &entry.trash_deletion_time {
-        return fika_core::format_trash_deletion_time(deletion_time);
-    }
-    if entry.is_dir {
-        "Folder".to_string()
-    } else {
-        fika_core::format_size(entry.size_bytes)
-    }
-}
-
-fn visible_item_thumbnail_path(entry: &fika_core::EntryData) -> Option<PathBuf> {
-    if entry.is_dir {
-        None
-    } else {
-        entry.thumbnail_path.clone()
     }
 }
 
@@ -5956,23 +5795,6 @@ fn paste_clipboard_result(
     )
 }
 
-fn print_help() {
-    println!(
-        "Usage: fika [--chooser] [START_DIR]\n\n\
-         Options:\n\
-           --chooser                 Start the GPUI file chooser shell.\n\
-           --chooser-directory       Select folders instead of files.\n\
-           --chooser-multiple        Select more than one path before confirmation.\n\
-           --chooser-title TITLE     Use TITLE as the chooser window title.\n\
-           --chooser-accept-label L  Use L in the chooser chrome.\n\
-           --chooser-filter-index N  Return N as selected filter metadata.\n\
-           --chooser-return-filter   Print selected filter metadata before paths.\n\
-           --chooser-choices LIST    Preserve portal choice metadata.\n\
-           --chooser-return-choices  Print selected choice metadata before paths.\n\
-           -h, --help                Show this help."
-    );
-}
-
 fn main() {
     let args = Args::parse(env::args().skip(1));
     gpui_platform::application().run(move |cx: &mut App| {
@@ -5993,17 +5815,6 @@ fn main() {
 mod tests {
     use super::*;
     use fika_core::ServiceMenuPriority;
-
-    #[test]
-    fn parses_chooser_mode_without_versioned_dependencies() {
-        let args = Args::parse(
-            ["--chooser", "--chooser-directory", "/tmp"]
-                .into_iter()
-                .map(str::to_string),
-        );
-        assert_eq!(args.mode, Mode::Chooser);
-        assert!(args.chooser_directories);
-    }
 
     #[test]
     fn active_place_prefers_longest_path_prefix() {
@@ -9269,36 +9080,6 @@ text/plain=writer.desktop;\n",
             pane.model.path_for_index(0),
             Some(PathBuf::from("/tmp/fika-load-new/new.txt"))
         );
-    }
-
-    #[test]
-    fn visible_item_thumbnail_path_uses_file_cache_hit_only() {
-        let thumbnail = PathBuf::from("/tmp/fika-thumbnail-cache/normal/hash.png");
-        let file = fika_core::EntryData {
-            name: Arc::from("photo.jpg"),
-            name_width_units: 9,
-            size_bytes: 12,
-            modified_secs: Some(42),
-            mime_type: Some(Arc::from("image/jpeg")),
-            thumbnail_path: Some(thumbnail.clone()),
-            trash_original_path: None,
-            trash_deletion_time: None,
-            is_dir: false,
-        };
-        let dir = fika_core::EntryData {
-            name: Arc::from("Pictures"),
-            name_width_units: 8,
-            size_bytes: 0,
-            modified_secs: Some(42),
-            mime_type: None,
-            thumbnail_path: Some(thumbnail.clone()),
-            trash_original_path: None,
-            trash_deletion_time: None,
-            is_dir: true,
-        };
-
-        assert_eq!(visible_item_thumbnail_path(&file), Some(thumbnail));
-        assert_eq!(visible_item_thumbnail_path(&dir), None);
     }
 
     #[test]

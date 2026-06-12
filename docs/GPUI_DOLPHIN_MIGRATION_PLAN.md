@@ -2,6 +2,13 @@
 
 This is the concrete plan for replacing the current Slint UI with GPUI while making Dolphin the first reference target.
 
+> **Status: Completed.** All 8 implementation slices have been delivered in the
+> GPUI mainline. The Slint implementation has been removed. The current codebase
+> follows this plan's architecture: UI-neutral `fika-core` library, GPUI shell
+> in `src/ui/`, and Dolphin-style directory/model/selection contracts. See
+> `README.md`, `docs/DESIGN.md`, and `docs/TODO.md` for the current state.
+> This document is retained as a historical record of the architecture transition.
+
 ## 1. Objective
 
 Fika will be rebuilt as:
