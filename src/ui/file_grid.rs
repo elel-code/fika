@@ -1,5 +1,12 @@
+mod layout;
+mod slots;
 mod snapshot;
 
+pub(crate) use layout::{
+    CompactColumnWidthCache, compact_layout_for_filtered_model, compact_layout_for_model,
+    compact_text_width, model_index_for_layout_index,
+};
+pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::VisibleItemSnapshot;
 
 use crate::FikaApp;
