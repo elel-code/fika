@@ -7,11 +7,14 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    Bounds, Context, Div, Empty, MouseButton, ParentElement, Pixels, Render, Rgba, Stateful, Styled,
-    StyledImage, Window, canvas, div, fill, img, point, px, rgb, rgba, size,
+    Bounds, Context, Div, Empty, ExternalPaths, MouseButton, ParentElement, Pixels, Render, Rgba,
+    ScrollDelta, Stateful, Styled, StyledImage, Window, canvas, div, fill, img, point, px, rgb,
+    rgba, size,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use super::places::PlaceDrag;
 
 pub(crate) const SCROLLBAR_THICKNESS: f32 = 12.0;
 pub(crate) const SCROLLBAR_MIN_HANDLE_WIDTH: f32 = 36.0;
@@ -33,13 +36,15 @@ pub(crate) struct FileGridProps {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct ScrollBarDrag {
-    pane_id: PaneId,
-    content_width: f32,
+pub(crate) struct ActiveScrollBarDrag {
+    pub(crate) pane_id: PaneId,
+    pub(crate) content_width: f32,
+    pub(crate) initial_scroll_x: f32,
+    pub(crate) start_track_x: f32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ItemDrag {
+pub(crate) struct ItemDrag {
     pane_id: PaneId,
     path: PathBuf,
     name: Arc<str>,
@@ -48,7 +53,7 @@ struct ItemDrag {
 }
 
 impl ItemDrag {
-    fn payload(&self) -> ItemDragPayload {
+    pub(crate) fn payload(&self) -> ItemDragPayload {
         ItemDragPayload {
             source_pane: self.pane_id,
             source_path: self.path.clone(),
@@ -138,8 +143,12 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                 .overflow_hidden()
                 .on_scroll_wheel(cx.listener(
                     move |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                        let delta = event.delta.pixel_delta(window.line_height());
-                        let horizontal_delta = -(delta.x.as_f32() + delta.y.as_f32());
+                        let horizontal_delta = horizontal_wheel_scroll_delta(
+                            event.delta,
+                            window.line_height(),
+                            &layout,
+                            visible_width,
+                        );
                         this.scroll_pane_smooth(
                             pane_id,
                             horizontal_delta,
@@ -197,11 +206,36 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                     },
                 ))
                 .on_drag_move::<ItemDrag>(cx.listener(
-                    move |this,
-                          _event: &gpui::DragMoveEvent<ItemDrag>,
-                          _window,
-                          cx| {
-                        if this.set_item_drag_drop_target_for_pane(pane_id) {
+                    move |this, _event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
+                        let changed = this.set_item_drag_drop_target_for_pane(pane_id);
+                        this.schedule_drop_target_stale_clear(cx);
+                        if changed {
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    },
+                ))
+                .on_drag_move::<ExternalPaths>(cx.listener(
+                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
+                        let changed = event.bounds.contains(&event.event.position)
+                            && this.set_item_drag_drop_target_for_pane(pane_id);
+                        if changed || event.bounds.contains(&event.event.position) {
+                            this.schedule_drop_target_stale_clear(cx);
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    },
+                ))
+                .on_drag_move::<PlaceDrag>(cx.listener(
+                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
+                        let changed = event.bounds.contains(&event.event.position)
+                            && this.set_item_drag_drop_target_for_pane(pane_id);
+                        if changed || event.bounds.contains(&event.event.position) {
+                            this.schedule_drop_target_stale_clear(cx);
+                        }
+                        if changed {
                             cx.notify();
                         }
                         cx.stop_propagation();
@@ -210,6 +244,22 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                 .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
                     let mode = file_transfer_mode_for_modifiers(window.modifiers());
                     this.drop_item_drag_to_pane(pane_id, drag.payload(), mode, cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .on_drop::<ExternalPaths>(cx.listener(
+                    move |this, external_paths: &ExternalPaths, _window, cx| {
+                        this.drop_external_paths_to_pane(
+                            pane_id,
+                            external_paths.paths().to_vec(),
+                            cx,
+                        );
+                        cx.stop_propagation();
+                        cx.notify();
+                    },
+                ))
+                .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, _window, cx| {
+                    this.drop_place_drag_to_pane(pane_id, drag.path());
                     cx.stop_propagation();
                     cx.notify();
                 }))
@@ -266,48 +316,235 @@ fn horizontal_scroll_bar(
         .overflow_hidden()
         .h(px(SCROLLBAR_THICKNESS))
         .bg(rgb(0xe6e9ef))
-        .on_drag(
-            ScrollBarDrag {
-                pane_id,
-                content_width,
-            },
-            |_, _, _, cx| cx.new(|_| Empty),
-        )
-        .on_drag_move::<ScrollBarDrag>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<ScrollBarDrag>, _window, cx| {
-                let drag = *event.drag(cx);
-                let track_x = (event.event.position.x - event.bounds.origin.x).as_f32();
-                let track_width = normalize_viewport_extent(event.bounds.size.width.as_f32());
-                let bar = horizontal_scroll_bar_layout(
-                    drag.content_width,
-                    0.0,
-                    track_width,
-                    SCROLLBAR_THICKNESS,
-                    SCROLLBAR_MIN_HANDLE_WIDTH,
-                );
-                let Some(bar) = bar else {
-                    return;
-                };
-                let scroll_x = bar.scroll_x_for_track_x(track_x);
-                this.set_pane_scroll_immediate(drag.pane_id, scroll_x, 0.0, bar.max_scroll_x, 0.0);
-                cx.stop_propagation();
-                cx.notify();
-            },
+        .child(scroll_bar_handle_canvas(
+            pane_id,
+            content_width,
+            scroll_x,
+            cx,
         ))
-        .on_drop::<ScrollBarDrag>(cx.listener(move |this, drag: &ScrollBarDrag, _window, cx| {
-            this.finish_scrollbar_drag_for_content_width(drag.pane_id, drag.content_width, cx);
-            cx.stop_propagation();
-        }))
-        .child(scroll_bar_handle_canvas(content_width, scroll_x))
 }
 
-fn scroll_bar_handle_canvas(content_width: f32, scroll_x: f32) -> impl IntoElement {
+fn horizontal_wheel_scroll_delta(
+    delta: ScrollDelta,
+    line_height: Pixels,
+    layout: &CompactLayout,
+    visible_width: f32,
+) -> f32 {
+    match delta {
+        ScrollDelta::Pixels(delta) => -(delta.x.as_f32() + delta.y.as_f32()),
+        ScrollDelta::Lines(delta) => {
+            let step = compact_wheel_line_step(layout, visible_width, line_height);
+            -(delta.x + delta.y) * step
+        }
+    }
+}
+
+fn compact_wheel_line_step(layout: &CompactLayout, visible_width: f32, line_height: Pixels) -> f32 {
+    let line_height = line_height.as_f32().max(1.0);
+    let content_width = layout.content_size().width.max(0.0);
+    let average_column_width = if layout.column_count() > 0 {
+        content_width / layout.column_count() as f32
+    } else {
+        line_height * 8.0
+    };
+    let pane_step_cap = (visible_width.max(1.0) * 0.72).max(line_height * 4.0);
+    (average_column_width / 3.0)
+        .clamp(line_height * 3.0, pane_step_cap)
+        .round()
+}
+
+fn scroll_x_for_scrollbar_drag(
+    content_width: f32,
+    initial_scroll_x: f32,
+    start_track_x: f32,
+    current_track_x: f32,
+    track_width: f32,
+) -> Option<(f32, f32)> {
+    let initial_bar = horizontal_scroll_bar_layout(
+        content_width,
+        initial_scroll_x,
+        track_width,
+        SCROLLBAR_THICKNESS,
+        SCROLLBAR_MIN_HANDLE_WIDTH,
+    )?;
+    let mapping_bar = horizontal_scroll_bar_layout(
+        content_width,
+        0.0,
+        track_width,
+        SCROLLBAR_THICKNESS,
+        SCROLLBAR_MIN_HANDLE_WIDTH,
+    )?;
+    let handle_x = initial_bar.handle_rect.x + current_track_x - start_track_x;
+    Some((
+        mapping_bar.scroll_x_for_handle_x(handle_x),
+        mapping_bar.max_scroll_x,
+    ))
+}
+
+fn scroll_x_for_scrollbar_drag_start(
+    content_width: f32,
+    scroll_x: f32,
+    start_track_x: f32,
+    track_width: f32,
+) -> Option<f32> {
+    let bar = horizontal_scroll_bar_layout(
+        content_width,
+        scroll_x,
+        track_width,
+        SCROLLBAR_THICKNESS,
+        SCROLLBAR_MIN_HANDLE_WIDTH,
+    )?;
+    if start_track_x >= bar.handle_rect.x && start_track_x <= bar.handle_rect.right() {
+        return Some(scroll_x.clamp(0.0, bar.max_scroll_x));
+    }
+    Some(bar.scroll_x_for_track_x(start_track_x))
+}
+
+impl FikaApp {
+    pub(crate) fn begin_horizontal_scrollbar_drag(
+        &mut self,
+        pane_id: PaneId,
+        content_width: f32,
+        scroll_x: f32,
+        start_track_x: f32,
+        track_width: f32,
+    ) -> bool {
+        let Some(initial_scroll_x) =
+            scroll_x_for_scrollbar_drag_start(content_width, scroll_x, start_track_x, track_width)
+        else {
+            return false;
+        };
+        let max_scroll_x = (content_width - track_width).max(0.0);
+        self.active_scrollbar_drag = Some(ActiveScrollBarDrag {
+            pane_id,
+            content_width,
+            initial_scroll_x,
+            start_track_x,
+        });
+        self.set_pane_scroll_immediate(pane_id, initial_scroll_x, 0.0, max_scroll_x, 0.0);
+        true
+    }
+
+    pub(crate) fn update_horizontal_scrollbar_drag(
+        &mut self,
+        pane_id: PaneId,
+        track_x: f32,
+        track_width: f32,
+    ) -> bool {
+        let Some(drag) = self.active_scrollbar_drag else {
+            return false;
+        };
+        if drag.pane_id != pane_id {
+            return false;
+        }
+        let Some((scroll_x, max_scroll_x)) = scroll_x_for_scrollbar_drag(
+            drag.content_width,
+            drag.initial_scroll_x,
+            drag.start_track_x,
+            track_x,
+            track_width,
+        ) else {
+            return false;
+        };
+        let previous_scroll_x = self
+            .panes
+            .pane(drag.pane_id)
+            .map(|pane| pane.view.scroll_x)
+            .unwrap_or_default();
+        self.set_pane_scroll_immediate(drag.pane_id, scroll_x, 0.0, max_scroll_x, 0.0);
+        self.panes
+            .pane(drag.pane_id)
+            .is_some_and(|pane| (pane.view.scroll_x - previous_scroll_x).abs() > f32::EPSILON)
+    }
+
+    pub(crate) fn finish_horizontal_scrollbar_drag(
+        &mut self,
+        pane_id: PaneId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(drag) = self.active_scrollbar_drag else {
+            return false;
+        };
+        if drag.pane_id != pane_id {
+            return false;
+        }
+        self.active_scrollbar_drag = None;
+        self.finish_scrollbar_drag_for_content_width(drag.pane_id, drag.content_width, cx);
+        true
+    }
+
+    pub(crate) fn clear_horizontal_scrollbar_drag_for_pane(&mut self, pane_id: PaneId) {
+        if self
+            .active_scrollbar_drag
+            .is_some_and(|drag| drag.pane_id == pane_id)
+        {
+            self.active_scrollbar_drag = None;
+        }
+    }
+}
+
+fn scroll_bar_handle_canvas(
+    pane_id: PaneId,
+    content_width: f32,
+    scroll_x: f32,
+    cx: &mut Context<FikaApp>,
+) -> impl IntoElement {
+    let app = cx.weak_entity();
     canvas(
         move |bounds, _window, _cx| scroll_bar_layout_for_bounds(content_width, scroll_x, bounds),
         move |bounds, bar, window, _cx| {
             let Some(bar) = bar else {
                 return;
             };
+            let track_origin_x = bounds.origin.x;
+            let track_width = normalize_viewport_extent(bounds.size.width.as_f32());
+            let app_for_down = app.clone();
+            window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, _window, cx| {
+                if !phase.bubble()
+                    || event.button != MouseButton::Left
+                    || !bounds.contains(&event.position)
+                {
+                    return;
+                }
+                let track_x = (event.position.x - track_origin_x).as_f32();
+                let _ = app_for_down.update(cx, |this, cx| {
+                    if this.begin_horizontal_scrollbar_drag(
+                        pane_id,
+                        content_width,
+                        scroll_x,
+                        track_x,
+                        track_width,
+                    ) {
+                        cx.notify();
+                    }
+                });
+            });
+
+            let app_for_move = app.clone();
+            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
+                if !phase.bubble() || !event.dragging() {
+                    return;
+                }
+                let track_x = (event.position.x - track_origin_x).as_f32();
+                let _ = app_for_move.update(cx, |this, cx| {
+                    if this.update_horizontal_scrollbar_drag(pane_id, track_x, track_width) {
+                        cx.notify();
+                    }
+                });
+            });
+
+            let app_for_up = app.clone();
+            window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _window, cx| {
+                if !phase.bubble() || event.button != MouseButton::Left {
+                    return;
+                }
+                let _ = app_for_up.update(cx, |this, cx| {
+                    if this.finish_horizontal_scrollbar_drag(pane_id, cx) {
+                        cx.notify();
+                    }
+                });
+            });
+
             let handle = bar.handle_rect;
             window.paint_quad(
                 fill(
@@ -451,9 +688,7 @@ fn item_tile(
                 .h(px(visual.height))
                 .rounded_md()
                 .bg(item_tile_background(selected, drop_target))
-                .hover(move |tile| {
-                    tile.bg(item_tile_hover_background(selected, drop_target))
-                })
+                .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
                 .cursor_pointer()
                 .on_click(
                     cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
@@ -496,30 +731,72 @@ fn item_tile(
                         ),
                     })
                 })
+                .on_drag_move::<PlaceDrag>(cx.listener(
+                    move |this, _event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
+                        let changed = this.set_item_drag_drop_target_for_pane(pane_id);
+                        this.schedule_drop_target_stale_clear(cx);
+                        if changed {
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    },
+                ))
+                .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, _window, cx| {
+                    this.drop_place_drag_to_pane(pane_id, drag.path());
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
                 .when(is_dir_for_drop, |tile| {
                     let target_dir_for_move = target_dir_for_drop.clone();
+                    let target_dir_for_external_move = target_dir_for_drop.clone();
+                    let target_dir_for_external_drop = target_dir_for_drop.clone();
                     tile.on_drag_move::<ItemDrag>(cx.listener(
-                        move |this,
-                              _event: &gpui::DragMoveEvent<ItemDrag>,
-                              _window,
-                              cx| {
-                            if this.set_item_drag_drop_target_for_directory(
+                        move |this, _event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
+                            let changed = this.set_item_drag_drop_target_for_directory(
                                 pane_id,
                                 target_dir_for_move.clone(),
-                            ) {
+                            );
+                            this.schedule_drop_target_stale_clear(cx);
+                            if changed {
                                 cx.notify();
                             }
                             cx.stop_propagation();
                         },
                     ))
-                    .on_drop::<ItemDrag>(cx.listener(
-                        move |this, drag: &ItemDrag, window, cx| {
-                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                            this.drop_item_drag_to_directory(
+                    .on_drag_move::<ExternalPaths>(cx.listener(
+                        move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
+                            let changed = event.bounds.contains(&event.event.position)
+                                && this.set_item_drag_drop_target_for_directory(
+                                    pane_id,
+                                    target_dir_for_external_move.clone(),
+                                );
+                            if changed || event.bounds.contains(&event.event.position) {
+                                this.schedule_drop_target_stale_clear(cx);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                            cx.stop_propagation();
+                        },
+                    ))
+                    .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                        this.drop_item_drag_to_directory(
+                            pane_id,
+                            drag.payload(),
+                            target_dir_for_drop.clone(),
+                            mode,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    .on_drop::<ExternalPaths>(cx.listener(
+                        move |this, external_paths: &ExternalPaths, _window, cx| {
+                            this.drop_external_paths_to_directory(
                                 pane_id,
-                                drag.payload(),
-                                target_dir_for_drop.clone(),
-                                mode,
+                                external_paths.paths().to_vec(),
+                                target_dir_for_external_drop.clone(),
                                 cx,
                             );
                             cx.stop_propagation();
@@ -529,20 +806,41 @@ fn item_tile(
                 })
                 .when(!is_dir_for_drop, |tile| {
                     tile.on_drag_move::<ItemDrag>(cx.listener(
-                        move |this,
-                              _event: &gpui::DragMoveEvent<ItemDrag>,
-                              _window,
-                              cx| {
-                            if this.set_item_drag_drop_target_for_pane(pane_id) {
+                        move |this, _event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
+                            let changed = this.set_item_drag_drop_target_for_pane(pane_id);
+                            this.schedule_drop_target_stale_clear(cx);
+                            if changed {
                                 cx.notify();
                             }
                             cx.stop_propagation();
                         },
                     ))
-                    .on_drop::<ItemDrag>(cx.listener(
-                        move |this, drag: &ItemDrag, window, cx| {
-                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                            this.drop_item_drag_to_pane(pane_id, drag.payload(), mode, cx);
+                    .on_drag_move::<ExternalPaths>(cx.listener(
+                        move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
+                            let changed = event.bounds.contains(&event.event.position)
+                                && this.set_item_drag_drop_target_for_pane(pane_id);
+                            if changed || event.bounds.contains(&event.event.position) {
+                                this.schedule_drop_target_stale_clear(cx);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                            cx.stop_propagation();
+                        },
+                    ))
+                    .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                        this.drop_item_drag_to_pane(pane_id, drag.payload(), mode, cx);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    .on_drop::<ExternalPaths>(cx.listener(
+                        move |this, external_paths: &ExternalPaths, _window, cx| {
+                            this.drop_external_paths_to_pane(
+                                pane_id,
+                                external_paths.paths().to_vec(),
+                                cx,
+                            );
                             cx.stop_propagation();
                             cx.notify();
                         },
@@ -689,13 +987,78 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::drag_preview_label;
+    use super::{drag_preview_label, horizontal_wheel_scroll_delta, scroll_x_for_scrollbar_drag};
+    use fika_core::{CompactLayout, CompactLayoutOptions};
+    use gpui::{ScrollDelta, point, px};
 
     #[test]
     fn drag_preview_uses_selection_count_only_for_selected_items() {
         assert_eq!(drag_preview_label("alpha.txt", true, 3), "3 items");
         assert_eq!(drag_preview_label("alpha.txt", true, 1), "alpha.txt");
         assert_eq!(drag_preview_label("alpha.txt", false, 3), "alpha.txt");
+    }
+
+    #[test]
+    fn wheel_lines_scroll_by_column_scaled_steps() {
+        let layout = CompactLayout::new(
+            120,
+            CompactLayoutOptions {
+                viewport_width: 240.0,
+                viewport_height: 240.0,
+                ..CompactLayoutOptions::default()
+            },
+        );
+
+        let line_delta = horizontal_wheel_scroll_delta(
+            ScrollDelta::Lines(point(0.0, -3.0)),
+            px(16.0),
+            &layout,
+            240.0,
+        );
+        let precise_delta = horizontal_wheel_scroll_delta(
+            ScrollDelta::Pixels(point(px(0.0), px(-32.0))),
+            px(16.0),
+            &layout,
+            240.0,
+        );
+
+        assert!(
+            line_delta > 140.0,
+            "line wheel events should move by compact-view columns, not text lines"
+        );
+        assert_eq!(precise_delta, 32.0);
+    }
+
+    #[test]
+    fn scrollbar_drag_preserves_initial_handle_grab_offset() {
+        let content_width = 1200.0;
+        let track_width = 180.0;
+        let initial_scroll_x = 240.0;
+        let start_track_x = 60.0;
+
+        let (same_scroll_x, max_scroll_x) = scroll_x_for_scrollbar_drag(
+            content_width,
+            initial_scroll_x,
+            start_track_x,
+            start_track_x,
+            track_width,
+        )
+        .unwrap();
+        let (moved_scroll_x, moved_max_scroll_x) = scroll_x_for_scrollbar_drag(
+            content_width,
+            initial_scroll_x,
+            start_track_x,
+            start_track_x + 24.0,
+            track_width,
+        )
+        .unwrap();
+
+        assert_eq!(max_scroll_x, moved_max_scroll_x);
+        assert!(
+            (same_scroll_x - initial_scroll_x).abs() <= 0.5,
+            "drag start should not re-center the handle under the cursor"
+        );
+        assert!(moved_scroll_x > initial_scroll_x + 100.0);
     }
 }
 

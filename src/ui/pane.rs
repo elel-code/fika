@@ -1,11 +1,14 @@
-use crate::{BreadcrumbSegment, FikaApp, FilterBarSnapshot, LocationDraftSnapshot, PaneSnapshot};
+use crate::{
+    BreadcrumbSegment, FikaApp, FilterBarSnapshot, LocationDraftSnapshot, PaneSnapshot,
+    file_transfer_mode_for_modifiers,
+};
 use gpui::prelude::*;
 use gpui::{
-    Bounds, Context, Div, MouseButton, NavigationDirection, ParentElement, Pixels, SharedString,
-    Stateful, Styled, TextRun, Window, canvas, div, fill, point, px, rgb, size,
+    Bounds, Context, Div, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Pixels,
+    SharedString, Stateful, Styled, TextRun, Window, canvas, div, fill, point, px, rgb, rgba, size,
 };
 
-use super::file_grid::{FileGridMode, FileGridProps, file_grid};
+use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
 use super::status_bar::status_bar;
 
 pub(crate) struct PaneProps {
@@ -495,7 +498,11 @@ fn breadcrumb_segment(
     segment: BreadcrumbSegment,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let path = segment.path.clone();
+    let path_for_click = segment.path.clone();
+    let path_for_internal_move = segment.path.clone();
+    let path_for_internal_drop = segment.path.clone();
+    let path_for_external_move = segment.path.clone();
+    let path_for_external_drop = segment.path.clone();
     div()
         .id(format!("location-segment-{}-{index}", pane_id.0))
         .flex()
@@ -516,16 +523,76 @@ fn breadcrumb_segment(
                 .truncate()
                 .text_color(rgb(0x1f2937))
                 .hover(|button| button.bg(rgb(0xe8eef7)))
+                .drag_over::<ItemDrag>(|style, _, _, _| style.bg(rgba(0x16a34a2e)))
+                .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(rgba(0x16a34a2e)))
                 .cursor_pointer()
                 .on_click(
                     cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                         if event.standard_click() {
-                            this.open_location_segment(pane_id, path.clone());
+                            this.open_location_segment(pane_id, path_for_click.clone());
                             cx.stop_propagation();
                             cx.notify();
                         }
                     }),
                 )
+                .on_drag_move::<ItemDrag>(cx.listener(
+                    move |this, event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
+                        let contains = event.bounds.contains(&event.event.position);
+                        let changed = contains
+                            && this.set_item_drag_drop_target_for_directory(
+                                pane_id,
+                                path_for_internal_move.clone(),
+                            );
+                        if contains {
+                            this.schedule_drop_target_stale_clear(cx);
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    },
+                ))
+                .on_drag_move::<ExternalPaths>(cx.listener(
+                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
+                        let contains = event.bounds.contains(&event.event.position);
+                        let changed = contains
+                            && this.set_item_drag_drop_target_for_directory(
+                                pane_id,
+                                path_for_external_move.clone(),
+                            );
+                        if contains {
+                            this.schedule_drop_target_stale_clear(cx);
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    },
+                ))
+                .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    this.drop_item_drag_to_location(
+                        pane_id,
+                        drag.payload(),
+                        path_for_internal_drop.clone(),
+                        mode,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .on_drop::<ExternalPaths>(cx.listener(
+                    move |this, external_paths: &ExternalPaths, _window, cx| {
+                        this.drop_external_paths_to_location(
+                            pane_id,
+                            external_paths.paths().to_vec(),
+                            path_for_external_drop.clone(),
+                            cx,
+                        );
+                        cx.stop_propagation();
+                        cx.notify();
+                    },
+                ))
                 .child(segment.label),
         )
         .when(show_separator, |row| {
