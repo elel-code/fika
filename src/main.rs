@@ -83,14 +83,14 @@ use ui::pane::{
     sort_role_label, split_ratio_eq, width_value_eq,
 };
 use ui::place_draft::{PlaceDraft, PlaceDraftField, place_draft_overlay};
-use ui::places::{
-    PlaceEntry, PlaceSnapshot, build_places, default_place_label, place_snapshots_for,
-    read_live_device_snapshot,
-};
 #[cfg(test)]
 use ui::places::{
     DEVICES_GROUP, NETWORK_GROUP, REMOVABLE_DEVICES_GROUP, active_place_index,
     build_places_with_devices, place_is_mounted,
+};
+use ui::places::{
+    PlaceEntry, PlaceSnapshot, build_places, default_place_label, place_snapshots_for,
+    read_live_device_snapshot,
 };
 use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
