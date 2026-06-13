@@ -82,7 +82,11 @@ use ui::pane::{
     pane_row_width_from_child_bounds, pane_splitter, pane_width_available, sort_order_label,
     sort_role_label, split_ratio_eq, width_value_eq,
 };
-use ui::place_draft::{PlaceDraft, PlaceDraftField, place_draft_overlay};
+use ui::place_draft::{
+    PlaceDraft, PlaceDraftField, PlaceDraftInputResult, apply_place_input_action,
+    clear_place_draft_for_pane as clear_place_draft_state_for_pane, place_draft_overlay,
+    set_place_draft_focus as set_place_draft_state_focus,
+};
 #[cfg(test)]
 use ui::places::{
     DEVICES_GROUP, NETWORK_GROUP, REMOVABLE_DEVICES_GROUP, active_place_index,
@@ -98,10 +102,12 @@ use ui::properties_dialog::{
 use ui::rename::RenameDraft;
 use ui::rubber_band::RubberBandState;
 use ui::scrollbar::{ActiveScrollBarDrag, HorizontalScrollBarTrack};
+#[cfg(test)]
+use ui::shortcuts::PlaceInputAction;
 use ui::shortcuts::{
-    FilterInputAction, LocationInputAction, PaneShortcut, PlaceInputAction, RenameInputAction,
-    filter_input_action, location_input_action, pane_shortcut, place_input_action,
-    rename_input_action, zoom_change_for_wheel_delta,
+    FilterInputAction, LocationInputAction, PaneShortcut, RenameInputAction, filter_input_action,
+    location_input_action, pane_shortcut, place_input_action, rename_input_action,
+    zoom_change_for_wheel_delta,
 };
 use ui::status_bar::{
     OperationProgressHandle, OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot,
@@ -2326,13 +2332,7 @@ impl FikaApp {
     }
 
     fn clear_place_draft_for_pane(&mut self, pane_id: PaneId) {
-        if self
-            .place_draft
-            .as_ref()
-            .is_some_and(|draft| draft.pane_id == pane_id)
-        {
-            self.place_draft = None;
-        }
+        clear_place_draft_state_for_pane(&mut self.place_draft, pane_id);
     }
 
     fn clear_application_chooser_for_pane(&mut self, pane_id: PaneId) {
@@ -2356,13 +2356,11 @@ impl FikaApp {
         self.panes.focus(pane_id);
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
-        self.place_draft = Some(PlaceDraft {
+        self.place_draft = Some(PlaceDraft::for_add(
             pane_id,
-            editing_path: None,
-            focus: PlaceDraftField::Label,
-            label: default_place_label(&path),
-            path: path.display().to_string(),
-        });
+            default_place_label(&path),
+            &path,
+        ));
         self.set_pane_status(pane_id, format!("Adding place {}", path.display()));
     }
 
@@ -2379,40 +2377,30 @@ impl FikaApp {
         self.panes.focus(pane_id);
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
-        self.place_draft = Some(PlaceDraft {
-            pane_id,
-            editing_path: Some(place.path.clone()),
-            focus: PlaceDraftField::Label,
-            label: place.label,
-            path: place.path.display().to_string(),
-        });
+        self.place_draft = Some(PlaceDraft::for_edit(pane_id, place.label, &place.path));
         self.set_pane_status(pane_id, "Editing place");
     }
 
     fn remove_place(&mut self, pane_id: PaneId, path: &Path) {
-        let Some(index) = self
-            .places
-            .iter()
-            .position(|place| place.path == path && place.removable)
-        else {
-            self.set_pane_status(pane_id, "Place cannot be removed");
+        let result = ui::places::remove_user_place(&mut self.places, path);
+        let Some(removed_path) = result.removed_path() else {
+            self.set_pane_status(pane_id, result.status_message());
             return;
         };
-        let removed = self.places.remove(index);
         if self
             .place_draft
             .as_ref()
             .and_then(|draft| draft.editing_path.as_deref())
-            == Some(removed.path.as_path())
+            == Some(removed_path)
         {
             self.place_draft = None;
         }
-        self.hidden_places.remove(&removed.path);
+        self.hidden_places.remove(removed_path);
         if let Err(error) = self.save_user_places() {
             self.set_pane_status(pane_id, error);
             return;
         }
-        self.set_pane_status(pane_id, format!("Removed place {}", removed.label));
+        self.set_pane_status(pane_id, result.status_message());
     }
 
     fn handle_place_draft_keystroke(&mut self, keystroke: &gpui::Keystroke) -> bool {
@@ -2423,41 +2411,21 @@ impl FikaApp {
             return false;
         }
 
-        match place_input_action(keystroke) {
-            PlaceInputAction::Cancel => {
+        let result = {
+            let Some(draft) = &mut self.place_draft else {
+                return false;
+            };
+            apply_place_input_action(draft, place_input_action(keystroke))
+        };
+
+        match result {
+            PlaceDraftInputResult::Cancel => {
                 self.place_draft = None;
                 self.set_pane_status(draft_pane_id, "Place edit cancelled");
             }
-            PlaceInputAction::Commit => self.commit_place_draft(),
-            PlaceInputAction::NextField => {
-                if let Some(draft) = &mut self.place_draft {
-                    draft.focus = match draft.focus {
-                        PlaceDraftField::Label => PlaceDraftField::Path,
-                        PlaceDraftField::Path => PlaceDraftField::Label,
-                    };
-                }
-            }
-            PlaceInputAction::Backspace => {
-                if let Some(draft) = &mut self.place_draft {
-                    match draft.focus {
-                        PlaceDraftField::Label => {
-                            draft.label.pop();
-                        }
-                        PlaceDraftField::Path => {
-                            draft.path.pop();
-                        }
-                    }
-                }
-            }
-            PlaceInputAction::Insert(text) => {
-                if let Some(draft) = &mut self.place_draft {
-                    match draft.focus {
-                        PlaceDraftField::Label => draft.label.push_str(&text),
-                        PlaceDraftField::Path => draft.path.push_str(&text),
-                    }
-                }
-            }
-            PlaceInputAction::Ignore => return false,
+            PlaceDraftInputResult::Commit => self.commit_place_draft(),
+            PlaceDraftInputResult::Edited => {}
+            PlaceDraftInputResult::Ignore => return false,
         }
         true
     }
@@ -2466,11 +2434,6 @@ impl FikaApp {
         let Some(draft) = self.place_draft.take() else {
             return;
         };
-        let label = draft.label.trim().to_string();
-        if label.is_empty() {
-            self.set_pane_status(draft.pane_id, "Place label cannot be empty");
-            return;
-        }
         let Some(current_dir) = self
             .panes
             .pane(draft.pane_id)
@@ -2478,71 +2441,25 @@ impl FikaApp {
         else {
             return;
         };
-        let Some(path) = resolve_location_input(&current_dir, &draft.path) else {
-            self.set_pane_status(draft.pane_id, "Place path cannot be empty");
-            return;
-        };
-        if !path.is_dir() {
-            self.set_pane_status(
-                draft.pane_id,
-                format!("Place path is not a folder: {}", path.display()),
-            );
-            return;
-        }
-        let duplicate = self.places.iter().position(|place| place.path == path);
-        if let Some(editing_path) = draft.editing_path {
-            let Some(index) = self
-                .places
-                .iter()
-                .position(|place| place.path == editing_path && place.editable)
-            else {
-                self.set_pane_status(draft.pane_id, "Place cannot be edited");
-                return;
-            };
-            if duplicate.is_some_and(|duplicate| duplicate != index) {
-                self.set_pane_status(draft.pane_id, "Place already exists");
-                return;
-            }
-            self.places[index].label = label.clone();
-            self.places[index].path = path.clone();
-            if let Err(error) = self.save_user_places() {
-                self.set_pane_status(draft.pane_id, error);
-                return;
-            }
-            self.set_pane_status(draft.pane_id, format!("Updated place {label}"));
+
+        let result = ui::places::commit_user_place_draft(
+            &mut self.places,
+            &current_dir,
+            &draft.label,
+            &draft.path,
+            draft.editing_path.as_deref(),
+        );
+        let message = result.status_message();
+        if !result.changed() {
+            self.set_pane_status(draft.pane_id, message);
             return;
         }
 
-        if duplicate.is_some() {
-            self.set_pane_status(draft.pane_id, "Place already exists");
-            return;
-        }
-        self.insert_user_place(label.clone(), path);
         if let Err(error) = self.save_user_places() {
             self.set_pane_status(draft.pane_id, error);
             return;
         }
-        self.set_pane_status(draft.pane_id, format!("Added place {label}"));
-    }
-
-    fn insert_user_place(&mut self, label: String, path: PathBuf) {
-        let insert_at = self.user_place_insert_index(self.places.len());
-        self.insert_user_place_at(label, path, insert_at);
-    }
-
-    fn insert_user_place_at(&mut self, label: String, path: PathBuf, index: usize) {
-        let entry = PlaceEntry {
-            group: "",
-            marker: "B",
-            label,
-            path,
-            editable: true,
-            removable: true,
-            device_ejectable: false,
-            device_can_power_off: false,
-        };
-        let insert_at = self.user_place_insert_index(index);
-        self.places.insert(insert_at, entry);
+        self.set_pane_status(draft.pane_id, message);
     }
 
     fn move_user_place_to_insert_index(
@@ -2551,30 +2468,21 @@ impl FikaApp {
         source_index: usize,
         index: usize,
     ) {
-        let Some(source) = self.places.get(source_index) else {
-            self.set_pane_status(pane_id, "Place cannot be moved");
-            return;
+        let label = match ui::places::move_user_place_to_insert_index(
+            &mut self.places,
+            source_index,
+            index,
+        ) {
+            ui::places::MoveUserPlaceResult::Moved { label } => label,
+            ui::places::MoveUserPlaceResult::AlreadyThere => {
+                self.set_pane_status(pane_id, "Place already there");
+                return;
+            }
+            ui::places::MoveUserPlaceResult::NotMovable => {
+                self.set_pane_status(pane_id, "Place cannot be moved");
+                return;
+            }
         };
-        if !(source.editable && source.removable) {
-            self.set_pane_status(pane_id, "Place cannot be moved");
-            return;
-        }
-
-        let target_index = self.user_place_insert_index(index);
-        if target_index == source_index || target_index == source_index + 1 {
-            self.set_pane_status(pane_id, "Place already there");
-            return;
-        }
-
-        let label = source.label.clone();
-        let place = self.places.remove(source_index);
-        let insert_at = if source_index < target_index {
-            target_index.saturating_sub(1)
-        } else {
-            target_index
-        };
-        let insert_at = self.user_place_insert_index(insert_at);
-        self.places.insert(insert_at, place);
         if let Err(error) = self.save_user_places() {
             self.set_pane_status(pane_id, error);
             return;
@@ -2583,17 +2491,7 @@ impl FikaApp {
     }
 
     fn user_place_insert_index(&self, index: usize) -> usize {
-        let first_grouped = self
-            .places
-            .iter()
-            .position(|place| !place.group.is_empty())
-            .unwrap_or(self.places.len());
-        let first_user = self
-            .places
-            .iter()
-            .position(|place| place.editable && place.removable)
-            .unwrap_or(first_grouped);
-        index.clamp(first_user, first_grouped)
+        ui::places::user_place_insert_index(&self.places, index)
     }
 
     fn insert_place_from_dropped_paths(
@@ -2602,62 +2500,43 @@ impl FikaApp {
         paths: Vec<PathBuf>,
         index: usize,
     ) {
-        let [path] = paths.as_slice() else {
-            self.set_pane_status(pane_id, "Drop one folder to add a place");
-            return;
-        };
-        if !path.is_dir() {
-            self.set_pane_status(pane_id, "Only folders can be added to Places");
+        let result = ui::places::add_user_place_from_dropped_paths(&mut self.places, &paths, index);
+        let message = result.status_message();
+        if !result.added() {
+            self.set_pane_status(pane_id, message);
             return;
         }
-        if self.places.iter().any(|place| place.path == *path) {
-            self.set_pane_status(pane_id, "Place already exists");
-            return;
-        }
-        let label = default_place_label(path);
-        self.insert_user_place_at(label.clone(), path.clone(), index);
         if let Err(error) = self.save_user_places() {
             self.set_pane_status(pane_id, error);
             return;
         }
-        self.set_pane_status(pane_id, format!("Added place {label}"));
+        self.set_pane_status(pane_id, message);
     }
 
     fn hide_place(&mut self, pane_id: PaneId, path: PathBuf) {
-        let Some(place) = self.places.iter().find(|place| place.path == path) else {
-            self.set_pane_status(pane_id, "Place cannot be hidden");
-            return;
-        };
-        let label = place.label.clone();
-        self.hidden_places.insert(path);
-        self.set_pane_status(pane_id, format!("Hidden place {label}"));
+        let message =
+            ui::places::hide_place(&self.places, &mut self.hidden_places, path).status_message();
+        self.set_pane_status(pane_id, message);
     }
 
     fn hide_place_section(&mut self, pane_id: PaneId, group: &'static str) {
-        if group.is_empty() || !self.places.iter().any(|place| place.group == group) {
-            self.set_pane_status(pane_id, "Place section cannot be hidden");
-            return;
-        }
-        self.hidden_place_sections.insert(group);
-        self.set_pane_status(pane_id, format!("Hidden places section {group}"));
+        let message =
+            ui::places::hide_place_section(&self.places, &mut self.hidden_place_sections, group)
+                .status_message();
+        self.set_pane_status(pane_id, message);
     }
 
     fn show_hidden_places(&mut self, pane_id: PaneId) {
-        if self.hidden_places.is_empty() && self.hidden_place_sections.is_empty() {
-            self.set_pane_status(pane_id, "No hidden places");
-            return;
-        }
-        self.hidden_places.clear();
-        self.hidden_place_sections.clear();
-        self.set_pane_status(pane_id, "Showing hidden places");
+        let message = ui::places::show_hidden_places(
+            &mut self.hidden_places,
+            &mut self.hidden_place_sections,
+        )
+        .status_message();
+        self.set_pane_status(pane_id, message);
     }
 
     fn user_places(&self) -> Vec<UserPlace> {
-        self.places
-            .iter()
-            .filter(|place| place.editable && place.removable)
-            .map(|place| UserPlace::new(place.label.clone(), place.path.clone()))
-            .collect()
+        ui::places::user_places(&self.places)
     }
 
     fn save_user_places(&self) -> Result<(), String> {
@@ -4454,9 +4333,7 @@ impl FikaApp {
     }
 
     pub(crate) fn set_place_draft_focus(&mut self, field: PlaceDraftField) {
-        if let Some(draft) = &mut self.place_draft {
-            draft.focus = field;
-        }
+        set_place_draft_state_focus(&mut self.place_draft, field);
     }
 
     pub(crate) fn dismiss_properties_dialog(&mut self) {
@@ -8534,13 +8411,7 @@ text/plain=writer.desktop;\n",
                 device_can_power_off: false,
             },
         ];
-        app.place_draft = Some(PlaceDraft {
-            pane_id,
-            editing_path: Some(user.clone()),
-            focus: PlaceDraftField::Label,
-            label: "User".to_string(),
-            path: user.display().to_string(),
-        });
+        app.place_draft = Some(PlaceDraft::for_edit(pane_id, "User".to_string(), &user));
 
         app.remove_place(pane_id, &current);
         assert_eq!(
