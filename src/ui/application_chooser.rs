@@ -67,8 +67,7 @@ impl ApplicationChooserState {
         let Some(rect) = self.query_text_rect else {
             return self.move_query_caret_to_end();
         };
-        let caret =
-            application_chooser_search_caret_for_local_x(&self.query, window_x - rect.x);
+        let caret = application_chooser_search_caret_for_local_x(&self.query, window_x - rect.x);
         self.set_query_caret(caret)
     }
 
@@ -85,8 +84,7 @@ impl ApplicationChooserState {
         if text.is_empty() {
             return false;
         }
-        self.query_caret =
-            application_chooser_search_clamped_caret(&self.query, self.query_caret);
+        self.query_caret = application_chooser_search_clamped_caret(&self.query, self.query_caret);
         self.query.insert_str(self.query_caret, text);
         self.query_caret += text.len();
         true
@@ -134,10 +132,7 @@ impl ApplicationChooserState {
 
     pub(crate) fn move_query_caret_forward(&mut self) -> bool {
         let caret = application_chooser_search_clamped_caret(&self.query, self.query_caret);
-        self.set_query_caret(application_chooser_search_next_boundary(
-            &self.query,
-            caret,
-        ))
+        self.set_query_caret(application_chooser_search_next_boundary(&self.query, caret))
     }
 
     fn set_query_caret(&mut self, caret: usize) -> bool {
@@ -523,16 +518,6 @@ fn application_chooser_search_box(
         .border_color(rgb(0xe1e5ea))
         .child(
             div()
-                .id("application-chooser-search")
-                .flex()
-                .items_center()
-                .h(px(30.0))
-                .px_2()
-                .border_1()
-                .rounded_md()
-                .border_color(rgb(0x2f6fed))
-                .bg(rgb(0xffffff))
-                .overflow_hidden()
                 .on_children_prepainted(move |bounds, _window, cx| {
                     let Some(bounds) = bounds.first() else {
                         return;
@@ -544,6 +529,16 @@ fn application_chooser_search_box(
                         }
                     });
                 })
+                .id("application-chooser-search")
+                .flex()
+                .items_center()
+                .h(px(30.0))
+                .px_2()
+                .border_1()
+                .rounded_md()
+                .border_color(rgb(0x2f6fed))
+                .bg(rgb(0xffffff))
+                .overflow_hidden()
                 .cursor_text()
                 .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                     let _ = app_for_click.update(cx, |this, cx| {

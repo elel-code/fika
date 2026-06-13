@@ -10065,6 +10065,50 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn application_chooser_input_action_classifies_caret_editing_and_text() {
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("escape").unwrap()),
+            ApplicationChooserInputAction::Cancel
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("enter").unwrap()),
+            ApplicationChooserInputAction::ChooseFirst
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("left").unwrap()),
+            ApplicationChooserInputAction::MoveBackward
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("right").unwrap()),
+            ApplicationChooserInputAction::MoveForward
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("home").unwrap()),
+            ApplicationChooserInputAction::MoveStart
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("end").unwrap()),
+            ApplicationChooserInputAction::MoveEnd
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("delete").unwrap()),
+            ApplicationChooserInputAction::Delete
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("a->a").unwrap()),
+            ApplicationChooserInputAction::Insert("a".to_string())
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("shift-a->A").unwrap()),
+            ApplicationChooserInputAction::Insert("A".to_string())
+        );
+        assert_eq!(
+            application_chooser_input_action(&gpui::Keystroke::parse("secondary-i").unwrap()),
+            ApplicationChooserInputAction::Ignore
+        );
+    }
+
+    #[test]
     fn filter_projection_is_pane_local_and_navigation_clears_query() {
         let mut app = test_app_with_entries("/tmp/fika-filter-a", &["alpha.rs", "beta.txt"]);
         let first = app.panes.focused().unwrap();

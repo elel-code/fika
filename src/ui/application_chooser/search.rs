@@ -32,18 +32,12 @@ pub(crate) fn application_chooser_search_next_boundary(text: &str, caret: usize)
         .unwrap_or(text.len())
 }
 
-pub(crate) fn application_chooser_search_parts(
-    text: &str,
-    caret: usize,
-) -> (&str, &str) {
+pub(crate) fn application_chooser_search_parts(text: &str, caret: usize) -> (&str, &str) {
     let caret = application_chooser_search_clamped_caret(text, caret);
     text.split_at(caret)
 }
 
-pub(crate) fn application_chooser_search_caret_for_local_x(
-    text: &str,
-    local_x: f32,
-) -> usize {
+pub(crate) fn application_chooser_search_caret_for_local_x(text: &str, local_x: f32) -> usize {
     if text.is_empty() {
         return 0;
     }
@@ -101,7 +95,10 @@ mod tests {
         let after_wide = "a\u{76ee}".len();
 
         assert_eq!(application_chooser_search_next_boundary(text, 0), 1);
-        assert_eq!(application_chooser_search_next_boundary(text, 1), after_wide);
+        assert_eq!(
+            application_chooser_search_next_boundary(text, 1),
+            after_wide
+        );
         assert_eq!(
             application_chooser_search_previous_boundary(text, after_wide),
             1
@@ -111,7 +108,10 @@ mod tests {
 
     #[test]
     fn search_caret_hit_test_uses_nearest_boundary() {
-        assert_eq!(application_chooser_search_caret_for_local_x("kate", -8.0), 0);
+        assert_eq!(
+            application_chooser_search_caret_for_local_x("kate", -8.0),
+            0
+        );
         assert_eq!(application_chooser_search_caret_for_local_x("kate", 6.0), 1);
         assert_eq!(
             application_chooser_search_caret_for_local_x("kate", 400.0),

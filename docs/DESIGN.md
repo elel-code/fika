@@ -86,6 +86,7 @@ src/
     place_draft.rs               Places Add/Edit draft
     application_chooser/
       identity.rs                Application chooser item identity
+      search.rs                  Application chooser search caret and hit-test
     chooser/
       state.rs                   Chooser state and portal metadata output
     clipboard/

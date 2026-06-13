@@ -144,8 +144,10 @@ icon selection, Open With menu, and future process launching path.
     the visible row range. The dialog owns a search query routed from keystrokes
     while it is open; filtering matches application name, desktop id, exec
     string, and desktop file path, with Escape clearing the query before closing
-    the dialog. The search field renders an active caret and uses text cursor
-    hit testing because the dialog is always the active text target while open.
+    the dialog. The search field owns a byte caret instead of a decorative
+    suffix marker: Left/Right/Home/End move it, Backspace/Delete edit at it,
+    insertion happens at the caret, and mouse clicks map the current search
+    text bounds to a UTF-8-safe caret while the field uses the text cursor.
     The dialog clips its chrome/body with `overflow_hidden()` so the virtual
     list cannot draw beyond the modal frame.
     Fika does not import Zed's GPL `ui` crate only for `WithScrollbar`; the
