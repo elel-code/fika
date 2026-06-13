@@ -2,8 +2,8 @@ use crate::FikaApp;
 use fika_core::{HorizontalScrollBarLayout, PaneId};
 use gpui::prelude::*;
 use gpui::{
-    Bounds, Context, Div, Hitbox, HitboxBehavior, MouseButton, ParentElement, Pixels, Stateful,
-    Styled, canvas, div, fill, point, px, rgb, size,
+    Bounds, Context, CursorStyle, Div, Hitbox, HitboxBehavior, MouseButton, ParentElement, Pixels,
+    Stateful, Styled, canvas, div, fill, point, px, rgb, size,
 };
 
 use super::geometry::{
@@ -13,8 +13,6 @@ use fika_core::ViewRect;
 
 pub(crate) fn horizontal_scroll_bar(
     pane_id: PaneId,
-    content_width: f32,
-    scroll_x: f32,
     mouse_overlay_active: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -29,20 +27,12 @@ pub(crate) fn horizontal_scroll_bar(
         .h(px(SCROLLBAR_THICKNESS))
         .bg(rgb(0xe6e9ef))
         .occlude()
-        .cursor_pointer()
-        .child(scroll_bar_canvas(
-            pane_id,
-            content_width,
-            scroll_x,
-            mouse_overlay_active,
-            cx,
-        ))
+        .cursor_col_resize()
+        .child(scroll_bar_canvas(pane_id, mouse_overlay_active, cx))
 }
 
 fn scroll_bar_canvas(
     pane_id: PaneId,
-    content_width: f32,
-    scroll_x: f32,
     mouse_overlay_active: bool,
     cx: &mut Context<FikaApp>,
 ) -> impl IntoElement {
@@ -51,34 +41,33 @@ fn scroll_bar_canvas(
     canvas(
         move |bounds, window, cx| {
             let track_window_rect = scrollbar_window_rect_from_bounds(bounds);
-            let _ = app_for_prepaint.update(cx, |this, _cx| {
-                this.set_horizontal_scrollbar_track(
-                    pane_id,
-                    track_window_rect,
-                    content_width,
-                    scroll_x,
-                );
-            });
+            let live_track = app_for_prepaint
+                .update(cx, |this, _cx| {
+                    this.refresh_horizontal_scrollbar_track_from_layout(pane_id, track_window_rect)
+                })
+                .ok()
+                .flatten();
             ScrollBarCanvasState {
-                bar: scroll_bar_layout_for_bounds(content_width, scroll_x, bounds),
+                bar: live_track.and_then(|track| {
+                    scroll_bar_layout_for_bounds(track.content_width, track.scroll_x, bounds)
+                }),
                 track_window_rect,
                 _hitbox: window.insert_hitbox(bounds, HitboxBehavior::BlockMouse),
             }
         },
-        move |bounds, state, window, _cx| {
+        move |bounds, state, window, cx| {
             let Some(bar) = state.bar else {
                 return;
             };
             paint_scrollbar_handle(bounds, bar, window);
             register_scrollbar_mouse_handlers(
                 pane_id,
-                content_width,
-                scroll_x,
                 mouse_overlay_active,
                 state.track_window_rect,
                 state._hitbox.clone(),
                 app_for_paint.clone(),
                 window,
+                cx,
             );
         },
     )
@@ -87,15 +76,13 @@ fn scroll_bar_canvas(
 
 fn register_scrollbar_mouse_handlers(
     pane_id: PaneId,
-    content_width: f32,
-    scroll_x: f32,
     mouse_overlay_active: bool,
     track_window_rect: ViewRect,
     hitbox: Hitbox,
     app: gpui::WeakEntity<FikaApp>,
     window: &mut gpui::Window,
+    app_cx: &mut gpui::App,
 ) {
-    let hitbox_for_down = hitbox.clone();
     let app_for_down = app.clone();
     window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, window, cx| {
         if !phase.capture()
@@ -111,13 +98,9 @@ fn register_scrollbar_mouse_handlers(
 
         let started = app_for_down
             .update(cx, |this, cx| {
-                let started = this.begin_horizontal_scrollbar_drag_from_window_track(
-                    pane_id,
-                    content_width,
-                    scroll_x,
-                    track_window_rect,
-                    event.position,
-                );
+                this.refresh_horizontal_scrollbar_track_from_layout(pane_id, track_window_rect);
+                let started =
+                    this.begin_horizontal_scrollbar_drag_from_cached_track(pane_id, event.position);
                 if started {
                     cx.notify();
                 }
@@ -126,13 +109,12 @@ fn register_scrollbar_mouse_handlers(
             .unwrap_or(false);
 
         if started {
-            window.capture_pointer(hitbox_for_down.id);
+            window.set_window_cursor_style(CursorStyle::ResizeLeftRight);
             window.prevent_default();
             cx.stop_propagation();
         }
     });
 
-    let hitbox_for_move = hitbox.clone();
     let app_for_move = app.clone();
     window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, cx| {
         if !phase.capture() || !event.dragging() {
@@ -154,13 +136,13 @@ fn register_scrollbar_mouse_handlers(
             .unwrap_or(false);
 
         if handled {
-            window.capture_pointer(hitbox_for_move.id);
+            window.set_window_cursor_style(CursorStyle::ResizeLeftRight);
             window.prevent_default();
             cx.stop_propagation();
         }
     });
 
-    let app_for_up = app;
+    let app_for_up = app.clone();
     window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
         if !phase.capture() || event.button != MouseButton::Left {
             return;
@@ -177,11 +159,21 @@ fn register_scrollbar_mouse_handlers(
             .unwrap_or(false);
 
         if finished {
-            window.release_pointer();
             window.prevent_default();
             cx.stop_propagation();
         }
     });
+
+    if app
+        .read_with(app_cx, |this, _cx| {
+            this.horizontal_scrollbar_drag_is_active_for(pane_id)
+        })
+        .unwrap_or(false)
+    {
+        window.set_window_cursor_style(CursorStyle::ResizeLeftRight);
+    } else {
+        window.set_cursor_style(CursorStyle::ResizeLeftRight, &hitbox);
+    }
 }
 
 fn paint_scrollbar_handle(

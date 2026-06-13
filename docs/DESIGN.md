@@ -370,20 +370,23 @@ module:
 - `scrollbar/drag.rs` owns `ActiveScrollBarDrag` and pane-local
   begin/update/finish routing on `FikaApp`.
 - `scrollbar/element.rs` owns the GPUI scrollbar element, handle painting,
-  prepaint hitbox insertion, cached-track publication and paint-phase pointer
-  capture handlers.
+  prepaint hitbox insertion, cached-track publication and paint-phase
+  down/move/up handlers.
 - The canvas inserts a prepaint `HitboxBehavior::BlockMouse` hitbox for the
   actual rendered track and converts those bounds to a window-space track rect.
   Prepaint publishes that rect as the pane-local current scrollbar track.
 - The canvas registers capture-phase mouse down/move/up handlers during paint.
   Left down starts from that frame's live window-space track rect only when the
   pointer is inside the measured 12px strip and no modal mouse overlay is
-  active, then captures the pointer on the scrollbar hitbox. Move events are
-  routed by pane-local active drag state, not GPUI DnD, and update scroll from
-  the original window-space track rect even after the pointer leaves the strip.
-- The file-grid reserve only provides layout, mouse occlusion, wheel routing and
-  navigation side-button routing. It does not intercept left-button down and
-  does not start or update drag state.
+  active. Move events are routed by pane-local active drag state, not GPUI DnD
+  or GPUI pointer capture, and update scroll from the original window-space
+  track rect even after the pointer leaves the strip. This avoids stale hitbox
+  capture after scroll changes trigger a redraw and recreate the canvas hitbox.
+- `src/ui/file_grid.rs` no longer creates or owns the scrollbar slot. It only
+  renders the item viewport and item interactions. `src/ui/pane.rs` owns the
+  scrollbar slot as a direct pane-shell sibling below the file-grid viewport,
+  keeping wheel and navigation side-button routing outside the item/blank-area
+  event tree.
 
 #### Location Bar (`src/ui/location_bar.rs`)
 

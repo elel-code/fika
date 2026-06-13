@@ -5,8 +5,9 @@ use gpui::{Context, Pixels, Point};
 #[cfg(test)]
 use super::geometry::scrollbar_drag_track_rect;
 use super::geometry::{
-    horizontal_scrollbar_track, scroll_x_for_scrollbar_drag, scrollbar_drag_start_from_local,
-    scrollbar_local_track_rect, scrollbar_track_local_point, scrollbar_track_x_from_window,
+    HorizontalScrollBarTrack, horizontal_scrollbar_track, scroll_x_for_scrollbar_drag,
+    scrollbar_drag_start_from_local, scrollbar_local_track_rect, scrollbar_track_local_point,
+    scrollbar_track_x_from_window,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,6 +19,7 @@ pub(crate) struct ActiveScrollBarDrag {
 }
 
 impl FikaApp {
+    #[cfg(test)]
     pub(crate) fn set_horizontal_scrollbar_track(
         &mut self,
         pane_id: PaneId,
@@ -36,7 +38,29 @@ impl FikaApp {
         true
     }
 
-    #[cfg(test)]
+    pub(crate) fn refresh_horizontal_scrollbar_track_from_layout(
+        &mut self,
+        pane_id: PaneId,
+        track_window_rect: ViewRect,
+    ) -> Option<HorizontalScrollBarTrack> {
+        let projection = self.layout_projection_for_pane(pane_id)?;
+        let content_width = projection.layout.content_size().width;
+        let scroll_x = self
+            .panes
+            .pane(pane_id)
+            .map(|pane| pane.view.scroll_x)
+            .unwrap_or_default();
+        let Some(track) = horizontal_scrollbar_track(track_window_rect, content_width, scroll_x)
+        else {
+            self.horizontal_scrollbar_tracks.remove(&pane_id);
+            return None;
+        };
+        if self.horizontal_scrollbar_tracks.get(&pane_id) != Some(&track) {
+            self.horizontal_scrollbar_tracks.insert(pane_id, track);
+        }
+        Some(track)
+    }
+
     pub(crate) fn begin_horizontal_scrollbar_drag_from_cached_track(
         &mut self,
         pane_id: PaneId,
@@ -57,6 +81,7 @@ impl FikaApp {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_horizontal_scrollbar_drag_from_window_track(
         &mut self,
         pane_id: PaneId,

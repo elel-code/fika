@@ -19,10 +19,11 @@ use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryListerEvent, ListingRequest, ListingWorker,
     LoadingPaneState, OperationQueue, PaneController, PaneId, RefreshPair, RenameUndoItem,
-    ScrollBounds, ScrollDragTracker, SelectionMove, SmoothScroll, SortDescriptor, SortOrder,
-    SortRole, UndoPayload, UserPlace, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
-    complete_location_input, file_ops, listing_requests_from_events, nearest_existing_ancestor,
-    perform_device_place_operation, resolve_location_input, update_loading_state_for_event,
+    ScrollBounds, ScrollDragTracker, SelectionMove, SmoothScroll, SMOOTH_SCROLL_FRAME,
+    SortDescriptor, SortOrder, SortRole, UndoPayload, UserPlace, ViewPoint, ViewRect, ZoomChange,
+    breadcrumb_segments, complete_location_input, file_ops, listing_requests_from_events,
+    nearest_existing_ancestor, perform_device_place_operation, resolve_location_input,
+    update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -130,6 +131,11 @@ const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
+
+fn view_point_eq(left: ViewPoint, right: ViewPoint) -> bool {
+    (left.x - right.x).abs() <= f32::EPSILON && (left.y - right.y).abs() <= f32::EPSILON
+}
+
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
     places: Vec<PlaceEntry>,
@@ -147,6 +153,7 @@ pub(crate) struct FikaApp {
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
     loading_panes: HashMap<PaneId, LoadingPaneState>,
     smooth_scrolls: HashMap<PaneId, SmoothScroll>,
+    smooth_scroll_tick_running: bool,
     scroll_drag_trackers: HashMap<PaneId, ScrollDragTracker>,
     active_scrollbar_drag: Option<ActiveScrollBarDrag>,
     horizontal_scrollbar_tracks: HashMap<PaneId, HorizontalScrollBarTrack>,
@@ -222,6 +229,7 @@ impl FikaApp {
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
             smooth_scrolls: HashMap::new(),
+            smooth_scroll_tick_running: false,
             scroll_drag_trackers: HashMap::new(),
             active_scrollbar_drag: None,
             horizontal_scrollbar_tracks: HashMap::new(),
@@ -1864,34 +1872,67 @@ impl FikaApp {
         max_scroll_y: f32,
         cx: &mut Context<Self>,
     ) {
+        if self.begin_pane_smooth_scroll_at(
+            pane_id,
+            delta_x,
+            delta_y,
+            max_scroll_x,
+            max_scroll_y,
+            Instant::now(),
+        ) {
+            self.schedule_smooth_scroll_tick(cx);
+            cx.notify();
+        }
+    }
+
+    fn begin_pane_smooth_scroll_at(
+        &mut self,
+        pane_id: PaneId,
+        delta_x: f32,
+        delta_y: f32,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+        now: Instant,
+    ) -> bool {
         if delta_x.abs() <= f32::EPSILON && delta_y.abs() <= f32::EPSILON {
-            return;
+            return false;
         }
         let Some(current) = self.panes.pane(pane_id).map(|pane| ViewPoint {
             x: pane.view.scroll_x,
             y: pane.view.scroll_y,
         }) else {
-            return;
+            return false;
         };
         let bounds = ScrollBounds::new(max_scroll_x, max_scroll_y);
         let target = bounds.clamp(ViewPoint {
             x: current.x + delta_x,
             y: current.y + delta_y,
         });
-        if target == current {
-            return;
+        if view_point_eq(target, current) && !self.smooth_scrolls.contains_key(&pane_id) {
+            return false;
         }
 
-        self.smooth_scrolls.remove(&pane_id);
-        if let Some(view) =
-            self.panes
-                .set_view_scroll(pane_id, target.x, target.y, bounds.max_x, bounds.max_y)
-            && ((view.scroll_x - current.x).abs() > f32::EPSILON
-                || (view.scroll_y - current.y).abs() > f32::EPSILON)
+        let distance = ViewPoint {
+            x: -delta_x,
+            y: -delta_y,
+        };
+        let scroll = match self.smooth_scrolls.remove(&pane_id) {
+            Some(scroll) if scroll.maximum_matches(bounds) => {
+                scroll.scroll_contents_by(current, distance, bounds, now)
+            }
+            _ => SmoothScroll::from_scroll_contents_by(current, distance, bounds, now),
+        };
+        if scroll
+            .target_offset()
+            .is_some_and(|target| view_point_eq(target, current))
         {
-            cx.notify();
+            self.scroll_drag_trackers.remove(&pane_id);
+            return false;
         }
+
+        self.smooth_scrolls.insert(pane_id, scroll);
         self.scroll_drag_trackers.remove(&pane_id);
+        true
     }
 
     pub(crate) fn set_pane_scroll_immediate(
@@ -1925,11 +1966,35 @@ impl FikaApp {
         pane_id: PaneId,
         max_scroll_x: f32,
         max_scroll_y: f32,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
-        let _ = (max_scroll_x, max_scroll_y);
-        self.scroll_drag_trackers.remove(&pane_id);
+        if self.finish_scrollbar_drag_at(pane_id, max_scroll_x, max_scroll_y, Instant::now()) {
+            self.schedule_smooth_scroll_tick(cx);
+        }
+    }
+
+    fn finish_scrollbar_drag_at(
+        &mut self,
+        pane_id: PaneId,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+        now: Instant,
+    ) -> bool {
+        let bounds = ScrollBounds::new(max_scroll_x, max_scroll_y);
+        let velocity = self
+            .scroll_drag_trackers
+            .remove(&pane_id)
+            .map(ScrollDragTracker::velocity)
+            .unwrap_or_default();
         self.smooth_scrolls.remove(&pane_id);
+        if bounds.max_x <= f32::EPSILON && bounds.max_y <= f32::EPSILON {
+            return false;
+        }
+        let Some(scroll) = SmoothScroll::kinetic(velocity, bounds, now) else {
+            return false;
+        };
+        self.smooth_scrolls.insert(pane_id, scroll);
+        true
     }
 
     pub(crate) fn finish_scrollbar_drag_for_content_width(
@@ -1944,6 +2009,81 @@ impl FikaApp {
             .map(|pane| pane.view.viewport_width)
             .unwrap_or_default();
         self.finish_scrollbar_drag(pane_id, (content_width - visible_width).max(0.0), 0.0, cx);
+    }
+
+    fn schedule_smooth_scroll_tick(&mut self, cx: &mut Context<Self>) {
+        if self.smooth_scroll_tick_running || self.smooth_scrolls.is_empty() {
+            return;
+        }
+        self.smooth_scroll_tick_running = true;
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    loop {
+                        cx.background_executor().timer(SMOOTH_SCROLL_FRAME).await;
+                        let Ok(keep_running) = this.update(&mut cx, |app, cx| {
+                            if app.smooth_scrolls.is_empty() {
+                                app.smooth_scroll_tick_running = false;
+                                return false;
+                            }
+                            let keep_running = app.advance_smooth_scrolls();
+                            if !keep_running {
+                                app.smooth_scroll_tick_running = false;
+                            }
+                            cx.notify();
+                            keep_running
+                        }) else {
+                            break;
+                        };
+                        if !keep_running {
+                            break;
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn advance_smooth_scrolls(&mut self) -> bool {
+        self.advance_smooth_scrolls_at(Instant::now())
+    }
+
+    fn advance_smooth_scrolls_at(&mut self, now: Instant) -> bool {
+        let pane_ids = self.smooth_scrolls.keys().copied().collect::<Vec<_>>();
+        for pane_id in pane_ids {
+            let Some(mut scroll) = self.smooth_scrolls.remove(&pane_id) else {
+                continue;
+            };
+            let Some(current) = self.panes.pane(pane_id).map(|pane| ViewPoint {
+                x: pane.view.scroll_x,
+                y: pane.view.scroll_y,
+            }) else {
+                self.scroll_drag_trackers.remove(&pane_id);
+                self.clear_horizontal_scrollbar_drag_for_pane(pane_id);
+                continue;
+            };
+            let bounds = scroll.bounds();
+            let advance = scroll.advance(current, now);
+            let Some(_) = self.panes.set_view_scroll(
+                pane_id,
+                advance.offset.x,
+                advance.offset.y,
+                bounds.max_x,
+                bounds.max_y,
+            ) else {
+                self.scroll_drag_trackers.remove(&pane_id);
+                self.clear_horizontal_scrollbar_drag_for_pane(pane_id);
+                continue;
+            };
+            if advance.active {
+                self.smooth_scrolls.insert(pane_id, scroll);
+            } else {
+                self.scroll_drag_trackers.remove(&pane_id);
+            }
+        }
+        !self.smooth_scrolls.is_empty()
     }
 
     pub(crate) fn set_pane_viewport_geometry(
@@ -9408,7 +9548,8 @@ text/plain=viewer.desktop;\n",
         let default_options = ui::file_grid::compact_layout_options(&ViewState::default(), 0.0);
         assert_eq!(default_options.icon_size, 48.0);
         assert_eq!(default_options.item_width, 168.0);
-        assert_eq!(default_options.item_height, 76.0);
+        assert_eq!(default_options.item_height, 80.0);
+        assert_eq!(default_options.text_height, 40.0);
 
         let zoomed_options = ui::file_grid::compact_layout_options(
             &ViewState {
@@ -9419,7 +9560,8 @@ text/plain=viewer.desktop;\n",
         );
         assert_eq!(zoomed_options.icon_size, 256.0);
         assert_eq!(zoomed_options.item_width, 376.0);
-        assert_eq!(zoomed_options.item_height, 284.0);
+        assert_eq!(zoomed_options.item_height, 288.0);
+        assert_eq!(zoomed_options.text_height, 40.0);
     }
 
     #[test]
@@ -10890,6 +11032,74 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn horizontal_scrollbar_live_refresh_replaces_stale_cached_track() {
+        let names = (0..80)
+            .map(|index| format!("file-{index:03}.txt"))
+            .collect::<Vec<_>>();
+        let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-live-refresh", &refs);
+        let pane_id = app.panes.focused().unwrap();
+        app.panes
+            .set_viewport_bounds(pane_id, 240.0, 128.0, 10_000.0, 0.0)
+            .unwrap();
+        let content_width = app
+            .layout_projection_for_pane(pane_id)
+            .unwrap()
+            .layout
+            .content_size()
+            .width;
+        let max_scroll_x = (content_width - 240.0).max(0.0);
+        assert!(max_scroll_x > 180.0);
+        app.panes
+            .set_view_scroll(pane_id, 180.0, 0.0, max_scroll_x, 0.0)
+            .unwrap();
+        assert!(app.set_horizontal_scrollbar_track(
+            pane_id,
+            ViewRect {
+                x: 80.0,
+                y: 420.0,
+                width: 260.0,
+                height: 12.0,
+            },
+            content_width,
+            0.0,
+        ));
+
+        let live_track = app
+            .refresh_horizontal_scrollbar_track_from_layout(
+                pane_id,
+                ViewRect {
+                    x: 520.0,
+                    y: 300.0,
+                    width: 180.0,
+                    height: 12.0,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            live_track.window_rect,
+            ViewRect {
+                x: 520.0,
+                y: 300.0,
+                width: 180.0,
+                height: 12.0,
+            }
+        );
+        assert!(
+            (live_track.scroll_x - 180.0).abs() <= 0.01,
+            "live refresh must use pane.view.scroll_x, not stale cached scroll"
+        );
+        assert!(app.begin_horizontal_scrollbar_drag_from_cached_track(
+            pane_id,
+            gpui::point(px(620.0), px(306.0)),
+        ));
+        assert!(app.active_scrollbar_drag.is_some_and(|drag| {
+            drag.pane_id == pane_id && drag.track_window_rect == live_track.window_rect
+        }));
+    }
+
+    #[test]
     fn horizontal_scrollbar_live_track_start_ignores_stale_cached_track() {
         let mut app = test_app_with_entries("/tmp/fika-scrollbar-live-not-cache", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
@@ -11319,6 +11529,7 @@ text/plain=viewer.desktop;\n",
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
             smooth_scrolls: HashMap::new(),
+            smooth_scroll_tick_running: false,
             scroll_drag_trackers: HashMap::new(),
             active_scrollbar_drag: None,
             horizontal_scrollbar_tracks: HashMap::new(),

@@ -35,7 +35,6 @@ use super::drag_drop::{
 use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
-use super::scrollbar::{SCROLLBAR_MIN_HANDLE_WIDTH, SCROLLBAR_THICKNESS, horizontal_scroll_bar};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FileGridMode {
@@ -106,15 +105,7 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
     let visible_height = view.viewport_height;
     let max_scroll_x = (content_size.width - visible_width).max(0.0);
     let max_scroll_y = (content_size.height - visible_height).max(0.0);
-    let scroll_bar_visible = layout
-        .horizontal_scroll_bar(
-            visible_width,
-            SCROLLBAR_THICKNESS,
-            SCROLLBAR_MIN_HANDLE_WIDTH,
-        )
-        .is_some();
     let viewport_wheel_layout = layout.clone();
-    let scrollbar_wheel_layout = layout.clone();
     let item_wheel_layout = Arc::new(layout.clone());
     let app = cx.weak_entity();
 
@@ -394,65 +385,6 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                     viewport.child(rubber_band_overlay(rect))
                 }),
         )
-        .when(scroll_bar_visible, |grid| {
-            grid.child(
-                div()
-                    .id(format!("scrollbar-x-reserve-{}", pane_id.0))
-                    .h(px(SCROLLBAR_THICKNESS))
-                    .w_full()
-                    .max_w_full()
-                    .min_w_0()
-                    .flex_shrink_1()
-                    .overflow_hidden()
-                    .occlude()
-                    .on_mouse_down(
-                        MouseButton::Navigate(NavigationDirection::Back),
-                        cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                            handle_pane_navigation_mouse_down(
-                                this,
-                                pane_id,
-                                NavigationDirection::Back,
-                            );
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Navigate(NavigationDirection::Forward),
-                        cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                            handle_pane_navigation_mouse_down(
-                                this,
-                                pane_id,
-                                NavigationDirection::Forward,
-                            );
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    )
-                    .on_scroll_wheel(cx.listener(
-                        move |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                            handle_file_grid_wheel(
-                                this,
-                                pane_id,
-                                event,
-                                window,
-                                &scrollbar_wheel_layout,
-                                visible_width,
-                                max_scroll_x,
-                                max_scroll_y,
-                                cx,
-                            );
-                        },
-                    ))
-                    .child(horizontal_scroll_bar(
-                        pane_id,
-                        content_size.width,
-                        view.scroll_x,
-                        mouse_overlay_active,
-                        cx,
-                    )),
-            )
-        })
 }
 
 fn handle_pane_navigation_mouse_down(
@@ -467,7 +399,7 @@ fn handle_pane_navigation_mouse_down(
     }
 }
 
-fn handle_file_grid_wheel(
+pub(crate) fn handle_file_grid_wheel(
     app: &mut FikaApp,
     pane_id: PaneId,
     event: &gpui::ScrollWheelEvent,
@@ -1122,6 +1054,9 @@ fn text_view(
         .top(px(text.y - visual.y))
         .w(px(text.width))
         .h(px(text.height))
+        .flex()
+        .flex_col()
+        .overflow_hidden()
         .child(if renaming {
             rename_editor_view(
                 pane_id,
@@ -1142,6 +1077,7 @@ fn text_view(
         .child(
             div()
                 .h(px(rename_layout.helper_height))
+                .min_h_0()
                 .text_xs()
                 .text_color(helper_color)
                 .truncate()
@@ -1319,10 +1255,10 @@ mod tests {
 
     #[test]
     fn rename_text_layout_keeps_editor_on_name_line() {
-        let layout = rename_text_layout(32.0);
+        let layout = rename_text_layout(40.0);
 
         assert_eq!(layout.name_height, 20.0);
-        assert_eq!(layout.helper_height, 12.0);
+        assert_eq!(layout.helper_height, 20.0);
 
         let compact = rename_text_layout(12.0);
         assert_eq!(compact.name_height, 12.0);
@@ -1397,7 +1333,7 @@ pub(crate) fn compact_layout_options(
     let icon_size = view.icon_size();
     let padding = 8.0;
     let gap = 8.0;
-    let text_height = 32.0;
+    let text_height = 40.0;
     CompactLayoutOptions {
         viewport_width: view.viewport_width.max(1.0),
         viewport_height: view.viewport_height.max(1.0),
@@ -1407,7 +1343,7 @@ pub(crate) fn compact_layout_options(
         padding,
         gap,
         item_width: icon_size + 120.0,
-        item_height: (icon_size + 28.0).max(text_height + padding * 2.0),
+        item_height: (icon_size + 32.0).max(text_height + padding * 2.0),
         icon_size,
         text_height,
         ..CompactLayoutOptions::default()

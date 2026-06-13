@@ -45,15 +45,16 @@ basic mouse-wheel and scrollbar hitbox behavior is being stabilized.
 - Dolphin `KItemListContainer` owned scrollbars -> `src/ui/scrollbar.rs` plus
   `src/ui/scrollbar/{geometry,drag,element}.rs`. Fika keeps horizontal
   scrollbar state, drawing, measured track bounds, drag lifecycle, and drag math
-  outside `src/ui/file_grid.rs`; the file grid composes the item viewport and a
-  scrollbar slot as siblings.
+  outside `src/ui/file_grid.rs`; the pane shell composes the file-grid item
+  viewport and a scrollbar slot as independent siblings.
 - Dolphin scrollbar maximum invalidation -> `FikaApp::set_pane_viewport_bounds()`
   clears pane-local scroll animation state when viewport/content bounds change.
 - Dolphin `KItemListContainer::updateGeometries()` keeps the item view geometry
-  separate from the scrollbar extent. Fika mirrors this by rendering the file
-  content viewport and the horizontal scrollbar as sibling slots: the item
-  viewport clips only items, while the scrollbar slot is outside that clipping
-  subtree.
+  separate from the scrollbar extent. Fika mirrors this by keeping
+  `src/ui/file_grid.rs` limited to the item viewport and letting
+  `src/ui/pane.rs` own the horizontal scrollbar slot below it. The item viewport
+  clips only items, while the scrollbar slot is outside that clipping subtree
+  and outside blank-area rubber-band/menu routing.
 - Dolphin scrollbar geometry stays constrained to the current pane's visible
   item-view area. Fika measures the pane content viewport, normalizes the
   extent so it never exceeds the measured width, and feeds that same width to
@@ -109,16 +110,22 @@ basic mouse-wheel and scrollbar hitbox behavior is being stabilized.
   publishes that rect as the pane-local current track in `FikaApp`. During paint
   the canvas registers capture-phase mouse down/move/up handlers. The initial
   down starts from that frame's live track rect only when the pointer is inside
-  the measured strip, then calls `Window::capture_pointer()` on the scrollbar
-  hitbox. Pane scrollbars are gated off while a context menu, properties dialog,
-  application chooser, or place draft overlay is active so top-level overlays do
-  not click through to the pane. Continued movement is handled by pane-local
-  active drag state rather than GPUI DnD; capture-phase moves update scroll from
-  the original window-space track rect even when the pointer leaves the strip,
-  and mouse up releases pointer capture and finishes the pane-local drag state.
+  the measured strip. Pane scrollbars are gated off while a context menu,
+  properties dialog, application chooser, or place draft overlay is active so
+  top-level overlays do not click through to the pane. Continued movement is
+  handled by pane-local active drag state rather than GPUI DnD or GPUI pointer
+  capture; capture-phase moves update scroll from the original window-space
+  track rect even when the pointer leaves the strip, and mouse up finishes the
+  pane-local drag state. This avoids stale hitbox capture after scroll changes
+  redraw the canvas and allocate a new hitbox id.
   The reserve slot does not intercept left-button down, start drag state, or
   update drag state; it only reserves layout, occludes the area, and keeps
   wheel/side-button routing local to the pane shell.
+  The canvas mouse handlers do not capture render-time `content_width` or
+  `scroll_x`; each prepaint refreshes the pane-local track from the current app
+  model/layout and `pane.view.scroll_x`, and the down event starts from that
+  refreshed cached track. This avoids GPUI element/canvas reuse feeding stale
+  scroll state back into drag start.
   A drag can only start when the initial window point is inside the measured
   track rect on both axes. Points above or below the 12px strip are ignored even
   if their x coordinate overlaps the scrollbar.
