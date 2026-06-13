@@ -23,10 +23,12 @@ The current replacement starts from a pane-decoupled component:
 
 - `src/ui/item_view.rs`
 - `src/ui/item_view/scroll_bar.rs`
+- `src/ui/item_view/scroll_bar/state.rs`
 
 `src/ui/pane.rs` no longer creates or sizes the item-view scrollbar. The file
-grid mounts it beside the viewport, and the drag lifecycle follows the same
+grid mounts it beside the viewport. The GPUI event layer follows the same
 paint-phase hitbox and pointer-capture pattern used by the working Other
-Application chooser scrollbar. Smooth/kinetic scrolling was deleted with the
-broken pane path and must be rebuilt only after the basic independent scrollbar
-is verified.
+Application chooser scrollbar, while scrollbar geometry, page press and thumb
+drag mapping live in the independent state module. Smooth/kinetic scrolling was
+deleted with the broken pane path and must be rebuilt only after the basic
+independent scrollbar is verified.

@@ -44,7 +44,8 @@ kinetic scrolling are pending a fresh rebuild on that independent component.
 
 - Dolphin `KItemListContainer` owned scrollbars -> currently
   `src/ui/item_view/scroll_bar.rs`, mounted by `src/ui/file_grid.rs` rather than
-  `src/ui/pane.rs`.
+  `src/ui/pane.rs`; geometry and drag math live in
+  `src/ui/item_view/scroll_bar/state.rs`.
 - Dolphin scrollbar maximum invalidation and `updateGeometries()` -> viewport
   bounds, zoom changes, pane loading and pane content clear cancel the active
   item-view drag state.

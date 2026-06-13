@@ -102,6 +102,8 @@ src/
       cache.rs                   FileIconCache, MIME candidate, theme resolution
     item_view/
       scroll_bar.rs              Pane-decoupled item-view horizontal scrollbar
+      scroll_bar/
+        state.rs                 Scrollbar geometry, page press and thumb drag math
     location_bar/
       draft.rs                   Editable location draft and caret state
       metrics.rs                 Editable metrics, hit-test, scroll math
@@ -367,9 +369,11 @@ now pane-decoupled:
   not create or size the item-view scrollbar.
 - `src/ui/file_grid.rs` owns the item viewport and mounts
   `src/ui/item_view/scroll_bar.rs` as an item-view component.
-- `src/ui/item_view/scroll_bar.rs` derives track/thumb geometry from the actual
-  GPUI paint bounds and uses the same hitbox/pointer-capture drag lifecycle as
-  the working Other Application chooser scrollbar.
+- `src/ui/item_view/scroll_bar.rs` owns the GPUI canvas, hitbox and
+  pointer-capture lifecycle.
+- `src/ui/item_view/scroll_bar/state.rs` owns track/thumb geometry, Dolphin
+  `font height * 2` wheel delta, QScrollBar-like page press and thumb-drag
+  mapping.
 
 Wheel input currently writes `ViewState.scroll_x` directly with Dolphin's
 `font height * 2` line step; Ctrl/secondary+wheel remains pane-local zoom.

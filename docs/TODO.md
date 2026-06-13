@@ -100,14 +100,14 @@
   - 验收：single select、Ctrl/secondary toggle、Shift range、Ctrl/secondary+A、select all、clear selection、方向键移动、Shift+方向键范围选择、chooser multi-select、model change pruning 和 GPUI rubber-band selection 都进入 `fika-core::PaneState`；selection 内部存储 core `ItemId`，rename/refresh 后选择跟随同一 model item；select-all 使用 compact all-selected 状态和 exclusion list，不为大目录分配全量 selected id。
 - [x] 实现 Dolphin compact file view。
   - 验收：core compact layout、model-index hit-test、selection rect、rubber-band overlay、GPUI item rendering 使用 `src/core/view.rs` 的布局结果；文件网格已抽到 `src/ui/file_grid.rs`，compact layout cache/model projection 已拆到 `src/ui/file_grid/layout.rs`；普通滚轮通过独立 `src/ui/item_view/scroll_bar.rs` 驱动 pane-local 横向 scroll state；条目按列优先布局；snapshot 只投影 `CompactLayout::visible_items()` 返回的可见条目；visible item slot pool 保持 pane-local 复用。
-  - 当前状态：旧 pane scrollbar、两版 `item_view_container` prototype、UI smooth-scroll bridge 和 `src/core/scroll.rs` 已删除；当前 `src/ui/file_grid.rs` 挂载独立 `src/ui/item_view/scroll_bar.rs`，scrollbar 不再由 `src/ui/pane.rs` 创建、测量或布局。
+  - 当前状态：旧 pane scrollbar、两版 `item_view_container` prototype、UI smooth-scroll bridge 和 `src/core/scroll.rs` 已删除；当前 `src/ui/file_grid.rs` 挂载独立 `src/ui/item_view/scroll_bar.rs`，scrollbar 不再由 `src/ui/pane.rs` 创建、测量或布局；`src/ui/item_view/scroll_bar/state.rs` 承接可复用 geometry、page press 和 thumb drag 映射，按在 thumb 上才启动拖拽，按在轨道空白处按 page step 滚动。
 - [ ] 实现滚动条平滑插值滚动。
   - 参考：Dolphin `QScroller` / `QPropertyAnimation` 驱动的平滑滚动和 kinetic scrolling（惯性滚动）实现；`KItemListView` 中 scrollbar drag 和滚轮事件的动画过渡。
   - 验收：滚轮滚动时 scroll offset 使用缓出（ease-out）插值而非瞬时跳跃，过渡时长约 150–200ms；viewport gesture 的 kinetic scrolling 由 `QScroller` 对应路径处理，不能错误接到 scrollbar handle release；大目录下平滑滚动不丢帧，插值计算在渲染帧回调中完成；pane 目录切换时取消当前滚动动画并从 offset 0 开始；纵向滚动（列表模式/详情模式预留）同样走插值路径；滚动动画使用 `f32` 亚像素精度，渲染时 round 到物理像素。
   - 已完成：新增 `docs/SMOOTH_SCROLL_REFERENCE.md`，记录 Dolphin `KItemListSmoothScroller`、`KItemListContainer`、`KItemListView::setScrollOffset()` 和 `QScroller` 对应路径；旧 UI smooth-scroll bridge、`src/core/scroll.rs` 和 `src/ui/item_view_container/smooth.rs` 已删除，避免继续保留拖拽卡死路径。
   - 当前恢复状态：当前 wheel 通过独立 `src/ui/item_view/scroll_bar.rs` 直接写入 `ViewState.scroll_x`；smooth/kinetic 尚未恢复，必须在独立 item-view scrollbar 验证后重新实现。
 - [~] 滚动条拖拽诊断：鼠标拖动 handle 困难，已移除 pane-coupled 路径和旧 smooth/gesture 状态，仍需实机复核。
-  - 当前状态：旧 pane 横向 scrollbar、`item_view_container`、drag/cache、smooth tick、canvas hitbox 旧实现和相关测试已删除；当前 `src/ui/item_view/scroll_bar.rs` 采用 Other Application chooser scrollbar 的 GPUI canvas hitbox / pointer capture 模式，连续拖拽 move 即使 offset 未变化也保持 capture。
+  - 当前状态：旧 pane 横向 scrollbar、`item_view_container`、drag/cache、smooth tick、canvas hitbox 旧实现和相关测试已删除；当前 `src/ui/item_view/scroll_bar.rs` 采用 Other Application chooser scrollbar 的 GPUI canvas hitbox / pointer capture 模式，`src/ui/item_view/scroll_bar/state.rs` 负责 QScrollBar-like page press 与 thumb drag 数学，连续拖拽 move 即使 offset 未变化也保持 capture。
   - 注意：当前没有 scrollbar release kinetic；viewport gesture kinetic 尚未重建。
 - [x] 实现 pane-local zoom（缩放）。
   - 参考：Dolphin `DolphinView::zoomIn()` / `zoomOut()` / `zoomReset()` 和 `KItemListView::setZoomLevel(int)`，zoom level 影响图标大小和 compact view 网格布局。
