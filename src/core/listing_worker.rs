@@ -1,4 +1,4 @@
-use super::cache::{DirectoryCache, DirectoryCacheState};
+use super::cache::DirectoryCache;
 use super::directory::{DirectoryLister, DirectoryListerEvent, LoadMode};
 use super::entries::Entry;
 use super::pane::{Generation, PaneId, PaneState, RequestSerial};
@@ -136,10 +136,7 @@ impl ListingWorkerState {
         if request.mode != LoadMode::Load {
             return None;
         }
-        let snapshot = self.cache.get(&request.path)?;
-        if snapshot.state() != DirectoryCacheState::Fresh {
-            return None;
-        }
+        let snapshot = self.cache.get_fresh(&request.path)?;
         Some(vec![
             DirectoryListerEvent::ListingRefreshed {
                 pane_id: request.pane_id,
@@ -583,7 +580,11 @@ fn listing_worker_loop(state: Arc<(Mutex<ListingWorkerState>, Condvar)>) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::cache::DirectoryCacheState;
     use super::*;
+    use std::fs;
+    use std::process;
+    use std::time::Duration;
 
     #[test]
     fn listing_requests_from_events_keeps_only_loading_events() {
@@ -826,6 +827,26 @@ mod tests {
     }
 
     #[test]
+    fn listing_worker_reloads_when_fresh_cache_metadata_is_stale() {
+        let root = temp_root("fresh-cache-stale");
+        let request = listing_request_at(1, 1, root.to_str().unwrap());
+        let entries = test_entries(&["cached.txt"]);
+        let mut state = ListingWorkerState::default();
+        assert!(state.cache_listing_snapshot(&root, Arc::clone(&entries)));
+
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(root.join("new.txt"), b"changed").unwrap();
+
+        assert!(state.schedule_or_cached(request.clone()).is_none());
+        assert_eq!(state.pending.len(), 1);
+        assert_eq!(state.pending[0], request);
+        let snapshot = state.cache.get(&root).unwrap();
+        assert_eq!(snapshot.state(), DirectoryCacheState::Stale);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn listing_worker_cache_ignores_reload_and_can_remove_directory() {
         let mut state = ListingWorkerState::default();
         let first = listing_request_at(1, 1, "/tmp/fika-cached-listing");
@@ -1037,5 +1058,12 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("fika-listing-{name}-{}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 }

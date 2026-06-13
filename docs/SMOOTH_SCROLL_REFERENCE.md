@@ -47,8 +47,9 @@ kinetic scrolling are pending a fresh rebuild on that independent component.
   sibling overlay of the tracked item viewport rather than by `src/ui/pane.rs`;
   geometry and drag math read/write the pane-local `gpui::ScrollHandle`.
 - Dolphin scrollbar maximum invalidation and `updateGeometries()` -> viewport
-  bounds are owned by GPUI `track_scroll()`, while zoom changes, pane loading
-  and pane content clear reset the pane-local `ScrollHandle`.
+  bounds are owned by GPUI `track_scroll()`. Zoom changes invalidate compact
+  column metrics but preserve the pane-local `ScrollHandle` offset; pane
+  loading and pane content clear reset the handle.
 - Dolphin `setScrollOffset()` synchronous layout path maps to GPUI
   `ScrollHandle` offset changes, followed by pane snapshot sync into
   `ViewState.scroll_x` for compact visible-item virtualization.
@@ -67,11 +68,10 @@ kinetic scrolling are pending a fresh rebuild on that independent component.
   implementation and `item_view_container` rewrite have been removed. There is
   no active `scroll_pane_smooth()`, cached scrollbar track or
   `src/core/scroll.rs` module in the current code.
-- Ordinary pane wheel events go through the item-view container value and smooth
-  model. Wheel retargeting uses Dolphin `scrollContentsBy()` math; scrollbar
-  page press and thumb drag write the view offset immediately and cancel the
-  running wheel animation. Ctrl/secondary+wheel remains routed to pane-local
-  zoom.
+- Ordinary pane wheel events go through GPUI's tracked viewport and update the
+  pane-local `ScrollHandle` directly. Scrollbar page press and thumb drag write
+  the view offset immediately through the same handle. Ctrl/secondary+wheel
+  remains routed to pane-local zoom.
 - Directory navigation/back/forward resets `ViewState` scroll to `0,0` in core.
 - Viewport width/height are normalized from GPUI's measured pane bounds before
   layout. Fractional widths are rounded down, not up, so the horizontal scrollbar
@@ -83,8 +83,8 @@ kinetic scrolling are pending a fresh rebuild on that independent component.
   for resize-time virtualization.
 - The removed horizontal scrollbar widget used a GPUI canvas, pane-local drag
   state and cached track snapshots. Those files are gone; the current scrollbar
-  is a new container component and derives live geometry from the GPUI paint
-  bounds.
+  is a new container component and derives live geometry from the tracked
+  viewport `ScrollHandle`.
 - Ctrl/secondary+wheel is routed to pane-local zoom, cancels active rubber-band
   selection, and does not update horizontal scroll state.
 - The model remains unchanged: scrolling only changes view offset and does not

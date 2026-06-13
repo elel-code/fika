@@ -312,10 +312,7 @@ pub(crate) fn file_grid(
                         .into_iter()
                         .map(|item| item_tile(pane_id, item, mode, cx)),
                 ),
-        )
-        .when_some(rubber_band, |viewport, rect| {
-            viewport.child(rubber_band_overlay(rect))
-        });
+        );
 
     div()
         .on_children_prepainted(move |bounds, _window, cx| {
@@ -359,6 +356,7 @@ pub(crate) fn file_grid(
         .child(item_view_scrollbar_container(
             pane_id,
             &scroll_handle,
+            rubber_band,
             viewport,
             window,
             cx,
@@ -1182,18 +1180,4 @@ pub(crate) fn compact_layout_options(
         text_height,
         ..CompactLayoutOptions::default()
     }
-}
-
-fn rubber_band_overlay(rect: ViewRect) -> Stateful<Div> {
-    div()
-        .id("rubber-band")
-        .absolute()
-        .left(px(rect.x))
-        .top(px(rect.y))
-        .w(px(rect.width.max(1.0)))
-        .h(px(rect.height.max(1.0)))
-        .border_1()
-        .rounded_sm()
-        .border_color(rgb(0x2563eb))
-        .bg(rgba(0x2563eb26))
 }

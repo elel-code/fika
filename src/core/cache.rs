@@ -1,7 +1,12 @@
 use super::entries::Entry;
 use std::collections::{HashMap, VecDeque};
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectoryCacheState {
@@ -15,6 +20,7 @@ pub struct DirectoryCacheSnapshot {
     entries: Arc<Vec<Entry>>,
     state: DirectoryCacheState,
     loaded_at: u64,
+    fingerprint: Option<DirectoryCacheFingerprint>,
 }
 
 impl DirectoryCacheSnapshot {
@@ -37,15 +43,32 @@ impl DirectoryCacheSnapshot {
     pub fn entry_count(&self) -> usize {
         self.entries.len()
     }
+
+    fn matches_current_directory(&self) -> bool {
+        self.fingerprint
+            .is_none_or(|fingerprint| fingerprint.matches_path(&self.path))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DirectoryCacheStats {
     pub hits: usize,
     pub misses: usize,
+    pub stale_invalidations: usize,
     pub evicted_directories: usize,
     pub skipped_large_directories: usize,
     pub cached_entries: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectoryCacheFingerprint {
+    modified_nanos: Option<u128>,
+    len: u64,
+    is_dir: bool,
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,6 +154,22 @@ impl DirectoryCache {
         snapshot
     }
 
+    pub fn get_fresh(&mut self, path: &Path) -> Option<DirectoryCacheSnapshot> {
+        let key = normalize_cache_path(path);
+        let snapshot = self.get(&key)?;
+        if snapshot.state != DirectoryCacheState::Fresh {
+            return None;
+        }
+        if !snapshot.matches_current_directory() {
+            if let Some(snapshot) = self.entries_by_path.get_mut(&key) {
+                snapshot.state = DirectoryCacheState::Stale;
+            }
+            self.stats.stale_invalidations += 1;
+            return None;
+        }
+        Some(snapshot)
+    }
+
     pub fn insert_fresh(
         &mut self,
         path: impl AsRef<Path>,
@@ -151,6 +190,7 @@ impl DirectoryCache {
             entries,
             state: DirectoryCacheState::Fresh,
             loaded_at: self.clock,
+            fingerprint: DirectoryCacheFingerprint::for_path(&key),
         };
         self.remove_normalized(&key);
         self.cached_entries += snapshot.entry_count();
@@ -203,6 +243,31 @@ impl DirectoryCache {
     }
 }
 
+impl DirectoryCacheFingerprint {
+    fn for_path(path: &Path) -> Option<Self> {
+        let metadata = fs::metadata(path).ok()?;
+        Some(Self {
+            modified_nanos: metadata.modified().ok().and_then(system_time_nanos),
+            len: metadata.len(),
+            is_dir: metadata.is_dir(),
+            #[cfg(unix)]
+            dev: metadata.dev(),
+            #[cfg(unix)]
+            ino: metadata.ino(),
+        })
+    }
+
+    fn matches_path(self, path: &Path) -> bool {
+        Self::for_path(path) == Some(self)
+    }
+}
+
+fn system_time_nanos(time: SystemTime) -> Option<u128> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_nanos())
+}
+
 pub fn normalize_cache_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -229,6 +294,8 @@ pub fn normalize_cache_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::core::entries::EntryData;
+    use std::process;
+    use std::time::Duration;
 
     fn entry(name: &str) -> Entry {
         Entry::new(EntryData {
@@ -246,6 +313,13 @@ mod tests {
 
     fn entries(names: &[&str]) -> Arc<Vec<Entry>> {
         Arc::new(names.iter().map(|name| entry(name)).collect())
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("fika-cache-{name}-{}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 
     #[test]
@@ -292,6 +366,26 @@ mod tests {
 
         assert_eq!(snapshot.state(), DirectoryCacheState::Stale);
         assert!(Arc::ptr_eq(snapshot.entries(), &payload));
+    }
+
+    #[test]
+    fn fresh_lookup_marks_cache_stale_when_directory_metadata_changes() {
+        let root = temp_root("freshness");
+        let mut cache = DirectoryCache::new(2);
+        let payload = entries(&["a"]);
+        assert!(cache.insert_fresh(&root, Arc::clone(&payload)).is_some());
+
+        assert!(cache.get_fresh(&root).is_some());
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(root.join("new.txt"), b"changed").unwrap();
+
+        assert!(cache.get_fresh(&root).is_none());
+        let snapshot = cache.get(&root).unwrap();
+        assert_eq!(snapshot.state(), DirectoryCacheState::Stale);
+        assert!(Arc::ptr_eq(snapshot.entries(), &payload));
+        assert_eq!(cache.stats().stale_invalidations, 1);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -128,6 +128,19 @@ const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
 
+fn scroll_value_eq(left: f32, right: f32) -> bool {
+    (left - right).abs() < 0.5
+}
+
+fn zoom_level_after_change(current: i32, change: ZoomChange) -> i32 {
+    match change {
+        ZoomChange::In => current + 1,
+        ZoomChange::Out => current - 1,
+        ZoomChange::Reset => fika_core::DEFAULT_ZOOM_LEVEL,
+    }
+    .clamp(fika_core::MIN_ZOOM_LEVEL, fika_core::MAX_ZOOM_LEVEL)
+}
+
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
     places: Vec<PlaceEntry>,
@@ -145,6 +158,7 @@ pub(crate) struct FikaApp {
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
     loading_panes: HashMap<PaneId, LoadingPaneState>,
     item_view_scroll_handles: HashMap<PaneId, ScrollHandle>,
+    pending_item_view_scroll_x: HashMap<PaneId, f32>,
     pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
     pane_split_ratios: HashMap<PaneId, f32>,
     pane_row_width: f32,
@@ -217,6 +231,7 @@ impl FikaApp {
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
             item_view_scroll_handles: HashMap::new(),
+            pending_item_view_scroll_x: HashMap::new(),
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
             pane_row_width: 0.0,
@@ -500,6 +515,9 @@ impl FikaApp {
     }
 
     fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) {
+        if self.pending_item_view_scroll_x.contains_key(&pane_id) {
+            return;
+        }
         let Some(scroll_handle) = self.item_view_scroll_handles.get(&pane_id).cloned() else {
             return;
         };
@@ -511,13 +529,76 @@ impl FikaApp {
             .set_view_scroll(pane_id, scroll_x, 0.0, max_scroll_x, 0.0);
     }
 
+    fn item_view_scroll_x_for_pane(&self, pane_id: PaneId) -> f32 {
+        let view_scroll_x = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.scroll_x.max(0.0));
+        let Some(scroll_handle) = self.item_view_scroll_handles.get(&pane_id) else {
+            return view_scroll_x;
+        };
+        let max_scroll_x = scroll_handle.max_offset().x.as_f32().max(0.0);
+        let handle_scroll_x = (-scroll_handle.offset().x.as_f32()).max(0.0);
+        let scroll_x = handle_scroll_x.max(view_scroll_x);
+        if max_scroll_x > 0.0 {
+            scroll_x.clamp(0.0, max_scroll_x.max(view_scroll_x))
+        } else {
+            scroll_x
+        }
+    }
+
+    fn preserve_item_view_scroll_for_layout_change(&mut self, pane_id: PaneId) {
+        if self.pending_item_view_scroll_x.contains_key(&pane_id) {
+            return;
+        }
+        let scroll_x = self.item_view_scroll_x_for_pane(pane_id);
+        self.pending_item_view_scroll_x.insert(pane_id, scroll_x);
+    }
+
+    fn set_item_view_scroll_handle_x(&mut self, pane_id: PaneId, scroll_x: f32) -> bool {
+        let Some(scroll_handle) = self.item_view_scroll_handles.get(&pane_id) else {
+            return false;
+        };
+        let current = scroll_handle.offset();
+        let next_x = px(-scroll_x.max(0.0));
+        if current.x == next_x {
+            return false;
+        }
+        scroll_handle.set_offset(point(next_x, current.y));
+        true
+    }
+
+    fn restore_pending_item_view_scroll_for_pane(
+        &mut self,
+        pane_id: PaneId,
+        max_scroll_x: f32,
+        max_scroll_y: f32,
+    ) -> bool {
+        let Some(scroll_x) = self.pending_item_view_scroll_x.remove(&pane_id) else {
+            return false;
+        };
+        let scroll_x = scroll_x.clamp(0.0, max_scroll_x.max(0.0));
+        let previous_scroll_x = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.scroll_x);
+        let view_changed = self
+            .panes
+            .set_view_scroll(pane_id, scroll_x, 0.0, max_scroll_x, max_scroll_y)
+            .is_some_and(|_| !scroll_value_eq(previous_scroll_x, scroll_x));
+        let handle_changed = self.set_item_view_scroll_handle_x(pane_id, scroll_x);
+        view_changed || handle_changed
+    }
+
     fn reset_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
+        self.pending_item_view_scroll_x.remove(&pane_id);
         if let Some(scroll_handle) = self.item_view_scroll_handles.get(&pane_id) {
             scroll_handle.set_offset(point(px(0.0), px(0.0)));
         }
     }
 
     fn remove_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
+        self.pending_item_view_scroll_x.remove(&pane_id);
         self.item_view_scroll_handles.remove(&pane_id);
     }
 
@@ -1764,25 +1845,27 @@ impl FikaApp {
     }
 
     fn apply_zoom_change(&mut self, pane_id: PaneId, change: ZoomChange) {
-        let Some(previous_level) = self.panes.pane(pane_id).map(|pane| pane.view.zoom_level) else {
+        let Some(previous_view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
             return;
         };
-        let Some(view) = self.panes.apply_zoom_change(pane_id, change) else {
-            return;
-        };
-        if view.zoom_level == previous_level {
+        let next_level = zoom_level_after_change(previous_view.zoom_level, change);
+        if next_level == previous_view.zoom_level {
             self.set_pane_status(
                 pane_id,
                 format!(
                     "Zoom level {} ({} px)",
-                    view.zoom_level,
-                    view.icon_size() as i32
+                    previous_view.zoom_level,
+                    previous_view.icon_size() as i32
                 ),
             );
             return;
         }
+        self.preserve_item_view_scroll_for_layout_change(pane_id);
+        let Some(view) = self.panes.set_zoom_level(pane_id, next_level) else {
+            self.pending_item_view_scroll_x.remove(&pane_id);
+            return;
+        };
         self.compact_column_widths.remove(&pane_id);
-        self.reset_item_view_scroll_for_pane(pane_id);
         self.set_pane_status(
             pane_id,
             format!(
@@ -1804,12 +1887,16 @@ impl FikaApp {
         let Some(previous_level) = self.panes.pane(pane_id).map(|pane| pane.view.zoom_level) else {
             return;
         };
-        let Some(view) = self.panes.set_zoom_level(pane_id, level) else {
+        let next_level = level.clamp(fika_core::MIN_ZOOM_LEVEL, fika_core::MAX_ZOOM_LEVEL);
+        if next_level != previous_level {
+            self.preserve_item_view_scroll_for_layout_change(pane_id);
+        }
+        let Some(view) = self.panes.set_zoom_level(pane_id, next_level) else {
+            self.pending_item_view_scroll_x.remove(&pane_id);
             return;
         };
         if view.zoom_level != previous_level {
             self.compact_column_widths.remove(&pane_id);
-            self.reset_item_view_scroll_for_pane(pane_id);
         }
         self.set_pane_status(
             pane_id,
@@ -2057,7 +2144,9 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
-        changed
+        let restored =
+            self.restore_pending_item_view_scroll_for_pane(pane_id, max_scroll_x, max_scroll_y);
+        changed || restored
     }
 
     fn content_point_from_window(
@@ -9571,6 +9660,54 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn zoom_preserves_item_view_scroll_offset() {
+        let mut app = test_app_with_entries("/tmp/fika-zoom-scroll", &["one.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let scroll_handle = app.item_view_scroll_handle_for_pane(pane_id);
+
+        scroll_handle.set_offset(point(px(-180.0), px(0.0)));
+        app.panes
+            .set_view_scroll(pane_id, 180.0, 0.0, 1000.0, 0.0)
+            .unwrap();
+        app.compact_column_widths
+            .insert(pane_id, CompactColumnWidthCache::default());
+
+        app.apply_zoom_change(pane_id, ZoomChange::In);
+
+        assert_eq!(scroll_handle.offset().x, px(-180.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
+        assert!(!app.compact_column_widths.contains_key(&pane_id));
+        assert_eq!(app.pending_item_view_scroll_x.get(&pane_id), Some(&180.0));
+
+        scroll_handle.set_offset(point(px(0.0), px(0.0)));
+        app.sync_pane_view_from_item_view_scroll_handle(pane_id);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
+
+        assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
+        assert_eq!(scroll_handle.offset().x, px(-180.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
+        assert!(!app.pending_item_view_scroll_x.contains_key(&pane_id));
+
+        scroll_handle.set_offset(point(px(-220.0), px(0.0)));
+        app.panes
+            .set_view_scroll(pane_id, 220.0, 0.0, 1000.0, 0.0)
+            .unwrap();
+
+        app.set_zoom_level(pane_id, fika_core::DEFAULT_ZOOM_LEVEL + 2);
+
+        assert_eq!(scroll_handle.offset().x, px(-220.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 220.0);
+
+        scroll_handle.set_offset(point(px(0.0), px(0.0)));
+        app.sync_pane_view_from_item_view_scroll_handle(pane_id);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 220.0);
+
+        assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
+        assert_eq!(scroll_handle.offset().x, px(-220.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 220.0);
+    }
+
+    #[test]
     fn operation_progress_snapshot_is_pane_local() {
         let mut app = test_app_with_entries("/tmp/fika-status-progress", &["one.txt"]);
         let first = app.panes.focused().unwrap();
@@ -10856,6 +10993,7 @@ text/plain=viewer.desktop;\n",
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
             item_view_scroll_handles: HashMap::new(),
+            pending_item_view_scroll_x: HashMap::new(),
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
             pane_row_width: 0.0,
