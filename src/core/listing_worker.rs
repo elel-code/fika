@@ -1,5 +1,5 @@
 use super::cache::DirectoryCache;
-use super::directory::{DirectoryLister, DirectoryListerEvent, LoadMode};
+use super::directory::{DirectoryLister, DirectoryListerEvent, LoadMode, RefreshPair};
 use super::entries::Entry;
 use super::pane::{Generation, PaneId, PaneState, RequestSerial};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -122,6 +122,30 @@ impl ListingWorkerState {
 
     fn mark_cache_stale(&mut self, path: &Path) {
         self.cache.mark_stale(path);
+    }
+
+    fn apply_cache_items_added(&mut self, path: &Path, entries: &[Entry]) -> bool {
+        let applied = self.cache.apply_items_added(path, entries);
+        if !applied {
+            self.cache.mark_stale(path);
+        }
+        applied
+    }
+
+    fn apply_cache_items_deleted(&mut self, path: &Path, paths: &[PathBuf]) -> bool {
+        let applied = self.cache.apply_items_deleted(path, paths);
+        if !applied {
+            self.cache.mark_stale(path);
+        }
+        applied
+    }
+
+    fn apply_cache_items_refreshed(&mut self, path: &Path, pairs: &[RefreshPair]) -> bool {
+        let applied = self.cache.apply_items_refreshed(path, pairs);
+        if !applied {
+            self.cache.mark_stale(path);
+        }
+        applied
     }
 
     fn remove_cached_directory(&mut self, path: &Path) {
@@ -288,6 +312,33 @@ impl ListingWorker {
         let (lock, _) = &*self.state;
         let mut state = lock.lock().expect("listing worker state poisoned");
         state.mark_cache_stale(path);
+    }
+
+    pub fn apply_cache_event(&self, event: &DirectoryListerEvent) -> bool {
+        let (lock, _) = &*self.state;
+        let mut state = lock.lock().expect("listing worker state poisoned");
+        match event {
+            DirectoryListerEvent::ItemsAdded { path, entries, .. } => {
+                state.apply_cache_items_added(path, entries)
+            }
+            DirectoryListerEvent::ItemsDeleted { path, paths, .. } => {
+                state.apply_cache_items_deleted(path, paths)
+            }
+            DirectoryListerEvent::ItemsRefreshed { path, pairs, .. } => {
+                state.apply_cache_items_refreshed(path, pairs)
+            }
+            DirectoryListerEvent::CurrentDirectoryRemoved { path, .. } => {
+                state.remove_cached_directory(path);
+                true
+            }
+            DirectoryListerEvent::LoadingStarted { mode, path, .. }
+                if *mode == LoadMode::Reload =>
+            {
+                state.mark_cache_stale(path);
+                false
+            }
+            _ => false,
+        }
     }
 
     pub fn remove_cached_directory(&self, path: &Path) {
@@ -884,6 +935,35 @@ mod tests {
     }
 
     #[test]
+    fn listing_worker_cache_applies_incremental_delta_for_next_load() {
+        let root = temp_root("incremental-cache");
+        let next = listing_request_at(2, 2, root.to_str().unwrap());
+        let mut state = ListingWorkerState::default();
+        assert!(state.cache_listing_snapshot(&root, test_entries(&["a.txt"])));
+
+        fs::write(root.join("b.txt"), b"b").unwrap();
+        let added = test_entries(&["b.txt"]);
+        assert!(state.apply_cache_items_added(&root, added.as_slice()));
+
+        let cached = state
+            .schedule_or_cached(next.clone())
+            .expect("incremental cache should serve next load");
+        assert!(state.pending.is_empty());
+        let DirectoryListerEvent::ListingRefreshed {
+            entries: cached_entries,
+            request_serial,
+            ..
+        } = &cached[0]
+        else {
+            panic!("expected cached listing refresh");
+        };
+        assert_eq!(*request_serial, next.request_serial);
+        assert_eq!(entry_names(cached_entries), vec!["a.txt", "b.txt"]);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn listing_batch_cancelled_only_when_all_requests_are_stale() {
         let mut state = ListingWorkerState::default();
         let first = listing_request_at(1, 1, "/tmp/fika-shared-listing");
@@ -1058,6 +1138,10 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    fn entry_names(entries: &[Entry]) -> Vec<String> {
+        entries.iter().map(|entry| entry.name.to_string()).collect()
     }
 
     fn temp_root(name: &str) -> PathBuf {

@@ -1,5 +1,7 @@
-use super::entries::Entry;
-use std::collections::{HashMap, VecDeque};
+use super::directory::RefreshPair;
+use super::entries::{Entry, directory_entry_path, sort_entries};
+use super::file_ops;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -209,9 +211,128 @@ impl DirectoryCache {
         true
     }
 
+    pub fn apply_items_added(&mut self, path: &Path, entries: &[Entry]) -> bool {
+        if entries.is_empty() {
+            return false;
+        }
+        self.update_fresh_entries(path, |directory, cached_entries| {
+            for entry in entries {
+                if let Some(index) = entry_index_for_name(cached_entries, entry.name.as_ref()) {
+                    cached_entries[index] = entry.clone();
+                } else {
+                    cached_entries.push(entry.clone());
+                }
+            }
+            sort_cache_entries(directory, cached_entries);
+            true
+        })
+    }
+
+    pub fn apply_items_deleted(&mut self, path: &Path, paths: &[PathBuf]) -> bool {
+        self.update_fresh_entries(path, |directory, cached_entries| {
+            let removed_indexes = paths
+                .iter()
+                .filter_map(|path| entry_index_for_path(cached_entries, directory, path))
+                .collect::<BTreeSet<_>>();
+            if removed_indexes.is_empty() {
+                return true;
+            }
+            let mut index = 0usize;
+            cached_entries.retain(|_| {
+                let keep = !removed_indexes.contains(&index);
+                index += 1;
+                keep
+            });
+            true
+        })
+    }
+
+    pub fn apply_items_refreshed(&mut self, path: &Path, pairs: &[RefreshPair]) -> bool {
+        self.update_fresh_entries(path, |directory, cached_entries| {
+            for pair in pairs {
+                match &pair.entry {
+                    Some(entry) => {
+                        if let Some(index) =
+                            entry_index_for_path(cached_entries, directory, &pair.old_path).or_else(
+                                || entry_index_for_name(cached_entries, entry.name.as_ref()),
+                            )
+                        {
+                            cached_entries[index] = entry.clone();
+                        } else {
+                            cached_entries.push(entry.clone());
+                        }
+                    }
+                    None => {
+                        let Some(index) =
+                            entry_index_for_path(cached_entries, directory, &pair.old_path)
+                        else {
+                            continue;
+                        };
+                        cached_entries.remove(index);
+                    }
+                }
+            }
+            sort_cache_entries(directory, cached_entries);
+            true
+        })
+    }
+
     pub fn remove(&mut self, path: &Path) -> bool {
         let key = normalize_cache_path(path);
         self.remove_normalized(&key)
+    }
+
+    fn update_fresh_entries(
+        &mut self,
+        path: &Path,
+        update: impl FnOnce(&Path, &mut Vec<Entry>) -> bool,
+    ) -> bool {
+        let key = normalize_cache_path(path);
+        let Some(snapshot) = self.entries_by_path.get(&key).cloned() else {
+            return false;
+        };
+        if snapshot.state != DirectoryCacheState::Fresh {
+            return false;
+        }
+
+        let mut entries = snapshot.entries.iter().cloned().collect::<Vec<_>>();
+        if !update(&key, &mut entries) {
+            return false;
+        }
+        self.replace_fresh_entries(key, entries, snapshot.entry_count())
+    }
+
+    fn replace_fresh_entries(
+        &mut self,
+        key: PathBuf,
+        entries: Vec<Entry>,
+        old_entry_count: usize,
+    ) -> bool {
+        if entries.len() > self.limits.max_entries_per_dir
+            || entries.len() > self.limits.max_entries
+        {
+            self.remove_normalized(&key);
+            self.stats.skipped_large_directories += 1;
+            return false;
+        }
+
+        self.clock = self.clock.wrapping_add(1);
+        let new_entry_count = entries.len();
+        let snapshot = DirectoryCacheSnapshot {
+            path: key.clone(),
+            entries: Arc::new(entries),
+            state: DirectoryCacheState::Fresh,
+            loaded_at: self.clock,
+            fingerprint: DirectoryCacheFingerprint::for_path(&key),
+        };
+        self.cached_entries = self
+            .cached_entries
+            .saturating_sub(old_entry_count)
+            .saturating_add(new_entry_count);
+        self.entries_by_path.insert(key.clone(), snapshot);
+        self.touch(&key);
+        self.evict_oldest();
+        true
     }
 
     fn remove_normalized(&mut self, key: &Path) -> bool {
@@ -268,6 +389,21 @@ fn system_time_nanos(time: SystemTime) -> Option<u128> {
         .map(|duration| duration.as_nanos())
 }
 
+fn entry_index_for_path(entries: &[Entry], directory: &Path, path: &Path) -> Option<usize> {
+    let item_path = directory_entry_path(directory, path)?;
+    let name = item_path.file_name()?.to_string_lossy();
+    let name = name.trim();
+    entry_index_for_name(entries, name)
+}
+
+fn entry_index_for_name(entries: &[Entry], name: &str) -> Option<usize> {
+    entries.iter().position(|entry| entry.name.as_ref() == name)
+}
+
+fn sort_cache_entries(directory: &Path, entries: &mut [Entry]) {
+    sort_entries(entries, file_ops::is_trash_files_dir(directory));
+}
+
 pub fn normalize_cache_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -313,6 +449,10 @@ mod tests {
 
     fn entries(names: &[&str]) -> Arc<Vec<Entry>> {
         Arc::new(names.iter().map(|name| entry(name)).collect())
+    }
+
+    fn entry_names(entries: &[Entry]) -> Vec<String> {
+        entries.iter().map(|entry| entry.name.to_string()).collect()
     }
 
     fn temp_root(name: &str) -> PathBuf {
@@ -366,6 +506,55 @@ mod tests {
 
         assert_eq!(snapshot.state(), DirectoryCacheState::Stale);
         assert!(Arc::ptr_eq(snapshot.entries(), &payload));
+    }
+
+    #[test]
+    fn cache_applies_watcher_delta_to_fresh_payload() {
+        let root = temp_root("delta");
+        fs::write(root.join("a.txt"), b"a").unwrap();
+        let mut cache = DirectoryCache::new(2);
+        assert!(cache.insert_fresh(&root, entries(&["a.txt"])).is_some());
+
+        fs::write(root.join("b.txt"), b"b").unwrap();
+        assert!(cache.apply_items_added(&root, &[entry("b.txt")]));
+        let snapshot = cache.get_fresh(&root).unwrap();
+        assert_eq!(entry_names(snapshot.entries()), vec!["a.txt", "b.txt"]);
+        assert_eq!(snapshot.state(), DirectoryCacheState::Fresh);
+
+        fs::rename(root.join("b.txt"), root.join("c.txt")).unwrap();
+        assert!(cache.apply_items_refreshed(
+            &root,
+            &[RefreshPair {
+                old_path: root.join("b.txt"),
+                entry: Some(entry("c.txt")),
+            }],
+        ));
+        let snapshot = cache.get_fresh(&root).unwrap();
+        assert_eq!(entry_names(snapshot.entries()), vec!["a.txt", "c.txt"]);
+
+        fs::remove_file(root.join("a.txt")).unwrap();
+        assert!(cache.apply_items_deleted(&root, &[root.join("a.txt")]));
+        let snapshot = cache.get_fresh(&root).unwrap();
+        assert_eq!(entry_names(snapshot.entries()), vec!["c.txt"]);
+        assert_eq!(cache.cached_entry_count(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_removes_payload_when_delta_exceeds_entry_budget() {
+        let mut cache = DirectoryCache::with_limits(DirectoryCacheLimits {
+            max_dirs: 2,
+            max_entries: 2,
+            max_entries_per_dir: 2,
+        });
+        assert!(cache.insert_fresh("/tmp/a", entries(&["a"])).is_some());
+
+        assert!(!cache.apply_items_added(Path::new("/tmp/a"), &[entry("b"), entry("c")]));
+
+        assert!(cache.get(Path::new("/tmp/a")).is_none());
+        assert_eq!(cache.cached_entry_count(), 0);
+        assert_eq!(cache.stats().skipped_large_directories, 1);
     }
 
     #[test]

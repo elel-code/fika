@@ -121,6 +121,7 @@ use ui::status_bar::{
 use ui::status_bar::{
     PROGRESS_DISPLAY_DELAY, parse_df_space_output, progress_percent, space_info_snapshot,
 };
+use ui::trash_conflict::{TrashConflictDialogState, trash_conflict_dialog_overlay};
 
 const DROP_TARGET_STALE_TIMEOUT: Duration = Duration::from_millis(3000);
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
@@ -187,6 +188,7 @@ pub(crate) struct FikaApp {
     context_menu_tree_hovered: bool,
     context_submenu_hide_generation: u64,
     properties_dialog: Option<PropertiesDialogState>,
+    trash_conflict_dialog: Option<TrashConflictDialogState>,
     application_chooser: Option<ApplicationChooserState>,
     pane_statuses: HashMap<PaneId, String>,
     operation_pending: bool,
@@ -260,6 +262,7 @@ impl FikaApp {
             context_menu_tree_hovered: false,
             context_submenu_hide_generation: 0,
             properties_dialog: None,
+            trash_conflict_dialog: None,
             application_chooser: None,
             pane_statuses: HashMap::new(),
             operation_pending: false,
@@ -4357,12 +4360,20 @@ impl FikaApp {
             self.rubber_band_selection_panes.remove(&result.pane_id);
             let _ = self.panes.clear_selection(result.pane_id);
         }
+        let restore_conflict_count = result.restore_conflicts.len();
+        if restore_conflict_count > 0 {
+            self.trash_conflict_dialog = Some(TrashConflictDialogState {
+                pane_id: result.pane_id,
+                conflicts: result.restore_conflicts.clone(),
+            });
+        }
+        let failure_count = result.failure_count + restore_conflict_count;
         self.finish_pane_operation(
             result.pane_id,
             action_status(
                 result.operation.completed_label(),
                 result.success_count,
-                result.failure_count,
+                failure_count,
             ),
         );
     }
@@ -4738,6 +4749,10 @@ impl FikaApp {
 
     pub(crate) fn dismiss_properties_dialog(&mut self) {
         self.properties_dialog = None;
+    }
+
+    pub(crate) fn dismiss_trash_conflict_dialog(&mut self) {
+        self.trash_conflict_dialog = None;
     }
 
     fn dismiss_application_chooser(&mut self) {
@@ -5633,6 +5648,12 @@ impl FikaApp {
             self.dismiss_properties_dialog();
             return true;
         }
+        if event.keystroke.key.eq_ignore_ascii_case("escape")
+            && self.trash_conflict_dialog.is_some()
+        {
+            self.dismiss_trash_conflict_dialog();
+            return true;
+        }
         if self.application_chooser.is_some() {
             return self.handle_application_chooser_keystroke(&event.keystroke, cx);
         }
@@ -5766,14 +5787,7 @@ impl FikaApp {
             return;
         }
 
-        match &event {
-            DirectoryListerEvent::ItemsAdded { path, .. }
-            | DirectoryListerEvent::ItemsDeleted { path, .. }
-            | DirectoryListerEvent::ItemsRefreshed { path, .. } => {
-                self.listing_worker.mark_cache_stale(path);
-            }
-            _ => {}
-        }
+        self.listing_worker.apply_cache_event(&event);
 
         self.retarget_rename_draft_for_lister_event(&event);
 
@@ -5981,6 +5995,7 @@ impl Render for FikaApp {
         }
         let context_menu = self.context_menu.clone();
         let properties_dialog = self.properties_dialog.clone();
+        let trash_conflict_dialog = self.trash_conflict_dialog.clone();
         let application_chooser = self.application_chooser.clone();
         let place_draft = self.place_draft.clone();
         let clipboard_available = self.clipboard.is_some();
@@ -6107,6 +6122,9 @@ impl Render for FikaApp {
             })
             .when_some(properties_dialog, |root, dialog| {
                 root.child(properties_dialog_overlay(dialog, cx))
+            })
+            .when_some(trash_conflict_dialog, |root, dialog| {
+                root.child(trash_conflict_dialog_overlay(dialog, cx))
             })
             .when_some(application_chooser, |root, chooser| {
                 root.child(application_chooser_overlay(chooser, cx))
@@ -11022,6 +11040,7 @@ text/plain=viewer.desktop;\n",
             context_menu_tree_hovered: false,
             context_submenu_hide_generation: 0,
             properties_dialog: None,
+            trash_conflict_dialog: None,
             application_chooser: None,
             pane_statuses: HashMap::new(),
             operation_pending: false,

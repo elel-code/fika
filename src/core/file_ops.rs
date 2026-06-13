@@ -479,6 +479,17 @@ pub fn undo_trash(items: &[(PathBuf, PathBuf)]) -> Result<String, String> {
 pub fn restore_trash_paths(paths: &[PathBuf]) -> FileActionSummary {
     let mut summary = FileActionSummary::default();
     for path in paths {
+        match trash_restore_conflict(path) {
+            Ok(Some(conflict)) => {
+                summary.restore_conflicts.push(conflict);
+                continue;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                summary.failures.push(format!("{}: {err}", path.display()));
+                continue;
+            }
+        }
         match restore_trash_path(path) {
             Ok(record) => summary.successes.push(record),
             Err(err) => summary.failures.push(format!("{}: {err}", path.display())),
@@ -581,12 +592,33 @@ fn permanently_delete_trash_path(trash_path: &Path) -> Result<TrashRecord, Strin
 pub struct FileActionSummary {
     pub successes: Vec<TrashRecord>,
     pub failures: Vec<String>,
+    pub restore_conflicts: Vec<TrashRestoreConflict>,
 }
 
 #[derive(Clone, Debug)]
 pub struct TrashRecord {
     pub original_path: PathBuf,
     pub trash_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrashRestoreConflict {
+    pub original_path: PathBuf,
+    pub trash_path: PathBuf,
+}
+
+pub fn trash_restore_conflict(trash_path: &Path) -> Result<Option<TrashRestoreConflict>, String> {
+    if is_trash_files_dir(trash_path) || !is_in_trash_files_dir(trash_path) {
+        return Err("item is not inside Trash".to_string());
+    }
+    if !path_exists(trash_path) {
+        return Err("trash item no longer exists".to_string());
+    }
+    let original_path = trash_original_path(trash_path)?;
+    Ok(path_exists(&original_path).then(|| TrashRestoreConflict {
+        original_path,
+        trash_path: trash_path.to_path_buf(),
+    }))
 }
 
 fn move_path(

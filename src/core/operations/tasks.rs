@@ -82,6 +82,7 @@ pub struct TrashViewOperationResult {
     pub success_count: usize,
     pub failure_count: usize,
     pub affected_dirs: Vec<PathBuf>,
+    pub restore_conflicts: Vec<file_ops::TrashRestoreConflict>,
 }
 
 #[derive(Clone, Debug)]
@@ -327,6 +328,7 @@ pub fn trash_view_operation_result(
     };
     let success_count = summary.successes.len();
     let failure_count = summary.failures.len();
+    let restore_conflicts = summary.restore_conflicts;
     let mut affected_dirs = Vec::new();
     if success_count > 0 {
         push_unique_path(&mut affected_dirs, file_ops::trash_files_dir());
@@ -349,6 +351,7 @@ pub fn trash_view_operation_result(
         success_count,
         failure_count,
         affected_dirs,
+        restore_conflicts,
     }
 }
 
@@ -725,6 +728,44 @@ mod tests {
             vec![file_ops::trash_files_dir(), temp.clone()]
         );
         assert_eq!(std::fs::read_to_string(&original).unwrap(), "restore");
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn trash_view_operation_result_reports_restore_conflict_without_overwrite() {
+        let temp = test_dir("trash-restore-conflict");
+        std::fs::create_dir_all(&temp).unwrap();
+        let unique_name = format!(
+            "restore-conflict-{}.txt",
+            temp.file_name().unwrap().to_string_lossy()
+        );
+        let original = temp.join(unique_name);
+        std::fs::write(&original, "trashed").unwrap();
+        let trashed = file_ops::trash_paths(std::slice::from_ref(&original));
+        assert!(trashed.failures.is_empty());
+        let trash_path = trashed.successes[0].trash_path.clone();
+        std::fs::write(&original, "replacement").unwrap();
+
+        let result = trash_view_operation_result(
+            PaneId(16),
+            TrashViewOperation::Restore,
+            vec![trash_path.clone()],
+        );
+
+        assert_eq!(result.success_count, 0);
+        assert_eq!(result.failure_count, 0);
+        assert_eq!(result.restore_conflicts.len(), 1);
+        assert_eq!(result.restore_conflicts[0].original_path, original);
+        assert_eq!(result.restore_conflicts[0].trash_path, trash_path);
+        assert!(result.affected_dirs.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&result.restore_conflicts[0].original_path).unwrap(),
+            "replacement"
+        );
+        assert!(result.restore_conflicts[0].trash_path.exists());
+        let _ = file_ops::permanently_delete_trash_paths(&[result.restore_conflicts[0]
+            .trash_path
+            .clone()]);
         let _ = std::fs::remove_dir_all(temp);
     }
 
