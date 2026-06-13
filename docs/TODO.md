@@ -27,7 +27,8 @@
   - Places 拖拽已继续目录式拆分：`src/ui/places/drag.rs` 承接 `PlaceDrag` payload、drag preview、row drop-zone 计算和拖拽重排 insert-index 数学，`src/ui/places/sidebar.rs` 组合 sidebar/row 事件处理。
   - Places 图标视图已继续目录式拆分：`src/ui/places/icon_view.rs` 承接 place icon image/fallback 渲染、fallback kind 分类和形状绘制测试，`src/ui/places/sidebar.rs` 只引用 `place_icon_view()`。
   - Places sidebar 已继续目录式拆分：`src/ui/places.rs` 保持入口/re-export，`src/ui/places/sidebar.rs` 作为 Places 面板入口和根容器组装，`src/ui/places/sidebar/section.rs` 承接 section header 视觉结构和右键菜单，`src/ui/places/sidebar/section/dnd.rs` 承接 section insert drop target、internal/external path drop 和 place reorder drop 事件绑定，`src/ui/places/sidebar/row.rs` 承接 place row 视觉结构、点击和右键，`src/ui/places/sidebar/row/dnd.rs` 承接 place row 的 internal/external/place drag move、drop target 和 drop/reorder 事件绑定，`src/ui/places/style.rs` 承接 row/drop-target/insert-indicator 颜色与样式 helper。
-  - 状态栏 zoom 控制已继续目录式拆分：`src/ui/status_bar.rs` 保持状态栏入口和主布局，`src/ui/status_bar/zoom.rs` 承接 zoom track/segment 渲染、drag payload、点击/拖拽更新和 `zoom_level_for_track_x()` 映射。
+  - 状态栏 UI 已继续目录式拆分：`src/ui/status_bar.rs` 保持状态栏入口和主布局，`src/ui/status_bar/zoom.rs` 承接 zoom track/segment 渲染、drag payload、点击/拖拽更新和 `zoom_level_for_track_x()` 映射，`src/ui/status_bar/progress.rs` 承接 operation progress/busy 视图和 Stop 路由，`src/ui/status_bar/space.rs` 承接 filesystem space info 视图和使用率颜色。
+  - Pane toolbar 已继续目录式拆分：`src/ui/pane/toolbar.rs` 承接 pane header Search/Close、Split 和 Close Pane 按钮的 snapshot、主题图标候选、fallback label 和 GPUI 渲染/点击路由。
   - Places Add/Edit draft 已继续目录式拆分：`src/ui/place_draft.rs` 仅保留入口和 re-export；`src/ui/place_draft/state.rs` 承接 `PlaceDraft`/`PlaceDraftField`、Add/Edit 构造、pane-scoped clear/focus、字段切换、Backspace 和文本插入；`src/ui/place_draft/overlay.rs` 承接 overlay/dialog/field 渲染，`src/main.rs` 只响应 Cancel/Commit/Edited/Ignore 路由。
 
   - 本轮新增拆分：`src/cli.rs` 已作为 CLI 入口，`src/cli/args.rs` 承接启动参数、chooser mode metadata 和 help 文案解析；`src/ui/application_chooser/identity.rs` 承接 Other Application chooser 的 row/widget identity、fallback marker 和 element id sanitizer；`src/core/launcher/results.rs` 承接 Open With/New Window/Service Menu 启动结果、目标 label 和状态栏文案格式化；`src/core/launcher/ark.rs` 承接 Ark Compress/Extract fallback 的 `DesktopLaunchPlan` 构造和测试；`src/ui/filter_bar/state.rs` 承接 filter source revision 计算；`src/ui/file_grid/snapshot.rs` 承接 visible item kind label 和 thumbnail path 投影 helper；`src/ui/file_grid/projection.rs` 承接 file-grid hit-test/projection 数据结构和 filtered layout index 映射测试；`src/ui/clipboard/tasks.rs` 承接 clipboard paste task result 构造、text paste/create undo 和 copy/move progress/cancel 测试；`src/ui/pane/sort.rs` 承接 pane sort status 文案 helper；`src/ui/places/projection.rs` 承接 Places row snapshot 投影和 hidden/active/drop target 映射测试；`src/ui/places/devices.rs` 承接 removable device section 替换和动态设备排序测试；`src/ui/places/user.rs` 作为用户书签入口承接插入位置、插入、重排、dropped folder 添加和持久化投影测试，`src/ui/places/user/removal.rs` 承接删除结果和 removable gate 测试；`src/ui/places/visibility.rs` 承接 Places hidden place/section 状态测试，保持 `src/cli.rs`、`src/core/launcher.rs`、`src/ui/filter_bar.rs`、`src/ui/file_grid.rs`、`src/ui/clipboard.rs`、`src/ui/pane.rs`、`src/ui/places.rs` 作为入口模块，子职责放入对应目录。
@@ -36,7 +37,8 @@
   - 本轮继续拆分：`src/ui/places/drag.rs` 承接 Places drag payload/preview 和 drop-zone/insert-index 纯函数，减少 `src/ui/places.rs` 入口模块的状态定义和拖拽数学。
   - 本轮继续拆分：`src/ui/places/icon_view.rs` 承接 Places 图标渲染和 fallback icon 分类，减少 `src/ui/places.rs` 入口模块的绘制细节。
   - 本轮继续拆分：`src/ui/places/sidebar.rs` 承接 Places 面板根容器和 rows 组装，`src/ui/places/sidebar/row.rs` 承接 Places row 视觉结构、点击和右键，`src/ui/places/sidebar/row/dnd.rs` 承接 row 的 internal item、external path 和 place reorder DnD 事件绑定，`src/ui/places/sidebar/section.rs` 承接 section header 视觉结构和右键，`src/ui/places/sidebar/section/dnd.rs` 承接 section insert drop、internal/external path drop 和 place reorder drop 事件绑定，`src/ui/places/style.rs` 承接 Places row 背景、边框、hover、drop-target 和插入线样式，`src/ui/places.rs` 收敛为现代 Rust 目录式入口模块。
-  - 本轮继续拆分：`src/ui/status_bar/zoom.rs` 承接状态栏 zoom 控制的 track/segment UI、drag payload、点击/拖拽更新和 track-x 到 zoom level 的映射，`src/ui/status_bar.rs` 只组合状态栏主布局、progress 和 space info。
+  - 本轮继续拆分：`src/ui/status_bar/zoom.rs` 承接状态栏 zoom 控制的 track/segment UI、drag payload、点击/拖拽更新和 track-x 到 zoom level 的映射，`src/ui/status_bar/progress.rs` 承接 operation progress/busy 视图和 Stop 路由，`src/ui/status_bar/space.rs` 承接 filesystem space info 视图和使用率颜色，`src/ui/status_bar.rs` 只组合状态栏主布局。
+  - 本轮继续拆分：`src/ui/pane/toolbar.rs` 承接 pane header 按钮 snapshot、主题图标候选、fallback label 和按钮渲染/事件路由，`src/ui/pane.rs` 只组合 toolbar 与 location/filter/file-grid/status-bar。
 
 ## Completed Cutover
 
@@ -204,13 +206,15 @@
   - 已完成：pane 目录 drop target、pane 空白 tint、breadcrumb path segment 和 Places drop-on-row 都按当前 action 使用 Copy 绿色、Move 琥珀色、Link 紫色高亮，和 selected 蓝色背景、普通 hover 浅灰背景区分；Places drop-between 使用 2px 蓝色插入线；内部 item drag 和外部 `ExternalPaths` drag 移动到其它 pane/目录/Places target 会替换上一 target，并在 modifier 变化时实时刷新目标 action 色；pane 空白区、目录/非目录 tile、breadcrumb segment、Places row 和 section header 的 drag-move handler 会刷新 active drag cursor，Copy 映射平台 `copy` cursor，Link 映射平台 `alias` cursor，Move 暂时映射默认箭头；拖到不可挂载 place 行中部、不可移动 place reorder 位置或当前 place 自身无效 reorder 位置时，会立即清掉旧 drop target 并切到平台 `not-allowed` cursor；drop 和 pane 生命周期清理会移除高亮；GPUI 没有内部 drag leave 回调，因此当前用 3s stale timeout 清理无后续 drag-move 的残留高亮。
   - 验收：pane 中目录 drop target 高亮颜色与 selected 高亮颜色明确区分（如蓝色 selected vs Copy 绿色 / Move 琥珀色 / Link 紫色 drop target）；侧栏插入线为 2px 粗线，颜色与系统强调色一致；拖拽离开区域后高亮立即清除；拖拽过程中光标样式随 drop action 变化（Move → 箭头+小方块，Copy → 箭头+加号，Link → 箭头+链接图标）。
   - 剩余验收：Move 专用 drag cursor/icon 仍需 GPUI/backend 支持；若 GPUI 后续暴露内部 drag leave，再改为离开时立即清理。
-- [ ] 为搜索栏添加启动按钮。
+- [x] 为搜索栏添加启动按钮。
   - 参考：Dolphin `DolphinSearchBox` / `KUrlNavigator` 中的搜索按钮触发搜索模式。
   - 验收：pane toolbar 或地址栏旁边有可见搜索按钮，点击后进入搜索模式（显示搜索输入框）；搜索按钮在普通浏览模式下可见，搜索模式下切换为关闭搜索按钮；快捷键（Ctrl+F）和按钮点击行为一致，都路由到 focused `PaneId`；按钮使用系统主题搜索图标（`edit-find` / `system-search`），无主题时回退到文本 label。
+  - 已完成：每个 pane 的地址栏行右侧增加 pane-local Search/Close 按钮；普通模式按钮使用 `edit-find` / `system-search` / `search` named icon 候选，搜索模式按钮使用 `window-close` / `dialog-close` / `edit-clear` 候选，主题缺失时回退到文本 label；点击 Search 会 focus 对应 pane 并调用现有 `show_filter_bar()`，点击 Close 会先 focus 对应 pane 再调用 `close_filter_bar()` 清空过滤；`Ctrl+F` 已补入 `PaneShortcut::ShowFilter`，和 `/`、`Ctrl+I` 一起走 focused pane 的同一路由。
 
-- [ ] 为分屏添加工具栏按钮。
+- [x] 为分屏添加工具栏按钮。
   - 参考：Dolphin `DolphinViewActionHandler::slotSplitView()` / `slotCloseSplitView()` 的分屏/关闭行为。
   - 验收：pane toolbar 或状态栏提供 Split（分屏）和 Close Pane（关闭当前分屏）按钮；Split 按钮在只有单个 pane 时可用，点击后在当前 focused pane 右侧创建新 pane；Close Pane 按钮在多个 pane 时可用，点击后关闭当前 focused pane；按钮使用系统主题图标（`view-split-left-right` / `window-close`），行为和现有 keyboard shortcut 一致；分屏后新 pane 继承源 pane 的 zoom level 和当前目录。
+  - 已完成：每个 pane header 右侧提供 Split 和 Close Pane 按钮；Split 按钮只有单 pane 时启用并复用现有 `split_pane()` 路由，Close Pane 按钮只有多 pane 时启用并复用现有 `close_pane()` 路由；按钮 snapshot 使用 `view-split-left-right` / `view-split-left-right-symbolic` / `view-restore` 与 `window-close` / `dialog-close` / `edit-delete` 主题图标候选，主题缺失时回退文本 label；按钮路由会先 focus 目标 pane，并在路由层重复校验 pane 数量以避免 UI 状态滞后一帧误操作。
 
 - [~] 优化 inline rename 交互体验。
   - 参考：Dolphin `DolphinView::renameSelectedItems()` / `KItemListView` inline rename widget；macOS Finder / Windows Explorer 的 inline rename 交互模式。

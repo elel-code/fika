@@ -1,6 +1,7 @@
 mod snapshot;
 mod sort;
 mod splitter;
+mod toolbar;
 
 pub(crate) use snapshot::PaneSnapshot;
 pub(crate) use sort::{sort_order_label, sort_role_label};
@@ -9,6 +10,7 @@ pub(crate) use splitter::{
     pane_row_width_from_child_bounds, pane_splitter, pane_width_available, split_ratio_eq,
     width_value_eq,
 };
+pub(crate) use toolbar::pane_toolbar_snapshot;
 
 use crate::FikaApp;
 use fika_core::BreadcrumbSegment;
@@ -25,6 +27,7 @@ use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
 use super::filter_bar::FilterBarSnapshot;
 use super::location_bar::LocationDraftSnapshot;
 use super::status_bar::status_bar;
+use toolbar::pane_toolbar_buttons;
 
 pub(crate) struct PaneProps {
     pub snapshot: PaneSnapshot,
@@ -44,6 +47,7 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         breadcrumbs,
         location_draft,
         filter_bar,
+        toolbar,
         status_bar: status_bar_snapshot,
         layout,
         visible_items,
@@ -118,7 +122,8 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
                     location_draft,
                     focused,
                     cx,
-                )),
+                ))
+                .child(pane_toolbar_buttons(pane_id, toolbar, cx)),
         )
         .when_some(filter_bar, |pane, filter| {
             pane.child(filter_bar_view(pane_id, filter, cx))

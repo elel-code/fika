@@ -84,6 +84,7 @@ pub(crate) fn pane_shortcut(keystroke: &gpui::Keystroke) -> Option<PaneShortcut>
         return match keystroke.key.to_ascii_lowercase().as_str() {
             "a" => Some(PaneShortcut::SelectAll),
             "c" => Some(PaneShortcut::CopySelection),
+            "f" => Some(PaneShortcut::ShowFilter),
             "i" => Some(PaneShortcut::ShowFilter),
             "l" => Some(PaneShortcut::EditLocation),
             "v" => Some(PaneShortcut::PasteIntoPane),

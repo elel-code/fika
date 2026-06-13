@@ -79,8 +79,8 @@ use ui::icons::FileIconCache;
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSnapshot, PaneSplitterDrag, normalize_pane_ratios,
-    pane_row_width_from_child_bounds, pane_splitter, pane_width_available, sort_order_label,
-    sort_role_label, split_ratio_eq, width_value_eq,
+    pane_row_width_from_child_bounds, pane_splitter, pane_toolbar_snapshot, pane_width_available,
+    sort_order_label, sort_role_label, split_ratio_eq, width_value_eq,
 };
 use ui::place_draft::{
     PlaceDraft, PlaceDraftField, PlaceDraftInputResult, apply_place_input_action,
@@ -370,6 +370,37 @@ impl FikaApp {
         self.show_filter_bar(pane_id);
     }
 
+    pub(crate) fn toggle_filter_bar_from_button(&mut self, pane_id: PaneId) {
+        if self
+            .pane_filters
+            .get(&pane_id)
+            .is_some_and(|filter| filter.visible)
+        {
+            self.panes.focus(pane_id);
+            self.close_filter_bar(pane_id);
+        } else {
+            self.show_filter_bar(pane_id);
+        }
+    }
+
+    pub(crate) fn split_pane_from_button(&mut self, pane_id: PaneId) {
+        if self.panes.pane_ids().len() != 1 {
+            self.set_pane_status(pane_id, "Split already active");
+            return;
+        }
+        self.panes.focus(pane_id);
+        self.split_pane(pane_id);
+    }
+
+    pub(crate) fn close_pane_from_button(&mut self, pane_id: PaneId) {
+        if self.panes.pane_ids().len() <= 1 {
+            self.set_pane_status(pane_id, "Cannot close the only pane");
+            return;
+        }
+        self.panes.focus(pane_id);
+        self.close_pane(pane_id);
+    }
+
     pub(crate) fn close_filter_bar(&mut self, pane_id: PaneId) {
         if let Some(filter) = self.pane_filters.get_mut(&pane_id) {
             filter.visible = false;
@@ -527,6 +558,7 @@ impl FikaApp {
     fn snapshots(&mut self, cx: &mut Context<Self>) -> Vec<PaneSnapshot> {
         let focused_pane = self.panes.focused();
         let pane_ids = self.panes.pane_ids().to_vec();
+        let pane_count = pane_ids.len();
         pane_ids
             .into_iter()
             .filter_map(|pane_id| {
@@ -684,12 +716,15 @@ impl FikaApp {
                     )
                     .collect::<Vec<_>>();
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
+                let toolbar =
+                    pane_toolbar_snapshot(&mut self.file_icons, filter_bar.is_some(), pane_count);
                 Some(PaneSnapshot {
                     id: pane_id,
                     split_ratio,
                     breadcrumbs,
                     location_draft,
                     filter_bar,
+                    toolbar,
                     status_bar,
                     layout,
                     visible_items,
@@ -8584,6 +8619,10 @@ text/plain=writer.desktop;\n",
             Some(PaneShortcut::ShowFilter)
         );
         assert_eq!(
+            pane_shortcut(&gpui::Keystroke::parse("secondary-f").unwrap()),
+            Some(PaneShortcut::ShowFilter)
+        );
+        assert_eq!(
             pane_shortcut(&gpui::Keystroke::parse("secondary-i").unwrap()),
             Some(PaneShortcut::ShowFilter)
         );
@@ -9125,6 +9164,54 @@ text/plain=writer.desktop;\n",
             app.panes.pane(first).map(|pane| pane.current_dir.as_path()),
             Some(next_dir.as_path())
         );
+    }
+
+    #[test]
+    fn filter_button_routes_open_and_close_to_target_pane() {
+        let mut app = test_app_with_entries("/tmp/fika-filter-button", &["alpha.rs", "beta.txt"]);
+        let first = app.panes.focused().unwrap();
+        let second = app.panes.split(first).unwrap();
+
+        app.toggle_filter_bar_from_button(second);
+        let second_filter = app.pane_filters.get(&second).unwrap();
+        assert_eq!(app.panes.focused(), Some(second));
+        assert!(second_filter.visible);
+        assert!(second_filter.focused);
+        assert!(app.pane_filters.get(&first).is_none());
+
+        app.set_filter_query(second, "*.rs".to_string());
+        assert!(app.filtered_model_for_pane(second).is_some());
+        app.panes.focus(first);
+        app.toggle_filter_bar_from_button(second);
+
+        let second_filter = app.pane_filters.get(&second).unwrap();
+        assert_eq!(app.panes.focused(), Some(second));
+        assert!(!second_filter.visible);
+        assert!(!second_filter.focused);
+        assert!(second_filter.query.is_empty());
+        assert!(app.filtered_models.get(&second).is_none());
+    }
+
+    #[test]
+    fn pane_toolbar_split_and_close_buttons_follow_availability_rules() {
+        let mut app = test_app_with_entries("/tmp/fika-pane-toolbar", &["alpha.rs", "beta.txt"]);
+        let first = app.panes.focused().unwrap();
+
+        app.split_pane_from_button(first);
+        let split_ids = app.panes.pane_ids().to_vec();
+        assert_eq!(split_ids.len(), 2);
+
+        app.split_pane_from_button(first);
+        assert_eq!(app.panes.pane_ids().len(), 2);
+
+        let second = split_ids[1];
+        app.close_pane_from_button(second);
+        let remaining = app.panes.pane_ids().to_vec();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0], first);
+
+        app.close_pane_from_button(first);
+        assert_eq!(app.panes.pane_ids(), &[first]);
     }
 
     #[test]
