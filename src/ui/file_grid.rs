@@ -923,6 +923,7 @@ fn item_tile(
                     renaming,
                     selected,
                     item.draft_error.as_deref(),
+                    item.draft_warning.as_deref(),
                 )),
         )
 }
@@ -1066,10 +1067,25 @@ fn text_view(
     renaming: bool,
     selected: bool,
     rename_error: Option<&str>,
+    rename_warning: Option<&str>,
 ) -> Div {
     let visual = layout.visual_rect;
     let text = layout.text_rect;
-    let helper_text = rename_error.unwrap_or(kind_label);
+    let helper_text = rename_error.or(rename_warning).unwrap_or(kind_label);
+    let helper_color = if rename_error.is_some() {
+        rgb(0xdc2626)
+    } else if rename_warning.is_some() {
+        rgb(0xb45309)
+    } else {
+        rgb(0x6b7280)
+    };
+    let border_color = if rename_error.is_some() {
+        rgb(0xdc2626)
+    } else if rename_warning.is_some() {
+        rgb(0xd97706)
+    } else {
+        rgb(0x2f6fed)
+    };
     div()
         .absolute()
         .left(px(text.x - visual.x))
@@ -1079,11 +1095,7 @@ fn text_view(
         .when(renaming, |name| {
             name.border_1()
                 .rounded_md()
-                .border_color(if rename_error.is_some() {
-                    rgb(0xdc2626)
-                } else {
-                    rgb(0x2f6fed)
-                })
+                .border_color(border_color)
                 .bg(rgb(0xffffff))
                 .px_1()
         })
@@ -1101,11 +1113,7 @@ fn text_view(
         .child(
             div()
                 .text_xs()
-                .text_color(if rename_error.is_some() {
-                    rgb(0xdc2626)
-                } else {
-                    rgb(0x6b7280)
-                })
+                .text_color(helper_color)
                 .truncate()
                 .child(helper_text.to_string()),
         )

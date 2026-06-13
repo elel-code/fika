@@ -32,8 +32,8 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, IntoElement, ParentElement, Render, ScrollDelta, Styled,
-    Window, WindowBounds, WindowOptions, div, px, rgb, size,
+    App, Bounds, ClipboardItem, Context, IntoElement, ParentElement, Render, ScrollDelta,
+    ScrollStrategy, Styled, Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
@@ -41,7 +41,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
-use ui::application_chooser::{ApplicationChooserState, application_chooser_overlay};
+use ui::application_chooser::{
+    ApplicationChooserState, application_chooser_filtered_applications,
+    application_chooser_overlay, dedup_application_chooser_applications,
+};
 use ui::chooser::{ChooserState, selected_choice_rows};
 use ui::clipboard::{
     ClipboardMode, ClipboardState, paste_clipboard_result, primary_paste_clipboard_state,
@@ -638,6 +641,9 @@ impl FikaApp {
                             let draft_error = rename_draft
                                 .filter(|draft| draft.original_path == path)
                                 .and_then(|draft| draft.error.clone());
+                            let draft_warning = rename_draft
+                                .filter(|draft| draft.original_path == path)
+                                .and_then(|draft| draft.extension_warning(entry.is_dir));
                             Some((
                                 item_layout,
                                 entry.id,
@@ -651,6 +657,7 @@ impl FikaApp {
                                 drop_target,
                                 draft_name,
                                 draft_error,
+                                draft_warning,
                             ))
                         })
                         .collect::<Vec<_>>();
@@ -675,7 +682,7 @@ impl FikaApp {
                 };
                 let visible_ids = visible_data
                     .iter()
-                    .map(|(_, item_id, _, _, _, _, _, _, _, _, _, _)| *item_id);
+                    .map(|(_, item_id, _, _, _, _, _, _, _, _, _, _, _)| *item_id);
                 let slot_by_item_id = self
                     .visible_item_slots
                     .entry(pane_id)
@@ -697,6 +704,7 @@ impl FikaApp {
                             drop_target,
                             draft_name,
                             draft_error,
+                            draft_warning,
                         )| {
                             let slot_id = slot_by_item_id.get(&item_id).copied()?;
                             let icon = self.file_icons.icon_for(
@@ -719,6 +727,7 @@ impl FikaApp {
                                 drop_target,
                                 draft_name,
                                 draft_error,
+                                draft_warning,
                             })
                         },
                     )
@@ -4501,6 +4510,7 @@ impl FikaApp {
             path,
             mime_type,
             applications,
+            query: String::new(),
             scroll_handle: gpui::UniformListScrollHandle::new(),
         });
     }
@@ -4520,7 +4530,61 @@ impl FikaApp {
         for app in &mut applications {
             app.is_default = default_ids.contains(&app.id);
         }
-        applications
+        dedup_application_chooser_applications(applications)
+    }
+
+    fn handle_application_chooser_keystroke(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(chooser) = self.application_chooser.as_mut() else {
+            return false;
+        };
+
+        match filter_input_action(keystroke) {
+            FilterInputAction::Cancel => {
+                if chooser.query.is_empty() {
+                    self.dismiss_application_chooser();
+                } else {
+                    chooser.query.clear();
+                    chooser
+                        .scroll_handle
+                        .scroll_to_item_strict(0, ScrollStrategy::Top);
+                }
+                cx.notify();
+                true
+            }
+            FilterInputAction::FocusView => {
+                let first_application = application_chooser_filtered_applications(
+                    &chooser.applications,
+                    &chooser.query,
+                )
+                .first()
+                .map(|app| app.id.clone());
+                if let Some(desktop_id) = first_application {
+                    self.choose_application_for_open_with(desktop_id, cx);
+                }
+                true
+            }
+            FilterInputAction::Backspace => {
+                chooser.query.pop();
+                chooser
+                    .scroll_handle
+                    .scroll_to_item_strict(0, ScrollStrategy::Top);
+                cx.notify();
+                true
+            }
+            FilterInputAction::Insert(text) => {
+                chooser.query.push_str(&text);
+                chooser
+                    .scroll_handle
+                    .scroll_to_item_strict(0, ScrollStrategy::Top);
+                cx.notify();
+                true
+            }
+            FilterInputAction::PassToView | FilterInputAction::Ignore => true,
+        }
     }
 
     fn choose_application_for_open_with(&mut self, desktop_id: String, cx: &mut Context<Self>) {
@@ -5263,10 +5327,8 @@ impl FikaApp {
             self.dismiss_properties_dialog();
             return true;
         }
-        if event.keystroke.key.eq_ignore_ascii_case("escape") && self.application_chooser.is_some()
-        {
-            self.dismiss_application_chooser();
-            return true;
+        if self.application_chooser.is_some() {
+            return self.handle_application_chooser_keystroke(&event.keystroke, cx);
         }
         if event.keystroke.key.eq_ignore_ascii_case("escape") && self.context_menu.is_some() {
             self.dismiss_context_menu();
@@ -7225,6 +7287,70 @@ text/plain=writer.desktop;\n",
                 .collect::<Vec<_>>(),
             vec![("Viewer", false), ("Writer", true)]
         );
+    }
+
+    #[test]
+    fn application_chooser_deduplicates_all_application_list() {
+        let mut app = test_app_with_entries("/tmp/fika-open-with-dedup", &["note.txt"]);
+        let mut duplicate =
+            test_desktop_application("viewer.desktop", "Viewer", "viewer %f", &["text/plain"]);
+        duplicate.desktop_file = PathBuf::from("/home/me/.local/share/applications/viewer.desktop");
+        let list = fika_core::parse_mimeapps_list(
+            "\
+[Default Applications]\n\
+text/plain=viewer.desktop;\n",
+        );
+        app.mime_applications = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![
+                test_desktop_application("viewer.desktop", "Viewer", "viewer %f", &["text/plain"]),
+                duplicate,
+                test_desktop_application("viewer-copy.desktop", "Viewer", "viewer %f", &[]),
+                test_desktop_application("writer.desktop", "Writer", "writer %f", &[]),
+            ],
+            &[list],
+        );
+
+        let applications = app.application_chooser_applications(Some("text/plain"));
+
+        assert_eq!(
+            applications
+                .iter()
+                .map(|app| (app.name.as_str(), app.is_default))
+                .collect::<Vec<_>>(),
+            vec![("Viewer", true), ("Writer", false)]
+        );
+    }
+
+    #[test]
+    fn application_chooser_search_filters_all_display_fields() {
+        let kate =
+            test_desktop_application("org.kde.kate.desktop", "Kate", "kate %U", &["text/plain"]);
+        let nautilus = test_desktop_application(
+            "org.gnome.Nautilus.desktop",
+            "Files",
+            "nautilus %U",
+            &["inode/directory"],
+        );
+        let applications = vec![
+            MimeApplication::from((&kate, false)),
+            MimeApplication::from((&nautilus, false)),
+        ];
+
+        assert_eq!(
+            application_chooser_filtered_applications(&applications, "kde kate")
+                .iter()
+                .map(|app| app.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["org.kde.kate.desktop"]
+        );
+        assert_eq!(
+            application_chooser_filtered_applications(&applications, "nautilus")
+                .iter()
+                .map(|app| app.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["org.gnome.Nautilus.desktop"]
+        );
+        assert!(application_chooser_filtered_applications(&applications, "missing").is_empty());
     }
 
     #[test]

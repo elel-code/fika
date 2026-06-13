@@ -1,4 +1,5 @@
 mod identity;
+mod matching;
 
 use crate::FikaApp;
 use fika_core::{MimeApplication, PaneId};
@@ -14,6 +15,9 @@ use std::sync::Arc;
 
 use super::icons::{FileIconCache, FileIconSnapshot};
 use identity::{application_marker, sanitize_element_id};
+pub(crate) use matching::{
+    application_chooser_filtered_applications, dedup_application_chooser_applications,
+};
 
 const APPLICATION_CHOOSER_ROW_HEIGHT: f32 = 44.0;
 const APPLICATION_CHOOSER_LIST_MAX_HEIGHT: f32 = 480.0;
@@ -24,6 +28,7 @@ pub(crate) struct ApplicationChooserState {
     pub(crate) path: PathBuf,
     pub(crate) mime_type: Option<Arc<str>>,
     pub(crate) applications: Vec<MimeApplication>,
+    pub(crate) query: String,
     pub(crate) scroll_handle: UniformListScrollHandle,
 }
 
@@ -103,7 +108,11 @@ pub(crate) fn application_chooser_overlay(
         .map(|mime| format!("{} - {}", chooser.path.display(), mime))
         .unwrap_or_else(|| chooser.path.display().to_string());
     let can_set_default = chooser.mime_type.is_some();
-    let applications = Arc::new(chooser.applications);
+    let query = chooser.query.clone();
+    let applications = Arc::new(application_chooser_filtered_applications(
+        &chooser.applications,
+        &query,
+    ));
     let application_count = applications.len();
     let list_height = application_chooser_list_height(application_count);
     let scroll_handle = chooser.scroll_handle.clone();
@@ -146,6 +155,12 @@ pub(crate) fn application_chooser_overlay(
                 .shadow_md()
                 .occlude()
                 .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .on_scroll_wheel(|_event, _window, cx| {
                     cx.stop_propagation();
                 })
                 .child(
@@ -197,33 +212,146 @@ pub(crate) fn application_chooser_overlay(
                                 .child("Close"),
                         ),
                 )
-                .child(
-                    uniform_list("application-chooser-list", application_count, {
-                        let applications = applications.clone();
-                        cx.processor(move |this, range: Range<usize>, _window, cx| {
-                            let visible_range = application_chooser_visible_range(
-                                applications.len(),
-                                range.clone(),
-                            );
-                            let icons = application_chooser_visible_icon_snapshots(
-                                &mut this.file_icons,
-                                applications.as_slice(),
-                                range,
-                            );
-                            visible_range
-                                .filter_map(|index| {
-                                    let app = applications.get(index)?.clone();
-                                    let icon = icons.get(&index).cloned();
-                                    Some(application_chooser_row(app, icon, can_set_default, cx))
-                                })
-                                .collect::<Vec<_>>()
+                .child(application_chooser_search_box(&query))
+                .child(div().h(px(list_height)).overflow_y_hidden().map(|list| {
+                    if application_count == 0 {
+                        return list
+                            .child(application_chooser_empty_state())
+                            .into_any_element();
+                    }
+
+                    list.child(
+                        uniform_list("application-chooser-list", application_count, {
+                            let applications = applications.clone();
+                            cx.processor(move |this, range: Range<usize>, _window, cx| {
+                                let visible_range = application_chooser_visible_range(
+                                    applications.len(),
+                                    range.clone(),
+                                );
+                                let icons = application_chooser_visible_icon_snapshots(
+                                    &mut this.file_icons,
+                                    applications.as_slice(),
+                                    range,
+                                );
+                                visible_range
+                                    .filter_map(|index| {
+                                        let app = applications.get(index)?.clone();
+                                        let icon = icons.get(&index).cloned();
+                                        Some(application_chooser_row(
+                                            app,
+                                            icon,
+                                            can_set_default,
+                                            cx,
+                                        ))
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
                         })
-                    })
-                    .w_full()
-                    .h(px(list_height))
-                    .track_scroll(&scroll_handle),
-                ),
+                        .size_full()
+                        .track_scroll(&scroll_handle),
+                    )
+                    .relative()
+                    .child(application_chooser_scrollbar(
+                        application_count,
+                        list_height,
+                        &scroll_handle,
+                    ))
+                    .into_any_element()
+                })),
         )
+}
+
+fn application_chooser_search_box(query: &str) -> Div {
+    let has_query = !query.is_empty();
+    div()
+        .px_4()
+        .py_3()
+        .border_b_1()
+        .border_color(rgb(0xe1e5ea))
+        .child(
+            div()
+                .id("application-chooser-search")
+                .flex()
+                .items_center()
+                .h(px(30.0))
+                .px_2()
+                .border_1()
+                .rounded_md()
+                .border_color(rgb(0x2f6fed))
+                .bg(rgb(0xffffff))
+                .overflow_hidden()
+                .cursor_text()
+                .text_sm()
+                .text_color(rgb(0x111827))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(if has_query {
+                            rgb(0x111827)
+                        } else {
+                            rgb(0x6b7280)
+                        })
+                        .child(if has_query {
+                            query.to_string()
+                        } else {
+                            "Search applications".to_string()
+                        }),
+                )
+                .when(has_query, |field| {
+                    field.child(div().w(px(1.0)).h(px(18.0)).bg(rgb(0x2f6fed)))
+                }),
+        )
+}
+
+fn application_chooser_empty_state() -> Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .px_4()
+        .text_sm()
+        .text_color(rgb(0x59636e))
+        .child("No matching applications")
+}
+
+fn application_chooser_scrollbar(
+    application_count: usize,
+    list_height: f32,
+    scroll_handle: &UniformListScrollHandle,
+) -> Div {
+    let content_height = application_count as f32 * APPLICATION_CHOOSER_ROW_HEIGHT;
+    if content_height <= list_height {
+        return div();
+    }
+
+    let base_handle = scroll_handle.0.borrow().base_handle.clone();
+    let offset_y = base_handle.offset().y.as_f32().max(0.0);
+    let max_offset_y = base_handle
+        .max_offset()
+        .y
+        .as_f32()
+        .max((content_height - list_height).max(0.0));
+    let handle_height = (list_height * (list_height / content_height))
+        .clamp(36.0, list_height)
+        .floor();
+    let available = (list_height - handle_height).max(0.0);
+    let handle_top = if max_offset_y > 0.0 {
+        (offset_y / max_offset_y).clamp(0.0, 1.0) * available
+    } else {
+        0.0
+    };
+
+    div()
+        .absolute()
+        .top(px(handle_top))
+        .right(px(3.0))
+        .w(px(6.0))
+        .h(px(handle_height))
+        .rounded_md()
+        .bg(rgba(0x5b647080))
 }
 
 fn application_chooser_row(

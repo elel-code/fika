@@ -134,10 +134,19 @@ icon selection, Open With menu, and future process launching path.
     only when the theme cannot resolve the name.
   - The "Other Application..." dialog lists every application from the same
     core desktop application cache, including apps that do not declare the
-    current MIME type. Selecting one still builds a `DesktopLaunchPlan` and
-    launches it through `launch_with_systemd_user()`. The GPUI list has an
-    explicit virtual-list height derived from row count and capped to the dialog
-    max height, avoiding zero-height empty-looking lists.
+    current MIME type. `src/ui/application_chooser/matching.rs` deduplicates the
+    chooser projection by desktop id, desktop path, and name/exec identity while
+    preserving the first row order and merged default marker. Selecting one
+    still builds a `DesktopLaunchPlan` and launches it through
+    `launch_with_systemd_user()`. The GPUI list uses `uniform_list` with a
+    persistent `UniformListScrollHandle`, has an explicit virtual-list height
+    derived from row count and capped to the dialog max height, and only resolves
+    icons for the visible row range. The dialog owns a search query routed from
+    keystrokes while it is open; filtering matches application name, desktop id,
+    exec string, and desktop file path, with Escape clearing the query before
+    closing the dialog. Fika does not import Zed's GPL `ui` crate only for
+    `WithScrollbar`; the chooser renders its own lightweight scrollbar thumb on
+    top of the GPUI virtual list.
   - When the dialog was opened for a known MIME type, non-default application
     rows expose a Set Default action. The action writes the user
     `mimeapps.list`, updates `[Default Applications]`, adds the application to
