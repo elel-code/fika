@@ -273,6 +273,7 @@ pub struct ViewState {
     pub viewport_width: f32,
     pub viewport_height: f32,
     pub zoom_level: i32,
+    pub view_mode: ViewMode,
 }
 
 impl Default for ViewState {
@@ -283,8 +284,16 @@ impl Default for ViewState {
             viewport_width: 720.0,
             viewport_height: 520.0,
             zoom_level: DEFAULT_ZOOM_LEVEL,
+            view_mode: ViewMode::Compact,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ViewMode {
+    Icons,
+    Compact,
+    Details,
 }
 
 pub const MIN_ZOOM_LEVEL: i32 = 0;
@@ -334,6 +343,15 @@ impl ViewState {
             ZoomChange::Out => self.set_zoom_level(self.zoom_level - 1),
             ZoomChange::Reset => self.set_zoom_level(DEFAULT_ZOOM_LEVEL),
         }
+    }
+
+    pub fn set_view_mode(&mut self, view_mode: ViewMode) -> bool {
+        if self.view_mode == view_mode {
+            return false;
+        }
+        self.view_mode = view_mode;
+        self.reset_scroll();
+        true
     }
 }
 
@@ -722,6 +740,12 @@ impl PaneController {
     pub fn set_zoom_level(&mut self, pane_id: PaneId, level: i32) -> Option<ViewState> {
         let pane = self.panes.get_mut(&pane_id)?;
         pane.view.set_zoom_level(level);
+        Some(pane.view.clone())
+    }
+
+    pub fn set_view_mode(&mut self, pane_id: PaneId, view_mode: ViewMode) -> Option<ViewState> {
+        let pane = self.panes.get_mut(&pane_id)?;
+        pane.view.set_view_mode(view_mode);
         Some(pane.view.clone())
     }
 
@@ -1763,6 +1787,40 @@ mod tests {
         assert_eq!(reset.zoom_level, DEFAULT_ZOOM_LEVEL);
     }
 
+    #[test]
+    fn view_mode_is_pane_local_resets_scroll_and_split_inherits_source_view() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let first = controller.focused().unwrap();
+        controller
+            .set_view_scroll(first, 120.0, 30.0, 200.0, 100.0)
+            .unwrap();
+
+        let icons = controller
+            .set_view_mode(first, ViewMode::Icons)
+            .expect("pane exists");
+        assert_eq!(icons.view_mode, ViewMode::Icons);
+        assert_eq!(icons.scroll_x, 0.0);
+        assert_eq!(icons.scroll_y, 0.0);
+
+        let second = controller.split(first).unwrap();
+        assert_eq!(
+            controller.pane(second).unwrap().view.view_mode,
+            ViewMode::Icons
+        );
+
+        controller
+            .set_view_mode(second, ViewMode::Details)
+            .expect("pane exists");
+        assert_eq!(
+            controller.pane(first).unwrap().view.view_mode,
+            ViewMode::Icons
+        );
+        assert_eq!(
+            controller.pane(second).unwrap().view.view_mode,
+            ViewMode::Details
+        );
+    }
+
     fn test_entry(name: &str) -> Entry {
         test_entry_at("/tmp/a", name)
     }
@@ -1784,6 +1842,7 @@ mod tests {
             size_bytes: 0,
             modified_secs: None,
             mime_type: None,
+            mime_magic_checked: true,
             thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,

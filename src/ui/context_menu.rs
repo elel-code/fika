@@ -1270,8 +1270,8 @@ pub(crate) fn context_submenu_actions(
         ],
         ContextMenuSubmenu::ViewMode => vec![
             context_menu_item(ContextMenuAction::ViewCompact, "Compact"),
-            disabled_context_menu_item(ContextMenuAction::ViewIcons, "Icons"),
-            disabled_context_menu_item(ContextMenuAction::ViewDetails, "Details"),
+            context_menu_item(ContextMenuAction::ViewIcons, "Icons"),
+            context_menu_item(ContextMenuAction::ViewDetails, "Details"),
         ],
     }
 }

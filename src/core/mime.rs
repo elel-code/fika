@@ -4,6 +4,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+pub mod roles;
+
+pub use roles::{
+    MimeProbeBatch, MimeProbeCandidate, MimeProbeRequest, MimeProbeResult, MimeProbeScheduler,
+    MimeWorkKey, apply_mime_probe_result_to_model, mime_magic_probe_required,
+    mime_probe_results_for_requests,
+};
+
+pub const GENERIC_BINARY_MIME: &str = "application/octet-stream";
+
 #[derive(Clone, Debug)]
 pub struct MimeDatabase {
     extension_mime: HashMap<String, String>,
@@ -67,7 +77,7 @@ impl MimeDatabase {
                         .and_then(|extension| extension.to_str())
                         .and_then(|extension| self.mime_for_extension(extension))
                 })
-                .unwrap_or("application/octet-stream"),
+                .unwrap_or(GENERIC_BINARY_MIME),
         ))
     }
 

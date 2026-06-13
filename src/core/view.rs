@@ -57,6 +57,39 @@ pub struct CompactLayoutOptions {
     pub text_height: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IconsLayoutOptions {
+    pub viewport_width: f32,
+    pub viewport_height: f32,
+    pub reserved_bottom: f32,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    pub padding: f32,
+    pub gap: f32,
+    pub item_width: f32,
+    pub item_height: f32,
+    pub icon_size: f32,
+    pub text_height: f32,
+}
+
+impl Default for IconsLayoutOptions {
+    fn default() -> Self {
+        Self {
+            viewport_width: 720.0,
+            viewport_height: 520.0,
+            reserved_bottom: 0.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            padding: 8.0,
+            gap: 8.0,
+            item_width: 128.0,
+            item_height: 112.0,
+            icon_size: 48.0,
+            text_height: 40.0,
+        }
+    }
+}
+
 impl Default for CompactLayoutOptions {
     fn default() -> Self {
         Self {
@@ -131,6 +164,15 @@ pub struct CompactLayout {
     item_count: usize,
     rows_per_column: usize,
     column_metrics: CompactColumnMetrics,
+    content_size: ViewSize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IconsLayout {
+    options: IconsLayoutOptions,
+    item_count: usize,
+    columns_per_row: usize,
+    row_count: usize,
     content_size: ViewSize,
 }
 
@@ -409,6 +451,196 @@ impl CompactLayout {
     }
 }
 
+impl IconsLayout {
+    pub fn new(item_count: usize, options: IconsLayoutOptions) -> Self {
+        let columns_per_row = columns_per_row(options);
+        let row_count = item_count.div_ceil(columns_per_row);
+        let content_width = if columns_per_row == 0 {
+            options.viewport_width.max(options.padding * 2.0)
+        } else {
+            options.padding * 2.0
+                + columns_per_row as f32 * options.item_width
+                + columns_per_row.saturating_sub(1) as f32 * options.gap
+        }
+        .max(options.viewport_width);
+        let content_height = if row_count == 0 {
+            options.viewport_height.max(options.padding * 2.0)
+        } else {
+            options.padding * 2.0
+                + row_count as f32 * options.item_height
+                + row_count.saturating_sub(1) as f32 * options.gap
+        }
+        .max(options.viewport_height);
+
+        Self {
+            options,
+            item_count,
+            columns_per_row,
+            row_count,
+            content_size: ViewSize {
+                width: content_width,
+                height: content_height,
+            },
+        }
+    }
+
+    pub fn columns_per_row(&self) -> usize {
+        self.columns_per_row
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.row_count
+    }
+
+    pub fn content_size(&self) -> ViewSize {
+        self.content_size
+    }
+
+    pub fn viewport_rect(&self) -> ViewRect {
+        ViewRect {
+            x: self.options.scroll_x,
+            y: self.options.scroll_y,
+            width: self.options.viewport_width,
+            height: self.options.viewport_height,
+        }
+    }
+
+    pub fn item(&self, model_index: usize) -> Option<ItemLayout> {
+        self.item_with_required_text_width(model_index, None)
+    }
+
+    pub fn item_with_required_text_width(
+        &self,
+        model_index: usize,
+        required_text_width: Option<f32>,
+    ) -> Option<ItemLayout> {
+        if model_index >= self.item_count {
+            return None;
+        }
+        let column = model_index % self.columns_per_row;
+        let row = model_index / self.columns_per_row;
+        let x = self.options.padding + column as f32 * (self.options.item_width + self.options.gap);
+        let y = self.options.padding + row as f32 * (self.options.item_height + self.options.gap);
+        let item_rect = ViewRect {
+            x,
+            y,
+            width: self.options.item_width,
+            height: self.options.item_height,
+        };
+        let icon_rect = ViewRect {
+            x: x + (self.options.item_width - self.options.icon_size).max(0.0) / 2.0,
+            y: y + self.options.padding,
+            width: self.options.icon_size,
+            height: self.options.icon_size,
+        };
+        let available_text_width = (self.options.item_width - self.options.padding * 2.0).max(0.0);
+        let text_width = required_text_width
+            .map(|width| width + self.options.padding * 2.0)
+            .unwrap_or(available_text_width)
+            .clamp(0.0, available_text_width);
+        let text_rect = ViewRect {
+            x: x + (self.options.item_width - text_width).max(0.0) / 2.0,
+            y: icon_rect.bottom() + self.options.gap,
+            width: text_width,
+            height: self.options.text_height,
+        };
+        let visual_left = icon_rect.x.min(text_rect.x);
+        let visual_right = icon_rect.right().max(text_rect.right());
+        let visual_top = icon_rect.y.min(text_rect.y);
+        let visual_bottom = icon_rect.bottom().max(text_rect.bottom());
+        let visual_rect = ViewRect {
+            x: (visual_left - self.options.padding).max(item_rect.x),
+            y: (visual_top - self.options.padding).max(item_rect.y),
+            width: (visual_right - visual_left + self.options.padding * 2.0).min(item_rect.width),
+            height: (visual_bottom - visual_top + self.options.padding * 2.0).min(item_rect.height),
+        };
+        Some(ItemLayout {
+            model_index,
+            column,
+            row,
+            item_rect,
+            visual_rect,
+            icon_rect,
+            text_rect,
+        })
+    }
+
+    pub fn visible_items(&self) -> impl Iterator<Item = ItemLayout> + '_ {
+        let viewport = self.viewport_rect();
+        let row_range = self.row_range_intersecting_y(viewport.y, viewport.bottom());
+        row_range.flat_map(move |row| {
+            let row_start = row * self.columns_per_row;
+            let row_end = (row_start + self.columns_per_row).min(self.item_count);
+            (row_start..row_end).filter_map(move |index| {
+                self.item(index)
+                    .filter(|item| item.item_rect.intersects(viewport))
+            })
+        })
+    }
+
+    pub fn hit_test_content_point(&self, point: ViewPoint) -> Option<usize> {
+        if self.item_count == 0 {
+            return None;
+        }
+        let pitch_x = self.options.item_width + self.options.gap;
+        let pitch_y = self.options.item_height + self.options.gap;
+        if pitch_x <= 0.0 || pitch_y <= 0.0 {
+            return None;
+        }
+        let column = ((point.x - self.options.padding) / pitch_x).floor();
+        let row = ((point.y - self.options.padding) / pitch_y).floor();
+        if column < 0.0 || row < 0.0 {
+            return None;
+        }
+        let column = column as usize;
+        let row = row as usize;
+        if column >= self.columns_per_row || row >= self.row_count {
+            return None;
+        }
+        let index = row * self.columns_per_row + column;
+        self.item(index)
+            .and_then(|item| item.item_rect.contains(point).then_some(item.model_index))
+    }
+
+    pub fn indexes_intersecting(&self, rect: ViewRect) -> RangeSelection {
+        let row_range = self.row_range_intersecting_y(rect.y, rect.bottom());
+        let column_range = self.column_range_intersecting_x(rect.x, rect.right());
+        let indexes = row_range
+            .flat_map(|row| {
+                column_range.clone().filter_map(move |column| {
+                    let index = row * self.columns_per_row + column;
+                    self.item(index)
+                        .filter(|item| item.item_rect.intersects(rect))
+                        .map(|item| item.model_index)
+                })
+            })
+            .collect();
+        RangeSelection { indexes }
+    }
+
+    fn row_range_intersecting_y(&self, visible_start: f32, visible_end: f32) -> Range<usize> {
+        visible_axis_range(
+            visible_start,
+            visible_end,
+            self.options.padding,
+            self.options.item_height,
+            self.options.gap,
+            self.row_count,
+        )
+    }
+
+    fn column_range_intersecting_x(&self, visible_start: f32, visible_end: f32) -> Range<usize> {
+        visible_axis_range(
+            visible_start,
+            visible_end,
+            self.options.padding,
+            self.options.item_width,
+            self.options.gap,
+            self.columns_per_row,
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RangeSelection {
     indexes: Vec<usize>,
@@ -430,6 +662,13 @@ fn rows_per_column(options: CompactLayoutOptions) -> usize {
     let available = (options.viewport_height - options.reserved_bottom - options.padding * 2.0)
         .max(options.item_height);
     ((available + options.gap) / (options.item_height + options.gap))
+        .floor()
+        .max(1.0) as usize
+}
+
+fn columns_per_row(options: IconsLayoutOptions) -> usize {
+    let available = (options.viewport_width - options.padding * 2.0).max(options.item_width);
+    ((available + options.gap) / (options.item_width + options.gap))
         .floor()
         .max(1.0) as usize
 }
@@ -711,5 +950,100 @@ mod tests {
         assert_eq!(layout.rows_per_column(), 2);
         assert_eq!(layout.item(2).unwrap().column, 1);
         assert_eq!(layout.item(2).unwrap().row, 0);
+    }
+
+    #[test]
+    fn icons_layout_fills_columns_before_rows() {
+        let layout = IconsLayout::new(
+            7,
+            IconsLayoutOptions {
+                viewport_width: 340.0,
+                item_width: 100.0,
+                item_height: 80.0,
+                gap: 10.0,
+                padding: 4.0,
+                ..IconsLayoutOptions::default()
+            },
+        );
+
+        assert_eq!(layout.columns_per_row(), 3);
+        assert_eq!(layout.item(0).unwrap().row, 0);
+        assert_eq!(layout.item(2).unwrap().column, 2);
+        assert_eq!(layout.item(3).unwrap().row, 1);
+        assert_eq!(layout.item(3).unwrap().column, 0);
+    }
+
+    #[test]
+    fn icons_layout_visible_items_respect_vertical_scroll() {
+        let layout = IconsLayout::new(
+            12,
+            IconsLayoutOptions {
+                viewport_width: 230.0,
+                viewport_height: 90.0,
+                scroll_y: 94.0,
+                item_width: 100.0,
+                item_height: 80.0,
+                gap: 10.0,
+                padding: 4.0,
+                ..IconsLayoutOptions::default()
+            },
+        );
+
+        let indexes = layout
+            .visible_items()
+            .map(|item| item.model_index)
+            .collect::<Vec<_>>();
+
+        assert_eq!(indexes, vec![2, 3]);
+    }
+
+    #[test]
+    fn icons_layout_visible_items_scale_with_viewport_not_model_size() {
+        let layout = IconsLayout::new(
+            1_000_000,
+            IconsLayoutOptions {
+                viewport_width: 340.0,
+                viewport_height: 190.0,
+                scroll_y: 100_000.0,
+                item_width: 100.0,
+                item_height: 80.0,
+                gap: 10.0,
+                padding: 4.0,
+                ..IconsLayoutOptions::default()
+            },
+        );
+
+        let indexes = layout
+            .visible_items()
+            .map(|item| item.model_index)
+            .collect::<Vec<_>>();
+
+        assert!(!indexes.is_empty());
+        assert!(indexes.len() <= layout.columns_per_row() * 4);
+        assert!(indexes.iter().all(|index| *index < 1_000_000));
+    }
+
+    #[test]
+    fn icons_layout_hit_test_uses_row_major_index() {
+        let layout = IconsLayout::new(
+            6,
+            IconsLayoutOptions {
+                viewport_width: 230.0,
+                item_width: 100.0,
+                item_height: 80.0,
+                gap: 10.0,
+                padding: 4.0,
+                ..IconsLayoutOptions::default()
+            },
+        );
+
+        assert_eq!(
+            layout.hit_test_content_point(ViewPoint { x: 118.0, y: 8.0 }),
+            Some(1)
+        );
+        assert_eq!(
+            layout.hit_test_content_point(ViewPoint { x: 8.0, y: 98.0 }),
+            Some(2)
+        );
     }
 }

@@ -52,7 +52,9 @@ pub struct TrashSelectionResult {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TrashViewOperation {
-    Restore,
+    Restore {
+        conflict_policy: file_ops::TrashRestoreConflictPolicy,
+    },
     DeletePermanently,
     Empty,
 }
@@ -60,7 +62,7 @@ pub enum TrashViewOperation {
 impl TrashViewOperation {
     pub fn progress_label(self, count: usize) -> String {
         match self {
-            Self::Restore => format!("Restoring {count} item(s)"),
+            Self::Restore { .. } => format!("Restoring {count} item(s)"),
             Self::DeletePermanently => format!("Deleting {count} item(s) permanently"),
             Self::Empty => "Emptying Trash".to_string(),
         }
@@ -68,7 +70,7 @@ impl TrashViewOperation {
 
     pub fn completed_label(self) -> &'static str {
         match self {
-            Self::Restore => "Restored from trash",
+            Self::Restore { .. } => "Restored from trash",
             Self::DeletePermanently => "Deleted permanently",
             Self::Empty => "Emptied Trash",
         }
@@ -322,7 +324,9 @@ pub fn trash_view_operation_result(
     paths: Vec<PathBuf>,
 ) -> TrashViewOperationResult {
     let summary = match operation {
-        TrashViewOperation::Restore => file_ops::restore_trash_paths(&paths),
+        TrashViewOperation::Restore { conflict_policy } => {
+            file_ops::restore_trash_paths_with_policy(&paths, conflict_policy)
+        }
         TrashViewOperation::DeletePermanently => file_ops::permanently_delete_trash_paths(&paths),
         TrashViewOperation::Empty => file_ops::empty_trash(),
     };
@@ -333,7 +337,7 @@ pub fn trash_view_operation_result(
     if success_count > 0 {
         push_unique_path(&mut affected_dirs, file_ops::trash_files_dir());
     }
-    if operation == TrashViewOperation::Restore {
+    if matches!(operation, TrashViewOperation::Restore { .. }) {
         for record in &summary.successes {
             if let Some(parent) = record
                 .original_path
@@ -716,11 +720,21 @@ mod tests {
         let trash_path = trashed.successes[0].trash_path.clone();
         assert!(!original.exists());
 
-        let result =
-            trash_view_operation_result(PaneId(16), TrashViewOperation::Restore, vec![trash_path]);
+        let result = trash_view_operation_result(
+            PaneId(16),
+            TrashViewOperation::Restore {
+                conflict_policy: file_ops::TrashRestoreConflictPolicy::Skip,
+            },
+            vec![trash_path],
+        );
 
         assert_eq!(result.pane_id, PaneId(16));
-        assert_eq!(result.operation, TrashViewOperation::Restore);
+        assert_eq!(
+            result.operation,
+            TrashViewOperation::Restore {
+                conflict_policy: file_ops::TrashRestoreConflictPolicy::Skip
+            }
+        );
         assert_eq!(result.success_count, 1);
         assert_eq!(result.failure_count, 0);
         assert_eq!(
@@ -748,7 +762,9 @@ mod tests {
 
         let result = trash_view_operation_result(
             PaneId(16),
-            TrashViewOperation::Restore,
+            TrashViewOperation::Restore {
+                conflict_policy: file_ops::TrashRestoreConflictPolicy::Skip,
+            },
             vec![trash_path.clone()],
         );
 
@@ -766,6 +782,41 @@ mod tests {
         let _ = file_ops::permanently_delete_trash_paths(&[result.restore_conflicts[0]
             .trash_path
             .clone()]);
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn trash_view_operation_result_replaces_restore_conflict_when_confirmed() {
+        let temp = test_dir("trash-restore-replace-conflict");
+        std::fs::create_dir_all(&temp).unwrap();
+        let unique_name = format!(
+            "restore-replace-conflict-{}.txt",
+            temp.file_name().unwrap().to_string_lossy()
+        );
+        let original = temp.join(unique_name);
+        std::fs::write(&original, "trashed").unwrap();
+        let trashed = file_ops::trash_paths(std::slice::from_ref(&original));
+        assert!(trashed.failures.is_empty());
+        let trash_path = trashed.successes[0].trash_path.clone();
+        std::fs::write(&original, "replacement").unwrap();
+
+        let result = trash_view_operation_result(
+            PaneId(16),
+            TrashViewOperation::Restore {
+                conflict_policy: file_ops::TrashRestoreConflictPolicy::Replace,
+            },
+            vec![trash_path.clone()],
+        );
+
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+        assert!(result.restore_conflicts.is_empty());
+        assert_eq!(
+            result.affected_dirs,
+            vec![file_ops::trash_files_dir(), temp.clone()]
+        );
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "trashed");
+        assert!(!trash_path.exists());
         let _ = std::fs::remove_dir_all(temp);
     }
 

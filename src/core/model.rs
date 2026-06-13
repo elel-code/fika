@@ -221,6 +221,60 @@ impl DirectoryModel {
         self.data.entries.iter().position(|entry| entry.id == id)
     }
 
+    pub fn set_thumbnail_path(
+        &mut self,
+        id: ItemId,
+        thumbnail_path: Option<PathBuf>,
+    ) -> Vec<DirectoryModelSignal> {
+        let Some(index) = self.index_of_id(id) else {
+            return Vec::new();
+        };
+        if self.data.entries[index].thumbnail_path == thumbnail_path {
+            return Vec::new();
+        }
+
+        let mut data = (*self.data.entries[index].entry).clone();
+        data.thumbnail_path = thumbnail_path;
+        self.data.entries[index].entry = Entry::new(data);
+        self.mark_data_changed();
+        vec![DirectoryModelSignal::ItemsChanged(
+            vec![ItemRange {
+                start: index,
+                len: 1,
+            }],
+            ChangedRoles::metadata(),
+        )]
+    }
+
+    pub fn set_mime_role(
+        &mut self,
+        id: ItemId,
+        mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
+    ) -> Vec<DirectoryModelSignal> {
+        let Some(index) = self.index_of_id(id) else {
+            return Vec::new();
+        };
+        if self.data.entries[index].mime_type == mime_type
+            && self.data.entries[index].mime_magic_checked == mime_magic_checked
+        {
+            return Vec::new();
+        }
+
+        let mut data = (*self.data.entries[index].entry).clone();
+        data.mime_type = mime_type;
+        data.mime_magic_checked = mime_magic_checked;
+        self.data.entries[index].entry = Entry::new(data);
+        self.mark_data_changed();
+        vec![DirectoryModelSignal::ItemsChanged(
+            vec![ItemRange {
+                start: index,
+                len: 1,
+            }],
+            ChangedRoles::metadata(),
+        )]
+    }
+
     pub fn clear_for_directory(&mut self, directory: PathBuf) -> Vec<DirectoryModelSignal> {
         if self.data.directory == directory && self.data.entries.is_empty() {
             return Vec::new();
@@ -705,6 +759,7 @@ mod tests {
             size_bytes,
             modified_secs,
             mime_type: None,
+            mime_magic_checked: true,
             thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
@@ -719,6 +774,7 @@ mod tests {
             size_bytes: 0,
             modified_secs: None,
             mime_type: None,
+            mime_magic_checked: true,
             thumbnail_path: None,
             trash_original_path: Some(PathBuf::from(original_path)),
             trash_deletion_time: Some(Arc::from(deletion_time)),
@@ -825,6 +881,42 @@ mod tests {
         assert_eq!(model.entries()[1].id, original_b);
         assert_eq!(model.index_of_id(original_a), Some(0));
         assert_eq!(model.index_of_id(original_b), Some(1));
+    }
+
+    #[test]
+    fn thumbnail_role_update_keeps_item_identity_and_emits_metadata_change() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry("image.png", false)]),
+        );
+        let item_id = model.entries()[0].id;
+        let thumbnail_path = PathBuf::from("/tmp/thumbs/image.png");
+
+        let signals = model.set_thumbnail_path(item_id, Some(thumbnail_path.clone()));
+
+        assert_eq!(
+            signals,
+            vec![DirectoryModelSignal::ItemsChanged(
+                vec![ItemRange { start: 0, len: 1 }],
+                ChangedRoles::metadata(),
+            )]
+        );
+        assert_eq!(model.entries()[0].id, item_id);
+        assert_eq!(
+            model.entries()[0].thumbnail_path.as_deref(),
+            Some(thumbnail_path.as_path())
+        );
+        assert!(
+            model
+                .set_thumbnail_path(item_id, Some(thumbnail_path))
+                .is_empty()
+        );
+        assert!(
+            model
+                .set_thumbnail_path(ItemId(999), Some(PathBuf::from("/tmp/missing.png")))
+                .is_empty()
+        );
     }
 
     #[test]

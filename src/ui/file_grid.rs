@@ -1,24 +1,30 @@
+mod details;
 mod layout;
 mod projection;
 mod slots;
 mod snapshot;
 
+pub(crate) use details::{
+    DETAILS_ICON_SIZE, DetailsItemSnapshot, details_content_height, details_content_width,
+    details_deletion_time_label, details_modified_label, details_original_path_label,
+    details_size_label, details_visible_row_range,
+};
 pub(crate) use layout::{
     CompactColumnWidthCache, CompactTextWidthOverride,
     compact_layout_for_filtered_model_with_text_override,
     compact_layout_for_model_with_text_override, compact_text_width, compact_text_width_for_name,
     model_index_for_layout_index,
 };
-pub(crate) use projection::{ContentItemHit, PaneLayoutProjection};
+pub(crate) use projection::{ContentItemHit, PaneLayout, PaneLayoutProjection};
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
-    VisibleItemSnapshot, format_entry_kind_label, visible_item_thumbnail_path,
+    VisibleItemSnapshot, format_entry_detail_label, visible_item_thumbnail_path,
 };
 
 use crate::FikaApp;
 use fika_core::{
-    CompactLayout, CompactLayoutOptions, ItemLayout, PaneId, ViewRect, ViewState,
-    normalize_viewport_extent,
+    CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemLayout, PaneId,
+    ViewMode, ViewRect, ViewState, normalize_viewport_extent,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -36,6 +42,9 @@ use super::item_view::item_view_scrollbar_container;
 use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
+use details::{
+    DETAILS_HEADER_HEIGHT, DETAILS_ROW_HEIGHT, DetailsColumn, DetailsColumnKind, details_columns,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FileGridMode {
@@ -47,6 +56,11 @@ pub(crate) struct FileGridProps {
     pub(crate) pane_id: PaneId,
     pub(crate) layout: CompactLayout,
     pub(crate) visible_items: Vec<VisibleItemSnapshot>,
+    pub(crate) icons_layout: IconsLayout,
+    pub(crate) icons_items: Vec<VisibleItemSnapshot>,
+    pub(crate) details_items: Vec<DetailsItemSnapshot>,
+    pub(crate) details_row_count: usize,
+    pub(crate) trash_view: bool,
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) view: ViewState,
     pub(crate) rubber_band: Option<ViewRect>,
@@ -99,16 +113,124 @@ pub(crate) fn file_grid(
         pane_id,
         layout,
         visible_items,
+        icons_layout,
+        icons_items,
+        details_items,
+        details_row_count,
+        trash_view,
         scroll_handle,
-        view: _view,
+        view,
         rubber_band,
         drop_target,
         mode,
     } = props;
-    let content_size = layout.content_size();
     let app = cx.weak_entity();
 
-    let viewport = div()
+    let (content_width, content_height, viewport) = match view.view_mode {
+        ViewMode::Icons => {
+            let content_size = icons_layout.content_size();
+            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                div()
+                    .relative()
+                    .w(px(content_size.width))
+                    .h(px(content_size.height))
+                    .children(
+                        icons_items
+                            .into_iter()
+                            .map(|item| item_tile(pane_id, item, mode, cx)),
+                    ),
+            );
+            (content_size.width, content_size.height, viewport)
+        }
+        ViewMode::Compact => {
+            let content_size = layout.content_size();
+            let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
+                div()
+                    .relative()
+                    .w(px(content_size.width))
+                    .h(px(content_size.height))
+                    .children(
+                        visible_items
+                            .into_iter()
+                            .map(|item| item_tile(pane_id, item, mode, cx)),
+                    ),
+            );
+            (content_size.width, content_size.height, viewport)
+        }
+        ViewMode::Details => {
+            let content_width = details_content_width(trash_view).max(1.0);
+            let content_height = details_content_height(details_row_count).max(1.0);
+            let viewport =
+                file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
+                    pane_id,
+                    details_items,
+                    details_row_count,
+                    trash_view,
+                    content_width,
+                    content_height,
+                    mode,
+                    cx,
+                ));
+            (content_width, content_height, viewport)
+        }
+    };
+
+    div()
+        .on_children_prepainted(move |bounds, _window, cx| {
+            let Some(bounds) = bounds.first() else {
+                return;
+            };
+            let width = normalize_viewport_extent(bounds.size.width.as_f32());
+            let height = normalize_viewport_extent(bounds.size.height.as_f32());
+            let window_rect = ViewRect {
+                x: bounds.origin.x.as_f32(),
+                y: bounds.origin.y.as_f32(),
+                width,
+                height,
+            };
+            let max_scroll_x = (content_width - width).max(0.0);
+            let max_scroll_y = (content_height - height).max(0.0);
+            let _ = app.update(cx, |this, cx| {
+                let geometry_changed = this.set_pane_viewport_geometry(pane_id, window_rect);
+                let bounds_changed = this.set_pane_viewport_bounds(
+                    pane_id,
+                    width,
+                    height,
+                    max_scroll_x,
+                    max_scroll_y,
+                );
+                if geometry_changed || bounds_changed {
+                    cx.notify();
+                }
+            });
+        })
+        .id(format!("items-{}", pane_id.0))
+        .relative()
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .min_h_0()
+        .w_full()
+        .max_w_full()
+        .overflow_hidden()
+        .flex_1()
+        .child(item_view_scrollbar_container(
+            pane_id,
+            &scroll_handle,
+            rubber_band,
+            viewport,
+            window,
+            cx,
+        ))
+}
+
+fn file_grid_viewport_shell(
+    pane_id: PaneId,
+    drop_target: Option<FileTransferMode>,
+    mode: FileGridMode,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    div()
         .id(format!("items-viewport-{}", pane_id.0))
         .relative()
         .flex_1()
@@ -302,65 +424,456 @@ pub(crate) fn file_grid(
             cx.stop_propagation();
             cx.notify();
         }))
-        .child(
+}
+
+fn details_table(
+    pane_id: PaneId,
+    items: Vec<DetailsItemSnapshot>,
+    row_count: usize,
+    trash_view: bool,
+    content_width: f32,
+    content_height: f32,
+    mode: FileGridMode,
+    cx: &mut Context<FikaApp>,
+) -> Div {
+    let columns = details_columns(trash_view);
+    div()
+        .relative()
+        .w(px(content_width))
+        .h(px(content_height))
+        .child(details_header(&columns, content_width))
+        .children(
+            items
+                .into_iter()
+                .map(|item| details_row(pane_id, item, &columns, content_width, mode, cx)),
+        )
+        .when(row_count == 0, |table| {
+            table.child(
+                div()
+                    .absolute()
+                    .top(px(DETAILS_HEADER_HEIGHT))
+                    .left_0()
+                    .w(px(content_width))
+                    .h(px(DETAILS_ROW_HEIGHT))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .text_sm()
+                    .text_color(rgb(0x6b7280))
+                    .child("No items"),
+            )
+        })
+}
+
+fn details_header(columns: &[DetailsColumn], content_width: f32) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(content_width))
+        .h(px(DETAILS_HEADER_HEIGHT))
+        .flex()
+        .items_center()
+        .border_b_1()
+        .border_color(rgb(0xd5d9df))
+        .bg(rgb(0xf3f5f8))
+        .children(columns.iter().map(|column| {
             div()
-                .relative()
-                .w(px(content_size.width))
-                .h(px(content_size.height))
-                .children(
-                    visible_items
-                        .into_iter()
-                        .map(|item| item_tile(pane_id, item, mode, cx)),
-                ),
-        );
+                .w(px(column.width))
+                .h_full()
+                .px_2()
+                .flex()
+                .items_center()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(0x4b5563))
+                .border_r_1()
+                .border_color(rgb(0xe1e5eb))
+                .child(column.title)
+        }))
+}
+
+fn details_row(
+    pane_id: PaneId,
+    item: DetailsItemSnapshot,
+    columns: &[DetailsColumn],
+    content_width: f32,
+    mode: FileGridMode,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    let top = DETAILS_HEADER_HEIGHT + item.row_index as f32 * DETAILS_ROW_HEIGHT;
+    let selected = item.selected;
+    let drop_target = item.drop_target;
+    let path_for_mouse_down = item.path.clone();
+    let path_for_menu = item.path.clone();
+    let path_for_drag = item.path.clone();
+    let target_dir_for_drop = item.path.clone();
+    let is_dir_for_click = item.is_dir;
+    let is_dir_for_menu = item.is_dir;
+    let is_dir_for_drop = item.is_dir;
+
+    let drag_value = ItemDrag {
+        pane_id,
+        path: path_for_drag,
+        name: item.name.clone(),
+        selected,
+        selection_count: item.selection_count,
+    };
+    let app = cx.weak_entity();
 
     div()
-        .on_children_prepainted(move |bounds, _window, cx| {
-            let Some(bounds) = bounds.first() else {
-                return;
-            };
-            let width = normalize_viewport_extent(bounds.size.width.as_f32());
-            let height = normalize_viewport_extent(bounds.size.height.as_f32());
-            let window_rect = ViewRect {
-                x: bounds.origin.x.as_f32(),
-                y: bounds.origin.y.as_f32(),
-                width,
-                height,
-            };
-            let max_scroll_x = (content_size.width - width).max(0.0);
-            let max_scroll_y = (content_size.height - height).max(0.0);
-            let _ = app.update(cx, |this, cx| {
-                let geometry_changed = this.set_pane_viewport_geometry(pane_id, window_rect);
-                let bounds_changed = this.set_pane_viewport_bounds(
+        .id(format!("details-row-{}-{}", pane_id.0, item.row_index))
+        .absolute()
+        .left_0()
+        .top(px(top))
+        .w(px(content_width))
+        .h(px(DETAILS_ROW_HEIGHT))
+        .flex()
+        .items_center()
+        .bg(details_row_background(
+            selected,
+            drop_target,
+            item.row_index,
+        ))
+        .when(drop_target.is_some(), |row| row.shadow_md())
+        .block_mouse_except_scroll()
+        .cursor_pointer()
+        .hover(move |row| row.bg(item_tile_hover_background(selected, drop_target)))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                if handle_item_mouse_down(
+                    this,
                     pane_id,
-                    width,
-                    height,
-                    max_scroll_x,
-                    max_scroll_y,
-                );
-                if geometry_changed || bounds_changed {
+                    path_for_mouse_down.clone(),
+                    is_dir_for_click,
+                    mode,
+                    event,
+                ) {
+                    cx.stop_propagation();
                     cx.notify();
                 }
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                this.show_item_context_menu(
+                    pane_id,
+                    path_for_menu.clone(),
+                    is_dir_for_menu,
+                    event.position,
+                );
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Back),
+            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Back);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Forward),
+            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                handle_pane_navigation_mouse_down(this, pane_id, NavigationDirection::Forward);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_drag(drag_value, move |drag, _, _, cx| {
+            let _ = app.update(cx, |this, _cx| {
+                this.begin_item_drag(drag.payload());
             });
+            cx.new(|_| DragPreview {
+                label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
+            })
         })
-        .id(format!("items-{}", pane_id.0))
-        .relative()
-        .flex()
-        .flex_col()
-        .min_w_0()
-        .min_h_0()
-        .w_full()
-        .max_w_full()
-        .overflow_hidden()
-        .flex_1()
-        .child(item_view_scrollbar_container(
-            pane_id,
-            &scroll_handle,
-            rubber_band,
-            viewport,
-            window,
-            cx,
+        .on_drag_move::<PlaceDrag>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
+                let contains = event.bounds.contains(&event.event.position);
+                let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                let changed = contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                if contains {
+                    refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                    this.schedule_drop_target_stale_clear(cx);
+                }
+                if changed {
+                    cx.notify();
+                }
+                if contains {
+                    cx.stop_propagation();
+                }
+            },
         ))
+        .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, _window, cx| {
+            this.drop_place_drag_to_pane(pane_id, drag.path());
+            cx.stop_propagation();
+            cx.notify();
+        }))
+        .when(is_dir_for_drop, |row| {
+            let target_dir_for_move = target_dir_for_drop.clone();
+            let target_dir_for_external_move = target_dir_for_drop.clone();
+            let target_dir_for_external_drop = target_dir_for_drop.clone();
+            let target_dir_for_primary_paste = target_dir_for_drop.clone();
+            row.on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                    if matches!(mode, FileGridMode::Manager) {
+                        this.paste_primary_into_directory(
+                            pane_id,
+                            target_dir_for_primary_paste.clone(),
+                            cx,
+                        );
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_drag_move::<ItemDrag>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                    let contains = event.bounds.contains(&event.event.position);
+                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    let valid_target =
+                        contains && this.item_drag_can_drop_to_directory(&target_dir_for_move);
+                    let changed = if valid_target {
+                        this.set_item_drag_drop_target_for_directory(
+                            pane_id,
+                            target_dir_for_move.clone(),
+                            mode,
+                        )
+                    } else if contains {
+                        this.clear_drag_drop_targets()
+                    } else {
+                        this.clear_item_drop_target_for_directory(pane_id, &target_dir_for_move)
+                    };
+                    if contains {
+                        if valid_target {
+                            refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                            this.schedule_drop_target_stale_clear(cx);
+                        } else {
+                            refresh_active_drag_cursor_not_allowed(window, cx);
+                        }
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                    if contains {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .on_drag_move::<ExternalPaths>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                    let contains = event.bounds.contains(&event.event.position);
+                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    let changed = if contains {
+                        this.set_item_drag_drop_target_for_directory(
+                            pane_id,
+                            target_dir_for_external_move.clone(),
+                            mode,
+                        )
+                    } else {
+                        this.clear_item_drop_target_for_directory(
+                            pane_id,
+                            &target_dir_for_external_move,
+                        )
+                    };
+                    if contains {
+                        refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                        this.schedule_drop_target_stale_clear(cx);
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                    if contains {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+                let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                this.drop_item_drag_to_directory(
+                    pane_id,
+                    drag.payload(),
+                    target_dir_for_drop.clone(),
+                    mode,
+                    cx,
+                );
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .on_drop::<ExternalPaths>(cx.listener(
+                move |this, external_paths: &ExternalPaths, window, cx| {
+                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    this.drop_external_paths_to_directory(
+                        pane_id,
+                        external_paths.paths().to_vec(),
+                        target_dir_for_external_drop.clone(),
+                        mode,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                    cx.notify();
+                },
+            ))
+        })
+        .when(!is_dir_for_drop, |row| {
+            row.on_drag_move::<ItemDrag>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                    let contains = event.bounds.contains(&event.event.position);
+                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    let changed =
+                        contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                    if contains {
+                        refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                        this.schedule_drop_target_stale_clear(cx);
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                    if contains {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .on_drag_move::<ExternalPaths>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                    let contains = event.bounds.contains(&event.event.position);
+                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    let changed =
+                        contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                    if contains {
+                        refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                        this.schedule_drop_target_stale_clear(cx);
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                    if contains {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+                let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                this.drop_item_drag_to_pane(pane_id, drag.payload(), mode, cx);
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .on_drop::<ExternalPaths>(cx.listener(
+                move |this, external_paths: &ExternalPaths, window, cx| {
+                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    this.drop_external_paths_to_pane(
+                        pane_id,
+                        external_paths.paths().to_vec(),
+                        mode,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                    cx.notify();
+                },
+            ))
+        })
+        .children(
+            columns
+                .iter()
+                .map(|column| details_cell(&item, *column, selected)),
+        )
+}
+
+fn details_row_background(
+    selected: bool,
+    drop_target: Option<FileTransferMode>,
+    row_index: usize,
+) -> Rgba {
+    if let Some(mode) = drop_target {
+        drop_target_item_background(mode)
+    } else if selected {
+        rgb(0xdbeafe)
+    } else if row_index % 2 == 0 {
+        rgb(0xffffff)
+    } else {
+        rgb(0xf8fafc)
+    }
+}
+
+fn details_cell(
+    item: &DetailsItemSnapshot,
+    column: DetailsColumn,
+    selected: bool,
+) -> gpui::AnyElement {
+    match column.kind {
+        DetailsColumnKind::Name => details_name_cell(item, column.width, selected),
+        DetailsColumnKind::Size => details_text_cell(column.width, item.size_label.clone()),
+        DetailsColumnKind::Modified => details_text_cell(column.width, item.modified_label.clone()),
+        DetailsColumnKind::OriginalPath => {
+            details_text_cell(column.width, item.original_path_label.clone())
+        }
+        DetailsColumnKind::DeletionTime => {
+            details_text_cell(column.width, item.deletion_time_label.clone())
+        }
+    }
+}
+
+fn details_name_cell(item: &DetailsItemSnapshot, width: f32, selected: bool) -> gpui::AnyElement {
+    let icon_path = item.icon.path.clone();
+    let fallback = item.icon.fallback_marker.clone();
+    let fallback_fg = item.icon.fallback_fg;
+    let fallback_bg = item.icon.fallback_bg;
+    div()
+        .w(px(width))
+        .h_full()
+        .min_w_0()
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .w(px(DETAILS_ICON_SIZE))
+                .h(px(DETAILS_ICON_SIZE))
+                .rounded_sm()
+                .overflow_hidden()
+                .child(icon_image_or_fallback(
+                    icon_path,
+                    fallback,
+                    fallback_fg,
+                    fallback_bg,
+                )),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .text_sm()
+                .text_color(if selected {
+                    rgb(0x0f172a)
+                } else {
+                    rgb(0x1f2937)
+                })
+                .truncate()
+                .child(item.name.to_string()),
+        )
+        .into_any_element()
+}
+
+fn details_text_cell(width: f32, text: String) -> gpui::AnyElement {
+    div()
+        .w(px(width))
+        .h_full()
+        .min_w_0()
+        .px_2()
+        .flex()
+        .items_center()
+        .text_sm()
+        .text_color(rgb(0x4b5563))
+        .truncate()
+        .child(text)
+        .into_any_element()
 }
 
 fn handle_pane_navigation_mouse_down(
@@ -774,7 +1287,7 @@ fn item_tile(
                 .child(text_view(
                     pane_id,
                     &display_name,
-                    &item.kind_label,
+                    &item.detail_label,
                     item.layout,
                     renaming,
                     selected,
@@ -896,7 +1409,7 @@ fn fallback_icon_element(marker: String, fg: u32, bg: u32) -> gpui::AnyElement {
 fn text_view(
     pane_id: PaneId,
     display_name: &str,
-    kind_label: &str,
+    detail_label: &str,
     layout: ItemLayout,
     renaming: bool,
     selected: bool,
@@ -909,7 +1422,7 @@ fn text_view(
     let visual = layout.visual_rect;
     let text = layout.text_rect;
     let rename_layout = rename_text_layout(text.height);
-    let helper_text = rename_error.or(rename_warning).unwrap_or(kind_label);
+    let helper_text = rename_error.or(rename_warning).unwrap_or(detail_label);
     let helper_color = if rename_error.is_some() {
         rgb(0xdc2626)
     } else if rename_warning.is_some() {
@@ -1179,5 +1692,27 @@ pub(crate) fn compact_layout_options(
         icon_size,
         text_height,
         ..CompactLayoutOptions::default()
+    }
+}
+
+pub(crate) fn icons_layout_options(view: &ViewState, reserved_bottom: f32) -> IconsLayoutOptions {
+    let icon_size = view.icon_size();
+    let padding = 8.0;
+    let gap = 8.0;
+    let text_height = 40.0;
+    let item_width = (icon_size * 2.25).max(128.0);
+    IconsLayoutOptions {
+        viewport_width: view.viewport_width.max(1.0),
+        viewport_height: view.viewport_height.max(1.0),
+        reserved_bottom,
+        scroll_x: view.scroll_x,
+        scroll_y: view.scroll_y,
+        padding,
+        gap,
+        item_width,
+        item_height: padding * 3.0 + icon_size + gap + text_height,
+        icon_size,
+        text_height,
+        ..IconsLayoutOptions::default()
     }
 }

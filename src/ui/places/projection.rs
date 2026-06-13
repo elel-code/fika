@@ -20,6 +20,7 @@ pub(crate) fn place_snapshots_for(
     hidden_place_sections: &BTreeSet<&'static str>,
     hidden_places: &BTreeSet<PathBuf>,
     place_drop_target: Option<&PlaceDropTarget>,
+    trash_has_items: bool,
     file_icons: &mut FileIconCache,
 ) -> Vec<PlaceSnapshot> {
     let active_index = current_dir.and_then(|path| active_place_index(places, path));
@@ -57,7 +58,7 @@ pub(crate) fn place_snapshots_for(
                 insert_after: index == last_index
                     && place_drop_target_matches_insert(place_drop_target, places.len()),
                 trash_place,
-                trash_has_items: trash_place && file_ops::trash_has_items(),
+                trash_has_items: trash_place && trash_has_items,
                 editable: place.editable,
                 removable: place.removable,
             }
@@ -103,6 +104,7 @@ mod tests {
             &hidden_sections,
             &hidden_places,
             Some(&drop_target),
+            false,
             &mut icons,
         );
 
@@ -118,6 +120,37 @@ mod tests {
         assert!(snapshots[1].device);
         assert!(snapshots[1].device_ejectable);
         assert!(snapshots[1].device_can_power_off);
+    }
+
+    #[test]
+    fn trash_snapshot_uses_app_owned_emptiness_state() {
+        let trash = file_ops::trash_files_dir();
+        let places = vec![place("", "Trash", trash, false)];
+        let mut icons = FileIconCache::default();
+
+        let empty = place_snapshots_for(
+            &places,
+            None,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            None,
+            false,
+            &mut icons,
+        );
+        let non_empty = place_snapshots_for(
+            &places,
+            None,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            None,
+            true,
+            &mut icons,
+        );
+
+        assert!(empty[0].trash_place);
+        assert!(!empty[0].trash_has_items);
+        assert!(non_empty[0].trash_place);
+        assert!(non_empty[0].trash_has_items);
     }
 
     fn place(group: &'static str, label: &str, path: PathBuf, editable: bool) -> PlaceEntry {

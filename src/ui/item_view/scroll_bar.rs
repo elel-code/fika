@@ -47,7 +47,8 @@ pub(crate) fn item_view_scrollbar_container(
                 .min_h_0()
                 .size_full()
                 .track_scroll(scroll_handle)
-                .overflow_x_scroll(),
+                .overflow_x_scroll()
+                .overflow_y_scroll(),
         )
         .when_some(rubber_band, |wrapper, rect| {
             wrapper.child(rubber_band_overlay(rect))

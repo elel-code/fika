@@ -40,8 +40,12 @@ operation flow, while using the local XDG Trash layout as the backing store.
     `$XDG_DATA_HOME/Trash/info`.
   - `trash_path()` creates the XDG `.trashinfo` file with original `Path` and
     `DeletionDate`, then moves the item into `files/`.
-  - `restore_trash_paths()`, `permanently_delete_trash_paths()`, and
-    `empty_trash()` are core file operations returning only summaries and
+  - `trashrc_path()`, `trash_status_empty()`, and
+    `set_trash_status_empty()` maintain the Dolphin/KIO-style
+    `$XDG_CONFIG_HOME/trashrc` `[Status] Empty=` state used for menu
+    enablement.
+  - `restore_trash_paths_with_policy()`, `permanently_delete_trash_paths()`,
+    and `empty_trash()` are core file operations returning only summaries and
     affected directories.
 - Model roles:
   - `src/core/entries.rs` decorates entries loaded from the Trash files
@@ -51,6 +55,9 @@ operation flow, while using the local XDG Trash layout as the backing store.
     model item.
   - `format_trash_original_location()` and `format_trash_deletion_time()`
     provide the display text used by the compact view and future details roles.
+    `VisibleItemSnapshot` carries a role-derived detail label so Trash compact
+    items expose both original location and deletion time without reading
+    metadata from the renderer.
 - Sorting and identity:
   - `src/core/model.rs` sorts Trash entries by deletion time role, then normal
     name order by default.
@@ -68,6 +75,11 @@ operation flow, while using the local XDG Trash layout as the backing store.
   - `src/main.rs` routes Delete in normal directories to move-to-trash.
   - Trash view context menus provide Restore, Delete Permanently, and Empty
     Trash actions.
+  - Restore conflicts are reported as structured `TrashRestoreConflict`
+    values. The pane-local conflict dialog lets the user skip or replace the
+    occupied original path; replace reruns the same Trash restore operation
+    with a replace policy, using a backup of the occupied target until the
+    trash item has moved successfully.
   - Trash blank context menus use a Trash-specific Sort By submenu containing
     Name, Original Path, and Deletion Time, wired through pane-local
     `DirectoryModel` sort roles.
@@ -76,19 +88,22 @@ operation flow, while using the local XDG Trash layout as the backing store.
 - Places:
   - `src/main.rs` exposes a Trash place that navigates to the Trash files
     directory.
-  - The Trash place derives empty/non-empty state with a lightweight
-    `read_dir().next()` check instead of loading the Trash model.
+  - `FikaApp` owns the Trash empty/non-empty state, similar to Dolphin's
+    Places model caching `Trash::emptinessChanged`. It initializes the state
+    once, refreshes it after Trash-affecting operations, updates it from Trash
+    pane lister events, and drains the core `TrashEmptinessMonitor` singleton
+    watcher for external changes when no Trash pane is open. Places projection
+    consumes that state and does not poll the filesystem.
   - `src/ui/places.rs` renders the Trash state with a state dot and marker
     color.
   - The Trash place context menu offers Open, Empty Trash, Copy Location, and
-    Properties; Empty Trash runs through the focused pane's pane-local
-    operation status.
+    Properties; Empty Trash uses the same app-owned state for enablement and
+    runs through the focused pane's pane-local operation status.
 
 ## Remaining Gaps
 
-- Restore conflict handling currently returns an error when the original path
-  exists; Dolphin/KIO asks the user through its job UI delegate.
-- Fika does not yet expose full Details view columns for Original Path and
-  Deletion Time, only compact metadata display.
-- Places Trash state is polled from the local Trash directory; it is not yet
-  backed by a singleton lister that emits Dolphin-style `emptinessChanged`.
+- Fika exposes Trash Original Path and Deletion Time through the pane-local
+  Details view mode; compact items also show the same role-derived metadata.
+- Fika's local XDG Trash backend does not yet implement Dolphin/KIO's
+  `trash:/` aggregation across storage devices or Solid removable-storage
+  accessibility refresh for `.Trash-$uid` directories.

@@ -12,6 +12,10 @@ pub(crate) fn trash_conflict_dialog_overlay(
     dialog: TrashConflictDialogState,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
+    let pane_id = dialog.pane_id;
+    let replace_conflicts = dialog.conflicts.clone();
+    let row_conflicts = dialog.conflicts;
+
     div()
         .id("trash-conflict-dialog-layer")
         .absolute()
@@ -98,18 +102,67 @@ pub(crate) fn trash_conflict_dialog_overlay(
                         .gap_2()
                         .px_4()
                         .py_3()
+                        .child(div().text_sm().text_color(rgb(0x59636e)).child(format!(
+                            "{} item(s) already exist at their original location.",
+                            row_conflicts.len()
+                        )))
+                        .children(row_conflicts.into_iter().map(conflict_row)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .px_4()
+                        .py_3()
+                        .border_t_1()
+                        .border_color(rgb(0xd5d9df))
+                        .child(dialog_button("skip", "Skip").on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
+                                this.dismiss_trash_conflict_dialog();
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        ))
                         .child(
-                            div()
-                                .text_sm()
-                                .text_color(rgb(0x59636e))
-                                .child(format!(
-                                    "{} item(s) already exist at their original location.",
-                                    dialog.conflicts.len()
-                                )),
-                        )
-                        .children(dialog.conflicts.into_iter().map(conflict_row)),
+                            dialog_button("replace", "Replace Existing")
+                                .bg(rgb(0x2563eb))
+                                .text_color(rgb(0xffffff))
+                                .hover(|button| button.bg(rgb(0x1d4ed8)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                                            this.replace_trash_restore_conflicts(
+                                                pane_id,
+                                                replace_conflicts.clone(),
+                                                cx,
+                                            );
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        },
+                                    ),
+                                ),
+                        ),
                 ),
         )
+}
+
+fn dialog_button(id: &'static str, label: &'static str) -> Stateful<Div> {
+    div()
+        .id(format!("trash-conflict-{id}"))
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .text_sm()
+        .text_color(rgb(0x1f2328))
+        .border_1()
+        .border_color(rgb(0xc8ced6))
+        .bg(rgb(0xffffff))
+        .hover(|button| button.bg(rgb(0xeaf1ff)))
+        .cursor_pointer()
+        .child(label)
 }
 
 fn conflict_row(conflict: fika_core::file_ops::TrashRestoreConflict) -> Stateful<Div> {

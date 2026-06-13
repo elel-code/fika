@@ -415,6 +415,7 @@ pub fn trash_path(path: &Path) -> Result<PathBuf, String> {
         trashinfo(path),
     )
     .map_err(|err| err.to_string())?;
+    let _ = set_trash_status_empty(false);
     Ok(destination)
 }
 
@@ -431,10 +432,32 @@ pub fn trash_info_dir() -> PathBuf {
     trash_home().join("info")
 }
 
+pub fn trashrc_path() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("trashrc")
+}
+
 pub fn trash_has_items() -> bool {
     fs::read_dir(trash_files_dir())
         .ok()
         .is_some_and(|mut entries| entries.any(|entry| entry.is_ok()))
+}
+
+pub fn trash_status_empty() -> bool {
+    trash_status_empty_at(&trashrc_path())
+}
+
+pub fn set_trash_status_empty(empty: bool) -> Result<(), String> {
+    write_trash_status_empty_at(&trashrc_path(), empty)
+}
+
+pub fn sync_trash_status_empty() -> Result<bool, String> {
+    let empty = !trash_has_items();
+    set_trash_status_empty(empty)?;
+    Ok(empty)
 }
 
 pub fn is_trash_files_dir(path: &Path) -> bool {
@@ -472,28 +495,29 @@ pub fn undo_trash(items: &[(PathBuf, PathBuf)]) -> Result<String, String> {
         move_path(trash_path, original_path, None, &mut |_| {}).map_err(|err| err.to_string())?;
         let _ = remove_trashinfo(trash_path);
     }
+    let _ = sync_trash_status_empty();
 
     Ok(format!("restored {} item(s)", items.len()))
 }
 
-pub fn restore_trash_paths(paths: &[PathBuf]) -> FileActionSummary {
+pub fn restore_trash_paths_with_policy(
+    paths: &[PathBuf],
+    conflict_policy: TrashRestoreConflictPolicy,
+) -> FileActionSummary {
     let mut summary = FileActionSummary::default();
     for path in paths {
-        match trash_restore_conflict(path) {
-            Ok(Some(conflict)) => {
-                summary.restore_conflicts.push(conflict);
-                continue;
-            }
-            Ok(None) => {}
-            Err(err) => {
-                summary.failures.push(format!("{}: {err}", path.display()));
-                continue;
-            }
-        }
-        match restore_trash_path(path) {
+        match restore_trash_path(path, conflict_policy) {
             Ok(record) => summary.successes.push(record),
-            Err(err) => summary.failures.push(format!("{}: {err}", path.display())),
+            Err(TrashRestoreError::Conflict(conflict)) => {
+                summary.restore_conflicts.push(conflict);
+            }
+            Err(TrashRestoreError::Failure(err)) => {
+                summary.failures.push(format!("{}: {err}", path.display()));
+            }
         }
+    }
+    if !summary.successes.is_empty() {
+        let _ = sync_trash_status_empty();
     }
     summary
 }
@@ -506,6 +530,9 @@ pub fn permanently_delete_trash_paths(paths: &[PathBuf]) -> FileActionSummary {
             Err(err) => summary.failures.push(format!("{}: {err}", path.display())),
         }
     }
+    if !summary.successes.is_empty() {
+        let _ = sync_trash_status_empty();
+    }
     summary
 }
 
@@ -513,6 +540,7 @@ pub fn empty_trash() -> FileActionSummary {
     let mut summary = FileActionSummary::default();
     let files_dir = trash_files_dir();
     if !path_exists(&files_dir) {
+        let _ = set_trash_status_empty(true);
         return summary;
     }
 
@@ -538,35 +566,75 @@ pub fn empty_trash() -> FileActionSummary {
         }
     }
     remove_orphan_trashinfo_files(&mut summary);
+    let _ = sync_trash_status_empty();
     summary
 }
 
-fn restore_trash_path(trash_path: &Path) -> Result<TrashRecord, String> {
+fn restore_trash_path(
+    trash_path: &Path,
+    conflict_policy: TrashRestoreConflictPolicy,
+) -> Result<TrashRecord, TrashRestoreError> {
     if is_trash_files_dir(trash_path) || !is_in_trash_files_dir(trash_path) {
-        return Err("item is not inside Trash".to_string());
+        return Err(TrashRestoreError::Failure(
+            "item is not inside Trash".to_string(),
+        ));
     }
     if !path_exists(trash_path) {
-        return Err("trash item no longer exists".to_string());
-    }
-
-    let original_path = trash_original_path(trash_path)?;
-    if path_exists(&original_path) {
-        return Err(format!(
-            "original location is already occupied: {}",
-            original_path.display()
+        return Err(TrashRestoreError::Failure(
+            "trash item no longer exists".to_string(),
         ));
     }
 
-    if let Some(parent) = original_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    let original_path = trash_original_path(trash_path).map_err(TrashRestoreError::Failure)?;
+    if original_path == trash_path {
+        return Err(TrashRestoreError::Failure(
+            "original location matches trash item".to_string(),
+        ));
     }
-    move_path(trash_path, &original_path, None, &mut |_| {}).map_err(|err| err.to_string())?;
+
+    let overwrite_backup = if path_exists(&original_path) {
+        match conflict_policy {
+            TrashRestoreConflictPolicy::Skip => {
+                return Err(TrashRestoreError::Conflict(TrashRestoreConflict {
+                    original_path,
+                    trash_path: trash_path.to_path_buf(),
+                }));
+            }
+            TrashRestoreConflictPolicy::Replace => Some(
+                backup_existing_destination(&original_path).map_err(TrashRestoreError::Failure)?,
+            ),
+        }
+    } else {
+        None
+    };
+
+    let restore_backup = |err: String| {
+        if let Some(backup) = overwrite_backup.as_ref() {
+            let _ = restore_overwrite_backup(&original_path, backup);
+        }
+        TrashRestoreError::Failure(err)
+    };
+
+    if let Some(parent) = original_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| restore_backup(err.to_string()))?;
+    }
+    move_path(trash_path, &original_path, None, &mut |_| {})
+        .map_err(|err| restore_backup(err.to_string()))?;
     let _ = remove_trashinfo(trash_path);
+    if let Some(backup) = overwrite_backup {
+        let _ = cleanup_overwrite_backup(&backup);
+    }
 
     Ok(TrashRecord {
         original_path,
         trash_path: trash_path.to_path_buf(),
     })
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum TrashRestoreError {
+    Conflict(TrashRestoreConflict),
+    Failure(String),
 }
 
 fn permanently_delete_trash_path(trash_path: &Path) -> Result<TrashRecord, String> {
@@ -605,6 +673,12 @@ pub struct TrashRecord {
 pub struct TrashRestoreConflict {
     pub original_path: PathBuf,
     pub trash_path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrashRestoreConflictPolicy {
+    Skip,
+    Replace,
 }
 
 pub fn trash_restore_conflict(trash_path: &Path) -> Result<Option<TrashRestoreConflict>, String> {
@@ -1037,6 +1111,56 @@ fn trash_home() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("Trash")
+}
+
+fn trash_status_empty_at(path: &Path) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| trash_status_empty_from_contents(&contents))
+        .unwrap_or(true)
+}
+
+fn write_trash_status_empty_at(path: &Path, empty: bool) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    fs::write(path, trash_status_contents(empty)).map_err(|err| err.to_string())
+}
+
+fn trash_status_contents(empty: bool) -> String {
+    format!("[Status]\nEmpty={}\n", if empty { "true" } else { "false" })
+}
+
+fn trash_status_empty_from_contents(contents: &str) -> Option<bool> {
+    let mut in_status = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            in_status = line[1..line.len() - 1].trim() == "Status";
+            continue;
+        }
+        if !in_status {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "Empty" {
+            continue;
+        }
+        return match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Some(true),
+            "false" | "0" | "no" => Some(false),
+            _ => None,
+        };
+    }
+    None
 }
 
 fn trashinfo(path: &Path) -> String {
@@ -1803,6 +1927,52 @@ mod tests {
             trash_original_path_from_info("[Trash Info]\nPath=/tmp/%XX.txt\n").unwrap_err(),
             "trash metadata Path contains invalid percent escape"
         );
+    }
+
+    #[test]
+    fn trashrc_status_empty_defaults_and_parses_status_group() {
+        assert_eq!(trash_status_empty_from_contents(""), None);
+        assert_eq!(
+            trash_status_empty_from_contents("[Other]\nEmpty=false\n"),
+            None
+        );
+        assert_eq!(
+            trash_status_empty_from_contents("[Status]\nEmpty=false\n"),
+            Some(false)
+        );
+        assert_eq!(
+            trash_status_empty_from_contents("[Status]\nEmpty=true\n"),
+            Some(true)
+        );
+        assert_eq!(
+            trash_status_empty_from_contents("[Status]\nEmpty=1\n"),
+            Some(true)
+        );
+        assert_eq!(
+            trash_status_empty_from_contents("[Status]\nEmpty=no\n"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn trashrc_status_write_round_trips() {
+        let temp = test_dir("trashrc-status");
+        let path = temp.join("config").join("trashrc");
+
+        assert!(trash_status_empty_at(&path));
+
+        write_trash_status_empty_at(&path, false).unwrap();
+        assert!(!trash_status_empty_at(&path));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[Status]\nEmpty=false\n"
+        );
+
+        write_trash_status_empty_at(&path, true).unwrap();
+        assert!(trash_status_empty_at(&path));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[Status]\nEmpty=true\n");
+
+        let _ = fs::remove_dir_all(temp);
     }
 
     fn test_dir(name: &str) -> PathBuf {

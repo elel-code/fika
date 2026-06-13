@@ -15,6 +15,16 @@ pub(crate) fn format_entry_kind_label(entry: &fika_core::EntryData) -> String {
     }
 }
 
+pub(crate) fn format_entry_detail_label(entry: &fika_core::EntryData) -> String {
+    if let Some(original_path) = &entry.trash_original_path {
+        return fika_core::format_trash_original_location(
+            original_path,
+            entry.trash_deletion_time.as_deref(),
+        );
+    }
+    format_entry_kind_label(entry)
+}
+
 pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::EntryData) -> Option<PathBuf> {
     if entry.is_dir {
         None
@@ -30,7 +40,7 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) path: PathBuf,
     pub(crate) is_dir: bool,
     pub(crate) name: Arc<str>,
-    pub(crate) kind_label: String,
+    pub(crate) detail_label: String,
     pub(crate) thumbnail_path: Option<PathBuf>,
     pub(crate) icon: FileIconSnapshot,
     pub(crate) selected: bool,
@@ -56,6 +66,7 @@ mod tests {
             size_bytes: 12,
             modified_secs: Some(42),
             mime_type: Some(Arc::from("image/jpeg")),
+            mime_magic_checked: true,
             thumbnail_path: Some(thumbnail.clone()),
             trash_original_path: None,
             trash_deletion_time: None,
@@ -67,6 +78,7 @@ mod tests {
             size_bytes: 0,
             modified_secs: Some(42),
             mime_type: None,
+            mime_magic_checked: true,
             thumbnail_path: Some(thumbnail.clone()),
             trash_original_path: None,
             trash_deletion_time: None,
@@ -75,5 +87,27 @@ mod tests {
 
         assert_eq!(visible_item_thumbnail_path(&file), Some(thumbnail));
         assert_eq!(visible_item_thumbnail_path(&dir), None);
+    }
+
+    #[test]
+    fn entry_detail_label_exposes_trash_original_path_and_deletion_time() {
+        let entry = fika_core::EntryData {
+            name: Arc::from("deleted.txt"),
+            name_width_units: 11,
+            size_bytes: 12,
+            modified_secs: Some(42),
+            mime_type: Some(Arc::from("text/plain")),
+            mime_magic_checked: true,
+            thumbnail_path: None,
+            trash_original_path: Some(PathBuf::from("/home/user/Documents/deleted.txt")),
+            trash_deletion_time: Some(Arc::from("2026-06-13T12:30:00")),
+            is_dir: false,
+        };
+
+        assert_eq!(
+            format_entry_detail_label(&entry),
+            "Original: /home/user/Documents - Deleted: 2026-06-13 12:30"
+        );
+        assert_eq!(format_entry_kind_label(&entry), "2026-06-13 12:30");
     }
 }

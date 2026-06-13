@@ -708,6 +708,7 @@ mod tests {
             trash_original_path: None,
             trash_deletion_time: None,
             mime_type: None,
+            mime_magic_checked: true,
             is_dir: false,
         })]);
         let events = vec![DirectoryListerEvent::ListingRefreshed {
@@ -1133,6 +1134,7 @@ mod tests {
                         trash_original_path: None,
                         trash_deletion_time: None,
                         mime_type: None,
+                        mime_magic_checked: true,
                         is_dir: false,
                     })
                 })
