@@ -156,11 +156,7 @@ fn filter_bar_view(
     };
     let case_label = if filter.case_sensitive { "Aa" } else { "aa" };
     let query_empty = filter.query.is_empty();
-    let query = if query_empty {
-        "Filter".to_string()
-    } else {
-        filter.query
-    };
+    let query = filter.query;
     let match_count = filter.match_count;
 
     div()
@@ -196,7 +192,7 @@ fn filter_bar_view(
                 })
                 .bg(rgb(0xffffff))
                 .overflow_hidden()
-                .cursor_pointer()
+                .cursor_text()
                 .on_click(
                     cx.listener(move |this, _event: &gpui::ClickEvent, _window, cx| {
                         this.focus_filter_bar(pane_id);
@@ -206,19 +202,39 @@ fn filter_bar_view(
                 )
                 .child(
                     div()
+                        .flex()
+                        .items_center()
                         .flex_1()
-                        .truncate()
+                        .min_w_0()
+                        .overflow_hidden()
                         .text_sm()
-                        .text_color(if query_empty {
-                            rgb(0x8b95a1)
+                        .child(if filter.focused && query_empty {
+                            filter_input_caret().into_any_element()
                         } else {
-                            rgb(0x111827)
+                            div().into_any_element()
                         })
-                        .child(query),
-                )
-                .when(filter.focused, |input| {
-                    input.child(div().w(px(1.0)).h(px(18.0)).bg(rgb(0x2f6fed)))
-                }),
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_shrink_1()
+                                .truncate()
+                                .text_color(if query_empty {
+                                    rgb(0x8b95a1)
+                                } else {
+                                    rgb(0x111827)
+                                })
+                                .child(if query_empty {
+                                    "Filter".to_string()
+                                } else {
+                                    query
+                                }),
+                        )
+                        .child(if filter.focused && !query_empty {
+                            filter_input_caret().into_any_element()
+                        } else {
+                            div().into_any_element()
+                        }),
+                ),
         )
         .child(
             filter_button(format!("filter-mode-{}", pane_id.0), mode_label).on_click(cx.listener(
@@ -275,6 +291,14 @@ fn filter_button(id: String, label: &'static str) -> Stateful<Div> {
         .hover(|button| button.bg(rgb(0xdbe7fb)))
         .cursor_pointer()
         .child(label)
+}
+
+fn filter_input_caret() -> Div {
+    div()
+        .flex_shrink_0()
+        .w(px(2.0))
+        .h(px(18.0))
+        .bg(rgb(0x2f6fed))
 }
 
 fn location_bar(

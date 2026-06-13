@@ -121,7 +121,7 @@
 - [x] 实现每个 pane 自己的搜索框。
   - 参考：Dolphin 搜索栏（`DolphinSearchBox` / `KUrlNavigator` 中的 filter/search 切换）。
   - 验收：每个 pane 有独立搜索框（inline filter bar），输入实时过滤当前目录条目；支持名称过滤和基本通配符；搜索框清空后恢复完整目录视图；搜索状态按 `PaneId` 隔离，分屏互不影响；激活搜索不影响 selection 和 navigation history。
-  - 已完成：新增 `docs/SEARCH_REFERENCE.md`，记录 Dolphin `FilterBar -> DolphinViewContainer -> DolphinView -> KFileItemModel` 执行流；每个 pane 有独立 inline filter bar，`/` 和 `Ctrl/Secondary+I` 激活；输入实时更新 pane-local `NameFilter`，默认 Glob、大小写不敏感，并支持 Plain Text/Glob 切换和 Match Case；过滤栏 UI 类型已按目录式模块拆到 `src/ui/filter_bar.rs` 和 `src/ui/filter_bar/state.rs`，其中 state 子模块承接 snapshot、pane-local filter state 和 filtered model cache key/entry；过滤在模型投影层生成缓存的 visible model-index 映射，GPUI grid、hit-test、rubber-band、range selection、select-all 和键盘移动都消费过滤后的索引，不在渲染热路径扫描全目录；关闭 filter 清空 query 并释放 filtered model/列宽/status cache；目录 URL 变化按 Dolphin `clearIfUnlocked()` 默认行为清空 query，reload 保留当前过滤；filter 激活不写 pane-local navigation history。
+  - 已完成：新增 `docs/SEARCH_REFERENCE.md`，记录 Dolphin `FilterBar -> DolphinViewContainer -> DolphinView -> KFileItemModel` 执行流；每个 pane 有独立 inline filter bar，`/` 和 `Ctrl/Secondary+I` 激活；输入实时更新 pane-local `NameFilter`，默认 Glob、大小写不敏感，并支持 Plain Text/Glob 切换和 Match Case；过滤栏 UI 类型已按目录式模块拆到 `src/ui/filter_bar.rs` 和 `src/ui/filter_bar/state.rs`，其中 state 子模块承接 snapshot、pane-local filter state 和 filtered model cache key/entry；过滤输入区使用文本鼠标光标，点击聚焦，caret 跟随 query 末尾，空 query 聚焦时 caret 在 placeholder 前，Mode/Case/Close 按钮保持 pointer；过滤在模型投影层生成缓存的 visible model-index 映射，GPUI grid、hit-test、rubber-band、range selection、select-all 和键盘移动都消费过滤后的索引，不在渲染热路径扫描全目录；关闭 filter 清空 query 并释放 filtered model/列宽/status cache；目录 URL 变化按 Dolphin `clearIfUnlocked()` 默认行为清空 query，reload 保留当前过滤；filter 激活不写 pane-local navigation history。
 - [~] 实现 Wayland 下的粘贴/复制操作协议。
   - 参考：Wayland `wl_data_device_manager` / `wl-clipboard` / `smithay-clipboard` 生态。
   - 验收：Ctrl+C 将选中文件路径写入 Wayland 剪贴板（`text/uri-list` 和 `text/plain`）；Ctrl+V 从剪贴板读取文件路径或文本，触发 paste file operation；支持 primary selection（中键粘贴）和 clipboard selection 两种 Wayland data device；拖拽过程中的 data offer 也走同一协议栈。
@@ -135,9 +135,8 @@
 > 子菜单定位和延迟消失参考 `QMenu::popup()`、`QMenu::setHideDelay()` 和 Dolphin 的
 > `DolphinContextMenu::open()` / `DolphinContextMenu::showEvent()`。
 
-- [~] 建立 Dolphin 右键菜单源码执行流参考清单。
-  - 已完成：新增 `docs/CONTEXT_MENU_REFERENCE.md`，记录 `DolphinContextMenu::{addAllActions, addViewportContextMenu, addItemContextMenu, createPasteAction}` 和 `KItemListController` 右键/空白区事件边界；补充 Fika 当前 `ContextMenuSubmenu` 级联定位、延迟消失、Places、Trash 和 Open With 动态菜单映射。
-  - 剩余验收：继续补齐设备和拖拽相关 context menu 执行流。
+- [x] 建立 Dolphin 右键菜单源码执行流参考清单。
+  - 已完成：新增 `docs/CONTEXT_MENU_REFERENCE.md`，记录 `DolphinContextMenu::{addAllActions, addViewportContextMenu, addItemContextMenu, createPasteAction}` 和 `KItemListController` 右键/空白区事件边界；补充 Fika 当前 `ContextMenuSubmenu` 级联定位、延迟消失、Places、Trash、Open With 动态菜单、设备 Places context menu、UDisks2/Solid teardown 映射、Places drag/drop 与 `DragAndDropHelper` 执行流。
 - [~] 实现基础右键菜单（空白区域）。
   - 已完成：pane 空白区域右键弹出 GPUI overlay menu；包含 Create New、Paste、Sort By、View Mode、Select All、Refresh、Properties；Paste 按内部 clipboard 状态启用/禁用；空白菜单会按当前目录 `inode/directory` 目标只加载专用 service menu 目录中的动作并显示图标，不从 application `.desktop Actions=` 生成 service 行；右键必须能映射到真实 viewport 空白点，缺少 viewport origin 或落在滚动条/pane chrome 时不打开空白菜单；终端类入口不再作为内建 `Open Terminal Here` 硬编码项出现，统一来自专用 service menu 文件；Sort By / View Mode 走可复用 `ContextMenuSubmenu` 级联结构；Sort By 已路由到 pane-local `DirectoryModel` 排序，支持 Name、Modified、Size、Ascending、Descending、Folders First 和 Hidden Files Last，并按 Dolphin `preferredSortOrder(role)` 思路在每个 pane 内记录每个排序字段自己的升/降序；Folders First / Hidden Files Last 是 pane-local toggle，分屏后互不影响；root menu 已按 Dolphin-like action grouping 分隔 create、paste、service actions、sort/view、select/refresh 和 properties；root menu 使用鼠标位置作为 anchor 后 clamp 到 viewport 内，不再围绕指针做镜像翻转；context menu layer、root menu 和子菜单都使用 GPUI `occlude()` 作为真实 mouse hitbox，防止 hover/click 穿透到底下 item；菜单或 modal overlay 存在时 file grid 禁用底层 item hover 样式，避免 GPUI hover 状态在 overlay 下继续高亮；点击外部或 Esc 关闭；空白右键不启动 rubber-band；Properties 只读取当前目录自身 metadata，不递归扫描。
   - 当前状态更新：空白菜单首项已改为 Dolphin-like `Create New` 子菜单，子项包含 Folder 和 Text File；菜单根定位使用鼠标点作为 anchor，能放下时保持 top-left 对齐，右/下越界且左/上有空间时按轴翻转到 `anchor - menu_size`，空间不足时才 clamp；context menu layer 在 capture 阶段处理菜单树外鼠标按下并阻断传播，避免点击或 hover 穿透到底层 item。
@@ -322,8 +321,8 @@
 - [x] README 只描述当前 GPUI package。
 - [x] DESIGN 只描述当前 GPUI/core 架构。
 - [x] REFERENCE 路径指向 `src/...`。
-- [ ] 为新增模块新建 Dolphin/cosmic-files 源码参考清单文档：
-  - [~] `docs/CONTEXT_MENU_REFERENCE.md` - Dolphin 右键菜单完整执行流
+- [x] 为新增模块新建 Dolphin/cosmic-files 源码参考清单文档：
+  - [x] `docs/CONTEXT_MENU_REFERENCE.md` - Dolphin 右键菜单完整执行流
   - [x] `docs/DRAG_DROP_REFERENCE.md` - Dolphin 拖拽完整执行流
   - [x] `docs/THUMBNAIL_REFERENCE.md` - Dolphin 缩略图管线和 freedesktop spec
   - [x] `docs/MIME_LAUNCHER_REFERENCE.md` - cosmic-files MIME 识别和 systemd 进程启动

@@ -48,6 +48,10 @@ item-vs-blank event boundaries, and later submenu behavior.
     icon is `window-new`.
   - `setupActions()` constructs the shared `DolphinNewFileMenu`, titles it
     `Create New`, and assigns theme icon `list-add`.
+  - `slotStorageTearDownFromPlacesRequested()` is the main-window side of
+    removable-device teardown requested from Places. It distinguishes teardown
+    requested from the Places panel from external teardown requests and updates
+    the active view after successful storage teardown.
 - `../dolphin/src/kitemviews/kitemlistcontroller.cpp`
   - Right-click cancels active rubber-band selection before menu handling.
   - Blank-region right-click consumes the event and does not create a rubber
@@ -62,6 +66,36 @@ item-vs-blank event boundaries, and later submenu behavior.
     `selectionRectCore()` define the visual and interactive item core.
   - In compact layout, width hints are based on icon size, padding, and required
     text width.
+- `../dolphin/src/panels/places/placespanel.cpp`
+  - `PlacesPanel::slotContextMenuAboutToShow()` customizes the `KFilePlacesView`
+    context menu just before showing it. It reads the model URL and
+    `Solid::Device`, shows `Configure Trash` only for `trash:/`, shows Open in
+    Split View only for valid URLs, and adds panel-level custom actions only
+    when the context click is on empty panel space.
+  - `slotTearDownRequested()` resolves the clicked place through
+    `KFilePlacesModel::deviceForIndex(index).as<Solid::StorageAccess>()`,
+    records the persistent model index being torn down, disconnects the external
+    teardown signal to avoid duplicate requests, and emits
+    `storageTearDownRequested(storageAccess->filePath())`.
+  - `slotTearDownRequestedExternally()` handles teardown initiated outside the
+    Places context menu by emitting `storageTearDownExternallyRequested(...)`.
+  - `slotTearDownDone()` emits `storageTearDownSuccessful()` only for the
+    persistent index that initiated the context-menu teardown and clears the
+    pending teardown index.
+  - `dragMoveEvent()` rejects external drags over non-writable place URLs, but
+    still allows internal Places drags so bookmarks can be reordered. Writable
+    external drags call `DragAndDropHelper::updateDropAction(event, url)`.
+  - `slotUrlsDropped()` calls `DragAndDropHelper::dropUrls(dest, event, parent)`
+    and turns non-cancel KIO job failures into panel error messages.
+- `../dolphin/src/views/draganddrophelper.cpp`
+  - `DragAndDropHelper::dropUrls()` rejects drops back onto their own
+    destination, handles Ark DnD by calling `org.kde.ark.DndExtract` over the
+    session bus, otherwise delegates to `KIO::drop(event, destUrl, flags)`.
+  - `supportsDropping()` allows drop targets that are writable directories,
+    desktop files, or local executable files.
+  - `updateDropAction()` rejects self-drops, accepts remote destinations, and
+    accepts local destinations only when `supportsDropping()` says they can
+    receive the drop.
 
 ## Fika Mapping
 
@@ -219,6 +253,33 @@ item-vs-blank event boundaries, and later submenu behavior.
     `drive-harddisk`, and related fallbacks) in a fixed icon slot; when no
     theme icon exists, the fallback is a small drawn place glyph rather than a
     repeated text marker such as `H`, `Doc`, or `Down`.
+  - Device Places context menus map Dolphin `KFilePlacesModel`/Solid teardown to
+    Fika's UDisks2-backed place model. `ContextMenuTarget::Place` carries
+    `device`, `mounted`, `ejectable`, and `can_power_off`; unmounted device rows
+    disable Open/Open in New Pane/Open in New Window and expose Mount, while
+    mounted device rows expose Unmount plus Eject and Safely Remove only when
+    the core device snapshot reports those capabilities. The rows resolve
+    `media-mount`, `media-eject`, and `drive-removable-media` named icons before
+    fallback markers.
+  - `run_context_menu_action()` routes Mount/Unmount/Eject/Safely Remove through
+    `run_device_place_operation()` with `DevicePlaceOperation::{Mount, Unmount,
+    Eject, SafelyRemove}`. The operation layer lives under
+    `src/core/devices.rs` and re-resolves UDisks2 object paths at execution
+    time, matching Dolphin's practice of asking the Places model/Solid for the
+    current device behind the clicked index rather than treating `/dev/*` paths
+    as navigable directories.
+  - Places drag/drop context behavior is kept separate from context-menu
+    opening. `src/ui/places/sidebar/row/dnd.rs` mirrors Dolphin
+    `PlacesPanel::dragMoveEvent()`: external file drags onto mounted writable
+    place rows update the active drop action and show a row highlight, drags
+    onto unmounted/non-droppable rows clear the previous target and switch to a
+    not-allowed cursor, and internal `PlaceDrag` remains accepted for bookmark
+    reorder even when the row itself is not a file-transfer destination.
+    `src/ui/places/sidebar/section/dnd.rs` handles section-boundary insert
+    targets, and `src/ui/places/drag.rs` owns the row-edge vs row-middle drop
+    zone calculation. Drop execution then reuses the same core transfer path as
+    file-grid drops or writes a user bookmark via the Places user-bookmark
+    helpers.
   - Trash context menus follow Dolphin's trash branch: blank trash view menus
     expose Empty Trash, trash item menus expose Restore to Former Location and
     Delete Permanently, and Restore is enabled only when the trash metadata can
