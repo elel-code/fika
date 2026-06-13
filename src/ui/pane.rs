@@ -34,7 +34,11 @@ pub(crate) struct PaneProps {
     pub file_grid_mode: FileGridMode,
 }
 
-pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful<Div> {
+pub(crate) fn pane_view(
+    props: PaneProps,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
     let PaneProps {
         snapshot,
         file_grid_mode,
@@ -49,6 +53,7 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         status_bar: status_bar_snapshot,
         layout,
         visible_items,
+        scroll_handle,
         view,
         rubber_band,
         drop_target,
@@ -130,11 +135,13 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
                 pane_id,
                 layout,
                 visible_items,
+                scroll_handle,
                 view,
                 rubber_band,
                 drop_target,
                 mode: file_grid_mode,
             },
+            window,
             cx,
         ))
         .child(status_bar(pane_id, visible_width, status_bar_snapshot, cx))

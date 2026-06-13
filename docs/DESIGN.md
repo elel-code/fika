@@ -103,7 +103,7 @@ src/
     item_view/
       scroll_bar.rs              Pane-decoupled item-view horizontal scrollbar
       scroll_bar/
-        state.rs                 Scrollbar geometry, page press and thumb drag math
+        state.rs                 Scrollbar geometry and track/thumb drag math
     location_bar/
       draft.rs                   Editable location draft and caret state
       metrics.rs                 Editable metrics, hit-test, scroll math
@@ -375,8 +375,8 @@ now pane-decoupled:
 - `src/ui/item_view/scroll_bar.rs` owns the GPUI canvas, hitbox and
   pointer-capture lifecycle.
 - `src/ui/item_view/scroll_bar/state.rs` owns track/thumb geometry, Dolphin
-  `font height * 2` wheel delta, QScrollBar-like page press and thumb-drag
-  mapping.
+  `font height * 2` wheel delta, and the same track/thumb drag mapping used by
+  the working Other Application scrollbar.
 
 Wheel input currently writes `ViewState.scroll_x` directly with Dolphin's
 `font height * 2` line step; Ctrl/secondary+wheel remains pane-local zoom.

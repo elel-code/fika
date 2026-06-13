@@ -30,7 +30,8 @@ use fika_core::{ServiceMenuAction, ViewState, home_dir, is_network_root_path, ne
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, IntoElement, ParentElement, Render, ScrollDelta,
-    ScrollStrategy, Styled, Window, WindowBounds, WindowOptions, div, px, rgb, size,
+    ScrollHandle, ScrollStrategy, Styled, Window, WindowBounds, WindowOptions, div, point, px, rgb,
+    size,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
@@ -78,7 +79,6 @@ use ui::filter_bar::{
     filter_source_revision,
 };
 use ui::icons::FileIconCache;
-use ui::item_view::ItemViewScrollDrag;
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSnapshot, PaneSplitterDrag, normalize_pane_ratios,
@@ -144,7 +144,7 @@ pub(crate) struct FikaApp {
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
     loading_panes: HashMap<PaneId, LoadingPaneState>,
-    item_view_scroll_drag: Option<ItemViewScrollDrag>,
+    item_view_scroll_handles: HashMap<PaneId, ScrollHandle>,
     pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
     pane_split_ratios: HashMap<PaneId, f32>,
     pane_row_width: f32,
@@ -216,7 +216,7 @@ impl FikaApp {
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
-            item_view_scroll_drag: None,
+            item_view_scroll_handles: HashMap::new(),
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
             pane_row_width: 0.0,
@@ -484,12 +484,41 @@ impl FikaApp {
         self.compact_column_widths.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
-        self.cancel_item_view_scroll_for_pane(pane_id);
-        if let Some(pane) = self.panes.pane_mut(pane_id) {
-            if reset_scroll {
+        if reset_scroll {
+            if let Some(pane) = self.panes.pane_mut(pane_id) {
                 pane.view.reset_scroll();
             }
+            self.reset_item_view_scroll_for_pane(pane_id);
         }
+    }
+
+    fn item_view_scroll_handle_for_pane(&mut self, pane_id: PaneId) -> ScrollHandle {
+        self.item_view_scroll_handles
+            .entry(pane_id)
+            .or_default()
+            .clone()
+    }
+
+    fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) {
+        let Some(scroll_handle) = self.item_view_scroll_handles.get(&pane_id).cloned() else {
+            return;
+        };
+        let max_scroll = scroll_handle.max_offset();
+        let max_scroll_x = max_scroll.x.as_f32().max(0.0);
+        let scroll_x = (-scroll_handle.offset().x.as_f32()).clamp(0.0, max_scroll_x);
+        let _ = self
+            .panes
+            .set_view_scroll(pane_id, scroll_x, 0.0, max_scroll_x, 0.0);
+    }
+
+    fn reset_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
+        if let Some(scroll_handle) = self.item_view_scroll_handles.get(&pane_id) {
+            scroll_handle.set_offset(point(px(0.0), px(0.0)));
+        }
+    }
+
+    fn remove_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
+        self.item_view_scroll_handles.remove(&pane_id);
     }
 
     fn clear_filter_focus_for_pane(&mut self, pane_id: PaneId) {
@@ -560,6 +589,8 @@ impl FikaApp {
         pane_ids
             .into_iter()
             .filter_map(|pane_id| {
+                self.sync_pane_view_from_item_view_scroll_handle(pane_id);
+                let scroll_handle = self.item_view_scroll_handle_for_pane(pane_id);
                 let filtered_model = self.filtered_model_for_pane(pane_id);
                 let split_ratio = self.pane_split_ratio(pane_id);
                 let projected_viewport_width = self.projected_pane_width(pane_id);
@@ -752,6 +783,7 @@ impl FikaApp {
                     status_bar,
                     layout,
                     visible_items,
+                    scroll_handle,
                     view,
                     rubber_band,
                     drop_target: pane_drop_target,
@@ -1425,7 +1457,7 @@ impl FikaApp {
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.loading_panes.remove(&pane_id);
-        self.cancel_item_view_scroll_for_pane(pane_id);
+        self.remove_item_view_scroll_for_pane(pane_id);
         self.pane_viewport_geometries.remove(&pane_id);
         self.rubber_band_selection_panes.remove(&pane_id);
         self.pane_statuses.remove(&pane_id);
@@ -1478,7 +1510,7 @@ impl FikaApp {
     fn begin_pane_loading_transition(&mut self, pane_id: PaneId) {
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
-        self.cancel_item_view_scroll_for_pane(pane_id);
+        self.reset_item_view_scroll_for_pane(pane_id);
         self.location_edit_metrics.remove(&pane_id);
         if self
             .active_item_drag
@@ -1750,7 +1782,7 @@ impl FikaApp {
             return;
         }
         self.compact_column_widths.remove(&pane_id);
-        self.cancel_item_view_scroll_for_pane(pane_id);
+        self.reset_item_view_scroll_for_pane(pane_id);
         self.set_pane_status(
             pane_id,
             format!(
@@ -1777,7 +1809,7 @@ impl FikaApp {
         };
         if view.zoom_level != previous_level {
             self.compact_column_widths.remove(&pane_id);
-            self.cancel_item_view_scroll_for_pane(pane_id);
+            self.reset_item_view_scroll_for_pane(pane_id);
         }
         self.set_pane_status(
             pane_id,
@@ -2025,9 +2057,6 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
-        if changed {
-            self.cancel_item_view_scroll_for_pane(pane_id);
-        }
         changed
     }
 
@@ -5846,18 +5875,6 @@ impl Render for FikaApp {
             .iter()
             .map(|snapshot| snapshot.id)
             .collect::<Vec<_>>();
-        let item_view_scrollbar_inputs = snapshots
-            .iter()
-            .filter_map(|snapshot| {
-                let geometry = self.pane_viewport_geometries.get(&snapshot.id)?;
-                Some((
-                    snapshot.id,
-                    snapshot.layout.clone(),
-                    snapshot.view.clone(),
-                    geometry.window_rect,
-                ))
-            })
-            .collect::<Vec<_>>();
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
         for (index, snapshot) in snapshots.into_iter().enumerate() {
             let left = snapshot.id;
@@ -5866,6 +5883,7 @@ impl Render for FikaApp {
                     snapshot,
                     file_grid_mode,
                 },
+                window,
                 cx,
             ));
             if let Some(right) = pane_ids.get(index + 1).copied() {
@@ -5883,14 +5901,6 @@ impl Render for FikaApp {
                 context_menu_icon_snapshots(&mut self.file_icons, menu, clipboard_available)
             })
             .unwrap_or_default();
-        let mut item_view_scrollbar_overlays = Vec::with_capacity(item_view_scrollbar_inputs.len());
-        for (pane_id, layout, view, viewport_rect) in item_view_scrollbar_inputs {
-            if let Some(overlay) =
-                ui::item_view::item_view_scrollbar_overlay(pane_id, layout, view, viewport_rect, cx)
-            {
-                item_view_scrollbar_overlays.push(overlay);
-            }
-        }
         let app = cx.weak_entity();
         div()
             .relative()
@@ -5996,7 +6006,6 @@ impl Render for FikaApp {
                             ),
                     ),
             )
-            .children(item_view_scrollbar_overlays)
             .when_some(context_menu, |root, menu| {
                 root.child(context_menu_overlay(
                     menu,
@@ -10846,7 +10855,7 @@ text/plain=viewer.desktop;\n",
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
-            item_view_scroll_drag: None,
+            item_view_scroll_handles: HashMap::new(),
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
             pane_row_width: 0.0,

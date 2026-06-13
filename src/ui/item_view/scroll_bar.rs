@@ -1,414 +1,383 @@
-mod state;
-
-use crate::FikaApp;
-use fika_core::{CompactLayout, PaneId, ViewRect, ViewState};
+use fika_core::PaneId;
 use gpui::prelude::*;
 use gpui::{
-    Bounds, Context, CursorStyle, Hitbox, HitboxBehavior, MouseButton, NavigationDirection,
-    ParentElement, Pixels, Styled, Window, canvas, div, fill, point, px, rgb, rgba, size,
-};
-use state::{
-    ItemViewScrollDragSession, ItemViewScrollMetrics, ItemViewScrollPress, item_view_wheel_delta,
+    App, Bounds, ContentMask, Context, CursorStyle, DispatchPhase, Div, Element, ElementId, Entity,
+    EntityId, GlobalElementId, Hitbox, HitboxBehavior, IntoElement, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Position,
+    ScrollHandle, Size, Stateful, Style, Window, fill, point, px, relative, rgb, rgba, size,
 };
 
-pub(crate) const ITEM_VIEW_SCROLLBAR_HEIGHT: f32 = 12.0;
-const ITEM_VIEW_SCROLLBAR_THUMB_HEIGHT: f32 = 8.0;
+use crate::FikaApp;
+
+const SCROLLBAR_WIDTH: Pixels = px(6.0);
+const SCROLLBAR_PADDING: Pixels = px(4.0);
+const MINIMUM_THUMB_SIZE: Pixels = px(25.0);
+
+pub(crate) fn item_view_scrollbar_container(
+    pane_id: PaneId,
+    scroll_handle: &ScrollHandle,
+    viewport: Stateful<Div>,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) -> Stateful<Div> {
+    let state = window.use_keyed_state(
+        format!("item-view-zed-scrollbar-{}", pane_id.0),
+        cx,
+        |_, cx| ItemViewScrollbarState::new(scroll_handle.clone(), cx.entity_id()),
+    );
+    state.update(cx, |state, _cx| {
+        state.scroll_handle = scroll_handle.clone();
+    });
+
+    viewport
+        .track_scroll(scroll_handle)
+        .overflow_x_scroll()
+        .child(ItemViewScrollbarElement { state })
+}
+
+struct ItemViewScrollbarState {
+    scroll_handle: ScrollHandle,
+    notify_id: EntityId,
+    thumb_state: ThumbState,
+    last_prepaint_state: Option<ScrollbarPrepaintState>,
+}
+
+impl ItemViewScrollbarState {
+    fn new(scroll_handle: ScrollHandle, notify_id: EntityId) -> Self {
+        Self {
+            scroll_handle,
+            notify_id,
+            thumb_state: ThumbState::Inactive,
+            last_prepaint_state: None,
+        }
+    }
+
+    fn set_offset(&self, offset_x: Pixels, cx: &mut App) {
+        let current = self.scroll_handle.offset();
+        self.scroll_handle.set_offset(point(offset_x, current.y));
+        cx.notify(self.notify_id);
+    }
+
+    fn set_thumb_state(&mut self, state: ThumbState, cx: &mut App) {
+        if self.thumb_state != state {
+            self.thumb_state = state;
+            cx.notify(self.notify_id);
+        }
+    }
+
+    fn hit_for_position(&self, position: &Point<Pixels>) -> Option<&ScrollbarLayout> {
+        self.last_prepaint_state
+            .as_ref()
+            .and_then(|state| state.track_hit_for_position(position))
+    }
+
+    fn thumb_for_position(&self, position: &Point<Pixels>) -> Option<&ScrollbarLayout> {
+        self.last_prepaint_state
+            .as_ref()
+            .and_then(|state| state.thumb_for_position(position))
+    }
+
+    fn thumb_layout(&self) -> Option<&ScrollbarLayout> {
+        self.last_prepaint_state
+            .as_ref()
+            .and_then(|state| state.thumb.as_ref())
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ItemViewScrollDrag {
-    pub(crate) pane_id: PaneId,
-    session: ItemViewScrollDragSession,
+enum ThumbState {
+    Inactive,
+    Hover,
+    Dragging(Pixels),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ItemViewScrollPressResult {
-    handled: bool,
-    changed: bool,
-    dragging: bool,
-}
-
-impl ItemViewScrollPressResult {
-    const IGNORED: Self = Self {
-        handled: false,
-        changed: false,
-        dragging: false,
-    };
-
-    fn handled(changed: bool, dragging: bool) -> Self {
-        Self {
-            handled: true,
-            changed,
-            dragging,
-        }
+impl ThumbState {
+    fn is_dragging(self) -> bool {
+        matches!(self, ThumbState::Dragging(_))
     }
 }
 
-pub(crate) fn item_view_scrollbar_overlay(
-    pane_id: PaneId,
-    layout: CompactLayout,
-    view: ViewState,
-    viewport_rect: ViewRect,
-    cx: &mut Context<FikaApp>,
-) -> Option<gpui::AnyElement> {
-    let app = cx.weak_entity();
-    let metrics = ItemViewScrollMetrics::from_extents(
-        layout.content_size().width,
-        viewport_rect.width,
-        view.scroll_x,
-        viewport_rect.width,
-    )?;
-    let wheel_layout = layout.clone();
-    let wheel_view = view.clone();
-    Some(div()
-        .id(format!("item-view-scroll-x-{}", pane_id.0))
-        .absolute()
-        .left(px(viewport_rect.x))
-        .top(px(
-            (viewport_rect.bottom() - ITEM_VIEW_SCROLLBAR_HEIGHT).max(viewport_rect.y),
-        ))
-        .w(px(viewport_rect.width))
-        .h(px(ITEM_VIEW_SCROLLBAR_HEIGHT))
-        .overflow_hidden()
-        .occlude()
-        .cursor_pointer()
-        .on_mouse_down(
-            MouseButton::Navigate(NavigationDirection::Back),
-            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                this.panes.focus(pane_id);
-                this.go_back(pane_id);
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Navigate(NavigationDirection::Forward),
-            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                this.panes.focus(pane_id);
-                this.go_forward(pane_id);
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_scroll_wheel(
-            cx.listener(move |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                handle_item_view_wheel(
-                    this,
-                    pane_id,
-                    event,
-                    window,
-                    &wheel_layout,
-                    &wheel_view,
-                    cx,
-                );
-            }),
-        )
-        .child(
-            canvas(
-                move |bounds, window, _cx| ItemViewScrollBarPaintState {
-                    metrics: ItemViewScrollMetrics::from_extents(
-                        layout.content_size().width,
-                        viewport_rect.width,
-                        view.scroll_x,
-                        bounds.size.width.as_f32(),
-                    )
-                    .or(Some(metrics)),
-                    hitbox: window.insert_hitbox(bounds, HitboxBehavior::BlockMouse),
-                },
-                move |bounds, state, window, cx| {
-                    if let Some(metrics) = state.metrics {
-                        paint_item_view_scrollbar(bounds, metrics, window);
-                    }
-                    register_item_view_scrollbar_handlers(
-                        pane_id,
-                        state.metrics,
-                        bounds,
-                        state.hitbox.clone(),
-                        app.clone(),
-                        window,
-                        cx,
-                    );
-                },
-            )
-            .size_full(),
-        )
-        .into_any_element())
+struct ScrollbarPrepaintState {
+    thumb: Option<ScrollbarLayout>,
 }
 
-struct ItemViewScrollBarPaintState {
-    metrics: Option<ItemViewScrollMetrics>,
-    hitbox: Hitbox,
+impl ScrollbarPrepaintState {
+    fn track_hit_for_position(&self, position: &Point<Pixels>) -> Option<&ScrollbarLayout> {
+        self.thumb
+            .as_ref()
+            .filter(|layout| layout.track_bounds.contains(position))
+    }
+
+    fn thumb_for_position(&self, position: &Point<Pixels>) -> Option<&ScrollbarLayout> {
+        self.thumb
+            .as_ref()
+            .filter(|layout| layout.thumb_bounds.contains(position))
+    }
 }
 
-fn register_item_view_scrollbar_handlers(
-    pane_id: PaneId,
-    metrics: Option<ItemViewScrollMetrics>,
+struct ScrollbarLayout {
+    thumb_bounds: Bounds<Pixels>,
     track_bounds: Bounds<Pixels>,
-    hitbox: Hitbox,
-    app: gpui::WeakEntity<FikaApp>,
-    window: &mut Window,
-    app_cx: &mut gpui::App,
-) {
-    let hitbox_for_down = hitbox.clone();
-    let app_for_down = app.clone();
-    window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, window, cx| {
-        if !phase.capture() || event.button != MouseButton::Left {
-            return;
-        }
-        let Some(metrics) = metrics else {
-            return;
+    cursor_hitbox: Hitbox,
+}
+
+impl ScrollbarLayout {
+    fn compute_click_offset(
+        &self,
+        event_position: Point<Pixels>,
+        max_offset: Point<Pixels>,
+        event_type: ScrollbarMouseEvent,
+    ) -> Pixels {
+        let viewport_size = self.track_bounds.size.width;
+        let thumb_size = self.thumb_bounds.size.width;
+        let thumb_offset = match event_type {
+            ScrollbarMouseEvent::TrackClick => thumb_size / 2.0,
+            ScrollbarMouseEvent::ThumbDrag(thumb_offset) => thumb_offset,
         };
-        let local_x = (event.position.x - track_bounds.origin.x).as_f32();
-        let local_y = (event.position.y - track_bounds.origin.y).as_f32();
-        if !(0.0..=track_bounds.size.width.as_f32()).contains(&local_x)
-            || !(0.0..=track_bounds.size.height.as_f32()).contains(&local_y)
-        {
-            return;
-        }
-        let handled = app_for_down
-            .update(cx, |this, cx| {
-                this.panes.focus(pane_id);
-                let result = this.press_item_view_scrollbar(pane_id, local_x, metrics);
-                if result.changed {
-                    cx.notify();
-                }
-                result
-            })
-            .unwrap_or(ItemViewScrollPressResult::IGNORED);
-        if handled.handled {
-            if handled.dragging {
-                window.capture_pointer(hitbox_for_down.id);
-            }
-            cx.stop_propagation();
-        }
-    });
-
-    let hitbox_for_move = hitbox.clone();
-    let app_for_move = app.clone();
-    window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, cx| {
-        if !phase.capture() || !event.dragging() {
-            return;
-        }
-        let Some(metrics) = metrics else {
-            return;
+        let thumb_start = (event_position.x - self.track_bounds.origin.x - thumb_offset)
+            .clamp(px(0.0), viewport_size - thumb_size);
+        let percentage = if viewport_size > thumb_size {
+            thumb_start / (viewport_size - thumb_size)
+        } else {
+            0.0
         };
-        let local_x = (event.position.x - track_bounds.origin.x).as_f32();
-        let handled = app_for_move
-            .update(cx, |this, cx| {
-                let Some(changed) = this.update_item_view_scroll_drag(pane_id, local_x, metrics)
-                else {
-                    return false;
-                };
-                window.capture_pointer(hitbox_for_move.id);
-                if changed {
-                    cx.notify();
-                }
-                true
-            })
-            .unwrap_or(false);
-        if handled {
-            cx.stop_propagation();
-        }
-    });
 
-    let app_for_up = app.clone();
-    window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
-        if !phase.capture() || event.button != MouseButton::Left {
-            return;
-        }
-        let handled = app_for_up
-            .update(cx, |this, cx| {
-                let handled = this.finish_item_view_scroll_drag(pane_id);
-                if handled {
-                    cx.notify();
-                }
-                handled
-            })
-            .unwrap_or(false);
-        if handled {
-            window.release_pointer();
-            cx.stop_propagation();
-        }
-    });
-
-    window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
-    if app
-        .read_with(app_cx, |this, _cx| {
-            this.item_view_scroll_drag
-                .is_some_and(|drag| drag.pane_id == pane_id)
-        })
-        .unwrap_or(false)
-    {
-        window.set_window_cursor_style(CursorStyle::PointingHand);
+        -max_offset.x * percentage
     }
 }
 
-pub(crate) fn handle_item_view_wheel(
-    app: &mut FikaApp,
-    pane_id: PaneId,
-    event: &gpui::ScrollWheelEvent,
-    window: &mut Window,
-    layout: &CompactLayout,
-    view: &ViewState,
-    cx: &mut Context<FikaApp>,
-) {
-    if wheel_modifiers_request_zoom(event.modifiers) {
-        app.finish_rubber_band(pane_id);
-        app.zoom_pane_from_wheel(pane_id, event.delta);
-        cx.stop_propagation();
-        cx.notify();
-        return;
+enum ScrollbarMouseEvent {
+    TrackClick,
+    ThumbDrag(Pixels),
+}
+
+struct ItemViewScrollbarElement {
+    state: Entity<ItemViewScrollbarState>,
+}
+
+impl Element for ItemViewScrollbarElement {
+    type RequestLayoutState = ();
+    type PrepaintState = Option<ScrollbarPrepaintState>;
+
+    fn id(&self) -> Option<ElementId> {
+        Some(("item-view-zed-scrollbar-element", self.state.entity_id()).into())
     }
 
-    app.finish_rubber_band(pane_id);
-    let delta = item_view_wheel_delta(event.delta, item_view_scroll_single_step(window));
-    let changed = app.scroll_item_view_by_delta(pane_id, layout, view, delta);
-    if changed {
-        cx.notify();
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
     }
-    cx.stop_propagation();
-}
 
-fn item_view_scroll_single_step(window: &Window) -> f32 {
-    window.line_height().as_f32().floor().max(1.0) * 2.0
-}
-
-fn wheel_modifiers_request_zoom(modifiers: gpui::Modifiers) -> bool {
-    modifiers.control || modifiers.secondary()
-}
-
-fn paint_item_view_scrollbar(
-    bounds: Bounds<Pixels>,
-    metrics: ItemViewScrollMetrics,
-    window: &mut Window,
-) {
-    window.paint_quad(fill(bounds, rgba(0x00000000)));
-    let thumb_height = ITEM_VIEW_SCROLLBAR_THUMB_HEIGHT.min(bounds.size.height.as_f32());
-    let thumb_y = ((bounds.size.height.as_f32() - thumb_height) / 2.0).max(0.0);
-    window.paint_quad(
-        fill(
-            Bounds::new(
-                point(
-                    bounds.origin.x + px(metrics.handle_left),
-                    bounds.origin.y + px(thumb_y),
-                ),
-                size(px(metrics.handle_width), px(thumb_height)),
-            ),
-            rgb(0x7a8494),
-        )
-        .corner_radii(px((thumb_height / 2.0).max(1.0))),
-    );
-}
-
-impl FikaApp {
-    fn press_item_view_scrollbar(
+    fn request_layout(
         &mut self,
-        pane_id: PaneId,
-        local_x: f32,
-        metrics: ItemViewScrollMetrics,
-    ) -> ItemViewScrollPressResult {
-        match metrics.press_kind(local_x) {
-            ItemViewScrollPress::None => ItemViewScrollPressResult::IGNORED,
-            ItemViewScrollPress::Thumb => {
-                self.finish_rubber_band(pane_id);
-                self.item_view_scroll_drag = Some(ItemViewScrollDrag {
-                    pane_id,
-                    session: metrics.thumb_drag_session(local_x),
-                });
-                ItemViewScrollPressResult::handled(false, true)
-            }
-            press @ (ItemViewScrollPress::PageBackward | ItemViewScrollPress::PageForward) => {
-                self.finish_rubber_band(pane_id);
-                self.item_view_scroll_drag = None;
-                let Some(scroll_x) = metrics.scroll_x_after_page_press(press) else {
-                    return ItemViewScrollPressResult::IGNORED;
-                };
-                let changed =
-                    self.write_item_view_scroll_x(pane_id, scroll_x, metrics.max_scroll_x);
-                ItemViewScrollPressResult::handled(changed, false)
-            }
-        }
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let style = Style {
+            position: Position::Absolute,
+            inset: Default::default(),
+            size: size(relative(1.0), relative(1.0)).map(Into::into),
+            ..Default::default()
+        };
+        (window.request_layout(style, None, cx), ())
     }
 
-    fn update_item_view_scroll_drag(
+    fn prepaint(
         &mut self,
-        pane_id: PaneId,
-        local_x: f32,
-        metrics: ItemViewScrollMetrics,
-    ) -> Option<bool> {
-        let drag = self.item_view_scroll_drag?;
-        if drag.pane_id != pane_id {
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let state = self.state.read(cx);
+        let max_offset = state.scroll_handle.max_offset();
+        let viewport_bounds = state.scroll_handle.bounds();
+        let viewport_width = viewport_bounds.size.width;
+
+        if max_offset.x <= Pixels::ZERO || viewport_width <= Pixels::ZERO {
             return None;
         }
-        Some(self.write_item_view_scroll_x(
-            pane_id,
-            drag.session.scroll_x_for_local_x(local_x, metrics),
-            metrics.max_scroll_x,
-        ))
+
+        let content_width = viewport_width + max_offset.x;
+        let visible_percentage = viewport_width / content_width;
+        let thumb_width = MINIMUM_THUMB_SIZE.max(viewport_width * visible_percentage);
+        if thumb_width > viewport_width {
+            return None;
+        }
+
+        let current_offset = state
+            .scroll_handle
+            .offset()
+            .x
+            .clamp(-max_offset.x, Pixels::ZERO)
+            .abs();
+        let thumb_start = (current_offset / max_offset.x) * (viewport_width - thumb_width);
+        let track_height = SCROLLBAR_WIDTH + 2.0 * SCROLLBAR_PADDING;
+        let track_bounds = Bounds::new(
+            point(
+                bounds.origin.x,
+                bounds.origin.y + (bounds.size.height - track_height).max(Pixels::ZERO),
+            ),
+            size(bounds.size.width, track_height.min(bounds.size.height)),
+        );
+        let thumb_track = inset_bounds(track_bounds, SCROLLBAR_PADDING);
+        let thumb_bounds = Bounds::new(
+            point(thumb_track.origin.x + thumb_start, thumb_track.origin.y),
+            size(thumb_width.min(thumb_track.size.width), thumb_track.size.height),
+        );
+        let cursor_hitbox = window.insert_hitbox(thumb_track, HitboxBehavior::BlockMouseExceptScroll);
+
+        Some(ScrollbarPrepaintState {
+            thumb: Some(ScrollbarLayout {
+                thumb_bounds,
+                track_bounds: thumb_track,
+                cursor_hitbox,
+            }),
+        })
     }
 
-    fn finish_item_view_scroll_drag(&mut self, pane_id: PaneId) -> bool {
-        if self
-            .item_view_scroll_drag
-            .is_some_and(|drag| drag.pane_id == pane_id)
-        {
-            self.item_view_scroll_drag = None;
-            true
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        prepaint_state: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(prepaint_state) = prepaint_state.take() else {
+            self.state
+                .update(cx, |state, _cx| state.last_prepaint_state = None);
+            return;
+        };
+        let Some(layout) = prepaint_state.thumb.as_ref() else {
+            self.state
+                .update(cx, |state, _cx| state.last_prepaint_state = Some(prepaint_state));
+            return;
+        };
+
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            window.paint_quad(fill(layout.track_bounds, rgba(0x00000000)));
+            let thumb_color = match self.state.read(cx).thumb_state {
+                ThumbState::Dragging(_) => rgb(0x4f5f73),
+                ThumbState::Hover => rgb(0x68778b),
+                ThumbState::Inactive => rgb(0x8792a2),
+            };
+            window.paint_quad(fill(layout.thumb_bounds, thumb_color).corner_radii(Pixels::MAX));
+
+            if self.state.read(cx).thumb_state.is_dragging() {
+                window.set_window_cursor_style(CursorStyle::Arrow);
+            } else {
+                window.set_cursor_style(CursorStyle::Arrow, &layout.cursor_hitbox);
+            }
+        });
+
+        self.state
+            .update(cx, |state, _cx| state.last_prepaint_state = Some(prepaint_state));
+
+        let capture_phase = if self.state.read(cx).thumb_state.is_dragging() {
+            DispatchPhase::Capture
         } else {
-            false
-        }
-    }
-
-    pub(crate) fn cancel_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
-        if self
-            .item_view_scroll_drag
-            .is_some_and(|drag| drag.pane_id == pane_id)
-        {
-            self.item_view_scroll_drag = None;
-        }
-    }
-
-    pub(crate) fn scroll_item_view_by_delta(
-        &mut self,
-        pane_id: PaneId,
-        layout: &CompactLayout,
-        view: &ViewState,
-        delta_x: f32,
-    ) -> bool {
-        let viewport_width = self
-            .panes
-            .pane(pane_id)
-            .map(|pane| pane.view.viewport_width)
-            .unwrap_or(view.viewport_width);
-        let max_scroll_x = (layout.content_size().width - viewport_width)
-            .floor()
-            .max(0.0);
-        if max_scroll_x <= 0.0 {
-            self.cancel_item_view_scroll_for_pane(pane_id);
-            return false;
-        }
-        let previous = self.panes.pane(pane_id).map(|pane| pane.view.scroll_x);
-        let Some(next) = self
-            .panes
-            .scroll_view(pane_id, delta_x, 0.0, max_scroll_x, 0.0)
-        else {
-            return false;
+            DispatchPhase::Bubble
         };
-        previous.is_some_and(|previous| (next.scroll_x - previous).abs() > f32::EPSILON)
-    }
 
-    fn write_item_view_scroll_x(
-        &mut self,
-        pane_id: PaneId,
-        scroll_x: f32,
-        max_scroll_x: f32,
-    ) -> bool {
-        let previous = self.panes.pane(pane_id).map(|pane| pane.view.scroll_x);
-        let Some(next) = self
-            .panes
-            .set_view_scroll(pane_id, scroll_x, 0.0, max_scroll_x, 0.0)
-        else {
-            return false;
-        };
-        previous.is_some_and(|previous| (next.scroll_x - previous).abs() > f32::EPSILON)
+        window.on_mouse_event({
+            let state = self.state.clone();
+            move |event: &MouseDownEvent, phase, _window, cx| {
+                state.update(cx, |state, cx| {
+                    let Some(scrollbar_layout) = (phase == capture_phase
+                        && event.button == MouseButton::Left)
+                        .then(|| state.hit_for_position(&event.position))
+                        .flatten()
+                    else {
+                        return;
+                    };
+
+                    if scrollbar_layout.thumb_bounds.contains(&event.position) {
+                        let offset = event.position.x - scrollbar_layout.thumb_bounds.origin.x;
+                        state.set_thumb_state(ThumbState::Dragging(offset), cx);
+                    } else {
+                        let click_offset = scrollbar_layout.compute_click_offset(
+                            event.position,
+                            state.scroll_handle.max_offset(),
+                            ScrollbarMouseEvent::TrackClick,
+                        );
+                        state.set_offset(click_offset, cx);
+                    }
+                    cx.stop_propagation();
+                });
+            }
+        });
+
+        window.on_mouse_event({
+            let state = self.state.clone();
+            move |event: &MouseMoveEvent, phase, _window, cx| {
+                if phase != capture_phase {
+                    return;
+                }
+
+                let thumb_state = state.read(cx).thumb_state;
+                match thumb_state {
+                    ThumbState::Dragging(drag_offset) if event.dragging() => {
+                        if let Some(scrollbar_layout) = state.read(cx).thumb_layout() {
+                            let drag_offset = scrollbar_layout.compute_click_offset(
+                                event.position,
+                                state.read(cx).scroll_handle.max_offset(),
+                                ScrollbarMouseEvent::ThumbDrag(drag_offset),
+                            );
+                            state.update(cx, |state, cx| state.set_offset(drag_offset, cx));
+                            cx.stop_propagation();
+                        }
+                    }
+                    _ => {
+                        let next_state = if state.read(cx).thumb_for_position(&event.position).is_some()
+                        {
+                            ThumbState::Hover
+                        } else {
+                            ThumbState::Inactive
+                        };
+                        state.update(cx, |state, cx| state.set_thumb_state(next_state, cx));
+                    }
+                }
+            }
+        });
+
+        window.on_mouse_event({
+            let state = self.state.clone();
+            move |event: &MouseUpEvent, phase, _window, cx| {
+                if phase != capture_phase {
+                    return;
+                }
+
+                let next_state = if state.read(cx).thumb_for_position(&event.position).is_some() {
+                    ThumbState::Hover
+                } else {
+                    ThumbState::Inactive
+                };
+                state.update(cx, |state, cx| state.set_thumb_state(next_state, cx));
+            }
+        });
     }
+}
+
+impl IntoElement for ItemViewScrollbarElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+fn inset_bounds(bounds: Bounds<Pixels>, inset: Pixels) -> Bounds<Pixels> {
+    Bounds::new(
+        point(bounds.origin.x + inset, bounds.origin.y + inset),
+        Size {
+            width: (bounds.size.width - 2.0 * inset).max(Pixels::ZERO),
+            height: (bounds.size.height - 2.0 * inset).max(Pixels::ZERO),
+        },
+    )
 }

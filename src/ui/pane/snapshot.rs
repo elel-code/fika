@@ -4,6 +4,7 @@ use crate::ui::filter_bar::FilterBarSnapshot;
 use crate::ui::location_bar::LocationDraftSnapshot;
 use crate::ui::status_bar::StatusBarSnapshot;
 use fika_core::{BreadcrumbSegment, CompactLayout, PaneId, ViewRect, ViewState};
+use gpui::ScrollHandle;
 
 use super::toolbar::PaneToolbarSnapshot;
 
@@ -18,6 +19,7 @@ pub(crate) struct PaneSnapshot {
     pub(crate) status_bar: StatusBarSnapshot,
     pub(crate) layout: CompactLayout,
     pub(crate) visible_items: Vec<VisibleItemSnapshot>,
+    pub(crate) scroll_handle: ScrollHandle,
     pub(crate) view: ViewState,
     pub(crate) rubber_band: Option<ViewRect>,
     pub(crate) drop_target: Option<FileTransferMode>,
