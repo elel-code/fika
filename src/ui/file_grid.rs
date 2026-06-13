@@ -32,7 +32,7 @@ use super::drag_drop::{
     FileTransferMode, ItemDragPayload, file_transfer_mode_for_modifiers,
     refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
-use super::item_view::{handle_item_view_wheel, item_view_horizontal_scrollbar};
+use super::item_view::handle_item_view_wheel;
 use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
@@ -102,8 +102,6 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
     let content_size = layout.content_size();
     let viewport_wheel_layout = layout.clone();
     let viewport_wheel_view = view.clone();
-    let scrollbar_layout = layout.clone();
-    let scrollbar_view = view.clone();
     let item_wheel_layout = Arc::new(layout.clone());
     let item_wheel_view = Arc::new(view.clone());
     let app = cx.weak_entity();
@@ -379,12 +377,6 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                     viewport.child(rubber_band_overlay(rect))
                 }),
         )
-        .child(item_view_horizontal_scrollbar(
-            pane_id,
-            scrollbar_layout,
-            scrollbar_view,
-            cx,
-        ))
 }
 
 fn handle_pane_navigation_mouse_down(

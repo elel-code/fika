@@ -367,8 +367,11 @@ now pane-decoupled:
 
 - `src/ui/pane.rs` only composes pane chrome, file grid and status bar; it does
   not create or size the item-view scrollbar.
-- `src/ui/file_grid.rs` owns the item viewport and mounts
-  `src/ui/item_view/scroll_bar.rs` as an item-view component.
+- `src/ui/file_grid.rs` owns the item viewport and records its visible
+  `PaneViewportGeometry`; it does not mount the scrollbar.
+- `src/main.rs` mounts `src/ui/item_view/scroll_bar.rs` as a root-level
+  absolute overlay using each pane viewport's window rect, so the scrollbar is
+  a sibling of the pane row rather than a pane/file-grid child.
 - `src/ui/item_view/scroll_bar.rs` owns the GPUI canvas, hitbox and
   pointer-capture lifecycle.
 - `src/ui/item_view/scroll_bar/state.rs` owns track/thumb geometry, Dolphin

@@ -5846,6 +5846,18 @@ impl Render for FikaApp {
             .iter()
             .map(|snapshot| snapshot.id)
             .collect::<Vec<_>>();
+        let item_view_scrollbar_inputs = snapshots
+            .iter()
+            .filter_map(|snapshot| {
+                let geometry = self.pane_viewport_geometries.get(&snapshot.id)?;
+                Some((
+                    snapshot.id,
+                    snapshot.layout.clone(),
+                    snapshot.view.clone(),
+                    geometry.window_rect,
+                ))
+            })
+            .collect::<Vec<_>>();
         let mut pane_elements = Vec::with_capacity(pane_ids.len().saturating_mul(2));
         for (index, snapshot) in snapshots.into_iter().enumerate() {
             let left = snapshot.id;
@@ -5871,6 +5883,14 @@ impl Render for FikaApp {
                 context_menu_icon_snapshots(&mut self.file_icons, menu, clipboard_available)
             })
             .unwrap_or_default();
+        let mut item_view_scrollbar_overlays = Vec::with_capacity(item_view_scrollbar_inputs.len());
+        for (pane_id, layout, view, viewport_rect) in item_view_scrollbar_inputs {
+            if let Some(overlay) =
+                ui::item_view::item_view_scrollbar_overlay(pane_id, layout, view, viewport_rect, cx)
+            {
+                item_view_scrollbar_overlays.push(overlay);
+            }
+        }
         let app = cx.weak_entity();
         div()
             .relative()
@@ -5976,6 +5996,7 @@ impl Render for FikaApp {
                             ),
                     ),
             )
+            .children(item_view_scrollbar_overlays)
             .when_some(context_menu, |root, menu| {
                 root.child(context_menu_overlay(
                     menu,

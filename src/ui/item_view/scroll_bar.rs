@@ -1,11 +1,11 @@
 mod state;
 
 use crate::FikaApp;
-use fika_core::{CompactLayout, PaneId, ViewState};
+use fika_core::{CompactLayout, PaneId, ViewRect, ViewState};
 use gpui::prelude::*;
 use gpui::{
-    Bounds, Context, CursorStyle, Div, Hitbox, HitboxBehavior, MouseButton, NavigationDirection,
-    ParentElement, Pixels, Stateful, Styled, Window, canvas, div, fill, point, px, rgb, rgba, size,
+    Bounds, Context, CursorStyle, Hitbox, HitboxBehavior, MouseButton, NavigationDirection,
+    ParentElement, Pixels, Styled, Window, canvas, div, fill, point, px, rgb, rgba, size,
 };
 use state::{
     ItemViewScrollDragSession, ItemViewScrollMetrics, ItemViewScrollPress, item_view_wheel_delta,
@@ -43,33 +43,31 @@ impl ItemViewScrollPressResult {
     }
 }
 
-pub(crate) fn item_view_horizontal_scrollbar(
+pub(crate) fn item_view_scrollbar_overlay(
     pane_id: PaneId,
     layout: CompactLayout,
     view: ViewState,
+    viewport_rect: ViewRect,
     cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
+) -> Option<gpui::AnyElement> {
     let app = cx.weak_entity();
-    let visible = ItemViewScrollMetrics::from_extents(
+    let metrics = ItemViewScrollMetrics::from_extents(
         layout.content_size().width,
-        view.viewport_width,
+        viewport_rect.width,
         view.scroll_x,
-        view.viewport_width,
-    )
-    .is_some();
+        viewport_rect.width,
+    )?;
     let wheel_layout = layout.clone();
     let wheel_view = view.clone();
-    div()
+    Some(div()
         .id(format!("item-view-scroll-x-{}", pane_id.0))
-        .h(px(if visible {
-            ITEM_VIEW_SCROLLBAR_HEIGHT
-        } else {
-            0.0
-        }))
-        .w_full()
-        .max_w_full()
-        .min_w_0()
-        .flex_none()
+        .absolute()
+        .left(px(viewport_rect.x))
+        .top(px(
+            (viewport_rect.bottom() - ITEM_VIEW_SCROLLBAR_HEIGHT).max(viewport_rect.y),
+        ))
+        .w(px(viewport_rect.width))
+        .h(px(ITEM_VIEW_SCROLLBAR_HEIGHT))
         .overflow_hidden()
         .occlude()
         .cursor_pointer()
@@ -104,36 +102,36 @@ pub(crate) fn item_view_horizontal_scrollbar(
                 );
             }),
         )
-        .when(visible, |scrollbar| {
-            scrollbar.child(
-                canvas(
-                    move |bounds, window, _cx| ItemViewScrollBarPaintState {
-                        metrics: ItemViewScrollMetrics::from_extents(
-                            layout.content_size().width,
-                            view.viewport_width,
-                            view.scroll_x,
-                            bounds.size.width.as_f32(),
-                        ),
-                        hitbox: window.insert_hitbox(bounds, HitboxBehavior::BlockMouse),
-                    },
-                    move |bounds, state, window, cx| {
-                        if let Some(metrics) = state.metrics {
-                            paint_item_view_scrollbar(bounds, metrics, window);
-                        }
-                        register_item_view_scrollbar_handlers(
-                            pane_id,
-                            state.metrics,
-                            bounds,
-                            state.hitbox.clone(),
-                            app.clone(),
-                            window,
-                            cx,
-                        );
-                    },
-                )
-                .size_full(),
+        .child(
+            canvas(
+                move |bounds, window, _cx| ItemViewScrollBarPaintState {
+                    metrics: ItemViewScrollMetrics::from_extents(
+                        layout.content_size().width,
+                        viewport_rect.width,
+                        view.scroll_x,
+                        bounds.size.width.as_f32(),
+                    )
+                    .or(Some(metrics)),
+                    hitbox: window.insert_hitbox(bounds, HitboxBehavior::BlockMouse),
+                },
+                move |bounds, state, window, cx| {
+                    if let Some(metrics) = state.metrics {
+                        paint_item_view_scrollbar(bounds, metrics, window);
+                    }
+                    register_item_view_scrollbar_handlers(
+                        pane_id,
+                        state.metrics,
+                        bounds,
+                        state.hitbox.clone(),
+                        app.clone(),
+                        window,
+                        cx,
+                    );
+                },
             )
-        })
+            .size_full(),
+        )
+        .into_any_element())
 }
 
 struct ItemViewScrollBarPaintState {
