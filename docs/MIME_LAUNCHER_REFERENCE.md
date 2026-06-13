@@ -102,11 +102,16 @@ icon selection, Open With menu, and future process launching path.
     selected targets and require an Exec field that accepts multiple paths
     (`%F` or `%U`), so single-file `%f/%u` actions are not offered for batch
     operations.
+  - It parses desktop-file-utils `mimeinfo.cache` `[MIME Cache]` files from
+    XDG applications directories and merges those desktop-id associations into
+    the Open With MIME index. This mirrors the cache-backed association source
+    Dolphin gets through KDE service infrastructure, without treating
+    application desktop actions as service menu actions.
   - It parses `mimeapps.list` `[Default Applications]`,
     `[Added Associations]`, and `[Removed Associations]`.
   - Application ordering mirrors the desktop association stack: default
-    application first, then added associations, then applications that declare
-    the MIME type themselves, with removed associations filtered out.
+    application first, then added associations, then cached or declared MIME
+    applications, with removed associations filtered out.
   - Open With lookup also accepts wildcard desktop MIME declarations such as
     `image/*` before considering parent MIME fallback. If no exact or wildcard
     application is available, text-like child MIME types such as `text/x-rust`,
@@ -130,7 +135,9 @@ icon selection, Open With menu, and future process launching path.
   - The "Other Application..." dialog lists every application from the same
     core desktop application cache, including apps that do not declare the
     current MIME type. Selecting one still builds a `DesktopLaunchPlan` and
-    launches it through `launch_with_systemd_user()`.
+    launches it through `launch_with_systemd_user()`. The GPUI list has an
+    explicit virtual-list height derived from row count and capped to the dialog
+    max height, avoiding zero-height empty-looking lists.
   - When the dialog was opened for a known MIME type, non-default application
     rows expose a Set Default action. The action writes the user
     `mimeapps.list`, updates `[Default Applications]`, adds the application to

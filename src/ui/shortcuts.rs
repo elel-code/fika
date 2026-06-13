@@ -150,6 +150,7 @@ pub(crate) fn zoom_change_for_wheel_delta(delta: ScrollDelta) -> Option<ZoomChan
 pub(crate) enum RenameInputAction {
     Cancel,
     Commit,
+    CommitAndRenameNext,
     Backspace,
     Insert(String),
     Ignore,
@@ -160,6 +161,7 @@ pub(crate) fn rename_input_action(keystroke: &gpui::Keystroke) -> RenameInputAct
         return match keystroke.key.to_ascii_lowercase().as_str() {
             "escape" => RenameInputAction::Cancel,
             "enter" => RenameInputAction::Commit,
+            "tab" => RenameInputAction::CommitAndRenameNext,
             "backspace" => RenameInputAction::Backspace,
             _ => rename_text_input_action(keystroke),
         };

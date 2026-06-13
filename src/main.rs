@@ -159,6 +159,7 @@ pub(crate) struct FikaApp {
     drop_target_stale_generation: u64,
     drop_target_stale_timer_running: bool,
     rename_draft: Option<RenameDraft>,
+    rename_next_after_operation: Option<(PaneId, PathBuf)>,
     location_draft: Option<LocationDraft>,
     location_edit_metrics: HashMap<PaneId, LocationEditMetrics>,
     place_draft: Option<PlaceDraft>,
@@ -233,6 +234,7 @@ impl FikaApp {
             drop_target_stale_generation: 0,
             drop_target_stale_timer_running: false,
             rename_draft: None,
+            rename_next_after_operation: None,
             location_draft: None,
             location_edit_metrics: HashMap::new(),
             place_draft: None,
@@ -2360,6 +2362,13 @@ impl FikaApp {
         {
             self.rename_draft = None;
         }
+        if self
+            .rename_next_after_operation
+            .as_ref()
+            .is_some_and(|(pending_pane_id, _)| *pending_pane_id == pane_id)
+        {
+            self.rename_next_after_operation = None;
+        }
     }
 
     fn clear_location_draft_for_pane(&mut self, pane_id: PaneId) {
@@ -2830,9 +2839,11 @@ impl FikaApp {
         match rename_input_action(keystroke) {
             RenameInputAction::Cancel => {
                 self.rename_draft = None;
+                self.clear_pending_rename_next_for_pane(draft_pane_id);
                 self.set_pane_status(draft_pane_id, "Rename cancelled");
             }
             RenameInputAction::Commit => self.commit_rename_draft(cx),
+            RenameInputAction::CommitAndRenameNext => self.commit_rename_draft_and_rename_next(cx),
             RenameInputAction::Backspace => {
                 if let Some(draft) = &mut self.rename_draft {
                     draft.draft_name.pop();
@@ -2848,6 +2859,27 @@ impl FikaApp {
             RenameInputAction::Ignore => {}
         }
         true
+    }
+
+    fn commit_rename_draft_and_rename_next(&mut self, cx: &mut Context<Self>) {
+        let Some((pane_id, original_path)) = self
+            .rename_draft
+            .as_ref()
+            .map(|draft| (draft.pane_id, draft.original_path.clone()))
+        else {
+            return;
+        };
+        self.rename_next_after_operation = self
+            .next_rename_path_after(pane_id, &original_path)
+            .map(|path| (pane_id, path));
+        self.commit_rename_draft(cx);
+        if self.rename_draft.is_some() {
+            self.clear_pending_rename_next_for_pane(pane_id);
+            return;
+        }
+        if !self.operation_pending {
+            self.start_pending_rename_next_for_pane(pane_id);
+        }
     }
 
     fn commit_rename_draft(&mut self, cx: &mut Context<Self>) {
@@ -2926,6 +2958,45 @@ impl FikaApp {
         self.set_pane_status(pane_id, message);
     }
 
+    fn next_rename_path_after(&self, pane_id: PaneId, path: &Path) -> Option<PathBuf> {
+        let pane = self.panes.pane(pane_id)?;
+        let index = pane.model.index_of_path(path)?;
+        pane.model.path_for_index(index + 1)
+    }
+
+    fn start_rename_for_path(&mut self, pane_id: PaneId, path: PathBuf) -> bool {
+        if !self.panes.select_only(pane_id, path) {
+            return false;
+        }
+        self.start_rename_in_pane(pane_id);
+        self.rename_draft
+            .as_ref()
+            .is_some_and(|draft| draft.pane_id == pane_id)
+    }
+
+    fn start_pending_rename_next_for_pane(&mut self, pane_id: PaneId) {
+        let Some((pending_pane_id, path)) = self.rename_next_after_operation.take() else {
+            return;
+        };
+        if pending_pane_id != pane_id {
+            self.rename_next_after_operation = Some((pending_pane_id, path));
+            return;
+        }
+        if !self.start_rename_for_path(pane_id, path) {
+            self.set_pane_status(pane_id, "Next rename item is no longer available");
+        }
+    }
+
+    fn clear_pending_rename_next_for_pane(&mut self, pane_id: PaneId) {
+        if self
+            .rename_next_after_operation
+            .as_ref()
+            .is_some_and(|(pending_pane_id, _)| *pending_pane_id == pane_id)
+        {
+            self.rename_next_after_operation = None;
+        }
+    }
+
     fn finish_rename_item(&mut self, result: RenameItemResult) {
         match result.result {
             Ok(renamed_path) => {
@@ -2945,8 +3016,10 @@ impl FikaApp {
                     result.pane_id,
                     format!("Renamed to {}", renamed_path.display()),
                 );
+                self.start_pending_rename_next_for_pane(result.pane_id);
             }
             Err(err) => {
+                self.clear_pending_rename_next_for_pane(result.pane_id);
                 self.finish_pane_operation(
                     result.pane_id,
                     format!("Cannot rename {}: {err}", result.original_path.display()),
@@ -9033,6 +9106,10 @@ text/plain=writer.desktop;\n",
             RenameInputAction::Commit
         );
         assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("tab").unwrap()),
+            RenameInputAction::CommitAndRenameNext
+        );
+        assert_eq!(
             rename_input_action(&gpui::Keystroke::parse("backspace").unwrap()),
             RenameInputAction::Backspace
         );
@@ -9048,6 +9125,47 @@ text/plain=writer.desktop;\n",
             rename_input_action(&gpui::Keystroke::parse("secondary-a").unwrap()),
             RenameInputAction::Ignore
         );
+    }
+
+    #[test]
+    fn rename_next_path_follows_current_model_order() {
+        let app = test_app_with_entries(
+            "/tmp/fika-rename-next",
+            &["alpha.txt", "beta.txt", "gamma.txt"],
+        );
+        let pane_id = app.panes.focused().unwrap();
+
+        assert_eq!(
+            app.next_rename_path_after(pane_id, Path::new("/tmp/fika-rename-next/alpha.txt")),
+            Some(PathBuf::from("/tmp/fika-rename-next/beta.txt"))
+        );
+        assert_eq!(
+            app.next_rename_path_after(pane_id, Path::new("/tmp/fika-rename-next/beta.txt")),
+            Some(PathBuf::from("/tmp/fika-rename-next/gamma.txt"))
+        );
+        assert_eq!(
+            app.next_rename_path_after(pane_id, Path::new("/tmp/fika-rename-next/gamma.txt")),
+            None
+        );
+    }
+
+    #[test]
+    fn start_rename_for_path_selects_item_and_creates_draft() {
+        let mut app = test_app_with_entries("/tmp/fika-rename-path", &["alpha.txt", "beta.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(
+            app.start_rename_for_path(pane_id, PathBuf::from("/tmp/fika-rename-path/beta.txt"),)
+        );
+
+        let draft = app.rename_draft.as_ref().unwrap();
+        assert_eq!(draft.pane_id, pane_id);
+        assert_eq!(
+            draft.original_path,
+            PathBuf::from("/tmp/fika-rename-path/beta.txt")
+        );
+        assert_eq!(draft.draft_name, "beta.txt");
+        assert!(draft.error.is_none());
     }
 
     #[test]
@@ -10112,6 +10230,7 @@ text/plain=writer.desktop;\n",
             drop_target_stale_generation: 0,
             drop_target_stale_timer_running: false,
             rename_draft: None,
+            rename_next_after_operation: None,
             location_draft: None,
             location_edit_metrics: HashMap::new(),
             place_draft: None,
