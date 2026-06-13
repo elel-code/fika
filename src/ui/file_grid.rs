@@ -22,8 +22,8 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Pixels,
-    Render, Rgba, ScrollDelta, Stateful, Styled, StyledImage, Window, div, img, px, rgb, rgba,
+    Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Render,
+    Rgba, Stateful, Styled, StyledImage, Window, div, img, px, rgb, rgba,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -101,12 +101,6 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
         mouse_overlay_active,
     } = props;
     let content_size = layout.content_size();
-    let visible_width = view.viewport_width;
-    let visible_height = view.viewport_height;
-    let max_scroll_x = (content_size.width - visible_width).max(0.0);
-    let max_scroll_y = (content_size.height - visible_height).max(0.0);
-    let viewport_wheel_layout = layout.clone();
-    let item_wheel_layout = Arc::new(layout.clone());
     let app = cx.weak_entity();
 
     div()
@@ -159,18 +153,8 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                 .occlude()
                 .overflow_hidden()
                 .on_scroll_wheel(cx.listener(
-                    move |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                        handle_file_grid_wheel(
-                            this,
-                            pane_id,
-                            event,
-                            window,
-                            &viewport_wheel_layout,
-                            visible_width,
-                            max_scroll_x,
-                            max_scroll_y,
-                            cx,
-                        );
+                    move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
+                        handle_file_grid_wheel(this, pane_id, event, cx);
                     },
                 ))
                 .on_mouse_down(
@@ -367,19 +351,11 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                         .top(px(-view.scroll_y.round()))
                         .w(px(content_size.width))
                         .h(px(content_size.height))
-                        .children(visible_items.into_iter().map(|item| {
-                            item_tile(
-                                pane_id,
-                                item,
-                                mode,
-                                mouse_overlay_active,
-                                item_wheel_layout.clone(),
-                                visible_width,
-                                max_scroll_x,
-                                max_scroll_y,
-                                cx,
-                            )
-                        })),
+                        .children(
+                            visible_items.into_iter().map(|item| {
+                                item_tile(pane_id, item, mode, mouse_overlay_active, cx)
+                            }),
+                        ),
                 )
                 .when_some(rubber_band, |viewport, rect| {
                     viewport.child(rubber_band_overlay(rect))
@@ -403,66 +379,14 @@ pub(crate) fn handle_file_grid_wheel(
     app: &mut FikaApp,
     pane_id: PaneId,
     event: &gpui::ScrollWheelEvent,
-    window: &mut Window,
-    layout: &CompactLayout,
-    visible_width: f32,
-    max_scroll_x: f32,
-    max_scroll_y: f32,
     cx: &mut Context<FikaApp>,
 ) {
-    if wheel_modifiers_request_zoom(event.modifiers) {
+    if event.modifiers.control || event.modifiers.secondary() {
         app.finish_rubber_band(pane_id);
         app.zoom_pane_from_wheel(pane_id, event.delta);
         cx.stop_propagation();
         cx.notify();
-        return;
     }
-
-    app.finish_rubber_band(pane_id);
-    let horizontal_delta =
-        horizontal_wheel_scroll_delta(event.delta, window.line_height(), layout, visible_width);
-    app.scroll_pane_smooth(
-        pane_id,
-        horizontal_delta,
-        0.0,
-        max_scroll_x,
-        max_scroll_y,
-        cx,
-    );
-    cx.stop_propagation();
-}
-
-fn wheel_modifiers_request_zoom(modifiers: gpui::Modifiers) -> bool {
-    modifiers.control || modifiers.secondary()
-}
-
-fn horizontal_wheel_scroll_delta(
-    delta: ScrollDelta,
-    line_height: Pixels,
-    layout: &CompactLayout,
-    visible_width: f32,
-) -> f32 {
-    match delta {
-        ScrollDelta::Pixels(delta) => -(delta.x.as_f32() + delta.y.as_f32()),
-        ScrollDelta::Lines(delta) => {
-            let step = compact_wheel_line_step(layout, visible_width, line_height);
-            -(delta.x + delta.y) * step
-        }
-    }
-}
-
-fn compact_wheel_line_step(layout: &CompactLayout, visible_width: f32, line_height: Pixels) -> f32 {
-    let line_height = line_height.as_f32().max(1.0);
-    let content_width = layout.content_size().width.max(0.0);
-    let average_column_width = if layout.column_count() > 0 {
-        content_width / layout.column_count() as f32
-    } else {
-        line_height * 8.0
-    };
-    let pane_step_cap = (visible_width.max(1.0) * 0.72).max(line_height * 4.0);
-    (average_column_width / 3.0)
-        .clamp(line_height * 3.0, pane_step_cap)
-        .round()
 }
 
 fn handle_item_mouse_down(
@@ -542,10 +466,6 @@ fn item_tile(
     item: VisibleItemSnapshot,
     mode: FileGridMode,
     mouse_overlay_active: bool,
-    wheel_layout: Arc<CompactLayout>,
-    visible_width: f32,
-    max_scroll_x: f32,
-    max_scroll_y: f32,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let id = format!("item-slot-{}-{}", pane_id.0, item.slot_id);
@@ -603,18 +523,8 @@ fn item_tile(
                 })
                 .cursor_pointer()
                 .on_scroll_wheel(cx.listener(
-                    move |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                        handle_file_grid_wheel(
-                            this,
-                            pane_id,
-                            event,
-                            window,
-                            &wheel_layout,
-                            visible_width,
-                            max_scroll_x,
-                            max_scroll_y,
-                            cx,
-                        );
+                    move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
+                        handle_file_grid_wheel(this, pane_id, event, cx);
                     },
                 ))
                 .on_mouse_down(
@@ -1226,12 +1136,9 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        FileGridMode, drag_preview_label, horizontal_wheel_scroll_delta,
-        item_mouse_down_opens_directory, normalized_text_range, rename_text_layout,
-        wheel_modifiers_request_zoom,
+        FileGridMode, drag_preview_label, item_mouse_down_opens_directory, normalized_text_range,
+        rename_text_layout,
     };
-    use fika_core::{CompactLayout, CompactLayoutOptions};
-    use gpui::{Modifiers, ScrollDelta, point, px};
 
     #[test]
     fn drag_preview_uses_selection_count_only_for_selected_items() {
@@ -1263,47 +1170,6 @@ mod tests {
         let compact = rename_text_layout(12.0);
         assert_eq!(compact.name_height, 12.0);
         assert_eq!(compact.helper_height, 0.0);
-    }
-
-    #[test]
-    fn wheel_lines_scroll_by_column_scaled_steps() {
-        let layout = CompactLayout::new(
-            120,
-            CompactLayoutOptions {
-                viewport_width: 240.0,
-                viewport_height: 240.0,
-                ..CompactLayoutOptions::default()
-            },
-        );
-
-        let line_delta = horizontal_wheel_scroll_delta(
-            ScrollDelta::Lines(point(0.0, -3.0)),
-            px(16.0),
-            &layout,
-            240.0,
-        );
-        let precise_delta = horizontal_wheel_scroll_delta(
-            ScrollDelta::Pixels(point(px(0.0), px(-32.0))),
-            px(16.0),
-            &layout,
-            240.0,
-        );
-
-        assert!(
-            line_delta > 140.0,
-            "line wheel events should move by compact-view columns, not text lines"
-        );
-        assert_eq!(precise_delta, 32.0);
-    }
-
-    #[test]
-    fn wheel_zoom_accepts_control_or_secondary_modifier() {
-        assert!(wheel_modifiers_request_zoom(Modifiers::secondary_key()));
-        assert!(wheel_modifiers_request_zoom(Modifiers {
-            control: true,
-            ..Modifiers::none()
-        }));
-        assert!(!wheel_modifiers_request_zoom(Modifiers::none()));
     }
 
     #[test]

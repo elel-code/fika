@@ -80,7 +80,6 @@ src/
     properties_dialog.rs         Properties dialog
     rename.rs                    Inline rename
     rubber_band.rs               Rubber-band selection
-    scrollbar.rs                 Horizontal scrollbar entry point
     shortcuts.rs                 Keyboard shortcut classification
     status_bar.rs                Status bar
     place_draft.rs               Places Add/Edit draft
@@ -117,10 +116,6 @@ src/
       metrics.rs                 Rename caret hit-test and text inset metrics
     rubber_band/
       state.rs                   Rubber-band drag payload and rect projection
-    scrollbar/
-      drag.rs                    Pane-local scrollbar drag state and app routing
-      element.rs                 GPUI scrollbar element, hitbox and drag handlers
-      geometry.rs                Scrollbar bounds, hit-test and scroll mapping
     status_bar/
       state.rs                   Snapshot, space info cache, progress handle
       summary.rs                 Pane selection/model summary formatting
@@ -360,33 +355,24 @@ line: only the stable name row receives the text-field border/background,
 selection highlight and caret, while the kind/error/extension-warning helper
 text stays in the existing helper row below it.
 
-#### Scrollbar (`src/ui/scrollbar.rs` + `src/ui/scrollbar/*`)
+#### Pane Scrolling
 
-The horizontal scrollbar is isolated behind the `src/ui/scrollbar.rs` entry
-module:
+All pane horizontal scrollbar implementations have been deleted. There is no
+`src/ui/scrollbar.rs`, no `src/ui/item_view_container`, no cached track, no
+pane-shell scrollbar slot, no `FikaApp` pane scrollbar drag/smooth state, and no
+core `HorizontalScrollBarLayout` API. The next implementation must be written as
+a new Dolphin `KItemListContainer` / `KItemListView` aligned component.
 
-- `scrollbar/geometry.rs` owns track normalization, window/local hit-testing
-  and handle-to-scroll mapping.
-- `scrollbar/drag.rs` owns `ActiveScrollBarDrag` and pane-local
-  begin/update/finish routing on `FikaApp`.
-- `scrollbar/element.rs` owns the GPUI scrollbar element, handle painting,
-  prepaint hitbox insertion, cached-track publication and paint-phase
-  down/move/up handlers.
-- The canvas inserts a prepaint `HitboxBehavior::BlockMouse` hitbox for the
-  actual rendered track and converts those bounds to a window-space track rect.
-  Prepaint publishes that rect as the pane-local current scrollbar track.
-- The canvas registers capture-phase mouse down/move/up handlers during paint.
-  Left down starts from that frame's live window-space track rect only when the
-  pointer is inside the measured 12px strip and no modal mouse overlay is
-  active. Move events are routed by pane-local active drag state, not GPUI DnD
-  or GPUI pointer capture, and update scroll from the original window-space
-  track rect even after the pointer leaves the strip. This avoids stale hitbox
-  capture after scroll changes trigger a redraw and recreate the canvas hitbox.
-- `src/ui/file_grid.rs` no longer creates or owns the scrollbar slot. It only
-  renders the item viewport and item interactions. `src/ui/pane.rs` owns the
-  scrollbar slot as a direct pane-shell sibling below the file-grid viewport,
-  keeping wheel and navigation side-button routing outside the item/blank-area
-  event tree.
+`src/ui/file_grid.rs` currently renders only the item viewport and item
+interactions. It keeps Ctrl/secondary+wheel routed to pane-local zoom, but does
+not retain the removed pane scrollbar/value/smooth wheel path.
+
+#### Scrolling
+
+Pane scrolling is being rebuilt to match Dolphin's `KItemListContainer` /
+`KItemListView` split. The pane UI scrollbar/value/smooth path is currently
+absent after the deletion pass. The next pass must reintroduce it from the
+Dolphin container model instead of reusing the deleted implementation.
 
 #### Location Bar (`src/ui/location_bar.rs`)
 

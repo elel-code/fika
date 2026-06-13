@@ -23,10 +23,9 @@ use gpui::{
 use super::drag_drop::{
     file_transfer_mode_for_modifiers, refresh_active_drag_cursor_for_transfer_mode,
 };
-use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid, handle_file_grid_wheel};
+use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
 use super::filter_bar::FilterBarSnapshot;
 use super::location_bar::LocationDraftSnapshot;
-use super::scrollbar::{SCROLLBAR_MIN_HANDLE_WIDTH, SCROLLBAR_THICKNESS, horizontal_scroll_bar};
 use super::status_bar::status_bar;
 use toolbar::pane_toolbar_buttons;
 
@@ -58,17 +57,6 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         focused,
     } = snapshot;
     let visible_width = view.viewport_width;
-    let content_size = layout.content_size();
-    let max_scroll_x = (content_size.width - visible_width).max(0.0);
-    let max_scroll_y = (content_size.height - view.viewport_height).max(0.0);
-    let scroll_bar_visible = layout
-        .horizontal_scroll_bar(
-            visible_width,
-            SCROLLBAR_THICKNESS,
-            SCROLLBAR_MIN_HANDLE_WIDTH,
-        )
-        .is_some();
-    let scrollbar_layout = layout.clone();
     let border = if focused {
         rgb(0x2f6fed)
     } else {
@@ -152,73 +140,7 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
             },
             cx,
         ))
-        .when(scroll_bar_visible, |pane| {
-            pane.child(pane_horizontal_scrollbar(
-                pane_id,
-                scrollbar_layout,
-                visible_width,
-                max_scroll_x,
-                max_scroll_y,
-                mouse_overlay_active,
-                cx,
-            ))
-        })
         .child(status_bar(pane_id, visible_width, status_bar_snapshot, cx))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn pane_horizontal_scrollbar(
-    pane_id: fika_core::PaneId,
-    layout: fika_core::CompactLayout,
-    visible_width: f32,
-    max_scroll_x: f32,
-    max_scroll_y: f32,
-    mouse_overlay_active: bool,
-    cx: &mut Context<FikaApp>,
-) -> Stateful<Div> {
-    div()
-        .id(format!("pane-scrollbar-x-slot-{}", pane_id.0))
-        .h(px(SCROLLBAR_THICKNESS))
-        .w_full()
-        .max_w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .overflow_hidden()
-        .occlude()
-        .on_mouse_down(
-            MouseButton::Navigate(NavigationDirection::Back),
-            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                this.panes.focus(pane_id);
-                this.go_back(pane_id);
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Navigate(NavigationDirection::Forward),
-            cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
-                this.panes.focus(pane_id);
-                this.go_forward(pane_id);
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-        .on_scroll_wheel(
-            cx.listener(move |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                handle_file_grid_wheel(
-                    this,
-                    pane_id,
-                    event,
-                    window,
-                    &layout,
-                    visible_width,
-                    max_scroll_x,
-                    max_scroll_y,
-                    cx,
-                );
-            }),
-        )
-        .child(horizontal_scroll_bar(pane_id, mouse_overlay_active, cx))
 }
 
 fn filter_bar_view(

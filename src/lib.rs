@@ -114,6 +114,6 @@ pub use core::thumbnails::{
     thumbnail_uri_for_path,
 };
 pub use core::view::{
-    CompactColumnMetrics, CompactLayout, CompactLayoutOptions, HorizontalScrollBarLayout,
-    ItemLayout, RangeSelection, ViewPoint, ViewRect, ViewSize, horizontal_scroll_bar_layout,
+    CompactColumnMetrics, CompactLayout, CompactLayoutOptions, ItemLayout, RangeSelection,
+    ViewPoint, ViewRect, ViewSize,
 };

@@ -14,6 +14,5 @@ pub(crate) mod places;
 pub(crate) mod properties_dialog;
 pub(crate) mod rename;
 pub(crate) mod rubber_band;
-pub(crate) mod scrollbar;
 pub(crate) mod shortcuts;
 pub(crate) mod status_bar;

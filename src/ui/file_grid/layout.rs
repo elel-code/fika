@@ -38,16 +38,6 @@ pub(crate) struct CompactColumnWidthCacheEntry {
 impl CompactColumnWidthCache {
     const MAX_CACHED_LAYOUTS: usize = 4;
 
-    #[cfg(test)]
-    pub(crate) fn metrics_for_model(
-        &mut self,
-        model: &fika_core::DirectoryModel,
-        rows_per_column: usize,
-        options: CompactLayoutOptions,
-    ) -> CompactColumnMetrics {
-        self.metrics_for_model_view(model, None, 0, rows_per_column, options, None)
-    }
-
     pub(crate) fn metrics_for_model_with_text_override(
         &mut self,
         model: &fika_core::DirectoryModel,
