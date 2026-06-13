@@ -1,6 +1,6 @@
 # Pane Scrollbar Drag Analysis
 
-Status: obsolete after the 2026-06-13 deletion and rewrite pass.
+Status: obsolete after the 2026-06-13 deletion and pane-decoupling pass.
 
 The previous pane scrollbar implementation has been removed completely:
 
@@ -11,6 +11,7 @@ The previous pane scrollbar implementation has been removed completely:
 - `src/ui/item_view_container.rs`
 - `src/ui/item_view_container/*`
 - `FikaApp` item-view scrollbar drag and smooth-scroll state
+- `src/core/scroll.rs`
 - core `HorizontalScrollBarLayout` / `horizontal_scroll_bar_layout`
 - old pane scrollbar and UI smooth-scroll tests
 
@@ -18,8 +19,14 @@ The earlier drag-freeze analysis pointed to stale GPUI canvas state, cached
 track geometry, and app-side smooth-scroll tick routing. Those code paths no
 longer exist.
 
-The current replacement is a new Dolphin `KItemListContainer` / `KItemListView`
-aligned component under `src/ui/item_view_container.rs` and
-`src/ui/item_view_container/*`. It must continue to be evaluated against
-Dolphin's container/value/smooth-scroller behavior, not against the removed
-implementation.
+The current replacement starts from a pane-decoupled component:
+
+- `src/ui/item_view.rs`
+- `src/ui/item_view/scroll_bar.rs`
+
+`src/ui/pane.rs` no longer creates or sizes the item-view scrollbar. The file
+grid mounts it beside the viewport, and the drag lifecycle follows the same
+paint-phase hitbox and pointer-capture pattern used by the working Other
+Application chooser scrollbar. Smooth/kinetic scrolling was deleted with the
+broken pane path and must be rebuilt only after the basic independent scrollbar
+is verified.

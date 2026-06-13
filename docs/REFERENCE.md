@@ -68,7 +68,7 @@
 | `KDirLister` | `src/core/directory.rs` |
 | `KFileItemModel` | `src/core/model.rs` |
 | `KItemListView` | layout in `src/core/view.rs`, rendering in `src/ui/file_grid.rs` |
-| `KItemListSmoothScroller` | `src/core/scroll.rs` |
+| `KItemListSmoothScroller` | pending rebuild; deleted broken `src/core/scroll.rs` path |
 | `KDirectoryListerCache` | `src/core/cache.rs` |
 | `KItemListCreatorBase` (slot reuse) | `src/ui/file_grid/slots.rs` |
 | `KItemListSizeHintResolver` (column width) | `src/ui/file_grid/layout.rs` |

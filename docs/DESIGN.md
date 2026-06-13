@@ -100,11 +100,8 @@ src/
       state.rs                   Filter snapshot and filtered model cache
     icons/
       cache.rs                   FileIconCache, MIME candidate, theme resolution
-    item_view_container/
-      gesture.rs                 Viewport wheel TouchPhase kinetic gesture state
-      scroll_offset.rs           Dolphin scrollOffset value and track math
-      scrollbar.rs               GPUI container-owned horizontal scrollbar
-      smooth.rs                  Dolphin smooth scroll tick and retargeting
+    item_view/
+      scroll_bar.rs              Pane-decoupled item-view horizontal scrollbar
     location_bar/
       draft.rs                   Editable location draft and caret state
       metrics.rs                 Editable metrics, hit-test, scroll math
@@ -362,35 +359,22 @@ text stays in the existing helper row below it.
 
 #### Pane Scrolling
 
-The previous `src/ui/scrollbar.rs` implementation and the first
-`src/ui/item_view_container` prototype were both deleted before the current
-rewrite. The active pane scrolling path is now a fresh Dolphin
-`KItemListContainer` / `KItemListView` aligned layer:
+The previous `src/ui/scrollbar.rs`, `src/ui/item_view_container/*` and
+`src/core/scroll.rs` paths were deleted. The active compact-view scroll path is
+now pane-decoupled:
 
-- `src/ui/item_view_container/scroll_offset.rs` owns the horizontal
-  `scrollOffset` value model: `pageStep = view.width`,
-  `maximum = maximumScrollOffset - view.width`, and
-  `singleStep = font height * 2`.
-- `src/ui/item_view_container/scrollbar.rs` owns the GPUI horizontal scrollbar
-  slot below the clipped file-grid viewport. Track/thumb geometry is derived
-  from the actual visible GPUI bounds on paint.
-- `src/ui/item_view_container/smooth.rs` owns the pane-local smooth wheel tick
-  and Dolphin `scrollContentsBy()` retargeting.
+- `src/ui/pane.rs` only composes pane chrome, file grid and status bar; it does
+  not create or size the item-view scrollbar.
+- `src/ui/file_grid.rs` owns the item viewport and mounts
+  `src/ui/item_view/scroll_bar.rs` as an item-view component.
+- `src/ui/item_view/scroll_bar.rs` derives track/thumb geometry from the actual
+  GPUI paint bounds and uses the same hitbox/pointer-capture drag lifecycle as
+  the working Other Application chooser scrollbar.
 
-No core `HorizontalScrollBarLayout` API or cached scrollbar track remains.
-`src/ui/file_grid.rs` renders the item viewport and forwards ordinary wheel
-events to the container; Ctrl/secondary+wheel remains pane-local zoom.
-
-#### Scrolling
-
-Pane scrolling is being rebuilt to match Dolphin's `KItemListContainer` /
-`KItemListView` split. The current pass has reintroduced the horizontal compact
-scroll path from the container model: scrollbar page press and thumb drag write
-`ViewState.scroll_x` immediately, while ordinary wheel events go through the
-container smooth scroller. GPUI wheel `TouchPhase` sequences on the viewport are
-tracked separately from the scrollbar and start kinetic scrolling on
-`TouchPhase::Ended`, matching Dolphin's separation between viewport `QScroller`
-and scrollbar lifecycle.
+Wheel input currently writes `ViewState.scroll_x` directly with Dolphin's
+`font height * 2` line step; Ctrl/secondary+wheel remains pane-local zoom.
+Smooth/kinetic scrolling is intentionally absent after the deletion pass and
+must be rebuilt only on top of the independent item-view component.
 
 #### Location Bar (`src/ui/location_bar.rs`)
 

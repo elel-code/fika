@@ -25,7 +25,6 @@ use super::drag_drop::{
 };
 use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
 use super::filter_bar::FilterBarSnapshot;
-use super::item_view_container::{ItemViewScrollOffsetBar, horizontal_scrollbar};
 use super::location_bar::LocationDraftSnapshot;
 use super::status_bar::status_bar;
 use toolbar::pane_toolbar_buttons;
@@ -33,14 +32,12 @@ use toolbar::pane_toolbar_buttons;
 pub(crate) struct PaneProps {
     pub snapshot: PaneSnapshot,
     pub file_grid_mode: FileGridMode,
-    pub mouse_overlay_active: bool,
 }
 
 pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful<Div> {
     let PaneProps {
         snapshot,
         file_grid_mode,
-        mouse_overlay_active,
     } = props;
     let PaneSnapshot {
         id: pane_id,
@@ -58,9 +55,6 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         focused,
     } = snapshot;
     let visible_width = view.viewport_width;
-    let scroll_offset_bar = ItemViewScrollOffsetBar::from_layout(&layout, &view);
-    let scrollbar_layout = layout.clone();
-    let scrollbar_view = view.clone();
     let border = if focused {
         rgb(0x2f6fed)
     } else {
@@ -143,16 +137,6 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
             },
             cx,
         ))
-        .when_some(scroll_offset_bar, |pane, bar| {
-            pane.child(horizontal_scrollbar(
-                pane_id,
-                scrollbar_layout,
-                scrollbar_view,
-                bar,
-                mouse_overlay_active,
-                cx,
-            ))
-        })
         .child(status_bar(pane_id, visible_width, status_bar_snapshot, cx))
 }
 

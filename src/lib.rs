@@ -101,10 +101,6 @@ pub use core::places::{
     save_user_places, user_places_xbel,
 };
 pub use core::privilege::{HelperBus, run_dbus_service};
-pub use core::scroll::{
-    SMOOTH_SCROLL_DURATION, SMOOTH_SCROLL_FRAME, ScrollAdvance, ScrollBounds, ScrollDragTracker,
-    SmoothScroll,
-};
 pub use core::thumbnails::{
     ThumbnailCacheHit, ThumbnailCachePaths, ThumbnailMetadata, ThumbnailRequest,
     ThumbnailRequestPriority, ThumbnailRequestQueue, ThumbnailSize, cached_thumbnail_for_path,

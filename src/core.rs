@@ -17,6 +17,5 @@ pub mod operations;
 pub mod pane;
 pub mod places;
 pub mod privilege;
-pub mod scroll;
 pub mod thumbnails;
 pub mod view;
