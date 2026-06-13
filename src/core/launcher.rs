@@ -119,6 +119,11 @@ pub struct MimeAppsList {
     pub removed_associations: HashMap<String, Vec<String>>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MimeInfoCache {
+    pub associations: HashMap<String, Vec<String>>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MimeApplicationCache {
     apps: Vec<DesktopApplication>,
@@ -315,12 +320,22 @@ impl MimeApplicationCache {
     pub fn load() -> Self {
         let applications = load_desktop_applications();
         let service_menus = load_desktop_service_menus();
+        let mimeinfo_caches = mimeinfo_cache_paths()
+            .into_iter()
+            .filter_map(|path| fs::read_to_string(path).ok())
+            .map(|contents| parse_mimeinfo_cache(&contents))
+            .collect::<Vec<_>>();
         let lists = mimeapps_list_paths()
             .into_iter()
             .filter_map(|path| fs::read_to_string(path).ok())
             .map(|contents| parse_mimeapps_list(&contents))
             .collect::<Vec<_>>();
-        Self::from_applications_service_menus_and_mimeapps(applications, service_menus, &lists)
+        Self::from_applications_service_menus_mimeinfo_and_mimeapps(
+            applications,
+            service_menus,
+            &mimeinfo_caches,
+            &lists,
+        )
     }
 
     pub fn shared() -> &'static Self {
@@ -339,9 +354,31 @@ impl MimeApplicationCache {
         Self::from_applications_service_menus_and_mimeapps(apps, Vec::new(), lists)
     }
 
+    pub fn from_applications_mimeinfo_and_mimeapps(
+        apps: Vec<DesktopApplication>,
+        mimeinfo_caches: &[MimeInfoCache],
+        lists: &[MimeAppsList],
+    ) -> Self {
+        Self::from_applications_service_menus_mimeinfo_and_mimeapps(
+            apps,
+            Vec::new(),
+            mimeinfo_caches,
+            lists,
+        )
+    }
+
     pub fn from_applications_service_menus_and_mimeapps(
+        apps: Vec<DesktopApplication>,
+        service_menus: Vec<DesktopServiceMenu>,
+        lists: &[MimeAppsList],
+    ) -> Self {
+        Self::from_applications_service_menus_mimeinfo_and_mimeapps(apps, service_menus, &[], lists)
+    }
+
+    pub fn from_applications_service_menus_mimeinfo_and_mimeapps(
         mut apps: Vec<DesktopApplication>,
         mut service_menus: Vec<DesktopServiceMenu>,
+        mimeinfo_caches: &[MimeInfoCache],
         lists: &[MimeAppsList],
     ) -> Self {
         apps.sort_by(desktop_application_cmp);
@@ -351,6 +388,7 @@ impl MimeApplicationCache {
         for app in apps {
             cache.insert_application(app);
         }
+        cache.apply_mimeinfo_caches(mimeinfo_caches);
         cache.apply_mimeapps_lists(lists);
         cache
     }
@@ -489,6 +527,16 @@ impl MimeApplicationCache {
         self.apps.push(app);
     }
 
+    fn apply_mimeinfo_caches(&mut self, caches: &[MimeInfoCache]) {
+        for cache in caches {
+            for (mime, desktop_ids) in &cache.associations {
+                for desktop_id in desktop_ids {
+                    self.append_mime_application(mime, desktop_id);
+                }
+            }
+        }
+    }
+
     fn apply_mimeapps_lists(&mut self, lists: &[MimeAppsList]) {
         let mut removed_by_mime: HashMap<String, HashSet<String>> = HashMap::new();
         for list in lists {
@@ -547,6 +595,18 @@ impl MimeApplicationCache {
         let indexes = self.apps_by_mime.entry(mime.to_string()).or_default();
         indexes.retain(|existing| *existing != index);
         indexes.insert(0, index);
+    }
+
+    fn append_mime_application(&mut self, mime: &str, desktop_id: &str) -> bool {
+        let Some(index) = self.application_index(desktop_id) else {
+            return false;
+        };
+        let indexes = self.apps_by_mime.entry(mime.to_string()).or_default();
+        if indexes.contains(&index) {
+            return false;
+        }
+        indexes.push(index);
+        true
     }
 
     fn insert_added_mime_application(
@@ -798,6 +858,33 @@ pub fn parse_mimeapps_list(contents: &str) -> MimeAppsList {
         }
     }
     list
+}
+
+pub fn parse_mimeinfo_cache(contents: &str) -> MimeInfoCache {
+    let mut cache = MimeInfoCache::default();
+    let mut section = "";
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            section = &line[1..line.len() - 1];
+            continue;
+        }
+        if section != "MIME Cache" {
+            continue;
+        }
+        let Some((mime, value)) = line.split_once('=') else {
+            continue;
+        };
+        let apps = desktop_list(value);
+        if apps.is_empty() {
+            continue;
+        }
+        append_mimeapps(&mut cache.associations, mime, apps);
+    }
+    cache
 }
 
 pub fn default_mimeapps_list_path() -> PathBuf {
@@ -1357,6 +1444,14 @@ fn desktop_service_menu_dirs() -> Vec<PathBuf> {
         push_service_menu_roots(&mut dirs, data_dir);
     }
     dirs
+}
+
+fn mimeinfo_cache_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for applications_dir in desktop_application_dirs() {
+        push_unique_path(&mut paths, applications_dir.join("mimeinfo.cache"));
+    }
+    paths
 }
 
 fn push_service_menu_roots(dirs: &mut Vec<PathBuf>, root: PathBuf) {
@@ -2631,6 +2726,88 @@ text/plain=text-editor.desktop;\n",
             .collect::<Vec<_>>();
 
         assert_eq!(names, vec!["Viewer".to_string(), "Writer".to_string()]);
+    }
+
+    #[test]
+    fn parse_mimeinfo_cache_reads_mime_cache_section() {
+        let cache = parse_mimeinfo_cache(
+            "\
+[Other]\n\
+text/plain=ignored.desktop;\n\
+[MIME Cache]\n\
+text/plain=viewer.desktop;writer.desktop;\n\
+inode/directory=file-manager.desktop;\n",
+        );
+
+        assert_eq!(
+            cache.associations.get("text/plain"),
+            Some(&vec![
+                "viewer.desktop".to_string(),
+                "writer.desktop".to_string()
+            ])
+        );
+        assert_eq!(
+            cache.associations.get("inode/directory"),
+            Some(&vec!["file-manager.desktop".to_string()])
+        );
+        assert!(!cache.associations.contains_key("Other"));
+    }
+
+    #[test]
+    fn mime_application_cache_uses_mimeinfo_cache_associations() {
+        let apps = vec![
+            desktop_app("writer.desktop", "Writer", &[]),
+            desktop_app("viewer.desktop", "Viewer", &[]),
+        ];
+        let cache_file = parse_mimeinfo_cache(
+            "\
+[MIME Cache]\n\
+text/plain=viewer.desktop;writer.desktop;\n",
+        );
+
+        let cache =
+            MimeApplicationCache::from_applications_mimeinfo_and_mimeapps(apps, &[cache_file], &[]);
+        let names = cache
+            .applications_for_mime("text/plain")
+            .into_iter()
+            .map(|app| app.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Viewer".to_string(), "Writer".to_string()]);
+    }
+
+    #[test]
+    fn mimeapps_list_overrides_mimeinfo_cache_associations() {
+        let apps = vec![
+            desktop_app("writer.desktop", "Writer", &[]),
+            desktop_app("viewer.desktop", "Viewer", &[]),
+        ];
+        let cache_file = parse_mimeinfo_cache(
+            "\
+[MIME Cache]\n\
+text/plain=viewer.desktop;writer.desktop;\n",
+        );
+        let list = parse_mimeapps_list(
+            "\
+[Default Applications]\n\
+text/plain=writer.desktop;\n\
+[Removed Associations]\n\
+text/plain=viewer.desktop;\n",
+        );
+
+        let cache = MimeApplicationCache::from_applications_mimeinfo_and_mimeapps(
+            apps,
+            &[cache_file],
+            &[list],
+        );
+        let apps = cache.applications_for_mime("text/plain");
+
+        assert_eq!(
+            apps.iter()
+                .map(|app| (app.name.as_str(), app.is_default))
+                .collect::<Vec<_>>(),
+            vec![("Writer", true)]
+        );
     }
 
     #[test]

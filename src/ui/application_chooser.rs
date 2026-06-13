@@ -81,6 +81,12 @@ pub(crate) fn application_chooser_visible_icon_snapshots(
     snapshots
 }
 
+pub(crate) fn application_chooser_list_height(application_count: usize) -> f32 {
+    (application_count as f32 * APPLICATION_CHOOSER_ROW_HEIGHT)
+        .min(APPLICATION_CHOOSER_LIST_MAX_HEIGHT)
+        .max(APPLICATION_CHOOSER_ROW_HEIGHT)
+}
+
 pub(crate) fn application_chooser_overlay(
     chooser: ApplicationChooserState,
     cx: &mut Context<FikaApp>,
@@ -99,6 +105,7 @@ pub(crate) fn application_chooser_overlay(
     let can_set_default = chooser.mime_type.is_some();
     let applications = Arc::new(chooser.applications);
     let application_count = applications.len();
+    let list_height = application_chooser_list_height(application_count);
     let scroll_handle = chooser.scroll_handle.clone();
 
     div()
@@ -213,7 +220,7 @@ pub(crate) fn application_chooser_overlay(
                         })
                     })
                     .w_full()
-                    .max_h(px(APPLICATION_CHOOSER_LIST_MAX_HEIGHT))
+                    .h(px(list_height))
                     .track_scroll(&scroll_handle),
                 ),
         )

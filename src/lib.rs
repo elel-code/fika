@@ -50,12 +50,13 @@ pub use core::file_ops;
 pub use core::filter::{FilteredModel, NameFilter, NameFilterMode};
 pub use core::launcher::{
     DesktopAction, DesktopApplication, DesktopLaunchCommand, DesktopLaunchPlan, DesktopServiceMenu,
-    LauncherError, MimeApplication, MimeApplicationCache, MimeAppsList, NewWindowLaunchResult,
-    OpenWithLaunchResult, ServiceMenuAction, ServiceMenuLaunchResult, ServiceMenuPriority,
-    ServiceMenuTarget, SystemdLaunchResult, SystemdLaunchUnit, ark_compress_launch_plan,
-    ark_extract_here_launch_plan, ark_extract_to_launch_plan, current_executable_launch_plan,
-    default_mimeapps_list_path, launch_with_systemd_user, parse_mimeapps_list,
-    service_menu_target_label, set_default_mime_application, set_default_mime_application_at,
+    LauncherError, MimeApplication, MimeApplicationCache, MimeAppsList, MimeInfoCache,
+    NewWindowLaunchResult, OpenWithLaunchResult, ServiceMenuAction, ServiceMenuLaunchResult,
+    ServiceMenuPriority, ServiceMenuTarget, SystemdLaunchResult, SystemdLaunchUnit,
+    ark_compress_launch_plan, ark_extract_here_launch_plan, ark_extract_to_launch_plan,
+    current_executable_launch_plan, default_mimeapps_list_path, launch_with_systemd_user,
+    parse_mimeapps_list, parse_mimeinfo_cache, service_menu_target_label,
+    set_default_mime_application, set_default_mime_application_at,
     set_default_mime_application_in_contents, systemd_launch_unit_name,
     systemd_units_for_launch_plan, terminal_launch_plan_for_directory,
 };

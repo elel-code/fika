@@ -37,6 +37,7 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) selection_count: usize,
     pub(crate) drop_target: Option<FileTransferMode>,
     pub(crate) draft_name: Option<String>,
+    pub(crate) draft_error: Option<String>,
 }
 
 #[cfg(test)]

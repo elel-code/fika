@@ -633,6 +633,9 @@ impl FikaApp {
                             let draft_name = rename_draft
                                 .filter(|draft| draft.original_path == path)
                                 .map(|draft| draft.draft_name.clone());
+                            let draft_error = rename_draft
+                                .filter(|draft| draft.original_path == path)
+                                .and_then(|draft| draft.error.clone());
                             Some((
                                 item_layout,
                                 entry.id,
@@ -645,6 +648,7 @@ impl FikaApp {
                                 selected,
                                 drop_target,
                                 draft_name,
+                                draft_error,
                             ))
                         })
                         .collect::<Vec<_>>();
@@ -669,7 +673,7 @@ impl FikaApp {
                 };
                 let visible_ids = visible_data
                     .iter()
-                    .map(|(_, item_id, _, _, _, _, _, _, _, _, _)| *item_id);
+                    .map(|(_, item_id, _, _, _, _, _, _, _, _, _, _)| *item_id);
                 let slot_by_item_id = self
                     .visible_item_slots
                     .entry(pane_id)
@@ -690,6 +694,7 @@ impl FikaApp {
                             selected,
                             drop_target,
                             draft_name,
+                            draft_error,
                         )| {
                             let slot_id = slot_by_item_id.get(&item_id).copied()?;
                             let icon = self.file_icons.icon_for(
@@ -711,6 +716,7 @@ impl FikaApp {
                                 selection_count,
                                 drop_target,
                                 draft_name,
+                                draft_error,
                             })
                         },
                     )
@@ -2804,6 +2810,7 @@ impl FikaApp {
             pane_id,
             original_path: original_path.clone(),
             draft_name: name.to_string(),
+            error: None,
         });
         self.set_pane_status(pane_id, format!("Renaming {name}"));
     }
@@ -2829,11 +2836,13 @@ impl FikaApp {
             RenameInputAction::Backspace => {
                 if let Some(draft) = &mut self.rename_draft {
                     draft.draft_name.pop();
+                    draft.error = None;
                 }
             }
             RenameInputAction::Insert(text) => {
                 if let Some(draft) = &mut self.rename_draft {
                     draft.draft_name.push_str(&text);
+                    draft.error = None;
                 }
             }
             RenameInputAction::Ignore => {}
@@ -2842,34 +2851,48 @@ impl FikaApp {
     }
 
     fn commit_rename_draft(&mut self, cx: &mut Context<Self>) {
-        let Some(draft_pane_id) = self.rename_draft.as_ref().map(|draft| draft.pane_id) else {
+        let Some((draft_pane_id, original_path, new_name)) =
+            self.rename_draft.as_ref().map(|draft| {
+                (
+                    draft.pane_id,
+                    draft.original_path.clone(),
+                    draft.draft_name.trim().to_string(),
+                )
+            })
+        else {
             return;
         };
         if self.operation_pending {
             self.set_pane_status(draft_pane_id, "File operation already running");
             return;
         }
-        let Some(draft) = self.rename_draft.take() else {
-            return;
-        };
-        let new_name = draft.draft_name.trim().to_string();
         if new_name.is_empty() {
-            self.set_pane_status(draft.pane_id, "Name cannot be empty");
+            self.set_rename_draft_error(draft_pane_id, "Name cannot be empty");
             return;
         }
-        if draft
-            .original_path
+        if original_path
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name == new_name)
         {
-            let _ = self
-                .panes
-                .select_only(draft.pane_id, draft.original_path.clone());
-            self.set_pane_status(draft.pane_id, "Rename unchanged");
+            self.rename_draft = None;
+            let _ = self.panes.select_only(draft_pane_id, original_path.clone());
+            self.set_pane_status(draft_pane_id, "Rename unchanged");
+            return;
+        }
+        let Some(parent) = original_path.parent() else {
+            self.set_rename_draft_error(draft_pane_id, "Item has no parent folder");
+            return;
+        };
+        let destination = parent.join(&new_name);
+        if destination != original_path && file_ops::path_exists(&destination) {
+            self.set_rename_draft_error(draft_pane_id, "An item with that name already exists");
             return;
         }
 
+        let Some(draft) = self.rename_draft.take() else {
+            return;
+        };
         self.begin_pane_operation(
             draft.pane_id,
             format!("Renaming {}", draft.original_path.display()),
@@ -2891,6 +2914,16 @@ impl FikaApp {
             },
         )
         .detach();
+    }
+
+    fn set_rename_draft_error(&mut self, pane_id: PaneId, message: impl Into<String>) {
+        let message = message.into();
+        if let Some(draft) = &mut self.rename_draft
+            && draft.pane_id == pane_id
+        {
+            draft.error = Some(message.clone());
+        }
+        self.set_pane_status(pane_id, message);
     }
 
     fn finish_rename_item(&mut self, result: RenameItemResult) {
@@ -7076,6 +7109,22 @@ mod tests {
         let writer = snapshots.get(&1).unwrap();
         assert_eq!(writer.icon_name, "application-x-executable");
         assert_eq!(writer.fallback_marker, "WR");
+    }
+
+    #[test]
+    fn application_chooser_list_height_is_stable_for_virtualized_rows() {
+        assert_eq!(
+            ui::application_chooser::application_chooser_list_height(0),
+            44.0
+        );
+        assert_eq!(
+            ui::application_chooser::application_chooser_list_height(3),
+            132.0
+        );
+        assert_eq!(
+            ui::application_chooser::application_chooser_list_height(100),
+            480.0
+        );
     }
 
     #[test]

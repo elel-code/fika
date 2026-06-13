@@ -922,6 +922,7 @@ fn item_tile(
                     item.layout,
                     renaming,
                     selected,
+                    item.draft_error.as_deref(),
                 )),
         )
 }
@@ -1064,9 +1065,11 @@ fn text_view(
     layout: ItemLayout,
     renaming: bool,
     selected: bool,
+    rename_error: Option<&str>,
 ) -> Div {
     let visual = layout.visual_rect;
     let text = layout.text_rect;
+    let helper_text = rename_error.unwrap_or(kind_label);
     div()
         .absolute()
         .left(px(text.x - visual.x))
@@ -1076,7 +1079,11 @@ fn text_view(
         .when(renaming, |name| {
             name.border_1()
                 .rounded_md()
-                .border_color(rgb(0x2f6fed))
+                .border_color(if rename_error.is_some() {
+                    rgb(0xdc2626)
+                } else {
+                    rgb(0x2f6fed)
+                })
                 .bg(rgb(0xffffff))
                 .px_1()
         })
@@ -1094,9 +1101,13 @@ fn text_view(
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x6b7280))
+                .text_color(if rename_error.is_some() {
+                    rgb(0xdc2626)
+                } else {
+                    rgb(0x6b7280)
+                })
                 .truncate()
-                .child(kind_label.to_string()),
+                .child(helper_text.to_string()),
         )
 }
 
