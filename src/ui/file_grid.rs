@@ -32,6 +32,7 @@ use super::drag_drop::{
     FileTransferMode, ItemDragPayload, file_transfer_mode_for_modifiers,
     refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
+use super::item_view_container::handle_item_view_container_wheel;
 use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
@@ -50,7 +51,6 @@ pub(crate) struct FileGridProps {
     pub(crate) rubber_band: Option<ViewRect>,
     pub(crate) drop_target: Option<FileTransferMode>,
     pub(crate) mode: FileGridMode,
-    pub(crate) mouse_overlay_active: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -98,9 +98,12 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
         rubber_band,
         drop_target,
         mode,
-        mouse_overlay_active,
     } = props;
     let content_size = layout.content_size();
+    let viewport_wheel_layout = layout.clone();
+    let viewport_wheel_view = view.clone();
+    let item_wheel_layout = Arc::new(layout.clone());
+    let item_wheel_view = Arc::new(view.clone());
     let app = cx.weak_entity();
 
     div()
@@ -153,8 +156,16 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                 .occlude()
                 .overflow_hidden()
                 .on_scroll_wheel(cx.listener(
-                    move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
-                        handle_file_grid_wheel(this, pane_id, event, cx);
+                    move |this, event: &gpui::ScrollWheelEvent, window, cx| {
+                        handle_file_grid_wheel(
+                            this,
+                            pane_id,
+                            event,
+                            window,
+                            &viewport_wheel_layout,
+                            &viewport_wheel_view,
+                            cx,
+                        );
                     },
                 ))
                 .on_mouse_down(
@@ -351,11 +362,16 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                         .top(px(-view.scroll_y.round()))
                         .w(px(content_size.width))
                         .h(px(content_size.height))
-                        .children(
-                            visible_items.into_iter().map(|item| {
-                                item_tile(pane_id, item, mode, mouse_overlay_active, cx)
-                            }),
-                        ),
+                        .children(visible_items.into_iter().map(|item| {
+                            item_tile(
+                                pane_id,
+                                item,
+                                mode,
+                                item_wheel_layout.clone(),
+                                item_wheel_view.clone(),
+                                cx,
+                            )
+                        })),
                 )
                 .when_some(rubber_band, |viewport, rect| {
                     viewport.child(rubber_band_overlay(rect))
@@ -379,14 +395,12 @@ pub(crate) fn handle_file_grid_wheel(
     app: &mut FikaApp,
     pane_id: PaneId,
     event: &gpui::ScrollWheelEvent,
+    window: &mut Window,
+    layout: &CompactLayout,
+    view: &ViewState,
     cx: &mut Context<FikaApp>,
 ) {
-    if event.modifiers.control || event.modifiers.secondary() {
-        app.finish_rubber_band(pane_id);
-        app.zoom_pane_from_wheel(pane_id, event.delta);
-        cx.stop_propagation();
-        cx.notify();
-    }
+    handle_item_view_container_wheel(app, pane_id, event, window, layout, view, cx);
 }
 
 fn handle_item_mouse_down(
@@ -465,7 +479,8 @@ fn item_tile(
     pane_id: PaneId,
     item: VisibleItemSnapshot,
     mode: FileGridMode,
-    mouse_overlay_active: bool,
+    wheel_layout: Arc<CompactLayout>,
+    wheel_view: Arc<ViewState>,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let id = format!("item-slot-{}-{}", pane_id.0, item.slot_id);
@@ -511,20 +526,21 @@ fn item_tile(
                 .w(px(visual.width))
                 .h(px(visual.height))
                 .rounded_md()
-                .border_1()
-                .border_color(item_tile_border_color(selected, drop_target))
                 .bg(item_tile_background(selected, drop_target))
                 .when(drop_target.is_some(), |tile| tile.shadow_md())
                 .occlude()
-                .when(!mouse_overlay_active, |tile| {
-                    tile.hover(move |tile| {
-                        tile.bg(item_tile_hover_background(selected, drop_target))
-                    })
-                })
                 .cursor_pointer()
                 .on_scroll_wheel(cx.listener(
-                    move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
-                        handle_file_grid_wheel(this, pane_id, event, cx);
+                    move |this, event: &gpui::ScrollWheelEvent, window, cx| {
+                        handle_file_grid_wheel(
+                            this,
+                            pane_id,
+                            event,
+                            window,
+                            &wheel_layout,
+                            &wheel_view,
+                            cx,
+                        );
                     },
                 ))
                 .on_mouse_down(
@@ -805,26 +821,6 @@ fn item_tile_background(selected: bool, drop_target: Option<FileTransferMode>) -
     }
 }
 
-fn item_tile_border_color(selected: bool, drop_target: Option<FileTransferMode>) -> Rgba {
-    if let Some(mode) = drop_target {
-        drop_target_border_color(mode)
-    } else if selected {
-        rgb(0xbfdbfe)
-    } else {
-        rgba(0x00000000)
-    }
-}
-
-fn item_tile_hover_background(selected: bool, drop_target: Option<FileTransferMode>) -> Rgba {
-    if let Some(mode) = drop_target {
-        drop_target_item_hover_background(mode)
-    } else if selected {
-        rgb(0xdbeafe)
-    } else {
-        rgb(0xf1f5f9)
-    }
-}
-
 fn drop_target_viewport_background(mode: FileTransferMode) -> Rgba {
     match mode {
         FileTransferMode::Copy => rgba(0x16a34a24),
@@ -838,22 +834,6 @@ fn drop_target_item_background(mode: FileTransferMode) -> Rgba {
         FileTransferMode::Copy => rgba(0x16a34a4a),
         FileTransferMode::Move => rgba(0xd977064a),
         FileTransferMode::Link => rgba(0x7c3aed4a),
-    }
-}
-
-fn drop_target_item_hover_background(mode: FileTransferMode) -> Rgba {
-    match mode {
-        FileTransferMode::Copy => rgba(0x16a34a66),
-        FileTransferMode::Move => rgba(0xd9770666),
-        FileTransferMode::Link => rgba(0x7c3aed66),
-    }
-}
-
-fn drop_target_border_color(mode: FileTransferMode) -> Rgba {
-    match mode {
-        FileTransferMode::Copy => rgb(0x16a34a),
-        FileTransferMode::Move => rgb(0xd97706),
-        FileTransferMode::Link => rgb(0x7c3aed),
     }
 }
 

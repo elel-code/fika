@@ -7,6 +7,7 @@ pub(crate) mod drag_drop;
 pub(crate) mod file_grid;
 pub(crate) mod filter_bar;
 pub(crate) mod icons;
+pub(crate) mod item_view_container;
 pub(crate) mod location_bar;
 pub(crate) mod pane;
 pub(crate) mod place_draft;

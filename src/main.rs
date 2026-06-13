@@ -78,6 +78,7 @@ use ui::filter_bar::{
     filter_source_revision,
 };
 use ui::icons::FileIconCache;
+use ui::item_view_container::{ItemViewScrollBarDrag, ItemViewSmoothScroll, ItemViewWheelGesture};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSnapshot, PaneSplitterDrag, normalize_pane_ratios,
@@ -143,6 +144,10 @@ pub(crate) struct FikaApp {
     space_info: SpaceInfoCache,
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
     loading_panes: HashMap<PaneId, LoadingPaneState>,
+    item_view_container_scroll_drag: Option<ItemViewScrollBarDrag>,
+    item_view_container_wheel_gestures: HashMap<PaneId, ItemViewWheelGesture>,
+    item_view_container_smooth_scrolls: HashMap<PaneId, ItemViewSmoothScroll>,
+    item_view_container_smooth_tick_running: bool,
     pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
     pane_split_ratios: HashMap<PaneId, f32>,
     pane_row_width: f32,
@@ -214,6 +219,10 @@ impl FikaApp {
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
+            item_view_container_scroll_drag: None,
+            item_view_container_wheel_gestures: HashMap::new(),
+            item_view_container_smooth_scrolls: HashMap::new(),
+            item_view_container_smooth_tick_running: false,
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
             pane_row_width: 0.0,
@@ -481,6 +490,7 @@ impl FikaApp {
         self.compact_column_widths.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.status_summaries.remove(&pane_id);
+        self.cancel_item_view_container_scroll_for_pane(pane_id);
         if let Some(pane) = self.panes.pane_mut(pane_id) {
             if reset_scroll {
                 pane.view.reset_scroll();
@@ -1421,6 +1431,7 @@ impl FikaApp {
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.loading_panes.remove(&pane_id);
+        self.cancel_item_view_container_scroll_for_pane(pane_id);
         self.pane_viewport_geometries.remove(&pane_id);
         self.rubber_band_selection_panes.remove(&pane_id);
         self.pane_statuses.remove(&pane_id);
@@ -1473,6 +1484,7 @@ impl FikaApp {
     fn begin_pane_loading_transition(&mut self, pane_id: PaneId) {
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
+        self.cancel_item_view_container_scroll_for_pane(pane_id);
         self.location_edit_metrics.remove(&pane_id);
         if self
             .active_item_drag
@@ -1744,6 +1756,7 @@ impl FikaApp {
             return;
         }
         self.compact_column_widths.remove(&pane_id);
+        self.cancel_item_view_container_scroll_for_pane(pane_id);
         self.set_pane_status(
             pane_id,
             format!(
@@ -1770,6 +1783,7 @@ impl FikaApp {
         };
         if view.zoom_level != previous_level {
             self.compact_column_widths.remove(&pane_id);
+            self.cancel_item_view_container_scroll_for_pane(pane_id);
         }
         self.set_pane_status(
             pane_id,
@@ -2017,6 +2031,9 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
+        if changed {
+            self.cancel_item_view_container_scroll_for_pane(pane_id);
+        }
         changed
     }
 
@@ -6012,6 +6029,7 @@ fn main() {
 mod tests {
     use super::*;
     use fika_core::ServiceMenuPriority;
+    use ui::item_view_container::ItemViewScrollOffsetBar;
 
     #[test]
     fn active_place_prefers_longest_path_prefix() {
@@ -10694,6 +10712,159 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn item_view_container_scroll_delta_uses_live_pane_offset() {
+        let mut app =
+            test_app_with_entries("/tmp/fika-item-view-container-scroll-live", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let bar = ItemViewScrollOffsetBar::from_extents(1000.0, 200.0, 0.0, 30.0).unwrap();
+        app.panes
+            .set_view_scroll(pane_id, 300.0, 0.0, bar.maximum, 0.0)
+            .unwrap();
+
+        assert!(app.scroll_item_view_container_by_delta(pane_id, bar, 60.0));
+
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 360.0);
+    }
+
+    #[test]
+    fn item_view_container_drag_clears_on_viewport_bounds_change() {
+        let mut app =
+            test_app_with_entries("/tmp/fika-item-view-container-scroll-clear", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let bar = ItemViewScrollOffsetBar::from_extents(1000.0, 200.0, 0.0, 30.0).unwrap();
+        let track = bar.track(200.0, 12.0).unwrap();
+        let result = app.begin_item_view_scrollbar_press(
+            pane_id,
+            bar,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 12.0,
+            },
+            gpui::point(px(track.thumb_rect.x + 2.0), px(6.0)),
+        );
+        assert!(result.handled);
+        assert!(result.dragging);
+        assert!(app.item_view_container_scroll_drag.is_some());
+
+        assert!(app.set_pane_viewport_bounds(pane_id, 300.0, 200.0, 700.0, 0.0));
+
+        assert!(app.item_view_container_scroll_drag.is_none());
+    }
+
+    #[test]
+    fn item_view_container_wheel_smooth_scroll_advances_and_finishes() {
+        let mut app = test_app_with_entries("/tmp/fika-item-view-container-smooth", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let bar = ItemViewScrollOffsetBar::from_extents(1000.0, 200.0, 0.0, 30.0).unwrap();
+        let now = Instant::now();
+
+        assert!(app.start_item_view_container_smooth_scroll_by_delta_at(pane_id, bar, 90.0, now,));
+        assert!(
+            app.item_view_container_smooth_scrolls
+                .contains_key(&pane_id)
+        );
+        assert!(app.advance_item_view_container_smooth_scrolls_at(
+            now + fika_core::SMOOTH_SCROLL_DURATION / 2
+        ));
+
+        let midway = app.panes.pane(pane_id).unwrap().view.scroll_x;
+        assert!(midway > 0.0);
+        assert!(midway < 90.0);
+
+        assert!(!app.advance_item_view_container_smooth_scrolls_at(
+            now + fika_core::SMOOTH_SCROLL_DURATION
+        ));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 90.0);
+        assert!(app.item_view_container_smooth_scrolls.is_empty());
+    }
+
+    #[test]
+    fn item_view_container_immediate_scrollbar_write_cancels_smooth_scroll() {
+        let mut app = test_app_with_entries(
+            "/tmp/fika-item-view-container-smooth-cancel",
+            &["alpha.txt"],
+        );
+        let pane_id = app.panes.focused().unwrap();
+        let bar = ItemViewScrollOffsetBar::from_extents(1000.0, 200.0, 0.0, 30.0).unwrap();
+
+        assert!(app.start_item_view_container_smooth_scroll_by_delta_at(
+            pane_id,
+            bar,
+            90.0,
+            Instant::now(),
+        ));
+        assert!(
+            app.item_view_container_smooth_scrolls
+                .contains_key(&pane_id)
+        );
+
+        assert!(app.set_item_view_container_scroll_offset(pane_id, bar, 120.0));
+
+        assert!(app.item_view_container_smooth_scrolls.is_empty());
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 120.0);
+    }
+
+    #[test]
+    fn item_view_container_wheel_gesture_starts_kinetic_on_viewport_end() {
+        let mut app =
+            test_app_with_entries("/tmp/fika-item-view-container-kinetic", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let bar = ItemViewScrollOffsetBar::from_extents(2000.0, 200.0, 0.0, 30.0).unwrap();
+        let now = Instant::now();
+
+        app.begin_item_view_container_wheel_gesture_at(pane_id, bar, now);
+        app.sample_item_view_container_wheel_gesture_target_at(
+            pane_id,
+            bar,
+            180.0,
+            now + Duration::from_millis(30),
+        );
+        let velocity = app
+            .finish_item_view_container_wheel_gesture_at(pane_id)
+            .unwrap();
+
+        assert!(velocity > 0.0);
+        assert!(app.start_item_view_container_kinetic_scroll_by_velocity_at(
+            pane_id,
+            bar,
+            velocity,
+            now + Duration::from_millis(31),
+        ));
+        assert!(app.advance_item_view_container_smooth_scrolls_at(now + Duration::from_millis(47)));
+        assert!(app.panes.pane(pane_id).unwrap().view.scroll_x > 0.0);
+    }
+
+    #[test]
+    fn item_view_container_scrollbar_release_does_not_start_kinetic() {
+        let mut app = test_app_with_entries(
+            "/tmp/fika-item-view-container-scrollbar-no-kinetic",
+            &["alpha.txt"],
+        );
+        let pane_id = app.panes.focused().unwrap();
+        let bar = ItemViewScrollOffsetBar::from_extents(1000.0, 200.0, 0.0, 30.0).unwrap();
+        let track = bar.track(200.0, 12.0).unwrap();
+        let result = app.begin_item_view_scrollbar_press(
+            pane_id,
+            bar,
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 12.0,
+            },
+            gpui::point(px(track.thumb_rect.x + 2.0), px(6.0)),
+        );
+        assert!(result.dragging);
+
+        assert!(app.finish_item_view_scrollbar_drag(pane_id));
+
+        assert!(app.item_view_container_smooth_scrolls.is_empty());
+        assert!(app.item_view_container_wheel_gestures.is_empty());
+    }
+
+    #[test]
     fn item_drop_target_mode_changes_refresh_target_state() {
         let temp = test_dir("item-drop-target-mode");
         std::fs::create_dir_all(&temp).unwrap();
@@ -10819,6 +10990,10 @@ text/plain=viewer.desktop;\n",
             space_info: SpaceInfoCache::default(),
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
+            item_view_container_scroll_drag: None,
+            item_view_container_wheel_gestures: HashMap::new(),
+            item_view_container_smooth_scrolls: HashMap::new(),
+            item_view_container_smooth_tick_running: false,
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
             pane_row_width: 0.0,
