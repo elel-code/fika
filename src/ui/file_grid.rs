@@ -521,11 +521,6 @@ fn item_tile(
                 .block_mouse_except_scroll()
                 .cursor_pointer()
                 .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
-                .on_scroll_wheel(cx.listener(
-                    move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
-                        handle_file_grid_wheel(this, pane_id, event, cx);
-                    },
-                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {

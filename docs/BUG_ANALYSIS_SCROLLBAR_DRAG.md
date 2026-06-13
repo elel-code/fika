@@ -26,9 +26,12 @@ The current replacement reproduces Zed's scrollbar model inside Fika:
 
 Each pane owns a `gpui::ScrollHandle`. `src/ui/file_grid.rs` makes the item
 viewport the tracked scroll container via `track_scroll()` and
-`overflow_x_scroll()`, then mounts `src/ui/item_view/scroll_bar.rs` as an
-absolute child of that same scroll container. `src/main.rs` no longer mounts a
-root-level scrollbar overlay and no longer carries old app-side drag state.
+`overflow_x_scroll()`. The viewport is a normal flex child so GPUI can measure
+its scrollable content size; `src/ui/item_view/scroll_bar.rs` is mounted as an
+absolute sibling overlay in the same wrapper, so it reads the tracked
+viewport's `ScrollHandle::bounds()` but is not part of the scrollable content.
+`src/main.rs` no longer mounts a root-level scrollbar overlay and no longer
+carries old app-side drag state.
 
 `src/ui/item_view/scroll_bar.rs` now directly mirrors the Zed scrollbar
 mechanics for the compact item view: thumb ranges come from

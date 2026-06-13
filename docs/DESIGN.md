@@ -372,11 +372,11 @@ reproduces Zed's `ScrollHandle` scrollbar model inside Fika:
 - `src/ui/file_grid.rs` makes the item viewport the tracked scroll container
   with `track_scroll()` and `overflow_x_scroll()`. It no longer manually shifts
   the content div by `-ViewState.scroll_x`.
-- `src/ui/item_view/scroll_bar.rs` is an absolute child of that tracked
-  viewport. It computes thumb geometry from `ScrollHandle::bounds()`,
-  `max_offset()` and `offset()`, then writes drag/track-click changes back with
-  `ScrollHandle::set_offset()` using the same negative-offset convention as
-  Zed.
+- `src/ui/item_view/scroll_bar.rs` is a sibling overlay of that tracked
+  viewport, not a child of the scrollable content. It computes thumb geometry
+  from `ScrollHandle::bounds()`, `max_offset()` and `offset()`, then writes
+  drag/track-click changes back with `ScrollHandle::set_offset()` using the
+  same negative-offset convention as Zed.
 
 Wheel input is handled by GPUI's tracked scroll container; Ctrl/secondary+wheel
 remains pane-local zoom.

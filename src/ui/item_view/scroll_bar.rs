@@ -4,7 +4,7 @@ use gpui::{
     App, Bounds, ContentMask, Context, CursorStyle, DispatchPhase, Div, Element, ElementId, Entity,
     EntityId, GlobalElementId, Hitbox, HitboxBehavior, IntoElement, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Position,
-    ScrollHandle, Size, Stateful, Style, Window, fill, point, px, relative, rgb, rgba, size,
+    ScrollHandle, Size, Stateful, Style, Window, div, fill, point, px, relative, rgb, rgba, size,
 };
 
 use crate::FikaApp;
@@ -29,9 +29,25 @@ pub(crate) fn item_view_scrollbar_container(
         state.scroll_handle = scroll_handle.clone();
     });
 
-    viewport
-        .track_scroll(scroll_handle)
-        .overflow_x_scroll()
+    div()
+        .id(format!("item-view-scroll-wrapper-{}", pane_id.0))
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .overflow_hidden()
+        .child(
+            viewport
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .size_full()
+                .track_scroll(scroll_handle)
+                .overflow_x_scroll(),
+        )
         .child(ItemViewScrollbarElement { state })
 }
 
@@ -195,9 +211,20 @@ impl Element for ItemViewScrollbarElement {
         let state = self.state.read(cx);
         let max_offset = state.scroll_handle.max_offset();
         let viewport_bounds = state.scroll_handle.bounds();
-        let viewport_width = viewport_bounds.size.width;
+        let visible_bounds = if viewport_bounds.size.width > Pixels::ZERO
+            && viewport_bounds.size.height > Pixels::ZERO
+        {
+            viewport_bounds
+        } else {
+            bounds
+        };
+        let viewport_width = visible_bounds.size.width;
+        let viewport_height = visible_bounds.size.height;
 
-        if max_offset.x <= Pixels::ZERO || viewport_width <= Pixels::ZERO {
+        if max_offset.x <= Pixels::ZERO
+            || viewport_width <= Pixels::ZERO
+            || viewport_height <= Pixels::ZERO
+        {
             return None;
         }
 
@@ -218,10 +245,10 @@ impl Element for ItemViewScrollbarElement {
         let track_height = SCROLLBAR_WIDTH + 2.0 * SCROLLBAR_PADDING;
         let track_bounds = Bounds::new(
             point(
-                bounds.origin.x,
-                bounds.origin.y + (bounds.size.height - track_height).max(Pixels::ZERO),
+                visible_bounds.origin.x,
+                visible_bounds.origin.y + (viewport_height - track_height).max(Pixels::ZERO),
             ),
-            size(bounds.size.width, track_height.min(bounds.size.height)),
+            size(viewport_width, track_height.min(viewport_height)),
         );
         let thumb_track = inset_bounds(track_bounds, SCROLLBAR_PADDING);
         let thumb_bounds = Bounds::new(

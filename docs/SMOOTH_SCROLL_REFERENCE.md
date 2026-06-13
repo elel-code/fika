@@ -43,15 +43,15 @@ kinetic scrolling are pending a fresh rebuild on that independent component.
 ## Fika Mapping
 
 - Dolphin `KItemListContainer` owned scrollbars -> currently
-  `src/ui/item_view/scroll_bar.rs`, mounted by `src/ui/file_grid.rs` rather than
-  `src/ui/pane.rs`; geometry and drag math live in
-  `src/ui/item_view/scroll_bar/state.rs`.
+  `src/ui/item_view/scroll_bar.rs`, mounted by `src/ui/file_grid.rs` as a
+  sibling overlay of the tracked item viewport rather than by `src/ui/pane.rs`;
+  geometry and drag math read/write the pane-local `gpui::ScrollHandle`.
 - Dolphin scrollbar maximum invalidation and `updateGeometries()` -> viewport
-  bounds, zoom changes, pane loading and pane content clear cancel the active
-  item-view drag state.
-- Dolphin `setScrollOffset()` synchronous layout path maps to direct writes of
-  `ViewState.scroll_x`, followed by GPUI rebuilding compact layout and
-  visible-item virtualization from the current logical offset.
+  bounds are owned by GPUI `track_scroll()`, while zoom changes, pane loading
+  and pane content clear reset the pane-local `ScrollHandle`.
+- Dolphin `setScrollOffset()` synchronous layout path maps to GPUI
+  `ScrollHandle` offset changes, followed by pane snapshot sync into
+  `ViewState.scroll_x` for compact visible-item virtualization.
 - Dolphin `KItemListSmoothScroller` and `QScroller` kinetic behavior are not
   present in the current code after the deletion pass. Rebuild them only after
   the independent scrollbar drag and wheel path are verified.
