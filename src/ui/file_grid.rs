@@ -4,8 +4,10 @@ mod slots;
 mod snapshot;
 
 pub(crate) use layout::{
-    CompactColumnWidthCache, compact_layout_for_filtered_model, compact_layout_for_model,
-    compact_text_width, model_index_for_layout_index,
+    CompactColumnWidthCache, CompactTextWidthOverride,
+    compact_layout_for_filtered_model_with_text_override,
+    compact_layout_for_model_with_text_override, compact_text_width, compact_text_width_for_name,
+    model_index_for_layout_index,
 };
 pub(crate) use projection::{ContentItemHit, PaneLayoutProjection};
 pub(crate) use slots::VisibleItemSlotPool;
@@ -28,14 +30,12 @@ use std::sync::Arc;
 
 use super::drag_drop::{
     FileTransferMode, ItemDragPayload, file_transfer_mode_for_modifiers,
-    refresh_active_drag_cursor_for_transfer_mode,
+    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
 use super::places::PlaceDrag;
+use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
-use super::scrollbar::{
-    SCROLLBAR_MIN_HANDLE_WIDTH, SCROLLBAR_THICKNESS, horizontal_scroll_bar,
-    scrollbar_drag_capture_overlay,
-};
+use super::scrollbar::{SCROLLBAR_MIN_HANDLE_WIDTH, SCROLLBAR_THICKNESS, horizontal_scroll_bar};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FileGridMode {
@@ -50,7 +50,6 @@ pub(crate) struct FileGridProps {
     pub(crate) view: ViewState,
     pub(crate) rubber_band: Option<ViewRect>,
     pub(crate) drop_target: Option<FileTransferMode>,
-    pub(crate) scrollbar_drag_active: bool,
     pub(crate) mode: FileGridMode,
     pub(crate) mouse_overlay_active: bool,
 }
@@ -83,6 +82,14 @@ struct DragPreview {
     label: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RenameTextLayout {
+    name_height: f32,
+    helper_height: f32,
+}
+
+const RENAME_NAME_HEIGHT: f32 = 20.0;
+
 pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stateful<Div> {
     let FileGridProps {
         pane_id,
@@ -91,7 +98,6 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
         view,
         rubber_band,
         drop_target,
-        scrollbar_drag_active,
         mode,
         mouse_overlay_active,
     } = props;
@@ -278,8 +284,11 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                         let contains = event.bounds.contains(&event.event.position)
                             && this.window_position_is_blank_in_pane(pane_id, event.event.position);
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        let changed =
-                            contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                        let changed = if contains {
+                            this.set_item_drag_drop_target_for_pane(pane_id, mode)
+                        } else {
+                            this.clear_item_drop_target_for_pane(pane_id)
+                        };
                         if contains {
                             refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
                             this.schedule_drop_target_stale_clear(cx);
@@ -297,8 +306,11 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                         let contains = event.bounds.contains(&event.event.position)
                             && this.window_position_is_blank_in_pane(pane_id, event.event.position);
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        let changed =
-                            contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                        let changed = if contains {
+                            this.set_item_drag_drop_target_for_pane(pane_id, mode)
+                        } else {
+                            this.clear_item_drop_target_for_pane(pane_id)
+                        };
                         if contains {
                             refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
                             this.schedule_drop_target_stale_clear(cx);
@@ -316,8 +328,11 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                         let contains = event.bounds.contains(&event.event.position)
                             && this.window_position_is_blank_in_pane(pane_id, event.event.position);
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        let changed =
-                            contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                        let changed = if contains {
+                            this.set_item_drag_drop_target_for_pane(pane_id, mode)
+                        } else {
+                            this.clear_item_drop_target_for_pane(pane_id)
+                        };
                         if contains {
                             refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
                             this.schedule_drop_target_stale_clear(cx);
@@ -429,29 +444,14 @@ pub(crate) fn file_grid(props: FileGridProps, cx: &mut Context<FikaApp>) -> Stat
                             );
                         },
                     ))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                            let started = this.begin_horizontal_scrollbar_drag_from_window(
-                                pane_id,
-                                event.position,
-                            );
-                            cx.stop_propagation();
-                            if started {
-                                cx.notify();
-                            }
-                        }),
-                    )
                     .child(horizontal_scroll_bar(
                         pane_id,
                         content_size.width,
                         view.scroll_x,
+                        mouse_overlay_active,
                         cx,
                     )),
             )
-        })
-        .when(scrollbar_drag_active, |grid| {
-            grid.child(scrollbar_drag_capture_overlay(pane_id, cx))
         })
 }
 
@@ -662,6 +662,7 @@ fn item_tile(
                 .border_1()
                 .border_color(item_tile_border_color(selected, drop_target))
                 .bg(item_tile_background(selected, drop_target))
+                .when(drop_target.is_some(), |tile| tile.shadow_md())
                 .occlude()
                 .when(!mouse_overlay_active, |tile| {
                     tile.hover(move |tile| {
@@ -791,15 +792,29 @@ fn item_tile(
                         move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                             let contains = event.bounds.contains(&event.event.position);
                             let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                            let changed = contains
-                                && this.set_item_drag_drop_target_for_directory(
+                            let valid_target = contains
+                                && this.item_drag_can_drop_to_directory(&target_dir_for_move);
+                            let changed = if valid_target {
+                                this.set_item_drag_drop_target_for_directory(
                                     pane_id,
                                     target_dir_for_move.clone(),
                                     mode,
-                                );
+                                )
+                            } else if contains {
+                                this.clear_drag_drop_targets()
+                            } else {
+                                this.clear_item_drop_target_for_directory(
+                                    pane_id,
+                                    &target_dir_for_move,
+                                )
+                            };
                             if contains {
-                                refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
-                                this.schedule_drop_target_stale_clear(cx);
+                                if valid_target {
+                                    refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                                    this.schedule_drop_target_stale_clear(cx);
+                                } else {
+                                    refresh_active_drag_cursor_not_allowed(window, cx);
+                                }
                             }
                             if changed {
                                 cx.notify();
@@ -813,12 +828,18 @@ fn item_tile(
                         move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
                             let contains = event.bounds.contains(&event.event.position);
                             let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                            let changed = contains
-                                && this.set_item_drag_drop_target_for_directory(
+                            let changed = if contains {
+                                this.set_item_drag_drop_target_for_directory(
                                     pane_id,
                                     target_dir_for_external_move.clone(),
                                     mode,
-                                );
+                                )
+                            } else {
+                                this.clear_item_drop_target_for_directory(
+                                    pane_id,
+                                    &target_dir_for_external_move,
+                                )
+                            };
                             if contains {
                                 refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
                                 this.schedule_drop_target_stale_clear(cx);
@@ -917,13 +938,17 @@ fn item_tile(
                 })
                 .child(icon_view(&item, item.layout))
                 .child(text_view(
+                    pane_id,
                     &display_name,
                     &item.kind_label,
                     item.layout,
                     renaming,
                     selected,
+                    item.draft_caret,
+                    item.draft_selection,
                     item.draft_error.as_deref(),
                     item.draft_warning.as_deref(),
+                    cx,
                 )),
         )
 }
@@ -968,17 +993,17 @@ fn drop_target_viewport_background(mode: FileTransferMode) -> Rgba {
 
 fn drop_target_item_background(mode: FileTransferMode) -> Rgba {
     match mode {
-        FileTransferMode::Copy => rgba(0x16a34a34),
-        FileTransferMode::Move => rgba(0xd9770634),
-        FileTransferMode::Link => rgba(0x7c3aed34),
+        FileTransferMode::Copy => rgba(0x16a34a4a),
+        FileTransferMode::Move => rgba(0xd977064a),
+        FileTransferMode::Link => rgba(0x7c3aed4a),
     }
 }
 
 fn drop_target_item_hover_background(mode: FileTransferMode) -> Rgba {
     match mode {
-        FileTransferMode::Copy => rgba(0x16a34a4a),
-        FileTransferMode::Move => rgba(0xd977064a),
-        FileTransferMode::Link => rgba(0x7c3aed4a),
+        FileTransferMode::Copy => rgba(0x16a34a66),
+        FileTransferMode::Move => rgba(0xd9770666),
+        FileTransferMode::Link => rgba(0x7c3aed66),
     }
 }
 
@@ -1061,16 +1086,21 @@ fn fallback_icon_element(marker: String, fg: u32, bg: u32) -> gpui::AnyElement {
 }
 
 fn text_view(
+    pane_id: PaneId,
     display_name: &str,
     kind_label: &str,
     layout: ItemLayout,
     renaming: bool,
     selected: bool,
+    rename_caret: Option<usize>,
+    rename_selection: Option<(usize, usize)>,
     rename_error: Option<&str>,
     rename_warning: Option<&str>,
+    cx: &mut Context<FikaApp>,
 ) -> Div {
     let visual = layout.visual_rect;
     let text = layout.text_rect;
+    let rename_layout = rename_text_layout(text.height);
     let helper_text = rename_error.or(rename_warning).unwrap_or(kind_label);
     let helper_color = if rename_error.is_some() {
         rgb(0xdc2626)
@@ -1092,31 +1122,146 @@ fn text_view(
         .top(px(text.y - visual.y))
         .w(px(text.width))
         .h(px(text.height))
-        .when(renaming, |name| {
-            name.border_1()
-                .rounded_md()
-                .border_color(border_color)
-                .bg(rgb(0xffffff))
-                .px_1()
+        .child(if renaming {
+            rename_editor_view(
+                pane_id,
+                display_name,
+                selected,
+                rename_caret,
+                rename_selection,
+                border_color,
+                rename_layout.name_height,
+                cx,
+            )
+            .into_any_element()
+        } else {
+            rename_name_view(display_name, false, selected, None, None)
+                .h(px(rename_layout.name_height))
+                .into_any_element()
         })
         .child(
             div()
-                .text_sm()
-                .truncate()
-                .text_color(if selected {
-                    rgb(0x0f172a)
-                } else {
-                    rgb(0x24292f)
-                })
-                .child(display_name.to_string()),
-        )
-        .child(
-            div()
+                .h(px(rename_layout.helper_height))
                 .text_xs()
                 .text_color(helper_color)
                 .truncate()
                 .child(helper_text.to_string()),
         )
+}
+
+fn rename_editor_view(
+    pane_id: PaneId,
+    display_name: &str,
+    selected: bool,
+    rename_caret: Option<usize>,
+    rename_selection: Option<(usize, usize)>,
+    border_color: Rgba,
+    height: f32,
+    cx: &mut Context<FikaApp>,
+) -> Div {
+    div()
+        .h(px(height))
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .flex()
+        .items_center()
+        .border_1()
+        .rounded_sm()
+        .border_color(border_color)
+        .bg(rgb(0xffffff))
+        .px(px(RENAME_TEXT_INSET_X))
+        .cursor_text()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                if this.set_rename_caret_from_window_position(pane_id, event.position) {
+                    cx.notify();
+                }
+                cx.stop_propagation();
+            }),
+        )
+        .child(rename_name_view(
+            display_name,
+            true,
+            selected,
+            rename_caret,
+            rename_selection,
+        ))
+}
+
+fn rename_name_view(
+    display_name: &str,
+    renaming: bool,
+    selected: bool,
+    rename_caret: Option<usize>,
+    rename_selection: Option<(usize, usize)>,
+) -> Div {
+    let text_color = if selected {
+        rgb(0x0f172a)
+    } else {
+        rgb(0x24292f)
+    };
+    let base = div()
+        .h_full()
+        .min_w_0()
+        .overflow_hidden()
+        .text_sm()
+        .truncate()
+        .text_color(text_color)
+        .when(renaming, |name| name.cursor_text());
+    if !renaming {
+        return base.child(display_name.to_string());
+    }
+
+    if let Some((start, end)) = normalized_text_range(display_name, rename_selection) {
+        return base
+            .flex()
+            .items_center()
+            .child(display_name[..start].to_string())
+            .child(
+                div()
+                    .bg(rgb(0xbfdbfe))
+                    .text_color(rgb(0x0f172a))
+                    .child(display_name[start..end].to_string()),
+            )
+            .child(display_name[end..].to_string());
+    }
+
+    let caret = clamp_text_boundary(display_name, rename_caret.unwrap_or(display_name.len()));
+    base.flex()
+        .items_center()
+        .child(display_name[..caret].to_string())
+        .child(rename_caret_view())
+        .child(display_name[caret..].to_string())
+}
+
+fn rename_caret_view() -> Div {
+    div().w(px(1.0)).h(px(16.0)).flex_none().bg(rgb(0x2f6fed))
+}
+
+fn rename_text_layout(text_height: f32) -> RenameTextLayout {
+    let text_height = text_height.max(0.0);
+    let name_height = text_height.min(RENAME_NAME_HEIGHT);
+    RenameTextLayout {
+        name_height,
+        helper_height: (text_height - name_height).max(0.0),
+    }
+}
+
+fn normalized_text_range(text: &str, range: Option<(usize, usize)>) -> Option<(usize, usize)> {
+    let (raw_start, raw_end) = range?;
+    let start = clamp_text_boundary(text, raw_start.min(raw_end));
+    let end = clamp_text_boundary(text, raw_start.max(raw_end));
+    (start < end).then_some((start, end))
+}
+
+fn clamp_text_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 impl Render for DragPreview {
@@ -1146,7 +1291,8 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 mod tests {
     use super::{
         FileGridMode, drag_preview_label, horizontal_wheel_scroll_delta,
-        item_mouse_down_opens_directory, wheel_modifiers_request_zoom,
+        item_mouse_down_opens_directory, normalized_text_range, rename_text_layout,
+        wheel_modifiers_request_zoom,
     };
     use fika_core::{CompactLayout, CompactLayoutOptions};
     use gpui::{Modifiers, ScrollDelta, point, px};
@@ -1156,6 +1302,31 @@ mod tests {
         assert_eq!(drag_preview_label("alpha.txt", true, 3), "3 items");
         assert_eq!(drag_preview_label("alpha.txt", true, 1), "alpha.txt");
         assert_eq!(drag_preview_label("alpha.txt", false, 3), "alpha.txt");
+    }
+
+    #[test]
+    fn rename_text_range_clamps_to_utf8_boundaries() {
+        assert_eq!(
+            normalized_text_range("目录.txt", Some((1, 5))),
+            Some((0, 3))
+        );
+        assert_eq!(
+            normalized_text_range("alpha.txt", Some((5, 2))),
+            Some((2, 5))
+        );
+        assert_eq!(normalized_text_range("alpha.txt", Some((3, 3))), None);
+    }
+
+    #[test]
+    fn rename_text_layout_keeps_editor_on_name_line() {
+        let layout = rename_text_layout(32.0);
+
+        assert_eq!(layout.name_height, 20.0);
+        assert_eq!(layout.helper_height, 12.0);
+
+        let compact = rename_text_layout(12.0);
+        assert_eq!(compact.name_height, 12.0);
+        assert_eq!(compact.helper_height, 0.0);
     }
 
     #[test]

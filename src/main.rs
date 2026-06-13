@@ -18,9 +18,9 @@ use fika_core::{
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryListerEvent, ListingRequest, ListingWorker,
-    LoadingPaneState, OperationQueue, PaneController, PaneId, RenameUndoItem, ScrollBounds,
-    ScrollDragTracker, SelectionMove, SmoothScroll, SortDescriptor, SortOrder, SortRole,
-    UndoPayload, UserPlace, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
+    LoadingPaneState, OperationQueue, PaneController, PaneId, RefreshPair, RenameUndoItem,
+    ScrollBounds, ScrollDragTracker, SelectionMove, SmoothScroll, SortDescriptor, SortOrder,
+    SortRole, UndoPayload, UserPlace, ViewPoint, ViewRect, ZoomChange, breadcrumb_segments,
     complete_location_input, file_ops, listing_requests_from_events, nearest_existing_ancestor,
     perform_device_place_operation, resolve_location_input, update_loading_state_for_event,
 };
@@ -60,8 +60,9 @@ use ui::context_menu::{
     ContextMenuSubmenu, ContextMenuTarget, context_menu_icon_snapshots, context_menu_overlay,
 };
 use ui::drag_drop::{
-    ActiveItemDrag, ItemDragPayload, ItemDropTarget, PlaceDropTarget, item_drag_paths,
-    item_drop_reject_reason, item_drop_target_mode_for_directory, item_drop_target_mode_for_pane,
+    ActiveItemDrag, ItemDragPayload, ItemDropTarget, PlaceDropTarget, item_drag_export_payload,
+    item_drag_paths, item_drop_reject_reason, item_drop_target_mode_for_directory,
+    item_drop_target_mode_for_pane,
 };
 #[cfg(test)]
 use ui::drag_drop::{
@@ -69,10 +70,11 @@ use ui::drag_drop::{
     place_drop_target_matches_insert, place_drop_target_mode_for_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, PaneLayoutProjection, PaneViewportGeometry,
-    VisibleItemSlotPool, VisibleItemSnapshot, compact_layout_for_filtered_model,
-    compact_layout_for_model, compact_text_width, format_entry_kind_label,
-    model_index_for_layout_index, visible_item_thumbnail_path,
+    CompactColumnWidthCache, CompactTextWidthOverride, ContentItemHit, PaneLayoutProjection,
+    PaneViewportGeometry, VisibleItemSlotPool, VisibleItemSnapshot,
+    compact_layout_for_filtered_model_with_text_override,
+    compact_layout_for_model_with_text_override, compact_text_width, compact_text_width_for_name,
+    format_entry_kind_label, model_index_for_layout_index, visible_item_thumbnail_path,
 };
 use ui::filter_bar::{
     FilterBarSnapshot, FilteredModelCacheEntry, FilteredModelCacheKey, PaneFilterState,
@@ -102,13 +104,14 @@ use ui::places::{
 use ui::properties_dialog::{
     PropertiesDialogState, properties_dialog_overlay, properties_for_path, properties_for_selection,
 };
-use ui::rename::RenameDraft;
+use ui::rename::{RENAME_TEXT_INSET_X, RenameDraft};
 use ui::rubber_band::RubberBandState;
 use ui::scrollbar::{ActiveScrollBarDrag, HorizontalScrollBarTrack};
 #[cfg(test)]
 use ui::shortcuts::PlaceInputAction;
 use ui::shortcuts::{
-    FilterInputAction, LocationInputAction, PaneShortcut, RenameInputAction, filter_input_action,
+    ApplicationChooserInputAction, FilterInputAction, LocationInputAction, PaneShortcut,
+    RenameInputAction, application_chooser_input_action, filter_input_action,
     location_input_action, pane_shortcut, place_input_action, rename_input_action,
     zoom_change_for_wheel_delta,
 };
@@ -598,23 +601,27 @@ impl FikaApp {
                         .rename_draft
                         .as_ref()
                         .filter(|draft| draft.pane_id == pane_id);
+                    let rename_text_override =
+                        Self::rename_text_override_for_model(&pane.model, rename_draft);
                     let location_draft = self
                         .location_draft
                         .as_ref()
                         .filter(|draft| draft.pane_id == pane_id)
                         .map(LocationDraft::snapshot);
                     let layout = match filtered {
-                        Some(filtered) => compact_layout_for_filtered_model(
+                        Some(filtered) => compact_layout_for_filtered_model_with_text_override(
                             self.compact_column_widths.entry(pane_id).or_default(),
                             &pane.model,
                             filtered,
                             source_revision,
                             &view,
+                            rename_text_override,
                         ),
-                        None => compact_layout_for_model(
+                        None => compact_layout_for_model_with_text_override(
                             self.compact_column_widths.entry(pane_id).or_default(),
                             &pane.model,
                             &view,
+                            rename_text_override,
                         ),
                     };
                     let selection_count = pane.selection.count_for_model(pane.model.len());
@@ -625,9 +632,13 @@ impl FikaApp {
                             let model_index = model_index_for_layout_index(filtered, layout_index)?;
                             let entry = pane.model.get(model_index)?;
                             let path = pane.model.path_for_index(model_index)?;
+                            let active_rename_draft =
+                                rename_draft.filter(|draft| draft.original_path == path);
+                            let required_text_width =
+                                Self::required_text_width_for_entry(entry, active_rename_draft);
                             let item_layout = layout.item_with_required_text_width(
                                 layout_index,
-                                Some(compact_text_width(entry.name_width_units)),
+                                Some(required_text_width),
                             )?;
                             let selected = pane.selection.is_selected(entry.id);
                             let drop_target = item_drop_target_mode_for_directory(
@@ -635,14 +646,14 @@ impl FikaApp {
                                 pane_id,
                                 &path,
                             );
-                            let draft_name = rename_draft
-                                .filter(|draft| draft.original_path == path)
-                                .map(|draft| draft.draft_name.clone());
-                            let draft_error = rename_draft
-                                .filter(|draft| draft.original_path == path)
-                                .and_then(|draft| draft.error.clone());
-                            let draft_warning = rename_draft
-                                .filter(|draft| draft.original_path == path)
+                            let draft_name =
+                                active_rename_draft.map(|draft| draft.draft_name.clone());
+                            let draft_caret = active_rename_draft.map(|draft| draft.caret);
+                            let draft_selection =
+                                active_rename_draft.and_then(|draft| draft.selection);
+                            let draft_error =
+                                active_rename_draft.and_then(|draft| draft.error.clone());
+                            let draft_warning = active_rename_draft
                                 .and_then(|draft| draft.extension_warning(entry.is_dir));
                             Some((
                                 item_layout,
@@ -656,6 +667,8 @@ impl FikaApp {
                                 selected,
                                 drop_target,
                                 draft_name,
+                                draft_caret,
+                                draft_selection,
                                 draft_error,
                                 draft_warning,
                             ))
@@ -682,7 +695,7 @@ impl FikaApp {
                 };
                 let visible_ids = visible_data
                     .iter()
-                    .map(|(_, item_id, _, _, _, _, _, _, _, _, _, _, _)| *item_id);
+                    .map(|(_, item_id, _, _, _, _, _, _, _, _, _, _, _, _, _)| *item_id);
                 let slot_by_item_id = self
                     .visible_item_slots
                     .entry(pane_id)
@@ -703,6 +716,8 @@ impl FikaApp {
                             selected,
                             drop_target,
                             draft_name,
+                            draft_caret,
+                            draft_selection,
                             draft_error,
                             draft_warning,
                         )| {
@@ -726,6 +741,8 @@ impl FikaApp {
                                 selection_count,
                                 drop_target,
                                 draft_name,
+                                draft_caret,
+                                draft_selection,
                                 draft_error,
                                 draft_warning,
                             })
@@ -748,9 +765,6 @@ impl FikaApp {
                     view,
                     rubber_band,
                     drop_target: pane_drop_target,
-                    scrollbar_drag_active: self
-                        .active_scrollbar_drag
-                        .is_some_and(|drag| drag.pane_id == pane_id),
                     focused,
                 })
             })
@@ -2175,24 +2189,55 @@ impl FikaApp {
     fn layout_projection_for_pane(&mut self, pane_id: PaneId) -> Option<PaneLayoutProjection> {
         let filtered_model = self.filtered_model_for_pane(pane_id);
         let pane = self.panes.pane(pane_id)?;
+        let rename_draft = self
+            .rename_draft
+            .as_ref()
+            .filter(|draft| draft.pane_id == pane_id);
+        let rename_text_override = Self::rename_text_override_for_model(&pane.model, rename_draft);
         let layout = match filtered_model.as_ref() {
-            Some((filtered, source_revision)) => compact_layout_for_filtered_model(
+            Some((filtered, source_revision)) => {
+                compact_layout_for_filtered_model_with_text_override(
+                    self.compact_column_widths.entry(pane_id).or_default(),
+                    &pane.model,
+                    filtered,
+                    *source_revision,
+                    &pane.view,
+                    rename_text_override,
+                )
+            }
+            None => compact_layout_for_model_with_text_override(
                 self.compact_column_widths.entry(pane_id).or_default(),
                 &pane.model,
-                filtered,
-                *source_revision,
                 &pane.view,
-            ),
-            None => compact_layout_for_model(
-                self.compact_column_widths.entry(pane_id).or_default(),
-                &pane.model,
-                &pane.view,
+                rename_text_override,
             ),
         };
         Some(PaneLayoutProjection::new(
             layout,
             filtered_model.map(|(filtered, _)| filtered),
         ))
+    }
+
+    fn rename_text_override_for_model(
+        model: &fika_core::DirectoryModel,
+        draft: Option<&RenameDraft>,
+    ) -> Option<CompactTextWidthOverride> {
+        let draft = draft?;
+        let model_index = model.index_of_path(&draft.original_path)?;
+        Some(CompactTextWidthOverride {
+            model_index,
+            text_width: compact_text_width_for_name(&draft.draft_name),
+        })
+    }
+
+    fn required_text_width_for_entry(
+        entry: &fika_core::EntryData,
+        draft: Option<&RenameDraft>,
+    ) -> f32 {
+        let base_width = compact_text_width(entry.name_width_units);
+        draft
+            .map(|draft| base_width.max(compact_text_width_for_name(&draft.draft_name)))
+            .unwrap_or(base_width)
     }
 
     fn item_at_content_point(
@@ -2203,18 +2248,27 @@ impl FikaApp {
         let projection = self.layout_projection_for_pane(pane_id)?;
         let layout_index = projection.layout.hit_test_content_point(point)?;
         let model_index = projection.model_index_for_layout_index(layout_index)?;
+        let rename_draft = self
+            .rename_draft
+            .as_ref()
+            .filter(|draft| draft.pane_id == pane_id);
         let pane = self.panes.pane(pane_id)?;
         let entry = pane.model.get(model_index)?;
+        let path = pane.model.path_for_index(model_index)?;
+        let active_rename_draft = rename_draft.filter(|draft| draft.original_path == path);
         let item_layout = projection.layout.item_with_required_text_width(
             layout_index,
-            Some(compact_text_width(entry.name_width_units)),
+            Some(Self::required_text_width_for_entry(
+                entry,
+                active_rename_draft,
+            )),
         )?;
         if !item_layout.visual_rect.contains(point) {
             return None;
         }
         Some(ContentItemHit {
             model_index,
-            path: pane.model.path_for_index(model_index)?,
+            path,
             is_dir: entry.is_dir,
         })
     }
@@ -2228,6 +2282,10 @@ impl FikaApp {
             .indexes_intersecting(rect)
             .indexes()
             .to_vec();
+        let rename_draft = self
+            .rename_draft
+            .as_ref()
+            .filter(|draft| draft.pane_id == pane_id);
         let Some(pane) = self.panes.pane(pane_id) else {
             return Vec::new();
         };
@@ -2238,11 +2296,16 @@ impl FikaApp {
                 let Some(entry) = pane.model.get(model_index) else {
                     return None;
                 };
+                let path = pane.model.path_for_index(model_index)?;
+                let active_rename_draft = rename_draft.filter(|draft| draft.original_path == path);
                 projection
                     .layout
                     .item_with_required_text_width(
                         layout_index,
-                        Some(compact_text_width(entry.name_width_units)),
+                        Some(Self::required_text_width_for_entry(
+                            entry,
+                            active_rename_draft,
+                        )),
                     )
                     .is_some_and(|item| item.visual_rect.intersects(rect))
                     .then_some(model_index)
@@ -2824,13 +2887,66 @@ impl FikaApp {
 
         self.clear_location_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
-        self.rename_draft = Some(RenameDraft {
+        self.rename_draft = Some(RenameDraft::new(
             pane_id,
-            original_path: original_path.clone(),
-            draft_name: name.to_string(),
-            error: None,
-        });
+            original_path.clone(),
+            name.to_string(),
+        ));
         self.set_pane_status(pane_id, format!("Renaming {name}"));
+    }
+
+    pub(crate) fn set_rename_caret_from_window_position(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> bool {
+        self.panes.focus(pane_id);
+        self.dismiss_context_menu();
+        let Some((original_path, draft_name)) = self
+            .rename_draft
+            .as_ref()
+            .filter(|draft| draft.pane_id == pane_id)
+            .map(|draft| (draft.original_path.clone(), draft.draft_name.clone()))
+        else {
+            return false;
+        };
+        let Some(point) = self.content_point_from_window(pane_id, position) else {
+            return false;
+        };
+        let Some(projection) = self.layout_projection_for_pane(pane_id) else {
+            return false;
+        };
+        let Some((model_index, name_width_units)) = self.panes.pane(pane_id).and_then(|pane| {
+            let model_index = pane.model.index_of_path(&original_path)?;
+            let entry = pane.model.get(model_index)?;
+            Some((model_index, entry.name_width_units))
+        }) else {
+            return false;
+        };
+        let Some(layout_index) = projection.layout_index_for_model_index(model_index) else {
+            return false;
+        };
+        let required_text_width =
+            compact_text_width(name_width_units).max(compact_text_width_for_name(&draft_name));
+        let Some(item) = projection
+            .layout
+            .item_with_required_text_width(layout_index, Some(required_text_width))
+        else {
+            return false;
+        };
+        let local_x =
+            (point.x - item.text_rect.x - RENAME_TEXT_INSET_X).clamp(0.0, item.text_rect.width);
+        let Some(draft) = self
+            .rename_draft
+            .as_mut()
+            .filter(|draft| draft.pane_id == pane_id)
+            .filter(|draft| draft.original_path == original_path)
+            .filter(|draft| draft.draft_name == draft_name)
+        else {
+            return false;
+        };
+        draft.set_caret_from_local_x(local_x);
+        true
     }
 
     fn handle_rename_keystroke(
@@ -2853,15 +2969,66 @@ impl FikaApp {
             }
             RenameInputAction::Commit => self.commit_rename_draft(cx),
             RenameInputAction::CommitAndRenameNext => self.commit_rename_draft_and_rename_next(cx),
+            RenameInputAction::MoveStart => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.move_to_start();
+                }
+            }
+            RenameInputAction::MoveEnd => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.move_to_end();
+                }
+            }
+            RenameInputAction::MoveBackward => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.move_backward();
+                }
+            }
+            RenameInputAction::MoveForward => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.move_forward();
+                }
+            }
+            RenameInputAction::SelectAll => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.select_all();
+                }
+            }
+            RenameInputAction::SelectStart => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.select_to_start();
+                }
+            }
+            RenameInputAction::SelectEnd => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.select_to_end();
+                }
+            }
+            RenameInputAction::SelectBackward => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.select_backward();
+                }
+            }
+            RenameInputAction::SelectForward => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.select_forward();
+                }
+            }
             RenameInputAction::Backspace => {
                 if let Some(draft) = &mut self.rename_draft {
-                    draft.draft_name.pop();
+                    draft.delete_backward();
+                    draft.error = None;
+                }
+            }
+            RenameInputAction::Delete => {
+                if let Some(draft) = &mut self.rename_draft {
+                    draft.delete_forward();
                     draft.error = None;
                 }
             }
             RenameInputAction::Insert(text) => {
                 if let Some(draft) = &mut self.rename_draft {
-                    draft.draft_name.push_str(&text);
+                    draft.insert(&text);
                     draft.error = None;
                 }
             }
@@ -3307,7 +3474,12 @@ impl FikaApp {
 
     pub(crate) fn begin_item_drag(&mut self, payload: ItemDragPayload) {
         let paths = item_drag_paths(&self.panes, &payload);
-        self.active_item_drag = Some(ActiveItemDrag { payload, paths });
+        let export = item_drag_export_payload(&self.panes, &payload);
+        self.active_item_drag = Some(ActiveItemDrag {
+            payload,
+            paths,
+            export,
+        });
         self.item_drop_target = None;
         self.place_drop_target = None;
     }
@@ -3353,6 +3525,9 @@ impl FikaApp {
         path: PathBuf,
         mode: FileTransferMode,
     ) -> bool {
+        if !self.item_drag_can_drop_to_directory(&path) {
+            return self.clear_drag_drop_targets();
+        }
         let target = Some(ItemDropTarget::Directory {
             pane_id,
             path,
@@ -3368,6 +3543,12 @@ impl FikaApp {
         true
     }
 
+    pub(crate) fn item_drag_can_drop_to_directory(&self, target_dir: &Path) -> bool {
+        self.active_item_drag
+            .as_ref()
+            .is_none_or(|drag| item_drop_reject_reason(&drag.paths, target_dir).is_none())
+    }
+
     fn clear_item_drop_target(&mut self) -> bool {
         let had_target = self.item_drop_target.is_some();
         self.item_drop_target = None;
@@ -3375,6 +3556,39 @@ impl FikaApp {
             self.touch_drop_target_stale_generation();
         }
         had_target
+    }
+
+    pub(crate) fn clear_item_drop_target_for_pane(&mut self, pane_id: PaneId) -> bool {
+        if matches!(
+            self.item_drop_target,
+            Some(ItemDropTarget::Pane {
+                pane_id: target_pane,
+                ..
+            }) if target_pane == pane_id
+        ) {
+            return self.clear_item_drop_target();
+        }
+        false
+    }
+
+    pub(crate) fn clear_item_drop_target_for_directory(
+        &mut self,
+        pane_id: PaneId,
+        path: &Path,
+    ) -> bool {
+        if self.item_drop_target.as_ref().is_some_and(|target| {
+            matches!(
+                target,
+                ItemDropTarget::Directory {
+                    pane_id: target_pane,
+                    path: target_path,
+                    ..
+                } if *target_pane == pane_id && target_path == path
+            )
+        }) {
+            return self.clear_item_drop_target();
+        }
+        false
     }
 
     pub(crate) fn set_place_drag_drop_target_for_path(
@@ -3413,6 +3627,40 @@ impl FikaApp {
             self.touch_drop_target_stale_generation();
         }
         had_target
+    }
+
+    pub(crate) fn clear_place_drop_target_for_insert(&mut self, index: usize) -> bool {
+        let index = self.user_place_insert_index(index);
+        if matches!(
+            self.place_drop_target,
+            Some(PlaceDropTarget::Insert { index: target_index }) if target_index == index
+        ) {
+            return self.clear_place_drop_target();
+        }
+        false
+    }
+
+    pub(crate) fn clear_place_drop_target_for_row(
+        &mut self,
+        path: &Path,
+        insert_before_index: usize,
+        insert_after_index: usize,
+    ) -> bool {
+        let before = self.user_place_insert_index(insert_before_index);
+        let after = self.user_place_insert_index(insert_after_index);
+        let matches_row = self
+            .place_drop_target
+            .as_ref()
+            .is_some_and(|target| match target {
+                PlaceDropTarget::Place {
+                    path: target_path, ..
+                } => target_path == path,
+                PlaceDropTarget::Insert { index } => *index == before || *index == after,
+            });
+        if matches_row {
+            return self.clear_place_drop_target();
+        }
+        false
     }
 
     pub(crate) fn clear_drag_drop_targets(&mut self) -> bool {
@@ -4511,7 +4759,11 @@ impl FikaApp {
             mime_type,
             applications,
             query: String::new(),
+            query_caret: 0,
+            query_text_rect: None,
             scroll_handle: gpui::UniformListScrollHandle::new(),
+            scrollbar_drag_grab_y: None,
+            set_default_on_choose: false,
         });
     }
 
@@ -4542,12 +4794,12 @@ impl FikaApp {
             return false;
         };
 
-        match filter_input_action(keystroke) {
-            FilterInputAction::Cancel => {
+        match application_chooser_input_action(keystroke) {
+            ApplicationChooserInputAction::Cancel => {
                 if chooser.query.is_empty() {
                     self.dismiss_application_chooser();
                 } else {
-                    chooser.query.clear();
+                    chooser.clear_query();
                     chooser
                         .scroll_handle
                         .scroll_to_item_strict(0, ScrollStrategy::Top);
@@ -4555,7 +4807,7 @@ impl FikaApp {
                 cx.notify();
                 true
             }
-            FilterInputAction::FocusView => {
+            ApplicationChooserInputAction::ChooseFirst => {
                 let first_application = application_chooser_filtered_applications(
                     &chooser.applications,
                     &chooser.query,
@@ -4567,31 +4819,83 @@ impl FikaApp {
                 }
                 true
             }
-            FilterInputAction::Backspace => {
-                chooser.query.pop();
-                chooser
-                    .scroll_handle
-                    .scroll_to_item_strict(0, ScrollStrategy::Top);
-                cx.notify();
+            ApplicationChooserInputAction::MoveStart => {
+                if chooser.move_query_caret_to_start() {
+                    cx.notify();
+                }
                 true
             }
-            FilterInputAction::Insert(text) => {
-                chooser.query.push_str(&text);
-                chooser
-                    .scroll_handle
-                    .scroll_to_item_strict(0, ScrollStrategy::Top);
-                cx.notify();
+            ApplicationChooserInputAction::MoveEnd => {
+                if chooser.move_query_caret_to_end() {
+                    cx.notify();
+                }
                 true
             }
-            FilterInputAction::PassToView | FilterInputAction::Ignore => true,
+            ApplicationChooserInputAction::MoveBackward => {
+                if chooser.move_query_caret_backward() {
+                    cx.notify();
+                }
+                true
+            }
+            ApplicationChooserInputAction::MoveForward => {
+                if chooser.move_query_caret_forward() {
+                    cx.notify();
+                }
+                true
+            }
+            ApplicationChooserInputAction::Backspace => {
+                if chooser.backspace_query() {
+                    chooser
+                        .scroll_handle
+                        .scroll_to_item_strict(0, ScrollStrategy::Top);
+                    cx.notify();
+                }
+                true
+            }
+            ApplicationChooserInputAction::Delete => {
+                if chooser.delete_query_forward() {
+                    chooser
+                        .scroll_handle
+                        .scroll_to_item_strict(0, ScrollStrategy::Top);
+                    cx.notify();
+                }
+                true
+            }
+            ApplicationChooserInputAction::Insert(text) => {
+                if chooser.insert_query_text(&text) {
+                    chooser
+                        .scroll_handle
+                        .scroll_to_item_strict(0, ScrollStrategy::Top);
+                    cx.notify();
+                }
+                true
+            }
+            ApplicationChooserInputAction::PassToView | ApplicationChooserInputAction::Ignore => {
+                true
+            }
         }
     }
 
     fn choose_application_for_open_with(&mut self, desktop_id: String, cx: &mut Context<Self>) {
+        if self
+            .application_chooser
+            .as_ref()
+            .is_some_and(|chooser| chooser.set_default_on_choose)
+        {
+            self.set_default_open_with_application(desktop_id.clone());
+        }
         let Some(chooser) = self.application_chooser.take() else {
             return;
         };
         self.open_with_application(chooser.pane_id, &desktop_id, chooser.path, cx);
+    }
+
+    fn toggle_application_chooser_set_default(&mut self) {
+        if let Some(chooser) = &mut self.application_chooser
+            && chooser.mime_type.is_some()
+        {
+            chooser.set_default_on_choose = !chooser.set_default_on_choose;
+        }
     }
 
     fn set_default_open_with_application(&mut self, desktop_id: String) {
@@ -5469,6 +5773,8 @@ impl FikaApp {
             _ => {}
         }
 
+        self.retarget_rename_draft_for_lister_event(&event);
+
         let pane_id = event.pane_id();
         if let Some(signals) = self.panes.apply_lister_event(event) {
             if !signals.is_empty() {
@@ -5476,6 +5782,61 @@ impl FikaApp {
                 self.set_pane_status(pane_id, format!("{} model signal(s)", signals.len()));
             }
         }
+    }
+
+    fn retarget_rename_draft_for_lister_event(&mut self, event: &DirectoryListerEvent) -> bool {
+        let DirectoryListerEvent::ItemsRefreshed { pane_id, pairs, .. } = event else {
+            return false;
+        };
+        let Some(pane) = self.panes.pane(*pane_id) else {
+            return false;
+        };
+        if !event.matches_target(pane.id, pane.generation, &pane.current_dir) {
+            return false;
+        }
+        let Some(original_path) = self
+            .rename_draft
+            .as_ref()
+            .filter(|draft| draft.pane_id == *pane_id)
+            .map(|draft| draft.original_path.clone())
+        else {
+            return false;
+        };
+        let Some(retargeted_path) = Self::rename_draft_retarget_path_from_refresh_pairs(
+            &original_path,
+            &pane.current_dir,
+            pairs,
+        ) else {
+            return false;
+        };
+        if retargeted_path == original_path {
+            return false;
+        }
+        let Some(draft) = self
+            .rename_draft
+            .as_mut()
+            .filter(|draft| draft.pane_id == *pane_id)
+            .filter(|draft| draft.original_path == original_path)
+        else {
+            return false;
+        };
+        draft.retarget_original_path(retargeted_path);
+        true
+    }
+
+    fn rename_draft_retarget_path_from_refresh_pairs(
+        original_path: &Path,
+        current_dir: &Path,
+        pairs: &[RefreshPair],
+    ) -> Option<PathBuf> {
+        pairs
+            .iter()
+            .find(|pair| pair.old_path == original_path)
+            .and_then(|pair| {
+                pair.entry
+                    .as_ref()
+                    .map(|entry| current_dir.join(entry.name.as_ref()))
+            })
     }
 
     fn update_loading_state(
@@ -7258,7 +7619,7 @@ mod tests {
         );
         assert_eq!(
             ui::application_chooser::application_chooser_list_height(100),
-            480.0
+            360.0
         );
     }
 
@@ -7351,6 +7712,41 @@ text/plain=viewer.desktop;\n",
             vec!["org.gnome.Nautilus.desktop"]
         );
         assert!(application_chooser_filtered_applications(&applications, "missing").is_empty());
+    }
+
+    #[test]
+    fn application_chooser_default_toggle_is_dialog_level_state() {
+        let mut app = test_app_with_entries("/tmp/fika-open-with-default-toggle", &["note.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        app.mime_applications = MimeApplicationCache::from_applications_and_mimeapps(
+            vec![test_desktop_application(
+                "viewer.desktop",
+                "Viewer",
+                "viewer %f",
+                &["text/plain"],
+            )],
+            &[],
+        );
+
+        app.show_application_chooser(
+            pane_id,
+            PathBuf::from("/tmp/fika-open-with-default-toggle/note.txt"),
+            Some(Arc::from("text/plain")),
+        );
+        assert!(
+            !app.application_chooser
+                .as_ref()
+                .unwrap()
+                .set_default_on_choose
+        );
+
+        app.toggle_application_chooser_set_default();
+        assert!(
+            app.application_chooser
+                .as_ref()
+                .unwrap()
+                .set_default_on_choose
+        );
     }
 
     #[test]
@@ -8244,6 +8640,77 @@ text/plain=viewer.desktop;\n",
                 .find(|place| place.label == "User")
                 .is_some_and(|place| place.insert_before)
         );
+
+        let _ = std::fs::remove_dir_all(current);
+        let _ = std::fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn place_drop_target_leave_clears_only_matching_row_or_insert() {
+        let current = test_dir("place-drop-leave-current");
+        let user = test_dir("place-drop-leave-user");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+        let current_arg = current.display().to_string();
+        let mut app = test_app_with_entries(&current_arg, &[]);
+        app.places = vec![
+            PlaceEntry {
+                group: "",
+                marker: "H",
+                label: "Home".to_string(),
+                path: current.clone(),
+                editable: false,
+                removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+            PlaceEntry {
+                group: "",
+                marker: "B",
+                label: "User".to_string(),
+                path: user.clone(),
+                editable: true,
+                removable: true,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+            PlaceEntry {
+                group: "Devices",
+                marker: "/",
+                label: "Root".to_string(),
+                path: PathBuf::from("/"),
+                editable: false,
+                removable: false,
+                device_ejectable: false,
+                device_can_power_off: false,
+            },
+        ];
+
+        assert!(app.set_place_drag_drop_target_for_path(user.clone(), FileTransferMode::Copy));
+        let place_generation = app.drop_target_stale_generation;
+        assert!(!app.clear_place_drop_target_for_row(&current, 0, 1));
+        assert_eq!(
+            place_drop_target_mode_for_place(app.place_drop_target.as_ref(), &user),
+            Some(FileTransferMode::Copy)
+        );
+        assert!(app.clear_place_drop_target_for_row(&user, 1, 2));
+        assert!(app.drop_target_stale_generation > place_generation);
+        assert!(app.place_drop_target.is_none());
+
+        assert!(app.set_place_drag_drop_target_for_insert(0));
+        let insert_generation = app.drop_target_stale_generation;
+        assert!(!app.clear_place_drop_target_for_insert(2));
+        assert!(place_drop_target_matches_insert(
+            app.place_drop_target.as_ref(),
+            1
+        ));
+        assert!(app.clear_place_drop_target_for_insert(0));
+        assert!(app.drop_target_stale_generation > insert_generation);
+        assert!(app.place_drop_target.is_none());
+
+        assert!(app.set_place_drag_drop_target_for_insert(2));
+        assert!(app.clear_place_drop_target_for_row(&user, 1, 2));
+        assert!(app.place_drop_target.is_none());
 
         let _ = std::fs::remove_dir_all(current);
         let _ = std::fs::remove_dir_all(user);
@@ -9236,8 +9703,44 @@ text/plain=viewer.desktop;\n",
             RenameInputAction::CommitAndRenameNext
         );
         assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("home").unwrap()),
+            RenameInputAction::MoveStart
+        );
+        assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("end").unwrap()),
+            RenameInputAction::MoveEnd
+        );
+        assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("left").unwrap()),
+            RenameInputAction::MoveBackward
+        );
+        assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("right").unwrap()),
+            RenameInputAction::MoveForward
+        );
+        assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("shift-home").unwrap()),
+            RenameInputAction::SelectStart
+        );
+        assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("shift-end").unwrap()),
+            RenameInputAction::SelectEnd
+        );
+        assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("shift-left").unwrap()),
+            RenameInputAction::SelectBackward
+        );
+        assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("shift-right").unwrap()),
+            RenameInputAction::SelectForward
+        );
+        assert_eq!(
             rename_input_action(&gpui::Keystroke::parse("backspace").unwrap()),
             RenameInputAction::Backspace
+        );
+        assert_eq!(
+            rename_input_action(&gpui::Keystroke::parse("delete").unwrap()),
+            RenameInputAction::Delete
         );
         assert_eq!(
             rename_input_action(&gpui::Keystroke::parse("a->a").unwrap()),
@@ -9249,7 +9752,7 @@ text/plain=viewer.desktop;\n",
         );
         assert_eq!(
             rename_input_action(&gpui::Keystroke::parse("secondary-a").unwrap()),
-            RenameInputAction::Ignore
+            RenameInputAction::SelectAll
         );
     }
 
@@ -9291,7 +9794,134 @@ text/plain=viewer.desktop;\n",
             PathBuf::from("/tmp/fika-rename-path/beta.txt")
         );
         assert_eq!(draft.draft_name, "beta.txt");
+        assert_eq!(draft.caret, "beta".len());
+        assert_eq!(draft.selection, Some((0, "beta".len())));
         assert!(draft.error.is_none());
+    }
+
+    #[test]
+    fn watcher_rename_retargets_active_rename_draft_without_resetting_input() {
+        let root = PathBuf::from("/tmp/fika-rename-watch");
+        let old_path = root.join("old.txt");
+        let new_path = root.join("new.txt");
+        let mut app = test_app_with_entries(root.to_str().unwrap(), &["old.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.start_rename_for_path(pane_id, old_path.clone()));
+        {
+            let draft = app.rename_draft.as_mut().unwrap();
+            draft.draft_name = "user-input.md".to_string();
+            draft.caret = 4;
+            draft.selection = Some((0, 4));
+            draft.error = Some("keep me".to_string());
+        }
+        let generation = app.panes.pane(pane_id).unwrap().generation;
+
+        app.apply_event(DirectoryListerEvent::ItemsRefreshed {
+            pane_id,
+            generation,
+            request_serial: fika_core::RequestSerial(1),
+            path: root,
+            pairs: vec![RefreshPair {
+                old_path: old_path.clone(),
+                entry: Some(test_entry("new.txt")),
+            }],
+        });
+
+        let draft = app.rename_draft.as_ref().unwrap();
+        assert_eq!(draft.original_path, new_path);
+        assert_eq!(draft.draft_name, "user-input.md");
+        assert_eq!(draft.caret, 4);
+        assert_eq!(draft.selection, Some((0, 4)));
+        assert_eq!(draft.error.as_deref(), Some("keep me"));
+
+        let pane = app.panes.pane(pane_id).unwrap();
+        assert_eq!(pane.model.index_of_path(&old_path), None);
+        assert_eq!(pane.model.index_of_path(&draft.original_path), Some(0));
+        assert_eq!(
+            app.panes.selected_paths(pane_id).unwrap(),
+            vec![draft.original_path.clone()]
+        );
+    }
+
+    #[test]
+    fn rename_click_positions_caret_from_window_x() {
+        let mut app = test_app_with_entries("/tmp/fika-rename-click", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        assert!(
+            app.start_rename_for_path(pane_id, PathBuf::from("/tmp/fika-rename-click/alpha.txt"),)
+        );
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 200.0,
+                width: 500.0,
+                height: 300.0,
+            },
+        ));
+
+        let item = app
+            .layout_projection_for_pane(pane_id)
+            .unwrap()
+            .layout
+            .item_with_required_text_width(0, Some(compact_text_width("alpha.txt".len() as u16)))
+            .unwrap();
+        let window_x = 100.0 + item.text_rect.x + RENAME_TEXT_INSET_X + 6.0;
+        let window_y = 200.0 + item.text_rect.y + 4.0;
+
+        assert!(app.set_rename_caret_from_window_position(
+            pane_id,
+            gpui::point(px(window_x), px(window_y)),
+        ));
+
+        let draft = app.rename_draft.as_ref().unwrap();
+        assert_eq!(draft.caret, 1);
+        assert_eq!(draft.selection, None);
+    }
+
+    #[test]
+    fn rename_draft_width_expands_layout_and_caret_hit_test() {
+        let mut app = test_app_with_entries("/tmp/fika-rename-width", &["a.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        assert!(app.start_rename_for_path(pane_id, PathBuf::from("/tmp/fika-rename-width/a.txt"),));
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 200.0,
+                width: 700.0,
+                height: 360.0,
+            },
+        ));
+        let base_width = app
+            .layout_projection_for_pane(pane_id)
+            .unwrap()
+            .layout
+            .item(0)
+            .unwrap()
+            .item_rect
+            .width;
+        let long_name = "much-much-much-longer-rename-target-name.txt";
+        app.rename_draft.as_mut().unwrap().draft_name = long_name.to_string();
+
+        let item = app
+            .layout_projection_for_pane(pane_id)
+            .unwrap()
+            .layout
+            .item_with_required_text_width(0, Some(compact_text_width_for_name(long_name)))
+            .unwrap();
+        assert!(item.item_rect.width > base_width);
+        assert!(item.text_rect.width > compact_text_width_for_name("a.txt"));
+
+        let window_x = 100.0 + item.text_rect.x + RENAME_TEXT_INSET_X + item.text_rect.width - 4.0;
+        let window_y = 200.0 + item.text_rect.y + 4.0;
+        assert!(app.set_rename_caret_from_window_position(
+            pane_id,
+            gpui::point(px(window_x), px(window_y)),
+        ));
+
+        assert!(app.rename_draft.as_ref().unwrap().caret > "a.txt".len());
     }
 
     #[test]
@@ -9718,6 +10348,45 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn begin_item_drag_captures_external_uri_list_payload() {
+        let temp = test_dir("item-drag-export");
+        std::fs::create_dir_all(&temp).unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &["alpha.txt", "beta.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let alpha = temp.join("alpha.txt");
+        let beta = temp.join("beta.txt");
+
+        assert!(app.panes.select_only(pane_id, alpha.clone()));
+        assert_eq!(
+            app.panes.toggle_selection(pane_id, beta.clone()),
+            Some(true)
+        );
+        app.begin_item_drag(ItemDragPayload {
+            source_pane: pane_id,
+            source_path: alpha.clone(),
+            source_selected: true,
+        });
+
+        let export = app
+            .active_item_drag
+            .as_ref()
+            .and_then(|drag| drag.export.as_ref())
+            .unwrap();
+        assert_eq!(export.uri_list_mime, "text/uri-list");
+        assert_eq!(export.plain_text_mime, "text/plain");
+        assert_eq!(export.paths, vec![alpha.clone(), beta.clone()]);
+        assert_eq!(
+            export.uri_list,
+            format!("file://{}\nfile://{}", alpha.display(), beta.display())
+        );
+        assert_eq!(
+            export.plain_text,
+            format!("{}\n{}", alpha.display(), beta.display())
+        );
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
     fn item_drop_rejects_drop_onto_same_directory() {
         let temp = test_dir("item-drop-same-directory");
         let source = temp.join("source");
@@ -9778,6 +10447,88 @@ text/plain=viewer.desktop;\n",
         app.clear_pane_content_state(pane_id);
 
         assert!(app.item_drop_target.is_none());
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn item_drop_target_leave_clears_only_matching_target() {
+        let temp = test_dir("item-drop-target-leave-clear");
+        let first_dir = temp.join("first");
+        let second_dir = temp.join("second");
+        std::fs::create_dir_all(&first_dir).unwrap();
+        std::fs::create_dir_all(&second_dir).unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
+        let pane_generation = app.drop_target_stale_generation;
+        assert!(!app.clear_item_drop_target_for_pane(PaneId(999)));
+        assert_eq!(
+            item_drop_target_mode_for_pane(app.item_drop_target.as_ref(), pane_id),
+            Some(FileTransferMode::Copy)
+        );
+        assert!(app.clear_item_drop_target_for_pane(pane_id));
+        assert!(app.drop_target_stale_generation > pane_generation);
+        assert!(app.item_drop_target.is_none());
+
+        assert!(app.set_item_drag_drop_target_for_directory(
+            pane_id,
+            first_dir.clone(),
+            FileTransferMode::Move,
+        ));
+        let directory_generation = app.drop_target_stale_generation;
+        assert!(!app.clear_item_drop_target_for_directory(pane_id, &second_dir));
+        assert!(!app.clear_item_drop_target_for_directory(PaneId(999), &first_dir));
+        assert_eq!(
+            item_drop_target_mode_for_directory(app.item_drop_target.as_ref(), pane_id, &first_dir),
+            Some(FileTransferMode::Move)
+        );
+        assert!(app.clear_item_drop_target_for_directory(pane_id, &first_dir));
+        assert!(app.drop_target_stale_generation > directory_generation);
+        assert!(app.item_drop_target.is_none());
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn item_drop_target_rejects_source_directory_as_hover_target() {
+        let temp = test_dir("item-drop-source-directory-hover");
+        let source_dir = temp.join("source");
+        let target_dir = temp.join("target");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
+        let pane_id = app.panes.focused().unwrap();
+        let payload = ItemDragPayload {
+            source_pane: pane_id,
+            source_path: source_dir.clone(),
+            source_selected: false,
+        };
+
+        app.begin_item_drag(payload);
+        assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
+        assert!(!app.item_drag_can_drop_to_directory(&source_dir));
+        assert!(app.set_item_drag_drop_target_for_directory(
+            pane_id,
+            source_dir.clone(),
+            FileTransferMode::Copy
+        ));
+        assert!(app.item_drop_target.is_none());
+
+        assert!(app.item_drag_can_drop_to_directory(&target_dir));
+        assert!(app.set_item_drag_drop_target_for_directory(
+            pane_id,
+            target_dir.clone(),
+            FileTransferMode::Copy
+        ));
+        assert_eq!(
+            item_drop_target_mode_for_directory(
+                app.item_drop_target.as_ref(),
+                pane_id,
+                &target_dir
+            ),
+            Some(FileTransferMode::Copy)
+        );
         let _ = std::fs::remove_dir_all(temp);
     }
 
@@ -10046,36 +10797,6 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn horizontal_scrollbar_drag_can_start_from_cached_track_bounds() {
-        let mut app = test_app_with_entries("/tmp/fika-scrollbar-track", &["alpha.txt"]);
-        let pane_id = app.panes.focused().unwrap();
-
-        assert!(app.set_horizontal_scrollbar_track(
-            pane_id,
-            ViewRect {
-                x: 100.0,
-                y: 400.0,
-                width: 240.0,
-                height: 12.0,
-            },
-            1600.0,
-            0.0,
-        ));
-        assert!(app.begin_horizontal_scrollbar_drag_from_window(
-            pane_id,
-            gpui::point(px(180.0), px(406.0)),
-        ));
-
-        assert!(app.active_scrollbar_drag.is_some_and(|drag| {
-            drag.pane_id == pane_id
-                && (drag.track_window_rect.x - 100.0).abs() <= 0.01
-                && (drag.handle_grab_x - 18.0).abs() <= 0.01
-        }));
-        app.clear_horizontal_scrollbar_drag_for_pane(pane_id);
-        assert!(!app.horizontal_scrollbar_tracks.contains_key(&pane_id));
-    }
-
-    #[test]
     fn horizontal_scrollbar_drag_can_start_from_live_track_bounds() {
         let mut app = test_app_with_entries("/tmp/fika-scrollbar-live-track", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
@@ -10101,8 +10822,67 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn horizontal_scrollbar_drag_rejects_points_outside_track_height() {
-        let mut app = test_app_with_entries("/tmp/fika-scrollbar-track-y", &["alpha.txt"]);
+    fn horizontal_scrollbar_drag_can_start_from_cached_track() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-cached-track", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.set_horizontal_scrollbar_track(
+            pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
+            1600.0,
+            0.0,
+        ));
+        assert!(app.begin_horizontal_scrollbar_drag_from_cached_track(
+            pane_id,
+            gpui::point(px(180.0), px(406.0)),
+        ));
+
+        assert!(app.horizontal_scrollbar_drag_is_active_for(pane_id));
+    }
+
+    #[test]
+    fn horizontal_scrollbar_live_track_start_ignores_stale_cached_track() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-live-not-cache", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let live_track = ViewRect {
+            x: 520.0,
+            y: 300.0,
+            width: 180.0,
+            height: 12.0,
+        };
+
+        assert!(app.set_horizontal_scrollbar_track(
+            pane_id,
+            ViewRect {
+                x: 80.0,
+                y: 420.0,
+                width: 260.0,
+                height: 12.0,
+            },
+            1600.0,
+            0.0,
+        ));
+        assert!(app.begin_horizontal_scrollbar_drag_from_window_track(
+            pane_id,
+            1600.0,
+            0.0,
+            live_track,
+            gpui::point(px(620.0), px(306.0)),
+        ));
+
+        assert!(app.active_scrollbar_drag.is_some_and(|drag| {
+            drag.pane_id == pane_id && drag.track_window_rect == live_track
+        }));
+    }
+
+    #[test]
+    fn horizontal_scrollbar_track_cache_is_removed_with_pane_drag_state() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-cache-clear", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
 
         assert!(app.set_horizontal_scrollbar_track(
@@ -10117,8 +10897,30 @@ text/plain=viewer.desktop;\n",
             0.0,
         ));
 
-        assert!(!app.begin_horizontal_scrollbar_drag_from_window(
+        app.clear_horizontal_scrollbar_drag_for_pane(pane_id);
+
+        assert!(!app.begin_horizontal_scrollbar_drag_from_cached_track(
             pane_id,
+            gpui::point(px(180.0), px(406.0)),
+        ));
+        assert!(!app.horizontal_scrollbar_drag_is_active_for(pane_id));
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drag_rejects_points_outside_track_height() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-track-y", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(!app.begin_horizontal_scrollbar_drag_from_window_track(
+            pane_id,
+            1600.0,
+            0.0,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
             gpui::point(px(180.0), px(390.0)),
         ));
         assert!(app.active_scrollbar_drag.is_none());
@@ -10129,19 +10931,16 @@ text/plain=viewer.desktop;\n",
         let mut app = test_app_with_entries("/tmp/fika-scrollbar-window", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
 
-        assert!(app.set_horizontal_scrollbar_track(
+        assert!(app.begin_horizontal_scrollbar_drag_from_window_track(
             pane_id,
+            1600.0,
+            0.0,
             ViewRect {
                 x: 100.0,
                 y: 400.0,
                 width: 240.0,
                 height: 12.0,
             },
-            1600.0,
-            0.0,
-        ));
-        assert!(app.begin_horizontal_scrollbar_drag_from_window(
-            pane_id,
             gpui::point(px(180.0), px(406.0)),
         ));
         assert!(app.update_horizontal_scrollbar_drag_from_window(
@@ -10154,6 +10953,144 @@ text/plain=viewer.desktop;\n",
                 .pane(pane_id)
                 .is_some_and(|pane| pane.view.scroll_x > 0.0)
         );
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drag_keeps_active_session_on_stationary_move() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-stationary", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let start_position = gpui::point(px(180.0), px(406.0));
+
+        assert!(app.begin_horizontal_scrollbar_drag_from_window_track(
+            pane_id,
+            1600.0,
+            0.0,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
+            start_position,
+        ));
+
+        assert!(!app.update_horizontal_scrollbar_drag_from_window(pane_id, start_position));
+        assert!(app.horizontal_scrollbar_drag_is_active_for(pane_id));
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drag_keeps_tracking_after_pointer_leaves_track() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-window-leave", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.begin_horizontal_scrollbar_drag_from_window_track(
+            pane_id,
+            1600.0,
+            0.0,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
+            gpui::point(px(180.0), px(406.0)),
+        ));
+        assert!(app.update_horizontal_scrollbar_drag_from_window(
+            pane_id,
+            gpui::point(px(520.0), px(120.0)),
+        ));
+        let right_scroll = app
+            .panes
+            .pane(pane_id)
+            .map(|pane| pane.view.scroll_x)
+            .unwrap_or_default();
+
+        assert!(right_scroll > 1200.0);
+
+        assert!(app.update_horizontal_scrollbar_drag_from_window(
+            pane_id,
+            gpui::point(px(-80.0), px(900.0)),
+        ));
+        let left_scroll = app
+            .panes
+            .pane(pane_id)
+            .map(|pane| pane.view.scroll_x)
+            .unwrap_or_default();
+
+        assert_eq!(left_scroll, 0.0);
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drag_start_does_not_overwrite_active_drag() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-no-overwrite", &["alpha.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.begin_horizontal_scrollbar_drag_from_window_track(
+            pane_id,
+            1600.0,
+            0.0,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
+            gpui::point(px(180.0), px(406.0)),
+        ));
+        let first_drag = app.active_scrollbar_drag.unwrap();
+
+        assert!(!app.begin_horizontal_scrollbar_drag_from_window_track(
+            pane_id,
+            1600.0,
+            100.0,
+            ViewRect {
+                x: 200.0,
+                y: 500.0,
+                width: 300.0,
+                height: 12.0,
+            },
+            gpui::point(px(260.0), px(506.0)),
+        ));
+
+        assert_eq!(app.active_scrollbar_drag, Some(first_drag));
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drag_start_rejects_second_pane_while_active() {
+        let mut app = test_app_with_entries(
+            "/tmp/fika-scrollbar-no-cross-pane-overwrite",
+            &["alpha.txt"],
+        );
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.begin_horizontal_scrollbar_drag_from_window_track(
+            pane_id,
+            1600.0,
+            0.0,
+            ViewRect {
+                x: 100.0,
+                y: 400.0,
+                width: 240.0,
+                height: 12.0,
+            },
+            gpui::point(px(180.0), px(406.0)),
+        ));
+        let first_drag = app.active_scrollbar_drag.unwrap();
+
+        assert!(!app.begin_horizontal_scrollbar_drag_from_window_track(
+            PaneId(999),
+            1600.0,
+            0.0,
+            ViewRect {
+                x: 200.0,
+                y: 420.0,
+                width: 240.0,
+                height: 12.0,
+            },
+            gpui::point(px(280.0), px(426.0)),
+        ));
+
+        assert_eq!(app.active_scrollbar_drag, Some(first_drag));
     }
 
     #[test]

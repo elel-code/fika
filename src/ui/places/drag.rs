@@ -3,21 +3,26 @@ use std::sync::Arc;
 
 use gpui::{Context, IntoElement, ParentElement, Render, Styled, div, rgb};
 
+use super::super::drag_drop::{DragExportPayload, place_drag_export_payload};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlaceDrag {
     path: PathBuf,
     label: Arc<str>,
     source_index: usize,
     movable: bool,
+    pub(crate) export: Option<DragExportPayload>,
 }
 
 impl PlaceDrag {
     pub(crate) fn new(path: PathBuf, label: &str, source_index: usize, movable: bool) -> Self {
+        let export = place_drag_export_payload(&path);
         Self {
             path,
             label: Arc::from(label),
             source_index,
             movable,
+            export,
         }
     }
 
@@ -164,5 +169,34 @@ mod tests {
             "Work".to_string()
         );
         assert_eq!(display_path_for_drag(Path::new("/")), "/".to_string());
+    }
+
+    #[test]
+    fn place_drag_carries_external_export_for_directories_only() {
+        let root = std::env::temp_dir().join(format!(
+            "fika-place-drag-payload-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let dir = root.join("dir");
+        let file = root.join("file.txt");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&file, "not exported").unwrap();
+
+        let dir_drag = PlaceDrag::new(dir.clone(), "dir", 0, true);
+        assert_eq!(
+            dir_drag
+                .export
+                .as_ref()
+                .map(|payload| payload.paths.clone()),
+            Some(vec![dir])
+        );
+        let file_drag = PlaceDrag::new(file, "file", 1, true);
+        assert_eq!(file_drag.export, None);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

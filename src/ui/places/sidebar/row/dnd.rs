@@ -38,10 +38,20 @@ pub(super) fn install_place_row_dnd(
         path_for_external_target,
         path_for_external_drop,
     } = config;
+    let path_for_item_target = path_for_internal_target.clone();
+    let path_for_place_drag_leave = path_for_internal_target.clone();
+    let path_for_external_move_target = path_for_external_target.clone();
 
     row.on_drag_move::<ItemDrag>(cx.listener(
         move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
             if !event.bounds.contains(&event.event.position) {
+                if this.clear_place_drop_target_for_row(
+                    &path_for_item_target,
+                    insert_before_index,
+                    insert_after_index,
+                ) {
+                    cx.notify();
+                }
                 return;
             }
             let mode = file_transfer_mode_for_modifiers(window.modifiers());
@@ -61,7 +71,7 @@ pub(super) fn install_place_row_dnd(
                     this.set_place_drag_drop_target_for_insert(insert_after_index)
                 }
                 PlaceDropZone::OnPlace if mounted => {
-                    this.set_place_drag_drop_target_for_path(path_for_internal_target.clone(), mode)
+                    this.set_place_drag_drop_target_for_path(path_for_item_target.clone(), mode)
                 }
                 PlaceDropZone::OnPlace => this.clear_drag_drop_targets(),
             };
@@ -80,6 +90,13 @@ pub(super) fn install_place_row_dnd(
     .on_drag_move::<ExternalPaths>(cx.listener(
         move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
             if !event.bounds.contains(&event.event.position) {
+                if this.clear_place_drop_target_for_row(
+                    &path_for_external_move_target,
+                    insert_before_index,
+                    insert_after_index,
+                ) {
+                    cx.notify();
+                }
                 return;
             }
             let mode = file_transfer_mode_for_modifiers(window.modifiers());
@@ -98,9 +115,10 @@ pub(super) fn install_place_row_dnd(
                 PlaceDropZone::InsertAfter => {
                     this.set_place_drag_drop_target_for_insert(insert_after_index)
                 }
-                PlaceDropZone::OnPlace if mounted => {
-                    this.set_place_drag_drop_target_for_path(path_for_external_target.clone(), mode)
-                }
+                PlaceDropZone::OnPlace if mounted => this.set_place_drag_drop_target_for_path(
+                    path_for_external_move_target.clone(),
+                    mode,
+                ),
                 PlaceDropZone::OnPlace => this.clear_drag_drop_targets(),
             };
             if let Some(cursor_mode) = cursor_mode {
@@ -118,6 +136,13 @@ pub(super) fn install_place_row_dnd(
     .on_drag_move::<PlaceDrag>(cx.listener(
         move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
             if !event.bounds.contains(&event.event.position) {
+                if this.clear_place_drop_target_for_row(
+                    &path_for_place_drag_leave,
+                    insert_before_index,
+                    insert_after_index,
+                ) {
+                    cx.notify();
+                }
                 return;
             }
             let drag = event.drag(cx);

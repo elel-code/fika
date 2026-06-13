@@ -19,7 +19,11 @@ pub(super) fn install_section_dnd(
         .on_drag_move::<ItemDrag>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                 let contains = event.bounds.contains(&event.event.position);
-                let changed = contains && this.set_place_drag_drop_target_for_insert(insert_index);
+                let changed = if contains {
+                    this.set_place_drag_drop_target_for_insert(insert_index)
+                } else {
+                    this.clear_place_drop_target_for_insert(insert_index)
+                };
                 if contains {
                     refresh_active_drag_cursor_for_transfer_mode(
                         FileTransferMode::Copy,
@@ -39,7 +43,11 @@ pub(super) fn install_section_dnd(
         .on_drag_move::<ExternalPaths>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
                 let contains = event.bounds.contains(&event.event.position);
-                let changed = contains && this.set_place_drag_drop_target_for_insert(insert_index);
+                let changed = if contains {
+                    this.set_place_drag_drop_target_for_insert(insert_index)
+                } else {
+                    this.clear_place_drop_target_for_insert(insert_index)
+                };
                 if contains {
                     refresh_active_drag_cursor_for_transfer_mode(
                         FileTransferMode::Copy,
@@ -75,9 +83,13 @@ pub(super) fn install_section_dnd(
             move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
                 let contains = event.bounds.contains(&event.event.position);
                 let drag = event.drag(cx);
-                let changed = contains
-                    && drag.movable()
-                    && this.set_place_drag_drop_target_for_insert(insert_index);
+                let changed = if contains && drag.movable() {
+                    this.set_place_drag_drop_target_for_insert(insert_index)
+                } else if !contains {
+                    this.clear_place_drop_target_for_insert(insert_index)
+                } else {
+                    false
+                };
                 if contains && drag.movable() {
                     refresh_active_drag_cursor_for_transfer_mode(
                         FileTransferMode::Move,

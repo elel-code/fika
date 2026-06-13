@@ -21,6 +21,5 @@ pub(crate) struct PaneSnapshot {
     pub(crate) view: ViewState,
     pub(crate) rubber_band: Option<ViewRect>,
     pub(crate) drop_target: Option<FileTransferMode>,
-    pub(crate) scrollbar_drag_active: bool,
     pub(crate) focused: bool,
 }

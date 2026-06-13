@@ -151,7 +151,17 @@ pub(crate) enum RenameInputAction {
     Cancel,
     Commit,
     CommitAndRenameNext,
+    MoveStart,
+    MoveEnd,
+    MoveBackward,
+    MoveForward,
+    SelectAll,
+    SelectStart,
+    SelectEnd,
+    SelectBackward,
+    SelectForward,
     Backspace,
+    Delete,
     Insert(String),
     Ignore,
 }
@@ -162,7 +172,12 @@ pub(crate) fn rename_input_action(keystroke: &gpui::Keystroke) -> RenameInputAct
             "escape" => RenameInputAction::Cancel,
             "enter" => RenameInputAction::Commit,
             "tab" => RenameInputAction::CommitAndRenameNext,
+            "home" => RenameInputAction::MoveStart,
+            "end" => RenameInputAction::MoveEnd,
+            "left" => RenameInputAction::MoveBackward,
+            "right" => RenameInputAction::MoveForward,
             "backspace" => RenameInputAction::Backspace,
+            "delete" => RenameInputAction::Delete,
             _ => rename_text_input_action(keystroke),
         };
     }
@@ -173,7 +188,20 @@ pub(crate) fn rename_input_action(keystroke: &gpui::Keystroke) -> RenameInputAct
         && !keystroke.modifiers.platform
         && !keystroke.modifiers.function
     {
-        return rename_text_input_action(keystroke);
+        return match keystroke.key.to_ascii_lowercase().as_str() {
+            "home" => RenameInputAction::SelectStart,
+            "end" => RenameInputAction::SelectEnd,
+            "left" => RenameInputAction::SelectBackward,
+            "right" => RenameInputAction::SelectForward,
+            _ => rename_text_input_action(keystroke),
+        };
+    }
+
+    if keystroke.modifiers.secondary() && keystroke.modifiers.number_of_modifiers() == 1 {
+        return match keystroke.key.to_ascii_lowercase().as_str() {
+            "a" => RenameInputAction::SelectAll,
+            _ => RenameInputAction::Ignore,
+        };
     }
 
     RenameInputAction::Ignore
@@ -322,6 +350,62 @@ fn filter_text_input_action(keystroke: &gpui::Keystroke) -> FilterInputAction {
         .filter(|text| text.chars().all(|ch| !ch.is_control()))
         .map(|text| FilterInputAction::Insert(text.clone()))
         .unwrap_or(FilterInputAction::Ignore)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ApplicationChooserInputAction {
+    Cancel,
+    ChooseFirst,
+    MoveStart,
+    MoveEnd,
+    MoveBackward,
+    MoveForward,
+    Backspace,
+    Delete,
+    Insert(String),
+    PassToView,
+    Ignore,
+}
+
+pub(crate) fn application_chooser_input_action(
+    keystroke: &gpui::Keystroke,
+) -> ApplicationChooserInputAction {
+    if has_no_modifiers(keystroke) {
+        return match keystroke.key.to_ascii_lowercase().as_str() {
+            "escape" => ApplicationChooserInputAction::Cancel,
+            "enter" => ApplicationChooserInputAction::ChooseFirst,
+            "up" | "down" | "pageup" | "pagedown" => ApplicationChooserInputAction::PassToView,
+            "home" => ApplicationChooserInputAction::MoveStart,
+            "end" => ApplicationChooserInputAction::MoveEnd,
+            "left" => ApplicationChooserInputAction::MoveBackward,
+            "right" => ApplicationChooserInputAction::MoveForward,
+            "backspace" => ApplicationChooserInputAction::Backspace,
+            "delete" => ApplicationChooserInputAction::Delete,
+            _ => application_chooser_text_input_action(keystroke),
+        };
+    }
+
+    if keystroke.modifiers.shift
+        && !keystroke.modifiers.control
+        && !keystroke.modifiers.alt
+        && !keystroke.modifiers.platform
+        && !keystroke.modifiers.function
+    {
+        return application_chooser_text_input_action(keystroke);
+    }
+
+    ApplicationChooserInputAction::Ignore
+}
+
+fn application_chooser_text_input_action(
+    keystroke: &gpui::Keystroke,
+) -> ApplicationChooserInputAction {
+    keystroke
+        .key_char
+        .as_ref()
+        .filter(|text| text.chars().all(|ch| !ch.is_control()))
+        .map(|text| ApplicationChooserInputAction::Insert(text.clone()))
+        .unwrap_or(ApplicationChooserInputAction::Ignore)
 }
 
 fn has_no_modifiers(keystroke: &gpui::Keystroke) -> bool {

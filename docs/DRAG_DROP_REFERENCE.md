@@ -75,9 +75,10 @@ model, and file operations are launched only after a drop target is resolved.
 - Dolphin "pressed selected item drags the whole selection" -> Fika item drag
   preview uses pane-local selection count when the dragged item is selected, and
   falls back to a single-item preview for unselected items.
-- Dolphin `KFileItemModel::createMimeData()` -> future Fika drag payload should
-  be built from `PaneController::selected_paths()` and encoded with the same
-  `FileClipboardPayload` URI-list path used by clipboard operations.
+- Dolphin `KFileItemModel::createMimeData()` -> Fika `DragExportPayload` is
+  built from `PaneController::selected_paths()` for selected item drags, prunes
+  child paths when a parent directory is already exported, and encodes
+  `text/uri-list` through the same URI-list path used by clipboard operations.
 - Dolphin `DragAndDropHelper::supportsDropping()` -> future Fika drop target
   checks should accept current directory blank space, writable directories,
   desktop files and local executables, and reject no-op drops onto their own
@@ -110,6 +111,12 @@ model, and file operations are launched only after a drop target is resolved.
   item, file item, Places row and Places heading targets update only when the
   pointer is inside their GPUI bounds, so the active drop target tracks the
   actual endpoint in real time instead of being overwritten by sibling handlers.
+- Pane blank space, directory item, breadcrumb segment, Places row and Places
+  section drag handlers also clear only the target they own when a later
+  drag-move event reports the pointer outside their bounds. This mirrors
+  Dolphin's `dragLeaveEvent()` cleanup at the target level and prevents old
+  pane tint, directory highlight or Places insertion lines from waiting for the
+  stale timer when the pointer has already moved elsewhere.
 - Pane, directory item and Places row drop targets carry the current
   `FileTransferMode`, recomputed from `Window::modifiers()` on every drag move
   and again on drop. No modifier or secondary/Ctrl means Copy, Shift means Move,
@@ -117,13 +124,20 @@ model, and file operations are launched only after a drop target is resolved.
   drags and GPUI `ExternalPaths` drags.
 - `src/ui/drag_drop.rs` now owns the DnD UI module boundary, while
   `src/ui/drag_drop/state.rs` owns `FileTransferMode`, `ItemDragPayload`,
-  `ActiveItemDrag`, `ItemDropTarget`, `PlaceDropTarget`, modifier-to-mode
-  mapping, cursor style mapping, no-op drop rejection and drop target matching
-  helpers. `main.rs` still performs the app-level operation routing after a
-  target is resolved.
+  `ActiveItemDrag`, `DragExportPayload`, `ItemDropTarget`, `PlaceDropTarget`,
+  modifier-to-mode mapping, cursor style mapping, no-op drop rejection and drop
+  target matching helpers. `main.rs` still performs the app-level operation
+  routing after a target is resolved.
+- Item drags now carry a prepared external export payload alongside the internal
+  GPUI drag value. The payload contains the resolved path list, `text/uri-list`
+  and `text/plain` data. Places drags prepare the same payload only when the
+  place path exists and is a directory.
 - Directory item, pane background and Places row drop targets use action-specific
   colors while hovered: green for Copy, amber for Move, and purple for Link.
   This visual state is separate from selection, hover and active place state.
+- Drop target stale timeout remains as a fallback for drag cancellation or
+  platform/backend paths that stop producing drag-move events; it is no longer
+  the primary cleanup path for ordinary target leave/target switch.
 - Ark drag-extract MIME parsing exists in core as
   `ark_dnd_extract_payload()`. It requires both
   `application/x-kde-ark-dndextract-service` and
@@ -139,15 +153,16 @@ model, and file operations are launched only after a drop target is resolved.
   bookmark block, built-in Home/Trash/Root and future device places are refused,
   and successful moves are written back to `user-places.xbel`.
 - External Wayland/X11 drag MIME publication is not complete yet. GPUI's current
-  app-level drag value is sufficient for internal drop targets, but system MIME
-  data still needs a backend path capable of publishing `text/uri-list` and
-  `text/plain` together.
+  app-level drag value is sufficient for internal drop targets, and Fika now
+  prepares the exact `text/uri-list` + `text/plain` payload required for
+  publication, but system MIME data still needs a backend path capable of
+  publishing that payload to other applications.
 
 ## Remaining Work
 
 - Complete external item and blank viewport drop targets for backend MIME data
   offers that do not yet arrive as GPUI `ExternalPaths`.
-- Integrate external drag MIME data with the same URI-list encoder used by
-  clipboard operations.
+- Wire `DragExportPayload` into the future GPUI/backend drag-source MIME
+  publication API.
 - Feed Ark DnD service/path MIME offers into the core parser/executor instead
   of ordinary copy/move/link when that payload is present.

@@ -80,7 +80,7 @@ src/
     properties_dialog.rs         Properties dialog
     rename.rs                    Inline rename
     rubber_band.rs               Rubber-band selection
-    scrollbar.rs                 Horizontal scrollbar
+    scrollbar.rs                 Horizontal scrollbar entry point
     shortcuts.rs                 Keyboard shortcut classification
     status_bar.rs                Status bar
     place_draft.rs               Places Add/Edit draft
@@ -91,7 +91,7 @@ src/
     clipboard/
       state.rs                   Copy/cut mode and GPUI ClipboardItem state
     drag_drop/
-      state.rs                   DnD state, modifier-to-mode, target matching
+      state.rs                   DnD state, export payloads, modifier-to-mode, target matching
     file_grid/
       layout.rs                  Compact column-width cache and layout assembly
       slots.rs                   Visible-item slot pool (recycled element IDs)
@@ -113,8 +113,13 @@ src/
       metadata.rs                File metadata reader and row generation
     rename/
       draft.rs                   Pane-local rename draft state
+      metrics.rs                 Rename caret hit-test and text inset metrics
     rubber_band/
       state.rs                   Rubber-band drag payload and rect projection
+    scrollbar/
+      drag.rs                    Pane-local scrollbar drag state and app routing
+      element.rs                 GPUI scrollbar element, hitbox and drag handlers
+      geometry.rs                Scrollbar bounds, hit-test and scroll mapping
     status_bar/
       state.rs                   Snapshot, space info cache, progress handle
       summary.rs                 Pane selection/model summary formatting
@@ -312,7 +317,7 @@ The GPUI shell owns:
 - context menu (target/action model, Open With, service menus, nested submenus)
 - drag and drop (item/place source, directory/pane target, external paths)
 - clipboard interaction (Copy/Cut/Paste with progress, primary-selection paste)
-- inline rename
+- inline rename, including pane-local draft state and watcher-rename retargeting
 - properties dialog
 - application chooser ("Other Application…" with `uniform_list`)
 - watcher polling handoff into core events
@@ -338,16 +343,46 @@ through three layers:
 3. **GPU-composited scroll**: Content translation via
    `left(-scroll_x) / top(-scroll_y)` avoids layout recalculation on scroll.
 
-#### Scrollbar (`src/ui/scrollbar.rs`)
+Active inline rename drafts add a pane-local text-width override to the compact
+column metrics. Snapshot generation, item hit-testing, rubber-band visual
+intersection and rename caret placement all consume that same expanded layout,
+so a long draft name can widen the editor without desynchronizing mouse
+geometry.
 
-The horizontal scrollbar uses a hybrid approach:
+Inline rename text editing follows normal text-field selection semantics inside
+`src/ui/rename/draft.rs`: the initial selection covers the file stem, plain
+Left/Right collapse an existing selection to its start/end, Shift+Left/Right and
+Shift+Home/End extend the selection from the current anchor, and
+Ctrl/Secondary+A selects the full draft name including extension.
+The file-grid renderer keeps the inline editor visually tied to the filename
+line: only the stable name row receives the text-field border/background,
+selection highlight and caret, while the kind/error/extension-warning helper
+text stays in the existing helper row below it.
 
-- Handle rendering uses `canvas()` with `paint_quad` for the draggable handle.
-- Drag initiation uses paint-phase `window.on_mouse_event(capture, MouseDown)`
-  from the handle canvas (Path A) and a reserve-area `on_mouse_down(Left)`
-  with measured-track fallback (Path B).
-- Drag tracking uses paint-phase `window.on_mouse_event(capture, MouseMove)`
-  and a full-pane `scrollbar_drag_capture_overlay`.
+#### Scrollbar (`src/ui/scrollbar.rs` + `src/ui/scrollbar/*`)
+
+The horizontal scrollbar is isolated behind the `src/ui/scrollbar.rs` entry
+module:
+
+- `scrollbar/geometry.rs` owns track normalization, window/local hit-testing
+  and handle-to-scroll mapping.
+- `scrollbar/drag.rs` owns `ActiveScrollBarDrag` and pane-local
+  begin/update/finish routing on `FikaApp`.
+- `scrollbar/element.rs` owns the GPUI scrollbar element, handle painting,
+  prepaint hitbox insertion, cached-track publication and paint-phase pointer
+  capture handlers.
+- The canvas inserts a prepaint `HitboxBehavior::BlockMouse` hitbox for the
+  actual rendered track and converts those bounds to a window-space track rect.
+  Prepaint publishes that rect as the pane-local current scrollbar track.
+- The canvas registers capture-phase mouse down/move/up handlers during paint.
+  Left down starts from that frame's live window-space track rect only when the
+  pointer is inside the measured 12px strip and no modal mouse overlay is
+  active, then captures the pointer on the scrollbar hitbox. Move events are
+  routed by pane-local active drag state, not GPUI DnD, and update scroll from
+  the original window-space track rect even after the pointer leaves the strip.
+- The file-grid reserve only provides layout, mouse occlusion, wheel routing and
+  navigation side-button routing. It does not intercept left-button down and
+  does not start or update drag state.
 
 #### Location Bar (`src/ui/location_bar.rs`)
 
@@ -397,6 +432,7 @@ Generates Dolphin-style context menus with:
 Supports:
 
 - Internal item drag (pane to pane, pane to Places, Places to pane)
+- Prepared external item/place drag payloads (`text/uri-list` and `text/plain`)
 - External file drop (`ExternalPaths`)
 - Modifier-based mode switching (no modifier = Copy, Shift = Move,
   Shift+Ctrl = Link)

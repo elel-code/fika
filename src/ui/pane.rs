@@ -54,7 +54,6 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
         view,
         rubber_band,
         drop_target,
-        scrollbar_drag_active,
         focused,
     } = snapshot;
     let visible_width = view.viewport_width;
@@ -136,7 +135,6 @@ pub(crate) fn pane_view(props: PaneProps, cx: &mut Context<FikaApp>) -> Stateful
                 view,
                 rubber_band,
                 drop_target,
-                scrollbar_drag_active,
                 mode: file_grid_mode,
                 mouse_overlay_active,
             },
@@ -588,12 +586,18 @@ fn breadcrumb_segment(
                     move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        let changed = contains
-                            && this.set_item_drag_drop_target_for_directory(
+                        let changed = if contains {
+                            this.set_item_drag_drop_target_for_directory(
                                 pane_id,
                                 path_for_internal_move.clone(),
                                 mode,
-                            );
+                            )
+                        } else {
+                            this.clear_item_drop_target_for_directory(
+                                pane_id,
+                                &path_for_internal_move,
+                            )
+                        };
                         if contains {
                             refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
                             this.schedule_drop_target_stale_clear(cx);
@@ -608,12 +612,18 @@ fn breadcrumb_segment(
                     move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        let changed = contains
-                            && this.set_item_drag_drop_target_for_directory(
+                        let changed = if contains {
+                            this.set_item_drag_drop_target_for_directory(
                                 pane_id,
                                 path_for_external_move.clone(),
                                 mode,
-                            );
+                            )
+                        } else {
+                            this.clear_item_drop_target_for_directory(
+                                pane_id,
+                                &path_for_external_move,
+                            )
+                        };
                         if contains {
                             refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
                             this.schedule_drop_target_stale_clear(cx);

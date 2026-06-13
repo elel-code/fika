@@ -25,6 +25,14 @@ impl PaneLayoutProjection {
     pub(crate) fn model_index_for_layout_index(&self, layout_index: usize) -> Option<usize> {
         model_index_for_layout_index(self.filtered.as_ref(), layout_index)
     }
+
+    pub(crate) fn layout_index_for_model_index(&self, model_index: usize) -> Option<usize> {
+        self.filtered
+            .as_ref()
+            .map_or(Some(model_index), |filtered| {
+                filtered.layout_index_for_model_index(model_index)
+            })
+    }
 }
 
 #[cfg(test)]
@@ -49,6 +57,8 @@ mod tests {
         );
 
         assert_eq!(projection.model_index_for_layout_index(0), Some(1));
+        assert_eq!(projection.layout_index_for_model_index(1), Some(0));
+        assert_eq!(projection.layout_index_for_model_index(0), None);
     }
 
     fn test_entry(name: &str) -> Entry {

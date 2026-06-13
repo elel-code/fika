@@ -140,19 +140,25 @@ icon selection, Open With menu, and future process launching path.
     still builds a `DesktopLaunchPlan` and launches it through
     `launch_with_systemd_user()`. The GPUI list uses `uniform_list` with a
     persistent `UniformListScrollHandle`, has an explicit virtual-list height
-    derived from row count and capped to the dialog max height, and only resolves
-    icons for the visible row range. The dialog owns a search query routed from
-    keystrokes while it is open; filtering matches application name, desktop id,
-    exec string, and desktop file path, with Escape clearing the query before
-    closing the dialog. Fika does not import Zed's GPL `ui` crate only for
-    `WithScrollbar`; the chooser renders its own lightweight scrollbar thumb on
-    top of the GPUI virtual list.
-  - When the dialog was opened for a known MIME type, non-default application
-    rows expose a Set Default action. The action writes the user
-    `mimeapps.list`, updates `[Default Applications]`, adds the application to
-    `[Added Associations]`, removes the same application from
-    `[Removed Associations]`, reloads the launcher cache, and keeps the dialog
-    open with the new default badge.
+    capped to the dialog's available body height, and only resolves icons for
+    the visible row range. The dialog owns a search query routed from keystrokes
+    while it is open; filtering matches application name, desktop id, exec
+    string, and desktop file path, with Escape clearing the query before closing
+    the dialog. The search field renders an active caret and uses text cursor
+    hit testing because the dialog is always the active text target while open.
+    The dialog clips its chrome/body with `overflow_hidden()` so the virtual
+    list cannot draw beyond the modal frame.
+    Fika does not import Zed's GPL `ui` crate only for `WithScrollbar`; the
+    chooser renders a local scrollbar on top of the GPUI virtual list. That
+    scrollbar inserts a prepaint hitbox, registers paint-phase capture handlers,
+    uses `Window::capture_pointer()` while dragging, and directly updates the
+    underlying `UniformListScrollHandle` offset on click/drag.
+  - When the dialog was opened for a known MIME type, the footer exposes a
+    dialog-level Set Default toggle. If enabled, choosing an application writes
+    the user `mimeapps.list`, updates `[Default Applications]`, adds the
+    application to `[Added Associations]`, removes the same application from
+    `[Removed Associations]`, reloads the launcher cache, and refreshes the
+    default badge.
   - Service menu action execution uses the same `DesktopLaunchPlan` and systemd
     transient unit path as Open With. Multi-selection actions pass the selected
     path list to the launch plan instead of re-reading filesystem state.
