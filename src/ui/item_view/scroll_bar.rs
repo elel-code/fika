@@ -226,9 +226,13 @@ impl Element for ItemViewScrollbarElement {
         let thumb_track = inset_bounds(track_bounds, SCROLLBAR_PADDING);
         let thumb_bounds = Bounds::new(
             point(thumb_track.origin.x + thumb_start, thumb_track.origin.y),
-            size(thumb_width.min(thumb_track.size.width), thumb_track.size.height),
+            size(
+                thumb_width.min(thumb_track.size.width),
+                thumb_track.size.height,
+            ),
         );
-        let cursor_hitbox = window.insert_hitbox(thumb_track, HitboxBehavior::BlockMouseExceptScroll);
+        let cursor_hitbox =
+            window.insert_hitbox(thumb_track, HitboxBehavior::BlockMouseExceptScroll);
 
         Some(ScrollbarPrepaintState {
             thumb: Some(ScrollbarLayout {
@@ -255,8 +259,9 @@ impl Element for ItemViewScrollbarElement {
             return;
         };
         let Some(layout) = prepaint_state.thumb.as_ref() else {
-            self.state
-                .update(cx, |state, _cx| state.last_prepaint_state = Some(prepaint_state));
+            self.state.update(cx, |state, _cx| {
+                state.last_prepaint_state = Some(prepaint_state)
+            });
             return;
         };
 
@@ -276,8 +281,9 @@ impl Element for ItemViewScrollbarElement {
             }
         });
 
-        self.state
-            .update(cx, |state, _cx| state.last_prepaint_state = Some(prepaint_state));
+        self.state.update(cx, |state, _cx| {
+            state.last_prepaint_state = Some(prepaint_state)
+        });
 
         let capture_phase = if self.state.read(cx).thumb_state.is_dragging() {
             DispatchPhase::Capture
@@ -334,12 +340,12 @@ impl Element for ItemViewScrollbarElement {
                         }
                     }
                     _ => {
-                        let next_state = if state.read(cx).thumb_for_position(&event.position).is_some()
-                        {
-                            ThumbState::Hover
-                        } else {
-                            ThumbState::Inactive
-                        };
+                        let next_state =
+                            if state.read(cx).thumb_for_position(&event.position).is_some() {
+                                ThumbState::Hover
+                            } else {
+                                ThumbState::Inactive
+                            };
                         state.update(cx, |state, cx| state.set_thumb_state(next_state, cx));
                     }
                 }

@@ -117,11 +117,11 @@ pub(crate) fn file_grid(
         .bg(drop_target.map_or(rgba(0x00000000), drop_target_viewport_background))
         .occlude()
         .overflow_hidden()
-        .on_scroll_wheel(cx.listener(
-            move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
+        .on_scroll_wheel(
+            cx.listener(move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
                 handle_file_grid_wheel(this, pane_id, event, cx);
-            },
-        ))
+            }),
+        )
         .on_mouse_down(
             MouseButton::Navigate(NavigationDirection::Back),
             cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
@@ -162,14 +162,16 @@ pub(crate) fn file_grid(
                 cx.notify();
             }),
         )
-        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
-            if event.standard_click() && this.handle_blank_click(pane_id, event.position()) {
-                cx.notify();
-            }
-            if event.standard_click() {
-                cx.stop_propagation();
-            }
-        }))
+        .on_click(
+            cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                if event.standard_click() && this.handle_blank_click(pane_id, event.position()) {
+                    cx.notify();
+                }
+                if event.standard_click() {
+                    cx.stop_propagation();
+                }
+            }),
+        )
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
@@ -204,12 +206,12 @@ pub(crate) fn file_grid(
                 }
             },
         ))
-        .on_drop::<RubberBandDrag>(cx.listener(
-            move |this, _drag: &RubberBandDrag, _window, cx| {
+        .on_drop::<RubberBandDrag>(
+            cx.listener(move |this, _drag: &RubberBandDrag, _window, cx| {
                 this.finish_rubber_band(pane_id);
                 cx.notify();
-            },
-        ))
+            }),
+        )
         .on_drag_move::<ItemDrag>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                 let contains = event.bounds.contains(&event.event.position)
@@ -302,14 +304,14 @@ pub(crate) fn file_grid(
         }))
         .child(
             div()
-                .absolute()
-                .left(px(0.0))
-                .top(px(0.0))
+                .relative()
                 .w(px(content_size.width))
                 .h(px(content_size.height))
-                .children(visible_items.into_iter().map(|item| {
-                    item_tile(pane_id, item, mode, cx)
-                })),
+                .children(
+                    visible_items
+                        .into_iter()
+                        .map(|item| item_tile(pane_id, item, mode, cx)),
+                ),
         )
         .when_some(rubber_band, |viewport, rect| {
             viewport.child(rubber_band_overlay(rect))
@@ -516,8 +518,9 @@ fn item_tile(
                 .rounded_md()
                 .bg(item_tile_background(selected, drop_target))
                 .when(drop_target.is_some(), |tile| tile.shadow_md())
-                .occlude()
+                .block_mouse_except_scroll()
                 .cursor_pointer()
+                .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
                 .on_scroll_wheel(cx.listener(
                     move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
                         handle_file_grid_wheel(this, pane_id, event, cx);
@@ -798,6 +801,16 @@ fn item_tile_background(selected: bool, drop_target: Option<FileTransferMode>) -
         rgb(0xdbeafe)
     } else {
         rgba(0x00000000)
+    }
+}
+
+fn item_tile_hover_background(selected: bool, drop_target: Option<FileTransferMode>) -> Rgba {
+    if let Some(mode) = drop_target {
+        drop_target_item_background(mode)
+    } else if selected {
+        rgb(0xcfe3ff)
+    } else {
+        rgb(0xeaf1ff)
     }
 }
 

@@ -362,24 +362,24 @@ text stays in the existing helper row below it.
 #### Pane Scrolling
 
 The previous `src/ui/scrollbar.rs`, `src/ui/item_view_container/*` and
-`src/core/scroll.rs` paths were deleted. The active compact-view scroll path is
-now pane-decoupled:
+`src/core/scroll.rs` paths were deleted. The active compact-view scroll path now
+reproduces Zed's `ScrollHandle` scrollbar model inside Fika:
 
 - `src/ui/pane.rs` only composes pane chrome, file grid and status bar; it does
-  not create or size the item-view scrollbar.
-- `src/ui/file_grid.rs` owns the item viewport and records its visible
-  `PaneViewportGeometry`; it does not mount the scrollbar.
-- `src/main.rs` mounts `src/ui/item_view/scroll_bar.rs` as a root-level
-  absolute overlay using each pane viewport's window rect, so the scrollbar is
-  a sibling of the pane row rather than a pane/file-grid child.
-- `src/ui/item_view/scroll_bar.rs` owns the GPUI canvas, hitbox and
-  pointer-capture lifecycle.
-- `src/ui/item_view/scroll_bar/state.rs` owns track/thumb geometry, Dolphin
-  `font height * 2` wheel delta, and the same track/thumb drag mapping used by
-  the working Other Application scrollbar.
+  not carry scrollbar drag state.
+- `src/main.rs` owns one `gpui::ScrollHandle` per `PaneId`, deletes the handle
+  when the pane is removed, and resets it for directory/layout resets.
+- `src/ui/file_grid.rs` makes the item viewport the tracked scroll container
+  with `track_scroll()` and `overflow_x_scroll()`. It no longer manually shifts
+  the content div by `-ViewState.scroll_x`.
+- `src/ui/item_view/scroll_bar.rs` is an absolute child of that tracked
+  viewport. It computes thumb geometry from `ScrollHandle::bounds()`,
+  `max_offset()` and `offset()`, then writes drag/track-click changes back with
+  `ScrollHandle::set_offset()` using the same negative-offset convention as
+  Zed.
 
-Wheel input currently writes `ViewState.scroll_x` directly with Dolphin's
-`font height * 2` line step; Ctrl/secondary+wheel remains pane-local zoom.
+Wheel input is handled by GPUI's tracked scroll container; Ctrl/secondary+wheel
+remains pane-local zoom.
 Smooth/kinetic scrolling is intentionally absent after the deletion pass and
 must be rebuilt only on top of the independent item-view component.
 
