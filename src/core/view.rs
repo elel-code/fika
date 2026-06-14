@@ -234,11 +234,9 @@ impl CompactLayout {
         };
         let visible_rows = item_count.min(rows_per_column);
         let content_height = if visible_rows == 0 {
-            options.viewport_height.max(options.padding * 2.0)
+            options.viewport_height.max(options.item_height)
         } else {
-            options.padding * 2.0
-                + visible_rows as f32 * options.item_height
-                + visible_rows.saturating_sub(1) as f32 * options.gap
+            visible_rows as f32 * options.item_height
         }
         .max(options.viewport_height);
 
@@ -295,7 +293,8 @@ impl CompactLayout {
         let row = model_index % self.rows_per_column;
         let x = self.column_metrics.offset(column);
         let item_width = self.column_metrics.width(column);
-        let y = self.options.padding + row as f32 * (self.options.item_height + self.options.gap);
+        let row_metrics = compact_row_metrics(self.options, self.item_count, self.rows_per_column);
+        let y = row_metrics.offset + row as f32 * row_metrics.pitch;
         let item_rect = ViewRect {
             x,
             y,
@@ -368,12 +367,12 @@ impl CompactLayout {
         if self.item_count == 0 {
             return None;
         }
-        let stride_y = self.options.item_height + self.options.gap;
-        if stride_y <= 0.0 {
+        let row_metrics = compact_row_metrics(self.options, self.item_count, self.rows_per_column);
+        if row_metrics.pitch <= 0.0 {
             return None;
         }
         let column = self.column_at_x(point.x)?;
-        let row = ((point.y - self.options.padding) / stride_y).floor();
+        let row = ((point.y - row_metrics.offset) / row_metrics.pitch).floor();
         if row < 0.0 {
             return None;
         }
@@ -417,9 +416,9 @@ impl CompactLayout {
         visible_axis_range(
             rect.y,
             rect.bottom(),
-            self.options.padding,
+            compact_row_metrics(self.options, self.item_count, self.rows_per_column).offset,
             self.options.item_height,
-            self.options.gap,
+            compact_row_metrics(self.options, self.item_count, self.rows_per_column).gap,
             self.rows_per_column,
         )
     }
@@ -659,11 +658,42 @@ impl RangeSelection {
 }
 
 fn rows_per_column(options: CompactLayoutOptions) -> usize {
-    let available = (options.viewport_height - options.reserved_bottom - options.padding * 2.0)
-        .max(options.item_height);
-    ((available + options.gap) / (options.item_height + options.gap))
+    (compact_available_height(options) / options.item_height)
         .floor()
         .max(1.0) as usize
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CompactRowMetrics {
+    offset: f32,
+    pitch: f32,
+    gap: f32,
+}
+
+fn compact_row_metrics(
+    options: CompactLayoutOptions,
+    item_count: usize,
+    rows_per_column: usize,
+) -> CompactRowMetrics {
+    let item_height = options.item_height.max(1.0);
+    let rows_per_column = rows_per_column.max(1);
+    let available = compact_available_height(options);
+    let should_distribute = item_count > rows_per_column && item_height >= 32.0;
+    let unused = (available - rows_per_column as f32 * item_height).max(0.0);
+    let gap = if should_distribute && unused > 0.0 {
+        unused / (rows_per_column as f32 + 1.0)
+    } else {
+        0.0
+    };
+    CompactRowMetrics {
+        offset: gap,
+        pitch: item_height + gap,
+        gap,
+    }
+}
+
+fn compact_available_height(options: CompactLayoutOptions) -> f32 {
+    (options.viewport_height - options.reserved_bottom).max(options.item_height.max(1.0))
 }
 
 fn columns_per_row(options: IconsLayoutOptions) -> usize {
@@ -793,13 +823,36 @@ mod tests {
 
         assert_eq!(layout.rows_per_column(), 2);
         assert_eq!(
-            layout.hit_test_content_point(ViewPoint { x: 118.0, y: 8.0 }),
+            layout.hit_test_content_point(ViewPoint { x: 118.0, y: 10.0 }),
             Some(2)
         );
         assert_eq!(
-            layout.hit_test_content_point(ViewPoint { x: 118.0, y: 68.0 }),
+            layout.hit_test_content_point(ViewPoint { x: 118.0, y: 70.0 }),
             Some(3)
         );
+    }
+
+    #[test]
+    fn compact_layout_distributes_unused_height_between_rows() {
+        let layout = CompactLayout::new(
+            6,
+            CompactLayoutOptions {
+                viewport_height: 128.0,
+                item_width: 100.0,
+                item_height: 50.0,
+                gap: 10.0,
+                padding: 4.0,
+                ..CompactLayoutOptions::default()
+            },
+        );
+
+        let first = layout.item(0).unwrap().item_rect;
+        let second = layout.item(1).unwrap().item_rect;
+        let distributed_gap = (128.0 - 2.0 * 50.0) / 3.0;
+
+        assert!((first.y - distributed_gap).abs() < 0.01);
+        assert!((second.y - (50.0 + 2.0 * distributed_gap)).abs() < 0.01);
+        assert!((128.0 - second.bottom() - distributed_gap).abs() < 0.01);
     }
 
     #[test]
