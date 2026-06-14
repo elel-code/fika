@@ -48,6 +48,20 @@ impl ItemViewScrollState {
         )
     }
 
+    pub(crate) fn sync_from_authoritative_handle(
+        &self,
+        pane_id: PaneId,
+        view_max_scroll_x: f32,
+        view_max_scroll_y: f32,
+    ) -> Option<ItemViewScrollSync> {
+        let observation = self.handle_observation(pane_id)?;
+        Some(sync_from_authoritative_handle_observation(
+            observation,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        ))
+    }
+
     pub(crate) fn preserve_for_layout_change(
         &mut self,
         pane_id: PaneId,
@@ -169,6 +183,23 @@ fn sync_from_handle_observation(
     })
 }
 
+fn sync_from_authoritative_handle_observation(
+    observation: ItemViewScrollHandleObservation,
+    view_max_scroll_x: f32,
+    view_max_scroll_y: f32,
+) -> ItemViewScrollSync {
+    let (scroll_x, max_scroll_x) =
+        sync_axis_from_authoritative_handle_observation(observation.scroll_x, view_max_scroll_x);
+    let (scroll_y, max_scroll_y) =
+        sync_axis_from_authoritative_handle_observation(observation.scroll_y, view_max_scroll_y);
+    ItemViewScrollSync {
+        scroll_x,
+        scroll_y,
+        max_scroll_x,
+        max_scroll_y,
+    }
+}
+
 fn scroll_axis_for_pane(
     observed_scroll: f32,
     observed_max_scroll: f32,
@@ -204,6 +235,21 @@ fn sync_axis_from_handle_observation(
     let observed_max_scroll = observed_max_scroll.max(0.0);
     if observed_max_scroll + 0.5 < view_max_scroll {
         return (view_scroll, view_max_scroll);
+    }
+    (observed_scroll.clamp(0.0, view_max_scroll), view_max_scroll)
+}
+
+fn sync_axis_from_authoritative_handle_observation(
+    observed_scroll: f32,
+    view_max_scroll: f32,
+) -> (f32, f32) {
+    let view_max_scroll = view_max_scroll.max(0.0);
+    if view_max_scroll <= 0.5 {
+        return (0.0, 0.0);
+    }
+    let observed_scroll = observed_scroll.max(0.0);
+    if observed_scroll <= 0.5 {
+        return (0.0, view_max_scroll);
     }
     (observed_scroll.clamp(0.0, view_max_scroll), view_max_scroll)
 }
@@ -290,6 +336,27 @@ mod tests {
                 max_scroll_x: 0.0,
                 max_scroll_y: 1_000.0,
             })
+        );
+    }
+
+    #[test]
+    fn authoritative_handle_sync_accepts_drag_offset_even_when_maximum_lags() {
+        let observation = ItemViewScrollHandleObservation {
+            scroll_x: 220.0,
+            scroll_y: 0.0,
+            max_scroll_x: 0.0,
+            max_scroll_y: 0.0,
+            bounds_valid: false,
+        };
+
+        assert_eq!(
+            sync_from_authoritative_handle_observation(observation, 1_000.0, 0.0),
+            ItemViewScrollSync {
+                scroll_x: 220.0,
+                scroll_y: 0.0,
+                max_scroll_x: 1_000.0,
+                max_scroll_y: 0.0,
+            }
         );
     }
 

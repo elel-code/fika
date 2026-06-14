@@ -21,13 +21,18 @@ pub(crate) fn item_view_scrollbar_container(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
+    let app = cx.weak_entity();
     let state = window.use_keyed_state(
         format!("item-view-zed-scrollbar-{}", pane_id.0),
         cx,
-        |_, cx| ItemViewScrollbarState::new(scroll_handle.clone(), cx.entity_id()),
+        |_, cx| {
+            ItemViewScrollbarState::new(scroll_handle.clone(), cx.entity_id(), pane_id, app.clone())
+        },
     );
     state.update(cx, |state, _cx| {
         state.scroll_handle = scroll_handle.clone();
+        state.pane_id = pane_id;
+        state.app = app.clone();
     });
 
     div()
@@ -64,15 +69,24 @@ fn rubber_band_rect_is_visible(rect: ViewRect) -> bool {
 struct ItemViewScrollbarState {
     scroll_handle: ScrollHandle,
     notify_id: EntityId,
+    pane_id: PaneId,
+    app: gpui::WeakEntity<FikaApp>,
     thumb_state: ThumbState,
     last_prepaint_state: Option<ScrollbarPrepaintState>,
 }
 
 impl ItemViewScrollbarState {
-    fn new(scroll_handle: ScrollHandle, notify_id: EntityId) -> Self {
+    fn new(
+        scroll_handle: ScrollHandle,
+        notify_id: EntityId,
+        pane_id: PaneId,
+        app: gpui::WeakEntity<FikaApp>,
+    ) -> Self {
         Self {
             scroll_handle,
             notify_id,
+            pane_id,
+            app,
             thumb_state: ThumbState::Inactive,
             last_prepaint_state: None,
         }
@@ -81,7 +95,28 @@ impl ItemViewScrollbarState {
     fn set_offset(&self, offset_x: Pixels, cx: &mut App) {
         let current = self.scroll_handle.offset();
         self.scroll_handle.set_offset(point(offset_x, current.y));
+        let _ = self.app.update(cx, |this, cx| {
+            if this.update_item_view_scrollbar_drag(self.pane_id) {
+                cx.notify();
+            }
+        });
         cx.notify(self.notify_id);
+    }
+
+    fn begin_drag(&self, cx: &mut App) {
+        let _ = self.app.update(cx, |this, cx| {
+            if this.begin_item_view_scrollbar_drag(self.pane_id) {
+                cx.notify();
+            }
+        });
+    }
+
+    fn finish_drag(&self, cx: &mut App) {
+        let _ = self.app.update(cx, |this, cx| {
+            if this.finish_item_view_scrollbar_drag(self.pane_id) {
+                cx.notify();
+            }
+        });
     }
 
     fn set_thumb_state(&mut self, state: ThumbState, cx: &mut App) {
@@ -317,6 +352,7 @@ fn paint_item_view_scrollbar(
                 if scrollbar_layout.thumb_bounds.contains(&event.position) {
                     let offset = event.position.x - scrollbar_layout.thumb_bounds.origin.x;
                     window.capture_pointer(scrollbar_layout.cursor_hitbox.id);
+                    state.begin_drag(cx);
                     state.set_thumb_state(ThumbState::Dragging(offset), cx);
                 } else {
                     let click_offset = scrollbar_layout.compute_click_offset(
@@ -376,7 +412,13 @@ fn paint_item_view_scrollbar(
             } else {
                 ThumbState::Inactive
             };
-            state.update(cx, |state, cx| state.set_thumb_state(next_state, cx));
+            state.update(cx, |state, cx| {
+                let was_dragging = state.thumb_state.is_dragging();
+                state.set_thumb_state(next_state, cx);
+                if was_dragging {
+                    state.finish_drag(cx);
+                }
+            });
             window.release_pointer();
         }
     });

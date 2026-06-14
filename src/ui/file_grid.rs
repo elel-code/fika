@@ -28,7 +28,7 @@ use gpui::{
     Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Render,
     Rgba, ScrollHandle, Stateful, Styled, Window, div, img, px, rgb, rgba,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::drag_drop::{
@@ -102,6 +102,16 @@ impl ItemDrag {
 
 struct DragPreview {
     label: String,
+}
+
+fn drag_move_hits_item_path<T>(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    path: &Path,
+    event: &gpui::DragMoveEvent<T>,
+) -> bool {
+    event.bounds.contains(&event.event.position)
+        && app.window_position_hits_item_path_in_pane(pane_id, event.event.position, path)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -519,6 +529,11 @@ fn details_row(
     let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
     let target_dir_for_drop = item.path.clone();
+    let path_for_place_drag_hit = item.path.clone();
+    let path_for_directory_item_drag_hit = item.path.clone();
+    let path_for_directory_external_drag_hit = item.path.clone();
+    let path_for_file_item_drag_hit = item.path.clone();
+    let path_for_file_external_drag_hit = item.path.clone();
     let is_dir_for_click = item.is_dir;
     let is_dir_for_menu = item.is_dir;
     let is_dir_for_drop = item.is_dir;
@@ -610,7 +625,8 @@ fn details_row(
         })
         .on_drag_move::<PlaceDrag>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                let contains = event.bounds.contains(&event.event.position);
+                let contains =
+                    drag_move_hits_item_path(this, pane_id, &path_for_place_drag_hit, event);
                 let mode = file_transfer_mode_for_modifiers(window.modifiers());
                 let changed = contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
                 if contains {
@@ -651,7 +667,12 @@ fn details_row(
             )
             .on_drag_move::<ItemDrag>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                    let contains = event.bounds.contains(&event.event.position);
+                    let contains = drag_move_hits_item_path(
+                        this,
+                        pane_id,
+                        &path_for_directory_item_drag_hit,
+                        event,
+                    );
                     let mode = file_transfer_mode_for_modifiers(window.modifiers());
                     let valid_target =
                         contains && this.item_drag_can_drop_to_directory(&target_dir_for_move);
@@ -684,7 +705,12 @@ fn details_row(
             ))
             .on_drag_move::<ExternalPaths>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                    let contains = event.bounds.contains(&event.event.position);
+                    let contains = drag_move_hits_item_path(
+                        this,
+                        pane_id,
+                        &path_for_directory_external_drag_hit,
+                        event,
+                    );
                     let mode = file_transfer_mode_for_modifiers(window.modifiers());
                     let changed = if contains {
                         this.set_item_drag_drop_target_for_directory(
@@ -740,7 +766,12 @@ fn details_row(
         .when(!is_dir_for_drop, |row| {
             row.on_drag_move::<ItemDrag>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                    let contains = event.bounds.contains(&event.event.position);
+                    let contains = drag_move_hits_item_path(
+                        this,
+                        pane_id,
+                        &path_for_file_item_drag_hit,
+                        event,
+                    );
                     let mode = file_transfer_mode_for_modifiers(window.modifiers());
                     let changed =
                         contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
@@ -758,7 +789,12 @@ fn details_row(
             ))
             .on_drag_move::<ExternalPaths>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                    let contains = event.bounds.contains(&event.event.position);
+                    let contains = drag_move_hits_item_path(
+                        this,
+                        pane_id,
+                        &path_for_file_external_drag_hit,
+                        event,
+                    );
                     let mode = file_transfer_mode_for_modifiers(window.modifiers());
                     let changed =
                         contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
@@ -1009,6 +1045,11 @@ fn item_tile(
     let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
     let target_dir_for_drop = item.path.clone();
+    let path_for_place_drag_hit = item.path.clone();
+    let path_for_directory_item_drag_hit = item.path.clone();
+    let path_for_directory_external_drag_hit = item.path.clone();
+    let path_for_file_item_drag_hit = item.path.clone();
+    let path_for_file_external_drag_hit = item.path.clone();
     let is_dir_for_click = item.is_dir;
     let is_dir_for_menu = item.is_dir;
     let is_dir_for_drop = item.is_dir;
@@ -1112,7 +1153,12 @@ fn item_tile(
                 })
                 .on_drag_move::<PlaceDrag>(cx.listener(
                     move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                        let contains = event.bounds.contains(&event.event.position);
+                        let contains = drag_move_hits_item_path(
+                            this,
+                            pane_id,
+                            &path_for_place_drag_hit,
+                            event,
+                        );
                         let mode = file_transfer_mode_for_modifiers(window.modifiers());
                         let changed =
                             contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
@@ -1154,7 +1200,12 @@ fn item_tile(
                     )
                     .on_drag_move::<ItemDrag>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                            let contains = event.bounds.contains(&event.event.position);
+                            let contains = drag_move_hits_item_path(
+                                this,
+                                pane_id,
+                                &path_for_directory_item_drag_hit,
+                                event,
+                            );
                             let mode = file_transfer_mode_for_modifiers(window.modifiers());
                             let valid_target = contains
                                 && this.item_drag_can_drop_to_directory(&target_dir_for_move);
@@ -1190,7 +1241,12 @@ fn item_tile(
                     ))
                     .on_drag_move::<ExternalPaths>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                            let contains = event.bounds.contains(&event.event.position);
+                            let contains = drag_move_hits_item_path(
+                                this,
+                                pane_id,
+                                &path_for_directory_external_drag_hit,
+                                event,
+                            );
                             let mode = file_transfer_mode_for_modifiers(window.modifiers());
                             let changed = if contains {
                                 this.set_item_drag_drop_target_for_directory(
@@ -1246,7 +1302,12 @@ fn item_tile(
                 .when(!is_dir_for_drop, |tile| {
                     tile.on_drag_move::<ItemDrag>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                            let contains = event.bounds.contains(&event.event.position);
+                            let contains = drag_move_hits_item_path(
+                                this,
+                                pane_id,
+                                &path_for_file_item_drag_hit,
+                                event,
+                            );
                             let mode = file_transfer_mode_for_modifiers(window.modifiers());
                             let changed =
                                 contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
@@ -1264,7 +1325,12 @@ fn item_tile(
                     ))
                     .on_drag_move::<ExternalPaths>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                            let contains = event.bounds.contains(&event.event.position);
+                            let contains = drag_move_hits_item_path(
+                                this,
+                                pane_id,
+                                &path_for_file_external_drag_hit,
+                                event,
+                            );
                             let mode = file_transfer_mode_for_modifiers(window.modifiers());
                             let changed =
                                 contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);

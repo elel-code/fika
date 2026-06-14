@@ -254,6 +254,7 @@ pub(crate) struct FikaApp {
     loading_panes: HashMap<PaneId, LoadingPaneState>,
     item_view_scroll: ItemViewScrollState,
     item_view_authoritative_scroll: HashMap<PaneId, u8>,
+    item_view_scrollbar_dragging: HashSet<PaneId>,
     metadata_role_scheduler: MetadataRoleScheduler,
     thumbnail_scheduler: ThumbnailScheduler,
     pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
@@ -333,6 +334,7 @@ impl FikaApp {
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
             item_view_authoritative_scroll: HashMap::new(),
+            item_view_scrollbar_dragging: HashSet::new(),
             metadata_role_scheduler: MetadataRoleScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             pane_viewport_geometries: HashMap::new(),
@@ -586,7 +588,10 @@ impl FikaApp {
         self.item_view_scroll.handle_for_pane(pane_id)
     }
 
-    fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) {
+    fn sync_pane_view_from_item_view_scroll_handle(&mut self, pane_id: PaneId) -> bool {
+        if self.item_view_scrollbar_dragging.contains(&pane_id) {
+            return self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id);
+        }
         let view_scroll_x = self
             .panes
             .pane(pane_id)
@@ -606,7 +611,7 @@ impl FikaApp {
         if self.item_view_authoritative_scroll.contains_key(&pane_id) {
             self.item_view_scroll
                 .sync_handle_to_view(pane_id, view_scroll_x, view_scroll_y);
-            return;
+            return false;
         }
         let Some(sync) = self.item_view_scroll.sync_from_handle(
             pane_id,
@@ -615,13 +620,17 @@ impl FikaApp {
             view_max_scroll_x,
             view_max_scroll_y,
         ) else {
-            return;
+            return false;
         };
         if !scroll_offset_matches(view_scroll_x, sync.scroll_x)
             || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
         {
             self.item_view_authoritative_scroll.remove(&pane_id);
         }
+        let changed = !scroll_offset_matches(view_scroll_x, sync.scroll_x)
+            || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
+            || !scroll_offset_matches(view_max_scroll_x, sync.max_scroll_x)
+            || !scroll_offset_matches(view_max_scroll_y, sync.max_scroll_y);
         let _ = self.panes.set_view_scroll(
             pane_id,
             sync.scroll_x,
@@ -629,6 +638,62 @@ impl FikaApp {
             sync.max_scroll_x,
             sync.max_scroll_y,
         );
+        changed
+    }
+
+    fn sync_pane_view_from_authoritative_item_view_scroll_handle(
+        &mut self,
+        pane_id: PaneId,
+    ) -> bool {
+        let view_scroll_x = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.scroll_x);
+        let view_scroll_y = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.scroll_y);
+        let view_max_scroll_x = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.max_scroll_x);
+        let view_max_scroll_y = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.max_scroll_y);
+        let Some(sync) = self.item_view_scroll.sync_from_authoritative_handle(
+            pane_id,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        ) else {
+            return false;
+        };
+        let changed = !scroll_offset_matches(view_scroll_x, sync.scroll_x)
+            || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
+            || !scroll_offset_matches(view_max_scroll_x, sync.max_scroll_x)
+            || !scroll_offset_matches(view_max_scroll_y, sync.max_scroll_y);
+        let _ = self.panes.set_view_scroll(
+            pane_id,
+            sync.scroll_x,
+            sync.scroll_y,
+            sync.max_scroll_x,
+            sync.max_scroll_y,
+        );
+        changed
+    }
+
+    pub(crate) fn begin_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
+        self.item_view_authoritative_scroll.remove(&pane_id);
+        self.item_view_scrollbar_dragging.insert(pane_id)
+    }
+
+    pub(crate) fn update_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
+        self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id)
+    }
+
+    pub(crate) fn finish_item_view_scrollbar_drag(&mut self, pane_id: PaneId) -> bool {
+        let was_dragging = self.item_view_scrollbar_dragging.remove(&pane_id);
+        self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id) || was_dragging
     }
 
     fn preserve_item_view_scroll_for_layout_change(&mut self, pane_id: PaneId) {
@@ -668,11 +733,13 @@ impl FikaApp {
     fn reset_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
         self.item_view_scroll.reset_pane(pane_id);
         self.item_view_authoritative_scroll.remove(&pane_id);
+        self.item_view_scrollbar_dragging.remove(&pane_id);
     }
 
     fn remove_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
         self.item_view_scroll.remove_pane(pane_id);
         self.item_view_authoritative_scroll.remove(&pane_id);
+        self.item_view_scrollbar_dragging.remove(&pane_id);
     }
 
     fn clear_filter_focus_for_pane(&mut self, pane_id: PaneId) {
@@ -2530,6 +2597,10 @@ impl FikaApp {
                 max_scroll_y,
             )
             .unwrap_or(false);
+        if self.item_view_scrollbar_dragging.contains(&pane_id) {
+            return self.sync_pane_view_from_authoritative_item_view_scroll_handle(pane_id)
+                || changed;
+        }
         let handle_changed = self.panes.pane(pane_id).is_some_and(|pane| {
             self.item_view_scroll.sync_handle_to_view(
                 pane_id,
@@ -2724,6 +2795,19 @@ impl FikaApp {
             return false;
         };
         self.item_at_content_point(pane_id, point).is_none()
+    }
+
+    pub(crate) fn window_position_hits_item_path_in_pane(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+        path: &Path,
+    ) -> bool {
+        let Some(point) = self.content_point_from_window(pane_id, position) else {
+            return false;
+        };
+        self.item_at_content_point(pane_id, point)
+            .is_some_and(|hit| hit.path == path)
     }
 
     fn start_rubber_band(&mut self, pane_id: PaneId, start: ViewPoint) {
@@ -10470,6 +10554,30 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn scrollbar_drag_keeps_handle_offset_authoritative_during_bounds_sync() {
+        let mut app = test_app_with_entries("/tmp/fika-scrollbar-drag", &["one.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let scroll_handle = app.item_view_scroll_handle_for_pane(pane_id);
+
+        assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
+        assert!(app.begin_item_view_scrollbar_drag(pane_id));
+        scroll_handle.set_offset(gpui::point(px(-320.0), px(0.0)));
+
+        assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
+        assert_eq!(scroll_handle.offset().x, px(-320.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 320.0);
+
+        scroll_handle.set_offset(gpui::point(px(-480.0), px(0.0)));
+        assert!(app.update_item_view_scrollbar_drag(pane_id));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 480.0);
+
+        assert!(app.finish_item_view_scrollbar_drag(pane_id));
+        assert!(!app.item_view_scrollbar_dragging.contains(&pane_id));
+        assert_eq!(scroll_handle.offset().x, px(-480.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 480.0);
+    }
+
+    #[test]
     fn zoom_clamps_to_zero_when_layout_really_has_no_scroll_range() {
         let mut app = test_app_with_entries("/tmp/fika-zoom-scroll-zero-bounds", &["one.txt"]);
         let pane_id = app.panes.focused().unwrap();
@@ -11544,6 +11652,46 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn dnd_item_hit_test_uses_viewport_origin_and_scroll_offset() {
+        let mut app = test_app_with_entries(
+            "/tmp/fika-dnd-hit-test",
+            &["alpha.txt", "beta.txt", "gamma.txt"],
+        );
+        let pane_id = app.panes.focused().unwrap();
+        app.set_pane_view_mode(pane_id, ViewMode::Details);
+        assert!(app.set_pane_viewport_geometry(
+            pane_id,
+            ViewRect {
+                x: 100.0,
+                y: 50.0,
+                width: 300.0,
+                height: 200.0,
+            }
+        ));
+        app.panes
+            .set_view_scroll(pane_id, 0.0, 12.0, 0.0, 200.0)
+            .unwrap();
+
+        let alpha = PathBuf::from("/tmp/fika-dnd-hit-test/alpha.txt");
+        let beta = PathBuf::from("/tmp/fika-dnd-hit-test/beta.txt");
+        let layout = app.layout_projection_for_pane(pane_id).unwrap().layout;
+        let item = layout.item_with_required_text_width(0, None).unwrap();
+        let view = app.panes.pane(pane_id).unwrap().view.clone();
+        let point_on_alpha = gpui::point(
+            px(100.0 + item.visual_rect.x - view.scroll_x + 8.0),
+            px(50.0 + item.visual_rect.y - view.scroll_y + 8.0),
+        );
+
+        assert!(app.window_position_hits_item_path_in_pane(pane_id, point_on_alpha, &alpha));
+        assert!(!app.window_position_hits_item_path_in_pane(pane_id, point_on_alpha, &beta));
+        assert!(!app.window_position_hits_item_path_in_pane(
+            pane_id,
+            gpui::point(px(420.0), px(80.0)),
+            &alpha
+        ));
+    }
+
+    #[test]
     fn rubber_band_selection_blank_right_click_clears_without_menu() {
         let mut app =
             test_app_with_entries("/tmp/fika-rubber-context-blank", &["alpha.txt", "beta.txt"]);
@@ -12384,6 +12532,7 @@ text/plain=viewer.desktop;\n",
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
             item_view_authoritative_scroll: HashMap::new(),
+            item_view_scrollbar_dragging: HashSet::new(),
             metadata_role_scheduler: MetadataRoleScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             pane_viewport_geometries: HashMap::new(),
