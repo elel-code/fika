@@ -2,7 +2,9 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fika_core::{EntryData, format_modified_secs, format_size, format_trash_deletion_time};
+use fika_core::{
+    EntryData, ModelEntry, format_modified_secs, format_size, format_trash_deletion_time,
+};
 
 use crate::ui::drag_drop::FileTransferMode;
 use crate::ui::icons::FileIconSnapshot;
@@ -105,18 +107,21 @@ pub(crate) fn details_visible_row_range(
     start.min(row_count)..end.min(row_count)
 }
 
-pub(crate) fn details_size_label(entry: &EntryData) -> String {
+pub(crate) fn details_size_label(entry: &ModelEntry) -> String {
     if entry.is_dir {
         "Folder".to_string()
-    } else if !entry.metadata_complete && entry.size_bytes == 0 && entry.modified_secs.is_none() {
+    } else if !entry.effective_metadata_complete()
+        && entry.effective_size_bytes() == 0
+        && entry.effective_modified_secs().is_none()
+    {
         "-".to_string()
     } else {
-        format_size(entry.size_bytes)
+        format_size(entry.effective_size_bytes())
     }
 }
 
-pub(crate) fn details_modified_label(entry: &EntryData) -> String {
-    format_modified_secs(entry.modified_secs)
+pub(crate) fn details_modified_label(entry: &ModelEntry) -> String {
+    format_modified_secs(entry.effective_modified_secs())
 }
 
 pub(crate) fn details_original_path_label(entry: &EntryData) -> String {
@@ -139,6 +144,17 @@ pub(crate) fn details_deletion_time_label(entry: &EntryData) -> String {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    fn model_entry(entry: EntryData) -> ModelEntry {
+        ModelEntry {
+            id: fika_core::ItemId(1),
+            entry: fika_core::Entry::new(entry),
+            metadata_role: None,
+            metadata_refresh_pending: false,
+            icon_name: None,
+            thumbnail_path: None,
+        }
+    }
 
     #[test]
     fn trash_details_columns_include_original_path_and_deletion_time() {
@@ -170,7 +186,7 @@ mod tests {
 
     #[test]
     fn incomplete_file_metadata_uses_unknown_size_and_modified_labels() {
-        let entry = EntryData {
+        let entry = model_entry(EntryData {
             name: Arc::from("payload"),
             name_width_units: 7,
             size_bytes: 0,
@@ -181,7 +197,7 @@ mod tests {
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,
-        };
+        });
 
         assert_eq!(details_size_label(&entry), "-");
         assert_eq!(details_modified_label(&entry), "-");
@@ -189,7 +205,7 @@ mod tests {
 
     #[test]
     fn pending_metadata_keeps_last_known_size_and_modified_labels() {
-        let entry = EntryData {
+        let entry = model_entry(EntryData {
             name: Arc::from("payload"),
             name_width_units: 7,
             size_bytes: 1536,
@@ -200,7 +216,7 @@ mod tests {
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,
-        };
+        });
 
         assert_eq!(details_size_label(&entry), "1.5 KB");
         assert_eq!(details_modified_label(&entry), "1970-01-01 00:00");

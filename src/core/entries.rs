@@ -128,6 +128,7 @@ impl EntryData {
 pub struct ModelEntry {
     pub id: ItemId,
     pub entry: Entry,
+    pub metadata_role: Option<EntryMetadataRole>,
     pub metadata_refresh_pending: bool,
     pub icon_name: Option<Arc<str>>,
     pub thumbnail_path: Option<PathBuf>,
@@ -138,6 +139,7 @@ impl ModelEntry {
         Self {
             id: ItemId::UNASSIGNED,
             entry,
+            metadata_role: None,
             metadata_refresh_pending: false,
             icon_name: None,
             thumbnail_path: None,
@@ -145,7 +147,59 @@ impl ModelEntry {
     }
 
     pub(crate) fn sort_cmp(&self, other: &Self) -> Ordering {
-        self.entry.sort_cmp(&other.entry)
+        match other.is_dir.cmp(&self.is_dir) {
+            Ordering::Equal => entry_name_cmp(&self.name, &other.name).then_with(|| {
+                self.effective_size_bytes()
+                    .cmp(&other.effective_size_bytes())
+            }),
+            ordering => ordering,
+        }
+    }
+
+    pub fn effective_size_bytes(&self) -> u64 {
+        self.metadata_role
+            .as_ref()
+            .map_or(self.entry.size_bytes, |role| role.size_bytes)
+    }
+
+    pub fn effective_modified_secs(&self) -> Option<u64> {
+        self.metadata_role
+            .as_ref()
+            .map_or(self.entry.modified_secs, |role| role.modified_secs)
+    }
+
+    pub fn effective_metadata_complete(&self) -> bool {
+        self.metadata_role.is_some() || self.entry.metadata_complete
+    }
+
+    pub fn effective_mime_type(&self) -> Option<&Arc<str>> {
+        self.metadata_role
+            .as_ref()
+            .and_then(|role| role.mime_type.as_ref())
+            .or(self.entry.mime_type.as_ref())
+    }
+
+    pub fn effective_mime_type_cloned(&self) -> Option<Arc<str>> {
+        self.effective_mime_type().cloned()
+    }
+
+    pub fn effective_mime_magic_checked(&self) -> bool {
+        self.metadata_role
+            .as_ref()
+            .map_or(self.entry.mime_magic_checked, |role| {
+                role.mime_magic_checked
+            })
+    }
+
+    pub fn effective_metadata_role(&self) -> EntryMetadataRole {
+        self.metadata_role
+            .clone()
+            .unwrap_or_else(|| EntryMetadataRole {
+                size_bytes: self.entry.size_bytes,
+                modified_secs: self.entry.modified_secs,
+                mime_type: self.entry.mime_type.clone(),
+                mime_magic_checked: self.entry.mime_magic_checked,
+            })
     }
 }
 
@@ -165,11 +219,30 @@ pub(crate) fn read_entries_sync_cancellable(
     path: &Path,
     mut is_cancelled: impl FnMut() -> bool,
 ) -> io::Result<Option<Vec<Entry>>> {
+    let mut entries = Vec::new();
+    let Some(()) =
+        read_entry_batches_sync_cancellable(path, usize::MAX, &mut is_cancelled, |mut batch| {
+            entries.append(&mut batch)
+        })?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(entries))
+}
+
+pub(crate) fn read_entry_batches_sync_cancellable(
+    path: &Path,
+    batch_size: usize,
+    mut is_cancelled: impl FnMut() -> bool,
+    mut on_batch: impl FnMut(Vec<Entry>),
+) -> io::Result<Option<()>> {
     if is_cancelled() {
         return Ok(None);
     }
 
-    let mut entries = Vec::new();
+    let batch_size = batch_size.max(1);
+    let mut batch = Vec::with_capacity(batch_size.min(1024));
     let decorate_trash_metadata = file_ops::is_trash_files_dir(path);
     let mime_database = MimeDatabase::shared();
 
@@ -188,28 +261,35 @@ pub(crate) fn read_entries_sync_cancellable(
         if decorate_trash_metadata {
             if let Ok(metadata) = item.metadata() {
                 let item_path = item.path();
-                let mut data = complete_entry_data(name, &item_path, metadata, mime_database);
+                let mut data = complete_entry_data(name, metadata, mime_database);
                 decorate_trash_entry(&mut data, &item_path);
-                entries.push(Entry::new(data));
+                batch.push(Entry::new(data));
             }
         } else {
-            let is_dir = item
-                .file_type()
-                .map(|file_type| file_type.is_dir())
-                .unwrap_or(false);
-            entries.push(Entry::new(incomplete_entry_data(
+            let Ok(metadata) = item.metadata() else {
+                continue;
+            };
+            batch.push(Entry::new(complete_entry_data(
                 name,
-                is_dir,
+                metadata,
                 mime_database,
             )));
+        }
+
+        if batch.len() >= batch_size {
+            sort_entries(&mut batch, decorate_trash_metadata);
+            on_batch(std::mem::take(&mut batch));
         }
     }
 
     if is_cancelled() {
         return Ok(None);
     }
-    sort_entries(&mut entries, decorate_trash_metadata);
-    Ok(Some(entries))
+    if !batch.is_empty() {
+        sort_entries(&mut batch, decorate_trash_metadata);
+        on_batch(batch);
+    }
+    Ok(Some(()))
 }
 
 pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
@@ -226,7 +306,7 @@ pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
         .map(|name| name.to_string_lossy().trim().to_string())
         .filter(|name| !name.is_empty())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory item has no name"))?;
-    let mut data = complete_entry_data(name, &item_path, metadata, MimeDatabase::shared());
+    let mut data = complete_entry_data(name, metadata, MimeDatabase::shared());
     if decorate_trash_metadata {
         decorate_trash_entry(&mut data, &item_path);
     }
@@ -357,34 +437,10 @@ fn name_width_units(name: &str) -> u16 {
         .min(u16::MAX as u32) as u16
 }
 
-fn incomplete_entry_data(name: String, is_dir: bool, mime: &MimeDatabase) -> EntryData {
-    let name_width_units = name_width_units(&name);
-    let mime_type = Some(mime.mime_for_name(&name, is_dir, None));
-    let mime_magic_checked = is_dir || mime_type.as_deref() != Some(GENERIC_BINARY_MIME);
-
-    EntryData {
-        name: Arc::from(name),
-        name_width_units,
-        size_bytes: 0,
-        modified_secs: None,
-        metadata_complete: false,
-        mime_type,
-        mime_magic_checked,
-        trash_original_path: None,
-        trash_deletion_time: None,
-        is_dir,
-    }
-}
-
-fn complete_entry_data(
-    name: String,
-    path: &Path,
-    metadata: Metadata,
-    mime: &MimeDatabase,
-) -> EntryData {
+fn complete_entry_data(name: String, metadata: Metadata, mime: &MimeDatabase) -> EntryData {
     let is_dir = metadata.is_dir();
     let name_width_units = name_width_units(&name);
-    let role = EntryMetadataRole::resolved_from_path(&name, path, is_dir, &metadata, mime);
+    let role = EntryMetadataRole::from_metadata(&name, is_dir, &metadata, mime);
 
     EntryData {
         name: Arc::from(name),
@@ -456,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn extensionless_entry_resolves_magic_mime_in_metadata_role() {
+    fn extensionless_entry_defers_magic_mime_to_metadata_role() {
         let dir = std::env::temp_dir().join(format!(
             "fika-entry-mime-{}-{}",
             std::process::id(),
@@ -478,9 +534,10 @@ mod tests {
 
         let entry = read_entry_sync(&dir, &path).unwrap();
 
-        assert_eq!(entry.mime_type.as_deref(), Some("image/png"));
-        assert!(entry.mime_magic_checked);
+        assert_eq!(entry.mime_type.as_deref(), Some("application/octet-stream"));
+        assert!(!entry.mime_magic_checked);
         assert!(entry.metadata_complete);
+        assert_eq!(entry.size_bytes, 12);
     }
 
     #[test]
@@ -506,7 +563,6 @@ mod tests {
 
         let entry = Entry::new(complete_entry_data(
             "image.png".to_string(),
-            &path,
             fs::metadata(&path).unwrap(),
             MimeDatabase::shared(),
         ));
@@ -516,9 +572,9 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_listing_defers_full_metadata_to_visible_role_update() {
+    fn ordinary_listing_reads_basic_metadata_without_magic_resolution() {
         let dir = std::env::temp_dir().join(format!(
-            "fika-entry-lazy-metadata-{}-{}",
+            "fika-entry-basic-metadata-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -534,6 +590,7 @@ mod tests {
         }
         let _guard = DirGuard(dir.clone());
         fs::write(dir.join("payload.txt"), b"payload").unwrap();
+        fs::write(dir.join("payload"), b"\x89PNG\r\n\x1a\nrest").unwrap();
         fs::create_dir(dir.join("folder")).unwrap();
 
         let entries = read_entries_sync(&dir).unwrap();
@@ -545,15 +602,26 @@ mod tests {
             .iter()
             .find(|entry| entry.name.as_ref() == "folder")
             .unwrap();
+        let generic = entries
+            .iter()
+            .find(|entry| entry.name.as_ref() == "payload")
+            .unwrap();
 
-        assert!(!file.metadata_complete);
-        assert_eq!(file.size_bytes, 0);
-        assert_eq!(file.modified_secs, None);
+        assert!(file.metadata_complete);
+        assert_eq!(file.size_bytes, 7);
+        assert!(file.modified_secs.is_some());
         assert_eq!(file.mime_type.as_deref(), Some("text/plain"));
         assert!(file.mime_magic_checked);
-        assert!(!folder.metadata_complete);
+        assert!(folder.metadata_complete);
         assert!(folder.is_dir);
         assert_eq!(folder.mime_type.as_deref(), Some("inode/directory"));
+        assert!(generic.metadata_complete);
+        assert_eq!(generic.size_bytes, 12);
+        assert_eq!(
+            generic.mime_type.as_deref(),
+            Some("application/octet-stream")
+        );
+        assert!(!generic.mime_magic_checked);
     }
 
     #[test]

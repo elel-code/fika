@@ -4,6 +4,7 @@ use super::entries::Entry;
 use super::pane::{Generation, PaneId, PaneState, RequestSerial};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -76,19 +77,23 @@ struct ListingBatch {
 }
 
 impl ListingBatch {
-    fn read_events_cancellable(
-        &self,
-        state: &Arc<(Mutex<ListingWorkerState>, Condvar)>,
-    ) -> Option<Vec<DirectoryListerEvent>> {
-        let request = self.requests.first()?;
-        DirectoryLister::read_listing_events_cancellable(
+    fn read_events_cancellable(&self, state: &Arc<(Mutex<ListingWorkerState>, Condvar)>) {
+        let Some(request) = self.requests.first() else {
+            return;
+        };
+        let _ = DirectoryLister::read_listing_events_streaming_cancellable(
             request.pane_id,
             request.generation,
             request.request_serial,
             self.path.clone(),
             self.mode,
             || listing_batch_cancelled(state, self),
-        )
+            |events| {
+                let (lock, _) = &**state;
+                let mut guard = lock.lock().expect("listing worker state poisoned");
+                guard.publish_batch_if_current(self, &events);
+            },
+        );
     }
 }
 
@@ -98,6 +103,7 @@ struct ListingWorkerState {
     latest_request_by_pane: HashMap<PaneId, ListingRequestKey>,
     results_by_pane: BTreeMap<PaneId, Vec<DirectoryListerEvent>>,
     cache: DirectoryCache,
+    result_notifier: Option<mpsc::Sender<()>>,
     shutdown: bool,
 }
 
@@ -260,11 +266,16 @@ impl ListingWorkerState {
                 continue;
             }
             self.results_by_pane
-                .insert(request.pane_id, retarget_listing_events(events, request));
+                .entry(request.pane_id)
+                .or_default()
+                .extend(retarget_listing_events(events, request));
             published = true;
         }
         if published && let Some(entries) = listing_refreshed_entries(events) {
             self.cache.insert_fresh(&batch.path, entries);
+        }
+        if published && let Some(notifier) = &self.result_notifier {
+            let _ = notifier.send(());
         }
         published
     }
@@ -283,7 +294,21 @@ pub struct ListingWorker {
 
 impl ListingWorker {
     pub fn new() -> Self {
+        Self::with_optional_result_notifier(None)
+    }
+
+    pub fn with_result_notifier(result_notifier: mpsc::Sender<()>) -> Self {
+        Self::with_optional_result_notifier(Some(result_notifier))
+    }
+
+    fn with_optional_result_notifier(result_notifier: Option<mpsc::Sender<()>>) -> Self {
         let state = Arc::new((Mutex::new(ListingWorkerState::default()), Condvar::new()));
+        {
+            let (lock, _) = &*state;
+            lock.lock()
+                .expect("listing worker state poisoned")
+                .result_notifier = result_notifier;
+        }
         let worker_state = Arc::clone(&state);
         let handle = std::thread::spawn(move || listing_worker_loop(worker_state));
         Self {
@@ -651,15 +676,7 @@ fn listing_worker_loop(state: Arc<(Mutex<ListingWorkerState>, Condvar)>) {
                 .expect("pending listing request disappeared")
         };
 
-        let Some(events) = batch.read_events_cancellable(&state) else {
-            continue;
-        };
-        let (lock, _) = &*state;
-        let mut guard = lock.lock().expect("listing worker state poisoned");
-        if guard.shutdown {
-            return;
-        }
-        guard.publish_batch_if_current(&batch, &events);
+        batch.read_events_cancellable(&state);
     }
 }
 

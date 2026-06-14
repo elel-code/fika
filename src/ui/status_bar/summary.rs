@@ -15,7 +15,7 @@ pub(crate) fn status_summary_for_model(
             folders += 1;
         } else {
             files += 1;
-            total_size = total_size.saturating_add(entry.size_bytes);
+            total_size = total_size.saturating_add(entry.effective_size_bytes());
         }
     }
 
@@ -43,7 +43,7 @@ pub(crate) fn status_summary_for_model_indexes(
             folders += 1;
         } else {
             files += 1;
-            total_size = total_size.saturating_add(entry.size_bytes);
+            total_size = total_size.saturating_add(entry.effective_size_bytes());
         }
     }
 

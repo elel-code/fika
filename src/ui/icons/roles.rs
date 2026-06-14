@@ -97,7 +97,7 @@ pub(crate) fn finish_metadata_role_results_with_icon_roles(
                     item_id,
                     path,
                     entry.is_dir,
-                    entry.mime_type.clone(),
+                    entry.effective_mime_type_cloned(),
                 ));
             }
         }
@@ -296,7 +296,10 @@ mod tests {
 
         let entry = &panes.pane(pane_id).unwrap().model.entries()[0];
         assert!(changed);
-        assert_eq!(entry.mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(
+            entry.effective_mime_type().map(Arc::as_ref),
+            Some("text/plain")
+        );
         assert_eq!(entry.icon_name.as_deref(), Some("text-plain"));
         assert_eq!(
             entry.thumbnail_path.as_deref(),

@@ -1,4 +1,6 @@
-use super::entries::{Entry, read_entries_sync_cancellable, read_entry_sync};
+use super::entries::{
+    Entry, read_entries_sync_cancellable, read_entry_batches_sync_cancellable, read_entry_sync,
+};
 use super::model::{DirectoryModel, DirectoryModelSignal};
 use super::pane::{Generation, PaneId, RequestSerial};
 use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
@@ -6,6 +8,7 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoadMode {
@@ -216,6 +219,26 @@ impl DirectoryLister {
         )
     }
 
+    pub fn read_listing_events_streaming_cancellable(
+        pane_id: PaneId,
+        generation: Generation,
+        request_serial: RequestSerial,
+        path: PathBuf,
+        mode: LoadMode,
+        is_cancelled: impl FnMut() -> bool,
+        on_events: impl FnMut(Vec<DirectoryListerEvent>),
+    ) -> Option<()> {
+        read_listing_events_streaming_cancellable(
+            pane_id,
+            generation,
+            request_serial,
+            path,
+            mode,
+            is_cancelled,
+            on_events,
+        )
+    }
+
     pub fn start_watcher(&mut self) -> Result<(), String> {
         self.drop_watcher();
         let (tx, rx) = mpsc::channel();
@@ -285,9 +308,11 @@ impl DirectoryLister {
 
         match event {
             DirectoryListerEvent::LoadingStarted { .. } => Vec::new(),
-            DirectoryListerEvent::ListingCompleted { .. }
-            | DirectoryListerEvent::CurrentDirectoryRemoved { .. }
+            DirectoryListerEvent::CurrentDirectoryRemoved { .. }
             | DirectoryListerEvent::Error { .. } => Vec::new(),
+            DirectoryListerEvent::ItemsAdded { path, entries, .. } if model.directory() != path => {
+                model.replace_listing(path, Arc::new(entries))
+            }
             DirectoryListerEvent::ItemsAdded { entries, .. } => model.apply_items_added(entries),
             DirectoryListerEvent::ItemsDeleted { paths, .. } => model.apply_items_deleted(&paths),
             DirectoryListerEvent::ItemsRefreshed { pairs, .. } => {
@@ -296,6 +321,10 @@ impl DirectoryLister {
             DirectoryListerEvent::ListingRefreshed { path, entries, .. } => {
                 model.replace_listing(path, entries)
             }
+            DirectoryListerEvent::ListingCompleted { path, .. } if model.directory() != path => {
+                model.clear_for_directory(path)
+            }
+            DirectoryListerEvent::ListingCompleted { .. } => Vec::new(),
         }
     }
 
@@ -458,6 +487,97 @@ fn read_listing_events_cancellable(
             path,
         },
     ])
+}
+
+fn read_listing_events_streaming_cancellable(
+    pane_id: PaneId,
+    generation: Generation,
+    request_serial: RequestSerial,
+    path: PathBuf,
+    mode: LoadMode,
+    mut is_cancelled: impl FnMut() -> bool,
+    mut on_events: impl FnMut(Vec<DirectoryListerEvent>),
+) -> Option<()> {
+    const LISTING_BATCH_SIZE: usize = 512;
+    const MAXIMUM_UPDATE_INTERVAL: Duration = Duration::from_millis(2000);
+
+    if is_cancelled() {
+        return None;
+    }
+
+    let mut pending_entries = Vec::new();
+    let mut pending_started_at: Option<Instant> = None;
+    let mut dispatch_pending =
+        |pending_entries: &mut Vec<Entry>, pending_started_at: &mut Option<Instant>| {
+            if pending_entries.is_empty() {
+                return;
+            }
+            on_events(vec![DirectoryListerEvent::ItemsAdded {
+                pane_id,
+                generation,
+                request_serial,
+                path: path.clone(),
+                entries: std::mem::take(pending_entries),
+            }]);
+            *pending_started_at = None;
+        };
+
+    let result = read_entry_batches_sync_cancellable(
+        &path,
+        LISTING_BATCH_SIZE,
+        &mut is_cancelled,
+        |entries| {
+            if pending_entries.is_empty() {
+                pending_started_at = Some(Instant::now());
+            }
+            pending_entries.extend(entries);
+            if pending_started_at
+                .is_some_and(|started| started.elapsed() >= MAXIMUM_UPDATE_INTERVAL)
+            {
+                dispatch_pending(&mut pending_entries, &mut pending_started_at);
+            }
+        },
+    );
+
+    match result {
+        Ok(Some(())) => {
+            if is_cancelled() {
+                return None;
+            }
+            dispatch_pending(&mut pending_entries, &mut pending_started_at);
+            on_events(vec![DirectoryListerEvent::ListingCompleted {
+                pane_id,
+                generation,
+                request_serial,
+                path,
+            }]);
+            Some(())
+        }
+        Ok(None) => None,
+        Err(err) => {
+            if is_cancelled() {
+                return None;
+            }
+            let event = if mode == LoadMode::Reload && !path.exists() {
+                DirectoryListerEvent::CurrentDirectoryRemoved {
+                    pane_id,
+                    generation,
+                    request_serial,
+                    path,
+                }
+            } else {
+                DirectoryListerEvent::Error {
+                    pane_id,
+                    generation,
+                    request_serial,
+                    path,
+                    message: err.to_string(),
+                }
+            };
+            on_events(vec![event]);
+            Some(())
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -660,6 +780,65 @@ pub fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn streaming_listing_emits_item_batches_before_completed() {
+        let root = std::env::temp_dir().join(format!(
+            "fika-streaming-listing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        struct DirGuard(PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = DirGuard(root.clone());
+        for index in 0..513 {
+            fs::write(root.join(format!("item-{index:03}.txt")), b"x").unwrap();
+        }
+
+        let mut event_groups = Vec::new();
+        let result = DirectoryLister::read_listing_events_streaming_cancellable(
+            PaneId(1),
+            Generation(1),
+            RequestSerial(1),
+            root.clone(),
+            LoadMode::Load,
+            || false,
+            |events| event_groups.push(events),
+        );
+
+        assert_eq!(result, Some(()));
+        assert!(matches!(
+            event_groups.first().and_then(|events| events.first()),
+            Some(DirectoryListerEvent::ItemsAdded { .. })
+        ));
+        assert!(matches!(
+            event_groups.last().and_then(|events| events.first()),
+            Some(DirectoryListerEvent::ListingCompleted { .. })
+        ));
+        let entry_count = event_groups
+            .iter()
+            .flat_map(|events| events.iter())
+            .filter_map(|event| {
+                if let DirectoryListerEvent::ItemsAdded { entries, .. } = event {
+                    Some(entries.len())
+                } else {
+                    None
+                }
+            })
+            .sum::<usize>();
+        assert_eq!(entry_count, 513);
+        assert_eq!(event_groups.len(), 2);
+    }
 
     #[test]
     fn watcher_create_maps_to_items_added() {

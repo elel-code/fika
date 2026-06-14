@@ -36,6 +36,15 @@ impl MetadataRoleWorkKey {
             path_hash: stable_hash(&request.path),
         }
     }
+
+    pub fn from_result(result: &MetadataRoleResult) -> Self {
+        Self {
+            pane_id: result.pane_id,
+            generation: result.generation,
+            item_id: result.item_id,
+            path_hash: stable_hash(&result.path),
+        }
+    }
 }
 
 fn stable_hash(value: impl Hash) -> u64 {
@@ -167,6 +176,20 @@ impl MetadataRoleScheduler {
         self.role_batch_pending = false;
         for key in self.active.drain() {
             self.seen.remove(&key);
+        }
+    }
+
+    pub fn finish_role_batch_with_results(&mut self, results: &[MetadataRoleResult]) {
+        let failed = results
+            .iter()
+            .filter(|result| result.role.is_none())
+            .map(MetadataRoleWorkKey::from_result)
+            .collect::<HashSet<_>>();
+        self.role_batch_pending = false;
+        for key in self.active.drain() {
+            if !failed.contains(&key) {
+                self.seen.remove(&key);
+            }
         }
     }
 
@@ -354,6 +377,30 @@ mod tests {
     }
 
     #[test]
+    fn metadata_role_scheduler_keeps_failed_active_key_seen() {
+        let root = PathBuf::from("/tmp/fika-metadata-failed");
+        let candidate = MetadataRoleCandidate {
+            item_id: ItemId(1),
+            path: root.join("missing"),
+        };
+        let mut scheduler = MetadataRoleScheduler::default();
+
+        assert!(scheduler.queue_candidates(PaneId(1), Generation(1), vec![candidate.clone()]));
+        let batch = scheduler.start_role_batch(8).unwrap();
+        scheduler.finish_role_batch_with_results(&[MetadataRoleResult {
+            pane_id: PaneId(1),
+            generation: Generation(1),
+            item_id: batch.requests[0].item_id(),
+            path: batch.requests[0].path().to_path_buf(),
+            role: None,
+        }]);
+
+        assert!(!scheduler.queue_candidates(PaneId(1), Generation(1), vec![candidate]));
+        assert_eq!(scheduler.queued_len(), 0);
+        assert_eq!(scheduler.seen_len(), 1);
+    }
+
+    #[test]
     fn metadata_role_result_applies_only_to_matching_model_item_and_path() {
         let root = PathBuf::from("/tmp/fika-metadata-result");
         let mut model = DirectoryModel::for_directory(root.clone());
@@ -390,7 +437,7 @@ mod tests {
                 role: Some(role.clone()),
             },
         ));
-        assert!(!model.entries()[0].metadata_complete);
+        assert!(!model.entries()[0].effective_metadata_complete());
 
         assert!(apply_metadata_role_result_to_model(
             &mut model,
@@ -402,8 +449,8 @@ mod tests {
                 role: Some(role),
             },
         ));
-        assert!(model.entries()[0].metadata_complete);
-        assert_eq!(model.entries()[0].size_bytes, 12);
+        assert!(model.entries()[0].effective_metadata_complete());
+        assert_eq!(model.entries()[0].effective_size_bytes(), 12);
     }
 
     #[test]

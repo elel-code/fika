@@ -316,6 +316,7 @@ impl FikaApp {
         });
         let initial_devices = fika_core::read_mountinfo_devices().unwrap_or_default();
         let trash_monitor = TrashEmptinessMonitor::new();
+        let (listing_results_tx, listing_results_rx) = mpsc::channel();
         let mut app = Self {
             panes: PaneController::new(args.start_dir.clone()),
             places: build_places(&user_places_path),
@@ -356,7 +357,7 @@ impl FikaApp {
             location_edit_metrics: HashMap::new(),
             place_draft: None,
             chooser,
-            listing_worker: ListingWorker::new(),
+            listing_worker: ListingWorker::with_result_notifier(listing_results_tx),
             _keystroke_subscription: None,
             rubber_band_pending: None,
             rubber_band: None,
@@ -383,6 +384,7 @@ impl FikaApp {
         app.start_watchers();
         app.start_trash_monitor();
         app.maybe_start_device_monitor(cx);
+        Self::start_listing_result_monitor(listing_results_rx, cx);
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -393,8 +395,7 @@ impl FikaApp {
                             .await;
                         if this
                             .update(&mut cx, |app, cx| {
-                                if app.drain_background_listing_results()
-                                    | app.drain_watchers()
+                                if app.drain_watchers()
                                     | app.drain_trash_monitor()
                                     | app.drain_device_monitor_messages()
                                     | app.operation_progress.is_some()
@@ -884,6 +885,43 @@ impl FikaApp {
             .collect()
     }
 
+    fn start_listing_result_monitor(receiver: mpsc::Receiver<()>, cx: &mut Context<Self>) {
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let mut receiver = receiver;
+                    loop {
+                        let (next_receiver, connected) = cx
+                            .background_spawn(async move {
+                                let connected = receiver.recv().is_ok();
+                                if connected {
+                                    while receiver.try_recv().is_ok() {}
+                                }
+                                (receiver, connected)
+                            })
+                            .await;
+                        receiver = next_receiver;
+                        if !connected {
+                            break;
+                        }
+                        if this
+                            .update(&mut cx, |app, cx| {
+                                if app.drain_background_listing_results() {
+                                    cx.notify();
+                                }
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
     fn status_bar_snapshot_for_pane(
         &mut self,
         pane_id: PaneId,
@@ -1130,7 +1168,8 @@ impl FikaApp {
                         )
                         .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.metadata_role_scheduler.finish_role_batch();
+                        app.metadata_role_scheduler
+                            .finish_role_batch_with_results(&results);
                         let changed = app.finish_metadata_role_results(results);
                         app.maybe_start_metadata_role(cx);
                         if changed {
@@ -2164,7 +2203,6 @@ impl FikaApp {
         let Some(view) = self.panes.set_zoom_level(pane_id, next_level) else {
             return;
         };
-        self.compact_column_widths.remove(&pane_id);
         self.set_pane_status(
             pane_id,
             format!(
@@ -2234,9 +2272,6 @@ impl FikaApp {
         let Some(view) = self.panes.set_zoom_level(pane_id, next_level) else {
             return;
         };
-        if view.zoom_level != previous_level {
-            self.compact_column_widths.remove(&pane_id);
-        }
         self.set_pane_status(
             pane_id,
             format!(
@@ -4784,7 +4819,7 @@ impl FikaApp {
     fn mime_type_for_pane_path(&self, pane_id: PaneId, path: &Path) -> Option<Arc<str>> {
         let pane = self.panes.pane(pane_id)?;
         let index = pane.model.index_of_path(path)?;
-        pane.model.get(index)?.mime_type.clone()
+        pane.model.get(index)?.effective_mime_type_cloned()
     }
 
     fn service_menu_targets_for_context(
@@ -4803,7 +4838,9 @@ impl FikaApp {
                 .iter()
                 .filter(|entry| pane.selection.is_selected(entry.id))
                 .map(|entry| ServiceMenuTarget {
-                    mime_type: entry.mime_type.as_deref().map(str::to_string),
+                    mime_type: entry
+                        .effective_mime_type()
+                        .map(|mime| mime.as_ref().to_string()),
                     is_dir: entry.is_dir,
                 })
                 .collect::<Vec<_>>();
@@ -6071,10 +6108,37 @@ impl FikaApp {
         let trash_state_event = event.clone();
         if let Some(signals) = self.panes.apply_lister_event(event) {
             self.update_trash_emptiness_state_from_lister_event(&trash_state_event);
+            self.cache_completed_listing_from_event(&trash_state_event);
             if !signals.is_empty() {
                 self.invalidate_pane_layout_projection(pane_id, false);
-                self.set_pane_status(pane_id, format!("{} model signal(s)", signals.len()));
             }
+        }
+    }
+
+    fn cache_completed_listing_from_event(&mut self, event: &DirectoryListerEvent) {
+        let DirectoryListerEvent::ListingCompleted { pane_id, path, .. } = event else {
+            return;
+        };
+        let Some(pane) = self.panes.pane(*pane_id) else {
+            return;
+        };
+        if !event.matches_target(pane.id, pane.generation, &pane.current_dir)
+            || pane.model.directory() != path
+        {
+            return;
+        }
+
+        let entry_count = pane.model.len();
+        if self.listing_worker.can_cache_entry_count(entry_count) {
+            let entries = pane.model.listing_snapshot();
+            if self.listing_worker.cache_listing_snapshot(path, entries) {
+                self.log_listing_cache_debug(&format!("load-completed-cached {}", path.display()));
+            }
+        } else if self
+            .listing_worker
+            .record_uncached_directory(path, entry_count)
+        {
+            self.log_listing_cache_debug(&format!("load-completed-uncached {}", path.display()));
         }
     }
 
@@ -10259,7 +10323,7 @@ text/plain=viewer.desktop;\n",
 
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        assert!(!app.compact_column_widths.contains_key(&pane_id));
+        assert!(app.compact_column_widths.contains_key(&pane_id));
 
         scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
         app.sync_pane_view_from_item_view_scroll_handle(pane_id);
@@ -12146,7 +12210,7 @@ text/plain=viewer.desktop;\n",
             path: path.join("payload"),
             role: Some(role.clone()),
         }]));
-        assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].metadata_complete);
+        assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].effective_metadata_complete());
 
         assert!(!app.finish_metadata_role_results(vec![MetadataRoleResult {
             pane_id,
@@ -12155,7 +12219,7 @@ text/plain=viewer.desktop;\n",
             path: path.join("other"),
             role: Some(role.clone()),
         }]));
-        assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].metadata_complete);
+        assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].effective_metadata_complete());
 
         assert!(app.finish_metadata_role_results(vec![MetadataRoleResult {
             pane_id,
@@ -12165,10 +12229,13 @@ text/plain=viewer.desktop;\n",
             role: Some(role),
         }]));
         let entry = &app.panes.pane(pane_id).unwrap().model.entries()[0];
-        assert!(entry.metadata_complete);
-        assert_eq!(entry.size_bytes, 12);
-        assert_eq!(entry.modified_secs, Some(42));
-        assert_eq!(entry.mime_type.as_deref(), Some("text/plain"));
+        assert!(entry.effective_metadata_complete());
+        assert_eq!(entry.effective_size_bytes(), 12);
+        assert_eq!(entry.effective_modified_secs(), Some(42));
+        assert_eq!(
+            entry.effective_mime_type().map(Arc::as_ref),
+            Some("text/plain")
+        );
     }
 
     #[test]
@@ -12217,8 +12284,8 @@ text/plain=viewer.desktop;\n",
 
         assert_eq!(
             app.panes.pane(pane_id).unwrap().model.entries()[0]
-                .mime_type
-                .as_deref(),
+                .effective_mime_type()
+                .map(Arc::as_ref),
             Some("image/png")
         );
         assert_eq!(
@@ -12346,6 +12413,7 @@ text/plain=viewer.desktop;\n",
     ) -> fika_core::ModelEntry {
         fika_core::ModelEntry {
             id: fika_core::ItemId(id),
+            metadata_role: None,
             metadata_refresh_pending: false,
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from(name),
