@@ -7,16 +7,6 @@ use fika_core::{
 pub(crate) const TEXT_URI_LIST_MIME: &str = "text/uri-list";
 pub(crate) const TEXT_PLAIN_MIME: &str = "text/plain";
 
-pub(crate) fn file_transfer_mode_for_modifiers(modifiers: gpui::Modifiers) -> FileTransferMode {
-    if modifiers.alt || (modifiers.shift && modifiers.secondary()) {
-        FileTransferMode::Link
-    } else if modifiers.shift {
-        FileTransferMode::Move
-    } else {
-        FileTransferMode::Copy
-    }
-}
-
 pub(crate) fn drag_cursor_style_for_transfer_mode(mode: FileTransferMode) -> gpui::CursorStyle {
     match mode {
         FileTransferMode::Copy => gpui::CursorStyle::DragCopy,
@@ -50,26 +40,14 @@ pub(crate) struct DragExportPayload {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ItemDropTarget {
-    Pane {
-        pane_id: PaneId,
-        mode: FileTransferMode,
-    },
-    Directory {
-        pane_id: PaneId,
-        path: PathBuf,
-        mode: FileTransferMode,
-    },
+    Pane { pane_id: PaneId },
+    Directory { pane_id: PaneId, path: PathBuf },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlaceDropTarget {
-    Place {
-        path: PathBuf,
-        mode: FileTransferMode,
-    },
-    Insert {
-        index: usize,
-    },
+    Place { path: PathBuf },
+    Insert { index: usize },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -286,44 +264,39 @@ pub(crate) fn item_drop_reject_reason(paths: &[PathBuf], target_dir: &Path) -> O
     None
 }
 
-pub(crate) fn item_drop_target_mode_for_pane(
+pub(crate) fn item_drop_target_matches_pane(
     target: Option<&ItemDropTarget>,
     pane_id: PaneId,
-) -> Option<FileTransferMode> {
+) -> bool {
     match target {
         Some(ItemDropTarget::Pane {
             pane_id: target_pane,
-            mode,
-        }) if *target_pane == pane_id => Some(*mode),
-        _ => None,
+        }) if *target_pane == pane_id => true,
+        _ => false,
     }
 }
 
-pub(crate) fn item_drop_target_mode_for_directory(
+pub(crate) fn item_drop_target_matches_directory(
     target: Option<&ItemDropTarget>,
     pane_id: PaneId,
     path: &Path,
-) -> Option<FileTransferMode> {
+) -> bool {
     match target {
         Some(ItemDropTarget::Directory {
             pane_id: target_pane,
             path: target_path,
-            mode,
-        }) if *target_pane == pane_id && target_path == path => Some(*mode),
-        _ => None,
+        }) if *target_pane == pane_id && target_path == path => true,
+        _ => false,
     }
 }
 
-pub(crate) fn place_drop_target_mode_for_place(
+pub(crate) fn place_drop_target_matches_place(
     target: Option<&PlaceDropTarget>,
     path: &Path,
-) -> Option<FileTransferMode> {
+) -> bool {
     match target {
-        Some(PlaceDropTarget::Place {
-            path: target_path,
-            mode,
-        }) if target_path == path => Some(*mode),
-        _ => None,
+        Some(PlaceDropTarget::Place { path: target_path }) if target_path == path => true,
+        _ => false,
     }
 }
 
@@ -370,11 +343,11 @@ fn path_is_child_of(path: &Path, parent: &Path) -> bool {
 mod tests {
     use super::{
         DropTargetState, ItemDropTarget, PlaceDropTarget, drag_export_payload_for_paths,
-        item_drop_target_mode_for_directory, item_drop_target_mode_for_pane,
+        item_drop_target_matches_directory, item_drop_target_matches_pane,
         place_drag_export_payload, place_drop_target_matches_insert,
-        place_drop_target_mode_for_place,
+        place_drop_target_matches_place,
     };
-    use fika_core::{FileTransferMode, PaneId};
+    use fika_core::PaneId;
     use std::path::PathBuf;
 
     #[test]
@@ -439,32 +412,17 @@ mod tests {
         let path = PathBuf::from("/tmp/fika-drop-target-state");
         let mut state = DropTargetState::default();
 
-        assert!(state.set_item(ItemDropTarget::Pane {
-            pane_id: pane,
-            mode: FileTransferMode::Copy,
-        }));
+        assert!(state.set_item(ItemDropTarget::Pane { pane_id: pane }));
         let first_generation = state.stale_generation();
-        assert_eq!(
-            item_drop_target_mode_for_pane(state.item(), pane),
-            Some(FileTransferMode::Copy)
-        );
+        assert!(item_drop_target_matches_pane(state.item(), pane));
 
-        assert!(!state.set_item(ItemDropTarget::Pane {
-            pane_id: pane,
-            mode: FileTransferMode::Copy,
-        }));
+        assert!(!state.set_item(ItemDropTarget::Pane { pane_id: pane }));
         assert!(state.stale_generation() > first_generation);
         let refreshed_generation = state.stale_generation();
 
-        assert!(state.set_place(PlaceDropTarget::Place {
-            path: path.clone(),
-            mode: FileTransferMode::Move,
-        }));
+        assert!(state.set_place(PlaceDropTarget::Place { path: path.clone() }));
         assert!(state.item().is_none());
-        assert_eq!(
-            place_drop_target_mode_for_place(state.place(), &path),
-            Some(FileTransferMode::Move)
-        );
+        assert!(place_drop_target_matches_place(state.place(), &path));
         assert!(state.stale_generation() > refreshed_generation);
     }
 
@@ -479,16 +437,16 @@ mod tests {
         assert!(state.set_item(ItemDropTarget::Directory {
             pane_id: pane,
             path: path.clone(),
-            mode: FileTransferMode::Link,
         }));
         let generation = state.stale_generation();
 
         assert!(!state.clear_item_for_directory(pane, &other_path));
         assert!(!state.clear_item_for_directory(other_pane, &path));
-        assert_eq!(
-            item_drop_target_mode_for_directory(state.item(), pane, &path),
-            Some(FileTransferMode::Link)
-        );
+        assert!(item_drop_target_matches_directory(
+            state.item(),
+            pane,
+            &path
+        ));
         assert_eq!(state.stale_generation(), generation);
 
         assert!(state.clear_item_for_directory(pane, &path));
@@ -512,14 +470,10 @@ mod tests {
 
         assert!(state.set_place(PlaceDropTarget::Place {
             path: row_path.clone(),
-            mode: FileTransferMode::Copy,
         }));
         let row_generation = state.stale_generation();
         assert!(!state.clear_place_for_row(&other_path, 1, 2));
-        assert_eq!(
-            place_drop_target_mode_for_place(state.place(), &row_path),
-            Some(FileTransferMode::Copy)
-        );
+        assert!(place_drop_target_matches_place(state.place(), &row_path));
         assert_eq!(state.stale_generation(), row_generation);
         assert!(state.clear_place_for_row(&row_path, 1, 2));
         assert!(state.place().is_none());
@@ -531,21 +485,12 @@ mod tests {
         let path = PathBuf::from("/tmp/fika-drop-target-state/place");
         let mut state = DropTargetState::default();
 
-        assert!(state.set_item(ItemDropTarget::Pane {
-            pane_id: pane,
-            mode: FileTransferMode::Copy,
-        }));
+        assert!(state.set_item(ItemDropTarget::Pane { pane_id: pane }));
         let stale_generation = state.stale_generation();
 
-        assert!(state.set_place(PlaceDropTarget::Place {
-            path: path.clone(),
-            mode: FileTransferMode::Copy,
-        }));
+        assert!(state.set_place(PlaceDropTarget::Place { path: path.clone() }));
         assert!(!state.clear_stale_for_generation(stale_generation));
-        assert_eq!(
-            place_drop_target_mode_for_place(state.place(), &path),
-            Some(FileTransferMode::Copy)
-        );
+        assert!(place_drop_target_matches_place(state.place(), &path));
 
         let current_generation = state.stale_generation();
         assert!(state.clear_stale_for_generation(current_generation));

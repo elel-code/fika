@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use fika_core::file_ops;
 
 use crate::ui::drag_drop::{
-    PlaceDropTarget, place_drop_target_matches_insert, place_drop_target_mode_for_place,
+    PlaceDropTarget, place_drop_target_matches_insert, place_drop_target_matches_place,
 };
 use crate::ui::icons::FileIconCache;
 
@@ -51,9 +51,9 @@ pub(crate) fn place_snapshots_for(
                 device_ejectable: place.device_ejectable,
                 device_can_power_off: place.device_can_power_off,
                 active: active_index == Some(index),
-                drop_target: (mounted && !network)
-                    .then(|| place_drop_target_mode_for_place(place_drop_target, &place.path))
-                    .flatten(),
+                drop_target: mounted
+                    && !network
+                    && place_drop_target_matches_place(place_drop_target, &place.path),
                 insert_before: place_drop_target_matches_insert(place_drop_target, index),
                 insert_after: index == last_index
                     && place_drop_target_matches_insert(place_drop_target, places.len()),
@@ -69,7 +69,6 @@ pub(crate) fn place_snapshots_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fika_core::FileTransferMode;
 
     #[test]
     fn place_snapshots_apply_active_hidden_and_drop_projection() {
@@ -94,7 +93,6 @@ mod tests {
         let hidden_places = BTreeSet::from([docs.clone()]);
         let drop_target = PlaceDropTarget::Place {
             path: device.clone(),
-            mode: FileTransferMode::Copy,
         };
         let mut icons = FileIconCache::default();
 
@@ -116,7 +114,7 @@ mod tests {
             vec!["Home", "USB"]
         );
         assert!(snapshots[0].active);
-        assert_eq!(snapshots[1].drop_target, Some(FileTransferMode::Copy));
+        assert!(snapshots[1].drop_target);
         assert!(snapshots[1].device);
         assert!(snapshots[1].device_ejectable);
         assert!(snapshots[1].device_can_power_off);

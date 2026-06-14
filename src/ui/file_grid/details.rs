@@ -6,7 +6,6 @@ use fika_core::{
     EntryData, ModelEntry, format_modified_secs, format_size, format_trash_deletion_time,
 };
 
-use crate::ui::drag_drop::FileTransferMode;
 use crate::ui::icons::FileIconSnapshot;
 
 pub(crate) const DETAILS_HEADER_HEIGHT: f32 = 28.0;
@@ -57,7 +56,7 @@ pub(crate) struct DetailsItemSnapshot {
     pub(crate) icon: FileIconSnapshot,
     pub(crate) selected: bool,
     pub(crate) selection_count: usize,
-    pub(crate) drop_target: Option<FileTransferMode>,
+    pub(crate) drop_target: bool,
     pub(crate) size_label: String,
     pub(crate) modified_label: String,
     pub(crate) original_path_label: String,

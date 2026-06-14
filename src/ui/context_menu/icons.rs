@@ -149,6 +149,9 @@ fn context_menu_theme_icon_candidates(icon: &ContextMenuIcon) -> (String, Vec<St
         }
         ContextMenuIcon::Copy => icon_candidates("context-copy", &["edit-copy"]),
         ContextMenuIcon::Cut => icon_candidates("context-cut", &["edit-cut"]),
+        ContextMenuIcon::Link => {
+            icon_candidates("context-link", &["insert-link", "emblem-symbolic-link"])
+        }
         ContextMenuIcon::Paste => icon_candidates("context-paste", &["edit-paste"]),
         ContextMenuIcon::Location => (
             "context-location".to_string(),
@@ -277,6 +280,7 @@ fn context_menu_icon_style(icon: &ContextMenuIcon, enabled: bool) -> (&'static s
         ContextMenuIcon::Rename => ("R", 0x6d28d9, 0xf2edff),
         ContextMenuIcon::Copy => ("C", 0x2563eb, 0xeaf1ff),
         ContextMenuIcon::Cut => ("X", 0xb45309, 0xfff3df),
+        ContextMenuIcon::Link => ("L", 0x7c3aed, 0xf2edff),
         ContextMenuIcon::Paste => ("P", 0x047857, 0xe7f8ef),
         ContextMenuIcon::Location => ("L", 0x334155, 0xe8eef7),
         ContextMenuIcon::Trash => ("T", 0xb91c1c, 0xffe8e8),

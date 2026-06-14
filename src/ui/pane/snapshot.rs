@@ -1,4 +1,3 @@
-use crate::ui::drag_drop::FileTransferMode;
 use crate::ui::file_grid::FileGridSnapshot;
 use crate::ui::filter_bar::FilterBarSnapshot;
 use crate::ui::location_bar::LocationDraftSnapshot;
@@ -22,6 +21,6 @@ pub(crate) struct PaneSnapshot {
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) view: ViewState,
     pub(crate) rubber_band: Option<ViewRect>,
-    pub(crate) drop_target: Option<FileTransferMode>,
+    pub(crate) drop_target: bool,
     pub(crate) focused: bool,
 }

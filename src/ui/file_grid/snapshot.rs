@@ -14,7 +14,7 @@ use super::layout::{
     model_index_for_layout_index,
 };
 use super::{FileGridSnapshot, VisibleItemSlotPool, icons_layout_options};
-use crate::ui::drag_drop::{FileTransferMode, ItemDropTarget, item_drop_target_mode_for_directory};
+use crate::ui::drag_drop::{ItemDropTarget, item_drop_target_matches_directory};
 use crate::ui::icons::FileIconSnapshot;
 use crate::ui::rename::RenameDraft;
 
@@ -89,7 +89,7 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) icon: FileIconSnapshot,
     pub(crate) selected: bool,
     pub(crate) selection_count: usize,
-    pub(crate) drop_target: Option<FileTransferMode>,
+    pub(crate) drop_target: bool,
     pub(crate) draft_name: Option<String>,
     pub(crate) draft_caret: Option<usize>,
     pub(crate) draft_selection: Option<(usize, usize)>,
@@ -115,7 +115,7 @@ pub(crate) struct RawVisibleItemSnapshot {
     pub(crate) mime_type: Option<Arc<str>>,
     pub(crate) mime_magic_checked: bool,
     pub(crate) selected: bool,
-    pub(crate) drop_target: Option<FileTransferMode>,
+    pub(crate) drop_target: bool,
     pub(crate) draft_name: Option<String>,
     pub(crate) draft_caret: Option<usize>,
     pub(crate) draft_selection: Option<(usize, usize)>,
@@ -153,7 +153,7 @@ pub(crate) struct RawDetailsItemSnapshot {
     pub(crate) mime_type: Option<Arc<str>>,
     pub(crate) mime_magic_checked: bool,
     pub(crate) selected: bool,
-    pub(crate) drop_target: Option<FileTransferMode>,
+    pub(crate) drop_target: bool,
     pub(crate) size_label: String,
     pub(crate) modified_label: String,
     pub(crate) original_path_label: String,
@@ -300,7 +300,7 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
                         let path = model.path_for_index(model_index)?;
                         let selected = selection.is_selected(entry.id);
                         let drop_target =
-                            item_drop_target_mode_for_directory(item_drop_target, pane_id, &path);
+                            item_drop_target_matches_directory(item_drop_target, pane_id, &path);
                         Some(RawDetailsItemSnapshot {
                             row_index,
                             item_id: entry.id,
@@ -600,7 +600,7 @@ fn raw_visible_item_snapshot(
     path: PathBuf,
 ) -> RawVisibleItemSnapshot {
     let selected = selection.is_selected(entry.id);
-    let drop_target = item_drop_target_mode_for_directory(item_drop_target, pane_id, &path);
+    let drop_target = item_drop_target_matches_directory(item_drop_target, pane_id, &path);
     RawVisibleItemSnapshot {
         slot_id: 0,
         layout,
@@ -938,7 +938,7 @@ mod tests {
                 mime_type: visible_entry.effective_mime_type_cloned(),
                 mime_magic_checked: visible_entry.effective_mime_magic_checked(),
                 selected: false,
-                drop_target: None,
+                drop_target: false,
                 draft_name: None,
                 draft_caret: None,
                 draft_selection: None,
@@ -987,7 +987,7 @@ mod tests {
                 mime_type: visible_entry.effective_mime_type_cloned(),
                 mime_magic_checked: visible_entry.effective_mime_magic_checked(),
                 selected: false,
-                drop_target: None,
+                drop_target: false,
                 draft_name: None,
                 draft_caret: None,
                 draft_selection: None,
@@ -1248,7 +1248,7 @@ mod tests {
             mime_type: Some(Arc::from("text/plain")),
             mime_magic_checked: true,
             selected: false,
-            drop_target: None,
+            drop_target: false,
             draft_name: None,
             draft_caret: None,
             draft_selection: None,

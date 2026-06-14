@@ -19,6 +19,15 @@ pub(crate) fn context_menu_actions(
     clipboard_available: bool,
 ) -> Vec<ContextMenuItem> {
     match target {
+        ContextMenuTarget::DropOperation { .. } => vec![
+            context_menu_item(ContextMenuAction::DropCopy, "Copy Here"),
+            context_menu_item(ContextMenuAction::DropMove, "Move Here"),
+            context_menu_item(ContextMenuAction::DropLink, "Link Here"),
+            context_menu_separator_before(context_menu_item(
+                ContextMenuAction::DropCancel,
+                "Cancel",
+            )),
+        ],
         ContextMenuTarget::Blank {
             trash_view: true,
             trash_has_items,

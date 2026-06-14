@@ -63,6 +63,11 @@ pub(crate) enum ContextMenuTarget {
     PlaceSection {
         group: &'static str,
     },
+    DropOperation {
+        target_dir: PathBuf,
+        paths: Vec<PathBuf>,
+        load_target_dir: bool,
+    },
     Place {
         path: PathBuf,
         mounted: bool,
@@ -139,6 +144,10 @@ pub(crate) enum ContextMenuAction {
     Paste,
     SelectAll,
     Refresh,
+    DropCopy,
+    DropMove,
+    DropLink,
+    DropCancel,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,6 +189,7 @@ pub(crate) enum ContextMenuIcon {
     Select,
     Refresh,
     Place,
+    Link,
 }
 
 #[cfg(test)]

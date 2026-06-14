@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::drag_drop::{
-    FileTransferMode, ItemDragPayload, file_transfer_mode_for_modifiers,
+    FileTransferMode, ItemDragPayload, refresh_active_drag_cursor_for_drop_menu,
     refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
 use super::icons::{FileIconSnapshot, cached_icon_or_fallback};
@@ -56,7 +56,7 @@ pub(crate) struct FileGridProps {
     pub(crate) trash_view: bool,
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) rubber_band: Option<ViewRect>,
-    pub(crate) drop_target: Option<FileTransferMode>,
+    pub(crate) drop_target: bool,
     pub(crate) mode: FileGridMode,
 }
 
@@ -307,7 +307,7 @@ fn measured_viewport_for_scrollbar_axis(
 
 fn file_grid_viewport_shell(
     pane_id: PaneId,
-    drop_target: Option<FileTransferMode>,
+    drop_target: bool,
     mode: FileGridMode,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -317,7 +317,11 @@ fn file_grid_viewport_shell(
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .bg(drop_target.map_or(rgba(0x00000000), drop_target_viewport_background))
+        .bg(if drop_target {
+            drop_target_viewport_background()
+        } else {
+            rgba(0x00000000)
+        })
         .occlude()
         .overflow_hidden()
         .on_scroll_wheel(
@@ -425,14 +429,14 @@ fn file_grid_viewport_shell(
             move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                 let contains = event.bounds.contains(&event.event.position)
                     && this.window_position_is_blank_in_pane(pane_id, event.event.position);
-                let mode = file_transfer_mode_for_modifiers(window.modifiers());
                 let changed = if contains {
-                    this.set_item_drag_drop_target_for_pane(pane_id, mode)
+                    this.set_drop_menu_position(event.event.position);
+                    this.set_item_drag_drop_target_for_pane(pane_id)
                 } else {
                     this.clear_item_drop_target_for_pane(pane_id)
                 };
                 if contains {
-                    refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                    refresh_active_drag_cursor_for_drop_menu(window, cx);
                     this.schedule_drop_target_stale_clear(cx);
                 }
                 if changed {
@@ -447,14 +451,14 @@ fn file_grid_viewport_shell(
             move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
                 let contains = event.bounds.contains(&event.event.position)
                     && this.window_position_is_blank_in_pane(pane_id, event.event.position);
-                let mode = file_transfer_mode_for_modifiers(window.modifiers());
                 let changed = if contains {
-                    this.set_item_drag_drop_target_for_pane(pane_id, mode)
+                    this.set_drop_menu_position(event.event.position);
+                    this.set_item_drag_drop_target_for_pane(pane_id)
                 } else {
                     this.clear_item_drop_target_for_pane(pane_id)
                 };
                 if contains {
-                    refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                    refresh_active_drag_cursor_for_drop_menu(window, cx);
                     this.schedule_drop_target_stale_clear(cx);
                 }
                 if changed {
@@ -469,14 +473,18 @@ fn file_grid_viewport_shell(
             move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
                 let contains = event.bounds.contains(&event.event.position)
                     && this.window_position_is_blank_in_pane(pane_id, event.event.position);
-                let mode = file_transfer_mode_for_modifiers(window.modifiers());
                 let changed = if contains {
-                    this.set_item_drag_drop_target_for_pane(pane_id, mode)
+                    this.set_drop_menu_position(event.event.position);
+                    this.set_item_drag_drop_target_for_pane(pane_id)
                 } else {
                     this.clear_item_drop_target_for_pane(pane_id)
                 };
                 if contains {
-                    refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                    refresh_active_drag_cursor_for_transfer_mode(
+                        FileTransferMode::Move,
+                        window,
+                        cx,
+                    );
                     this.schedule_drop_target_stale_clear(cx);
                 }
                 if changed {
@@ -487,21 +495,14 @@ fn file_grid_viewport_shell(
                 }
             },
         ))
-        .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-            let mode = file_transfer_mode_for_modifiers(window.modifiers());
-            this.drop_item_drag_to_pane(pane_id, drag.payload(), mode, cx);
+        .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
+            this.drop_item_drag_to_pane(pane_id, drag.payload(), cx);
             cx.stop_propagation();
             cx.notify();
         }))
         .on_drop::<ExternalPaths>(cx.listener(
-            move |this, external_paths: &ExternalPaths, window, cx| {
-                let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                this.drop_external_paths_to_pane(
-                    pane_id,
-                    external_paths.paths().to_vec(),
-                    mode,
-                    cx,
-                );
+            move |this, external_paths: &ExternalPaths, _window, cx| {
+                this.drop_external_paths_to_pane(pane_id, external_paths.paths().to_vec(), cx);
                 cx.stop_propagation();
                 cx.notify();
             },
@@ -633,7 +634,7 @@ fn details_row(
             drop_target,
             item.row_index,
         ))
-        .when(drop_target.is_some(), |row| row.shadow_md())
+        .when(drop_target, |row| row.shadow_md())
         .block_mouse_except_scroll()
         .cursor_pointer()
         .hover(move |row| row.bg(item_tile_hover_background(selected, drop_target)))
@@ -702,10 +703,14 @@ fn details_row(
             move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
                 let contains =
                     drag_move_hits_item_path(this, pane_id, &path_for_place_drag_hit, event);
-                let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                let changed = contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                let changed = contains && this.set_item_drag_drop_target_for_pane(pane_id);
                 if contains {
-                    refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                    this.set_drop_menu_position(event.event.position);
+                    refresh_active_drag_cursor_for_transfer_mode(
+                        FileTransferMode::Move,
+                        window,
+                        cx,
+                    );
                     this.schedule_drop_target_stale_clear(cx);
                 }
                 if changed {
@@ -748,14 +753,13 @@ fn details_row(
                         &path_for_directory_item_drag_hit,
                         event,
                     );
-                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
                     let valid_target =
                         contains && this.item_drag_can_drop_to_directory(&target_dir_for_move);
                     let changed = if valid_target {
+                        this.set_drop_menu_position(event.event.position);
                         this.set_item_drag_drop_target_for_directory(
                             pane_id,
                             target_dir_for_move.clone(),
-                            mode,
                         )
                     } else if contains {
                         this.clear_drag_drop_targets()
@@ -764,7 +768,7 @@ fn details_row(
                     };
                     if contains {
                         if valid_target {
-                            refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                            refresh_active_drag_cursor_for_drop_menu(window, cx);
                             this.schedule_drop_target_stale_clear(cx);
                         } else {
                             refresh_active_drag_cursor_not_allowed(window, cx);
@@ -786,12 +790,11 @@ fn details_row(
                         &path_for_directory_external_drag_hit,
                         event,
                     );
-                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
                     let changed = if contains {
+                        this.set_drop_menu_position(event.event.position);
                         this.set_item_drag_drop_target_for_directory(
                             pane_id,
                             target_dir_for_external_move.clone(),
-                            mode,
                         )
                     } else {
                         this.clear_item_drop_target_for_directory(
@@ -800,7 +803,7 @@ fn details_row(
                         )
                     };
                     if contains {
-                        refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                        refresh_active_drag_cursor_for_drop_menu(window, cx);
                         this.schedule_drop_target_stale_clear(cx);
                     }
                     if changed {
@@ -811,26 +814,24 @@ fn details_row(
                     }
                 },
             ))
-            .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-                let mode = file_transfer_mode_for_modifiers(window.modifiers());
+            .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
                 this.drop_item_drag_to_directory(
                     pane_id,
                     drag.payload(),
                     target_dir_for_drop.clone(),
-                    mode,
+                    false,
                     cx,
                 );
                 cx.stop_propagation();
                 cx.notify();
             }))
             .on_drop::<ExternalPaths>(cx.listener(
-                move |this, external_paths: &ExternalPaths, window, cx| {
-                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                move |this, external_paths: &ExternalPaths, _window, cx| {
                     this.drop_external_paths_to_directory(
                         pane_id,
                         external_paths.paths().to_vec(),
                         target_dir_for_external_drop.clone(),
-                        mode,
+                        false,
                         cx,
                     );
                     cx.stop_propagation();
@@ -847,11 +848,12 @@ fn details_row(
                         &path_for_file_item_drag_hit,
                         event,
                     );
-                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                    let changed =
-                        contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                    let changed = contains && {
+                        this.set_drop_menu_position(event.event.position);
+                        this.set_item_drag_drop_target_for_pane(pane_id)
+                    };
                     if contains {
-                        refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                        refresh_active_drag_cursor_for_drop_menu(window, cx);
                         this.schedule_drop_target_stale_clear(cx);
                     }
                     if changed {
@@ -870,11 +872,12 @@ fn details_row(
                         &path_for_file_external_drag_hit,
                         event,
                     );
-                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                    let changed =
-                        contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                    let changed = contains && {
+                        this.set_drop_menu_position(event.event.position);
+                        this.set_item_drag_drop_target_for_pane(pane_id)
+                    };
                     if contains {
-                        refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                        refresh_active_drag_cursor_for_drop_menu(window, cx);
                         this.schedule_drop_target_stale_clear(cx);
                     }
                     if changed {
@@ -885,21 +888,14 @@ fn details_row(
                     }
                 },
             ))
-            .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-                let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                this.drop_item_drag_to_pane(pane_id, drag.payload(), mode, cx);
+            .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
+                this.drop_item_drag_to_pane(pane_id, drag.payload(), cx);
                 cx.stop_propagation();
                 cx.notify();
             }))
             .on_drop::<ExternalPaths>(cx.listener(
-                move |this, external_paths: &ExternalPaths, window, cx| {
-                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                    this.drop_external_paths_to_pane(
-                        pane_id,
-                        external_paths.paths().to_vec(),
-                        mode,
-                        cx,
-                    );
+                move |this, external_paths: &ExternalPaths, _window, cx| {
+                    this.drop_external_paths_to_pane(pane_id, external_paths.paths().to_vec(), cx);
                     cx.stop_propagation();
                     cx.notify();
                 },
@@ -912,13 +908,9 @@ fn details_row(
         )
 }
 
-fn details_row_background(
-    selected: bool,
-    drop_target: Option<FileTransferMode>,
-    row_index: usize,
-) -> Rgba {
-    if let Some(mode) = drop_target {
-        drop_target_item_background(mode)
+fn details_row_background(selected: bool, drop_target: bool, row_index: usize) -> Rgba {
+    if drop_target {
+        drop_target_item_background()
     } else if selected {
         rgb(0xdbeafe)
     } else if row_index % 2 == 0 {
@@ -1163,7 +1155,7 @@ fn item_tile(
                 .h(px(visual.height))
                 .rounded_md()
                 .bg(item_tile_background(selected, drop_target))
-                .when(drop_target.is_some(), |tile| tile.shadow_md())
+                .when(drop_target, |tile| tile.shadow_md())
                 .block_mouse_except_scroll()
                 .cursor_pointer()
                 .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
@@ -1245,11 +1237,14 @@ fn item_tile(
                             &path_for_place_drag_hit,
                             event,
                         );
-                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        let changed =
-                            contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                        let changed = contains && this.set_item_drag_drop_target_for_pane(pane_id);
                         if contains {
-                            refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                            this.set_drop_menu_position(event.event.position);
+                            refresh_active_drag_cursor_for_transfer_mode(
+                                FileTransferMode::Move,
+                                window,
+                                cx,
+                            );
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {
@@ -1292,14 +1287,13 @@ fn item_tile(
                                 &path_for_directory_item_drag_hit,
                                 event,
                             );
-                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
                             let valid_target = contains
                                 && this.item_drag_can_drop_to_directory(&target_dir_for_move);
                             let changed = if valid_target {
+                                this.set_drop_menu_position(event.event.position);
                                 this.set_item_drag_drop_target_for_directory(
                                     pane_id,
                                     target_dir_for_move.clone(),
-                                    mode,
                                 )
                             } else if contains {
                                 this.clear_drag_drop_targets()
@@ -1311,7 +1305,7 @@ fn item_tile(
                             };
                             if contains {
                                 if valid_target {
-                                    refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                                    refresh_active_drag_cursor_for_drop_menu(window, cx);
                                     this.schedule_drop_target_stale_clear(cx);
                                 } else {
                                     refresh_active_drag_cursor_not_allowed(window, cx);
@@ -1333,12 +1327,11 @@ fn item_tile(
                                 &path_for_directory_external_drag_hit,
                                 event,
                             );
-                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
                             let changed = if contains {
+                                this.set_drop_menu_position(event.event.position);
                                 this.set_item_drag_drop_target_for_directory(
                                     pane_id,
                                     target_dir_for_external_move.clone(),
-                                    mode,
                                 )
                             } else {
                                 this.clear_item_drop_target_for_directory(
@@ -1347,7 +1340,7 @@ fn item_tile(
                                 )
                             };
                             if contains {
-                                refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                                refresh_active_drag_cursor_for_drop_menu(window, cx);
                                 this.schedule_drop_target_stale_clear(cx);
                             }
                             if changed {
@@ -1358,26 +1351,24 @@ fn item_tile(
                             }
                         },
                     ))
-                    .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
                         this.drop_item_drag_to_directory(
                             pane_id,
                             drag.payload(),
                             target_dir_for_drop.clone(),
-                            mode,
+                            false,
                             cx,
                         );
                         cx.stop_propagation();
                         cx.notify();
                     }))
                     .on_drop::<ExternalPaths>(cx.listener(
-                        move |this, external_paths: &ExternalPaths, window, cx| {
-                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                        move |this, external_paths: &ExternalPaths, _window, cx| {
                             this.drop_external_paths_to_directory(
                                 pane_id,
                                 external_paths.paths().to_vec(),
                                 target_dir_for_external_drop.clone(),
-                                mode,
+                                false,
                                 cx,
                             );
                             cx.stop_propagation();
@@ -1394,11 +1385,12 @@ fn item_tile(
                                 &path_for_file_item_drag_hit,
                                 event,
                             );
-                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                            let changed =
-                                contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                            let changed = contains && {
+                                this.set_drop_menu_position(event.event.position);
+                                this.set_item_drag_drop_target_for_pane(pane_id)
+                            };
                             if contains {
-                                refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                                refresh_active_drag_cursor_for_drop_menu(window, cx);
                                 this.schedule_drop_target_stale_clear(cx);
                             }
                             if changed {
@@ -1417,11 +1409,12 @@ fn item_tile(
                                 &path_for_file_external_drag_hit,
                                 event,
                             );
-                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                            let changed =
-                                contains && this.set_item_drag_drop_target_for_pane(pane_id, mode);
+                            let changed = contains && {
+                                this.set_drop_menu_position(event.event.position);
+                                this.set_item_drag_drop_target_for_pane(pane_id)
+                            };
                             if contains {
-                                refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                                refresh_active_drag_cursor_for_drop_menu(window, cx);
                                 this.schedule_drop_target_stale_clear(cx);
                             }
                             if changed {
@@ -1432,19 +1425,16 @@ fn item_tile(
                             }
                         },
                     ))
-                    .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
-                        this.drop_item_drag_to_pane(pane_id, drag.payload(), mode, cx);
+                    .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
+                        this.drop_item_drag_to_pane(pane_id, drag.payload(), cx);
                         cx.stop_propagation();
                         cx.notify();
                     }))
                     .on_drop::<ExternalPaths>(cx.listener(
-                        move |this, external_paths: &ExternalPaths, window, cx| {
-                            let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                        move |this, external_paths: &ExternalPaths, _window, cx| {
                             this.drop_external_paths_to_pane(
                                 pane_id,
                                 external_paths.paths().to_vec(),
-                                mode,
                                 cx,
                             );
                             cx.stop_propagation();
@@ -1470,9 +1460,9 @@ fn item_tile(
         )
 }
 
-fn item_tile_background(selected: bool, drop_target: Option<FileTransferMode>) -> Rgba {
-    if let Some(mode) = drop_target {
-        drop_target_item_background(mode)
+fn item_tile_background(selected: bool, drop_target: bool) -> Rgba {
+    if drop_target {
+        drop_target_item_background()
     } else if selected {
         rgb(0xdbeafe)
     } else {
@@ -1480,9 +1470,9 @@ fn item_tile_background(selected: bool, drop_target: Option<FileTransferMode>) -
     }
 }
 
-fn item_tile_hover_background(selected: bool, drop_target: Option<FileTransferMode>) -> Rgba {
-    if let Some(mode) = drop_target {
-        drop_target_item_background(mode)
+fn item_tile_hover_background(selected: bool, drop_target: bool) -> Rgba {
+    if drop_target {
+        drop_target_item_background()
     } else if selected {
         rgb(0xcfe3ff)
     } else {
@@ -1490,20 +1480,12 @@ fn item_tile_hover_background(selected: bool, drop_target: Option<FileTransferMo
     }
 }
 
-fn drop_target_viewport_background(mode: FileTransferMode) -> Rgba {
-    match mode {
-        FileTransferMode::Copy => rgba(0x16a34a24),
-        FileTransferMode::Move => rgba(0xd9770624),
-        FileTransferMode::Link => rgba(0x7c3aed24),
-    }
+fn drop_target_viewport_background() -> Rgba {
+    rgba(0xf59e0b24)
 }
 
-fn drop_target_item_background(mode: FileTransferMode) -> Rgba {
-    match mode {
-        FileTransferMode::Copy => rgba(0x16a34a4a),
-        FileTransferMode::Move => rgba(0xd977064a),
-        FileTransferMode::Link => rgba(0x7c3aed4a),
-    }
+fn drop_target_item_background() -> Rgba {
+    rgba(0xf59e0b4a)
 }
 
 fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {

@@ -20,9 +20,7 @@ use gpui::{
     SharedString, Stateful, Styled, TextRun, Window, canvas, div, fill, point, px, rgb, rgba, size,
 };
 
-use super::drag_drop::{
-    file_transfer_mode_for_modifiers, refresh_active_drag_cursor_for_transfer_mode,
-};
+use super::drag_drop::refresh_active_drag_cursor_for_drop_menu;
 use super::file_grid::{FileGridMode, FileGridProps, ItemDrag, file_grid};
 use super::filter_bar::FilterBarSnapshot;
 use super::location_bar::LocationDraftSnapshot;
@@ -573,8 +571,8 @@ fn breadcrumb_segment(
                 .truncate()
                 .text_color(rgb(0x1f2937))
                 .hover(|button| button.bg(rgb(0xe8eef7)))
-                .drag_over::<ItemDrag>(|style, _, _, _| style.bg(rgba(0x16a34a2e)))
-                .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(rgba(0x16a34a2e)))
+                .drag_over::<ItemDrag>(|style, _, _, _| style.bg(rgba(0xf59e0b2e)))
+                .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(rgba(0xf59e0b2e)))
                 .cursor_pointer()
                 .on_click(
                     cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
@@ -588,12 +586,11 @@ fn breadcrumb_segment(
                 .on_drag_move::<ItemDrag>(cx.listener(
                     move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
-                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
                         let changed = if contains {
+                            this.set_drop_menu_position(event.event.position);
                             this.set_item_drag_drop_target_for_directory(
                                 pane_id,
                                 path_for_internal_move.clone(),
-                                mode,
                             )
                         } else {
                             this.clear_item_drop_target_for_directory(
@@ -602,7 +599,7 @@ fn breadcrumb_segment(
                             )
                         };
                         if contains {
-                            refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                            refresh_active_drag_cursor_for_drop_menu(window, cx);
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {
@@ -614,12 +611,11 @@ fn breadcrumb_segment(
                 .on_drag_move::<ExternalPaths>(cx.listener(
                     move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
                         let contains = event.bounds.contains(&event.event.position);
-                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
                         let changed = if contains {
+                            this.set_drop_menu_position(event.event.position);
                             this.set_item_drag_drop_target_for_directory(
                                 pane_id,
                                 path_for_external_move.clone(),
-                                mode,
                             )
                         } else {
                             this.clear_item_drop_target_for_directory(
@@ -628,7 +624,7 @@ fn breadcrumb_segment(
                             )
                         };
                         if contains {
-                            refresh_active_drag_cursor_for_transfer_mode(mode, window, cx);
+                            refresh_active_drag_cursor_for_drop_menu(window, cx);
                             this.schedule_drop_target_stale_clear(cx);
                         }
                         if changed {
@@ -637,26 +633,22 @@ fn breadcrumb_segment(
                         cx.stop_propagation();
                     },
                 ))
-                .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
-                    let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
                     this.drop_item_drag_to_location(
                         pane_id,
                         drag.payload(),
                         path_for_internal_drop.clone(),
-                        mode,
                         cx,
                     );
                     cx.stop_propagation();
                     cx.notify();
                 }))
                 .on_drop::<ExternalPaths>(cx.listener(
-                    move |this, external_paths: &ExternalPaths, window, cx| {
-                        let mode = file_transfer_mode_for_modifiers(window.modifiers());
+                    move |this, external_paths: &ExternalPaths, _window, cx| {
                         this.drop_external_paths_to_location(
                             pane_id,
                             external_paths.paths().to_vec(),
                             path_for_external_drop.clone(),
-                            mode,
                             cx,
                         );
                         cx.stop_propagation();

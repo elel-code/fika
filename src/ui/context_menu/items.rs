@@ -116,9 +116,11 @@ fn context_menu_icon_for_action(action: &ContextMenuAction) -> Option<ContextMen
         | ContextMenuAction::ViewIcons
         | ContextMenuAction::ViewDetails => Some(ContextMenuIcon::View),
         ContextMenuAction::Rename => Some(ContextMenuIcon::Rename),
-        ContextMenuAction::Copy => Some(ContextMenuIcon::Copy),
+        ContextMenuAction::Copy | ContextMenuAction::DropCopy => Some(ContextMenuIcon::Copy),
         ContextMenuAction::CopyLocation => Some(ContextMenuIcon::Location),
-        ContextMenuAction::Cut => Some(ContextMenuIcon::Cut),
+        ContextMenuAction::Cut | ContextMenuAction::DropMove => Some(ContextMenuIcon::Cut),
+        ContextMenuAction::DropLink => Some(ContextMenuIcon::Link),
+        ContextMenuAction::DropCancel => None,
         ContextMenuAction::Trash | ContextMenuAction::EmptyTrash => Some(ContextMenuIcon::Trash),
         ContextMenuAction::RestoreFromTrash => Some(ContextMenuIcon::Restore),
         ContextMenuAction::DeletePermanently => Some(ContextMenuIcon::Delete),

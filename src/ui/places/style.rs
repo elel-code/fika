@@ -1,13 +1,8 @@
 use gpui::{InteractiveElement, IntoElement, Styled, div, px, rgb, rgba};
 
-use crate::ui::drag_drop::FileTransferMode;
-
-pub(super) fn place_row_background(
-    active: bool,
-    drop_target: Option<FileTransferMode>,
-) -> gpui::Rgba {
-    if let Some(mode) = drop_target {
-        place_drop_target_background(mode)
+pub(super) fn place_row_background(active: bool, drop_target: bool) -> gpui::Rgba {
+    if drop_target {
+        place_drop_target_background()
     } else if active {
         rgb(0xeaf1ff)
     } else {
@@ -15,12 +10,9 @@ pub(super) fn place_row_background(
     }
 }
 
-pub(super) fn place_row_border_color(
-    active: bool,
-    drop_target: Option<FileTransferMode>,
-) -> gpui::Rgba {
-    if let Some(mode) = drop_target {
-        place_drop_target_border_color(mode)
+pub(super) fn place_row_border_color(active: bool, drop_target: bool) -> gpui::Rgba {
+    if drop_target {
+        place_drop_target_border_color()
     } else if active {
         rgb(0xbfdbfe)
     } else {
@@ -28,12 +20,9 @@ pub(super) fn place_row_border_color(
     }
 }
 
-pub(super) fn place_row_hover_background(
-    active: bool,
-    drop_target: Option<FileTransferMode>,
-) -> gpui::Rgba {
-    if let Some(mode) = drop_target {
-        place_drop_target_hover_background(mode)
+pub(super) fn place_row_hover_background(active: bool, drop_target: bool) -> gpui::Rgba {
+    if drop_target {
+        place_drop_target_hover_background()
     } else if active {
         rgb(0xeaf1ff)
     } else {
@@ -41,28 +30,16 @@ pub(super) fn place_row_hover_background(
     }
 }
 
-fn place_drop_target_background(mode: FileTransferMode) -> gpui::Rgba {
-    match mode {
-        FileTransferMode::Copy => rgba(0x16a34a34),
-        FileTransferMode::Move => rgba(0xd9770634),
-        FileTransferMode::Link => rgba(0x7c3aed34),
-    }
+fn place_drop_target_background() -> gpui::Rgba {
+    rgba(0xf59e0b34)
 }
 
-fn place_drop_target_hover_background(mode: FileTransferMode) -> gpui::Rgba {
-    match mode {
-        FileTransferMode::Copy => rgba(0x16a34a4a),
-        FileTransferMode::Move => rgba(0xd977064a),
-        FileTransferMode::Link => rgba(0x7c3aed4a),
-    }
+fn place_drop_target_hover_background() -> gpui::Rgba {
+    rgba(0xf59e0b4a)
 }
 
-fn place_drop_target_border_color(mode: FileTransferMode) -> gpui::Rgba {
-    match mode {
-        FileTransferMode::Copy => rgb(0x16a34a),
-        FileTransferMode::Move => rgb(0xd97706),
-        FileTransferMode::Link => rgb(0x7c3aed),
-    }
+fn place_drop_target_border_color() -> gpui::Rgba {
+    rgb(0xd97706)
 }
 
 pub(super) fn place_insert_indicator(id: String) -> impl IntoElement {

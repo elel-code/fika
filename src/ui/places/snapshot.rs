@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use crate::ui::drag_drop::FileTransferMode;
 use crate::ui::icons::FileIconSnapshot;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -33,7 +32,7 @@ pub(crate) struct PlaceSnapshot {
     pub(crate) device_ejectable: bool,
     pub(crate) device_can_power_off: bool,
     pub(crate) active: bool,
-    pub(crate) drop_target: Option<FileTransferMode>,
+    pub(crate) drop_target: bool,
     pub(crate) insert_before: bool,
     pub(crate) insert_after: bool,
     pub(crate) trash_place: bool,
