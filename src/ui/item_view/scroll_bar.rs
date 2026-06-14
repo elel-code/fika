@@ -9,13 +9,67 @@ use gpui::{
 
 use crate::FikaApp;
 
-const SCROLLBAR_WIDTH: Pixels = px(6.0);
 const SCROLLBAR_PADDING: Pixels = px(4.0);
 const MINIMUM_THUMB_SIZE: Pixels = px(25.0);
+pub(crate) const ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT: f32 = 14.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ItemViewScrollbarAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl ItemViewScrollbarAxis {
+    fn point_axis(self, point: Point<Pixels>) -> Pixels {
+        match self {
+            Self::Horizontal => point.x,
+            Self::Vertical => point.y,
+        }
+    }
+
+    fn bounds_axis_size(self, bounds: Bounds<Pixels>) -> Pixels {
+        match self {
+            Self::Horizontal => bounds.size.width,
+            Self::Vertical => bounds.size.height,
+        }
+    }
+
+    fn bounds_cross_size(self, bounds: Bounds<Pixels>) -> Pixels {
+        match self {
+            Self::Horizontal => bounds.size.height,
+            Self::Vertical => bounds.size.width,
+        }
+    }
+
+    fn thumb_bounds(
+        self,
+        track_bounds: Bounds<Pixels>,
+        thumb_start: Pixels,
+        thumb_size: Pixels,
+    ) -> Bounds<Pixels> {
+        match self {
+            Self::Horizontal => Bounds::new(
+                point(track_bounds.origin.x + thumb_start, track_bounds.origin.y),
+                size(
+                    thumb_size.min(track_bounds.size.width),
+                    track_bounds.size.height,
+                ),
+            ),
+            Self::Vertical => Bounds::new(
+                point(track_bounds.origin.x, track_bounds.origin.y + thumb_start),
+                size(
+                    track_bounds.size.width,
+                    thumb_size.min(track_bounds.size.height),
+                ),
+            ),
+        }
+    }
+}
 
 pub(crate) fn item_view_scrollbar_container(
     pane_id: PaneId,
     scroll_handle: &ScrollHandle,
+    axis: ItemViewScrollbarAxis,
     rubber_band: Option<ViewRect>,
     viewport: Stateful<Div>,
     window: &mut Window,
@@ -33,33 +87,45 @@ pub(crate) fn item_view_scrollbar_container(
         state.scroll_handle = scroll_handle.clone();
         state.pane_id = pane_id;
         state.app = app.clone();
+        state.axis = axis;
     });
 
-    div()
-        .id(format!("item-view-scroll-wrapper-{}", pane_id.0))
+    let viewport = viewport
         .relative()
-        .flex()
-        .flex_col()
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .overflow_hidden()
-        .child(
-            viewport
-                .relative()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .size_full()
-                .track_scroll(scroll_handle)
-                .overflow_x_scroll()
-                .overflow_y_scroll(),
-        )
-        .when_some(
-            rubber_band.filter(|rect| rubber_band_rect_is_visible(*rect)),
-            |wrapper, rect| wrapper.child(rubber_band_overlay(rect)),
-        )
-        .child(item_view_scrollbar_overlay(state))
+        .track_scroll(scroll_handle)
+        .overflow_x_scroll()
+        .overflow_y_scroll();
+
+    let wrapper = div()
+        .id(format!("item-view-scroll-wrapper-{}", pane_id.0))
+        .relative()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .overflow_hidden();
+
+    match axis {
+        ItemViewScrollbarAxis::Horizontal => wrapper
+            .flex_col()
+            .child(viewport)
+            .when_some(
+                rubber_band.filter(|rect| rubber_band_rect_is_visible(*rect)),
+                |wrapper, rect| wrapper.child(rubber_band_overlay(rect)),
+            )
+            .child(item_view_scrollbar(state, axis)),
+        ItemViewScrollbarAxis::Vertical => wrapper
+            .flex_row()
+            .child(viewport)
+            .when_some(
+                rubber_band.filter(|rect| rubber_band_rect_is_visible(*rect)),
+                |wrapper, rect| wrapper.child(rubber_band_overlay(rect)),
+            )
+            .child(item_view_scrollbar(state, axis)),
+    }
 }
 
 fn rubber_band_rect_is_visible(rect: ViewRect) -> bool {
@@ -71,6 +137,7 @@ struct ItemViewScrollbarState {
     notify_id: EntityId,
     pane_id: PaneId,
     app: gpui::WeakEntity<FikaApp>,
+    axis: ItemViewScrollbarAxis,
     thumb_state: ThumbState,
     last_prepaint_state: Option<ScrollbarPrepaintState>,
 }
@@ -87,14 +154,19 @@ impl ItemViewScrollbarState {
             notify_id,
             pane_id,
             app,
+            axis: ItemViewScrollbarAxis::Horizontal,
             thumb_state: ThumbState::Inactive,
             last_prepaint_state: None,
         }
     }
 
-    fn set_offset(&self, offset_x: Pixels, cx: &mut App) {
+    fn set_axis_offset(&self, offset: Pixels, cx: &mut App) {
         let current = self.scroll_handle.offset();
-        self.scroll_handle.set_offset(point(offset_x, current.y));
+        let offset = match self.axis {
+            ItemViewScrollbarAxis::Horizontal => point(offset, current.y),
+            ItemViewScrollbarAxis::Vertical => point(current.x, offset),
+        };
+        self.scroll_handle.set_offset(offset);
         let _ = self.app.update(cx, |this, cx| {
             if this.update_item_view_scrollbar_drag(self.pane_id) {
                 cx.notify();
@@ -177,6 +249,7 @@ impl ScrollbarPrepaintState {
 }
 
 struct ScrollbarLayout {
+    axis: ItemViewScrollbarAxis,
     thumb_bounds: Bounds<Pixels>,
     track_bounds: Bounds<Pixels>,
     cursor_hitbox: Hitbox,
@@ -189,13 +262,15 @@ impl ScrollbarLayout {
         max_offset: Point<Pixels>,
         event_type: ScrollbarMouseEvent,
     ) -> Pixels {
-        let viewport_size = self.track_bounds.size.width;
-        let thumb_size = self.thumb_bounds.size.width;
+        let viewport_size = self.axis.bounds_axis_size(self.track_bounds);
+        let thumb_size = self.axis.bounds_axis_size(self.thumb_bounds);
         let thumb_offset = match event_type {
             ScrollbarMouseEvent::TrackClick => thumb_size / 2.0,
             ScrollbarMouseEvent::ThumbDrag(thumb_offset) => thumb_offset,
         };
-        let thumb_start = (event_position.x - self.track_bounds.origin.x - thumb_offset)
+        let thumb_start = (self.axis.point_axis(event_position)
+            - self.axis.point_axis(self.track_bounds.origin)
+            - thumb_offset)
             .clamp(px(0.0), viewport_size - thumb_size);
         let percentage = if viewport_size > thumb_size {
             thumb_start / (viewport_size - thumb_size)
@@ -203,7 +278,7 @@ impl ScrollbarLayout {
             0.0
         };
 
-        -max_offset.x * percentage
+        -self.axis.point_axis(max_offset) * percentage
     }
 }
 
@@ -216,8 +291,8 @@ struct ItemViewScrollbarPaintState {
     layout: Option<ScrollbarLayout>,
 }
 
-fn item_view_scrollbar_overlay(state: Entity<ItemViewScrollbarState>) -> Div {
-    div().absolute().inset_0().size_full().child(
+fn item_view_scrollbar(state: Entity<ItemViewScrollbarState>, axis: ItemViewScrollbarAxis) -> Div {
+    let scrollbar = div().relative().flex_none().overflow_hidden().child(
         canvas(
             {
                 let state = state.clone();
@@ -231,7 +306,16 @@ fn item_view_scrollbar_overlay(state: Entity<ItemViewScrollbarState>) -> Div {
             },
         )
         .size_full(),
-    )
+    );
+
+    match axis {
+        ItemViewScrollbarAxis::Horizontal => scrollbar
+            .w_full()
+            .h(px(ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT)),
+        ItemViewScrollbarAxis::Vertical => scrollbar
+            .w(px(ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT))
+            .h_full(),
+    }
 }
 
 fn item_view_scrollbar_layout(
@@ -241,6 +325,7 @@ fn item_view_scrollbar_layout(
     cx: &mut App,
 ) -> Option<ScrollbarLayout> {
     let state = state.read(cx);
+    let axis = state.axis;
     let max_offset = state.scroll_handle.max_offset();
     let viewport_bounds = state.scroll_handle.bounds();
     let visible_bounds = if viewport_bounds.size.width > Pixels::ZERO
@@ -250,49 +335,36 @@ fn item_view_scrollbar_layout(
     } else {
         bounds
     };
-    let viewport_width = visible_bounds.size.width;
-    let viewport_height = visible_bounds.size.height;
+    let viewport_axis_size = axis.bounds_axis_size(visible_bounds);
+    let max_axis_offset = axis.point_axis(max_offset);
+    let thumb_track = inset_bounds(bounds, SCROLLBAR_PADDING);
+    let track_axis_size = axis.bounds_axis_size(thumb_track);
 
-    if max_offset.x <= Pixels::ZERO
-        || viewport_width <= Pixels::ZERO
-        || viewport_height <= Pixels::ZERO
+    if max_axis_offset <= Pixels::ZERO
+        || viewport_axis_size <= Pixels::ZERO
+        || track_axis_size <= Pixels::ZERO
+        || axis.bounds_cross_size(thumb_track) <= Pixels::ZERO
     {
         return None;
     }
 
-    let content_width = viewport_width + max_offset.x;
-    let visible_percentage = viewport_width / content_width;
-    let thumb_width = MINIMUM_THUMB_SIZE.max(viewport_width * visible_percentage);
-    if thumb_width > viewport_width {
+    let content_axis_size = viewport_axis_size + max_axis_offset;
+    let visible_percentage = viewport_axis_size / content_axis_size;
+    let thumb_axis_size = MINIMUM_THUMB_SIZE.max(track_axis_size * visible_percentage);
+    if thumb_axis_size > track_axis_size {
         return None;
     }
 
-    let current_offset = state
-        .scroll_handle
-        .offset()
-        .x
-        .clamp(-max_offset.x, Pixels::ZERO)
+    let current_offset = axis
+        .point_axis(state.scroll_handle.offset())
+        .clamp(-max_axis_offset, Pixels::ZERO)
         .abs();
-    let thumb_start = (current_offset / max_offset.x) * (viewport_width - thumb_width);
-    let track_height = SCROLLBAR_WIDTH + 2.0 * SCROLLBAR_PADDING;
-    let track_bounds = Bounds::new(
-        point(
-            visible_bounds.origin.x,
-            visible_bounds.origin.y + (viewport_height - track_height).max(Pixels::ZERO),
-        ),
-        size(viewport_width, track_height.min(viewport_height)),
-    );
-    let thumb_track = inset_bounds(track_bounds, SCROLLBAR_PADDING);
-    let thumb_bounds = Bounds::new(
-        point(thumb_track.origin.x + thumb_start, thumb_track.origin.y),
-        size(
-            thumb_width.min(thumb_track.size.width),
-            thumb_track.size.height,
-        ),
-    );
+    let thumb_start = (current_offset / max_axis_offset) * (track_axis_size - thumb_axis_size);
+    let thumb_bounds = axis.thumb_bounds(thumb_track, thumb_start, thumb_axis_size);
     let cursor_hitbox = window.insert_hitbox(thumb_track, HitboxBehavior::BlockMouseExceptScroll);
 
     Some(ScrollbarLayout {
+        axis,
         thumb_bounds,
         track_bounds: thumb_track,
         cursor_hitbox,
@@ -350,7 +422,10 @@ fn paint_item_view_scrollbar(
                 };
 
                 if scrollbar_layout.thumb_bounds.contains(&event.position) {
-                    let offset = event.position.x - scrollbar_layout.thumb_bounds.origin.x;
+                    let offset = scrollbar_layout.axis.point_axis(event.position)
+                        - scrollbar_layout
+                            .axis
+                            .point_axis(scrollbar_layout.thumb_bounds.origin);
                     window.capture_pointer(scrollbar_layout.cursor_hitbox.id);
                     state.begin_drag(cx);
                     state.set_thumb_state(ThumbState::Dragging(offset), cx);
@@ -360,7 +435,7 @@ fn paint_item_view_scrollbar(
                         state.scroll_handle.max_offset(),
                         ScrollbarMouseEvent::TrackClick,
                     );
-                    state.set_offset(click_offset, cx);
+                    state.set_axis_offset(click_offset, cx);
                 }
                 cx.stop_propagation();
             });
@@ -383,7 +458,7 @@ fn paint_item_view_scrollbar(
                             state.read(cx).scroll_handle.max_offset(),
                             ScrollbarMouseEvent::ThumbDrag(drag_offset),
                         );
-                        state.update(cx, |state, cx| state.set_offset(drag_offset, cx));
+                        state.update(cx, |state, cx| state.set_axis_offset(drag_offset, cx));
                         cx.stop_propagation();
                     }
                 }

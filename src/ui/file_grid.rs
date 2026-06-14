@@ -36,7 +36,9 @@ use super::drag_drop::{
     refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
 use super::icons::{FileIconSnapshot, cached_icon_or_fallback};
-use super::item_view::item_view_scrollbar_container;
+use super::item_view::{
+    ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollbarAxis, item_view_scrollbar_container,
+};
 use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
@@ -143,6 +145,7 @@ pub(crate) fn file_grid(
         mode,
     } = props;
     let app = cx.weak_entity();
+    let scrollbar_axis = scrollbar_axis_for_snapshot(&snapshot);
 
     let (content_width, content_height, viewport) = match snapshot {
         FileGridSnapshot::Icons {
@@ -201,24 +204,20 @@ pub(crate) fn file_grid(
             let Some(bounds) = bounds.first() else {
                 return;
             };
-            let width = normalize_viewport_extent(bounds.size.width.as_f32());
-            let height = normalize_viewport_extent(bounds.size.height.as_f32());
-            let window_rect = ViewRect {
-                x: bounds.origin.x.as_f32(),
-                y: bounds.origin.y.as_f32(),
-                width,
-                height,
-            };
-            let max_scroll_x = (content_width - width).max(0.0);
-            let max_scroll_y = (content_height - height).max(0.0);
+            let measured = measured_viewport_for_scrollbar_axis(
+                *bounds,
+                content_width,
+                content_height,
+                scrollbar_axis,
+            );
             let _ = app.update(cx, |this, cx| {
-                let geometry_changed = this.set_pane_viewport_geometry(pane_id, window_rect);
+                let geometry_changed = this.set_pane_viewport_geometry(pane_id, measured.rect);
                 let bounds_changed = this.set_pane_viewport_bounds(
                     pane_id,
-                    width,
-                    height,
-                    max_scroll_x,
-                    max_scroll_y,
+                    measured.rect.width,
+                    measured.rect.height,
+                    measured.max_scroll_x,
+                    measured.max_scroll_y,
                 );
                 if geometry_changed || bounds_changed {
                     cx.notify();
@@ -238,11 +237,66 @@ pub(crate) fn file_grid(
         .child(item_view_scrollbar_container(
             pane_id,
             &scroll_handle,
+            scrollbar_axis,
             rubber_band,
             viewport,
             window,
             cx,
         ))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MeasuredViewport {
+    rect: ViewRect,
+    max_scroll_x: f32,
+    max_scroll_y: f32,
+}
+
+fn scrollbar_axis_for_snapshot(snapshot: &FileGridSnapshot) -> ItemViewScrollbarAxis {
+    match snapshot {
+        FileGridSnapshot::Compact { .. } => ItemViewScrollbarAxis::Horizontal,
+        FileGridSnapshot::Icons { .. } | FileGridSnapshot::Details { .. } => {
+            ItemViewScrollbarAxis::Vertical
+        }
+    }
+}
+
+fn measured_viewport_for_scrollbar_axis(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    content_width: f32,
+    content_height: f32,
+    axis: ItemViewScrollbarAxis,
+) -> MeasuredViewport {
+    let wrapper_width = normalize_viewport_extent(bounds.size.width.as_f32());
+    let wrapper_height = normalize_viewport_extent(bounds.size.height.as_f32());
+    let (width, height) = match axis {
+        ItemViewScrollbarAxis::Horizontal => (
+            wrapper_width,
+            normalize_viewport_extent(
+                (wrapper_height - ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT).max(1.0),
+            ),
+        ),
+        ItemViewScrollbarAxis::Vertical => (
+            normalize_viewport_extent(
+                (wrapper_width - ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT).max(1.0),
+            ),
+            wrapper_height,
+        ),
+    };
+    let (max_scroll_x, max_scroll_y) = match axis {
+        ItemViewScrollbarAxis::Horizontal => ((content_width - width).max(0.0), 0.0),
+        ItemViewScrollbarAxis::Vertical => (0.0, (content_height - height).max(0.0)),
+    };
+    MeasuredViewport {
+        rect: ViewRect {
+            x: bounds.origin.x.as_f32(),
+            y: bounds.origin.y.as_f32(),
+            width,
+            height,
+        },
+        max_scroll_x,
+        max_scroll_y,
+    }
 }
 
 fn file_grid_viewport_shell(
@@ -1704,9 +1758,11 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 mod tests {
     use super::{
         FileGridMode, drag_preview_cursor_offset, drag_preview_label,
-        item_mouse_down_opens_directory, normalized_text_range, rename_text_layout,
+        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
+        normalized_text_range, rename_text_layout,
     };
-    use gpui::{point, px};
+    use crate::ui::item_view::ItemViewScrollbarAxis;
+    use gpui::{Bounds, point, px, size};
 
     #[test]
     fn drag_preview_uses_selection_count_only_for_selected_items() {
@@ -1725,6 +1781,35 @@ mod tests {
             drag_preview_cursor_offset(point(px(-4.0), px(-2.0))),
             (0.0, 0.0)
         );
+    }
+
+    #[test]
+    fn measured_viewport_reserves_scrollbar_on_primary_axis_only() {
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(300.0), px(200.0)));
+
+        let vertical = measured_viewport_for_scrollbar_axis(
+            bounds,
+            500.0,
+            800.0,
+            ItemViewScrollbarAxis::Vertical,
+        );
+        assert_eq!(vertical.rect.x, 10.0);
+        assert_eq!(vertical.rect.y, 20.0);
+        assert_eq!(vertical.rect.width, 286.0);
+        assert_eq!(vertical.rect.height, 200.0);
+        assert_eq!(vertical.max_scroll_x, 0.0);
+        assert_eq!(vertical.max_scroll_y, 600.0);
+
+        let horizontal = measured_viewport_for_scrollbar_axis(
+            bounds,
+            500.0,
+            800.0,
+            ItemViewScrollbarAxis::Horizontal,
+        );
+        assert_eq!(horizontal.rect.width, 300.0);
+        assert_eq!(horizontal.rect.height, 186.0);
+        assert_eq!(horizontal.max_scroll_x, 200.0);
+        assert_eq!(horizontal.max_scroll_y, 0.0);
     }
 
     #[test]

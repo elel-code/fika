@@ -208,13 +208,7 @@ fn wheel_scroll_delta_for_view_mode(view_mode: ViewMode, delta: ScrollDelta) -> 
             let primary = if x.abs() > y.abs() { x } else { y };
             (-primary, 0.0)
         }
-        ViewMode::Icons | ViewMode::Details => {
-            if x.abs() > y.abs() {
-                (-x, 0.0)
-            } else {
-                (0.0, -y)
-            }
-        }
+        ViewMode::Icons | ViewMode::Details => (0.0, -y),
     }
 }
 
@@ -10118,6 +10112,20 @@ text/plain=viewer.desktop;\n",
                 ScrollDelta::Lines(gpui::point(0.0, -3.0))
             ),
             (0.0, 60.0)
+        );
+        assert_eq!(
+            wheel_scroll_delta_for_view_mode(
+                ViewMode::Icons,
+                ScrollDelta::Lines(gpui::point(4.0, 0.0))
+            ),
+            (0.0, -0.0)
+        );
+        assert_eq!(
+            wheel_scroll_delta_for_view_mode(
+                ViewMode::Details,
+                ScrollDelta::Lines(gpui::point(4.0, 0.0))
+            ),
+            (0.0, -0.0)
         );
     }
 
