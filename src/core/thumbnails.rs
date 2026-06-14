@@ -9,6 +9,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -383,6 +384,11 @@ pub struct ThumbnailerRegistry {
 }
 
 impl ThumbnailerRegistry {
+    pub fn shared_system() -> &'static Self {
+        static REGISTRY: OnceLock<ThumbnailerRegistry> = OnceLock::new();
+        REGISTRY.get_or_init(Self::load_system)
+    }
+
     pub fn load_system() -> Self {
         Self::load_from_dirs(thumbnailer_search_dirs())
     }
@@ -612,8 +618,11 @@ pub fn generate_thumbnail_with_external_thumbnailer(
     root: &Path,
     request: &ThumbnailRequest,
 ) -> io::Result<Option<ThumbnailCacheHit>> {
-    let registry = ThumbnailerRegistry::load_system();
-    generate_thumbnail_with_external_thumbnailer_registry(root, request, &registry)
+    generate_thumbnail_with_external_thumbnailer_registry(
+        root,
+        request,
+        ThumbnailerRegistry::shared_system(),
+    )
 }
 
 pub fn generate_thumbnail_with_external_thumbnailer_registry(
@@ -731,6 +740,43 @@ pub fn external_thumbnailer_commands_for_path(
     }
 
     Vec::new()
+}
+
+pub fn thumbnail_request_may_have_preview(path: &Path, mime_type: Option<&str>) -> bool {
+    mime_type.is_some_and(thumbnail_mime_may_have_preview)
+        || thumbnail_extension_may_have_preview(path)
+}
+
+fn thumbnail_mime_may_have_preview(mime_type: &str) -> bool {
+    let mime_type = mime_type.trim().to_ascii_lowercase();
+    if mime_type.starts_with("text/") {
+        return false;
+    }
+    if mime_type.starts_with("image/") || mime_type.starts_with("video/") {
+        return true;
+    }
+    if matches!(
+        mime_type.as_str(),
+        "application/pdf"
+            | "application/postscript"
+            | "application/eps"
+            | "application/epub+zip"
+            | "application/x-mobipocket-ebook"
+    ) {
+        return true;
+    }
+    false
+}
+
+fn thumbnail_extension_may_have_preview(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|extension| {
+            image_thumbnail_extension(&extension)
+                || video_thumbnail_extension(&extension)
+                || document_thumbnail_extension(&extension)
+        })
 }
 
 fn thumbnailer_search_dirs() -> Vec<PathBuf> {
@@ -1415,6 +1461,26 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn thumbnail_preview_filter_matches_dolphin_preview_candidates() {
+        assert!(!thumbnail_request_may_have_preview(
+            Path::new("/tmp/notes.txt"),
+            Some("text/plain")
+        ));
+        assert!(thumbnail_request_may_have_preview(
+            Path::new("/tmp/photo"),
+            Some("image/png")
+        ));
+        assert!(thumbnail_request_may_have_preview(
+            Path::new("/tmp/photo.png"),
+            Some("application/octet-stream")
+        ));
+        assert!(!thumbnail_request_may_have_preview(
+            Path::new("/tmp/archive.zip"),
+            Some("application/zip")
+        ));
     }
 
     #[test]

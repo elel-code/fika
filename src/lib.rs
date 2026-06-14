@@ -120,7 +120,7 @@ pub use core::thumbnails::{
     thumbnail_cache_key, thumbnail_cache_path, thumbnail_cache_paths_for_uri, thumbnail_cache_root,
     thumbnail_candidate_failure_is_cached, thumbnail_failure_is_cached, thumbnail_failure_path,
     thumbnail_metadata, thumbnail_probe_results_for_requests, thumbnail_read_ahead_indexes,
-    thumbnail_uri_for_path, write_thumbnail_metadata,
+    thumbnail_request_may_have_preview, thumbnail_uri_for_path, write_thumbnail_metadata,
 };
 pub use core::trash_monitor::TrashEmptinessMonitor;
 pub use core::view::{

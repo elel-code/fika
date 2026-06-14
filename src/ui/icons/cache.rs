@@ -196,6 +196,12 @@ struct IconThemeResolver {
     search_order: Option<Vec<String>>,
     inherits_cache: HashMap<String, Vec<String>>,
     path_cache: HashMap<(String, u16), Option<PathBuf>>,
+    directory_cache: HashMap<PathBuf, Option<IconDirectoryIndex>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct IconDirectoryIndex {
+    icons: HashMap<String, PathBuf>,
 }
 
 impl Default for IconThemeResolver {
@@ -206,6 +212,7 @@ impl Default for IconThemeResolver {
             search_order: None,
             inherits_cache: HashMap::new(),
             path_cache: HashMap::new(),
+            directory_cache: HashMap::new(),
         }
     }
 }
@@ -234,10 +241,11 @@ impl IconThemeResolver {
     }
 
     fn find_uncached(&mut self, icon_name: &str, desired_size: u16) -> Option<PathBuf> {
+        let roots = self.roots.clone();
         for theme in self.theme_search_order() {
-            for root in &self.roots {
+            for root in &roots {
                 let theme_root = root.join(&theme);
-                if let Some(path) = find_icon_in_theme(&theme_root, icon_name, desired_size) {
+                if let Some(path) = self.find_icon_in_theme(&theme_root, icon_name, desired_size) {
                     return Some(path);
                 }
             }
@@ -248,7 +256,60 @@ impl IconThemeResolver {
             Path::new("/usr/local/share/pixmaps"),
         ]
         .into_iter()
-        .find_map(|root| find_icon_direct(root, icon_name))
+        .find_map(|root| self.find_icon_direct(root, icon_name))
+    }
+
+    fn find_icon_in_theme(
+        &mut self,
+        theme_root: &Path,
+        icon_name: &str,
+        desired_size: u16,
+    ) -> Option<PathBuf> {
+        const CATEGORIES: &[&str] = &[
+            "places",
+            "mimetypes",
+            "apps",
+            "actions",
+            "devices",
+            "status",
+        ];
+        if self.icon_directory_index(theme_root).is_none() {
+            return None;
+        }
+        if let Some(path) = self.find_icon_direct(theme_root, icon_name) {
+            return Some(path);
+        }
+        for size in preferred_icon_size_dirs(desired_size) {
+            for category in CATEGORIES {
+                for base in [
+                    theme_root.join(&size).join(category),
+                    theme_root.join(category).join(&size),
+                ] {
+                    if let Some(path) = self.find_icon_direct(&base, icon_name) {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+        for category in CATEGORIES {
+            if let Some(path) = self.find_icon_direct(&theme_root.join(category), icon_name) {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    fn find_icon_direct(&mut self, root: &Path, icon_name: &str) -> Option<PathBuf> {
+        self.icon_directory_index(root)
+            .and_then(|index| index.icons.get(icon_name).cloned())
+    }
+
+    fn icon_directory_index(&mut self, root: &Path) -> Option<&IconDirectoryIndex> {
+        if !self.directory_cache.contains_key(root) {
+            let index = root.is_dir().then(|| IconDirectoryIndex::read(root));
+            self.directory_cache.insert(root.to_path_buf(), index);
+        }
+        self.directory_cache.get(root).and_then(Option::as_ref)
     }
 
     fn theme_search_order(&mut self) -> Vec<String> {
@@ -293,6 +354,39 @@ impl IconThemeResolver {
         self.inherits_cache
             .insert(theme.to_string(), inherited.clone());
         inherited
+    }
+}
+
+impl IconDirectoryIndex {
+    fn read(root: &Path) -> Self {
+        let mut icons = HashMap::<String, (u8, PathBuf)>::new();
+        let Ok(entries) = fs::read_dir(root) else {
+            return Self::default();
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some((name, extension_rank)) = icon_file_name_and_rank(&path) else {
+                continue;
+            };
+            let file_type = entry.file_type().ok();
+            if !file_type.is_some_and(|file_type| file_type.is_file() || file_type.is_symlink()) {
+                continue;
+            }
+            match icons.get(&name) {
+                Some((existing_rank, _)) if *existing_rank <= extension_rank => {}
+                _ => {
+                    icons.insert(name, (extension_rank, path));
+                }
+            }
+        }
+
+        Self {
+            icons: icons
+                .into_iter()
+                .map(|(name, (_, path))| (name, path))
+                .collect(),
+        }
     }
 }
 
@@ -646,6 +740,7 @@ fn parse_icon_theme_inherits(contents: &str) -> Vec<String> {
     themes
 }
 
+#[cfg(test)]
 fn find_icon_in_theme(theme_root: &Path, icon_name: &str, desired_size: u16) -> Option<PathBuf> {
     const CATEGORIES: &[&str] = &[
         "places",
@@ -655,10 +750,11 @@ fn find_icon_in_theme(theme_root: &Path, icon_name: &str, desired_size: u16) -> 
         "devices",
         "status",
     ];
-    if !theme_root.is_dir() {
+    let mut directory_cache = HashMap::new();
+    if find_icon_directory_index(theme_root, &mut directory_cache).is_none() {
         return None;
     }
-    if let Some(path) = find_icon_direct(theme_root, icon_name) {
+    if let Some(path) = find_icon_direct_cached(theme_root, icon_name, &mut directory_cache) {
         return Some(path);
     }
     for size in preferred_icon_size_dirs(desired_size) {
@@ -667,14 +763,17 @@ fn find_icon_in_theme(theme_root: &Path, icon_name: &str, desired_size: u16) -> 
                 theme_root.join(&size).join(category),
                 theme_root.join(category).join(&size),
             ] {
-                if let Some(path) = find_icon_direct(&base, icon_name) {
+                if let Some(path) = find_icon_direct_cached(&base, icon_name, &mut directory_cache)
+                {
                     return Some(path);
                 }
             }
         }
     }
     for category in CATEGORIES {
-        if let Some(path) = find_icon_direct(&theme_root.join(category), icon_name) {
+        if let Some(path) =
+            find_icon_direct_cached(&theme_root.join(category), icon_name, &mut directory_cache)
+        {
             return Some(path);
         }
     }
@@ -702,11 +801,49 @@ fn push_icon_size_dir(dirs: &mut Vec<String>, value: String) {
     }
 }
 
-fn find_icon_direct(root: &Path, icon_name: &str) -> Option<PathBuf> {
-    ["png", "svg", "webp", "jpg", "jpeg", "bmp", "gif", "ico"]
-        .into_iter()
-        .map(|extension| root.join(format!("{icon_name}.{extension}")))
-        .find(|path| is_renderable_icon_file(path))
+#[cfg(test)]
+fn find_icon_direct_cached(
+    root: &Path,
+    icon_name: &str,
+    directory_cache: &mut HashMap<PathBuf, Option<IconDirectoryIndex>>,
+) -> Option<PathBuf> {
+    find_icon_directory_index(root, directory_cache)
+        .and_then(|index| index.icons.get(icon_name).cloned())
+}
+
+#[cfg(test)]
+fn find_icon_directory_index<'a>(
+    root: &Path,
+    directory_cache: &'a mut HashMap<PathBuf, Option<IconDirectoryIndex>>,
+) -> Option<&'a IconDirectoryIndex> {
+    if !directory_cache.contains_key(root) {
+        directory_cache.insert(
+            root.to_path_buf(),
+            root.is_dir().then(|| IconDirectoryIndex::read(root)),
+        );
+    }
+    directory_cache.get(root).and_then(Option::as_ref)
+}
+
+fn icon_file_name_and_rank(path: &Path) -> Option<(String, u8)> {
+    let extension = path.extension()?.to_str()?;
+    let rank = renderable_icon_extension_rank(extension)?;
+    let name = path.file_stem()?.to_str()?.to_string();
+    (!name.is_empty()).then_some((name, rank))
+}
+
+fn renderable_icon_extension_rank(extension: &str) -> Option<u8> {
+    match extension.to_ascii_lowercase().as_str() {
+        "png" => Some(0),
+        "svg" => Some(1),
+        "webp" => Some(2),
+        "jpg" => Some(3),
+        "jpeg" => Some(4),
+        "bmp" => Some(5),
+        "gif" => Some(6),
+        "ico" => Some(7),
+        _ => None,
+    }
 }
 
 fn is_renderable_icon_file(path: &Path) -> bool {
@@ -887,6 +1024,7 @@ gtk-icon-theme-name=breeze\n"
             search_order: None,
             inherits_cache: HashMap::new(),
             path_cache: HashMap::new(),
+            directory_cache: HashMap::new(),
         };
 
         assert_eq!(
@@ -949,6 +1087,7 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                directory_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1009,6 +1148,7 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                directory_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),
@@ -1063,6 +1203,7 @@ gtk-icon-theme-name=breeze\n"
                 search_order: None,
                 inherits_cache: HashMap::new(),
                 path_cache: HashMap::new(),
+                directory_cache: HashMap::new(),
             },
             mime: fika_core::MimeDatabase::from_maps(
                 HashMap::new(),

@@ -22,6 +22,7 @@ use fika_core::{
     MetadataRoleCandidate, MetadataRoleScheduler, PaneId, SelectionState, ThumbnailCandidate,
     ThumbnailRequestPriority, ThumbnailScheduler, ViewMode, ViewState,
     mime_magic_resolution_required, thumbnail_read_ahead_indexes,
+    thumbnail_request_may_have_preview,
 };
 
 pub(crate) fn format_entry_kind_label(entry: &fika_core::ModelEntry) -> String {
@@ -621,10 +622,15 @@ pub(crate) fn deferred_thumbnail_candidates_for_model<'a>(
         .filter_map(move |layout_index| {
             let model_index = model_index_for_layout_index(filtered, layout_index)?;
             let entry = model.get(model_index)?;
+            let path = model.path_for_index(model_index)?;
             if entry.is_dir
                 || !entry.effective_metadata_complete()
                 || entry.metadata_refresh_pending
                 || visible_item_thumbnail_path(entry).is_some()
+                || !thumbnail_request_may_have_preview(
+                    &path,
+                    entry.effective_mime_type().map(Arc::as_ref),
+                )
             {
                 return None;
             }
@@ -638,7 +644,7 @@ pub(crate) fn deferred_thumbnail_candidates_for_model<'a>(
             }
             Some(ThumbnailCandidate {
                 item_id: entry.id,
-                path: model.path_for_index(model_index)?,
+                path,
                 modified_secs: entry.effective_modified_secs()?,
                 metadata_complete: entry.effective_metadata_complete(),
                 mime_type: entry
@@ -687,6 +693,7 @@ fn visible_thumbnail_candidate(
         || !metadata_complete
         || metadata_refresh_pending
         || thumbnail_path.is_some()
+        || !thumbnail_request_may_have_preview(path, mime_type.map(Arc::as_ref))
         || mime_magic_resolution_required(
             is_dir,
             size_bytes,
@@ -1005,6 +1012,50 @@ mod tests {
             Generation(1)
         ));
         assert!(scheduler.start_role_batch(8).is_none());
+    }
+
+    #[test]
+    fn thumbnail_candidates_skip_plain_text_without_preview_support() {
+        let mime_type = Arc::from("text/plain");
+
+        assert_eq!(
+            visible_thumbnail_candidate(
+                ItemId(1),
+                Path::new("/tmp/notes.txt"),
+                false,
+                None,
+                Some(42),
+                12,
+                true,
+                false,
+                Some(&mime_type),
+                true,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn thumbnail_candidates_include_images() {
+        let mime_type = Arc::from("image/png");
+
+        let candidate = visible_thumbnail_candidate(
+            ItemId(1),
+            Path::new("/tmp/photo.png"),
+            false,
+            None,
+            Some(42),
+            12,
+            true,
+            false,
+            Some(&mime_type),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(candidate.path, PathBuf::from("/tmp/photo.png"));
+        assert_eq!(candidate.mime_type.as_deref(), Some("image/png"));
+        assert_eq!(candidate.priority, ThumbnailRequestPriority::Visible);
     }
 
     fn test_entry(

@@ -842,16 +842,23 @@ fn preserve_pending_entry_metadata_role(old: &ModelEntry, new: &mut ModelEntry) 
         return;
     }
 
-    let mut role = if new.entry.metadata_complete {
-        base_metadata_role(new)
-    } else {
-        old.effective_metadata_role()
-    };
+    let old_role = old.effective_metadata_role();
     if new.entry.metadata_complete {
+        let mut role = base_metadata_role(new);
+        if old_role.mime_magic_checked
+            && old_role.size_bytes == role.size_bytes
+            && old_role.modified_secs == role.modified_secs
+        {
+            new.metadata_role =
+                (!metadata_role_matches_base_entry(new, &old_role)).then_some(old_role);
+            return;
+        }
         role.mime_type = old.effective_mime_type_cloned().or(role.mime_type);
         role.mime_magic_checked = old.effective_mime_magic_checked();
+        new.metadata_role = Some(role);
+    } else {
+        new.metadata_role = Some(old_role);
     }
-    new.metadata_role = Some(role);
     new.metadata_refresh_pending = true;
 }
 
@@ -1793,7 +1800,7 @@ mod tests {
     }
 
     #[test]
-    fn same_listing_reload_keeps_resolved_mime_as_pending_role() {
+    fn same_listing_reload_keeps_resolved_mime_as_finished_role_when_metadata_matches() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -1823,6 +1830,44 @@ mod tests {
         assert_eq!(entry.id, item_id);
         assert_eq!(entry.entry.mime_type.as_deref(), Some(GENERIC_BINARY_MIME));
         assert!(!entry.entry.mime_magic_checked);
+        assert!(!entry.metadata_refresh_pending);
+        assert_eq!(
+            entry.effective_mime_type().map(Arc::as_ref),
+            Some("text/plain")
+        );
+        assert!(entry.effective_mime_magic_checked());
+        assert_eq!(entry.icon_name.as_deref(), Some("text-plain"));
+    }
+
+    #[test]
+    fn same_listing_reload_marks_resolved_mime_pending_when_metadata_changes() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_mime_state(
+                "payload",
+                12,
+                Some(42),
+                "text/plain",
+                true,
+            )]),
+        );
+        let item_id = model.entries()[0].id;
+        model.set_icon_name_role(item_id, Some(Arc::from("text-plain")));
+
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_mime_state(
+                "payload",
+                13,
+                Some(43),
+                GENERIC_BINARY_MIME,
+                false,
+            )]),
+        );
+
+        let entry = &model.entries()[0];
+        assert_eq!(entry.id, item_id);
         assert!(entry.metadata_refresh_pending);
         assert_eq!(
             entry.effective_mime_type().map(Arc::as_ref),

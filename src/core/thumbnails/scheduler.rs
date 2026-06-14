@@ -15,6 +15,7 @@ use super::{
     ThumbnailRequest, ThumbnailRequestPriority, ThumbnailRequestQueue, ThumbnailerRegistry,
     cached_thumbnail_for_request, default_thumbnail_cache_root,
     generate_thumbnail_with_external_thumbnailer_registry, thumbnail_failure_is_cached,
+    thumbnail_request_may_have_preview,
 };
 
 const THUMBNAIL_PROBE_WORKER_LIMIT: usize = 4;
@@ -125,12 +126,7 @@ impl ThumbnailScheduler {
     ) -> bool {
         let mut queued = false;
         for candidate in candidates {
-            let (key, request, failure_cached) = thumbnail_candidate_failure_is_cached(
-                &self.cache_root,
-                pane_id,
-                generation,
-                candidate,
-            );
+            let (key, request) = thumbnail_candidate_request(pane_id, generation, candidate);
             let Some(request) = request else {
                 continue;
             };
@@ -145,6 +141,11 @@ impl ThumbnailScheduler {
                 }
                 continue;
             }
+            let failure_cached = thumbnail_failure_is_cached(
+                &self.cache_root,
+                request.uri(),
+                request.modified_secs(),
+            );
             if failure_cached {
                 self.seen.insert(key);
                 continue;
@@ -434,9 +435,24 @@ pub fn thumbnail_candidate_failure_is_cached(
     generation: Generation,
     candidate: ThumbnailCandidate,
 ) -> (ThumbnailWorkKey, Option<ThumbnailRequest>, bool) {
+    let (key, request) = thumbnail_candidate_request(pane_id, generation, candidate);
+    let failure_cached = request.as_ref().is_some_and(|request| {
+        thumbnail_failure_is_cached(cache_root, request.uri(), request.modified_secs())
+    });
+    (key, request, failure_cached)
+}
+
+fn thumbnail_candidate_request(
+    pane_id: PaneId,
+    generation: Generation,
+    candidate: ThumbnailCandidate,
+) -> (ThumbnailWorkKey, Option<ThumbnailRequest>) {
     let key = ThumbnailWorkKey::from_candidate(pane_id, generation, &candidate);
     if !candidate.metadata_complete {
-        return (key, None, false);
+        return (key, None);
+    }
+    if !thumbnail_request_may_have_preview(&candidate.path, candidate.mime_type.as_deref()) {
+        return (key, None);
     }
     let request = ThumbnailRequest::from_entry_metadata_with_mime(
         pane_id,
@@ -447,10 +463,7 @@ pub fn thumbnail_candidate_failure_is_cached(
         candidate.mime_type,
         candidate.priority,
     );
-    let failure_cached = request.as_ref().is_some_and(|request| {
-        thumbnail_failure_is_cached(cache_root, request.uri(), request.modified_secs())
-    });
-    (key, request, failure_cached)
+    (key, request)
 }
 
 pub fn thumbnail_probe_results_for_requests(
@@ -458,7 +471,7 @@ pub fn thumbnail_probe_results_for_requests(
     requests: Vec<ThumbnailRequest>,
     cancel_handle: ThumbnailProbeCancelHandle,
 ) -> Vec<ThumbnailProbeResult> {
-    let thumbnailers = ThumbnailerRegistry::load_system();
+    let thumbnailers = ThumbnailerRegistry::shared_system();
     thumbnail_probe_results_with_worker(
         requests,
         THUMBNAIL_PROBE_WORKER_LIMIT,
@@ -612,6 +625,19 @@ mod tests {
             ThumbnailScheduler::new(PathBuf::from("/tmp/fika-thumbnail-incomplete-metadata"));
         let mut candidate = thumbnail_candidate(1, "image.png", ThumbnailRequestPriority::Visible);
         candidate.metadata_complete = false;
+
+        assert!(!scheduler.queue_candidates(pane_id, generation, vec![candidate]));
+        assert_eq!(scheduler.queued_len(), 0);
+        assert_eq!(scheduler.seen_len(), 0);
+    }
+
+    #[test]
+    fn thumbnail_scheduler_skips_plain_text_candidates() {
+        let pane_id = PaneId(1);
+        let generation = Generation(1);
+        let mut scheduler = ThumbnailScheduler::new(PathBuf::from("/tmp/fika-thumbnail-text"));
+        let mut candidate = thumbnail_candidate(1, "notes.txt", ThumbnailRequestPriority::Visible);
+        candidate.mime_type = Some("text/plain".to_string());
 
         assert!(!scheduler.queue_candidates(pane_id, generation, vec![candidate]));
         assert_eq!(scheduler.queued_len(), 0);
