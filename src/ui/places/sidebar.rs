@@ -4,17 +4,29 @@ mod section;
 use crate::FikaApp;
 use gpui::prelude::*;
 use gpui::{
-    Context, Div, MouseButton, NavigationDirection, ParentElement, Stateful, Styled, div, px, rgb,
+    App, Bounds, Context, Div, Entity, Hitbox, HitboxBehavior, MouseButton, NavigationDirection,
+    ParentElement, Pixels, ScrollHandle, Size, Stateful, Styled, Window, canvas, div, fill, point,
+    px, rgb, rgba, size,
 };
 
 use super::snapshot::PlaceSnapshot;
 use row::place_row;
 use section::group_heading;
 
+const PLACES_SCROLLBAR_WIDTH: f32 = 10.0;
+const PLACES_SCROLLBAR_THUMB_WIDTH: f32 = 4.0;
+const PLACES_SCROLLBAR_PADDING: f32 = 3.0;
+const PLACES_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 24.0;
+
 pub(crate) fn places_sidebar(
     places: Vec<PlaceSnapshot>,
+    window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
+    let state = window.use_keyed_state("places-sidebar-scrollbar", cx, |_, _| {
+        PlacesSidebarScrollState::new()
+    });
+    let scroll_handle = state.read(cx).scroll_handle.clone();
     let mut rows = Vec::new();
     let mut current_group = None;
 
@@ -90,12 +102,309 @@ pub(crate) fn places_sidebar(
         )
         .child(
             div()
-                .id("places-sidebar-list")
+                .relative()
                 .flex()
-                .flex_col()
+                .flex_row()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .children(rows),
+                .child(
+                    div()
+                        .id("places-sidebar-list")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&scroll_handle)
+                        .children(rows),
+                )
+                .child(places_sidebar_scrollbar(state)),
         )
+}
+
+struct PlacesSidebarScrollState {
+    scroll_handle: ScrollHandle,
+    drag_grab_y: Option<f32>,
+}
+
+impl PlacesSidebarScrollState {
+    fn new() -> Self {
+        Self {
+            scroll_handle: ScrollHandle::new(),
+            drag_grab_y: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PlacesSidebarScrollbarMetrics {
+    track_top: f32,
+    track_height: f32,
+    thumb_top: f32,
+    thumb_height: f32,
+    max_scroll_y: f32,
+}
+
+impl PlacesSidebarScrollbarMetrics {
+    fn thumb_bounds(self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        let thumb_x = (bounds.size.width.as_f32() - PLACES_SCROLLBAR_THUMB_WIDTH).max(0.0) / 2.0;
+        Bounds::new(
+            point(
+                bounds.origin.x + px(thumb_x),
+                bounds.origin.y + px(self.thumb_top),
+            ),
+            size(px(PLACES_SCROLLBAR_THUMB_WIDTH), px(self.thumb_height)),
+        )
+    }
+}
+
+struct PlacesSidebarScrollbarPaintState {
+    metrics: Option<PlacesSidebarScrollbarMetrics>,
+    hitbox: Option<Hitbox>,
+}
+
+fn places_sidebar_scrollbar(state: Entity<PlacesSidebarScrollState>) -> Div {
+    div()
+        .relative()
+        .flex_none()
+        .w(px(PLACES_SCROLLBAR_WIDTH))
+        .h_full()
+        .child(
+            canvas(
+                {
+                    let state = state.clone();
+                    move |bounds, window, cx| {
+                        let scroll_handle = state.read(cx).scroll_handle.clone();
+                        let metrics = places_sidebar_scrollbar_metrics(&scroll_handle, bounds);
+                        PlacesSidebarScrollbarPaintState {
+                            metrics,
+                            hitbox: metrics
+                                .map(|_| window.insert_hitbox(bounds, HitboxBehavior::BlockMouse)),
+                        }
+                    }
+                },
+                move |bounds, paint_state, window, cx| {
+                    paint_places_sidebar_scrollbar(bounds, &paint_state, window);
+                    install_places_sidebar_scrollbar_mouse_handlers(
+                        state.clone(),
+                        bounds,
+                        paint_state,
+                        window,
+                        cx,
+                    );
+                },
+            )
+            .size_full(),
+        )
+}
+
+fn places_sidebar_scrollbar_metrics(
+    scroll_handle: &ScrollHandle,
+    bounds: Bounds<Pixels>,
+) -> Option<PlacesSidebarScrollbarMetrics> {
+    let viewport_height = scroll_handle.bounds().size.height.as_f32();
+    places_sidebar_scrollbar_metrics_for_values(
+        if viewport_height > 0.0 {
+            viewport_height
+        } else {
+            bounds.size.height.as_f32()
+        },
+        scroll_handle.max_offset().y.as_f32(),
+        -scroll_handle.offset().y.as_f32(),
+        bounds.size.height.as_f32(),
+    )
+}
+
+fn places_sidebar_scrollbar_metrics_for_values(
+    viewport_height: f32,
+    max_scroll_y: f32,
+    scroll_y: f32,
+    bounds_height: f32,
+) -> Option<PlacesSidebarScrollbarMetrics> {
+    let max_scroll_y = max_scroll_y.max(0.0);
+    let track_top = PLACES_SCROLLBAR_PADDING;
+    let track_height = (bounds_height - PLACES_SCROLLBAR_PADDING * 2.0).max(0.0);
+    if max_scroll_y <= 0.0 || viewport_height <= 0.0 || track_height <= 0.0 {
+        return None;
+    }
+
+    let content_height = viewport_height + max_scroll_y;
+    let thumb_height = (track_height * (viewport_height / content_height))
+        .clamp(PLACES_SCROLLBAR_MIN_THUMB_HEIGHT, track_height)
+        .floor();
+    if thumb_height >= track_height {
+        return None;
+    }
+
+    let available = (track_height - thumb_height).max(0.0);
+    let thumb_top =
+        track_top + (scroll_y.clamp(0.0, max_scroll_y) / max_scroll_y).clamp(0.0, 1.0) * available;
+
+    Some(PlacesSidebarScrollbarMetrics {
+        track_top,
+        track_height,
+        thumb_top,
+        thumb_height,
+        max_scroll_y,
+    })
+}
+
+fn paint_places_sidebar_scrollbar(
+    bounds: Bounds<Pixels>,
+    paint_state: &PlacesSidebarScrollbarPaintState,
+    window: &mut Window,
+) {
+    let Some(metrics) = paint_state.metrics else {
+        return;
+    };
+
+    let track_x =
+        bounds.origin.x + px((bounds.size.width.as_f32() - PLACES_SCROLLBAR_THUMB_WIDTH) / 2.0);
+    let track_bounds = Bounds::new(
+        point(track_x, bounds.origin.y + px(metrics.track_top)),
+        Size {
+            width: px(PLACES_SCROLLBAR_THUMB_WIDTH),
+            height: px(metrics.track_height),
+        },
+    );
+    window.paint_quad(fill(track_bounds, rgba(0xd5dbe466)).corner_radii(px(2.0)));
+    window.paint_quad(fill(metrics.thumb_bounds(bounds), rgba(0x6f7b8acc)).corner_radii(px(2.0)));
+}
+
+fn install_places_sidebar_scrollbar_mouse_handlers(
+    state: Entity<PlacesSidebarScrollState>,
+    bounds: Bounds<Pixels>,
+    paint_state: PlacesSidebarScrollbarPaintState,
+    window: &mut Window,
+    _cx: &mut App,
+) {
+    let (Some(metrics), Some(hitbox)) = (paint_state.metrics, paint_state.hitbox.clone()) else {
+        return;
+    };
+
+    window.on_mouse_event({
+        let state = state.clone();
+        move |event: &gpui::MouseDownEvent, phase, window, cx| {
+            if !phase.capture() || event.button != MouseButton::Left {
+                return;
+            }
+            if !bounds.contains(&event.position) {
+                return;
+            }
+
+            let local_y = (event.position.y - bounds.origin.y).as_f32();
+            let grab_y = if metrics.thumb_bounds(bounds).contains(&event.position) {
+                local_y - metrics.thumb_top
+            } else {
+                metrics.thumb_height / 2.0
+            };
+            state.update(cx, |state, cx| {
+                state.drag_grab_y = Some(grab_y);
+                set_places_sidebar_scroll_y(
+                    &state.scroll_handle,
+                    places_sidebar_scroll_y_for_local_y(local_y, grab_y, metrics),
+                );
+                cx.notify();
+            });
+            window.capture_pointer(hitbox.id);
+            cx.stop_propagation();
+        }
+    });
+
+    window.on_mouse_event({
+        let state = state.clone();
+        move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
+            if !phase.capture() || !event.dragging() {
+                return;
+            }
+            let local_y = (event.position.y - bounds.origin.y).as_f32();
+            state.update(cx, |state, cx| {
+                let Some(grab_y) = state.drag_grab_y else {
+                    return;
+                };
+                set_places_sidebar_scroll_y(
+                    &state.scroll_handle,
+                    places_sidebar_scroll_y_for_local_y(local_y, grab_y, metrics),
+                );
+                cx.notify();
+                cx.stop_propagation();
+            });
+        }
+    });
+
+    window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
+        if !phase.capture() || event.button != MouseButton::Left {
+            return;
+        }
+        state.update(cx, |state, cx| {
+            if state.drag_grab_y.take().is_some() {
+                window.release_pointer();
+                cx.notify();
+                cx.stop_propagation();
+            }
+        });
+    });
+}
+
+fn places_sidebar_scroll_y_for_local_y(
+    local_y: f32,
+    grab_y: f32,
+    metrics: PlacesSidebarScrollbarMetrics,
+) -> f32 {
+    let available = (metrics.track_height - metrics.thumb_height).max(0.0);
+    if available <= 0.0 || metrics.max_scroll_y <= 0.0 {
+        return 0.0;
+    }
+    let thumb_top = (local_y - grab_y).clamp(metrics.track_top, metrics.track_top + available);
+    ((thumb_top - metrics.track_top) / available * metrics.max_scroll_y)
+        .clamp(0.0, metrics.max_scroll_y)
+}
+
+fn set_places_sidebar_scroll_y(scroll_handle: &ScrollHandle, scroll_y: f32) {
+    let current = scroll_handle.offset();
+    scroll_handle.set_offset(point(current.x, px(-scroll_y.max(0.0))));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn places_sidebar_scrollbar_metrics_hide_without_overflow() {
+        assert_eq!(
+            places_sidebar_scrollbar_metrics_for_values(200.0, 0.0, 0.0, 200.0),
+            None
+        );
+    }
+
+    #[test]
+    fn places_sidebar_scrollbar_metrics_track_offset_and_size() {
+        let metrics =
+            places_sidebar_scrollbar_metrics_for_values(200.0, 300.0, 150.0, 206.0).unwrap();
+
+        assert_eq!(metrics.track_top, PLACES_SCROLLBAR_PADDING);
+        assert_eq!(metrics.track_height, 200.0);
+        assert_eq!(metrics.thumb_height, 80.0);
+        assert_eq!(metrics.thumb_top, 63.0);
+    }
+
+    #[test]
+    fn places_sidebar_scrollbar_drag_maps_track_position_to_scroll() {
+        let metrics =
+            places_sidebar_scrollbar_metrics_for_values(200.0, 300.0, 0.0, 206.0).unwrap();
+
+        assert_eq!(
+            places_sidebar_scroll_y_for_local_y(metrics.track_top, 0.0, metrics),
+            0.0
+        );
+        assert_eq!(
+            places_sidebar_scroll_y_for_local_y(
+                metrics.track_top + metrics.track_height,
+                metrics.thumb_height,
+                metrics
+            ),
+            300.0
+        );
+    }
 }

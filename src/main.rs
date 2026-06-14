@@ -6554,7 +6554,7 @@ impl Render for FikaApp {
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(ui::places::places_sidebar(places, cx))
+                    .child(ui::places::places_sidebar(places, window, cx))
                     .child(
                         div()
                             .flex()
