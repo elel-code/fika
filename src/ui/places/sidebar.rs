@@ -31,20 +31,13 @@ pub(crate) fn places_sidebar(
     let mut current_group = None;
 
     for (index, place) in places.into_iter().enumerate() {
-        let starts_group = current_group != Some(place.group);
         if current_group != Some(place.group) {
             current_group = Some(place.group);
             if !place.group.is_empty() {
-                rows.push(group_heading(
-                    place.group,
-                    place.index,
-                    place.insert_before,
-                    cx,
-                ));
+                rows.push(group_heading(place.group, place.index, cx));
             }
         }
-        let show_insert_before = !starts_group || place.group.is_empty();
-        rows.push(place_row(index, place, show_insert_before, cx));
+        rows.push(place_row(index, place, cx));
     }
 
     div()

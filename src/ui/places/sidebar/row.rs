@@ -17,7 +17,6 @@ use super::super::style::{
 pub(super) fn place_row(
     visible_index: usize,
     place: PlaceSnapshot,
-    show_insert_before: bool,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let row_id = format!("place-{visible_index}");
@@ -118,7 +117,7 @@ pub(super) fn place_row(
         .flex()
         .flex_col()
         .child(row_content)
-        .when(show_insert_before && place.insert_before, |row| {
+        .when(place.insert_before, |row| {
             row.child(place_insert_indicator(
                 format!("place-insert-before-{visible_index}"),
                 PlaceInsertIndicatorEdge::Before,

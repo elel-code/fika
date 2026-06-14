@@ -32,8 +32,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::drag_drop::{
-    FileTransferMode, ItemDragPayload, refresh_active_drag_cursor_for_drop_menu,
-    refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
+    FileTransferMode, ItemDragPayload, item_drop_reject_reason,
+    refresh_active_drag_cursor_for_drop_menu, refresh_active_drag_cursor_for_transfer_mode,
+    refresh_active_drag_cursor_not_allowed,
 };
 use super::icons::{FileIconSnapshot, cached_icon_or_fallback};
 use super::item_view::{
@@ -120,8 +121,146 @@ const DRAG_PREVIEW_CURSOR_GAP: f32 = 10.0;
 const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
 const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
 
-fn drag_move_hits_item_path<T>(event: &gpui::DragMoveEvent<T>) -> bool {
-    event.bounds.contains(&event.event.position)
+fn handle_file_grid_item_drag_move(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    event: &gpui::DragMoveEvent<ItemDrag>,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    let contains = event.bounds.contains(&event.event.position);
+    let allowed = contains
+        && app
+            .item_at_window_position(pane_id, event.event.position)
+            .is_none_or(|hit| !hit.is_dir || app.item_drag_can_drop_to_directory(&hit.path));
+    let changed = if contains {
+        app.set_item_drag_drop_target_from_window_position(pane_id, event.event.position)
+    } else {
+        app.clear_item_drop_target_for_pane(pane_id)
+    };
+    if contains {
+        if allowed {
+            refresh_active_drag_cursor_for_drop_menu(window, cx);
+            app.schedule_drop_target_stale_clear(cx);
+        } else {
+            refresh_active_drag_cursor_not_allowed(window, cx);
+        }
+    }
+    if changed {
+        cx.notify();
+    }
+    if contains {
+        cx.stop_propagation();
+    }
+}
+
+fn handle_file_grid_external_drag_move(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    event: &gpui::DragMoveEvent<ExternalPaths>,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    let contains = event.bounds.contains(&event.event.position);
+    let changed = if contains {
+        app.set_item_drag_drop_target_from_window_position(pane_id, event.event.position)
+    } else {
+        app.clear_item_drop_target_for_pane(pane_id)
+    };
+    if contains {
+        refresh_active_drag_cursor_for_drop_menu(window, cx);
+        app.schedule_drop_target_stale_clear(cx);
+    }
+    if changed {
+        cx.notify();
+    }
+    if contains {
+        cx.stop_propagation();
+    }
+}
+
+fn handle_file_grid_place_drag_move(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    event: &gpui::DragMoveEvent<PlaceDrag>,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    let contains = event.bounds.contains(&event.event.position);
+    let source_path = event.drag(cx).path();
+    let hit = contains
+        .then(|| app.item_at_window_position(pane_id, event.event.position))
+        .flatten();
+    let target_is_directory = hit.as_ref().is_some_and(|hit| hit.is_dir);
+    let target_accepts_drop = hit.as_ref().is_some_and(|hit| {
+        hit.is_dir
+            && item_drop_reject_reason(std::slice::from_ref(&source_path), &hit.path).is_none()
+    });
+    let changed = if contains {
+        app.set_path_drag_drop_target_from_window_position(
+            pane_id,
+            event.event.position,
+            &source_path,
+        )
+    } else {
+        app.clear_item_drop_target_for_pane(pane_id)
+    };
+    if contains {
+        if target_accepts_drop {
+            refresh_active_drag_cursor_for_drop_menu(window, cx);
+            app.schedule_drop_target_stale_clear(cx);
+        } else if target_is_directory {
+            refresh_active_drag_cursor_not_allowed(window, cx);
+        } else {
+            refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Move, window, cx);
+            app.schedule_drop_target_stale_clear(cx);
+        }
+    }
+    if changed {
+        cx.notify();
+    }
+    if contains {
+        cx.stop_propagation();
+    }
+}
+
+fn handle_file_grid_item_drop(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    drag: &ItemDrag,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    app.set_drop_menu_position(window.mouse_position());
+    app.drop_item_drag_to_current_item_target(pane_id, drag.payload(), cx);
+    cx.stop_propagation();
+    cx.notify();
+}
+
+fn handle_file_grid_external_drop(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    external_paths: &ExternalPaths,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    app.set_drop_menu_position(window.mouse_position());
+    app.drop_external_paths_to_current_item_target(pane_id, external_paths.paths().to_vec(), cx);
+    cx.stop_propagation();
+    cx.notify();
+}
+
+fn handle_file_grid_place_drop(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    drag: &PlaceDrag,
+    window: &mut Window,
+    cx: &mut Context<FikaApp>,
+) {
+    app.set_drop_menu_position(window.mouse_position());
+    app.drop_place_drag_to_current_item_target(pane_id, drag.path(), cx);
+    cx.stop_propagation();
+    cx.notify();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -420,107 +559,29 @@ fn file_grid_viewport_shell(
         )
         .on_drag_move::<ItemDrag>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                let in_viewport = event.bounds.contains(&event.event.position);
-                let changed = if in_viewport {
-                    this.set_item_drag_drop_target_from_window_position(
-                        pane_id,
-                        event.event.position,
-                    )
-                } else {
-                    this.clear_item_drop_target_for_pane(pane_id)
-                };
-                if in_viewport {
-                    refresh_active_drag_cursor_for_drop_menu(window, cx);
-                    this.schedule_drop_target_stale_clear(cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-                if in_viewport {
-                    cx.stop_propagation();
-                }
+                handle_file_grid_item_drag_move(this, pane_id, event, window, cx);
             },
         ))
         .on_drag_move::<ExternalPaths>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                let in_viewport = event.bounds.contains(&event.event.position);
-                let changed = if in_viewport {
-                    this.set_item_drag_drop_target_from_window_position(
-                        pane_id,
-                        event.event.position,
-                    )
-                } else {
-                    this.clear_item_drop_target_for_pane(pane_id)
-                };
-                if in_viewport {
-                    refresh_active_drag_cursor_for_drop_menu(window, cx);
-                    this.schedule_drop_target_stale_clear(cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-                if in_viewport {
-                    cx.stop_propagation();
-                }
+                handle_file_grid_external_drag_move(this, pane_id, event, window, cx);
             },
         ))
         .on_drag_move::<PlaceDrag>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                let in_viewport = event.bounds.contains(&event.event.position);
-                let target_is_directory = in_viewport
-                    && this
-                        .item_at_window_position(pane_id, event.event.position)
-                        .is_some_and(|hit| hit.is_dir);
-                let changed = if in_viewport {
-                    let source_path = event.drag(cx).path();
-                    this.set_path_drag_drop_target_from_window_position(
-                        pane_id,
-                        event.event.position,
-                        &source_path,
-                    )
-                } else {
-                    this.clear_item_drop_target_for_pane(pane_id)
-                };
-                if in_viewport {
-                    if target_is_directory {
-                        refresh_active_drag_cursor_for_drop_menu(window, cx);
-                    } else {
-                        refresh_active_drag_cursor_for_transfer_mode(
-                            FileTransferMode::Move,
-                            window,
-                            cx,
-                        );
-                    }
-                    this.schedule_drop_target_stale_clear(cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-                if in_viewport {
-                    cx.stop_propagation();
-                }
+                handle_file_grid_place_drag_move(this, pane_id, event, window, cx);
             },
         ))
-        .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
-            this.drop_item_drag_to_current_item_target(pane_id, drag.payload(), cx);
-            cx.stop_propagation();
-            cx.notify();
+        .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+            handle_file_grid_item_drop(this, pane_id, drag, window, cx);
         }))
         .on_drop::<ExternalPaths>(cx.listener(
-            move |this, external_paths: &ExternalPaths, _window, cx| {
-                this.drop_external_paths_to_current_item_target(
-                    pane_id,
-                    external_paths.paths().to_vec(),
-                    cx,
-                );
-                cx.stop_propagation();
-                cx.notify();
+            move |this, external_paths: &ExternalPaths, window, cx| {
+                handle_file_grid_external_drop(this, pane_id, external_paths, window, cx);
             },
         ))
-        .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, _window, cx| {
-            this.drop_place_drag_to_current_item_target(pane_id, drag.path(), cx);
-            cx.stop_propagation();
-            cx.notify();
+        .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
+            handle_file_grid_place_drop(this, pane_id, drag, window, cx);
         }))
 }
 
@@ -612,7 +673,6 @@ fn details_row(
     let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
     let target_dir_for_drop = item.path.clone();
-    let target_dir_for_place_drop = item.path.clone();
     let is_dir_for_click = item.is_dir;
     let is_dir_for_menu = item.is_dir;
     let is_dir_for_drop = item.is_dir;
@@ -707,63 +767,33 @@ fn details_row(
                 cursor_offset_y,
             })
         })
-        .on_drag_move::<PlaceDrag>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                let contains = drag_move_hits_item_path(event);
-                let changed = if contains {
-                    if is_dir_for_drop {
-                        let source_path = event.drag(cx).path();
-                        this.set_path_drag_drop_target_from_window_position(
-                            pane_id,
-                            event.event.position,
-                            &source_path,
-                        )
-                    } else {
-                        this.set_drop_menu_position(event.event.position);
-                        this.set_item_drag_drop_target_for_pane(pane_id)
-                    }
-                } else {
-                    this.clear_item_drop_target_for_pane(pane_id)
-                };
-                if contains {
-                    if is_dir_for_drop {
-                        refresh_active_drag_cursor_for_drop_menu(window, cx);
-                    } else {
-                        refresh_active_drag_cursor_for_transfer_mode(
-                            FileTransferMode::Move,
-                            window,
-                            cx,
-                        );
-                    }
-                    this.schedule_drop_target_stale_clear(cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-                if contains {
-                    cx.stop_propagation();
-                }
+        .on_drag_move::<ItemDrag>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                handle_file_grid_item_drag_move(this, pane_id, event, window, cx);
             },
         ))
-        .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, _window, cx| {
-            if is_dir_for_drop {
-                this.drop_place_drag_to_directory(
-                    pane_id,
-                    drag.path(),
-                    target_dir_for_place_drop.clone(),
-                    false,
-                    cx,
-                );
-            } else {
-                this.drop_place_drag_to_pane(pane_id, drag.path());
-            }
-            cx.stop_propagation();
-            cx.notify();
+        .on_drag_move::<ExternalPaths>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                handle_file_grid_external_drag_move(this, pane_id, event, window, cx);
+            },
+        ))
+        .on_drag_move::<PlaceDrag>(cx.listener(
+            move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
+                handle_file_grid_place_drag_move(this, pane_id, event, window, cx);
+            },
+        ))
+        .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+            handle_file_grid_item_drop(this, pane_id, drag, window, cx);
+        }))
+        .on_drop::<ExternalPaths>(cx.listener(
+            move |this, external_paths: &ExternalPaths, window, cx| {
+                handle_file_grid_external_drop(this, pane_id, external_paths, window, cx);
+            },
+        ))
+        .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
+            handle_file_grid_place_drop(this, pane_id, drag, window, cx);
         }))
         .when(is_dir_for_drop, |row| {
-            let target_dir_for_move = target_dir_for_drop.clone();
-            let target_dir_for_external_move = target_dir_for_drop.clone();
-            let target_dir_for_external_drop = target_dir_for_drop.clone();
             let target_dir_for_primary_paste = target_dir_for_drop.clone();
             row.on_mouse_down(
                 MouseButton::Middle,
@@ -779,141 +809,6 @@ fn details_row(
                     }
                 }),
             )
-            .on_drag_move::<ItemDrag>(cx.listener(
-                move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                    let contains = drag_move_hits_item_path(event);
-                    let valid_target =
-                        contains && this.item_drag_can_drop_to_directory(&target_dir_for_move);
-                    let changed = if valid_target {
-                        this.set_drop_menu_position(event.event.position);
-                        this.set_item_drag_drop_target_for_directory(
-                            pane_id,
-                            target_dir_for_move.clone(),
-                        )
-                    } else if contains {
-                        this.clear_drag_drop_targets()
-                    } else {
-                        this.clear_item_drop_target_for_directory(pane_id, &target_dir_for_move)
-                    };
-                    if contains {
-                        if valid_target {
-                            refresh_active_drag_cursor_for_drop_menu(window, cx);
-                            this.schedule_drop_target_stale_clear(cx);
-                        } else {
-                            refresh_active_drag_cursor_not_allowed(window, cx);
-                        }
-                    }
-                    if changed {
-                        cx.notify();
-                    }
-                    if contains {
-                        cx.stop_propagation();
-                    }
-                },
-            ))
-            .on_drag_move::<ExternalPaths>(cx.listener(
-                move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                    let contains = drag_move_hits_item_path(event);
-                    let changed = if contains {
-                        this.set_drop_menu_position(event.event.position);
-                        this.set_item_drag_drop_target_for_directory(
-                            pane_id,
-                            target_dir_for_external_move.clone(),
-                        )
-                    } else {
-                        this.clear_item_drop_target_for_directory(
-                            pane_id,
-                            &target_dir_for_external_move,
-                        )
-                    };
-                    if contains {
-                        refresh_active_drag_cursor_for_drop_menu(window, cx);
-                        this.schedule_drop_target_stale_clear(cx);
-                    }
-                    if changed {
-                        cx.notify();
-                    }
-                    if contains {
-                        cx.stop_propagation();
-                    }
-                },
-            ))
-            .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
-                this.drop_item_drag_to_directory(
-                    pane_id,
-                    drag.payload(),
-                    target_dir_for_drop.clone(),
-                    false,
-                    cx,
-                );
-                cx.stop_propagation();
-                cx.notify();
-            }))
-            .on_drop::<ExternalPaths>(cx.listener(
-                move |this, external_paths: &ExternalPaths, _window, cx| {
-                    this.drop_external_paths_to_directory(
-                        pane_id,
-                        external_paths.paths().to_vec(),
-                        target_dir_for_external_drop.clone(),
-                        false,
-                        cx,
-                    );
-                    cx.stop_propagation();
-                    cx.notify();
-                },
-            ))
-        })
-        .when(!is_dir_for_drop, |row| {
-            row.on_drag_move::<ItemDrag>(cx.listener(
-                move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                    let contains = drag_move_hits_item_path(event);
-                    let changed = contains && {
-                        this.set_drop_menu_position(event.event.position);
-                        this.set_item_drag_drop_target_for_pane(pane_id)
-                    };
-                    if contains {
-                        refresh_active_drag_cursor_for_drop_menu(window, cx);
-                        this.schedule_drop_target_stale_clear(cx);
-                    }
-                    if changed {
-                        cx.notify();
-                    }
-                    if contains {
-                        cx.stop_propagation();
-                    }
-                },
-            ))
-            .on_drag_move::<ExternalPaths>(cx.listener(
-                move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                    let contains = drag_move_hits_item_path(event);
-                    let changed = contains && {
-                        this.set_drop_menu_position(event.event.position);
-                        this.set_item_drag_drop_target_for_pane(pane_id)
-                    };
-                    if contains {
-                        refresh_active_drag_cursor_for_drop_menu(window, cx);
-                        this.schedule_drop_target_stale_clear(cx);
-                    }
-                    if changed {
-                        cx.notify();
-                    }
-                    if contains {
-                        cx.stop_propagation();
-                    }
-                },
-            ))
-            .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
-                this.drop_item_drag_to_pane(pane_id, drag.payload(), cx);
-                cx.stop_propagation();
-                cx.notify();
-            }))
-            .on_drop::<ExternalPaths>(cx.listener(
-                move |this, external_paths: &ExternalPaths, _window, cx| {
-                    this.drop_external_paths_to_pane(pane_id, external_paths.paths().to_vec(), cx);
-                    cx.stop_propagation();
-                    cx.notify();
-                },
-            ))
         })
         .children(
             columns
@@ -1133,7 +1028,6 @@ fn item_tile(
     let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
     let target_dir_for_drop = item.path.clone();
-    let target_dir_for_place_drop = item.path.clone();
     let is_dir_for_click = item.is_dir;
     let is_dir_for_menu = item.is_dir;
     let is_dir_for_drop = item.is_dir;
@@ -1241,63 +1135,33 @@ fn item_tile(
                         cursor_offset_y,
                     })
                 })
-                .on_drag_move::<PlaceDrag>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                        let contains = drag_move_hits_item_path(event);
-                        let changed = if contains {
-                            if is_dir_for_drop {
-                                let source_path = event.drag(cx).path();
-                                this.set_path_drag_drop_target_from_window_position(
-                                    pane_id,
-                                    event.event.position,
-                                    &source_path,
-                                )
-                            } else {
-                                this.set_drop_menu_position(event.event.position);
-                                this.set_item_drag_drop_target_for_pane(pane_id)
-                            }
-                        } else {
-                            this.clear_item_drop_target_for_pane(pane_id)
-                        };
-                        if contains {
-                            if is_dir_for_drop {
-                                refresh_active_drag_cursor_for_drop_menu(window, cx);
-                            } else {
-                                refresh_active_drag_cursor_for_transfer_mode(
-                                    FileTransferMode::Move,
-                                    window,
-                                    cx,
-                                );
-                            }
-                            this.schedule_drop_target_stale_clear(cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                        if contains {
-                            cx.stop_propagation();
-                        }
+                .on_drag_move::<ItemDrag>(cx.listener(
+                    move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
+                        handle_file_grid_item_drag_move(this, pane_id, event, window, cx);
                     },
                 ))
-                .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, _window, cx| {
-                    if is_dir_for_drop {
-                        this.drop_place_drag_to_directory(
-                            pane_id,
-                            drag.path(),
-                            target_dir_for_place_drop.clone(),
-                            false,
-                            cx,
-                        );
-                    } else {
-                        this.drop_place_drag_to_pane(pane_id, drag.path());
-                    }
-                    cx.stop_propagation();
-                    cx.notify();
+                .on_drag_move::<ExternalPaths>(cx.listener(
+                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
+                        handle_file_grid_external_drag_move(this, pane_id, event, window, cx);
+                    },
+                ))
+                .on_drag_move::<PlaceDrag>(cx.listener(
+                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
+                        handle_file_grid_place_drag_move(this, pane_id, event, window, cx);
+                    },
+                ))
+                .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+                    handle_file_grid_item_drop(this, pane_id, drag, window, cx);
+                }))
+                .on_drop::<ExternalPaths>(cx.listener(
+                    move |this, external_paths: &ExternalPaths, window, cx| {
+                        handle_file_grid_external_drop(this, pane_id, external_paths, window, cx);
+                    },
+                ))
+                .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
+                    handle_file_grid_place_drop(this, pane_id, drag, window, cx);
                 }))
                 .when(is_dir_for_drop, |tile| {
-                    let target_dir_for_move = target_dir_for_drop.clone();
-                    let target_dir_for_external_move = target_dir_for_drop.clone();
-                    let target_dir_for_external_drop = target_dir_for_drop.clone();
                     let target_dir_for_primary_paste = target_dir_for_drop.clone();
                     tile.on_mouse_down(
                         MouseButton::Middle,
@@ -1313,148 +1177,6 @@ fn item_tile(
                             }
                         }),
                     )
-                    .on_drag_move::<ItemDrag>(cx.listener(
-                        move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                            let contains = drag_move_hits_item_path(event);
-                            let valid_target = contains
-                                && this.item_drag_can_drop_to_directory(&target_dir_for_move);
-                            let changed = if valid_target {
-                                this.set_drop_menu_position(event.event.position);
-                                this.set_item_drag_drop_target_for_directory(
-                                    pane_id,
-                                    target_dir_for_move.clone(),
-                                )
-                            } else if contains {
-                                this.clear_drag_drop_targets()
-                            } else {
-                                this.clear_item_drop_target_for_directory(
-                                    pane_id,
-                                    &target_dir_for_move,
-                                )
-                            };
-                            if contains {
-                                if valid_target {
-                                    refresh_active_drag_cursor_for_drop_menu(window, cx);
-                                    this.schedule_drop_target_stale_clear(cx);
-                                } else {
-                                    refresh_active_drag_cursor_not_allowed(window, cx);
-                                }
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                            if contains {
-                                cx.stop_propagation();
-                            }
-                        },
-                    ))
-                    .on_drag_move::<ExternalPaths>(cx.listener(
-                        move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                            let contains = drag_move_hits_item_path(event);
-                            let changed = if contains {
-                                this.set_drop_menu_position(event.event.position);
-                                this.set_item_drag_drop_target_for_directory(
-                                    pane_id,
-                                    target_dir_for_external_move.clone(),
-                                )
-                            } else {
-                                this.clear_item_drop_target_for_directory(
-                                    pane_id,
-                                    &target_dir_for_external_move,
-                                )
-                            };
-                            if contains {
-                                refresh_active_drag_cursor_for_drop_menu(window, cx);
-                                this.schedule_drop_target_stale_clear(cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                            if contains {
-                                cx.stop_propagation();
-                            }
-                        },
-                    ))
-                    .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
-                        this.drop_item_drag_to_directory(
-                            pane_id,
-                            drag.payload(),
-                            target_dir_for_drop.clone(),
-                            false,
-                            cx,
-                        );
-                        cx.stop_propagation();
-                        cx.notify();
-                    }))
-                    .on_drop::<ExternalPaths>(cx.listener(
-                        move |this, external_paths: &ExternalPaths, _window, cx| {
-                            this.drop_external_paths_to_directory(
-                                pane_id,
-                                external_paths.paths().to_vec(),
-                                target_dir_for_external_drop.clone(),
-                                false,
-                                cx,
-                            );
-                            cx.stop_propagation();
-                            cx.notify();
-                        },
-                    ))
-                })
-                .when(!is_dir_for_drop, |tile| {
-                    tile.on_drag_move::<ItemDrag>(cx.listener(
-                        move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                            let contains = drag_move_hits_item_path(event);
-                            let changed = contains && {
-                                this.set_drop_menu_position(event.event.position);
-                                this.set_item_drag_drop_target_for_pane(pane_id)
-                            };
-                            if contains {
-                                refresh_active_drag_cursor_for_drop_menu(window, cx);
-                                this.schedule_drop_target_stale_clear(cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                            if contains {
-                                cx.stop_propagation();
-                            }
-                        },
-                    ))
-                    .on_drag_move::<ExternalPaths>(cx.listener(
-                        move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                            let contains = drag_move_hits_item_path(event);
-                            let changed = contains && {
-                                this.set_drop_menu_position(event.event.position);
-                                this.set_item_drag_drop_target_for_pane(pane_id)
-                            };
-                            if contains {
-                                refresh_active_drag_cursor_for_drop_menu(window, cx);
-                                this.schedule_drop_target_stale_clear(cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                            if contains {
-                                cx.stop_propagation();
-                            }
-                        },
-                    ))
-                    .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
-                        this.drop_item_drag_to_pane(pane_id, drag.payload(), cx);
-                        cx.stop_propagation();
-                        cx.notify();
-                    }))
-                    .on_drop::<ExternalPaths>(cx.listener(
-                        move |this, external_paths: &ExternalPaths, _window, cx| {
-                            this.drop_external_paths_to_pane(
-                                pane_id,
-                                external_paths.paths().to_vec(),
-                                cx,
-                            );
-                            cx.stop_propagation();
-                            cx.notify();
-                        },
-                    ))
                 })
                 .child(icon_view(&item, item.layout))
                 .child(text_view(
