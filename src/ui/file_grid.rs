@@ -1855,6 +1855,7 @@ mod tests {
         normalized_text_range, rename_text_layout,
     };
     use crate::ui::item_view::ItemViewScrollbarAxis;
+    use fika_core::{CompactLayout, CompactLayoutOptions};
     use gpui::{Bounds, point, px, size};
 
     #[test]
@@ -1903,6 +1904,30 @@ mod tests {
         assert_eq!(horizontal.rect.height, 186.0);
         assert_eq!(horizontal.max_scroll_x, 200.0);
         assert_eq!(horizontal.max_scroll_y, 0.0);
+    }
+
+    #[test]
+    fn measured_compact_empty_layout_has_no_horizontal_scroll_range() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(300.0), px(200.0)));
+        let layout = CompactLayout::new(
+            0,
+            CompactLayoutOptions {
+                viewport_width: 720.0,
+                viewport_height: 520.0,
+                ..CompactLayoutOptions::default()
+            },
+        );
+        let content_size = layout.content_size();
+
+        let measured = measured_viewport_for_scrollbar_axis(
+            bounds,
+            content_size.width,
+            content_size.height,
+            ItemViewScrollbarAxis::Horizontal,
+        );
+
+        assert_eq!(measured.max_scroll_x, 0.0);
+        assert_eq!(measured.max_scroll_y, 0.0);
     }
 
     #[test]

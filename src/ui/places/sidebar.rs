@@ -88,5 +88,14 @@ pub(crate) fn places_sidebar(
                 .text_color(rgb(0x24292f))
                 .child("Places"),
         )
-        .children(rows)
+        .child(
+            div()
+                .id("places-sidebar-list")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .children(rows),
+        )
 }

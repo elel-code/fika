@@ -1,6 +1,8 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+const EMPTY_CONTENT_EXTENT: f32 = 1.0;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ViewPoint {
     pub x: f32,
@@ -225,20 +227,19 @@ impl CompactLayout {
                 vec![options.item_width; column_count],
             )
         };
-        let content_width = if column_count == 0 {
-            options.viewport_width.max(options.padding * 2.0)
+        let content_width = if item_count == 0 {
+            EMPTY_CONTENT_EXTENT
         } else {
             column_metrics.offset(column_count - 1)
                 + column_metrics.width(column_count - 1)
                 + options.padding
         };
         let visible_rows = item_count.min(rows_per_column);
-        let content_height = if visible_rows == 0 {
-            options.viewport_height.max(options.item_height)
+        let content_height = if item_count == 0 {
+            EMPTY_CONTENT_EXTENT
         } else {
-            visible_rows as f32 * options.item_height
-        }
-        .max(options.viewport_height);
+            (visible_rows as f32 * options.item_height).max(options.viewport_height)
+        };
 
         Self {
             options,
@@ -454,22 +455,22 @@ impl IconsLayout {
     pub fn new(item_count: usize, options: IconsLayoutOptions) -> Self {
         let columns_per_row = columns_per_row(options);
         let row_count = item_count.div_ceil(columns_per_row);
-        let content_width = if columns_per_row == 0 {
-            options.viewport_width.max(options.padding * 2.0)
+        let content_width = if item_count == 0 {
+            EMPTY_CONTENT_EXTENT
         } else {
-            options.padding * 2.0
+            (options.padding * 2.0
                 + columns_per_row as f32 * options.item_width
-                + columns_per_row.saturating_sub(1) as f32 * options.gap
-        }
-        .max(options.viewport_width);
-        let content_height = if row_count == 0 {
-            options.viewport_height.max(options.padding * 2.0)
+                + columns_per_row.saturating_sub(1) as f32 * options.gap)
+                .max(options.viewport_width)
+        };
+        let content_height = if item_count == 0 {
+            EMPTY_CONTENT_EXTENT
         } else {
-            options.padding * 2.0
+            (options.padding * 2.0
                 + row_count as f32 * options.item_height
-                + row_count.saturating_sub(1) as f32 * options.gap
-        }
-        .max(options.viewport_height);
+                + row_count.saturating_sub(1) as f32 * options.gap)
+                .max(options.viewport_height)
+        };
 
         Self {
             options,
@@ -1006,6 +1007,22 @@ mod tests {
     }
 
     #[test]
+    fn compact_empty_layout_does_not_inherit_viewport_extent() {
+        let layout = CompactLayout::new(
+            0,
+            CompactLayoutOptions {
+                viewport_width: 720.0,
+                viewport_height: 520.0,
+                ..CompactLayoutOptions::default()
+            },
+        );
+
+        assert_eq!(layout.content_size().width, EMPTY_CONTENT_EXTENT);
+        assert_eq!(layout.content_size().height, EMPTY_CONTENT_EXTENT);
+        assert_eq!(layout.visible_items().count(), 0);
+    }
+
+    #[test]
     fn icons_layout_fills_columns_before_rows() {
         let layout = IconsLayout::new(
             7,
@@ -1024,6 +1041,22 @@ mod tests {
         assert_eq!(layout.item(2).unwrap().column, 2);
         assert_eq!(layout.item(3).unwrap().row, 1);
         assert_eq!(layout.item(3).unwrap().column, 0);
+    }
+
+    #[test]
+    fn icons_empty_layout_does_not_inherit_viewport_extent() {
+        let layout = IconsLayout::new(
+            0,
+            IconsLayoutOptions {
+                viewport_width: 720.0,
+                viewport_height: 520.0,
+                ..IconsLayoutOptions::default()
+            },
+        );
+
+        assert_eq!(layout.content_size().width, EMPTY_CONTENT_EXTENT);
+        assert_eq!(layout.content_size().height, EMPTY_CONTENT_EXTENT);
+        assert_eq!(layout.visible_items().count(), 0);
     }
 
     #[test]
