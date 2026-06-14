@@ -150,36 +150,6 @@ impl DropTargetState {
         had_target
     }
 
-    pub(crate) fn clear_place_for_insert(&mut self, index: usize) -> bool {
-        if matches!(
-            self.place,
-            Some(PlaceDropTarget::Insert { index: target_index }) if target_index == index
-        ) {
-            return self.clear_place();
-        }
-        false
-    }
-
-    pub(crate) fn clear_place_for_row(
-        &mut self,
-        path: &Path,
-        insert_before_index: usize,
-        insert_after_index: usize,
-    ) -> bool {
-        let matches_row = self.place.as_ref().is_some_and(|target| match target {
-            PlaceDropTarget::Place {
-                path: target_path, ..
-            } => target_path == path,
-            PlaceDropTarget::Insert { index } => {
-                *index == insert_before_index || *index == insert_after_index
-            }
-        });
-        if matches_row {
-            return self.clear_place();
-        }
-        false
-    }
-
     pub(crate) fn clear_all(&mut self) -> bool {
         let had_target = self.has_target();
         self.item = None;
@@ -344,8 +314,7 @@ mod tests {
     use super::{
         DropTargetState, ItemDropTarget, PlaceDropTarget, drag_export_payload_for_paths,
         item_drop_target_matches_directory, item_drop_target_matches_pane,
-        place_drag_export_payload, place_drop_target_matches_insert,
-        place_drop_target_matches_place,
+        place_drag_export_payload, place_drop_target_matches_place,
     };
     use fika_core::PaneId;
     use std::path::PathBuf;
@@ -452,31 +421,6 @@ mod tests {
         assert!(state.clear_item_for_directory(pane, &path));
         assert!(state.item().is_none());
         assert!(state.stale_generation() > generation);
-    }
-
-    #[test]
-    fn drop_target_state_clears_only_matching_place_target() {
-        let row_path = PathBuf::from("/tmp/fika-drop-target-state/place");
-        let other_path = PathBuf::from("/tmp/fika-drop-target-state/other-place");
-        let mut state = DropTargetState::default();
-
-        assert!(state.set_place(PlaceDropTarget::Insert { index: 3 }));
-        let insert_generation = state.stale_generation();
-        assert!(!state.clear_place_for_insert(2));
-        assert!(place_drop_target_matches_insert(state.place(), 3));
-        assert_eq!(state.stale_generation(), insert_generation);
-        assert!(state.clear_place_for_insert(3));
-        assert!(state.place().is_none());
-
-        assert!(state.set_place(PlaceDropTarget::Place {
-            path: row_path.clone(),
-        }));
-        let row_generation = state.stale_generation();
-        assert!(!state.clear_place_for_row(&other_path, 1, 2));
-        assert!(place_drop_target_matches_place(state.place(), &row_path));
-        assert_eq!(state.stale_generation(), row_generation);
-        assert!(state.clear_place_for_row(&row_path, 1, 2));
-        assert!(state.place().is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{Context, IntoElement, ParentElement, Render, Styled, div, px, rgb};
@@ -50,7 +50,6 @@ impl PlaceDrag {
 
 pub(crate) struct PlaceDragPreview {
     label: Arc<str>,
-    path: PathBuf,
     icon: FileIconSnapshot,
 }
 
@@ -58,7 +57,6 @@ impl PlaceDragPreview {
     pub(crate) fn from_drag(drag: &PlaceDrag) -> Self {
         Self {
             label: drag.label.clone(),
-            path: drag.path.clone(),
             icon: drag.icon.clone(),
         }
     }
@@ -125,11 +123,12 @@ impl Render for PlaceDragPreview {
                     .overflow_hidden()
                     .child(place_drag_icon_or_fallback(icon)),
             )
-            .child(div().max_w(px(180.0)).truncate().child(format!(
-                "{} -> {}",
-                self.label,
-                display_path_for_drag(&self.path)
-            )))
+            .child(
+                div()
+                    .max_w(px(170.0))
+                    .truncate()
+                    .child(self.label.as_ref().to_string()),
+            )
     }
 }
 
@@ -151,14 +150,6 @@ fn place_drag_icon_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
             .child(marker.as_ref().to_string())
             .into_any_element()
     })
-}
-
-fn display_path_for_drag(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| path.display().to_string())
 }
 
 #[cfg(test)]
@@ -205,15 +196,6 @@ mod tests {
             place_drag_insert_index_for_zone(2, 2, PlaceDropZone::OnPlace),
             None
         );
-    }
-
-    #[test]
-    fn display_path_for_drag_prefers_filename() {
-        assert_eq!(
-            display_path_for_drag(Path::new("/home/yk/Work")),
-            "Work".to_string()
-        );
-        assert_eq!(display_path_for_drag(Path::new("/")), "/".to_string());
     }
 
     #[test]

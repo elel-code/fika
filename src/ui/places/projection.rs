@@ -39,6 +39,9 @@ pub(crate) fn place_snapshots_for(
             let device = place.group == REMOVABLE_DEVICES_GROUP;
             let place_icon = place_icon_for(place, trash_place);
             let icon = place_icon_snapshot(file_icons, place_icon);
+            let insert_before = place_drop_target_matches_insert(place_drop_target, index);
+            let insert_after = index == last_index
+                && place_drop_target_matches_insert(place_drop_target, places.len());
             PlaceSnapshot {
                 index,
                 group: place.group,
@@ -51,12 +54,13 @@ pub(crate) fn place_snapshots_for(
                 device_ejectable: place.device_ejectable,
                 device_can_power_off: place.device_can_power_off,
                 active: active_index == Some(index),
-                drop_target: mounted
-                    && !network
-                    && place_drop_target_matches_place(place_drop_target, &place.path),
-                insert_before: place_drop_target_matches_insert(place_drop_target, index),
-                insert_after: index == last_index
-                    && place_drop_target_matches_insert(place_drop_target, places.len()),
+                drop_target: insert_before
+                    || insert_after
+                    || (mounted
+                        && !network
+                        && place_drop_target_matches_place(place_drop_target, &place.path)),
+                insert_before,
+                insert_after,
                 trash_place,
                 trash_has_items: trash_place && trash_has_items,
                 editable: place.editable,
@@ -118,6 +122,31 @@ mod tests {
         assert!(snapshots[1].device);
         assert!(snapshots[1].device_ejectable);
         assert!(snapshots[1].device_can_power_off);
+    }
+
+    #[test]
+    fn place_snapshots_highlight_row_for_insert_target() {
+        let home = PathBuf::from("/tmp/fika-places-insert-home");
+        let docs = home.join("Documents");
+        let places = vec![
+            place("", "Home", home.clone(), false),
+            place("", "Documents", docs.clone(), true),
+        ];
+        let mut icons = FileIconCache::default();
+
+        let snapshots = place_snapshots_for(
+            &places,
+            Some(&home),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            Some(&PlaceDropTarget::Insert { index: 1 }),
+            false,
+            &mut icons,
+        );
+
+        assert!(!snapshots[0].drop_target);
+        assert!(snapshots[1].insert_before);
+        assert!(snapshots[1].drop_target);
     }
 
     #[test]

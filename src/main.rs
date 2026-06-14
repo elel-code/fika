@@ -1696,21 +1696,33 @@ impl FikaApp {
         self.load_pane(target_pane, path);
     }
 
-    pub(crate) fn drop_place_drag_to_current_item_target(
+    pub(crate) fn drop_place_drag_to_position_in_pane(
         &mut self,
-        fallback_pane: PaneId,
+        target_pane: PaneId,
         source_path: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        match self.drop_targets.item().cloned() {
-            Some(ItemDropTarget::Directory { pane_id, path }) => {
-                self.drop_place_drag_to_directory(pane_id, source_path, path, false, cx);
+        match self.item_at_window_position(target_pane, position) {
+            Some(hit) if hit.is_dir => {
+                let target_dir = hit.path;
+                let _ = self.set_dragged_paths_drop_target_for_directory(
+                    target_pane,
+                    std::slice::from_ref(&source_path),
+                    target_dir.clone(),
+                );
+                self.drop_place_drag_to_directory(
+                    target_pane,
+                    source_path,
+                    target_dir,
+                    false,
+                    position,
+                    cx,
+                );
             }
-            Some(ItemDropTarget::Pane { pane_id }) => {
-                self.drop_place_drag_to_pane(pane_id, source_path);
-            }
-            None => {
-                self.drop_place_drag_to_pane(fallback_pane, source_path);
+            _ => {
+                let _ = self.set_item_drag_drop_target_for_pane(target_pane);
+                self.drop_place_drag_to_pane(target_pane, source_path);
             }
         }
     }
@@ -1721,6 +1733,7 @@ impl FikaApp {
         source_path: PathBuf,
         target_dir: PathBuf,
         load_target_dir: bool,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         if self.chooser.is_some() {
@@ -1745,7 +1758,13 @@ impl FikaApp {
             return;
         }
 
-        self.show_drop_operation_menu(target_pane, target_dir, vec![source_path], load_target_dir);
+        self.show_drop_operation_menu(
+            target_pane,
+            target_dir,
+            vec![source_path],
+            load_target_dir,
+            position,
+        );
         cx.notify();
     }
 
@@ -1753,13 +1772,14 @@ impl FikaApp {
         &mut self,
         source_index: usize,
         fallback_index: usize,
+        position: gpui::Point<gpui::Pixels>,
     ) {
         match self.drop_targets.place().cloned() {
             Some(PlaceDropTarget::Insert { index }) => {
                 self.drop_place_drag_to_place_insert(source_index, index);
             }
             Some(PlaceDropTarget::Place { path }) => {
-                self.drop_place_drag_to_place(source_index, path);
+                self.drop_place_drag_to_place(source_index, path, position);
             }
             None => {
                 self.drop_place_drag_to_place_insert(source_index, fallback_index);
@@ -1767,7 +1787,12 @@ impl FikaApp {
         }
     }
 
-    pub(crate) fn drop_place_drag_to_place(&mut self, source_index: usize, target_dir: PathBuf) {
+    pub(crate) fn drop_place_drag_to_place(
+        &mut self,
+        source_index: usize,
+        target_dir: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
+    ) {
         let Some(status_pane) = self.panes.focused() else {
             self.clear_place_drop_target();
             return;
@@ -1801,7 +1826,7 @@ impl FikaApp {
             return;
         }
 
-        self.show_drop_operation_menu(status_pane, target_dir, vec![source_path], false);
+        self.show_drop_operation_menu(status_pane, target_dir, vec![source_path], false, position);
     }
 
     pub(crate) fn drop_place_drag_to_place_insert(&mut self, source_index: usize, index: usize) {
@@ -2978,22 +3003,17 @@ impl FikaApp {
         }
     }
 
-    pub(crate) fn set_path_drag_drop_target_from_window_position(
+    pub(crate) fn set_dragged_paths_drop_target_from_window_position(
         &mut self,
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
-        source_path: &Path,
+        source_paths: &[PathBuf],
     ) -> bool {
         self.set_drop_menu_position(position);
         match self.item_at_window_position(pane_id, position) {
-            Some(hit)
-                if hit.is_dir
-                    && item_drop_reject_reason(&[source_path.to_path_buf()], &hit.path)
-                        .is_none() =>
-            {
-                self.set_item_drop_target_for_directory_unchecked(pane_id, hit.path)
+            Some(hit) if hit.is_dir => {
+                self.set_dragged_paths_drop_target_for_directory(pane_id, source_paths, hit.path)
             }
-            Some(hit) if hit.is_dir => self.clear_drag_drop_targets(),
             _ => self.set_item_drag_drop_target_for_pane(pane_id),
         }
     }
@@ -4114,6 +4134,11 @@ impl FikaApp {
             .map(|drag| drag.paths.clone())
     }
 
+    pub(crate) fn item_drag_source_paths(&self, payload: &ItemDragPayload) -> Vec<PathBuf> {
+        self.active_item_drag_paths(payload)
+            .unwrap_or_else(|| item_drag_paths(&self.panes, payload))
+    }
+
     fn clear_item_drag(&mut self, payload: &ItemDragPayload) {
         if self
             .active_item_drag
@@ -4125,10 +4150,14 @@ impl FikaApp {
     }
 
     pub(crate) fn set_drop_menu_position(&mut self, position: gpui::Point<gpui::Pixels>) {
-        self.drop_menu_position = Some(ViewPoint {
+        self.drop_menu_position = Some(Self::window_position_to_view_point(position));
+    }
+
+    fn window_position_to_view_point(position: gpui::Point<gpui::Pixels>) -> ViewPoint {
+        ViewPoint {
             x: position.x.as_f32(),
             y: position.y.as_f32(),
-        });
+        }
     }
 
     pub(crate) fn set_item_drag_drop_target_for_pane(&mut self, pane_id: PaneId) -> bool {
@@ -4153,6 +4182,18 @@ impl FikaApp {
     ) -> bool {
         self.drop_targets
             .set_item(ItemDropTarget::Directory { pane_id, path })
+    }
+
+    pub(crate) fn set_dragged_paths_drop_target_for_directory(
+        &mut self,
+        pane_id: PaneId,
+        source_paths: &[PathBuf],
+        target_dir: PathBuf,
+    ) -> bool {
+        if item_drop_reject_reason(source_paths, &target_dir).is_some() {
+            return self.clear_drag_drop_targets();
+        }
+        self.set_item_drop_target_for_directory_unchecked(pane_id, target_dir)
     }
 
     pub(crate) fn item_drag_can_drop_to_directory(&self, target_dir: &Path) -> bool {
@@ -4201,30 +4242,6 @@ impl FikaApp {
 
     fn clear_place_drop_target(&mut self) -> bool {
         let changed = self.drop_targets.clear_place();
-        if !self.drop_targets.has_target() {
-            self.drop_menu_position = None;
-        }
-        changed
-    }
-
-    pub(crate) fn clear_place_drop_target_for_insert(&mut self, index: usize) -> bool {
-        let index = self.user_place_insert_index(index);
-        let changed = self.drop_targets.clear_place_for_insert(index);
-        if !self.drop_targets.has_target() {
-            self.drop_menu_position = None;
-        }
-        changed
-    }
-
-    pub(crate) fn clear_place_drop_target_for_row(
-        &mut self,
-        path: &Path,
-        insert_before_index: usize,
-        insert_after_index: usize,
-    ) -> bool {
-        let before = self.user_place_insert_index(insert_before_index);
-        let after = self.user_place_insert_index(insert_after_index);
-        let changed = self.drop_targets.clear_place_for_row(path, before, after);
         if !self.drop_targets.has_target() {
             self.drop_menu_position = None;
         }
@@ -4290,6 +4307,7 @@ impl FikaApp {
         &mut self,
         target_pane: PaneId,
         payload: ItemDragPayload,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         let Some(target_dir) = self
@@ -4299,24 +4317,37 @@ impl FikaApp {
         else {
             return;
         };
-        self.drop_item_drag_to_directory(target_pane, payload, target_dir, false, cx);
+        self.drop_item_drag_to_directory(target_pane, payload, target_dir, false, position, cx);
     }
 
-    pub(crate) fn drop_item_drag_to_current_item_target(
+    pub(crate) fn drop_item_drag_to_position_in_pane(
         &mut self,
-        fallback_pane: PaneId,
+        target_pane: PaneId,
         payload: ItemDragPayload,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        match self.drop_targets.item().cloned() {
-            Some(ItemDropTarget::Directory { pane_id, path }) => {
-                self.drop_item_drag_to_directory(pane_id, payload, path, false, cx);
+        let source_paths = self.item_drag_source_paths(&payload);
+        match self.item_at_window_position(target_pane, position) {
+            Some(hit) if hit.is_dir => {
+                let target_dir = hit.path;
+                let _ = self.set_dragged_paths_drop_target_for_directory(
+                    target_pane,
+                    &source_paths,
+                    target_dir.clone(),
+                );
+                self.drop_item_drag_to_directory(
+                    target_pane,
+                    payload,
+                    target_dir,
+                    false,
+                    position,
+                    cx,
+                );
             }
-            Some(ItemDropTarget::Pane { pane_id }) => {
-                self.drop_item_drag_to_pane(pane_id, payload, cx);
-            }
-            None => {
-                self.drop_item_drag_to_pane(fallback_pane, payload, cx);
+            _ => {
+                let _ = self.set_item_drag_drop_target_for_pane(target_pane);
+                self.drop_item_drag_to_pane(target_pane, payload, position, cx);
             }
         }
     }
@@ -4325,6 +4356,7 @@ impl FikaApp {
         &mut self,
         target_pane: PaneId,
         paths: Vec<PathBuf>,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         let Some(target_dir) = self
@@ -4334,24 +4366,36 @@ impl FikaApp {
         else {
             return;
         };
-        self.drop_external_paths_to_directory(target_pane, paths, target_dir, false, cx);
+        self.drop_external_paths_to_directory(target_pane, paths, target_dir, false, position, cx);
     }
 
-    pub(crate) fn drop_external_paths_to_current_item_target(
+    pub(crate) fn drop_external_paths_to_position_in_pane(
         &mut self,
-        fallback_pane: PaneId,
+        target_pane: PaneId,
         paths: Vec<PathBuf>,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        match self.drop_targets.item().cloned() {
-            Some(ItemDropTarget::Directory { pane_id, path }) => {
-                self.drop_external_paths_to_directory(pane_id, paths, path, false, cx);
+        match self.item_at_window_position(target_pane, position) {
+            Some(hit) if hit.is_dir => {
+                let target_dir = hit.path;
+                let _ = self.set_dragged_paths_drop_target_for_directory(
+                    target_pane,
+                    &paths,
+                    target_dir.clone(),
+                );
+                self.drop_external_paths_to_directory(
+                    target_pane,
+                    paths,
+                    target_dir,
+                    false,
+                    position,
+                    cx,
+                );
             }
-            Some(ItemDropTarget::Pane { pane_id }) => {
-                self.drop_external_paths_to_pane(pane_id, paths, cx);
-            }
-            None => {
-                self.drop_external_paths_to_pane(fallback_pane, paths, cx);
+            _ => {
+                let _ = self.set_item_drag_drop_target_for_pane(target_pane);
+                self.drop_external_paths_to_pane(target_pane, paths, position, cx);
             }
         }
     }
@@ -4362,6 +4406,7 @@ impl FikaApp {
         paths: Vec<PathBuf>,
         target_dir: PathBuf,
         load_target_dir: bool,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         if self.chooser.is_some() {
@@ -4384,7 +4429,7 @@ impl FikaApp {
             return;
         }
 
-        self.show_drop_operation_menu(target_pane, target_dir, paths, load_target_dir);
+        self.show_drop_operation_menu(target_pane, target_dir, paths, load_target_dir, position);
         cx.notify();
     }
 
@@ -4392,6 +4437,7 @@ impl FikaApp {
         &mut self,
         payload: ItemDragPayload,
         target_dir: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         let status_pane = self
@@ -4431,7 +4477,7 @@ impl FikaApp {
             return;
         }
 
-        self.show_drop_operation_menu(status_pane, target_dir, paths, false);
+        self.show_drop_operation_menu(status_pane, target_dir, paths, false, position);
         cx.notify();
     }
 
@@ -4439,6 +4485,7 @@ impl FikaApp {
         &mut self,
         paths: Vec<PathBuf>,
         target_dir: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         let Some(status_pane) = self.panes.focused() else {
@@ -4463,7 +4510,7 @@ impl FikaApp {
             return;
         }
 
-        self.show_drop_operation_menu(status_pane, target_dir, paths, false);
+        self.show_drop_operation_menu(status_pane, target_dir, paths, false, position);
         cx.notify();
     }
 
@@ -4471,6 +4518,7 @@ impl FikaApp {
         &mut self,
         payload: ItemDragPayload,
         fallback_dir: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         match self
@@ -4480,7 +4528,7 @@ impl FikaApp {
             .unwrap_or(PlaceDropTarget::Place { path: fallback_dir })
         {
             PlaceDropTarget::Place { path, .. } => {
-                self.drop_item_drag_to_place(payload, path, cx);
+                self.drop_item_drag_to_place(payload, path, position, cx);
             }
             PlaceDropTarget::Insert { index } => {
                 self.drop_item_drag_to_place_insert(payload, index);
@@ -4492,6 +4540,7 @@ impl FikaApp {
         &mut self,
         paths: Vec<PathBuf>,
         fallback_dir: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         match self
@@ -4501,7 +4550,7 @@ impl FikaApp {
             .unwrap_or(PlaceDropTarget::Place { path: fallback_dir })
         {
             PlaceDropTarget::Place { path, .. } => {
-                self.drop_external_paths_to_place(paths, path, cx);
+                self.drop_external_paths_to_place(paths, path, position, cx);
             }
             PlaceDropTarget::Insert { index } => {
                 self.drop_external_paths_to_place_insert(paths, index);
@@ -4565,6 +4614,7 @@ impl FikaApp {
         target_pane: PaneId,
         payload: ItemDragPayload,
         target_dir: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         if self.chooser.is_some() {
@@ -4593,7 +4643,7 @@ impl FikaApp {
             return;
         }
 
-        self.show_drop_operation_menu(target_pane, target_dir, paths, true);
+        self.show_drop_operation_menu(target_pane, target_dir, paths, true, position);
         cx.notify();
     }
 
@@ -4602,6 +4652,7 @@ impl FikaApp {
         target_pane: PaneId,
         paths: Vec<PathBuf>,
         target_dir: PathBuf,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         if self.chooser.is_some() {
@@ -4621,7 +4672,7 @@ impl FikaApp {
             return;
         }
 
-        self.show_drop_operation_menu(target_pane, target_dir, paths, true);
+        self.show_drop_operation_menu(target_pane, target_dir, paths, true, position);
         cx.notify();
     }
 
@@ -4631,6 +4682,7 @@ impl FikaApp {
         payload: ItemDragPayload,
         target_dir: PathBuf,
         load_target_dir: bool,
+        position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         if self.chooser.is_some() {
@@ -4669,7 +4721,7 @@ impl FikaApp {
             return;
         }
 
-        self.show_drop_operation_menu(target_pane, target_dir, paths, load_target_dir);
+        self.show_drop_operation_menu(target_pane, target_dir, paths, load_target_dir, position);
         cx.notify();
     }
 
@@ -4679,11 +4731,10 @@ impl FikaApp {
         target_dir: PathBuf,
         paths: Vec<PathBuf>,
         load_target_dir: bool,
+        position: gpui::Point<gpui::Pixels>,
     ) {
-        let position = self
-            .drop_menu_position
-            .take()
-            .unwrap_or(ViewPoint { x: 0.0, y: 0.0 });
+        let position = Self::window_position_to_view_point(position);
+        self.drop_menu_position = None;
         self.set_context_menu(ContextMenuState {
             pane_id,
             target: ContextMenuTarget::DropOperation {
@@ -9755,77 +9806,6 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn place_drop_target_leave_clears_only_matching_row_or_insert() {
-        let current = test_dir("place-drop-leave-current");
-        let user = test_dir("place-drop-leave-user");
-        std::fs::create_dir_all(&current).unwrap();
-        std::fs::create_dir_all(&user).unwrap();
-        let current_arg = current.display().to_string();
-        let mut app = test_app_with_entries(&current_arg, &[]);
-        app.places = vec![
-            PlaceEntry {
-                group: "",
-                marker: "H",
-                label: "Home".to_string(),
-                path: current.clone(),
-                editable: false,
-                removable: false,
-                device_ejectable: false,
-                device_can_power_off: false,
-            },
-            PlaceEntry {
-                group: "",
-                marker: "B",
-                label: "User".to_string(),
-                path: user.clone(),
-                editable: true,
-                removable: true,
-                device_ejectable: false,
-                device_can_power_off: false,
-            },
-            PlaceEntry {
-                group: "Devices",
-                marker: "/",
-                label: "Root".to_string(),
-                path: PathBuf::from("/"),
-                editable: false,
-                removable: false,
-                device_ejectable: false,
-                device_can_power_off: false,
-            },
-        ];
-
-        assert!(app.set_place_drag_drop_target_for_path(user.clone()));
-        let place_generation = app.drop_targets.stale_generation();
-        assert!(!app.clear_place_drop_target_for_row(&current, 0, 1));
-        assert!(place_drop_target_matches_place(
-            app.drop_targets.place(),
-            &user
-        ));
-        assert!(app.clear_place_drop_target_for_row(&user, 1, 2));
-        assert!(app.drop_targets.stale_generation() > place_generation);
-        assert!(app.drop_targets.place().is_none());
-
-        assert!(app.set_place_drag_drop_target_for_insert(0));
-        let insert_generation = app.drop_targets.stale_generation();
-        assert!(!app.clear_place_drop_target_for_insert(2));
-        assert!(place_drop_target_matches_insert(
-            app.drop_targets.place(),
-            0
-        ));
-        assert!(app.clear_place_drop_target_for_insert(0));
-        assert!(app.drop_targets.stale_generation() > insert_generation);
-        assert!(app.drop_targets.place().is_none());
-
-        assert!(app.set_place_drag_drop_target_for_insert(2));
-        assert!(app.clear_place_drop_target_for_row(&user, 1, 2));
-        assert!(app.drop_targets.place().is_none());
-
-        let _ = std::fs::remove_dir_all(current);
-        let _ = std::fs::remove_dir_all(user);
-    }
-
-    #[test]
     fn drop_target_stale_generation_clears_only_current_target() {
         let current = test_dir("drop-target-stale-current");
         let target = test_dir("drop-target-stale-target");
@@ -12024,10 +12004,10 @@ text/plain=viewer.desktop;\n",
         );
 
         assert!(app.clear_drag_drop_targets());
-        assert!(app.set_path_drag_drop_target_from_window_position(
+        assert!(app.set_dragged_paths_drop_target_from_window_position(
             pane_id,
             position,
-            &place_source
+            std::slice::from_ref(&place_source)
         ));
         assert!(item_drop_target_matches_directory(
             app.drop_targets.item(),
@@ -12055,10 +12035,17 @@ text/plain=viewer.desktop;\n",
         let mut app = test_app_with_entries(temp.to_str().unwrap(), &[]);
         let pane_id = app.panes.focused().unwrap();
         let position = gpui::point(px(120.0), px(64.0));
+        let stale_position = gpui::point(px(0.0), px(0.0));
 
         assert!(app.set_item_drag_drop_target_for_directory(pane_id, target_dir.clone()));
-        app.set_drop_menu_position(position);
-        app.show_drop_operation_menu(pane_id, target_dir.clone(), vec![source.clone()], false);
+        app.set_drop_menu_position(stale_position);
+        app.show_drop_operation_menu(
+            pane_id,
+            target_dir.clone(),
+            vec![source.clone()],
+            false,
+            position,
+        );
 
         assert!(item_drop_target_matches_directory(
             app.drop_targets.item(),
@@ -12074,6 +12061,7 @@ text/plain=viewer.desktop;\n",
                 y: position.y.as_f32(),
             }
         );
+        assert_eq!(app.drop_menu_position, None);
         assert_eq!(
             menu.target,
             ContextMenuTarget::DropOperation {

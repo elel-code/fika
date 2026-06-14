@@ -633,22 +633,26 @@ fn breadcrumb_segment(
                         cx.stop_propagation();
                     },
                 ))
-                .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, _window, cx| {
+                .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
+                    let position = window.mouse_position();
                     this.drop_item_drag_to_location(
                         pane_id,
                         drag.payload(),
                         path_for_internal_drop.clone(),
+                        position,
                         cx,
                     );
                     cx.stop_propagation();
                     cx.notify();
                 }))
                 .on_drop::<ExternalPaths>(cx.listener(
-                    move |this, external_paths: &ExternalPaths, _window, cx| {
+                    move |this, external_paths: &ExternalPaths, window, cx| {
+                        let position = window.mouse_position();
                         this.drop_external_paths_to_location(
                             pane_id,
                             external_paths.paths().to_vec(),
                             path_for_external_drop.clone(),
+                            position,
                             cx,
                         );
                         cx.stop_propagation();

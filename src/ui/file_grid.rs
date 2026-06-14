@@ -129,17 +129,19 @@ fn handle_file_grid_item_drag_move(
     cx: &mut Context<FikaApp>,
 ) {
     let contains = event.bounds.contains(&event.event.position);
-    let allowed = contains
-        && app
-            .item_at_window_position(pane_id, event.event.position)
-            .is_none_or(|hit| !hit.is_dir || app.item_drag_can_drop_to_directory(&hit.path));
+    let payload = event.drag(cx).payload();
+    let source_paths = app.item_drag_source_paths(&payload);
     let changed = if contains {
-        app.set_item_drag_drop_target_from_window_position(pane_id, event.event.position)
+        app.set_dragged_paths_drop_target_from_window_position(
+            pane_id,
+            event.event.position,
+            &source_paths,
+        )
     } else {
         app.clear_item_drop_target_for_pane(pane_id)
     };
     if contains {
-        if allowed {
+        if dragged_paths_hover_accepts_drop(app, pane_id, event.event.position, &source_paths) {
             refresh_active_drag_cursor_for_drop_menu(window, cx);
             app.schedule_drop_target_stale_clear(cx);
         } else {
@@ -188,19 +190,25 @@ fn handle_file_grid_place_drag_move(
 ) {
     let contains = event.bounds.contains(&event.event.position);
     let source_path = event.drag(cx).path();
-    let hit = contains
-        .then(|| app.item_at_window_position(pane_id, event.event.position))
-        .flatten();
-    let target_is_directory = hit.as_ref().is_some_and(|hit| hit.is_dir);
-    let target_accepts_drop = hit.as_ref().is_some_and(|hit| {
-        hit.is_dir
-            && item_drop_reject_reason(std::slice::from_ref(&source_path), &hit.path).is_none()
+    let target = contains.then(|| {
+        app.item_at_window_position(pane_id, event.event.position)
+            .map(|hit| (hit.path, hit.is_dir))
     });
+    let target_is_directory = target
+        .as_ref()
+        .and_then(|target| target.as_ref())
+        .is_some_and(|(_, is_dir)| *is_dir);
+    let target_accepts_drop = target
+        .as_ref()
+        .and_then(|target| target.as_ref())
+        .is_some_and(|(path, is_dir)| {
+            *is_dir && item_drop_reject_reason(std::slice::from_ref(&source_path), path).is_none()
+        });
     let changed = if contains {
-        app.set_path_drag_drop_target_from_window_position(
+        app.set_dragged_paths_drop_target_from_window_position(
             pane_id,
             event.event.position,
-            &source_path,
+            std::slice::from_ref(&source_path),
         )
     } else {
         app.clear_item_drop_target_for_pane(pane_id)
@@ -231,8 +239,9 @@ fn handle_file_grid_item_drop(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) {
-    app.set_drop_menu_position(window.mouse_position());
-    app.drop_item_drag_to_current_item_target(pane_id, drag.payload(), cx);
+    let position = window.mouse_position();
+    let payload = drag.payload();
+    app.drop_item_drag_to_position_in_pane(pane_id, payload, position, cx);
     cx.stop_propagation();
     cx.notify();
 }
@@ -244,8 +253,13 @@ fn handle_file_grid_external_drop(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) {
-    app.set_drop_menu_position(window.mouse_position());
-    app.drop_external_paths_to_current_item_target(pane_id, external_paths.paths().to_vec(), cx);
+    let position = window.mouse_position();
+    app.drop_external_paths_to_position_in_pane(
+        pane_id,
+        external_paths.paths().to_vec(),
+        position,
+        cx,
+    );
     cx.stop_propagation();
     cx.notify();
 }
@@ -257,10 +271,20 @@ fn handle_file_grid_place_drop(
     window: &mut Window,
     cx: &mut Context<FikaApp>,
 ) {
-    app.set_drop_menu_position(window.mouse_position());
-    app.drop_place_drag_to_current_item_target(pane_id, drag.path(), cx);
+    let position = window.mouse_position();
+    app.drop_place_drag_to_position_in_pane(pane_id, drag.path(), position, cx);
     cx.stop_propagation();
     cx.notify();
+}
+
+fn dragged_paths_hover_accepts_drop(
+    app: &mut FikaApp,
+    pane_id: PaneId,
+    position: gpui::Point<gpui::Pixels>,
+    source_paths: &[PathBuf],
+) -> bool {
+    app.item_at_window_position(pane_id, position)
+        .is_none_or(|hit| !hit.is_dir || item_drop_reject_reason(source_paths, &hit.path).is_none())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -767,21 +791,6 @@ fn details_row(
                 cursor_offset_y,
             })
         })
-        .on_drag_move::<ItemDrag>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                handle_file_grid_item_drag_move(this, pane_id, event, window, cx);
-            },
-        ))
-        .on_drag_move::<ExternalPaths>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                handle_file_grid_external_drag_move(this, pane_id, event, window, cx);
-            },
-        ))
-        .on_drag_move::<PlaceDrag>(cx.listener(
-            move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                handle_file_grid_place_drag_move(this, pane_id, event, window, cx);
-            },
-        ))
         .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
             handle_file_grid_item_drop(this, pane_id, drag, window, cx);
         }))
@@ -1135,21 +1144,6 @@ fn item_tile(
                         cursor_offset_y,
                     })
                 })
-                .on_drag_move::<ItemDrag>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                        handle_file_grid_item_drag_move(this, pane_id, event, window, cx);
-                    },
-                ))
-                .on_drag_move::<ExternalPaths>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                        handle_file_grid_external_drag_move(this, pane_id, event, window, cx);
-                    },
-                ))
-                .on_drag_move::<PlaceDrag>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                        handle_file_grid_place_drag_move(this, pane_id, event, window, cx);
-                    },
-                ))
                 .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
                     handle_file_grid_item_drop(this, pane_id, drag, window, cx);
                 }))

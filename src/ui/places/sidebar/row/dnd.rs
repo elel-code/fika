@@ -45,13 +45,6 @@ pub(super) fn install_place_row_dnd(
     row.on_drag_move::<ItemDrag>(cx.listener(
         move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
             if !event.bounds.contains(&event.event.position) {
-                if this.clear_place_drop_target_for_row(
-                    &path_for_item_target,
-                    insert_before_index,
-                    insert_after_index,
-                ) {
-                    cx.notify();
-                }
                 return;
             }
             let drop_zone = place_drop_zone(event);
@@ -92,13 +85,6 @@ pub(super) fn install_place_row_dnd(
     .on_drag_move::<ExternalPaths>(cx.listener(
         move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
             if !event.bounds.contains(&event.event.position) {
-                if this.clear_place_drop_target_for_row(
-                    &path_for_external_move_target,
-                    insert_before_index,
-                    insert_after_index,
-                ) {
-                    cx.notify();
-                }
                 return;
             }
             let drop_zone = place_drop_zone(event);
@@ -139,13 +125,6 @@ pub(super) fn install_place_row_dnd(
     .on_drag_move::<PlaceDrag>(cx.listener(
         move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
             if !event.bounds.contains(&event.event.position) {
-                if this.clear_place_drop_target_for_row(
-                    &path_for_place_drag_leave,
-                    insert_before_index,
-                    insert_after_index,
-                ) {
-                    cx.notify();
-                }
                 return;
             }
             let drag = event.drag(cx);
@@ -195,10 +174,12 @@ pub(super) fn install_place_row_dnd(
     ))
     .on_drop::<ItemDrag>(cx.listener(move |this, drag: &ItemDrag, window, cx| {
         if mounted {
-            this.set_drop_menu_position(window.mouse_position());
+            let position = window.mouse_position();
+            this.set_drop_menu_position(position);
             this.drop_item_drag_to_current_place_target(
                 drag.payload(),
                 path_for_internal_drop.clone(),
+                position,
                 cx,
             );
         }
@@ -208,10 +189,12 @@ pub(super) fn install_place_row_dnd(
     .on_drop::<ExternalPaths>(cx.listener(
         move |this, external_paths: &ExternalPaths, window, cx| {
             if mounted {
-                this.set_drop_menu_position(window.mouse_position());
+                let position = window.mouse_position();
+                this.set_drop_menu_position(position);
                 this.drop_external_paths_to_current_place_target(
                     external_paths.paths().to_vec(),
                     path_for_external_drop.clone(),
+                    position,
                     cx,
                 );
             }
@@ -220,8 +203,13 @@ pub(super) fn install_place_row_dnd(
         },
     ))
     .on_drop::<PlaceDrag>(cx.listener(move |this, drag: &PlaceDrag, window, cx| {
-        this.set_drop_menu_position(window.mouse_position());
-        this.drop_place_drag_to_current_place_target(drag.source_index(), insert_after_index);
+        let position = window.mouse_position();
+        this.set_drop_menu_position(position);
+        this.drop_place_drag_to_current_place_target(
+            drag.source_index(),
+            insert_after_index,
+            position,
+        );
         cx.stop_propagation();
         cx.notify();
     }))
