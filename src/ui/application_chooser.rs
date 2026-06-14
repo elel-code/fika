@@ -409,6 +409,7 @@ pub(crate) fn application_chooser_overlay(
                                     applications.as_slice(),
                                     range,
                                 );
+                                this.start_pending_icon_loads(cx);
                                 visible_range
                                     .filter_map(|index| {
                                         let app = applications.get(index)?.clone();

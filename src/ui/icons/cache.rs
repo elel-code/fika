@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use gpui::{Image, ImageFormat, RenderImage, SvgRenderer};
 
@@ -43,20 +43,77 @@ struct RoleIconCacheKey {
     fallback_bg: u32,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct FileIconCache {
-    named_cached: HashMap<NamedIconCacheKey, FileIconSnapshot>,
-    role_cached: HashMap<RoleIconCacheKey, FileIconSnapshot>,
-    render_images: HashMap<PathBuf, Option<Arc<RenderImage>>>,
-    pending_render_images: HashSet<PathBuf>,
-    theme: IconThemeResolver,
-    mime: fika_core::MimeDatabase,
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum FileIconLoadKey {
+    Named(NamedIconCacheKey),
+    Role(RoleIconCacheKey),
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct IconResourceCacheKey {
+    candidates: Vec<String>,
+    size_px: u16,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct FileIconRenderResult {
-    pub(crate) path: PathBuf,
-    pub(crate) render_image: Option<Arc<RenderImage>>,
+struct FileIconLoadRequest {
+    resource_key: IconResourceCacheKey,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FileIconLoadBatch {
+    resolver: Arc<Mutex<IconThemeResolver>>,
+    render_images: Arc<Mutex<HashMap<PathBuf, Option<Arc<RenderImage>>>>>,
+    requests: Vec<FileIconLoadRequest>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FileIconLoadResult {
+    icons: Vec<FileIconLoadedIcon>,
+}
+
+#[derive(Clone, Debug)]
+struct FileIconLoadedIcon {
+    resource_key: IconResourceCacheKey,
+    resource: FileIconResolvedResource,
+}
+
+#[derive(Clone, Debug)]
+struct FileIconResolvedResource {
+    icon_name: String,
+    path: Option<PathBuf>,
+    render_image: Option<Arc<RenderImage>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FileIconCache {
+    named_cached: HashMap<NamedIconCacheKey, FileIconSnapshot>,
+    role_cached: HashMap<RoleIconCacheKey, FileIconSnapshot>,
+    resource_cached: HashMap<IconResourceCacheKey, FileIconResolvedResource>,
+    render_images: Arc<Mutex<HashMap<PathBuf, Option<Arc<RenderImage>>>>>,
+    pending_load_keys: HashSet<IconResourceCacheKey>,
+    pending_loads: VecDeque<FileIconLoadRequest>,
+    resource_waiters: HashMap<IconResourceCacheKey, Vec<FileIconLoadKey>>,
+    icon_load_batch_pending: bool,
+    theme: Arc<Mutex<IconThemeResolver>>,
+    mime: fika_core::MimeDatabase,
+}
+
+impl Default for FileIconCache {
+    fn default() -> Self {
+        Self {
+            named_cached: HashMap::new(),
+            role_cached: HashMap::new(),
+            resource_cached: HashMap::new(),
+            render_images: Arc::new(Mutex::new(HashMap::new())),
+            pending_load_keys: HashSet::new(),
+            pending_loads: VecDeque::new(),
+            resource_waiters: HashMap::new(),
+            icon_load_batch_pending: false,
+            theme: Arc::new(Mutex::new(IconThemeResolver::default())),
+            mime: fika_core::MimeDatabase::default(),
+        }
+    }
 }
 
 impl FileIconCache {
@@ -78,6 +135,36 @@ impl FileIconCache {
         mime_type: Option<Arc<str>>,
         icon_size: f32,
     ) -> FileIconSnapshot {
+        let key = self.ensure_role_icon_cached(icon_name, path, is_dir, mime_type, icon_size);
+        self.with_cached_render_image(
+            self.role_cached
+                .get(&key)
+                .expect("role icon cache entry missing")
+                .clone(),
+        )
+    }
+
+    pub(crate) fn preload_icon_for_model_role(
+        &mut self,
+        stored_icon_name: Option<Arc<str>>,
+        path: &Path,
+        is_dir: bool,
+        mime_type: Option<Arc<str>>,
+        icon_size: f32,
+    ) {
+        let icon_name =
+            stored_icon_name.unwrap_or_else(|| self.icon_name_for(path, is_dir, mime_type.clone()));
+        self.ensure_role_icon_cached(icon_name.as_ref(), path, is_dir, mime_type, icon_size);
+    }
+
+    fn ensure_role_icon_cached(
+        &mut self,
+        icon_name: &str,
+        path: &Path,
+        is_dir: bool,
+        mime_type: Option<Arc<str>>,
+        icon_size: f32,
+    ) -> RoleIconCacheKey {
         let kind = file_icon_kind(path, is_dir, mime_type);
         let profile = file_icon_profile(&kind, &self.mime);
         let key = RoleIconCacheKey {
@@ -87,19 +174,24 @@ impl FileIconCache {
             fallback_fg: profile.fg,
             fallback_bg: profile.bg,
         };
-        if let Some(icon) = self.role_cached.get(&key) {
-            return self.with_cached_render_image(icon.clone());
+        if !self.role_cached.contains_key(&key) {
+            let icon = file_icon_snapshot_from_resolved_path(
+                key.icon_name.clone(),
+                None,
+                key.fallback_marker.clone(),
+                key.fallback_fg,
+                key.fallback_bg,
+            );
+            self.role_cached.insert(key.clone(), icon);
+            self.queue_icon_resource(
+                FileIconLoadKey::Role(key.clone()),
+                IconResourceCacheKey {
+                    candidates: vec![icon_name.to_string()],
+                    size_px: icon_cache_size(icon_size),
+                },
+            );
         }
-
-        let icon = file_icon_snapshot_from_resolved_path(
-            key.icon_name.clone(),
-            self.theme.find(&key.icon_name, key.size_px),
-            key.fallback_marker.clone(),
-            key.fallback_fg,
-            key.fallback_bg,
-        );
-        self.role_cached.insert(key, icon.clone());
-        self.with_cached_render_image(icon)
+        key
     }
 
     pub(crate) fn named_icon(
@@ -123,69 +215,152 @@ impl FileIconCache {
             .iter()
             .map(|candidate| (*candidate).to_string())
             .collect::<Vec<_>>();
-        let (icon_name, path) = candidates
-            .iter()
-            .find_map(|candidate| {
-                absolute_icon_candidate(candidate).map(|path| (candidate.clone(), Some(path)))
-            })
-            .or_else(|| {
-                self.theme
-                    .first_existing(&candidates, key.size_px)
-                    .map(|(name, path)| (name, Some(path)))
-            })
-            .unwrap_or_else(|| {
-                (
-                    candidates
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| name.to_string()),
-                    None,
-                )
-            });
+        let icon_name = candidates
+            .first()
+            .cloned()
+            .unwrap_or_else(|| name.to_string());
         let icon = file_icon_snapshot_from_resolved_path(
             icon_name,
-            path,
+            None,
             fallback_marker.to_string(),
             fallback_fg,
             fallback_bg,
         );
-        self.named_cached.insert(key, icon.clone());
-        self.with_cached_render_image(icon)
+        self.named_cached.insert(key.clone(), icon);
+        self.queue_icon_resource(
+            FileIconLoadKey::Named(key.clone()),
+            IconResourceCacheKey {
+                candidates,
+                size_px: icon_cache_size(icon_size),
+            },
+        );
+        self.with_cached_render_image(
+            self.named_cached
+                .get(&key)
+                .expect("named icon cache entry missing")
+                .clone(),
+        )
     }
 
-    pub(crate) fn queue_render_image(&mut self, icon: &FileIconSnapshot) -> Option<PathBuf> {
-        let path = icon.path.as_deref()?.to_path_buf();
-        if self.render_images.contains_key(&path)
-            || !self.pending_render_images.insert(path.clone())
-        {
+    pub(crate) fn take_icon_load_batch(&mut self, limit: usize) -> Option<FileIconLoadBatch> {
+        if self.icon_load_batch_pending || self.pending_loads.is_empty() {
             return None;
         }
-        Some(path)
+        let limit = limit.max(1);
+        let mut requests = Vec::with_capacity(limit.min(self.pending_loads.len()));
+        while requests.len() < limit {
+            let Some(request) = self.pending_loads.pop_front() else {
+                break;
+            };
+            requests.push(request);
+        }
+        self.icon_load_batch_pending = true;
+        Some(FileIconLoadBatch {
+            resolver: Arc::clone(&self.theme),
+            render_images: Arc::clone(&self.render_images),
+            requests,
+        })
     }
 
-    pub(crate) fn finish_render_image(&mut self, result: FileIconRenderResult) -> bool {
-        self.pending_render_images.remove(&result.path);
-        let changed = !matches!(
-            (self.render_images.get(&result.path), &result.render_image),
-            (Some(Some(left)), Some(right)) if Arc::ptr_eq(left, right)
-        );
-        self.render_images.insert(result.path, result.render_image);
+    pub(crate) fn load_icon_batch(batch: FileIconLoadBatch) -> FileIconLoadResult {
+        let icons = batch
+            .requests
+            .into_iter()
+            .map(|request| {
+                let (icon_name, path) = resolve_icon_load_request(
+                    &batch.resolver,
+                    &request.resource_key.candidates,
+                    request.resource_key.size_px,
+                );
+                let render_image = path.as_ref().and_then(|path| {
+                    if let Some(image) = cached_render_image(&batch.render_images, path) {
+                        return image;
+                    }
+                    let image = load_icon_render_image(path);
+                    batch
+                        .render_images
+                        .lock()
+                        .expect("icon render image cache poisoned")
+                        .insert(path.clone(), image.clone());
+                    image
+                });
+                FileIconLoadedIcon {
+                    resource_key: request.resource_key,
+                    resource: FileIconResolvedResource {
+                        icon_name,
+                        path,
+                        render_image,
+                    },
+                }
+            })
+            .collect();
+        FileIconLoadResult { icons }
+    }
+
+    pub(crate) fn finish_icon_load_batch(&mut self, result: FileIconLoadResult) -> bool {
+        self.icon_load_batch_pending = false;
+        let mut changed = false;
+        for icon in result.icons {
+            self.pending_load_keys.remove(&icon.resource_key);
+            self.resource_cached
+                .insert(icon.resource_key.clone(), icon.resource.clone());
+            if let Some(waiters) = self.resource_waiters.remove(&icon.resource_key) {
+                for waiter in waiters {
+                    changed |= self.apply_loaded_resource(&waiter, &icon.resource);
+                }
+            }
+        }
         changed
-    }
-
-    pub(crate) fn load_render_image(path: PathBuf) -> FileIconRenderResult {
-        let render_image = load_icon_render_image(&path);
-        FileIconRenderResult { path, render_image }
     }
 
     fn with_cached_render_image(&self, mut icon: FileIconSnapshot) -> FileIconSnapshot {
         if icon.render_image.is_none()
             && let Some(path) = icon.path.as_deref()
-            && let Some(Some(render_image)) = self.render_images.get(path)
+            && let Some(Some(render_image)) = self
+                .render_images
+                .lock()
+                .expect("icon render image cache poisoned")
+                .get(path)
         {
             icon.render_image = Some(Arc::clone(render_image));
         }
         icon
+    }
+
+    fn queue_icon_resource(&mut self, key: FileIconLoadKey, resource_key: IconResourceCacheKey) {
+        if let Some(resource) = self.resource_cached.get(&resource_key).cloned() {
+            self.apply_loaded_resource(&key, &resource);
+            return;
+        }
+        let waiters = self
+            .resource_waiters
+            .entry(resource_key.clone())
+            .or_default();
+        if !waiters.iter().any(|waiter| waiter == &key) {
+            waiters.push(key);
+        }
+        if !self.pending_load_keys.insert(resource_key.clone()) {
+            return;
+        }
+        self.pending_loads
+            .push_back(FileIconLoadRequest { resource_key });
+    }
+
+    fn apply_loaded_resource(
+        &mut self,
+        key: &FileIconLoadKey,
+        resource: &FileIconResolvedResource,
+    ) -> bool {
+        match key {
+            FileIconLoadKey::Named(key) => self
+                .named_cached
+                .get_mut(&key)
+                .is_some_and(|icon| apply_loaded_resource_to_snapshot(icon, resource)),
+            FileIconLoadKey::Role(key) => self
+                .role_cached
+                .get_mut(&key)
+                .is_some_and(|icon| apply_loaded_resource_to_snapshot(icon, resource)),
+        }
     }
 }
 
@@ -413,7 +588,7 @@ fn icon_cache_size(icon_size: f32) -> u16 {
 
 fn absolute_icon_candidate(icon_name: &str) -> Option<PathBuf> {
     let path = Path::new(icon_name);
-    if path.is_absolute() && is_renderable_icon_file(path) {
+    if path.is_absolute() && has_renderable_icon_extension(path) {
         return Some(path.to_path_buf());
     }
     None
@@ -444,6 +619,74 @@ fn file_icon_snapshot_from_resolved_path(
         fallback_fg,
         fallback_bg,
     }
+}
+
+fn apply_loaded_resource_to_snapshot(
+    icon: &mut FileIconSnapshot,
+    resource: &FileIconResolvedResource,
+) -> bool {
+    let new_path = resource
+        .path
+        .clone()
+        .map(|path| Arc::from(path.into_boxed_path()));
+    let name_changed = icon.icon_name.as_ref() != resource.icon_name;
+    let path_changed = icon.path.as_deref() != new_path.as_deref();
+    let image_changed = match (&icon.render_image, &resource.render_image) {
+        (Some(left), Some(right)) => !Arc::ptr_eq(left, right),
+        (None, None) => false,
+        _ => true,
+    };
+
+    if name_changed {
+        icon.icon_name = Arc::from(resource.icon_name.as_str());
+    }
+    if path_changed {
+        icon.path = new_path;
+    }
+    if image_changed {
+        icon.render_image = resource.render_image.clone();
+    }
+
+    name_changed || path_changed || image_changed
+}
+
+fn resolve_icon_load_request(
+    resolver: &Arc<Mutex<IconThemeResolver>>,
+    candidates: &[String],
+    size_px: u16,
+) -> (String, Option<PathBuf>) {
+    if let Some((name, path)) = candidates.iter().find_map(|candidate| {
+        absolute_icon_candidate(candidate).map(|path| (candidate.clone(), path))
+    }) {
+        return (name, Some(path));
+    }
+
+    if let Some((name, path)) = resolver
+        .lock()
+        .expect("icon theme resolver poisoned")
+        .first_existing(candidates, size_px)
+    {
+        return (name, Some(path));
+    }
+
+    (
+        candidates
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string()),
+        None,
+    )
+}
+
+fn cached_render_image(
+    cache: &Arc<Mutex<HashMap<PathBuf, Option<Arc<RenderImage>>>>>,
+    path: &Path,
+) -> Option<Option<Arc<RenderImage>>> {
+    cache
+        .lock()
+        .expect("icon render image cache poisoned")
+        .get(path)
+        .cloned()
 }
 
 fn load_icon_render_image(path: &Path) -> Option<Arc<RenderImage>> {
@@ -846,15 +1089,7 @@ fn renderable_icon_extension_rank(extension: &str) -> Option<u8> {
     }
 }
 
-fn is_renderable_icon_file(path: &Path) -> bool {
-    if !path.is_file()
-        || fs::metadata(path)
-            .map(|metadata| metadata.len() == 0)
-            .unwrap_or(true)
-    {
-        return false;
-    }
-
+fn has_renderable_icon_extension(path: &Path) -> bool {
     matches!(
         path.extension()
             .and_then(|extension| extension.to_str())
@@ -909,6 +1144,40 @@ mod tests {
     use super::*;
 
     const GENERIC_BINARY_MIME: &str = "application/octet-stream";
+
+    fn test_icon_cache(root: &Path) -> FileIconCache {
+        FileIconCache {
+            named_cached: HashMap::new(),
+            role_cached: HashMap::new(),
+            resource_cached: HashMap::new(),
+            render_images: Arc::new(Mutex::new(HashMap::new())),
+            pending_load_keys: HashSet::new(),
+            pending_loads: VecDeque::new(),
+            resource_waiters: HashMap::new(),
+            icon_load_batch_pending: false,
+            theme: Arc::new(Mutex::new(IconThemeResolver {
+                roots: vec![root.to_path_buf()],
+                themes: vec!["theme".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+                directory_cache: HashMap::new(),
+            })),
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        }
+    }
+
+    fn drain_icon_loads(cache: &mut FileIconCache) -> bool {
+        let mut changed = false;
+        while let Some(batch) = cache.take_icon_load_batch(64) {
+            changed |= cache.finish_icon_load_batch(FileIconCache::load_icon_batch(batch));
+        }
+        changed
+    }
 
     #[test]
     fn mime_icon_candidates_keep_specific_text_icon_before_generic_text() {
@@ -1076,25 +1345,7 @@ gtk-icon-theme-name=breeze\n"
             test_svg(),
         )
         .unwrap();
-        let mut cache = FileIconCache {
-            named_cached: HashMap::new(),
-            role_cached: HashMap::new(),
-            render_images: HashMap::new(),
-            pending_render_images: HashSet::new(),
-            theme: IconThemeResolver {
-                roots: vec![root.clone()],
-                themes: vec!["theme".to_string()],
-                search_order: None,
-                inherits_cache: HashMap::new(),
-                path_cache: HashMap::new(),
-                directory_cache: HashMap::new(),
-            },
-            mime: fika_core::MimeDatabase::from_maps(
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-            ),
-        };
+        let mut cache = test_icon_cache(&root);
 
         let role = cache.icon_name_for(
             Path::new("settings.conf"),
@@ -1112,10 +1363,7 @@ gtk-icon-theme-name=breeze\n"
         assert_eq!(role.as_ref(), "application-octet-stream");
         assert_eq!(rendered.icon_name.as_ref(), "application-octet-stream");
         assert!(rendered.render_image.is_none());
-        let request = cache.queue_render_image(&rendered).unwrap();
-        let result = FileIconCache::load_render_image(request);
-        assert!(result.render_image.is_some());
-        assert!(cache.finish_render_image(result));
+        assert!(drain_icon_loads(&mut cache));
         let rendered = cache.icon_for_name_role(
             role.as_ref(),
             Path::new("settings.conf"),
@@ -1137,25 +1385,7 @@ gtk-icon-theme-name=breeze\n"
             test_svg(),
         )
         .unwrap();
-        let mut cache = FileIconCache {
-            named_cached: HashMap::new(),
-            role_cached: HashMap::new(),
-            render_images: HashMap::new(),
-            pending_render_images: HashSet::new(),
-            theme: IconThemeResolver {
-                roots: vec![root.clone()],
-                themes: vec!["theme".to_string()],
-                search_order: None,
-                inherits_cache: HashMap::new(),
-                path_cache: HashMap::new(),
-                directory_cache: HashMap::new(),
-            },
-            mime: fika_core::MimeDatabase::from_maps(
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-            ),
-        };
+        let mut cache = test_icon_cache(&root);
 
         let icon = cache.named_icon(
             "archive-insert",
@@ -1168,10 +1398,7 @@ gtk-icon-theme-name=breeze\n"
 
         assert_eq!(icon.icon_name.as_ref(), "archive-insert");
         assert!(icon.render_image.is_none());
-        let request = cache.queue_render_image(&icon).unwrap();
-        let result = FileIconCache::load_render_image(request);
-        assert!(result.render_image.is_some());
-        assert!(cache.finish_render_image(result));
+        assert!(drain_icon_loads(&mut cache));
         let icon = cache.named_icon(
             "archive-insert",
             &["archive-insert"],
@@ -1186,31 +1413,144 @@ gtk-icon-theme-name=breeze\n"
     }
 
     #[test]
+    fn icon_snapshot_queues_only_one_background_load_per_cache_key() {
+        let root = test_dir("icon-load-dedupe");
+        std::fs::create_dir_all(root.join("theme/48x48/mimetypes")).unwrap();
+        std::fs::write(
+            root.join("theme/48x48/mimetypes/text-plain.svg"),
+            test_svg(),
+        )
+        .unwrap();
+        let mut cache = test_icon_cache(&root);
+
+        let first = cache.icon_for_name_role(
+            "text-plain",
+            Path::new("a.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+        let second = cache.icon_for_name_role(
+            "text-plain",
+            Path::new("b.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+
+        assert_eq!(first.icon_name, second.icon_name);
+        assert!(first.render_image.is_none());
+        assert!(second.render_image.is_none());
+        let batch = cache.take_icon_load_batch(64).unwrap();
+        assert_eq!(batch.requests.len(), 1);
+        assert!(cache.take_icon_load_batch(64).is_none());
+        assert!(cache.finish_icon_load_batch(FileIconCache::load_icon_batch(batch)));
+
+        let loaded = cache.icon_for_name_role(
+            "text-plain",
+            Path::new("a.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+        assert!(loaded.render_image.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn icon_resource_load_is_shared_across_role_fallback_styles() {
+        let root = test_dir("icon-resource-load-dedupe");
+        std::fs::create_dir_all(root.join("theme/48x48/mimetypes")).unwrap();
+        std::fs::write(
+            root.join("theme/48x48/mimetypes/text-plain.svg"),
+            test_svg(),
+        )
+        .unwrap();
+        let mut cache = test_icon_cache(&root);
+
+        let first = cache.icon_for_name_role(
+            "text-plain",
+            Path::new("notes.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+        let second = cache.icon_for_name_role(
+            "text-plain",
+            Path::new("settings.conf"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+
+        assert_ne!(first.fallback_marker, second.fallback_marker);
+        assert_eq!(cache.role_cached.len(), 2);
+        let batch = cache.take_icon_load_batch(64).unwrap();
+        assert_eq!(batch.requests.len(), 1);
+        assert!(cache.finish_icon_load_batch(FileIconCache::load_icon_batch(batch)));
+
+        let first = cache.icon_for_name_role(
+            "text-plain",
+            Path::new("notes.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+        let second = cache.icon_for_name_role(
+            "text-plain",
+            Path::new("settings.conf"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+        assert!(first.render_image.is_some());
+        assert!(second.render_image.is_some());
+        assert_eq!(cache.resource_cached.len(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn icon_preload_queues_resource_without_visible_snapshot() {
+        let root = test_dir("icon-preload-role");
+        std::fs::create_dir_all(root.join("theme/48x48/mimetypes")).unwrap();
+        std::fs::write(
+            root.join("theme/48x48/mimetypes/text-plain.svg"),
+            test_svg(),
+        )
+        .unwrap();
+        let mut cache = test_icon_cache(&root);
+
+        cache.preload_icon_for_model_role(
+            None,
+            Path::new("notes.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+
+        assert_eq!(cache.role_cached.len(), 1);
+        let batch = cache.take_icon_load_batch(64).unwrap();
+        assert_eq!(batch.requests.len(), 1);
+        assert!(cache.finish_icon_load_batch(FileIconCache::load_icon_batch(batch)));
+        let rendered = cache.icon_for_name_role(
+            "text-plain",
+            Path::new("notes.txt"),
+            false,
+            Some(Arc::from("text/plain")),
+            48.0,
+        );
+        assert!(rendered.render_image.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn named_icon_accepts_desktop_absolute_icon_path() {
         let root = test_dir("named-icon-absolute-path");
         std::fs::create_dir_all(&root).unwrap();
         let icon_path = root.join("service-icon.svg");
         std::fs::write(&icon_path, test_svg()).unwrap();
         let icon_name = icon_path.to_string_lossy().into_owned();
-        let mut cache = FileIconCache {
-            named_cached: HashMap::new(),
-            role_cached: HashMap::new(),
-            render_images: HashMap::new(),
-            pending_render_images: HashSet::new(),
-            theme: IconThemeResolver {
-                roots: vec![root.clone()],
-                themes: vec!["theme".to_string()],
-                search_order: None,
-                inherits_cache: HashMap::new(),
-                path_cache: HashMap::new(),
-                directory_cache: HashMap::new(),
-            },
-            mime: fika_core::MimeDatabase::from_maps(
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-            ),
-        };
+        let mut cache = test_icon_cache(&root);
 
         let icon = cache.named_icon(
             &icon_name,
@@ -1222,11 +1562,19 @@ gtk-icon-theme-name=breeze\n"
         );
 
         assert_eq!(icon.icon_name.as_ref(), icon_name);
+        assert_eq!(icon.path, None);
+        assert!(icon.render_image.is_none());
+        assert!(drain_icon_loads(&mut cache));
+        let icon = cache.named_icon(
+            &icon_name,
+            &[&icon_name, "application-x-executable"],
+            "S",
+            0x0f766e,
+            0xe6fffb,
+            18.0,
+        );
         assert_eq!(icon.path.as_deref(), Some(icon_path.as_path()));
-        let request = cache.queue_render_image(&icon).unwrap();
-        assert_eq!(request, icon_path);
-        let result = FileIconCache::load_render_image(request);
-        assert!(result.render_image.is_some());
+        assert!(icon.render_image.is_some());
         let _ = std::fs::remove_dir_all(root);
     }
 
