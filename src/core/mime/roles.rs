@@ -66,6 +66,7 @@ pub struct MimeProbeCandidate {
     pub path: PathBuf,
     pub size_bytes: u64,
     pub modified_secs: Option<u64>,
+    pub metadata_complete: bool,
     pub mime_type: Option<String>,
     pub mime_magic_checked: bool,
 }
@@ -86,6 +87,9 @@ impl MimeProbeRequest {
         generation: Generation,
         candidate: MimeProbeCandidate,
     ) -> Option<Self> {
+        if !candidate.metadata_complete {
+            return None;
+        }
         if !mime_magic_probe_required(
             false,
             candidate.size_bytes,
@@ -426,6 +430,7 @@ mod tests {
                 path: path.clone(),
                 size_bytes: 12,
                 modified_secs: Some(42),
+                metadata_complete: true,
                 mime_type: Some(GENERIC_BINARY_MIME.to_string()),
                 mime_magic_checked: false,
             },
@@ -441,6 +446,25 @@ mod tests {
         assert_eq!(result.modified_secs, Some(42));
         assert_eq!(result.mime_type.as_deref(), Some("image/png"));
         assert!(result.mime_magic_checked);
+    }
+
+    #[test]
+    fn mime_probe_candidate_requires_complete_metadata() {
+        let request = MimeProbeRequest::from_candidate(
+            PaneId(1),
+            Generation(2),
+            MimeProbeCandidate {
+                item_id: ItemId(3),
+                path: PathBuf::from("/tmp/fika-mime-incomplete/payload"),
+                size_bytes: 12,
+                modified_secs: None,
+                metadata_complete: false,
+                mime_type: Some(GENERIC_BINARY_MIME.to_string()),
+                mime_magic_checked: false,
+            },
+        );
+
+        assert_eq!(request, None);
     }
 
     #[test]
@@ -520,6 +544,7 @@ mod tests {
                 name_width_units: 7,
                 size_bytes: 12,
                 modified_secs: Some(42),
+                metadata_complete: true,
                 mime_type: Some(Arc::from(GENERIC_BINARY_MIME)),
                 mime_magic_checked: false,
                 trash_original_path: None,
@@ -601,6 +626,7 @@ mod tests {
                 name_width_units: 7,
                 size_bytes: 12,
                 modified_secs: Some(42),
+                metadata_complete: true,
                 mime_type: Some(Arc::from(GENERIC_BINARY_MIME)),
                 mime_magic_checked: false,
                 trash_original_path: None,
@@ -636,6 +662,7 @@ mod tests {
             path,
             size_bytes: 12,
             modified_secs: Some(42),
+            metadata_complete: true,
             mime_type: Some(GENERIC_BINARY_MIME.to_string()),
             mime_magic_checked: false,
         }

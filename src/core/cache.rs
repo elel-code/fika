@@ -534,6 +534,7 @@ mod tests {
             name_width_units: name.len() as u16,
             size_bytes: 0,
             modified_secs: None,
+            metadata_complete: true,
             mime_type: None,
             mime_magic_checked: true,
             trash_original_path: None,

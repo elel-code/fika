@@ -70,6 +70,7 @@ pub struct ThumbnailCandidate {
     pub item_id: ItemId,
     pub path: PathBuf,
     pub modified_secs: u64,
+    pub metadata_complete: bool,
     pub mime_type: Option<String>,
     pub priority: ThumbnailRequestPriority,
 }
@@ -434,6 +435,9 @@ pub fn thumbnail_candidate_failure_is_cached(
     candidate: ThumbnailCandidate,
 ) -> (ThumbnailWorkKey, Option<ThumbnailRequest>, bool) {
     let key = ThumbnailWorkKey::from_candidate(pane_id, generation, &candidate);
+    if !candidate.metadata_complete {
+        return (key, None, false);
+    }
     let request = ThumbnailRequest::from_entry_metadata_with_mime(
         pane_id,
         generation,
@@ -597,6 +601,20 @@ mod tests {
 
         scheduler.cancel_pane(pane_id);
         assert!(scheduler.is_empty());
+        assert_eq!(scheduler.seen_len(), 0);
+    }
+
+    #[test]
+    fn thumbnail_scheduler_skips_incomplete_metadata_candidates() {
+        let pane_id = PaneId(1);
+        let generation = Generation(1);
+        let mut scheduler =
+            ThumbnailScheduler::new(PathBuf::from("/tmp/fika-thumbnail-incomplete-metadata"));
+        let mut candidate = thumbnail_candidate(1, "image.png", ThumbnailRequestPriority::Visible);
+        candidate.metadata_complete = false;
+
+        assert!(!scheduler.queue_candidates(pane_id, generation, vec![candidate]));
+        assert_eq!(scheduler.queued_len(), 0);
         assert_eq!(scheduler.seen_len(), 0);
     }
 
@@ -880,6 +898,7 @@ mod tests {
             item_id: ItemId(item_id),
             path: PathBuf::from(format!("/tmp/{name}")),
             modified_secs: 42,
+            metadata_complete: true,
             mime_type: Some("image/png".to_string()),
             priority,
         }
@@ -891,6 +910,7 @@ mod tests {
             name_width_units: name.len() as u16,
             size_bytes: 0,
             modified_secs: Some(42),
+            metadata_complete: true,
             mime_type: Some(Arc::from("image/png")),
             mime_magic_checked: true,
             trash_original_path: None,

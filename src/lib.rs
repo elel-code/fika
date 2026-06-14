@@ -43,7 +43,7 @@ pub use core::directory::{
     WatcherDelta, nearest_existing_ancestor,
 };
 pub use core::entries::{
-    Entry, EntryData, ItemId, ModelEntry, format_modified_secs, format_size,
+    Entry, EntryData, EntryMetadataRole, ItemId, ModelEntry, format_modified_secs, format_size,
     format_trash_deletion_time, format_trash_original_location, read_entries_sync, read_entry_sync,
 };
 pub use core::file_ops;
@@ -67,6 +67,11 @@ pub use core::listing_worker::{
 pub use core::location::{
     BreadcrumbSegment, breadcrumb_segments, complete_location_input, expand_user_path, home_dir,
     normalize_start_dir, resolve_location_input,
+};
+pub use core::metadata::{
+    MetadataProbeBatch, MetadataProbeCandidate, MetadataProbeRequest, MetadataProbeResult,
+    MetadataProbeScheduler, MetadataWorkKey, apply_metadata_probe_result_to_model,
+    metadata_probe_result_for_request, metadata_probe_results_for_requests,
 };
 pub use core::mime::{
     MimeDatabase, MimeProbeBatch, MimeProbeCandidate, MimeProbeRequest, MimeProbeResult,

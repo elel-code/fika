@@ -1,4 +1,6 @@
-use super::entries::{Entry, ItemId, ModelEntry, directory_entry_path, entry_name_cmp};
+use super::entries::{
+    Entry, EntryMetadataRole, ItemId, ModelEntry, directory_entry_path, entry_name_cmp,
+};
 use super::file_ops;
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -279,6 +281,77 @@ impl DirectoryModel {
         data.mime_type = mime_type;
         data.mime_magic_checked = mime_magic_checked;
         self.data.entries[index].entry = Entry::new(data);
+        self.mark_metadata_changed();
+        vec![DirectoryModelSignal::ItemsChanged(
+            vec![ItemRange {
+                start: index,
+                len: 1,
+            }],
+            ChangedRoles::metadata(),
+        )]
+    }
+
+    pub fn set_metadata_role(
+        &mut self,
+        id: ItemId,
+        path: &Path,
+        role: EntryMetadataRole,
+    ) -> Vec<DirectoryModelSignal> {
+        let Some(index) = self.index_of_id(id) else {
+            return Vec::new();
+        };
+        if self.path_for_index(index).as_deref() != Some(path) {
+            return Vec::new();
+        }
+
+        let entry = &self.data.entries[index];
+        if entry.metadata_complete
+            && entry.size_bytes == role.size_bytes
+            && entry.modified_secs == role.modified_secs
+            && entry.mime_type == role.mime_type
+            && entry.mime_magic_checked == role.mime_magic_checked
+        {
+            return Vec::new();
+        }
+
+        let old_order = metadata_sort_role_needs_resort(self.data.sort).then(|| {
+            self.data
+                .entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>()
+        });
+        let had_reusable_thumbnail = self.data.entries[index].thumbnail_path.is_some();
+        let old_size = self.data.entries[index].size_bytes;
+        let old_modified = self.data.entries[index].modified_secs;
+        let mut data = (*self.data.entries[index].entry).clone();
+        data.size_bytes = role.size_bytes;
+        data.modified_secs = role.modified_secs;
+        data.metadata_complete = true;
+        data.mime_type = role.mime_type;
+        data.mime_magic_checked = role.mime_magic_checked;
+        self.data.entries[index].entry = Entry::new(data);
+        if had_reusable_thumbnail
+            && (old_size != self.data.entries[index].size_bytes
+                || old_modified != self.data.entries[index].modified_secs)
+        {
+            self.data.entries[index].thumbnail_path = None;
+        }
+
+        if let Some(old_order) = old_order {
+            let sort = self.data.sort;
+            sort_model_entries(&mut self.data.entries, sort);
+            let order_changed = old_order
+                .iter()
+                .zip(&self.data.entries)
+                .any(|(old_id, entry)| *old_id != entry.id);
+            if order_changed {
+                self.mark_structure_changed();
+                return vec![DirectoryModelSignal::ModelReset];
+            }
+        }
+
+        let index = self.index_of_id(id).unwrap_or(index);
         self.mark_metadata_changed();
         vec![DirectoryModelSignal::ItemsChanged(
             vec![ItemRange {
@@ -692,6 +765,8 @@ fn reusable_thumbnail_path(old: &ModelEntry, new: &ModelEntry) -> Option<PathBuf
     if old.is_dir
         || new.is_dir
         || old.name != new.name
+        || !old.metadata_complete
+        || !new.metadata_complete
         || old.size_bytes != new.size_bytes
         || old.modified_secs.is_none()
         || old.modified_secs != new.modified_secs
@@ -700,6 +775,10 @@ fn reusable_thumbnail_path(old: &ModelEntry, new: &ModelEntry) -> Option<PathBuf
     } else {
         old.thumbnail_path.clone()
     }
+}
+
+fn metadata_sort_role_needs_resort(sort: SortDescriptor) -> bool {
+    matches!(sort.role, SortRole::Modified | SortRole::Size)
 }
 
 impl PathIndexCache {
@@ -899,6 +978,28 @@ mod tests {
             name_width_units: name.len() as u16,
             size_bytes,
             modified_secs,
+            metadata_complete: true,
+            mime_type: None,
+            mime_magic_checked: true,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir,
+        })
+    }
+
+    fn entry_with_metadata_state(
+        name: &str,
+        is_dir: bool,
+        size_bytes: u64,
+        modified_secs: Option<u64>,
+        metadata_complete: bool,
+    ) -> Entry {
+        Entry::new(EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len() as u16,
+            size_bytes,
+            modified_secs,
+            metadata_complete,
             mime_type: None,
             mime_magic_checked: true,
             trash_original_path: None,
@@ -913,6 +1014,7 @@ mod tests {
             name_width_units: name.len() as u16,
             size_bytes: 0,
             modified_secs: None,
+            metadata_complete: true,
             mime_type: None,
             mime_magic_checked: true,
             trash_original_path: Some(PathBuf::from(original_path)),
@@ -1123,6 +1225,113 @@ mod tests {
     }
 
     #[test]
+    fn metadata_role_update_is_item_and_path_guarded() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_metadata("payload", false, 0, None)]),
+        );
+        let item_id = model.entries()[0].id;
+        let role = EntryMetadataRole {
+            size_bytes: 99,
+            modified_secs: Some(42),
+            mime_type: Some(Arc::from("text/plain")),
+            mime_magic_checked: true,
+        };
+
+        assert!(
+            model
+                .set_metadata_role(item_id, Path::new("/tmp/other"), role.clone())
+                .is_empty()
+        );
+        assert_eq!(model.entries()[0].size_bytes, 0);
+
+        let signals = model.set_metadata_role(item_id, Path::new("/tmp/payload"), role);
+
+        assert_eq!(
+            signals,
+            vec![DirectoryModelSignal::ItemsChanged(
+                vec![ItemRange { start: 0, len: 1 }],
+                ChangedRoles::metadata(),
+            )]
+        );
+        assert!(model.entries()[0].metadata_complete);
+        assert_eq!(model.entries()[0].size_bytes, 99);
+        assert_eq!(model.entries()[0].modified_secs, Some(42));
+        assert_eq!(model.entries()[0].mime_type.as_deref(), Some("text/plain"));
+    }
+
+    #[test]
+    fn metadata_role_update_clears_stale_thumbnail_when_identity_changes() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_metadata("image.png", false, 12, Some(10))]),
+        );
+        let item_id = model.entries()[0].id;
+        model.set_thumbnail_path(item_id, Some(PathBuf::from("/tmp/thumbs/image.png")));
+
+        let signals = model.set_metadata_role(
+            item_id,
+            Path::new("/tmp/image.png"),
+            EntryMetadataRole {
+                size_bytes: 13,
+                modified_secs: Some(11),
+                mime_type: Some(Arc::from("image/png")),
+                mime_magic_checked: true,
+            },
+        );
+
+        assert_eq!(
+            signals,
+            vec![DirectoryModelSignal::ItemsChanged(
+                vec![ItemRange { start: 0, len: 1 }],
+                ChangedRoles::metadata(),
+            )]
+        );
+        assert!(model.entries()[0].thumbnail_path.is_none());
+    }
+
+    #[test]
+    fn metadata_role_update_resorts_size_sorted_model() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![
+                entry_with_metadata("small.txt", false, 1, Some(10)),
+                entry_with_metadata("large.txt", false, 10, Some(10)),
+            ]),
+        );
+        model.set_sort(SortDescriptor {
+            role: SortRole::Size,
+            order: SortOrder::Ascending,
+            folders_first: true,
+            hidden_last: false,
+        });
+        let small_id = model
+            .entries()
+            .iter()
+            .find(|entry| entry.name.as_ref() == "small.txt")
+            .unwrap()
+            .id;
+
+        let signals = model.set_metadata_role(
+            small_id,
+            Path::new("/tmp/small.txt"),
+            EntryMetadataRole {
+                size_bytes: 20,
+                modified_secs: Some(20),
+                mime_type: Some(Arc::from("text/plain")),
+                mime_magic_checked: true,
+            },
+        );
+
+        assert_eq!(signals, vec![DirectoryModelSignal::ModelReset]);
+        assert_eq!(model.entries()[1].id, small_id);
+        assert_eq!(model.entries()[1].size_bytes, 20);
+    }
+
+    #[test]
     fn thumbnail_role_update_keeps_item_identity_and_emits_metadata_change() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
@@ -1245,6 +1454,31 @@ mod tests {
         model.replace_listing(
             PathBuf::from("/tmp"),
             listing(vec![entry_with_metadata("image.png", false, 13, Some(101))]),
+        );
+
+        assert_eq!(model.entries()[0].id, item_id);
+        assert!(model.entries()[0].thumbnail_path.is_none());
+    }
+
+    #[test]
+    fn incomplete_metadata_reload_does_not_reuse_thumbnail_role() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_metadata("image.png", false, 12, Some(100))]),
+        );
+        let item_id = model.entries()[0].id;
+        model.set_thumbnail_path(item_id, Some(PathBuf::from("/tmp/thumbs/image.png")));
+
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_metadata_state(
+                "image.png",
+                false,
+                12,
+                Some(100),
+                false,
+            )]),
         );
 
         assert_eq!(model.entries()[0].id, item_id);

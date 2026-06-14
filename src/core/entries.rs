@@ -27,6 +27,7 @@ pub struct EntryData {
     pub name_width_units: u16,
     pub size_bytes: u64,
     pub modified_secs: Option<u64>,
+    pub metadata_complete: bool,
     pub mime_type: Option<Arc<str>>,
     pub mime_magic_checked: bool,
     pub trash_original_path: Option<PathBuf>,
@@ -57,6 +58,35 @@ impl Deref for Entry {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EntryMetadataRole {
+    pub size_bytes: u64,
+    pub modified_secs: Option<u64>,
+    pub mime_type: Option<Arc<str>>,
+    pub mime_magic_checked: bool,
+}
+
+impl EntryMetadataRole {
+    pub fn from_metadata(
+        name: &str,
+        is_dir: bool,
+        metadata: &Metadata,
+        mime: &MimeDatabase,
+    ) -> Self {
+        let size_bytes = if is_dir { 0 } else { metadata.len() };
+        let modified_secs = metadata.modified().ok().map(system_time_secs);
+        let mime_type = Some(mime.mime_for_name(name, is_dir, None));
+        let mime_magic_checked =
+            is_dir || size_bytes == 0 || mime_type.as_deref() != Some(GENERIC_BINARY_MIME);
+        Self {
+            size_bytes,
+            modified_secs,
+            mime_type,
+            mime_magic_checked,
+        }
     }
 }
 
@@ -292,20 +322,17 @@ fn name_width_units(name: &str) -> u16 {
 
 fn to_entry_data(name: String, metadata: Metadata, mime: &MimeDatabase) -> EntryData {
     let is_dir = metadata.is_dir();
-    let size_bytes = if is_dir { 0 } else { metadata.len() };
-    let modified_secs = metadata.modified().ok().map(system_time_secs);
     let name_width_units = name_width_units(&name);
-    let mime_type = Some(mime.mime_for_name(&name, is_dir, None));
-    let mime_magic_checked =
-        is_dir || size_bytes == 0 || mime_type.as_deref() != Some(GENERIC_BINARY_MIME);
+    let role = EntryMetadataRole::from_metadata(&name, is_dir, &metadata, mime);
 
     EntryData {
         name: Arc::from(name),
         name_width_units,
-        size_bytes,
-        modified_secs,
-        mime_type,
-        mime_magic_checked,
+        size_bytes: role.size_bytes,
+        modified_secs: role.modified_secs,
+        metadata_complete: true,
+        mime_type: role.mime_type,
+        mime_magic_checked: role.mime_magic_checked,
         trash_original_path: None,
         trash_deletion_time: None,
         is_dir,

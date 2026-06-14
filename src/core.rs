@@ -10,6 +10,7 @@ pub mod filter;
 pub mod launcher;
 pub mod listing_worker;
 pub mod location;
+pub mod metadata;
 pub mod mime;
 pub mod model;
 pub mod network;

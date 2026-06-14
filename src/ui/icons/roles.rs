@@ -183,6 +183,7 @@ mod tests {
                 name_width_units: 7,
                 size_bytes: 12,
                 modified_secs: Some(42),
+                metadata_complete: true,
                 mime_type: Some(Arc::from(GENERIC_BINARY_MIME)),
                 mime_magic_checked: false,
                 trash_original_path: None,

@@ -19,9 +19,9 @@ use crate::ui::rename::RenameDraft;
 
 use fika_core::{
     CompactLayout, DirectoryModel, FilteredModel, Generation, IconsLayout, ItemId, ItemLayout,
-    MimeProbeCandidate, MimeProbeScheduler, PaneId, SelectionState, ThumbnailCandidate,
-    ThumbnailRequestPriority, ThumbnailScheduler, ViewMode, ViewState, mime_magic_probe_required,
-    thumbnail_read_ahead_indexes,
+    MetadataProbeCandidate, MetadataProbeScheduler, MimeProbeCandidate, MimeProbeScheduler, PaneId,
+    SelectionState, ThumbnailCandidate, ThumbnailRequestPriority, ThumbnailScheduler, ViewMode,
+    ViewState, mime_magic_probe_required, thumbnail_read_ahead_indexes,
 };
 
 pub(crate) fn format_entry_kind_label(entry: &fika_core::EntryData) -> String {
@@ -107,6 +107,7 @@ pub(crate) struct RawVisibleItemSnapshot {
     pub(crate) thumbnail_path: Option<PathBuf>,
     pub(crate) modified_secs: Option<u64>,
     pub(crate) size_bytes: u64,
+    pub(crate) metadata_complete: bool,
     pub(crate) mime_type: Option<Arc<str>>,
     pub(crate) mime_magic_checked: bool,
     pub(crate) icon_name: Option<Arc<str>>,
@@ -132,6 +133,7 @@ impl RawVisibleItemSnapshot {
             path: self.path.clone(),
             size_bytes: self.size_bytes,
             modified_secs: self.modified_secs,
+            metadata_complete: self.metadata_complete,
             mime_type: self.mime_type.as_deref().map(str::to_string),
             mime_magic_checked: self.mime_magic_checked,
         })
@@ -145,6 +147,7 @@ impl RawVisibleItemSnapshot {
             self.thumbnail_path.as_ref(),
             self.modified_secs,
             self.size_bytes,
+            self.metadata_complete,
             self.mime_type.as_ref(),
             self.mime_magic_checked,
         )
@@ -160,6 +163,7 @@ pub(crate) struct RawDetailsItemSnapshot {
     pub(crate) name: Arc<str>,
     pub(crate) size_bytes: u64,
     pub(crate) modified_secs: Option<u64>,
+    pub(crate) metadata_complete: bool,
     pub(crate) mime_type: Option<Arc<str>>,
     pub(crate) mime_magic_checked: bool,
     pub(crate) icon_name: Option<Arc<str>>,
@@ -184,6 +188,7 @@ impl RawDetailsItemSnapshot {
             path: self.path.clone(),
             size_bytes: self.size_bytes,
             modified_secs: self.modified_secs,
+            metadata_complete: self.metadata_complete,
             mime_type: self.mime_type.as_deref().map(str::to_string),
             mime_magic_checked: self.mime_magic_checked,
         })
@@ -332,6 +337,7 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
                         name: entry.name.clone(),
                         size_bytes: entry.size_bytes,
                         modified_secs: entry.modified_secs,
+                        metadata_complete: entry.metadata_complete,
                         mime_type: entry.mime_type.clone(),
                         mime_magic_checked: entry.mime_magic_checked,
                         icon_name: entry.icon_name.clone(),
@@ -513,6 +519,38 @@ impl RawFileGridSnapshot {
         }
     }
 
+    pub(crate) fn queue_metadata_probe_candidates(
+        &self,
+        scheduler: &mut MetadataProbeScheduler,
+        pane_id: PaneId,
+        generation: Generation,
+    ) -> bool {
+        match self {
+            Self::Compact { items, .. } | Self::Icons { items, .. } => scheduler.queue_candidates(
+                pane_id,
+                generation,
+                items
+                    .iter()
+                    .filter(|item| !item.metadata_complete)
+                    .map(|item| MetadataProbeCandidate {
+                        item_id: item.item_id,
+                        path: item.path.clone(),
+                    }),
+            ),
+            Self::Details { items, .. } => scheduler.queue_candidates(
+                pane_id,
+                generation,
+                items
+                    .iter()
+                    .filter(|item| !item.metadata_complete)
+                    .map(|item| MetadataProbeCandidate {
+                        item_id: item.item_id,
+                        path: item.path.clone(),
+                    }),
+            ),
+        }
+    }
+
     pub(crate) fn queue_thumbnail_candidates(
         &self,
         scheduler: &mut ThumbnailScheduler,
@@ -565,6 +603,7 @@ fn raw_visible_item_snapshot(
         thumbnail_path: visible_item_thumbnail_path(entry),
         modified_secs: entry.modified_secs,
         size_bytes: entry.size_bytes,
+        metadata_complete: entry.metadata_complete,
         mime_type: entry.mime_type.clone(),
         mime_magic_checked: entry.mime_magic_checked,
         icon_name: entry.icon_name.clone(),
@@ -593,7 +632,10 @@ pub(crate) fn deferred_thumbnail_candidates_for_model<'a>(
         .filter_map(move |layout_index| {
             let model_index = model_index_for_layout_index(filtered, layout_index)?;
             let entry = model.get(model_index)?;
-            if entry.is_dir || visible_item_thumbnail_path(entry).is_some() {
+            if entry.is_dir
+                || !entry.metadata_complete
+                || visible_item_thumbnail_path(entry).is_some()
+            {
                 return None;
             }
             if mime_magic_probe_required(
@@ -608,6 +650,7 @@ pub(crate) fn deferred_thumbnail_candidates_for_model<'a>(
                 item_id: entry.id,
                 path: model.path_for_index(model_index)?,
                 modified_secs: entry.modified_secs?,
+                metadata_complete: entry.metadata_complete,
                 mime_type: entry.mime_type.as_deref().map(str::to_string),
                 priority: ThumbnailRequestPriority::Deferred,
             })
@@ -643,10 +686,12 @@ fn visible_thumbnail_candidate(
     thumbnail_path: Option<&PathBuf>,
     modified_secs: Option<u64>,
     size_bytes: u64,
+    metadata_complete: bool,
     mime_type: Option<&Arc<str>>,
     mime_magic_checked: bool,
 ) -> Option<ThumbnailCandidate> {
     if is_dir
+        || !metadata_complete
         || thumbnail_path.is_some()
         || mime_magic_probe_required(
             is_dir,
@@ -661,6 +706,7 @@ fn visible_thumbnail_candidate(
         item_id,
         path: path.to_path_buf(),
         modified_secs: modified_secs?,
+        metadata_complete,
         mime_type: mime_type.map(|mime| mime.as_ref().to_string()),
         priority: ThumbnailRequestPriority::Visible,
     })
@@ -682,6 +728,7 @@ mod tests {
                 name_width_units: 9,
                 size_bytes: 12,
                 modified_secs: Some(42),
+                metadata_complete: true,
                 mime_type: Some(Arc::from("image/jpeg")),
                 mime_magic_checked: true,
                 trash_original_path: None,
@@ -698,6 +745,7 @@ mod tests {
                 name_width_units: 8,
                 size_bytes: 0,
                 modified_secs: Some(42),
+                metadata_complete: true,
                 mime_type: None,
                 mime_magic_checked: true,
                 trash_original_path: None,
@@ -717,6 +765,7 @@ mod tests {
             name_width_units: 11,
             size_bytes: 12,
             modified_secs: Some(42),
+            metadata_complete: true,
             mime_type: Some(Arc::from("text/plain")),
             mime_magic_checked: true,
             trash_original_path: Some(PathBuf::from("/home/user/Documents/deleted.txt")),
@@ -773,6 +822,7 @@ mod tests {
                 thumbnail_path: None,
                 modified_secs: visible_entry.modified_secs,
                 size_bytes: visible_entry.size_bytes,
+                metadata_complete: visible_entry.metadata_complete,
                 mime_type: visible_entry.mime_type.clone(),
                 mime_magic_checked: visible_entry.mime_magic_checked,
                 icon_name: None,
@@ -830,6 +880,30 @@ mod tests {
         assert_eq!(requests[0].1, PathBuf::from("/tmp/alpha.txt"));
     }
 
+    #[test]
+    fn raw_file_grid_snapshot_queues_only_incomplete_metadata_candidates() {
+        let mut complete = test_raw_visible_item(1, "complete.txt", 0);
+        complete.metadata_complete = true;
+        let mut incomplete = test_raw_visible_item(2, "incomplete.txt", 1);
+        incomplete.metadata_complete = false;
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
+            items: vec![complete, incomplete],
+        };
+        let mut scheduler = MetadataProbeScheduler::default();
+
+        assert!(raw_file_grid.queue_metadata_probe_candidates(
+            &mut scheduler,
+            PaneId(1),
+            Generation(1)
+        ));
+        let batch = scheduler.start_probe_batch(8).unwrap();
+
+        assert_eq!(batch.requests.len(), 1);
+        assert_eq!(batch.requests[0].item_id(), ItemId(2));
+        assert_eq!(batch.requests[0].path(), Path::new("/tmp/incomplete.txt"));
+    }
+
     fn test_entry(
         name: &str,
         mime_type: Option<&str>,
@@ -841,6 +915,7 @@ mod tests {
             name_width_units: name.chars().count() as u16,
             size_bytes: 12,
             modified_secs,
+            metadata_complete: true,
             mime_type: mime_type.map(Arc::from),
             mime_magic_checked,
             trash_original_path: None,
@@ -861,6 +936,7 @@ mod tests {
             thumbnail_path: None,
             modified_secs: Some(42),
             size_bytes: 12,
+            metadata_complete: true,
             mime_type: Some(Arc::from("text/plain")),
             mime_magic_checked: true,
             icon_name: Some(Arc::from("text-plain")),

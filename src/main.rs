@@ -13,14 +13,15 @@ use fika_core::{
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, Generation,
-    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MimeProbeResult, MimeProbeScheduler,
-    OperationQueue, PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove,
-    SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult, ThumbnailScheduler,
-    TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange,
+    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MetadataProbeResult,
+    MetadataProbeScheduler, MimeProbeResult, MimeProbeScheduler, OperationQueue, PaneController,
+    PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole,
+    ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace,
+    ViewMode, ViewPoint, ViewRect, ZoomChange, apply_metadata_probe_result_to_model,
     apply_thumbnail_probe_result_to_model, breadcrumb_segments, complete_location_input, file_ops,
-    listing_requests_from_events, mime_probe_results_for_requests, nearest_existing_ancestor,
-    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
-    update_loading_state_for_event,
+    listing_requests_from_events, metadata_probe_results_for_requests,
+    mime_probe_results_for_requests, nearest_existing_ancestor, perform_device_place_operation,
+    resolve_location_input, thumbnail_probe_results_for_requests, update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -183,6 +184,7 @@ fn listing_cache_debug_summary(
 }
 const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
 const MIME_PROBE_BATCH_SIZE: usize = 64;
+const METADATA_PROBE_BATCH_SIZE: usize = 128;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
 
@@ -258,6 +260,7 @@ pub(crate) struct FikaApp {
     loading_panes: HashMap<PaneId, LoadingPaneState>,
     item_view_scroll: ItemViewScrollState,
     item_view_authoritative_scroll: HashMap<PaneId, u8>,
+    metadata_probe_scheduler: MetadataProbeScheduler,
     mime_probe_scheduler: MimeProbeScheduler,
     thumbnail_scheduler: ThumbnailScheduler,
     pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
@@ -336,6 +339,7 @@ impl FikaApp {
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
             item_view_authoritative_scroll: HashMap::new(),
+            metadata_probe_scheduler: MetadataProbeScheduler::default(),
             mime_probe_scheduler: MimeProbeScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             pane_viewport_geometries: HashMap::new(),
@@ -764,6 +768,7 @@ impl FikaApp {
                     focused,
                     selection_count,
                     generation,
+                    metadata_probe_queued,
                     thumbnail_probe_queued,
                     trash_view,
                 ) = {
@@ -805,6 +810,11 @@ impl FikaApp {
                             .entry(pane_id)
                             .or_default(),
                     });
+                    let metadata_probe_queued = raw_file_grid.queue_metadata_probe_candidates(
+                        &mut self.metadata_probe_scheduler,
+                        pane_id,
+                        generation,
+                    );
                     let thumbnail_probe_queued = raw_file_grid.queue_thumbnail_candidates(
                         &mut self.thumbnail_scheduler,
                         pane_id,
@@ -828,10 +838,14 @@ impl FikaApp {
                         focused_pane == Some(pane_id),
                         selection_count,
                         generation,
+                        metadata_probe_queued,
                         thumbnail_probe_queued,
                         trash_view,
                     )
                 };
+                if metadata_probe_queued {
+                    self.maybe_start_metadata_probe(cx);
+                }
                 self.schedule_mime_probe_requests(pane_id, generation, &raw_file_grid, cx);
                 if thumbnail_probe_queued {
                     self.maybe_start_thumbnail_probe(cx);
@@ -1098,6 +1112,54 @@ impl FikaApp {
         self.space_info.finish_request(&path, snapshot)
     }
 
+    fn maybe_start_metadata_probe(&mut self, cx: &mut Context<Self>) {
+        let Some(batch) = self
+            .metadata_probe_scheduler
+            .start_probe_batch(METADATA_PROBE_BATCH_SIZE)
+        else {
+            return;
+        };
+        let requests = batch.requests;
+
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let results = cx
+                        .background_spawn(
+                            async move { metadata_probe_results_for_requests(requests) },
+                        )
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        app.metadata_probe_scheduler.finish_probe_batch();
+                        let changed = app.finish_metadata_probe_results(results);
+                        app.maybe_start_metadata_probe(cx);
+                        if changed {
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_metadata_probe_results(&mut self, results: Vec<MetadataProbeResult>) -> bool {
+        let mut changed = false;
+        for result in results {
+            let Some(pane) = self.panes.pane_mut(result.pane_id) else {
+                continue;
+            };
+            if pane.generation != result.generation {
+                continue;
+            }
+            if apply_metadata_probe_result_to_model(&mut pane.model, result) {
+                changed = true;
+            }
+        }
+        changed
+    }
+
     fn schedule_mime_probe_requests(
         &mut self,
         pane_id: PaneId,
@@ -1218,6 +1280,19 @@ impl FikaApp {
 
     fn finish_icon_render_image(&mut self, result: FileIconRenderResult) -> bool {
         self.file_icons.finish_render_image(result)
+    }
+
+    fn cancel_metadata_probe_work_for_pane(&mut self, pane_id: PaneId) {
+        self.metadata_probe_scheduler.cancel_pane(pane_id);
+    }
+
+    fn cancel_stale_metadata_probe_work_for_pane(&mut self, pane_id: PaneId) {
+        let Some(generation) = self.panes.pane(pane_id).map(|pane| pane.generation) else {
+            self.cancel_metadata_probe_work_for_pane(pane_id);
+            return;
+        };
+        self.metadata_probe_scheduler
+            .cancel_stale_pane_generations(pane_id, generation);
     }
 
     fn cancel_mime_probe_work_for_pane(&mut self, pane_id: PaneId) {
@@ -1840,6 +1915,7 @@ impl FikaApp {
         self.filtered_models.remove(&pane_id);
         self.loading_panes.remove(&pane_id);
         self.remove_item_view_scroll_for_pane(pane_id);
+        self.cancel_metadata_probe_work_for_pane(pane_id);
         self.cancel_mime_probe_work_for_pane(pane_id);
         self.cancel_thumbnail_work_for_pane(pane_id);
         self.pane_viewport_geometries.remove(&pane_id);
@@ -1892,6 +1968,7 @@ impl FikaApp {
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.reset_item_view_scroll_for_pane(pane_id);
+        self.cancel_stale_metadata_probe_work_for_pane(pane_id);
         self.cancel_stale_mime_probe_work_for_pane(pane_id);
         self.cancel_stale_thumbnail_work_for_pane(pane_id);
         self.location_edit_metrics.remove(&pane_id);
@@ -11689,6 +11766,7 @@ text/plain=viewer.desktop;\n",
             item_id,
             path: path.clone(),
             modified_secs: 42,
+            metadata_complete: true,
             mime_type: Some("image/png".to_string()),
             priority: ThumbnailRequestPriority::Visible,
         };
@@ -11739,6 +11817,7 @@ text/plain=viewer.desktop;\n",
                     item_id: deferred_id,
                     path: deferred_path,
                     modified_secs: 42,
+                    metadata_complete: true,
                     mime_type: Some("image/png".to_string()),
                     priority: ThumbnailRequestPriority::Deferred,
                 },
@@ -11746,6 +11825,7 @@ text/plain=viewer.desktop;\n",
                     item_id: visible_id,
                     path: visible_path,
                     modified_secs: 42,
+                    metadata_complete: true,
                     mime_type: Some("image/png".to_string()),
                     priority: ThumbnailRequestPriority::Visible,
                 },
@@ -11776,6 +11856,7 @@ text/plain=viewer.desktop;\n",
                 item_id,
                 path: path.clone(),
                 modified_secs: 42,
+                metadata_complete: true,
                 mime_type: Some("image/png".to_string()),
                 priority: ThumbnailRequestPriority::Deferred,
             }]
@@ -11790,6 +11871,7 @@ text/plain=viewer.desktop;\n",
                 item_id,
                 path,
                 modified_secs: 42,
+                metadata_complete: true,
                 mime_type: Some("image/png".to_string()),
                 priority: ThumbnailRequestPriority::Visible,
             }]
@@ -11818,6 +11900,7 @@ text/plain=viewer.desktop;\n",
             item_id: keep_id,
             path: keep_path.clone(),
             modified_secs: 42,
+            metadata_complete: true,
             mime_type: Some("image/png".to_string()),
             priority: ThumbnailRequestPriority::Deferred,
         };
@@ -11825,6 +11908,7 @@ text/plain=viewer.desktop;\n",
             item_id: stale_id,
             path: stale_path.clone(),
             modified_secs: 42,
+            metadata_complete: true,
             mime_type: Some("image/png".to_string()),
             priority: ThumbnailRequestPriority::Deferred,
         };
@@ -11872,6 +11956,7 @@ text/plain=viewer.desktop;\n",
             item_id: keep_id,
             path: keep_path.clone(),
             modified_secs: 42,
+            metadata_complete: true,
             mime_type: Some("image/png".to_string()),
             priority: ThumbnailRequestPriority::Deferred,
         };
@@ -11879,6 +11964,7 @@ text/plain=viewer.desktop;\n",
             item_id: stale_id,
             path: stale_path.clone(),
             modified_secs: 42,
+            metadata_complete: true,
             mime_type: Some("image/png".to_string()),
             priority: ThumbnailRequestPriority::Deferred,
         };
@@ -11932,6 +12018,7 @@ text/plain=viewer.desktop;\n",
                 item_id,
                 path: path.clone(),
                 modified_secs: 42,
+                metadata_complete: true,
                 mime_type: Some("image/png".to_string()),
                 priority: ThumbnailRequestPriority::Deferred,
             }]
@@ -11949,6 +12036,7 @@ text/plain=viewer.desktop;\n",
                 item_id,
                 path,
                 modified_secs: 42,
+                metadata_complete: true,
                 mime_type: Some("image/png".to_string()),
                 priority: ThumbnailRequestPriority::Visible,
             }]
@@ -11983,6 +12071,7 @@ text/plain=viewer.desktop;\n",
                 item_id,
                 path: path.clone(),
                 modified_secs: 42,
+                metadata_complete: true,
                 mime_type: Some("image/png".to_string()),
                 priority: ThumbnailRequestPriority::Visible,
             }]
@@ -11997,6 +12086,7 @@ text/plain=viewer.desktop;\n",
                 item_id,
                 path,
                 modified_secs: 43,
+                metadata_complete: true,
                 mime_type: Some("image/png".to_string()),
                 priority: ThumbnailRequestPriority::Visible,
             }]
@@ -12028,6 +12118,7 @@ text/plain=viewer.desktop;\n",
                 item_id,
                 path,
                 modified_secs: 42,
+                metadata_complete: true,
                 mime_type: Some("image/png".to_string()),
                 priority: ThumbnailRequestPriority::Visible,
             }]
@@ -12095,6 +12186,72 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn metadata_probe_results_update_matching_model_role_only() {
+        let path = PathBuf::from("/tmp/fika-metadata-result");
+        let mut app = test_app_with_entries("/tmp/fika-metadata-result", &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
+            path.clone(),
+            Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from("payload"),
+                name_width_units: 7,
+                size_bytes: 0,
+                modified_secs: None,
+                metadata_complete: false,
+                mime_type: None,
+                mime_magic_checked: true,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                is_dir: false,
+            })]),
+        );
+        let pane = app.panes.pane(pane_id).unwrap();
+        let generation = pane.generation;
+        let item_id = pane.model.entries()[0].id;
+        let role = fika_core::EntryMetadataRole {
+            size_bytes: 12,
+            modified_secs: Some(42),
+            mime_type: Some(Arc::from("text/plain")),
+            mime_magic_checked: true,
+        };
+
+        assert!(
+            !app.finish_metadata_probe_results(vec![MetadataProbeResult {
+                pane_id,
+                generation: Generation(generation.0 + 1),
+                item_id,
+                path: path.join("payload"),
+                role: Some(role.clone()),
+            }])
+        );
+        assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].metadata_complete);
+
+        assert!(
+            !app.finish_metadata_probe_results(vec![MetadataProbeResult {
+                pane_id,
+                generation,
+                item_id,
+                path: path.join("other"),
+                role: Some(role.clone()),
+            }])
+        );
+        assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].metadata_complete);
+
+        assert!(app.finish_metadata_probe_results(vec![MetadataProbeResult {
+            pane_id,
+            generation,
+            item_id,
+            path: path.join("payload"),
+            role: Some(role),
+        }]));
+        let entry = &app.panes.pane(pane_id).unwrap().model.entries()[0];
+        assert!(entry.metadata_complete);
+        assert_eq!(entry.size_bytes, 12);
+        assert_eq!(entry.modified_secs, Some(42));
+        assert_eq!(entry.mime_type.as_deref(), Some("text/plain"));
+    }
+
+    #[test]
     fn mime_probe_results_update_matching_model_role_only() {
         let path = PathBuf::from("/tmp/fika-mime-result");
         let payload = path.join("payload");
@@ -12107,6 +12264,7 @@ text/plain=viewer.desktop;\n",
                 name_width_units: 7,
                 size_bytes: 12,
                 modified_secs: Some(42),
+                metadata_complete: true,
                 trash_original_path: None,
                 trash_deletion_time: None,
                 mime_type: Some(Arc::from("application/octet-stream")),
@@ -12216,6 +12374,7 @@ text/plain=viewer.desktop;\n",
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
             item_view_authoritative_scroll: HashMap::new(),
+            metadata_probe_scheduler: MetadataProbeScheduler::default(),
             mime_probe_scheduler: MimeProbeScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             pane_viewport_geometries: HashMap::new(),
@@ -12260,6 +12419,7 @@ text/plain=viewer.desktop;\n",
             name_width_units: name.len() as u16,
             size_bytes: 0,
             modified_secs: None,
+            metadata_complete: true,
             trash_original_path: None,
             trash_deletion_time: None,
             mime_type: None,
@@ -12302,6 +12462,7 @@ text/plain=viewer.desktop;\n",
                 name_width_units: name.len() as u16,
                 size_bytes,
                 modified_secs: None,
+                metadata_complete: true,
                 trash_original_path: None,
                 trash_deletion_time: None,
                 mime_type: None,
