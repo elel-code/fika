@@ -67,18 +67,31 @@ impl MimeDatabase {
         if is_dir {
             return Some(Arc::from("inode/directory"));
         }
-        if let Some(mime) = magic.and_then(detect_mime_from_magic) {
-            return Some(Arc::from(mime));
+        let filename = path
+            .file_name()
+            .and_then(|filename| filename.to_str())
+            .unwrap_or_default();
+        Some(self.mime_for_name(filename, is_dir, magic))
+    }
+
+    pub fn mime_for_name(&self, filename: &str, is_dir: bool, magic: Option<&[u8]>) -> Arc<str> {
+        if is_dir {
+            return Arc::from("inode/directory");
         }
-        Some(Arc::from(
-            self.mime_for_filename(path)
+        if let Some(mime) = magic.and_then(detect_mime_from_magic) {
+            return Arc::from(mime);
+        }
+
+        Arc::from(
+            self.mime_for_filename(filename)
                 .or_else(|| {
-                    path.extension()
+                    Path::new(filename)
+                        .extension()
                         .and_then(|extension| extension.to_str())
                         .and_then(|extension| self.mime_for_extension(extension))
                 })
                 .unwrap_or(GENERIC_BINARY_MIME),
-        ))
+        )
     }
 
     pub fn mime_for_extension(&self, extension: &str) -> Option<&str> {
@@ -87,8 +100,8 @@ impl MimeDatabase {
             .map(String::as_str)
     }
 
-    fn mime_for_filename(&self, path: &Path) -> Option<&str> {
-        let filename = path.file_name()?.to_str()?.to_ascii_lowercase();
+    fn mime_for_filename(&self, filename: &str) -> Option<&str> {
+        let filename = filename.to_ascii_lowercase();
         if let Some(mime) = self.literal_mime.get(&filename) {
             return Some(mime);
         }
@@ -792,6 +805,14 @@ mod tests {
                 .as_deref(),
             Some("application/zip")
         );
+        assert_eq!(
+            database.mime_for_name("lib.rs", false, None).as_ref(),
+            "text/rust"
+        );
+        assert_eq!(
+            database.mime_for_name("dir", true, None).as_ref(),
+            "inode/directory"
+        );
     }
 
     #[test]
@@ -836,6 +857,16 @@ mod tests {
                 .mime_for_path(Path::new("plain.gz"), false, None)
                 .as_deref(),
             Some("application/gzip")
+        );
+        assert_eq!(
+            database.mime_for_name("Cargo.toml", false, None).as_ref(),
+            "text/x-toml"
+        );
+        assert_eq!(
+            database
+                .mime_for_name("archive.tar.gz", false, None)
+                .as_ref(),
+            "application/x-compressed-tar"
         );
     }
 }

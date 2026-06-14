@@ -235,11 +235,37 @@ impl DirectoryLister {
         let Some(rx) = self.watcher_rx.take() else {
             return Vec::new();
         };
-        let mut events = Vec::new();
+        let mut errors = Vec::new();
+        let mut deltas = Vec::new();
         while let Ok(event) = rx.try_recv() {
-            events.push(self.classify_notify_result(event));
+            match event {
+                Ok(event) => deltas.push(WatcherDelta::from_notify_event(&self.path, event)),
+                Err(err) => errors.push(err.to_string()),
+            }
         }
         self.watcher_rx = Some(rx);
+
+        let mut events = errors
+            .into_iter()
+            .map(|message| {
+                let serial = self.next_serial();
+                DirectoryListerEvent::Error {
+                    pane_id: self.pane_id,
+                    generation: self.generation,
+                    request_serial: serial,
+                    path: self.path.clone(),
+                    message,
+                }
+            })
+            .collect::<Vec<_>>();
+        events.extend(
+            coalesce_watcher_deltas(&self.path, deltas)
+                .into_iter()
+                .map(|delta| {
+                    let serial = self.next_serial();
+                    self.event_for_classified_delta(delta, serial)
+                }),
+        );
         events
     }
 
@@ -273,30 +299,20 @@ impl DirectoryLister {
         }
     }
 
-    fn classify_notify_result(&mut self, event: notify::Result<Event>) -> DirectoryListerEvent {
-        match event {
-            Ok(event) => {
-                self.classify_watcher_delta(WatcherDelta::from_notify_event(&self.path, event))
-            }
-            Err(err) => {
-                let serial = self.next_serial();
-                DirectoryListerEvent::Error {
-                    pane_id: self.pane_id,
-                    generation: self.generation,
-                    request_serial: serial,
-                    path: self.path.clone(),
-                    message: err.to_string(),
-                }
-            }
-        }
-    }
-
     fn classify_delta_with_serial(
         &self,
         delta: WatcherDelta,
         serial: RequestSerial,
     ) -> DirectoryListerEvent {
-        match classify_watcher_delta(&self.path, delta) {
+        self.event_for_classified_delta(classify_watcher_delta(&self.path, delta), serial)
+    }
+
+    fn event_for_classified_delta(
+        &self,
+        delta: ClassifiedWatcherDelta,
+        serial: RequestSerial,
+    ) -> DirectoryListerEvent {
+        match delta {
             ClassifiedWatcherDelta::ItemsAdded(paths) => {
                 let entries = paths
                     .iter()
@@ -527,6 +543,109 @@ pub fn classify_watcher_delta(root: &Path, delta: WatcherDelta) -> ClassifiedWat
     }
 }
 
+fn coalesce_watcher_deltas(
+    root: &Path,
+    deltas: impl IntoIterator<Item = WatcherDelta>,
+) -> Vec<ClassifiedWatcherDelta> {
+    let mut coalesced = Vec::new();
+    for delta in deltas {
+        push_coalesced_watcher_delta(&mut coalesced, classify_watcher_delta(root, delta));
+        if matches!(
+            coalesced.as_slice(),
+            [ClassifiedWatcherDelta::CurrentDirectoryRemoved]
+        ) {
+            break;
+        }
+    }
+    coalesced
+}
+
+fn push_coalesced_watcher_delta(
+    coalesced: &mut Vec<ClassifiedWatcherDelta>,
+    delta: ClassifiedWatcherDelta,
+) {
+    match delta {
+        ClassifiedWatcherDelta::CurrentDirectoryRemoved => {
+            coalesced.clear();
+            coalesced.push(ClassifiedWatcherDelta::CurrentDirectoryRemoved);
+        }
+        ClassifiedWatcherDelta::FullReload => {
+            if !matches!(
+                coalesced.as_slice(),
+                [ClassifiedWatcherDelta::CurrentDirectoryRemoved]
+            ) {
+                coalesced.clear();
+                coalesced.push(ClassifiedWatcherDelta::FullReload);
+            }
+        }
+        ClassifiedWatcherDelta::ItemsAdded(paths) => {
+            if matches!(
+                coalesced.as_slice(),
+                [ClassifiedWatcherDelta::FullReload]
+                    | [ClassifiedWatcherDelta::CurrentDirectoryRemoved]
+            ) {
+                return;
+            }
+            if let Some(ClassifiedWatcherDelta::ItemsAdded(existing)) = coalesced.last_mut() {
+                extend_unique_paths(existing, paths);
+            } else {
+                coalesced.push(ClassifiedWatcherDelta::ItemsAdded(unique_paths(paths)));
+            }
+        }
+        ClassifiedWatcherDelta::ItemsDeleted(paths) => {
+            if matches!(
+                coalesced.as_slice(),
+                [ClassifiedWatcherDelta::FullReload]
+                    | [ClassifiedWatcherDelta::CurrentDirectoryRemoved]
+            ) {
+                return;
+            }
+            if let Some(ClassifiedWatcherDelta::ItemsDeleted(existing)) = coalesced.last_mut() {
+                extend_unique_paths(existing, paths);
+            } else {
+                coalesced.push(ClassifiedWatcherDelta::ItemsDeleted(unique_paths(paths)));
+            }
+        }
+        ClassifiedWatcherDelta::ItemsRefreshed(paths) => {
+            if matches!(
+                coalesced.as_slice(),
+                [ClassifiedWatcherDelta::FullReload]
+                    | [ClassifiedWatcherDelta::CurrentDirectoryRemoved]
+            ) {
+                return;
+            }
+            if let Some(ClassifiedWatcherDelta::ItemsRefreshed(existing)) = coalesced.last_mut() {
+                extend_unique_paths(existing, paths);
+            } else {
+                coalesced.push(ClassifiedWatcherDelta::ItemsRefreshed(unique_paths(paths)));
+            }
+        }
+        ClassifiedWatcherDelta::Renamed { from, to } => {
+            if !matches!(
+                coalesced.as_slice(),
+                [ClassifiedWatcherDelta::FullReload]
+                    | [ClassifiedWatcherDelta::CurrentDirectoryRemoved]
+            ) {
+                coalesced.push(ClassifiedWatcherDelta::Renamed { from, to });
+            }
+        }
+    }
+}
+
+fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique = Vec::new();
+    extend_unique_paths(&mut unique, paths);
+    unique
+}
+
+fn extend_unique_paths(target: &mut Vec<PathBuf>, paths: Vec<PathBuf>) {
+    for path in paths {
+        if !target.iter().any(|existing| existing == &path) {
+            target.push(path);
+        }
+    }
+}
+
 pub fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
     let mut cursor = Some(path);
     while let Some(path) = cursor {
@@ -641,6 +760,109 @@ mod tests {
         assert_eq!(
             classify_watcher_delta(root, delta),
             ClassifiedWatcherDelta::FullReload
+        );
+    }
+
+    #[test]
+    fn watcher_coalesce_merges_adjacent_same_kind_paths() {
+        let root = Path::new("/tmp/root");
+        let alpha = root.join("alpha.txt");
+        let beta = root.join("beta.txt");
+
+        assert_eq!(
+            coalesce_watcher_deltas(
+                root,
+                [
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Modify,
+                        paths: vec![alpha.clone()],
+                    },
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Modify,
+                        paths: vec![alpha.clone(), beta.clone()],
+                    },
+                ],
+            ),
+            vec![ClassifiedWatcherDelta::ItemsRefreshed(vec![alpha, beta])]
+        );
+    }
+
+    #[test]
+    fn watcher_coalesce_keeps_order_across_different_delta_kinds() {
+        let root = Path::new("/tmp/root");
+        let created = root.join("created.txt");
+        let modified = root.join("modified.txt");
+
+        assert_eq!(
+            coalesce_watcher_deltas(
+                root,
+                [
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Create,
+                        paths: vec![created.clone()],
+                    },
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Modify,
+                        paths: vec![modified.clone()],
+                    },
+                ],
+            ),
+            vec![
+                ClassifiedWatcherDelta::ItemsAdded(vec![created]),
+                ClassifiedWatcherDelta::ItemsRefreshed(vec![modified])
+            ]
+        );
+    }
+
+    #[test]
+    fn watcher_coalesce_full_reload_supersedes_incremental_deltas() {
+        let root = Path::new("/tmp/root");
+
+        assert_eq!(
+            coalesce_watcher_deltas(
+                root,
+                [
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Modify,
+                        paths: vec![root.join("changed.txt")],
+                    },
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Rescan,
+                        paths: Vec::new(),
+                    },
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Create,
+                        paths: vec![root.join("ignored.txt")],
+                    },
+                ],
+            ),
+            vec![ClassifiedWatcherDelta::FullReload]
+        );
+    }
+
+    #[test]
+    fn watcher_coalesce_current_directory_removed_supersedes_everything() {
+        let root = Path::new("/tmp/root");
+
+        assert_eq!(
+            coalesce_watcher_deltas(
+                root,
+                [
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Create,
+                        paths: vec![root.join("created.txt")],
+                    },
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Remove,
+                        paths: vec![root.to_path_buf()],
+                    },
+                    WatcherDelta {
+                        kind: WatcherDeltaKind::Modify,
+                        paths: vec![root.join("ignored.txt")],
+                    },
+                ],
+            ),
+            vec![ClassifiedWatcherDelta::CurrentDirectoryRemoved]
         );
     }
 }

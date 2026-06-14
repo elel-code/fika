@@ -6,25 +6,22 @@ mod snapshot;
 
 pub(crate) use details::{
     DETAILS_ICON_SIZE, DetailsItemSnapshot, details_content_height, details_content_width,
-    details_deletion_time_label, details_modified_label, details_original_path_label,
-    details_size_label, details_visible_row_range,
 };
-pub(crate) use layout::{
-    CompactColumnWidthCache, CompactTextWidthOverride,
-    compact_layout_for_filtered_model_with_text_override,
-    compact_layout_for_model_with_text_override, compact_text_width, compact_text_width_for_name,
-    model_index_for_layout_index,
+pub(crate) use layout::{CompactColumnWidthCache, compact_text_width, compact_text_width_for_name};
+pub(crate) use projection::{
+    ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput, content_item_hit_at_point,
+    model_indexes_intersecting_visual_rect, pane_layout_projection,
 };
-pub(crate) use projection::{ContentItemHit, PaneLayout, PaneLayoutProjection};
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
-    VisibleItemSnapshot, format_entry_detail_label, visible_item_thumbnail_path,
+    RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSnapshot,
+    deferred_thumbnail_candidates_for_model, raw_file_grid_snapshot,
 };
 
 use crate::FikaApp;
 use fika_core::{
     CompactLayout, CompactLayoutOptions, IconsLayout, IconsLayoutOptions, ItemLayout, PaneId,
-    ViewMode, ViewRect, ViewState, normalize_viewport_extent,
+    ViewRect, ViewState, normalize_viewport_extent,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -55,18 +52,28 @@ pub(crate) enum FileGridMode {
 
 pub(crate) struct FileGridProps {
     pub(crate) pane_id: PaneId,
-    pub(crate) layout: CompactLayout,
-    pub(crate) visible_items: Vec<VisibleItemSnapshot>,
-    pub(crate) icons_layout: IconsLayout,
-    pub(crate) icons_items: Vec<VisibleItemSnapshot>,
-    pub(crate) details_items: Vec<DetailsItemSnapshot>,
-    pub(crate) details_row_count: usize,
+    pub(crate) snapshot: FileGridSnapshot,
     pub(crate) trash_view: bool,
     pub(crate) scroll_handle: ScrollHandle,
-    pub(crate) view: ViewState,
     pub(crate) rubber_band: Option<ViewRect>,
     pub(crate) drop_target: Option<FileTransferMode>,
     pub(crate) mode: FileGridMode,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum FileGridSnapshot {
+    Compact {
+        layout: CompactLayout,
+        items: Vec<VisibleItemSnapshot>,
+    },
+    Icons {
+        layout: IconsLayout,
+        items: Vec<VisibleItemSnapshot>,
+    },
+    Details {
+        items: Vec<DetailsItemSnapshot>,
+        row_count: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,23 +119,20 @@ pub(crate) fn file_grid(
 ) -> Stateful<Div> {
     let FileGridProps {
         pane_id,
-        layout,
-        visible_items,
-        icons_layout,
-        icons_items,
-        details_items,
-        details_row_count,
+        snapshot,
         trash_view,
         scroll_handle,
-        view,
         rubber_band,
         drop_target,
         mode,
     } = props;
     let app = cx.weak_entity();
 
-    let (content_width, content_height, viewport) = match view.view_mode {
-        ViewMode::Icons => {
+    let (content_width, content_height, viewport) = match snapshot {
+        FileGridSnapshot::Icons {
+            layout: icons_layout,
+            items,
+        } => {
             let content_size = icons_layout.content_size();
             let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
                 div()
@@ -136,14 +140,14 @@ pub(crate) fn file_grid(
                     .w(px(content_size.width))
                     .h(px(content_size.height))
                     .children(
-                        icons_items
+                        items
                             .into_iter()
                             .map(|item| item_tile(pane_id, item, mode, cx)),
                     ),
             );
             (content_size.width, content_size.height, viewport)
         }
-        ViewMode::Compact => {
+        FileGridSnapshot::Compact { layout, items } => {
             let content_size = layout.content_size();
             let viewport = file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(
                 div()
@@ -151,21 +155,21 @@ pub(crate) fn file_grid(
                     .w(px(content_size.width))
                     .h(px(content_size.height))
                     .children(
-                        visible_items
+                        items
                             .into_iter()
                             .map(|item| item_tile(pane_id, item, mode, cx)),
                     ),
             );
             (content_size.width, content_size.height, viewport)
         }
-        ViewMode::Details => {
+        FileGridSnapshot::Details { items, row_count } => {
             let content_width = details_content_width(trash_view).max(1.0);
-            let content_height = details_content_height(details_row_count).max(1.0);
+            let content_height = details_content_height(row_count).max(1.0);
             let viewport =
                 file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
                     pane_id,
-                    details_items,
-                    details_row_count,
+                    items,
+                    row_count,
                     trash_view,
                     content_width,
                     content_height,

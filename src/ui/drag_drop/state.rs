@@ -72,6 +72,158 @@ pub(crate) enum PlaceDropTarget {
     },
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DropTargetState {
+    item: Option<ItemDropTarget>,
+    place: Option<PlaceDropTarget>,
+    stale_generation: u64,
+}
+
+impl DropTargetState {
+    pub(crate) fn item(&self) -> Option<&ItemDropTarget> {
+        self.item.as_ref()
+    }
+
+    pub(crate) fn place(&self) -> Option<&PlaceDropTarget> {
+        self.place.as_ref()
+    }
+
+    pub(crate) fn stale_generation(&self) -> u64 {
+        self.stale_generation
+    }
+
+    pub(crate) fn has_target(&self) -> bool {
+        self.item.is_some() || self.place.is_some()
+    }
+
+    pub(crate) fn clear_without_touch(&mut self) {
+        self.item = None;
+        self.place = None;
+    }
+
+    pub(crate) fn set_item(&mut self, target: ItemDropTarget) -> bool {
+        let target = Some(target);
+        if self.item == target && self.place.is_none() {
+            self.touch_stale_generation();
+            return false;
+        }
+        self.item = target;
+        self.place = None;
+        self.touch_stale_generation();
+        true
+    }
+
+    pub(crate) fn set_place(&mut self, target: PlaceDropTarget) -> bool {
+        let target = Some(target);
+        if self.place == target && self.item.is_none() {
+            self.touch_stale_generation();
+            return false;
+        }
+        self.place = target;
+        self.item = None;
+        self.touch_stale_generation();
+        true
+    }
+
+    pub(crate) fn clear_item(&mut self) -> bool {
+        let had_target = self.item.is_some();
+        self.item = None;
+        if had_target {
+            self.touch_stale_generation();
+        }
+        had_target
+    }
+
+    pub(crate) fn clear_item_for_pane(&mut self, pane_id: PaneId) -> bool {
+        if matches!(
+            self.item,
+            Some(ItemDropTarget::Pane {
+                pane_id: target_pane,
+                ..
+            }) if target_pane == pane_id
+        ) {
+            return self.clear_item();
+        }
+        false
+    }
+
+    pub(crate) fn clear_item_for_directory(&mut self, pane_id: PaneId, path: &Path) -> bool {
+        if self.item.as_ref().is_some_and(|target| {
+            matches!(
+                target,
+                ItemDropTarget::Directory {
+                    pane_id: target_pane,
+                    path: target_path,
+                    ..
+                } if *target_pane == pane_id && target_path == path
+            )
+        }) {
+            return self.clear_item();
+        }
+        false
+    }
+
+    pub(crate) fn clear_place(&mut self) -> bool {
+        let had_target = self.place.is_some();
+        self.place = None;
+        if had_target {
+            self.touch_stale_generation();
+        }
+        had_target
+    }
+
+    pub(crate) fn clear_place_for_insert(&mut self, index: usize) -> bool {
+        if matches!(
+            self.place,
+            Some(PlaceDropTarget::Insert { index: target_index }) if target_index == index
+        ) {
+            return self.clear_place();
+        }
+        false
+    }
+
+    pub(crate) fn clear_place_for_row(
+        &mut self,
+        path: &Path,
+        insert_before_index: usize,
+        insert_after_index: usize,
+    ) -> bool {
+        let matches_row = self.place.as_ref().is_some_and(|target| match target {
+            PlaceDropTarget::Place {
+                path: target_path, ..
+            } => target_path == path,
+            PlaceDropTarget::Insert { index } => {
+                *index == insert_before_index || *index == insert_after_index
+            }
+        });
+        if matches_row {
+            return self.clear_place();
+        }
+        false
+    }
+
+    pub(crate) fn clear_all(&mut self) -> bool {
+        let had_target = self.has_target();
+        self.item = None;
+        self.place = None;
+        if had_target {
+            self.touch_stale_generation();
+        }
+        had_target
+    }
+
+    pub(crate) fn clear_stale_for_generation(&mut self, generation: u64) -> bool {
+        if self.stale_generation != generation {
+            return false;
+        }
+        self.clear_all()
+    }
+
+    fn touch_stale_generation(&mut self) {
+        self.stale_generation = self.stale_generation.wrapping_add(1);
+    }
+}
+
 pub(crate) fn item_drag_paths(
     controller: &PaneController,
     payload: &ItemDragPayload,
@@ -216,7 +368,13 @@ fn path_is_child_of(path: &Path, parent: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{drag_export_payload_for_paths, place_drag_export_payload};
+    use super::{
+        DropTargetState, ItemDropTarget, PlaceDropTarget, drag_export_payload_for_paths,
+        item_drop_target_mode_for_directory, item_drop_target_mode_for_pane,
+        place_drag_export_payload, place_drop_target_matches_insert,
+        place_drop_target_mode_for_place,
+    };
+    use fika_core::{FileTransferMode, PaneId};
     use std::path::PathBuf;
 
     #[test]
@@ -273,5 +431,125 @@ mod tests {
         assert_eq!(place_drag_export_payload(&root.join("missing")), None);
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn drop_target_state_replaces_item_and_place_targets() {
+        let pane = PaneId(1);
+        let path = PathBuf::from("/tmp/fika-drop-target-state");
+        let mut state = DropTargetState::default();
+
+        assert!(state.set_item(ItemDropTarget::Pane {
+            pane_id: pane,
+            mode: FileTransferMode::Copy,
+        }));
+        let first_generation = state.stale_generation();
+        assert_eq!(
+            item_drop_target_mode_for_pane(state.item(), pane),
+            Some(FileTransferMode::Copy)
+        );
+
+        assert!(!state.set_item(ItemDropTarget::Pane {
+            pane_id: pane,
+            mode: FileTransferMode::Copy,
+        }));
+        assert!(state.stale_generation() > first_generation);
+        let refreshed_generation = state.stale_generation();
+
+        assert!(state.set_place(PlaceDropTarget::Place {
+            path: path.clone(),
+            mode: FileTransferMode::Move,
+        }));
+        assert!(state.item().is_none());
+        assert_eq!(
+            place_drop_target_mode_for_place(state.place(), &path),
+            Some(FileTransferMode::Move)
+        );
+        assert!(state.stale_generation() > refreshed_generation);
+    }
+
+    #[test]
+    fn drop_target_state_clears_only_matching_item_target() {
+        let pane = PaneId(1);
+        let other_pane = PaneId(2);
+        let path = PathBuf::from("/tmp/fika-drop-target-state/target");
+        let other_path = PathBuf::from("/tmp/fika-drop-target-state/other");
+        let mut state = DropTargetState::default();
+
+        assert!(state.set_item(ItemDropTarget::Directory {
+            pane_id: pane,
+            path: path.clone(),
+            mode: FileTransferMode::Link,
+        }));
+        let generation = state.stale_generation();
+
+        assert!(!state.clear_item_for_directory(pane, &other_path));
+        assert!(!state.clear_item_for_directory(other_pane, &path));
+        assert_eq!(
+            item_drop_target_mode_for_directory(state.item(), pane, &path),
+            Some(FileTransferMode::Link)
+        );
+        assert_eq!(state.stale_generation(), generation);
+
+        assert!(state.clear_item_for_directory(pane, &path));
+        assert!(state.item().is_none());
+        assert!(state.stale_generation() > generation);
+    }
+
+    #[test]
+    fn drop_target_state_clears_only_matching_place_target() {
+        let row_path = PathBuf::from("/tmp/fika-drop-target-state/place");
+        let other_path = PathBuf::from("/tmp/fika-drop-target-state/other-place");
+        let mut state = DropTargetState::default();
+
+        assert!(state.set_place(PlaceDropTarget::Insert { index: 3 }));
+        let insert_generation = state.stale_generation();
+        assert!(!state.clear_place_for_insert(2));
+        assert!(place_drop_target_matches_insert(state.place(), 3));
+        assert_eq!(state.stale_generation(), insert_generation);
+        assert!(state.clear_place_for_insert(3));
+        assert!(state.place().is_none());
+
+        assert!(state.set_place(PlaceDropTarget::Place {
+            path: row_path.clone(),
+            mode: FileTransferMode::Copy,
+        }));
+        let row_generation = state.stale_generation();
+        assert!(!state.clear_place_for_row(&other_path, 1, 2));
+        assert_eq!(
+            place_drop_target_mode_for_place(state.place(), &row_path),
+            Some(FileTransferMode::Copy)
+        );
+        assert_eq!(state.stale_generation(), row_generation);
+        assert!(state.clear_place_for_row(&row_path, 1, 2));
+        assert!(state.place().is_none());
+    }
+
+    #[test]
+    fn drop_target_state_stale_generation_only_clears_current_target() {
+        let pane = PaneId(1);
+        let path = PathBuf::from("/tmp/fika-drop-target-state/place");
+        let mut state = DropTargetState::default();
+
+        assert!(state.set_item(ItemDropTarget::Pane {
+            pane_id: pane,
+            mode: FileTransferMode::Copy,
+        }));
+        let stale_generation = state.stale_generation();
+
+        assert!(state.set_place(PlaceDropTarget::Place {
+            path: path.clone(),
+            mode: FileTransferMode::Copy,
+        }));
+        assert!(!state.clear_stale_for_generation(stale_generation));
+        assert_eq!(
+            place_drop_target_mode_for_place(state.place(), &path),
+            Some(FileTransferMode::Copy)
+        );
+
+        let current_generation = state.stale_generation();
+        assert!(state.clear_stale_for_generation(current_generation));
+        assert!(!state.has_target());
+        assert!(state.stale_generation() > current_generation);
     }
 }

@@ -9,12 +9,10 @@ use crate::ui::icons::FileIconSnapshot;
 
 use super::actions::{context_menu_actions, context_submenu_actions};
 use super::icons::context_menu_icon_slot;
-use super::layout::{
-    CONTEXT_MENU_ROW_HEIGHT, ContextMenuOverlayRect, context_menu_overlay_layout,
-};
+use super::layout::{CONTEXT_MENU_ROW_HEIGHT, ContextMenuOverlayRect, context_menu_overlay_layout};
 use super::{
-    ContextMenuAction, ContextMenuIcon, ContextMenuItem, ContextMenuNestedSubmenu,
-    ContextMenuOpenSubmenu, ContextMenuState, ContextMenuSubmenu,
+    ContextMenuIcon, ContextMenuItem, ContextMenuNestedSubmenu, ContextMenuOpenSubmenu,
+    ContextMenuState,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

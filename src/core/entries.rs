@@ -125,13 +125,13 @@ pub(crate) fn read_entries_sync_cancellable(
             continue;
         };
         if let Ok(metadata) = item.metadata() {
-            let item_path = item.path();
             let name = item.file_name().to_string_lossy().trim().to_string();
             if name.is_empty() {
                 continue;
             }
-            let mut data = to_entry_data(&item_path, name, metadata, mime_database);
+            let mut data = to_entry_data(name, metadata, mime_database);
             if decorate_trash_metadata {
+                let item_path = item.path();
                 decorate_trash_entry(&mut data, &item_path);
             }
             entries.push(Entry::new(data));
@@ -159,7 +159,7 @@ pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
         .map(|name| name.to_string_lossy().trim().to_string())
         .filter(|name| !name.is_empty())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory item has no name"))?;
-    let mut data = to_entry_data(&item_path, name, metadata, MimeDatabase::shared());
+    let mut data = to_entry_data(name, metadata, MimeDatabase::shared());
     if decorate_trash_metadata {
         decorate_trash_entry(&mut data, &item_path);
     }
@@ -290,12 +290,12 @@ fn name_width_units(name: &str) -> u16 {
         .min(u16::MAX as u32) as u16
 }
 
-fn to_entry_data(path: &Path, name: String, metadata: Metadata, mime: &MimeDatabase) -> EntryData {
+fn to_entry_data(name: String, metadata: Metadata, mime: &MimeDatabase) -> EntryData {
     let is_dir = metadata.is_dir();
     let size_bytes = if is_dir { 0 } else { metadata.len() };
     let modified_secs = metadata.modified().ok().map(system_time_secs);
     let name_width_units = name_width_units(&name);
-    let mime_type = mime.mime_for_path(path, is_dir, None);
+    let mime_type = Some(mime.mime_for_name(&name, is_dir, None));
     let mime_magic_checked =
         is_dir || size_bytes == 0 || mime_type.as_deref() != Some(GENERIC_BINARY_MIME);
 
@@ -415,7 +415,6 @@ mod tests {
         fs::write(&path, b"\x89PNG\r\n\x1a\nrest").unwrap();
 
         let entry = Entry::new(to_entry_data(
-            &path,
             "image.png".to_string(),
             fs::metadata(&path).unwrap(),
             MimeDatabase::shared(),

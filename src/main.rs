@@ -13,15 +13,13 @@ use fika_core::{
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, Generation,
-    IconsLayout, ItemId, ListingRequest, ListingWorker, LoadingPaneState, MimeProbeCandidate,
-    MimeProbeResult, MimeProbeScheduler, OperationQueue, PaneController, PaneId, RefreshPair,
-    RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailCandidate,
-    ThumbnailProbeResult, ThumbnailRequestPriority, ThumbnailScheduler, TrashEmptinessMonitor,
-    UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange,
+    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MimeProbeResult, MimeProbeScheduler,
+    OperationQueue, PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove,
+    SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult, ThumbnailScheduler,
+    TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange,
     apply_thumbnail_probe_result_to_model, breadcrumb_segments, complete_location_input, file_ops,
-    listing_requests_from_events, mime_magic_probe_required, mime_probe_results_for_requests,
-    nearest_existing_ancestor, perform_device_place_operation, resolve_location_input,
-    thumbnail_probe_results_for_requests, thumbnail_read_ahead_indexes,
+    listing_requests_from_events, mime_probe_results_for_requests, nearest_existing_ancestor,
+    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
     update_loading_state_for_event,
 };
 use fika_core::{
@@ -31,7 +29,10 @@ use fika_core::{
     launch_with_systemd_user, service_menu_target_label, set_default_mime_application,
 };
 #[cfg(test)]
-use fika_core::{ServiceMenuAction, ViewState, home_dir, is_network_root_path, network_root_path};
+use fika_core::{
+    ServiceMenuAction, ThumbnailCandidate, ThumbnailRequestPriority, ViewState, home_dir,
+    is_network_root_path, network_root_path,
+};
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, IntoElement, ParentElement, Render, ScrollDelta,
@@ -39,7 +40,6 @@ use gpui::{
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -63,28 +63,25 @@ use ui::context_menu::{
     ContextMenuSubmenu, ContextMenuTarget, context_menu_icon_snapshots, context_menu_overlay,
 };
 use ui::drag_drop::{
-    ActiveItemDrag, ItemDragPayload, ItemDropTarget, PlaceDropTarget, item_drag_export_payload,
-    item_drag_paths, item_drop_reject_reason, item_drop_target_mode_for_directory,
+    ActiveItemDrag, DropTargetState, ItemDragPayload, ItemDropTarget, PlaceDropTarget,
+    item_drag_export_payload, item_drag_paths, item_drop_reject_reason,
     item_drop_target_mode_for_pane,
 };
 #[cfg(test)]
 use ui::drag_drop::{
     drag_cursor_style_for_transfer_mode, file_transfer_mode_for_modifiers,
-    place_drop_target_matches_insert, place_drop_target_mode_for_place,
+    item_drop_target_mode_for_directory, place_drop_target_matches_insert,
+    place_drop_target_mode_for_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, CompactTextWidthOverride, ContentItemHit, DETAILS_ICON_SIZE,
-    DetailsItemSnapshot, PaneLayout, PaneLayoutProjection, PaneViewportGeometry,
-    VisibleItemSlotPool, VisibleItemSnapshot, compact_layout_for_filtered_model_with_text_override,
-    compact_layout_for_model_with_text_override, compact_text_width, compact_text_width_for_name,
-    details_content_width, details_deletion_time_label, details_modified_label,
-    details_original_path_label, details_size_label, details_visible_row_range,
-    format_entry_detail_label, icons_layout_options, model_index_for_layout_index,
-    visible_item_thumbnail_path,
+    CompactColumnWidthCache, ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput,
+    PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSlotPool,
+    compact_text_width, compact_text_width_for_name, content_item_hit_at_point,
+    deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
+    pane_layout_projection, raw_file_grid_snapshot,
 };
 use ui::filter_bar::{
-    FilterBarSnapshot, FilteredModelCacheEntry, FilteredModelCacheKey, PaneFilterState,
-    filter_source_revision,
+    FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState, cached_filtered_model_for_pane,
 };
 use ui::icons::{
     FileIconCache, FileIconRenderResult, FileIconSnapshot, file_icon_snapshot_for_model_role,
@@ -233,45 +230,6 @@ fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bo
     (start.x - current.x).abs() + (start.y - current.y).abs() >= RUBBER_BAND_START_DRAG_DISTANCE
 }
 
-fn visible_thumbnail_candidate(
-    item_id: fika_core::ItemId,
-    path: &Path,
-    is_dir: bool,
-    thumbnail_path: Option<&PathBuf>,
-    modified_secs: Option<u64>,
-    size_bytes: u64,
-    mime_type: Option<&Arc<str>>,
-    mime_magic_checked: bool,
-) -> Option<ThumbnailCandidate> {
-    if is_dir
-        || thumbnail_path.is_some()
-        || mime_magic_probe_required(
-            is_dir,
-            size_bytes,
-            mime_type.map(Arc::as_ref),
-            mime_magic_checked,
-        )
-    {
-        return None;
-    }
-    Some(ThumbnailCandidate {
-        item_id,
-        path: path.to_path_buf(),
-        modified_secs: modified_secs?,
-        mime_type: mime_type.map(|mime| mime.as_ref().to_string()),
-        priority: ThumbnailRequestPriority::Visible,
-    })
-}
-
-fn layout_index_range(indexes: impl IntoIterator<Item = usize>) -> Option<Range<usize>> {
-    let mut indexes = indexes.into_iter();
-    let first = indexes.next()?;
-    let (start, end) = indexes.fold((first, first), |(start, end), index| {
-        (start.min(index), end.max(index))
-    });
-    Some(start..end + 1)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PendingRubberBand {
     pane_id: PaneId,
@@ -312,9 +270,7 @@ pub(crate) struct FikaApp {
     operations: OperationQueue,
     clipboard: Option<ClipboardState>,
     active_item_drag: Option<ActiveItemDrag>,
-    item_drop_target: Option<ItemDropTarget>,
-    place_drop_target: Option<PlaceDropTarget>,
-    drop_target_stale_generation: u64,
+    drop_targets: DropTargetState,
     drop_target_stale_timer_running: bool,
     rename_draft: Option<RenameDraft>,
     rename_next_after_operation: Option<(PaneId, PathBuf)>,
@@ -392,9 +348,7 @@ impl FikaApp {
             operations: OperationQueue::new(),
             clipboard: None,
             active_item_drag: None,
-            item_drop_target: None,
-            place_drop_target: None,
-            drop_target_stale_generation: 0,
+            drop_targets: DropTargetState::default(),
             drop_target_stale_timer_running: false,
             rename_draft: None,
             rename_next_after_operation: None,
@@ -463,46 +417,16 @@ impl FikaApp {
         app
     }
 
-    fn active_filter_for_pane(&self, pane_id: PaneId) -> Option<fika_core::NameFilter> {
-        self.pane_filters
-            .get(&pane_id)
-            .and_then(PaneFilterState::active_filter)
-    }
-
     fn filtered_model_for_pane(
         &mut self,
         pane_id: PaneId,
     ) -> Option<(fika_core::FilteredModel, u64)> {
-        let Some(filter) = self.active_filter_for_pane(pane_id) else {
-            self.filtered_models.remove(&pane_id);
-            return None;
-        };
-        let source_revision = filter_source_revision(&filter);
-        let model_generation = self.panes.pane(pane_id)?.model.data_generation();
-        let key = FilteredModelCacheKey {
-            model_generation,
-            filter: filter.clone(),
-        };
-        if let Some(cached) = self
-            .filtered_models
-            .get(&pane_id)
-            .filter(|cached| cached.key == key)
-        {
-            return Some((cached.model.clone(), source_revision));
-        }
-
-        let model = {
-            let pane = self.panes.pane(pane_id)?;
-            fika_core::FilteredModel::from_model(&pane.model, &filter)
-        };
-        self.filtered_models.insert(
+        cached_filtered_model_for_pane(
             pane_id,
-            FilteredModelCacheEntry {
-                key,
-                model: model.clone(),
-            },
-        );
-        Some((model, source_revision))
+            &self.pane_filters,
+            &mut self.filtered_models,
+            self.panes.pane(pane_id).map(|pane| &pane.model),
+        )
     }
 
     fn filter_bar_snapshot(
@@ -827,26 +751,20 @@ impl FikaApp {
                 let filtered_model = self.filtered_model_for_pane(pane_id);
                 let split_ratio = self.pane_split_ratio(pane_id);
                 let projected_viewport_width = self.projected_pane_width(pane_id);
-                let item_drop_target = self.item_drop_target.clone();
+                let item_drop_target = self.drop_targets.item().cloned();
                 let pane_drop_target =
                     item_drop_target_mode_for_pane(item_drop_target.as_ref(), pane_id);
                 let (
                     breadcrumbs,
                     location_draft,
                     filter_bar,
-                    layout,
                     view,
+                    raw_file_grid,
                     rubber_band,
                     focused,
                     selection_count,
                     generation,
-                    mime_candidates,
-                    thumbnail_candidates,
-                    visible_data,
-                    icons_layout,
-                    icons_visible_data,
-                    details_data,
-                    details_row_count,
+                    thumbnail_probe_queued,
                     trash_view,
                 ) = {
                     let pane = self.panes.pane(pane_id)?;
@@ -864,636 +782,77 @@ impl FikaApp {
                         .rename_draft
                         .as_ref()
                         .filter(|draft| draft.pane_id == pane_id);
-                    let rename_text_override =
-                        Self::rename_text_override_for_model(&pane.model, rename_draft);
                     let location_draft = self
                         .location_draft
                         .as_ref()
                         .filter(|draft| draft.pane_id == pane_id)
                         .map(LocationDraft::snapshot);
-                    let layout = match filtered {
-                        Some(filtered) => compact_layout_for_filtered_model_with_text_override(
-                            self.compact_column_widths.entry(pane_id).or_default(),
-                            &pane.model,
-                            filtered,
-                            source_revision,
-                            &view,
-                            rename_text_override,
-                        ),
-                        None => compact_layout_for_model_with_text_override(
-                            self.compact_column_widths.entry(pane_id).or_default(),
-                            &pane.model,
-                            &view,
-                            rename_text_override,
-                        ),
-                    };
                     let selection_count = pane.selection.count_for_model(pane.model.len());
                     let item_count =
                         filtered.map_or_else(|| pane.model.len(), fika_core::FilteredModel::len);
-                    let icons_layout =
-                        IconsLayout::new(item_count, icons_layout_options(&view, 0.0));
                     let trash_view = file_ops::is_trash_files_dir(&pane.current_dir);
-                    let details_row_count = item_count;
-                    let details_data = details_visible_row_range(
-                        details_row_count,
-                        view.viewport_height,
-                        view.scroll_y,
-                    )
-                    .filter_map(|row_index| {
-                        let model_index = model_index_for_layout_index(filtered, row_index)?;
-                        let entry = pane.model.get(model_index)?;
-                        let path = pane.model.path_for_index(model_index)?;
-                        let selected = pane.selection.is_selected(entry.id);
-                        let drop_target = item_drop_target_mode_for_directory(
-                            item_drop_target.as_ref(),
-                            pane_id,
-                            &path,
-                        );
-                        Some((
-                            row_index,
-                            entry.id,
-                            path,
-                            entry.is_dir,
-                            entry.name.clone(),
-                            entry.size_bytes,
-                            entry.modified_secs,
-                            entry.mime_type.clone(),
-                            entry.mime_magic_checked,
-                            selected,
-                            drop_target,
-                            details_size_label(entry),
-                            details_modified_label(entry),
-                            details_original_path_label(entry),
-                            details_deletion_time_label(entry),
-                        ))
-                    })
-                    .collect::<Vec<_>>();
-                    let visible_data = layout
-                        .visible_items()
-                        .filter_map(|visible_item| {
-                            let layout_index = visible_item.model_index;
-                            let model_index = model_index_for_layout_index(filtered, layout_index)?;
-                            let entry = pane.model.get(model_index)?;
-                            let path = pane.model.path_for_index(model_index)?;
-                            let active_rename_draft =
-                                rename_draft.filter(|draft| draft.original_path == path);
-                            let required_text_width =
-                                Self::required_text_width_for_entry(entry, active_rename_draft);
-                            let item_layout = layout.item_with_required_text_width(
-                                layout_index,
-                                Some(required_text_width),
-                            )?;
-                            let selected = pane.selection.is_selected(entry.id);
-                            let drop_target = item_drop_target_mode_for_directory(
-                                item_drop_target.as_ref(),
-                                pane_id,
-                                &path,
-                            );
-                            let draft_name =
-                                active_rename_draft.map(|draft| draft.draft_name.clone());
-                            let draft_caret = active_rename_draft.map(|draft| draft.caret);
-                            let draft_selection =
-                                active_rename_draft.and_then(|draft| draft.selection);
-                            let draft_error =
-                                active_rename_draft.and_then(|draft| draft.error.clone());
-                            let draft_warning = active_rename_draft
-                                .and_then(|draft| draft.extension_warning(entry.is_dir));
-                            Some((
-                                item_layout,
-                                entry.id,
-                                path,
-                                entry.is_dir,
-                                entry.name.clone(),
-                                format_entry_detail_label(entry),
-                                visible_item_thumbnail_path(entry),
-                                entry.modified_secs,
-                                entry.size_bytes,
-                                entry.mime_type.clone(),
-                                entry.mime_magic_checked,
-                                selected,
-                                drop_target,
-                                draft_name,
-                                draft_caret,
-                                draft_selection,
-                                draft_error,
-                                draft_warning,
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    let icons_visible_data = icons_layout
-                        .visible_items()
-                        .filter_map(|visible_item| {
-                            let layout_index = visible_item.model_index;
-                            let model_index = model_index_for_layout_index(filtered, layout_index)?;
-                            let entry = pane.model.get(model_index)?;
-                            let path = pane.model.path_for_index(model_index)?;
-                            let active_rename_draft =
-                                rename_draft.filter(|draft| draft.original_path == path);
-                            let required_text_width =
-                                Self::required_text_width_for_entry(entry, active_rename_draft);
-                            let item_layout = icons_layout.item_with_required_text_width(
-                                layout_index,
-                                Some(required_text_width),
-                            )?;
-                            let selected = pane.selection.is_selected(entry.id);
-                            let drop_target = item_drop_target_mode_for_directory(
-                                item_drop_target.as_ref(),
-                                pane_id,
-                                &path,
-                            );
-                            let draft_name =
-                                active_rename_draft.map(|draft| draft.draft_name.clone());
-                            let draft_caret = active_rename_draft.map(|draft| draft.caret);
-                            let draft_selection =
-                                active_rename_draft.and_then(|draft| draft.selection);
-                            let draft_error =
-                                active_rename_draft.and_then(|draft| draft.error.clone());
-                            let draft_warning = active_rename_draft
-                                .and_then(|draft| draft.extension_warning(entry.is_dir));
-                            Some((
-                                item_layout,
-                                entry.id,
-                                path,
-                                entry.is_dir,
-                                entry.name.clone(),
-                                format_entry_detail_label(entry),
-                                visible_item_thumbnail_path(entry),
-                                entry.modified_secs,
-                                entry.size_bytes,
-                                entry.mime_type.clone(),
-                                entry.mime_magic_checked,
-                                selected,
-                                drop_target,
-                                draft_name,
-                                draft_caret,
-                                draft_selection,
-                                draft_error,
-                                draft_warning,
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    let mime_candidates = match view.view_mode {
-                        ViewMode::Compact => visible_data
-                            .iter()
-                            .filter_map(
-                                |(
-                                    _,
-                                    item_id,
-                                    path,
-                                    is_dir,
-                                    _,
-                                    _,
-                                    _,
-                                    modified_secs,
-                                    size_bytes,
-                                    mime_type,
-                                    mime_magic_checked,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                )| {
-                                    mime_magic_probe_required(
-                                        *is_dir,
-                                        *size_bytes,
-                                        mime_type.as_deref(),
-                                        *mime_magic_checked,
-                                    )
-                                    .then(|| {
-                                        MimeProbeCandidate {
-                                            item_id: *item_id,
-                                            path: path.clone(),
-                                            size_bytes: *size_bytes,
-                                            modified_secs: *modified_secs,
-                                            mime_type: mime_type.as_deref().map(str::to_string),
-                                            mime_magic_checked: *mime_magic_checked,
-                                        }
-                                    })
-                                },
-                            )
-                            .collect::<Vec<_>>(),
-                        ViewMode::Icons => icons_visible_data
-                            .iter()
-                            .filter_map(
-                                |(
-                                    _,
-                                    item_id,
-                                    path,
-                                    is_dir,
-                                    _,
-                                    _,
-                                    _,
-                                    modified_secs,
-                                    size_bytes,
-                                    mime_type,
-                                    mime_magic_checked,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                )| {
-                                    mime_magic_probe_required(
-                                        *is_dir,
-                                        *size_bytes,
-                                        mime_type.as_deref(),
-                                        *mime_magic_checked,
-                                    )
-                                    .then(|| {
-                                        MimeProbeCandidate {
-                                            item_id: *item_id,
-                                            path: path.clone(),
-                                            size_bytes: *size_bytes,
-                                            modified_secs: *modified_secs,
-                                            mime_type: mime_type.as_deref().map(str::to_string),
-                                            mime_magic_checked: *mime_magic_checked,
-                                        }
-                                    })
-                                },
-                            )
-                            .collect::<Vec<_>>(),
-                        ViewMode::Details => details_data
-                            .iter()
-                            .filter_map(
-                                |(
-                                    _,
-                                    item_id,
-                                    path,
-                                    is_dir,
-                                    _,
-                                    size_bytes,
-                                    modified_secs,
-                                    mime_type,
-                                    mime_magic_checked,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                )| {
-                                    mime_magic_probe_required(
-                                        *is_dir,
-                                        *size_bytes,
-                                        mime_type.as_deref(),
-                                        *mime_magic_checked,
-                                    )
-                                    .then(|| {
-                                        MimeProbeCandidate {
-                                            item_id: *item_id,
-                                            path: path.clone(),
-                                            size_bytes: *size_bytes,
-                                            modified_secs: *modified_secs,
-                                            mime_type: mime_type.as_deref().map(str::to_string),
-                                            mime_magic_checked: *mime_magic_checked,
-                                        }
-                                    })
-                                },
-                            )
-                            .collect::<Vec<_>>(),
-                    };
-                    let mut thumbnail_candidates = match view.view_mode {
-                        ViewMode::Compact => visible_data
-                            .iter()
-                            .filter_map(
-                                |(
-                                    _,
-                                    item_id,
-                                    path,
-                                    is_dir,
-                                    _,
-                                    _,
-                                    thumbnail_path,
-                                    modified_secs,
-                                    size_bytes,
-                                    mime_type,
-                                    mime_magic_checked,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                )| {
-                                    visible_thumbnail_candidate(
-                                        *item_id,
-                                        path,
-                                        *is_dir,
-                                        thumbnail_path.as_ref(),
-                                        *modified_secs,
-                                        *size_bytes,
-                                        mime_type.as_ref(),
-                                        *mime_magic_checked,
-                                    )
-                                },
-                            )
-                            .collect::<Vec<_>>(),
-                        ViewMode::Icons => icons_visible_data
-                            .iter()
-                            .filter_map(
-                                |(
-                                    _,
-                                    item_id,
-                                    path,
-                                    is_dir,
-                                    _,
-                                    _,
-                                    thumbnail_path,
-                                    modified_secs,
-                                    size_bytes,
-                                    mime_type,
-                                    mime_magic_checked,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                )| {
-                                    visible_thumbnail_candidate(
-                                        *item_id,
-                                        path,
-                                        *is_dir,
-                                        thumbnail_path.as_ref(),
-                                        *modified_secs,
-                                        *size_bytes,
-                                        mime_type.as_ref(),
-                                        *mime_magic_checked,
-                                    )
-                                },
-                            )
-                            .collect::<Vec<_>>(),
-                        ViewMode::Details => Vec::new(),
-                    };
-                    let visible_layout_indexes = match view.view_mode {
-                        ViewMode::Compact => visible_data
-                            .iter()
-                            .map(|(layout, ..)| layout.model_index)
-                            .collect::<Vec<_>>(),
-                        ViewMode::Icons => icons_visible_data
-                            .iter()
-                            .map(|(layout, ..)| layout.model_index)
-                            .collect::<Vec<_>>(),
-                        ViewMode::Details => Vec::new(),
-                    };
-                    if let Some(visible_range) =
-                        layout_index_range(visible_layout_indexes.iter().copied())
-                    {
-                        for layout_index in thumbnail_read_ahead_indexes(
-                            visible_range,
+                    let raw_file_grid = raw_file_grid_snapshot(RawFileGridSnapshotInput {
+                        pane_id,
+                        model: &pane.model,
+                        selection: &pane.selection,
+                        view: &view,
+                        filtered,
+                        source_revision,
+                        rename_draft,
+                        item_drop_target: item_drop_target.as_ref(),
+                        compact_column_widths: self
+                            .compact_column_widths
+                            .entry(pane_id)
+                            .or_default(),
+                    });
+                    let thumbnail_probe_queued = raw_file_grid.queue_thumbnail_candidates(
+                        &mut self.thumbnail_scheduler,
+                        pane_id,
+                        generation,
+                        deferred_thumbnail_candidates_for_model(
+                            &raw_file_grid,
+                            &pane.model,
+                            filtered,
                             item_count,
-                            visible_layout_indexes.len(),
-                        ) {
-                            let Some(model_index) =
-                                model_index_for_layout_index(filtered, layout_index)
-                            else {
-                                continue;
-                            };
-                            let Some(entry) = pane.model.get(model_index) else {
-                                continue;
-                            };
-                            if entry.is_dir || visible_item_thumbnail_path(entry).is_some() {
-                                continue;
-                            }
-                            if mime_magic_probe_required(
-                                entry.is_dir,
-                                entry.size_bytes,
-                                entry.mime_type.as_deref(),
-                                entry.mime_magic_checked,
-                            ) {
-                                continue;
-                            }
-                            let Some(modified_secs) = entry.modified_secs else {
-                                continue;
-                            };
-                            let Some(path) = pane.model.path_for_index(model_index) else {
-                                continue;
-                            };
-                            thumbnail_candidates.push(ThumbnailCandidate {
-                                item_id: entry.id,
-                                path,
-                                modified_secs,
-                                mime_type: entry.mime_type.as_deref().map(str::to_string),
-                                priority: ThumbnailRequestPriority::Deferred,
-                            });
-                        }
-                    }
+                        ),
+                    );
                     (
                         breadcrumb_segments(&pane.current_dir),
                         location_draft,
-                        self.filter_bar_snapshot(
-                            pane_id,
-                            focused_pane,
-                            filtered
-                                .map_or_else(|| pane.model.len(), fika_core::FilteredModel::len),
-                        ),
-                        layout,
+                        self.filter_bar_snapshot(pane_id, focused_pane, item_count),
                         view.clone(),
+                        raw_file_grid,
                         self.rubber_band.and_then(|band| {
                             (band.pane_id == pane_id).then(|| band.viewport_rect(&view))
                         }),
                         focused_pane == Some(pane_id),
                         selection_count,
                         generation,
-                        mime_candidates,
-                        thumbnail_candidates,
-                        visible_data,
-                        icons_layout,
-                        icons_visible_data,
-                        details_data,
-                        details_row_count,
+                        thumbnail_probe_queued,
                         trash_view,
                     )
                 };
-                self.schedule_mime_probe_requests(pane_id, generation, mime_candidates, cx);
-                self.schedule_thumbnail_requests(pane_id, generation, thumbnail_candidates, cx);
-                let visible_ids = match view.view_mode {
-                    ViewMode::Compact => visible_data
-                        .iter()
-                        .map(
-                            |(_, item_id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| *item_id,
-                        )
-                        .collect::<Vec<_>>(),
-                    ViewMode::Icons => icons_visible_data
-                        .iter()
-                        .map(
-                            |(_, item_id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| *item_id,
-                        )
-                        .collect::<Vec<_>>(),
-                    ViewMode::Details => Vec::new(),
-                };
-                let slot_by_item_id = self
-                    .visible_item_slots
-                    .entry(pane_id)
-                    .or_default()
-                    .slots_for_items(visible_ids);
-                let visible_items = visible_data
-                    .into_iter()
-                    .filter_map(
-                        |(
-                            layout,
-                            item_id,
-                            path,
-                            is_dir,
-                            name,
-                            detail_label,
-                            thumbnail_path,
-                            _modified_secs,
-                            _size_bytes,
-                            mime_type,
-                            _mime_magic_checked,
-                            selected,
-                            drop_target,
-                            draft_name,
-                            draft_caret,
-                            draft_selection,
-                            draft_error,
-                            draft_warning,
-                        )| {
-                            let slot_id = slot_by_item_id.get(&item_id).copied()?;
-                            let icon = self.icon_snapshot_for_model_item(
-                                pane_id,
-                                item_id,
-                                &path,
-                                is_dir,
-                                _size_bytes,
-                                mime_type,
-                                _mime_magic_checked,
-                                layout.icon_rect.width,
-                                cx,
-                            );
-                            Some(VisibleItemSnapshot {
-                                slot_id,
-                                layout,
-                                path,
-                                is_dir,
-                                name,
-                                detail_label,
-                                thumbnail_path,
-                                icon,
-                                selected,
-                                selection_count,
-                                drop_target,
-                                draft_name,
-                                draft_caret,
-                                draft_selection,
-                                draft_error,
-                                draft_warning,
-                            })
-                        },
+                self.schedule_mime_probe_requests(pane_id, generation, &raw_file_grid, cx);
+                if thumbnail_probe_queued {
+                    self.maybe_start_thumbnail_probe(cx);
+                }
+                let mut raw_file_grid = raw_file_grid;
+                raw_file_grid
+                    .assign_visible_item_slots(self.visible_item_slots.entry(pane_id).or_default());
+                let file_grid = raw_file_grid.into_file_grid_snapshot(selection_count, |request| {
+                    self.icon_snapshot_for_model_item(
+                        pane_id,
+                        request.item_id,
+                        request.path,
+                        request.is_dir,
+                        request.size_bytes,
+                        request.mime_type.clone(),
+                        request.mime_magic_checked,
+                        request.icon_name.clone(),
+                        request.icon_size,
+                        cx,
                     )
-                    .collect::<Vec<_>>();
-                let icons_items = icons_visible_data
-                    .into_iter()
-                    .filter_map(
-                        |(
-                            layout,
-                            item_id,
-                            path,
-                            is_dir,
-                            name,
-                            detail_label,
-                            thumbnail_path,
-                            _modified_secs,
-                            _size_bytes,
-                            mime_type,
-                            _mime_magic_checked,
-                            selected,
-                            drop_target,
-                            draft_name,
-                            draft_caret,
-                            draft_selection,
-                            draft_error,
-                            draft_warning,
-                        )| {
-                            let slot_id = slot_by_item_id.get(&item_id).copied()?;
-                            let icon = self.icon_snapshot_for_model_item(
-                                pane_id,
-                                item_id,
-                                &path,
-                                is_dir,
-                                _size_bytes,
-                                mime_type,
-                                _mime_magic_checked,
-                                layout.icon_rect.width,
-                                cx,
-                            );
-                            Some(VisibleItemSnapshot {
-                                slot_id,
-                                layout,
-                                path,
-                                is_dir,
-                                name,
-                                detail_label,
-                                thumbnail_path,
-                                icon,
-                                selected,
-                                selection_count,
-                                drop_target,
-                                draft_name,
-                                draft_caret,
-                                draft_selection,
-                                draft_error,
-                                draft_warning,
-                            })
-                        },
-                    )
-                    .collect::<Vec<_>>();
-                let details_items = details_data
-                    .into_iter()
-                    .map(
-                        |(
-                            row_index,
-                            item_id,
-                            path,
-                            is_dir,
-                            name,
-                            _size_bytes,
-                            _modified_secs,
-                            mime_type,
-                            _mime_magic_checked,
-                            selected,
-                            drop_target,
-                            size_label,
-                            modified_label,
-                            original_path_label,
-                            deletion_time_label,
-                        )| {
-                            let icon = self.icon_snapshot_for_model_item(
-                                pane_id,
-                                item_id,
-                                &path,
-                                is_dir,
-                                _size_bytes,
-                                mime_type,
-                                _mime_magic_checked,
-                                DETAILS_ICON_SIZE,
-                                cx,
-                            );
-                            DetailsItemSnapshot {
-                                row_index,
-                                path,
-                                is_dir,
-                                name,
-                                icon,
-                                selected,
-                                selection_count,
-                                drop_target,
-                                size_label,
-                                modified_label,
-                                original_path_label,
-                                deletion_time_label,
-                            }
-                        },
-                    )
-                    .collect::<Vec<_>>();
+                });
                 let status_bar = self.status_bar_snapshot_for_pane(pane_id, cx);
                 let toolbar =
                     pane_toolbar_snapshot(&mut self.file_icons, filter_bar.is_some(), pane_count);
@@ -1505,12 +864,7 @@ impl FikaApp {
                     filter_bar,
                     toolbar,
                     status_bar,
-                    layout,
-                    visible_items,
-                    icons_layout,
-                    icons_items,
-                    details_items,
-                    details_row_count,
+                    file_grid,
                     trash_view,
                     scroll_handle,
                     view,
@@ -1748,13 +1102,14 @@ impl FikaApp {
         &mut self,
         pane_id: PaneId,
         generation: Generation,
-        candidates: Vec<MimeProbeCandidate>,
+        raw_file_grid: &RawFileGridSnapshot,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .mime_probe_scheduler
-            .queue_candidates(pane_id, generation, candidates)
-        {
+        if raw_file_grid.queue_mime_probe_candidates(
+            &mut self.mime_probe_scheduler,
+            pane_id,
+            generation,
+        ) {
             self.maybe_start_mime_probe(cx);
         }
     }
@@ -1802,19 +1157,10 @@ impl FikaApp {
         size_bytes: u64,
         mime_type: Option<Arc<str>>,
         mime_magic_checked: bool,
+        icon_name: Option<Arc<str>>,
         icon_size: f32,
         cx: &mut Context<Self>,
     ) -> FileIconSnapshot {
-        let icon_name = self
-            .panes
-            .pane(pane_id)
-            .and_then(|pane| {
-                pane.model
-                    .index_of_id(item_id)
-                    .and_then(|index| pane.model.get(index))
-            })
-            .and_then(|entry| entry.icon_name.clone());
-
         let snapshot = file_icon_snapshot_for_model_role(
             &mut self.file_icons,
             icon_name,
@@ -1885,21 +1231,6 @@ impl FikaApp {
         };
         self.mime_probe_scheduler
             .cancel_stale_pane_generations(pane_id, generation);
-    }
-
-    fn schedule_thumbnail_requests(
-        &mut self,
-        pane_id: PaneId,
-        generation: Generation,
-        candidates: Vec<ThumbnailCandidate>,
-        cx: &mut Context<Self>,
-    ) {
-        if self
-            .thumbnail_scheduler
-            .queue_candidates(pane_id, generation, candidates)
-        {
-            self.maybe_start_thumbnail_probe(cx);
-        }
     }
 
     fn maybe_start_thumbnail_probe(&mut self, cx: &mut Context<Self>) {
@@ -2087,7 +1418,7 @@ impl FikaApp {
             current_dir,
             &self.hidden_place_sections,
             &self.hidden_places,
-            self.place_drop_target.as_ref(),
+            self.drop_targets.place(),
             trash_has_items,
             &mut self.file_icons,
         )
@@ -2285,7 +1616,7 @@ impl FikaApp {
         source_index: usize,
         fallback_index: usize,
     ) {
-        let index = match self.place_drop_target.clone() {
+        let index = match self.drop_targets.place().cloned() {
             Some(PlaceDropTarget::Insert { index }) => index,
             _ => fallback_index,
         };
@@ -2521,23 +1852,19 @@ impl FikaApp {
             .is_some_and(|drag| drag.payload.source_pane == pane_id)
         {
             self.active_item_drag = None;
-            self.place_drop_target = None;
+            self.drop_targets.clear_without_touch();
         }
-        if self
-            .item_drop_target
-            .as_ref()
-            .is_some_and(|target| match target {
-                ItemDropTarget::Pane {
-                    pane_id: target_pane,
-                    ..
-                }
-                | ItemDropTarget::Directory {
-                    pane_id: target_pane,
-                    ..
-                } => *target_pane == pane_id,
-            })
-        {
-            self.item_drop_target = None;
+        if self.drop_targets.item().is_some_and(|target| match target {
+            ItemDropTarget::Pane {
+                pane_id: target_pane,
+                ..
+            }
+            | ItemDropTarget::Directory {
+                pane_id: target_pane,
+                ..
+            } => *target_pane == pane_id,
+        }) {
+            self.drop_targets.clear_item();
         }
         if self
             .rubber_band
@@ -2574,23 +1901,19 @@ impl FikaApp {
             .is_some_and(|drag| drag.payload.source_pane == pane_id)
         {
             self.active_item_drag = None;
-            self.place_drop_target = None;
+            self.drop_targets.clear_without_touch();
         }
-        if self
-            .item_drop_target
-            .as_ref()
-            .is_some_and(|target| match target {
-                ItemDropTarget::Pane {
-                    pane_id: target_pane,
-                    ..
-                }
-                | ItemDropTarget::Directory {
-                    pane_id: target_pane,
-                    ..
-                } => *target_pane == pane_id,
-            })
-        {
-            self.item_drop_target = None;
+        if self.drop_targets.item().is_some_and(|target| match target {
+            ItemDropTarget::Pane {
+                pane_id: target_pane,
+                ..
+            }
+            | ItemDropTarget::Directory {
+                pane_id: target_pane,
+                ..
+            } => *target_pane == pane_id,
+        }) {
+            self.drop_targets.clear_item();
         }
         if self
             .rubber_band
@@ -3237,74 +2560,21 @@ impl FikaApp {
     fn layout_projection_for_pane(&mut self, pane_id: PaneId) -> Option<PaneLayoutProjection> {
         let filtered_model = self.filtered_model_for_pane(pane_id);
         let pane = self.panes.pane(pane_id)?;
-        let item_count = filtered_model
+        let filtered = filtered_model.as_ref().map(|(filtered, _)| filtered);
+        let source_revision = filtered_model.as_ref().map_or(0, |(_, revision)| *revision);
+        let rename_draft = self
+            .rename_draft
             .as_ref()
-            .map_or_else(|| pane.model.len(), |(filtered, _)| filtered.len());
-        let layout = match pane.view.view_mode {
-            ViewMode::Icons => PaneLayout::Icons(IconsLayout::new(
-                item_count,
-                icons_layout_options(&pane.view, 0.0),
-            )),
-            ViewMode::Compact => {
-                let rename_draft = self
-                    .rename_draft
-                    .as_ref()
-                    .filter(|draft| draft.pane_id == pane_id);
-                let rename_text_override =
-                    Self::rename_text_override_for_model(&pane.model, rename_draft);
-                PaneLayout::Compact(match filtered_model.as_ref() {
-                    Some((filtered, source_revision)) => {
-                        compact_layout_for_filtered_model_with_text_override(
-                            self.compact_column_widths.entry(pane_id).or_default(),
-                            &pane.model,
-                            filtered,
-                            *source_revision,
-                            &pane.view,
-                            rename_text_override,
-                        )
-                    }
-                    None => compact_layout_for_model_with_text_override(
-                        self.compact_column_widths.entry(pane_id).or_default(),
-                        &pane.model,
-                        &pane.view,
-                        rename_text_override,
-                    ),
-                })
-            }
-            ViewMode::Details => PaneLayout::Details {
-                row_count: item_count,
-                content_width: details_content_width(file_ops::is_trash_files_dir(
-                    &pane.current_dir,
-                ))
-                .max(1.0),
-            },
-        };
-        Some(PaneLayoutProjection::new(
-            layout,
-            filtered_model.map(|(filtered, _)| filtered),
-        ))
-    }
-
-    fn rename_text_override_for_model(
-        model: &fika_core::DirectoryModel,
-        draft: Option<&RenameDraft>,
-    ) -> Option<CompactTextWidthOverride> {
-        let draft = draft?;
-        let model_index = model.index_of_path(&draft.original_path)?;
-        Some(CompactTextWidthOverride {
-            model_index,
-            text_width: compact_text_width_for_name(&draft.draft_name),
-        })
-    }
-
-    fn required_text_width_for_entry(
-        entry: &fika_core::EntryData,
-        draft: Option<&RenameDraft>,
-    ) -> f32 {
-        let base_width = compact_text_width(entry.name_width_units);
-        draft
-            .map(|draft| base_width.max(compact_text_width_for_name(&draft.draft_name)))
-            .unwrap_or(base_width)
+            .filter(|draft| draft.pane_id == pane_id);
+        Some(pane_layout_projection(PaneLayoutProjectionInput {
+            model: &pane.model,
+            view: &pane.view,
+            filtered,
+            source_revision,
+            rename_draft,
+            trash_view: file_ops::is_trash_files_dir(&pane.current_dir),
+            compact_column_widths: self.compact_column_widths.entry(pane_id).or_default(),
+        }))
     }
 
     fn item_at_content_point(
@@ -3313,38 +2583,18 @@ impl FikaApp {
         point: ViewPoint,
     ) -> Option<ContentItemHit> {
         let projection = self.layout_projection_for_pane(pane_id)?;
-        let layout_index = projection.layout.hit_test_content_point(point)?;
-        let model_index = projection.model_index_for_layout_index(layout_index)?;
         let rename_draft = self
             .rename_draft
             .as_ref()
             .filter(|draft| draft.pane_id == pane_id);
         let pane = self.panes.pane(pane_id)?;
-        let entry = pane.model.get(model_index)?;
-        let path = pane.model.path_for_index(model_index)?;
-        let active_rename_draft = rename_draft.filter(|draft| draft.original_path == path);
-        let item_layout = projection.layout.item_with_required_text_width(
-            layout_index,
-            Some(Self::required_text_width_for_entry(
-                entry,
-                active_rename_draft,
-            )),
-        )?;
-        if !item_layout.visual_rect.contains(point) {
-            return None;
-        }
-        Some(ContentItemHit {
-            model_index,
-            path,
-            is_dir: entry.is_dir,
-        })
+        content_item_hit_at_point(&projection, &pane.model, rename_draft, point)
     }
 
     fn indexes_intersecting_visual_rect(&mut self, pane_id: PaneId, rect: ViewRect) -> Vec<usize> {
         let Some(projection) = self.layout_projection_for_pane(pane_id) else {
             return Vec::new();
         };
-        let candidate_indexes = projection.layout.indexes_intersecting(rect);
         let rename_draft = self
             .rename_draft
             .as_ref()
@@ -3352,28 +2602,7 @@ impl FikaApp {
         let Some(pane) = self.panes.pane(pane_id) else {
             return Vec::new();
         };
-        candidate_indexes
-            .into_iter()
-            .filter_map(|layout_index| {
-                let model_index = projection.model_index_for_layout_index(layout_index)?;
-                let Some(entry) = pane.model.get(model_index) else {
-                    return None;
-                };
-                let path = pane.model.path_for_index(model_index)?;
-                let active_rename_draft = rename_draft.filter(|draft| draft.original_path == path);
-                projection
-                    .layout
-                    .item_with_required_text_width(
-                        layout_index,
-                        Some(Self::required_text_width_for_entry(
-                            entry,
-                            active_rename_draft,
-                        )),
-                    )
-                    .is_some_and(|item| item.visual_rect.intersects(rect))
-                    .then_some(model_index)
-            })
-            .collect()
+        model_indexes_intersecting_visual_rect(&projection, &pane.model, rename_draft, rect)
     }
 
     fn handle_blank_click(&mut self, pane_id: PaneId, position: gpui::Point<gpui::Pixels>) -> bool {
@@ -4573,8 +3802,7 @@ impl FikaApp {
             paths,
             export,
         });
-        self.item_drop_target = None;
-        self.place_drop_target = None;
+        self.drop_targets.clear_without_touch();
     }
 
     fn active_item_drag_paths(&self, payload: &ItemDragPayload) -> Option<Vec<PathBuf>> {
@@ -4591,8 +3819,7 @@ impl FikaApp {
             .is_some_and(|drag| drag.payload == *payload)
         {
             self.active_item_drag = None;
-            self.item_drop_target = None;
-            self.place_drop_target = None;
+            self.drop_targets.clear_without_touch();
         }
     }
 
@@ -4601,15 +3828,8 @@ impl FikaApp {
         pane_id: PaneId,
         mode: FileTransferMode,
     ) -> bool {
-        let target = Some(ItemDropTarget::Pane { pane_id, mode });
-        if self.item_drop_target == target && self.place_drop_target.is_none() {
-            self.touch_drop_target_stale_generation();
-            return false;
-        }
-        self.item_drop_target = target;
-        self.place_drop_target = None;
-        self.touch_drop_target_stale_generation();
-        true
+        self.drop_targets
+            .set_item(ItemDropTarget::Pane { pane_id, mode })
     }
 
     pub(crate) fn set_item_drag_drop_target_for_directory(
@@ -4621,19 +3841,11 @@ impl FikaApp {
         if !self.item_drag_can_drop_to_directory(&path) {
             return self.clear_drag_drop_targets();
         }
-        let target = Some(ItemDropTarget::Directory {
+        self.drop_targets.set_item(ItemDropTarget::Directory {
             pane_id,
             path,
             mode,
-        });
-        if self.item_drop_target == target && self.place_drop_target.is_none() {
-            self.touch_drop_target_stale_generation();
-            return false;
-        }
-        self.item_drop_target = target;
-        self.place_drop_target = None;
-        self.touch_drop_target_stale_generation();
-        true
+        })
     }
 
     pub(crate) fn item_drag_can_drop_to_directory(&self, target_dir: &Path) -> bool {
@@ -4643,25 +3855,11 @@ impl FikaApp {
     }
 
     fn clear_item_drop_target(&mut self) -> bool {
-        let had_target = self.item_drop_target.is_some();
-        self.item_drop_target = None;
-        if had_target {
-            self.touch_drop_target_stale_generation();
-        }
-        had_target
+        self.drop_targets.clear_item()
     }
 
     pub(crate) fn clear_item_drop_target_for_pane(&mut self, pane_id: PaneId) -> bool {
-        if matches!(
-            self.item_drop_target,
-            Some(ItemDropTarget::Pane {
-                pane_id: target_pane,
-                ..
-            }) if target_pane == pane_id
-        ) {
-            return self.clear_item_drop_target();
-        }
-        false
+        self.drop_targets.clear_item_for_pane(pane_id)
     }
 
     pub(crate) fn clear_item_drop_target_for_directory(
@@ -4669,19 +3867,7 @@ impl FikaApp {
         pane_id: PaneId,
         path: &Path,
     ) -> bool {
-        if self.item_drop_target.as_ref().is_some_and(|target| {
-            matches!(
-                target,
-                ItemDropTarget::Directory {
-                    pane_id: target_pane,
-                    path: target_path,
-                    ..
-                } if *target_pane == pane_id && target_path == path
-            )
-        }) {
-            return self.clear_item_drop_target();
-        }
-        false
+        self.drop_targets.clear_item_for_directory(pane_id, path)
     }
 
     pub(crate) fn set_place_drag_drop_target_for_path(
@@ -4689,48 +3875,23 @@ impl FikaApp {
         path: PathBuf,
         mode: FileTransferMode,
     ) -> bool {
-        let target = Some(PlaceDropTarget::Place { path, mode });
-        if self.place_drop_target == target && self.item_drop_target.is_none() {
-            self.touch_drop_target_stale_generation();
-            return false;
-        }
-        self.place_drop_target = target;
-        self.item_drop_target = None;
-        self.touch_drop_target_stale_generation();
-        true
+        self.drop_targets
+            .set_place(PlaceDropTarget::Place { path, mode })
     }
 
     pub(crate) fn set_place_drag_drop_target_for_insert(&mut self, index: usize) -> bool {
         let index = self.user_place_insert_index(index);
-        let target = Some(PlaceDropTarget::Insert { index });
-        if self.place_drop_target == target && self.item_drop_target.is_none() {
-            self.touch_drop_target_stale_generation();
-            return false;
-        }
-        self.place_drop_target = target;
-        self.item_drop_target = None;
-        self.touch_drop_target_stale_generation();
-        true
+        self.drop_targets
+            .set_place(PlaceDropTarget::Insert { index })
     }
 
     fn clear_place_drop_target(&mut self) -> bool {
-        let had_target = self.place_drop_target.is_some();
-        self.place_drop_target = None;
-        if had_target {
-            self.touch_drop_target_stale_generation();
-        }
-        had_target
+        self.drop_targets.clear_place()
     }
 
     pub(crate) fn clear_place_drop_target_for_insert(&mut self, index: usize) -> bool {
         let index = self.user_place_insert_index(index);
-        if matches!(
-            self.place_drop_target,
-            Some(PlaceDropTarget::Insert { index: target_index }) if target_index == index
-        ) {
-            return self.clear_place_drop_target();
-        }
-        false
+        self.drop_targets.clear_place_for_insert(index)
     }
 
     pub(crate) fn clear_place_drop_target_for_row(
@@ -4741,39 +3902,15 @@ impl FikaApp {
     ) -> bool {
         let before = self.user_place_insert_index(insert_before_index);
         let after = self.user_place_insert_index(insert_after_index);
-        let matches_row = self
-            .place_drop_target
-            .as_ref()
-            .is_some_and(|target| match target {
-                PlaceDropTarget::Place {
-                    path: target_path, ..
-                } => target_path == path,
-                PlaceDropTarget::Insert { index } => *index == before || *index == after,
-            });
-        if matches_row {
-            return self.clear_place_drop_target();
-        }
-        false
+        self.drop_targets.clear_place_for_row(path, before, after)
     }
 
     pub(crate) fn clear_drag_drop_targets(&mut self) -> bool {
-        let had_target = self.item_drop_target.is_some() || self.place_drop_target.is_some();
-        self.item_drop_target = None;
-        self.place_drop_target = None;
-        if had_target {
-            self.touch_drop_target_stale_generation();
-        }
-        had_target
-    }
-
-    fn touch_drop_target_stale_generation(&mut self) {
-        self.drop_target_stale_generation = self.drop_target_stale_generation.wrapping_add(1);
+        self.drop_targets.clear_all()
     }
 
     pub(crate) fn schedule_drop_target_stale_clear(&mut self, cx: &mut Context<Self>) {
-        if self.drop_target_stale_timer_running
-            || (self.item_drop_target.is_none() && self.place_drop_target.is_none())
-        {
+        if self.drop_target_stale_timer_running || !self.drop_targets.has_target() {
             return;
         }
         self.drop_target_stale_timer_running = true;
@@ -4783,7 +3920,7 @@ impl FikaApp {
                 async move {
                     loop {
                         let Ok(generation) =
-                            this.update(&mut cx, |app, _cx| app.drop_target_stale_generation)
+                            this.update(&mut cx, |app, _cx| app.drop_targets.stale_generation())
                         else {
                             break;
                         };
@@ -4791,7 +3928,7 @@ impl FikaApp {
                             .timer(DROP_TARGET_STALE_TIMEOUT)
                             .await;
                         let Ok(keep_running) = this.update(&mut cx, |app, cx| {
-                            if app.drop_target_stale_generation == generation {
+                            if app.drop_targets.stale_generation() == generation {
                                 let changed =
                                     app.clear_stale_drop_targets_for_generation(generation);
                                 app.drop_target_stale_timer_running = false;
@@ -4799,9 +3936,7 @@ impl FikaApp {
                                     cx.notify();
                                 }
                                 false
-                            } else if app.item_drop_target.is_some()
-                                || app.place_drop_target.is_some()
-                            {
+                            } else if app.drop_targets.has_target() {
                                 true
                             } else {
                                 app.drop_target_stale_timer_running = false;
@@ -4821,16 +3956,7 @@ impl FikaApp {
     }
 
     fn clear_stale_drop_targets_for_generation(&mut self, generation: u64) -> bool {
-        if self.drop_target_stale_generation != generation {
-            return false;
-        }
-        let had_target = self.item_drop_target.is_some() || self.place_drop_target.is_some();
-        self.item_drop_target = None;
-        self.place_drop_target = None;
-        if had_target {
-            self.touch_drop_target_stale_generation();
-        }
-        had_target
+        self.drop_targets.clear_stale_for_generation(generation)
     }
 
     pub(crate) fn drop_item_drag_to_pane(
@@ -4982,8 +4108,9 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) {
         match self
-            .place_drop_target
-            .clone()
+            .drop_targets
+            .place()
+            .cloned()
             .unwrap_or(PlaceDropTarget::Place {
                 path: fallback_dir,
                 mode,
@@ -5005,8 +4132,9 @@ impl FikaApp {
         cx: &mut Context<Self>,
     ) {
         match self
-            .place_drop_target
-            .clone()
+            .drop_targets
+            .place()
+            .cloned()
             .unwrap_or(PlaceDropTarget::Place {
                 path: fallback_dir,
                 mode,
@@ -10018,9 +9146,9 @@ text/plain=viewer.desktop;\n",
 
         assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
         assert!(app.set_place_drag_drop_target_for_path(user.clone(), FileTransferMode::Copy));
-        assert!(app.item_drop_target.is_none());
+        assert!(app.drop_targets.item().is_none());
         assert_eq!(
-            place_drop_target_mode_for_place(app.place_drop_target.as_ref(), &user),
+            place_drop_target_mode_for_place(app.drop_targets.place(), &user),
             Some(FileTransferMode::Copy)
         );
         assert!(
@@ -10032,7 +9160,7 @@ text/plain=viewer.desktop;\n",
 
         assert!(app.set_place_drag_drop_target_for_insert(0));
         assert!(place_drop_target_matches_insert(
-            app.place_drop_target.as_ref(),
+            app.drop_targets.place(),
             1
         ));
         assert!(
@@ -10088,30 +9216,30 @@ text/plain=viewer.desktop;\n",
         ];
 
         assert!(app.set_place_drag_drop_target_for_path(user.clone(), FileTransferMode::Copy));
-        let place_generation = app.drop_target_stale_generation;
+        let place_generation = app.drop_targets.stale_generation();
         assert!(!app.clear_place_drop_target_for_row(&current, 0, 1));
         assert_eq!(
-            place_drop_target_mode_for_place(app.place_drop_target.as_ref(), &user),
+            place_drop_target_mode_for_place(app.drop_targets.place(), &user),
             Some(FileTransferMode::Copy)
         );
         assert!(app.clear_place_drop_target_for_row(&user, 1, 2));
-        assert!(app.drop_target_stale_generation > place_generation);
-        assert!(app.place_drop_target.is_none());
+        assert!(app.drop_targets.stale_generation() > place_generation);
+        assert!(app.drop_targets.place().is_none());
 
         assert!(app.set_place_drag_drop_target_for_insert(0));
-        let insert_generation = app.drop_target_stale_generation;
+        let insert_generation = app.drop_targets.stale_generation();
         assert!(!app.clear_place_drop_target_for_insert(2));
         assert!(place_drop_target_matches_insert(
-            app.place_drop_target.as_ref(),
+            app.drop_targets.place(),
             1
         ));
         assert!(app.clear_place_drop_target_for_insert(0));
-        assert!(app.drop_target_stale_generation > insert_generation);
-        assert!(app.place_drop_target.is_none());
+        assert!(app.drop_targets.stale_generation() > insert_generation);
+        assert!(app.drop_targets.place().is_none());
 
         assert!(app.set_place_drag_drop_target_for_insert(2));
         assert!(app.clear_place_drop_target_for_row(&user, 1, 2));
-        assert!(app.place_drop_target.is_none());
+        assert!(app.drop_targets.place().is_none());
 
         let _ = std::fs::remove_dir_all(current);
         let _ = std::fs::remove_dir_all(user);
@@ -10128,18 +9256,18 @@ text/plain=viewer.desktop;\n",
         let pane_id = app.panes.focused().unwrap();
 
         assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
-        let stale_generation = app.drop_target_stale_generation;
+        let stale_generation = app.drop_targets.stale_generation();
         assert!(app.set_place_drag_drop_target_for_path(target.clone(), FileTransferMode::Copy));
         assert!(!app.clear_stale_drop_targets_for_generation(stale_generation));
         assert_eq!(
-            place_drop_target_mode_for_place(app.place_drop_target.as_ref(), &target),
+            place_drop_target_mode_for_place(app.drop_targets.place(), &target),
             Some(FileTransferMode::Copy)
         );
 
-        let current_generation = app.drop_target_stale_generation;
+        let current_generation = app.drop_targets.stale_generation();
         assert!(app.clear_stale_drop_targets_for_generation(current_generation));
-        assert!(app.item_drop_target.is_none());
-        assert!(app.place_drop_target.is_none());
+        assert!(app.drop_targets.item().is_none());
+        assert!(app.drop_targets.place().is_none());
 
         let _ = std::fs::remove_dir_all(current);
         let _ = std::fs::remove_dir_all(target);
@@ -10154,12 +9282,12 @@ text/plain=viewer.desktop;\n",
         let pane_id = app.panes.focused().unwrap();
 
         assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
-        let first_generation = app.drop_target_stale_generation;
+        let first_generation = app.drop_targets.stale_generation();
         assert!(!app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
-        assert!(app.drop_target_stale_generation > first_generation);
+        assert!(app.drop_targets.stale_generation() > first_generation);
         assert!(!app.clear_stale_drop_targets_for_generation(first_generation));
         assert_eq!(
-            item_drop_target_mode_for_pane(app.item_drop_target.as_ref(), pane_id),
+            item_drop_target_mode_for_pane(app.drop_targets.item(), pane_id),
             Some(FileTransferMode::Copy)
         );
 
@@ -10226,7 +9354,7 @@ text/plain=viewer.desktop;\n",
         assert!(app.places[1].editable);
         assert!(app.places[1].removable);
         assert!(app.active_item_drag.is_none());
-        assert!(app.place_drop_target.is_none());
+        assert!(app.drop_targets.place().is_none());
         assert!(
             app.status_message_for_pane(pane_id)
                 .starts_with("Added place ")
@@ -10341,7 +9469,7 @@ text/plain=viewer.desktop;\n",
                 .collect::<Vec<_>>(),
             vec!["Home", "Beta", "Alpha", "Root"]
         );
-        assert!(app.place_drop_target.is_none());
+        assert!(app.drop_targets.place().is_none());
         assert_eq!(app.status_message_for_pane(pane_id), "Moved place Beta");
         assert_eq!(
             fika_core::load_user_places(&app.user_places_path),
@@ -10409,7 +9537,7 @@ text/plain=viewer.desktop;\n",
                 .collect::<Vec<_>>(),
             vec!["Home", "User"]
         );
-        assert!(app.place_drop_target.is_none());
+        assert!(app.drop_targets.place().is_none());
         assert_eq!(
             app.status_message_for_pane(pane_id),
             "Place cannot be moved"
@@ -10450,8 +9578,8 @@ text/plain=viewer.desktop;\n",
                 .map(|pane| pane.current_dir.as_path()),
             Some(place_dir.as_path())
         );
-        assert!(app.item_drop_target.is_none());
-        assert!(app.place_drop_target.is_none());
+        assert!(app.drop_targets.item().is_none());
+        assert!(app.drop_targets.place().is_none());
         assert_eq!(
             app.status_message_for_pane(second),
             format!("Loading {}", place_dir.display())
@@ -10978,7 +10106,7 @@ text/plain=viewer.desktop;\n",
         app.visible_item_slots
             .entry(pane_id)
             .or_default()
-            .slots_for_items(item_ids);
+            .update_visible_items(item_ids);
         app.compact_column_widths
             .insert(pane_id, CompactColumnWidthCache::default());
 
@@ -11850,11 +10978,11 @@ text/plain=viewer.desktop;\n",
         app.visible_item_slots
             .entry(first)
             .or_default()
-            .slots_for_items(first_ids);
+            .update_visible_items(first_ids);
         app.visible_item_slots
             .entry(second)
             .or_default()
-            .slots_for_items(second_ids);
+            .update_visible_items(second_ids);
         app.compact_column_widths
             .insert(first, CompactColumnWidthCache::default());
         app.compact_column_widths
@@ -12068,15 +11196,11 @@ text/plain=viewer.desktop;\n",
 
         assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
         assert_eq!(
-            item_drop_target_mode_for_pane(app.item_drop_target.as_ref(), pane_id),
+            item_drop_target_mode_for_pane(app.drop_targets.item(), pane_id),
             Some(FileTransferMode::Copy)
         );
         assert_eq!(
-            item_drop_target_mode_for_directory(
-                app.item_drop_target.as_ref(),
-                pane_id,
-                &target_dir
-            ),
+            item_drop_target_mode_for_directory(app.drop_targets.item(), pane_id, &target_dir),
             None
         );
         assert!(!app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
@@ -12087,21 +11211,17 @@ text/plain=viewer.desktop;\n",
             FileTransferMode::Copy
         ));
         assert_eq!(
-            item_drop_target_mode_for_pane(app.item_drop_target.as_ref(), pane_id),
+            item_drop_target_mode_for_pane(app.drop_targets.item(), pane_id),
             None
         );
         assert_eq!(
-            item_drop_target_mode_for_directory(
-                app.item_drop_target.as_ref(),
-                pane_id,
-                &target_dir
-            ),
+            item_drop_target_mode_for_directory(app.drop_targets.item(), pane_id, &target_dir),
             Some(FileTransferMode::Copy)
         );
 
         app.clear_pane_content_state(pane_id);
 
-        assert!(app.item_drop_target.is_none());
+        assert!(app.drop_targets.item().is_none());
         let _ = std::fs::remove_dir_all(temp);
     }
 
@@ -12116,31 +11236,31 @@ text/plain=viewer.desktop;\n",
         let pane_id = app.panes.focused().unwrap();
 
         assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
-        let pane_generation = app.drop_target_stale_generation;
+        let pane_generation = app.drop_targets.stale_generation();
         assert!(!app.clear_item_drop_target_for_pane(PaneId(999)));
         assert_eq!(
-            item_drop_target_mode_for_pane(app.item_drop_target.as_ref(), pane_id),
+            item_drop_target_mode_for_pane(app.drop_targets.item(), pane_id),
             Some(FileTransferMode::Copy)
         );
         assert!(app.clear_item_drop_target_for_pane(pane_id));
-        assert!(app.drop_target_stale_generation > pane_generation);
-        assert!(app.item_drop_target.is_none());
+        assert!(app.drop_targets.stale_generation() > pane_generation);
+        assert!(app.drop_targets.item().is_none());
 
         assert!(app.set_item_drag_drop_target_for_directory(
             pane_id,
             first_dir.clone(),
             FileTransferMode::Move,
         ));
-        let directory_generation = app.drop_target_stale_generation;
+        let directory_generation = app.drop_targets.stale_generation();
         assert!(!app.clear_item_drop_target_for_directory(pane_id, &second_dir));
         assert!(!app.clear_item_drop_target_for_directory(PaneId(999), &first_dir));
         assert_eq!(
-            item_drop_target_mode_for_directory(app.item_drop_target.as_ref(), pane_id, &first_dir),
+            item_drop_target_mode_for_directory(app.drop_targets.item(), pane_id, &first_dir),
             Some(FileTransferMode::Move)
         );
         assert!(app.clear_item_drop_target_for_directory(pane_id, &first_dir));
-        assert!(app.drop_target_stale_generation > directory_generation);
-        assert!(app.item_drop_target.is_none());
+        assert!(app.drop_targets.stale_generation() > directory_generation);
+        assert!(app.drop_targets.item().is_none());
 
         let _ = std::fs::remove_dir_all(temp);
     }
@@ -12168,7 +11288,7 @@ text/plain=viewer.desktop;\n",
             source_dir.clone(),
             FileTransferMode::Copy
         ));
-        assert!(app.item_drop_target.is_none());
+        assert!(app.drop_targets.item().is_none());
 
         assert!(app.item_drag_can_drop_to_directory(&target_dir));
         assert!(app.set_item_drag_drop_target_for_directory(
@@ -12177,11 +11297,7 @@ text/plain=viewer.desktop;\n",
             FileTransferMode::Copy
         ));
         assert_eq!(
-            item_drop_target_mode_for_directory(
-                app.item_drop_target.as_ref(),
-                pane_id,
-                &target_dir
-            ),
+            item_drop_target_mode_for_directory(app.drop_targets.item(), pane_id, &target_dir),
             Some(FileTransferMode::Copy)
         );
         let _ = std::fs::remove_dir_all(temp);
@@ -12454,17 +11570,17 @@ text/plain=viewer.desktop;\n",
         let pane_id = app.panes.focused().unwrap();
 
         assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Copy));
-        let first_generation = app.drop_target_stale_generation;
+        let first_generation = app.drop_targets.stale_generation();
         assert_eq!(
-            item_drop_target_mode_for_pane(app.item_drop_target.as_ref(), pane_id),
+            item_drop_target_mode_for_pane(app.drop_targets.item(), pane_id),
             Some(FileTransferMode::Copy)
         );
 
         assert!(app.set_item_drag_drop_target_for_pane(pane_id, FileTransferMode::Move));
 
-        assert!(app.drop_target_stale_generation > first_generation);
+        assert!(app.drop_targets.stale_generation() > first_generation);
         assert_eq!(
-            item_drop_target_mode_for_pane(app.item_drop_target.as_ref(), pane_id),
+            item_drop_target_mode_for_pane(app.drop_targets.item(), pane_id),
             Some(FileTransferMode::Move)
         );
         let _ = std::fs::remove_dir_all(temp);
@@ -12522,28 +11638,42 @@ text/plain=viewer.desktop;\n",
     #[test]
     fn visible_item_slot_pool_reuses_offscreen_slots() {
         let mut pool = VisibleItemSlotPool::default();
-        let first = pool.slots_for_items([fika_core::ItemId(1), fika_core::ItemId(2)]);
-        assert_eq!(first.len(), 2);
-
-        let slot_for_one = first[&fika_core::ItemId(1)];
-        let slot_for_two = first[&fika_core::ItemId(2)];
-        let second = pool.slots_for_items([fika_core::ItemId(2), fika_core::ItemId(3)]);
-
-        assert_eq!(second[&fika_core::ItemId(2)], slot_for_two);
-        assert_eq!(second[&fika_core::ItemId(3)], slot_for_one);
+        pool.update_visible_items([fika_core::ItemId(1), fika_core::ItemId(2)]);
         assert_eq!(pool.slot_by_item_id.len(), 2);
+
+        let slot_for_one = pool.slot_for_item(fika_core::ItemId(1)).unwrap();
+        let slot_for_two = pool.slot_for_item(fika_core::ItemId(2)).unwrap();
+        pool.update_visible_items([fika_core::ItemId(2), fika_core::ItemId(3)]);
+
+        assert_eq!(pool.slot_for_item(fika_core::ItemId(2)), Some(slot_for_two));
+        assert_eq!(pool.slot_for_item(fika_core::ItemId(3)), Some(slot_for_one));
+        assert_eq!(pool.slot_by_item_id.len(), 2);
+    }
+
+    #[test]
+    fn visible_item_slot_pool_treats_duplicate_visible_ids_as_one_widget() {
+        let mut pool = VisibleItemSlotPool::default();
+        pool.update_visible_items([
+            fika_core::ItemId(7),
+            fika_core::ItemId(7),
+            fika_core::ItemId(7),
+        ]);
+
+        assert_eq!(pool.slot_by_item_id.len(), 1);
+        assert!(pool.slot_for_item(fika_core::ItemId(7)).is_some());
+        assert!(pool.free_slots.is_empty());
     }
 
     #[test]
     fn visible_item_slot_pool_caps_recycled_slots() {
         let mut pool = VisibleItemSlotPool::default();
         let visible = (1..=150).map(fika_core::ItemId).collect::<Vec<_>>();
-        let first = pool.slots_for_items(visible);
-        assert_eq!(first.len(), 150);
+        pool.update_visible_items(visible);
+        assert_eq!(pool.slot_by_item_id.len(), 150);
 
-        let second = pool.slots_for_items(std::iter::empty::<fika_core::ItemId>());
+        pool.update_visible_items(std::iter::empty::<fika_core::ItemId>());
 
-        assert!(second.is_empty());
+        assert!(pool.slot_by_item_id.is_empty());
         assert_eq!(pool.free_slots.len(), VisibleItemSlotPool::MAX_FREE_SLOTS);
     }
 
@@ -13098,9 +12228,7 @@ text/plain=viewer.desktop;\n",
             operations: OperationQueue::new(),
             clipboard: None,
             active_item_drag: None,
-            item_drop_target: None,
-            place_drop_target: None,
-            drop_target_stale_generation: 0,
+            drop_targets: DropTargetState::default(),
             drop_target_stale_timer_running: false,
             rename_draft: None,
             rename_next_after_operation: None,

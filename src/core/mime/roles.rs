@@ -158,24 +158,25 @@ impl MimeProbeScheduler {
         &mut self,
         pane_id: PaneId,
         generation: Generation,
-        candidates: Vec<MimeProbeCandidate>,
+        candidates: impl IntoIterator<Item = MimeProbeCandidate>,
     ) -> bool {
-        let keep = candidates
-            .iter()
-            .map(|candidate| MimeWorkKey::from_candidate(pane_id, generation, candidate))
-            .collect::<HashSet<_>>();
+        let mut keep = HashSet::new();
+        let mut pending = Vec::new();
+        for candidate in candidates {
+            let key = MimeWorkKey::from_candidate(pane_id, generation, &candidate);
+            keep.insert(key.clone());
+            if let Some(request) = MimeProbeRequest::from_candidate(pane_id, generation, candidate)
+            {
+                pending.push((key, request));
+            }
+        }
         self.prune_queued_for_snapshot(pane_id, generation, &keep);
 
         let mut queued = false;
-        for candidate in candidates {
-            let key = MimeWorkKey::from_candidate(pane_id, generation, &candidate);
+        for (key, request) in pending {
             if self.seen.contains(&key) {
                 continue;
             }
-            let Some(request) = MimeProbeRequest::from_candidate(pane_id, generation, candidate)
-            else {
-                continue;
-            };
             self.seen.insert(key);
             self.requests.push_back(request);
             queued = true;
