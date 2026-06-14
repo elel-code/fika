@@ -144,8 +144,15 @@ pub struct DirectoryLister {
     generation: Generation,
     path: PathBuf,
     request_serial: u64,
+    active_listing: Option<ActiveListing>,
     watcher: Option<notify::RecommendedWatcher>,
     watcher_rx: Option<Receiver<notify::Result<Event>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ActiveListing {
+    request_serial: RequestSerial,
+    received_items: bool,
 }
 
 impl DirectoryLister {
@@ -155,6 +162,7 @@ impl DirectoryLister {
             generation,
             path,
             request_serial: 0,
+            active_listing: None,
             watcher: None,
             watcher_rx: None,
         }
@@ -164,6 +172,7 @@ impl DirectoryLister {
         self.pane_id = pane_id;
         self.generation = generation;
         self.path = path;
+        self.active_listing = None;
         self.drop_watcher();
     }
 
@@ -177,6 +186,10 @@ impl DirectoryLister {
 
     pub fn load_directory(&mut self, mode: LoadMode) -> DirectoryListerEvent {
         let serial = self.next_serial();
+        self.active_listing = Some(ActiveListing {
+            request_serial: serial,
+            received_items: false,
+        });
         self.loading_started(mode, serial)
     }
 
@@ -302,14 +315,40 @@ impl DirectoryLister {
         event: DirectoryListerEvent,
         model: &mut DirectoryModel,
     ) -> Vec<DirectoryModelSignal> {
+        if self
+            .active_listing
+            .is_some_and(|listing| listing.request_serial < RequestSerial(self.request_serial))
+        {
+            self.active_listing = None;
+        }
         if event.request_serial() < RequestSerial(self.request_serial) {
             return Vec::new();
         }
 
         match event {
-            DirectoryListerEvent::LoadingStarted { .. } => Vec::new(),
-            DirectoryListerEvent::CurrentDirectoryRemoved { .. }
-            | DirectoryListerEvent::Error { .. } => Vec::new(),
+            DirectoryListerEvent::LoadingStarted { request_serial, .. } => {
+                self.active_listing = Some(ActiveListing {
+                    request_serial,
+                    received_items: false,
+                });
+                Vec::new()
+            }
+            DirectoryListerEvent::CurrentDirectoryRemoved { request_serial, .. }
+            | DirectoryListerEvent::Error { request_serial, .. } => {
+                self.clear_active_listing_for_serial(request_serial);
+                Vec::new()
+            }
+            DirectoryListerEvent::ItemsAdded {
+                request_serial,
+                path,
+                entries,
+                ..
+            } if self.active_listing_is_waiting_for_first_items(request_serial) => {
+                if let Some(listing) = &mut self.active_listing {
+                    listing.received_items = true;
+                }
+                model.replace_listing(path, Arc::new(entries))
+            }
             DirectoryListerEvent::ItemsAdded { path, entries, .. } if model.directory() != path => {
                 model.replace_listing(path, Arc::new(entries))
             }
@@ -318,13 +357,56 @@ impl DirectoryLister {
             DirectoryListerEvent::ItemsRefreshed { pairs, .. } => {
                 model.apply_items_refreshed(pairs)
             }
-            DirectoryListerEvent::ListingRefreshed { path, entries, .. } => {
+            DirectoryListerEvent::ListingRefreshed {
+                request_serial,
+                path,
+                entries,
+                ..
+            } => {
+                self.clear_active_listing_for_serial(request_serial);
                 model.replace_listing(path, entries)
             }
-            DirectoryListerEvent::ListingCompleted { path, .. } if model.directory() != path => {
+            DirectoryListerEvent::ListingCompleted {
+                request_serial,
+                path,
+                ..
+            } if self.active_listing_is_empty(request_serial) => {
+                self.clear_active_listing_for_serial(request_serial);
                 model.clear_for_directory(path)
             }
-            DirectoryListerEvent::ListingCompleted { .. } => Vec::new(),
+            DirectoryListerEvent::ListingCompleted {
+                request_serial,
+                path,
+                ..
+            } if model.directory() != path => {
+                self.clear_active_listing_for_serial(request_serial);
+                model.clear_for_directory(path)
+            }
+            DirectoryListerEvent::ListingCompleted { request_serial, .. } => {
+                self.clear_active_listing_for_serial(request_serial);
+                Vec::new()
+            }
+        }
+    }
+
+    fn active_listing_is_waiting_for_first_items(&self, request_serial: RequestSerial) -> bool {
+        self.active_listing.is_some_and(|listing| {
+            listing.request_serial == request_serial && !listing.received_items
+        })
+    }
+
+    fn active_listing_is_empty(&self, request_serial: RequestSerial) -> bool {
+        self.active_listing.is_some_and(|listing| {
+            listing.request_serial == request_serial && !listing.received_items
+        })
+    }
+
+    fn clear_active_listing_for_serial(&mut self, request_serial: RequestSerial) {
+        if self
+            .active_listing
+            .is_some_and(|listing| listing.request_serial == request_serial)
+        {
+            self.active_listing = None;
         }
     }
 
@@ -841,6 +923,73 @@ mod tests {
     }
 
     #[test]
+    fn streaming_reload_first_batch_replaces_current_listing() {
+        let root = PathBuf::from("/tmp/fika-streaming-reload-replace");
+        let mut lister = DirectoryLister::new(PaneId(1), root.clone(), Generation(1));
+        let mut model = DirectoryModel::for_directory(root.clone());
+        model.replace_listing(
+            root.clone(),
+            Arc::new(vec![test_entry("ghost.txt"), test_entry("kept.txt")]),
+        );
+
+        let started = lister.load_directory(LoadMode::Reload);
+        let request_serial = started.request_serial();
+        assert!(lister.apply_event_to_model(started, &mut model).is_empty());
+
+        let signals = lister.apply_event_to_model(
+            DirectoryListerEvent::ItemsAdded {
+                pane_id: PaneId(1),
+                generation: Generation(1),
+                request_serial,
+                path: root.clone(),
+                entries: vec![test_entry("kept.txt")],
+            },
+            &mut model,
+        );
+
+        assert_eq!(signals, vec![DirectoryModelSignal::ModelReset]);
+        assert_eq!(model_entry_names(&model), vec!["kept.txt"]);
+
+        lister.apply_event_to_model(
+            DirectoryListerEvent::ItemsAdded {
+                pane_id: PaneId(1),
+                generation: Generation(1),
+                request_serial,
+                path: root,
+                entries: vec![test_entry("new.txt")],
+            },
+            &mut model,
+        );
+
+        assert_eq!(model_entry_names(&model), vec!["kept.txt", "new.txt"]);
+    }
+
+    #[test]
+    fn streaming_reload_completed_without_items_clears_current_listing() {
+        let root = PathBuf::from("/tmp/fika-streaming-reload-empty");
+        let mut lister = DirectoryLister::new(PaneId(1), root.clone(), Generation(1));
+        let mut model = DirectoryModel::for_directory(root.clone());
+        model.replace_listing(root.clone(), Arc::new(vec![test_entry("ghost.txt")]));
+
+        let started = lister.load_directory(LoadMode::Reload);
+        let request_serial = started.request_serial();
+        assert!(lister.apply_event_to_model(started, &mut model).is_empty());
+
+        let signals = lister.apply_event_to_model(
+            DirectoryListerEvent::ListingCompleted {
+                pane_id: PaneId(1),
+                generation: Generation(1),
+                request_serial,
+                path: root,
+            },
+            &mut model,
+        );
+
+        assert_eq!(signals, vec![DirectoryModelSignal::ModelReset]);
+        assert!(model.entries().is_empty());
+    }
+
+    #[test]
     fn watcher_create_maps_to_items_added() {
         let root = Path::new("/tmp/root");
         let delta = WatcherDelta {
@@ -1043,5 +1192,28 @@ mod tests {
             ),
             vec![ClassifiedWatcherDelta::CurrentDirectoryRemoved]
         );
+    }
+
+    fn test_entry(name: &str) -> Entry {
+        Entry::new(super::super::entries::EntryData {
+            name: Arc::from(name),
+            name_width_units: name.len() as u16,
+            size_bytes: 0,
+            modified_secs: None,
+            metadata_complete: true,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            mime_type: None,
+            mime_magic_checked: true,
+            is_dir: false,
+        })
+    }
+
+    fn model_entry_names(model: &DirectoryModel) -> Vec<&str> {
+        model
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_ref())
+            .collect()
     }
 }

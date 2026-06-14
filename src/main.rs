@@ -4506,6 +4506,7 @@ impl FikaApp {
             success_count,
             failure_count,
             affected_dirs,
+            refresh_dirs,
             undo_items,
             created_items,
         } = result;
@@ -4529,7 +4530,6 @@ impl FikaApp {
                     },
                 );
             }
-            self.refresh_affected_dirs(&affected_dirs);
             if let Some(path) = created_selection {
                 self.rubber_band_selection_panes.remove(&pane_id);
                 let _ = self.panes.select_only(pane_id, path);
@@ -4539,6 +4539,9 @@ impl FikaApp {
                 self.rubber_band_selection_panes.remove(&pane_id);
                 let _ = self.panes.clear_selection(pane_id);
             }
+        }
+        if !refresh_dirs.is_empty() {
+            self.refresh_affected_dirs(&refresh_dirs);
         }
 
         self.finish_pane_operation(

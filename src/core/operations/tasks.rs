@@ -96,6 +96,7 @@ pub struct TransferTaskResult {
     pub success_count: usize,
     pub failure_count: usize,
     pub affected_dirs: Vec<PathBuf>,
+    pub refresh_dirs: Vec<PathBuf>,
     pub undo_items: Vec<TransferUndoItem>,
     pub created_items: Vec<CreateUndoItem>,
 }
@@ -182,18 +183,23 @@ pub fn created_item_label(kind: CreatedItemKind) -> &'static str {
 
 pub fn paste_text_result(pane_id: PaneId, target_dir: PathBuf, text: &str) -> TransferTaskResult {
     let mut affected_dirs = Vec::new();
+    let mut refresh_dirs = Vec::new();
     let mut created_items = Vec::new();
     let result = file_ops::write_unique_file(&target_dir, "Pasted Text", "txt", text.as_bytes());
     let (success_count, failure_count) = match result {
         Ok(path) => {
-            push_unique_path(&mut affected_dirs, target_dir);
+            push_unique_path(&mut affected_dirs, target_dir.clone());
+            push_unique_path(&mut refresh_dirs, target_dir);
             created_items.push(CreateUndoItem {
                 path,
                 kind: CreatedItemKind::File,
             });
             (1, 0)
         }
-        Err(_) => (0, 1),
+        Err(_) => {
+            push_unique_path(&mut refresh_dirs, target_dir);
+            (0, 1)
+        }
     };
 
     TransferTaskResult {
@@ -204,6 +210,7 @@ pub fn paste_text_result(pane_id: PaneId, target_dir: PathBuf, text: &str) -> Tr
         success_count,
         failure_count,
         affected_dirs,
+        refresh_dirs,
         undo_items: Vec::new(),
         created_items,
     }
@@ -223,6 +230,7 @@ pub fn transfer_paths_result(
     let mut success_count = 0;
     let mut failure_count = 0;
     let mut affected_dirs = Vec::new();
+    let mut refresh_dirs = Vec::new();
     let mut undo_items = Vec::new();
 
     for source in paths {
@@ -251,12 +259,14 @@ pub fn transfer_paths_result(
             Ok(outcome) => {
                 success_count += 1;
                 push_unique_path(&mut affected_dirs, target_dir.clone());
+                push_unique_path(&mut refresh_dirs, target_dir.clone());
                 if mode == FileTransferMode::Move
                     && let Some(parent) = source
                         .parent()
                         .filter(|parent| !parent.as_os_str().is_empty())
                 {
                     push_unique_path(&mut affected_dirs, parent.to_path_buf());
+                    push_unique_path(&mut refresh_dirs, parent.to_path_buf());
                 }
                 undo_items.push(TransferUndoItem {
                     operation: operation.to_string(),
@@ -267,6 +277,7 @@ pub fn transfer_paths_result(
             }
             Err(_) => {
                 failure_count += 1;
+                push_unique_path(&mut refresh_dirs, target_dir.clone());
             }
         }
     }
@@ -279,6 +290,7 @@ pub fn transfer_paths_result(
         success_count,
         failure_count,
         affected_dirs,
+        refresh_dirs,
         undo_items,
         created_items: Vec::new(),
     }
@@ -596,6 +608,7 @@ mod tests {
         assert_eq!(result.success_count, 1);
         assert_eq!(result.failure_count, 0);
         assert_eq!(result.affected_dirs, vec![target_dir.clone()]);
+        assert_eq!(result.refresh_dirs, vec![target_dir.clone()]);
         assert_eq!(
             result.undo_items,
             vec![TransferUndoItem {
@@ -638,6 +651,10 @@ mod tests {
         assert_eq!(result.failure_count, 0);
         assert_eq!(
             result.affected_dirs,
+            vec![target_dir.clone(), source_dir.clone()]
+        );
+        assert_eq!(
+            result.refresh_dirs,
             vec![target_dir.clone(), source_dir.clone()]
         );
         assert_eq!(result.undo_items[0].operation, "move");
@@ -701,7 +718,33 @@ mod tests {
 
         assert_eq!(result.success_count, 0);
         assert_eq!(result.failure_count, 1);
+        assert!(result.affected_dirs.is_empty());
+        assert!(result.refresh_dirs.is_empty());
         assert!(std::fs::read_dir(&target_dir).unwrap().next().is_none());
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn transfer_paths_result_refreshes_target_after_failed_attempt() {
+        let temp = test_dir("transfer-failed-refresh");
+        let target_dir = temp.join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+
+        let result = transfer_paths_result(
+            PaneId(17),
+            target_dir.clone(),
+            FileTransferMode::Copy,
+            vec![temp.join("missing.txt")],
+            "Copy",
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(result.success_count, 0);
+        assert_eq!(result.failure_count, 1);
+        assert!(result.affected_dirs.is_empty());
+        assert_eq!(result.refresh_dirs, vec![target_dir]);
         let _ = std::fs::remove_dir_all(temp);
     }
 
