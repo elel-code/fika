@@ -232,6 +232,12 @@ struct PendingRubberBand {
     start: ViewPoint,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PaneLoadingScrollPolicy {
+    Reset,
+    Preserve,
+}
+
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
 
 pub(crate) struct FikaApp {
@@ -734,6 +740,18 @@ impl FikaApp {
         self.item_view_scroll.reset_pane(pane_id);
         self.item_view_authoritative_scroll.remove(&pane_id);
         self.item_view_scrollbar_dragging.remove(&pane_id);
+    }
+
+    fn sync_item_view_scroll_handle_to_pane_view(&mut self, pane_id: PaneId) {
+        self.item_view_authoritative_scroll.remove(&pane_id);
+        self.item_view_scrollbar_dragging.remove(&pane_id);
+        if let Some(pane) = self.panes.pane(pane_id) {
+            let _ = self.item_view_scroll.sync_handle_to_view(
+                pane_id,
+                pane.view.scroll_x,
+                pane.view.scroll_y,
+            );
+        }
     }
 
     fn remove_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
@@ -1813,7 +1831,7 @@ impl FikaApp {
         let Some(event) = self.panes.load(pane_id, path.clone()) else {
             return;
         };
-        self.begin_pane_loading_transition(pane_id);
+        self.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Reset);
         if url_changed {
             self.clear_filter_query_for_url_change(pane_id);
         }
@@ -1829,7 +1847,7 @@ impl FikaApp {
         let Some(event) = self.panes.reload(pane_id) else {
             return;
         };
-        self.begin_pane_loading_transition(pane_id);
+        self.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Preserve);
         let cached_events = self.schedule_listing(&event);
         self.apply_event_with_previous_summary(event, previous_summary);
         self.apply_cached_listing_events(cached_events);
@@ -1848,7 +1866,7 @@ impl FikaApp {
         let Some(event) = self.panes.go_back(pane_id) else {
             return;
         };
-        self.begin_pane_loading_transition(pane_id);
+        self.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Reset);
         self.clear_filter_query_for_url_change(pane_id);
         let path = event.path().to_path_buf();
         let cached_events = self.schedule_listing(&event);
@@ -1863,7 +1881,7 @@ impl FikaApp {
         let Some(event) = self.panes.go_forward(pane_id) else {
             return;
         };
-        self.begin_pane_loading_transition(pane_id);
+        self.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Reset);
         self.clear_filter_query_for_url_change(pane_id);
         let path = event.path().to_path_buf();
         let cached_events = self.schedule_listing(&event);
@@ -1988,10 +2006,19 @@ impl FikaApp {
         self.clear_place_draft_for_pane(pane_id);
     }
 
-    fn begin_pane_loading_transition(&mut self, pane_id: PaneId) {
+    fn begin_pane_loading_transition(
+        &mut self,
+        pane_id: PaneId,
+        scroll_policy: PaneLoadingScrollPolicy,
+    ) {
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
-        self.reset_item_view_scroll_for_pane(pane_id);
+        match scroll_policy {
+            PaneLoadingScrollPolicy::Reset => self.reset_item_view_scroll_for_pane(pane_id),
+            PaneLoadingScrollPolicy::Preserve => {
+                self.sync_item_view_scroll_handle_to_pane_view(pane_id)
+            }
+        }
         self.cancel_stale_metadata_role_work_for_pane(pane_id);
         self.cancel_stale_thumbnail_work_for_pane(pane_id);
         self.location_edit_metrics.remove(&pane_id);
@@ -10551,6 +10578,28 @@ text/plain=viewer.desktop;\n",
         app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0);
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
+    }
+
+    #[test]
+    fn refresh_transition_preserves_item_view_scroll_handle() {
+        let mut app = test_app_with_entries("/tmp/fika-refresh-scroll", &["one.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        let scroll_handle = app.item_view_scroll_handle_for_pane(pane_id);
+
+        scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
+        app.panes
+            .set_view_scroll(pane_id, 140.0, 32.0, 1_000.0, 500.0)
+            .unwrap();
+        app.item_view_authoritative_scroll.insert(pane_id, 1);
+        app.item_view_scrollbar_dragging.insert(pane_id);
+
+        app.begin_pane_loading_transition(pane_id, PaneLoadingScrollPolicy::Preserve);
+
+        assert_eq!(scroll_handle.offset(), gpui::point(px(-140.0), px(-32.0)));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 140.0);
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_y, 32.0);
+        assert!(!app.item_view_authoritative_scroll.contains_key(&pane_id));
+        assert!(!app.item_view_scrollbar_dragging.contains(&pane_id));
     }
 
     #[test]

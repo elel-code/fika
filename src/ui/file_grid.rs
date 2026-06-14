@@ -102,7 +102,13 @@ impl ItemDrag {
 
 struct DragPreview {
     label: String,
+    cursor_offset_x: f32,
+    cursor_offset_y: f32,
 }
+
+const DRAG_PREVIEW_CURSOR_GAP: f32 = 10.0;
+const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
+const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
 
 fn drag_move_hits_item_path<T>(
     app: &mut FikaApp,
@@ -615,12 +621,15 @@ fn details_row(
                 cx.notify();
             }),
         )
-        .on_drag(drag_value, move |drag, _, _, cx| {
+        .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
             let _ = app.update(cx, |this, _cx| {
                 this.begin_item_drag(drag.payload());
             });
+            let (cursor_offset_x, cursor_offset_y) = drag_preview_cursor_offset(cursor_offset);
             cx.new(|_| DragPreview {
                 label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
+                cursor_offset_x,
+                cursor_offset_y,
             })
         })
         .on_drag_move::<PlaceDrag>(cx.listener(
@@ -1139,16 +1148,20 @@ fn item_tile(
                         cx.notify();
                     }),
                 )
-                .on_drag(drag_value, move |drag, _, _, cx| {
+                .on_drag(drag_value, move |drag, cursor_offset, _, cx| {
                     let _ = app.update(cx, |this, _cx| {
                         this.begin_item_drag(drag.payload());
                     });
+                    let (cursor_offset_x, cursor_offset_y) =
+                        drag_preview_cursor_offset(cursor_offset);
                     cx.new(|_| DragPreview {
                         label: drag_preview_label(
                             drag.name.as_ref(),
                             drag.selected,
                             drag.selection_count,
                         ),
+                        cursor_offset_x,
+                        cursor_offset_y,
                     })
                 })
                 .on_drag_move::<PlaceDrag>(cx.listener(
@@ -1651,17 +1664,32 @@ fn clamp_text_boundary(text: &str, index: usize) -> usize {
 
 impl Render for DragPreview {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let left = self.cursor_offset_x + DRAG_PREVIEW_CURSOR_GAP;
+        let top = self.cursor_offset_y + DRAG_PREVIEW_CURSOR_GAP;
         div()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(0x94a3b8))
-            .bg(rgb(0xffffff))
-            .text_sm()
-            .text_color(rgb(0x1f2937))
-            .child(self.label.clone())
+            .relative()
+            .w(px(left + DRAG_PREVIEW_MIN_WIDTH))
+            .h(px(top + DRAG_PREVIEW_MIN_HEIGHT))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0x94a3b8))
+                    .bg(rgb(0xffffff))
+                    .text_sm()
+                    .text_color(rgb(0x1f2937))
+                    .child(self.label.clone()),
+            )
     }
+}
+
+fn drag_preview_cursor_offset(offset: gpui::Point<gpui::Pixels>) -> (f32, f32) {
+    (offset.x.as_f32().max(0.0), offset.y.as_f32().max(0.0))
 }
 
 fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> String {
@@ -1675,15 +1703,28 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        FileGridMode, drag_preview_label, item_mouse_down_opens_directory, normalized_text_range,
-        rename_text_layout,
+        FileGridMode, drag_preview_cursor_offset, drag_preview_label,
+        item_mouse_down_opens_directory, normalized_text_range, rename_text_layout,
     };
+    use gpui::{point, px};
 
     #[test]
     fn drag_preview_uses_selection_count_only_for_selected_items() {
         assert_eq!(drag_preview_label("alpha.txt", true, 3), "3 items");
         assert_eq!(drag_preview_label("alpha.txt", true, 1), "alpha.txt");
         assert_eq!(drag_preview_label("alpha.txt", false, 3), "alpha.txt");
+    }
+
+    #[test]
+    fn drag_preview_keeps_label_anchored_to_cursor_offset() {
+        assert_eq!(
+            drag_preview_cursor_offset(point(px(48.0), px(12.0))),
+            (48.0, 12.0)
+        );
+        assert_eq!(
+            drag_preview_cursor_offset(point(px(-4.0), px(-2.0))),
+            (0.0, 0.0)
+        );
     }
 
     #[test]
