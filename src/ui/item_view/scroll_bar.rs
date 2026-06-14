@@ -97,7 +97,11 @@ pub(crate) fn item_view_scrollbar_container(
         .min_h_0()
         .track_scroll(scroll_handle)
         .overflow_x_scroll()
-        .overflow_y_scroll();
+        .overflow_y_scroll()
+        .when_some(
+            rubber_band.filter(|rect| rubber_band_rect_is_visible(*rect)),
+            |viewport, rect| viewport.child(rubber_band_overlay(rect)),
+        );
 
     let wrapper = div()
         .id(format!("item-view-scroll-wrapper-{}", pane_id.0))
@@ -112,18 +116,10 @@ pub(crate) fn item_view_scrollbar_container(
         ItemViewScrollbarAxis::Horizontal => wrapper
             .flex_col()
             .child(viewport)
-            .when_some(
-                rubber_band.filter(|rect| rubber_band_rect_is_visible(*rect)),
-                |wrapper, rect| wrapper.child(rubber_band_overlay(rect)),
-            )
             .child(item_view_scrollbar(state, axis)),
         ItemViewScrollbarAxis::Vertical => wrapper
             .flex_row()
             .child(viewport)
-            .when_some(
-                rubber_band.filter(|rect| rubber_band_rect_is_visible(*rect)),
-                |wrapper, rect| wrapper.child(rubber_band_overlay(rect)),
-            )
             .child(item_view_scrollbar(state, axis)),
     }
 }
