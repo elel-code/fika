@@ -106,6 +106,7 @@ pub(crate) struct RawVisibleItemSnapshot {
     pub(crate) name: Arc<str>,
     pub(crate) detail_label: String,
     pub(crate) thumbnail_path: Option<PathBuf>,
+    pub(crate) thumbnail_failed: bool,
     pub(crate) modified_secs: Option<u64>,
     pub(crate) size_bytes: u64,
     pub(crate) metadata_complete: bool,
@@ -128,6 +129,7 @@ impl RawVisibleItemSnapshot {
             &self.path,
             self.is_dir,
             self.thumbnail_path.as_ref(),
+            self.thumbnail_failed,
             self.modified_secs,
             self.size_bytes,
             self.metadata_complete,
@@ -592,6 +594,7 @@ fn raw_visible_item_snapshot(
         name: entry.name.clone(),
         detail_label: format_entry_detail_label(entry),
         thumbnail_path: visible_item_thumbnail_path(entry),
+        thumbnail_failed: entry.thumbnail_failed,
         modified_secs: entry.effective_modified_secs(),
         size_bytes: entry.effective_size_bytes(),
         metadata_complete: entry.effective_metadata_complete(),
@@ -628,6 +631,7 @@ pub(crate) fn deferred_thumbnail_candidates_for_model<'a>(
                 || !entry.effective_metadata_complete()
                 || entry.metadata_refresh_pending
                 || visible_item_thumbnail_path(entry).is_some()
+                || entry.thumbnail_failed
                 || !thumbnail_request_may_have_preview(
                     &path,
                     entry.effective_mime_type().map(Arc::as_ref),
@@ -709,6 +713,7 @@ fn visible_thumbnail_candidate(
     path: &std::path::Path,
     is_dir: bool,
     thumbnail_path: Option<&PathBuf>,
+    thumbnail_failed: bool,
     modified_secs: Option<u64>,
     size_bytes: u64,
     metadata_complete: bool,
@@ -720,6 +725,7 @@ fn visible_thumbnail_candidate(
         || !metadata_complete
         || metadata_refresh_pending
         || thumbnail_path.is_some()
+        || thumbnail_failed
         || !thumbnail_request_may_have_preview(path, mime_type.map(Arc::as_ref))
         || mime_magic_resolution_required(
             is_dir,
@@ -751,6 +757,7 @@ mod tests {
             metadata_role: None,
             metadata_refresh_pending: false,
             thumbnail_path: None,
+            thumbnail_failed: false,
         }
     }
 
@@ -762,6 +769,7 @@ mod tests {
             metadata_role: None,
             metadata_refresh_pending: false,
             thumbnail_path: Some(thumbnail.clone()),
+            thumbnail_failed: false,
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("photo.jpg"),
                 name_width_units: 9,
@@ -780,6 +788,7 @@ mod tests {
             metadata_role: None,
             metadata_refresh_pending: false,
             thumbnail_path: Some(thumbnail.clone()),
+            thumbnail_failed: false,
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("Pictures"),
                 name_width_units: 8,
@@ -905,6 +914,7 @@ mod tests {
                 name: visible_entry.name.clone(),
                 detail_label: String::new(),
                 thumbnail_path: None,
+                thumbnail_failed: false,
                 modified_secs: visible_entry.effective_modified_secs(),
                 size_bytes: visible_entry.effective_size_bytes(),
                 metadata_complete: visible_entry.effective_metadata_complete(),
@@ -953,6 +963,7 @@ mod tests {
                 name: visible_entry.name.clone(),
                 detail_label: String::new(),
                 thumbnail_path: None,
+                thumbnail_failed: false,
                 modified_secs: visible_entry.effective_modified_secs(),
                 size_bytes: visible_entry.effective_size_bytes(),
                 metadata_complete: visible_entry.effective_metadata_complete(),
@@ -1108,6 +1119,7 @@ mod tests {
                 Path::new("/tmp/notes.txt"),
                 false,
                 None,
+                false,
                 Some(42),
                 12,
                 true,
@@ -1128,6 +1140,7 @@ mod tests {
             Path::new("/tmp/photo.png"),
             false,
             None,
+            false,
             Some(42),
             12,
             true,
@@ -1140,6 +1153,28 @@ mod tests {
         assert_eq!(candidate.path, PathBuf::from("/tmp/photo.png"));
         assert_eq!(candidate.mime_type.as_deref(), Some("image/png"));
         assert_eq!(candidate.priority, ThumbnailRequestPriority::Visible);
+    }
+
+    #[test]
+    fn thumbnail_candidates_skip_failed_preview_role() {
+        let mime_type = Arc::from("image/png");
+
+        assert_eq!(
+            visible_thumbnail_candidate(
+                ItemId(1),
+                Path::new("/tmp/photo.png"),
+                false,
+                None,
+                true,
+                Some(42),
+                12,
+                true,
+                false,
+                Some(&mime_type),
+                true,
+            ),
+            None
+        );
     }
 
     fn test_entry(
@@ -1172,6 +1207,7 @@ mod tests {
             name: Arc::from(name),
             detail_label: String::new(),
             thumbnail_path: None,
+            thumbnail_failed: false,
             modified_secs: Some(42),
             size_bytes: 12,
             metadata_complete: true,

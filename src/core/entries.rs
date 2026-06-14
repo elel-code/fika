@@ -131,6 +131,7 @@ pub struct ModelEntry {
     pub metadata_role: Option<EntryMetadataRole>,
     pub metadata_refresh_pending: bool,
     pub thumbnail_path: Option<PathBuf>,
+    pub thumbnail_failed: bool,
 }
 
 impl ModelEntry {
@@ -141,6 +142,7 @@ impl ModelEntry {
             metadata_role: None,
             metadata_refresh_pending: false,
             thumbnail_path: None,
+            thumbnail_failed: false,
         }
     }
 

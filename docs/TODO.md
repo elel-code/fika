@@ -10,6 +10,16 @@
 - `[ ]` 未开始
 - `[!]` 阻塞项或必须先解决的决策
 
+## Commit Baseline Exploration
+
+- [x] 本轮继续探索 Zed `ScrollHandle` 滚动条前后的历史提交，统一用 debug `/etc` 启动 2 秒后的 `smaps_rollup` `Private_Dirty` 作为私有内存对照。已确认 `fcf16b7`、`06fefd0`、`4444948`、`dd0ed45`、`3f99f49` 和 `2f4e6ee` 都在约 48MB 私有脏页范围，滚动条改为 GPUI `ScrollHandle`、根级 overlay、hover 背景和早期按主题路径图标 cache 本身不是内存膨胀源。
+- [x] 当前 HEAD 复测为约 49MB 私有脏页，已回到上述低内存基线附近；剩余性能问题应继续按 Dolphin 的 visible/read-ahead role updater、icon cache、thumbnail scheduler 和 listing worker 热路径排查，而不是把启动后常驻内存作为唯一判断。
+- [x] 不可作为“完美状态”基线的提交已标记：`b46e71c` 可编译但启动触发 `zbus` reactor 和 GPUI paint 约束 panic；`81149fb` 删除旧滚动模块后源码接口不完整不可编译；`024b4ab` 引入 `src/ui/icons/roles.rs`、`ModelEntry.icon_name`、`DirectoryModel::set_icon_name_role()`、Fika 自解码 `RenderImage` icon cache 和 model icon role 写回方向，且不是干净可运行基线；`83fb24f` 当前干净 checkout 也存在接口不一致编译错误，不能再当已验证运行基线。
+- [x] 图标历史结论：`024b4ab` 是错误 icon role 架构的引入点；当前 HEAD 已移除 `RenderImage`、`role_cached`、`pending_render_images`、`set_icon_name_role` 和 model-level `icon_name`，只保留按 theme icon name / file kind / size 的轻量路径缓存，后续继续按 Dolphin `KFileItemModelRolesUpdater` 与 `KStandardItemListWidget::pixmapForIcon()` 分层优化。
+- [x] 改为按实现三方对比，不再用粗 commit 边界判断：`9e527ec` 的 `FileIconCache` 已经是按 `FileIconKind + size` / named icon 缓存主题路径，不是按 item 缓存；当前 HEAD 延续该模型并把 snapshot 改成 `Arc<str>` / `Arc<Path>`，同时增加绝对 icon path 支持。和 Dolphin 的差异仍在于 Fika 仍有手写 theme path resolver，而 Dolphin 交给 `KIconLoader` / `QIcon::fromTheme` / `QPixmapCache`。
+- [x] listing/model 实现对比：当前 `DirectoryLister::read_listing_events_streaming_cancellable()`、`ListingWorkerState::publish_batch_if_current()`、`append_listing_results_for_pane()` 和 `DirectoryModel::insert_sorted_model_entries()` 比 `9e527ec` 更接近 Dolphin `KFileItemModel::slotItemsAdded()` / `m_pendingItemsToInsert` / `dispatchPendingItemsToInsert()` / `insertItems()`；保留 2000ms maximum update interval、按 pane 当前 request 发布、结果队列 coalesce 和从尾部 O(N) 原地归并。
+- [x] role/thumbnail 实现对比：当前 metadata magic 只对非空 `application/octet-stream` 且未 magic checked 的文件触发，不再为目录或已知 text/glob MIME 反复 probe；这比错误 icon role 架构更接近 Dolphin 的 fast role / async role 分层。thumbnail 已补齐 Dolphin `KFileItemModelRolesUpdater::m_finishedItems` 语义：成功 preview 写入 `thumbnail_path`，失败 preview 写入轻量 `thumbnail_failed` finished role；同一 item 的 size/mtime 未变时不会重复排队，MIME 精化只清失败状态，不清已成功缩略图。
+
 ## Hard Rules
 
 - [x] Dolphin 是第一参考目标。目录加载、刷新、删除、rename、undo 后刷新必须先确认 Dolphin 源码执行流，再实现 Fika 对应层。

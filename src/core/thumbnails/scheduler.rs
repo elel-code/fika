@@ -82,7 +82,8 @@ pub struct ThumbnailProbeResult {
     pub generation: Generation,
     pub item_id: ItemId,
     pub path: PathBuf,
-    pub thumbnail_path: PathBuf,
+    pub modified_secs: u64,
+    pub thumbnail_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -526,16 +527,21 @@ pub fn apply_thumbnail_probe_result_to_model(
     if model.path_for_index(index).as_deref() != Some(result.path.as_path()) {
         return false;
     }
-    !model
-        .set_thumbnail_path(result.item_id, Some(result.thumbnail_path))
-        .is_empty()
+    if model.entries()[index].effective_modified_secs() != Some(result.modified_secs) {
+        return false;
+    }
+    let signals = match result.thumbnail_path {
+        Some(thumbnail_path) => model.set_thumbnail_path(result.item_id, Some(thumbnail_path)),
+        None => model.set_thumbnail_failed(result.item_id, true),
+    };
+    !signals.is_empty()
 }
 
 fn thumbnail_probe_results_with_worker(
     requests: Vec<ThumbnailRequest>,
     worker_limit: usize,
     cancel_handle: Option<ThumbnailProbeCancelHandle>,
-    worker: impl Fn(ThumbnailRequest) -> Option<ThumbnailProbeResult> + Send + Sync,
+    worker: impl Fn(ThumbnailRequest) -> ThumbnailProbeResult + Send + Sync,
 ) -> Vec<ThumbnailProbeResult> {
     if requests.is_empty() {
         return Vec::new();
@@ -563,9 +569,7 @@ fn thumbnail_probe_results_with_worker(
                     {
                         continue;
                     }
-                    let Some(result) = worker(request) else {
-                        continue;
-                    };
+                    let result = worker(request);
                     if let Ok(mut results) = results.lock() {
                         results.push(result);
                     }
@@ -584,20 +588,21 @@ fn thumbnail_probe_result_for_request(
     cache_root: &Path,
     thumbnailers: &ThumbnailerRegistry,
     request: ThumbnailRequest,
-) -> Option<ThumbnailProbeResult> {
+) -> ThumbnailProbeResult {
     let thumbnail = cached_thumbnail_for_request(cache_root, &request).or_else(|| {
         generate_thumbnail_with_external_thumbnailer_registry(cache_root, &request, thumbnailers)
             .ok()
             .flatten()
-    })?;
-    let thumbnail_path = thumbnail.path().to_path_buf();
-    Some(ThumbnailProbeResult {
+    });
+    let thumbnail_path = thumbnail.map(|thumbnail| thumbnail.path().to_path_buf());
+    ThumbnailProbeResult {
         pane_id: request.pane_id(),
         generation: request.generation(),
         item_id: request.item_id(),
         path: request.path().to_path_buf(),
+        modified_secs: request.modified_secs(),
         thumbnail_path,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -750,7 +755,8 @@ mod tests {
                 generation,
                 item_id,
                 path: PathBuf::from("/tmp/fika-thumbnail-result/other.png"),
-                thumbnail_path: PathBuf::from("/tmp/wrong-path.png"),
+                modified_secs: 42,
+                thumbnail_path: Some(PathBuf::from("/tmp/wrong-path.png")),
             },
         ));
         assert!(model.entries()[0].thumbnail_path.is_none());
@@ -762,7 +768,8 @@ mod tests {
                 generation,
                 item_id: ItemId(999),
                 path: PathBuf::from("/tmp/fika-thumbnail-result/image.png"),
-                thumbnail_path: PathBuf::from("/tmp/missing-item.png"),
+                modified_secs: 42,
+                thumbnail_path: Some(PathBuf::from("/tmp/missing-item.png")),
             },
         ));
         assert!(model.entries()[0].thumbnail_path.is_none());
@@ -774,13 +781,77 @@ mod tests {
                 generation,
                 item_id,
                 path: PathBuf::from("/tmp/fika-thumbnail-result/image.png"),
-                thumbnail_path: thumbnail_path.clone(),
+                modified_secs: 42,
+                thumbnail_path: Some(thumbnail_path.clone()),
             },
         ));
         assert_eq!(
             model.entries()[0].thumbnail_path.as_deref(),
             Some(thumbnail_path.as_path())
         );
+    }
+
+    #[test]
+    fn thumbnail_probe_failure_marks_model_preview_finished() {
+        let pane_id = PaneId(1);
+        let generation = Generation(1);
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp/fika-thumbnail-failed"));
+        model.replace_listing(
+            PathBuf::from("/tmp/fika-thumbnail-failed"),
+            Arc::new(vec![test_entry("image.png")]),
+        );
+        let item_id = model.entries()[0].id;
+
+        assert!(apply_thumbnail_probe_result_to_model(
+            &mut model,
+            ThumbnailProbeResult {
+                pane_id,
+                generation,
+                item_id,
+                path: PathBuf::from("/tmp/fika-thumbnail-failed/image.png"),
+                modified_secs: 42,
+                thumbnail_path: None,
+            },
+        ));
+        assert!(model.entries()[0].thumbnail_failed);
+        assert!(model.entries()[0].thumbnail_path.is_none());
+        assert!(!apply_thumbnail_probe_result_to_model(
+            &mut model,
+            ThumbnailProbeResult {
+                pane_id,
+                generation,
+                item_id,
+                path: PathBuf::from("/tmp/fika-thumbnail-failed/image.png"),
+                modified_secs: 42,
+                thumbnail_path: None,
+            },
+        ));
+    }
+
+    #[test]
+    fn stale_thumbnail_probe_result_does_not_update_model() {
+        let pane_id = PaneId(1);
+        let generation = Generation(1);
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp/fika-thumbnail-stale"));
+        model.replace_listing(
+            PathBuf::from("/tmp/fika-thumbnail-stale"),
+            Arc::new(vec![test_entry("image.png")]),
+        );
+        let item_id = model.entries()[0].id;
+
+        assert!(!apply_thumbnail_probe_result_to_model(
+            &mut model,
+            ThumbnailProbeResult {
+                pane_id,
+                generation,
+                item_id,
+                path: PathBuf::from("/tmp/fika-thumbnail-stale/image.png"),
+                modified_secs: 41,
+                thumbnail_path: Some(PathBuf::from("/tmp/stale.png")),
+            },
+        ));
+        assert!(model.entries()[0].thumbnail_path.is_none());
+        assert!(!model.entries()[0].thumbnail_failed);
     }
 
     #[test]
@@ -827,16 +898,17 @@ mod tests {
                 state.active -= 1;
                 drop(state);
 
-                Some(ThumbnailProbeResult {
+                ThumbnailProbeResult {
                     pane_id: request.pane_id(),
                     generation: request.generation(),
                     item_id: request.item_id(),
                     path: request.path().to_path_buf(),
-                    thumbnail_path: PathBuf::from(format!(
+                    modified_secs: request.modified_secs(),
+                    thumbnail_path: Some(PathBuf::from(format!(
                         "/tmp/fika-thumbnail-worker-result-{}.png",
                         request.item_id().0
-                    )),
-                })
+                    ))),
+                }
             })
         });
 
@@ -913,16 +985,17 @@ mod tests {
                 }
                 drop(state);
 
-                Some(ThumbnailProbeResult {
+                ThumbnailProbeResult {
                     pane_id: request.pane_id(),
                     generation: request.generation(),
                     item_id: request.item_id(),
                     path: request.path().to_path_buf(),
-                    thumbnail_path: PathBuf::from(format!(
+                    modified_secs: request.modified_secs(),
+                    thumbnail_path: Some(PathBuf::from(format!(
                         "/tmp/fika-thumbnail-worker-result-{}.png",
                         request.item_id().0
-                    )),
-                })
+                    ))),
+                }
             })
         });
 

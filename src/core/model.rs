@@ -254,11 +254,38 @@ impl DirectoryModel {
         let Some(index) = self.index_of_id(id) else {
             return Vec::new();
         };
-        if self.data.entries[index].thumbnail_path == thumbnail_path {
+        if self.data.entries[index].thumbnail_path == thumbnail_path
+            && !self.data.entries[index].thumbnail_failed
+        {
             return Vec::new();
         }
 
         self.data.entries[index].thumbnail_path = thumbnail_path;
+        self.data.entries[index].thumbnail_failed = false;
+        self.mark_metadata_changed();
+        vec![DirectoryModelSignal::ItemsChanged(
+            vec![ItemRange {
+                start: index,
+                len: 1,
+            }],
+            ChangedRoles::metadata(),
+        )]
+    }
+
+    pub fn set_thumbnail_failed(&mut self, id: ItemId, failed: bool) -> Vec<DirectoryModelSignal> {
+        let Some(index) = self.index_of_id(id) else {
+            return Vec::new();
+        };
+        if self.data.entries[index].thumbnail_failed == failed
+            && (failed || self.data.entries[index].thumbnail_path.is_none())
+        {
+            return Vec::new();
+        }
+
+        self.data.entries[index].thumbnail_failed = failed;
+        if failed {
+            self.data.entries[index].thumbnail_path = None;
+        }
         self.mark_metadata_changed();
         vec![DirectoryModelSignal::ItemsChanged(
             vec![ItemRange {
@@ -306,6 +333,7 @@ impl DirectoryModel {
         let had_reusable_thumbnail = self.data.entries[index].thumbnail_path.is_some();
         let old_size = self.data.entries[index].effective_size_bytes();
         let old_modified = self.data.entries[index].effective_modified_secs();
+        let old_mime = self.data.entries[index].effective_mime_type_cloned();
         self.data.entries[index].metadata_role =
             (!metadata_role_matches_base_entry(&self.data.entries[index], &role))
                 .then_some(role.clone());
@@ -315,6 +343,12 @@ impl DirectoryModel {
                 || old_modified != self.data.entries[index].effective_modified_secs())
         {
             self.data.entries[index].thumbnail_path = None;
+        }
+        if old_size != self.data.entries[index].effective_size_bytes()
+            || old_modified != self.data.entries[index].effective_modified_secs()
+            || old_mime != self.data.entries[index].effective_mime_type_cloned()
+        {
+            self.data.entries[index].thumbnail_failed = false;
         }
 
         if let Some(old_order) = old_order {
@@ -757,6 +791,26 @@ impl DirectoryModel {
 }
 
 fn reusable_thumbnail_path(old: &ModelEntry, new: &ModelEntry) -> Option<PathBuf> {
+    if !thumbnail_path_can_be_reused(old, new) {
+        None
+    } else {
+        old.thumbnail_path.clone()
+    }
+}
+
+fn reusable_thumbnail_failed(old: &ModelEntry, new: &ModelEntry) -> bool {
+    thumbnail_failed_can_be_reused(old, new) && old.thumbnail_failed
+}
+
+fn thumbnail_path_can_be_reused(old: &ModelEntry, new: &ModelEntry) -> bool {
+    thumbnail_base_can_be_reused(old, new)
+}
+
+fn thumbnail_failed_can_be_reused(old: &ModelEntry, new: &ModelEntry) -> bool {
+    thumbnail_base_can_be_reused(old, new) && old.effective_mime_type() == new.effective_mime_type()
+}
+
+fn thumbnail_base_can_be_reused(old: &ModelEntry, new: &ModelEntry) -> bool {
     if old.is_dir
         || new.is_dir
         || old.name != new.name
@@ -766,15 +820,16 @@ fn reusable_thumbnail_path(old: &ModelEntry, new: &ModelEntry) -> Option<PathBuf
         || old.effective_modified_secs().is_none()
         || old.effective_modified_secs() != new.effective_modified_secs()
     {
-        None
+        false
     } else {
-        old.thumbnail_path.clone()
+        true
     }
 }
 
 fn preserve_refreshed_entry_roles(old: &ModelEntry, new: &mut ModelEntry) {
     preserve_pending_entry_metadata_role(old, new);
     new.thumbnail_path = reusable_thumbnail_path(old, new);
+    new.thumbnail_failed = reusable_thumbnail_failed(old, new);
 }
 
 fn preserve_pending_entry_metadata_role(old: &ModelEntry, new: &mut ModelEntry) {
@@ -1478,6 +1533,68 @@ mod tests {
     }
 
     #[test]
+    fn same_listing_reload_preserves_failed_thumbnail_role_for_unchanged_file() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_mime_state(
+                "image.png",
+                128,
+                Some(42),
+                "image/png",
+                true,
+            )]),
+        );
+        let item_id = model.entries()[0].id;
+        model.set_thumbnail_failed(item_id, true);
+
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_mime_state(
+                "image.png",
+                128,
+                Some(42),
+                "image/png",
+                true,
+            )]),
+        );
+
+        assert_eq!(model.entries()[0].id, item_id);
+        assert!(model.entries()[0].thumbnail_failed);
+    }
+
+    #[test]
+    fn same_listing_reload_drops_failed_thumbnail_role_when_file_changes() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_mime_state(
+                "image.png",
+                128,
+                Some(42),
+                "image/png",
+                true,
+            )]),
+        );
+        let item_id = model.entries()[0].id;
+        model.set_thumbnail_failed(item_id, true);
+
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_mime_state(
+                "image.png",
+                128,
+                Some(43),
+                "image/png",
+                true,
+            )]),
+        );
+
+        assert_eq!(model.entries()[0].id, item_id);
+        assert!(!model.entries()[0].thumbnail_failed);
+    }
+
+    #[test]
     fn same_listing_directory_reload_does_not_enter_metadata_refresh() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
@@ -1667,6 +1784,70 @@ mod tests {
             )]
         );
         assert!(model.entries()[0].thumbnail_path.is_none());
+    }
+
+    #[test]
+    fn metadata_role_update_preserves_thumbnail_when_only_mime_is_refined() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_mime_state(
+                "image.png",
+                12,
+                Some(10),
+                GENERIC_BINARY_MIME,
+                false,
+            )]),
+        );
+        let item_id = model.entries()[0].id;
+        let thumbnail_path = PathBuf::from("/tmp/thumbs/image.png");
+        model.set_thumbnail_path(item_id, Some(thumbnail_path.clone()));
+
+        model.set_metadata_role(
+            item_id,
+            Path::new("/tmp/image.png"),
+            EntryMetadataRole {
+                size_bytes: 12,
+                modified_secs: Some(10),
+                mime_type: Some(Arc::from("image/png")),
+                mime_magic_checked: true,
+            },
+        );
+
+        assert_eq!(
+            model.entries()[0].thumbnail_path.as_deref(),
+            Some(thumbnail_path.as_path())
+        );
+    }
+
+    #[test]
+    fn metadata_role_update_drops_failed_thumbnail_when_mime_is_refined() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_mime_state(
+                "image.png",
+                12,
+                Some(10),
+                GENERIC_BINARY_MIME,
+                false,
+            )]),
+        );
+        let item_id = model.entries()[0].id;
+        model.set_thumbnail_failed(item_id, true);
+
+        model.set_metadata_role(
+            item_id,
+            Path::new("/tmp/image.png"),
+            EntryMetadataRole {
+                size_bytes: 12,
+                modified_secs: Some(10),
+                mime_type: Some(Arc::from("image/png")),
+                mime_magic_checked: true,
+            },
+        );
+
+        assert!(!model.entries()[0].thumbnail_failed);
     }
 
     #[test]

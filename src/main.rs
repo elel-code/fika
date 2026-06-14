@@ -12152,12 +12152,29 @@ text/plain=viewer.desktop;\n",
 
     #[test]
     fn thumbnail_probe_results_update_matching_model_role_only() {
-        let mut app = test_app_with_entries("/tmp/fika-thumbnail-result", &["image.png"]);
+        let path = PathBuf::from("/tmp/fika-thumbnail-result");
+        let mut app = test_app_with_entries("/tmp/fika-thumbnail-result", &[]);
         let pane_id = app.panes.focused().unwrap();
+        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
+            path.clone(),
+            Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from("image.png"),
+                name_width_units: 9,
+                size_bytes: 128,
+                modified_secs: Some(42),
+                metadata_complete: true,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                mime_type: Some(Arc::from("image/png")),
+                mime_magic_checked: true,
+                is_dir: false,
+            })]),
+        );
         let pane = app.panes.pane(pane_id).unwrap();
         let generation = pane.generation;
         let item_id = pane.model.entries()[0].id;
         let path = pane.model.path_for_index(0).unwrap();
+        let modified_secs = pane.model.entries()[0].effective_modified_secs().unwrap();
         let thumbnail_path = PathBuf::from("/tmp/fika-thumbnail-cache/normal/image.png");
 
         assert!(
@@ -12166,7 +12183,8 @@ text/plain=viewer.desktop;\n",
                 generation: Generation(generation.0 + 1),
                 item_id,
                 path: path.clone(),
-                thumbnail_path: PathBuf::from("/tmp/stale.png"),
+                modified_secs,
+                thumbnail_path: Some(PathBuf::from("/tmp/stale.png")),
             }])
         );
         assert!(
@@ -12181,7 +12199,8 @@ text/plain=viewer.desktop;\n",
                 generation,
                 item_id,
                 path: PathBuf::from("/tmp/fika-thumbnail-result/other.png"),
-                thumbnail_path: PathBuf::from("/tmp/wrong-path.png"),
+                modified_secs,
+                thumbnail_path: Some(PathBuf::from("/tmp/wrong-path.png")),
             }])
         );
         assert!(
@@ -12190,7 +12209,8 @@ text/plain=viewer.desktop;\n",
                 generation,
                 item_id,
                 path,
-                thumbnail_path: thumbnail_path.clone(),
+                modified_secs,
+                thumbnail_path: Some(thumbnail_path.clone()),
             }])
         );
 
@@ -12461,6 +12481,7 @@ text/plain=viewer.desktop;\n",
                 is_dir,
             }),
             thumbnail_path: None,
+            thumbnail_failed: false,
         }
     }
 

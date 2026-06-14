@@ -152,6 +152,7 @@ mod tests {
             metadata_role: None,
             metadata_refresh_pending: false,
             thumbnail_path: None,
+            thumbnail_failed: false,
         }
     }
 
