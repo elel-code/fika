@@ -83,7 +83,7 @@ use ui::filter_bar::{
     FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState, cached_filtered_model_for_pane,
 };
 use ui::icons::{FileIconCache, FileIconSnapshot};
-use ui::item_view::ItemViewScrollState;
+use ui::item_view::{ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT, ItemViewScrollState};
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
     MIN_PANE_WIDTH, PANE_SPLITTER_WIDTH, PaneSnapshot, PaneSplitterDrag, normalize_pane_ratios,
@@ -210,6 +210,10 @@ fn wheel_scroll_delta_for_view_mode(view_mode: ViewMode, delta: ScrollDelta) -> 
         }
         ViewMode::Icons | ViewMode::Details => (0.0, -y),
     }
+}
+
+fn view_mode_uses_horizontal_item_scrollbar(view_mode: ViewMode) -> bool {
+    matches!(view_mode, ViewMode::Compact)
 }
 
 fn scroll_offset_matches(left: f32, right: f32) -> bool {
@@ -2376,9 +2380,41 @@ impl FikaApp {
         let Some(view) = self.panes.set_view_mode(pane_id, view_mode) else {
             return;
         };
+        self.prime_pane_viewport_for_view_mode_axis_change(pane_id, previous_mode, view_mode);
         self.reset_item_view_scroll_for_pane(pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.set_pane_status(pane_id, view_mode_status(view.view_mode));
+    }
+
+    fn prime_pane_viewport_for_view_mode_axis_change(
+        &mut self,
+        pane_id: PaneId,
+        previous_mode: ViewMode,
+        next_mode: ViewMode,
+    ) {
+        let previous_horizontal = view_mode_uses_horizontal_item_scrollbar(previous_mode);
+        let next_horizontal = view_mode_uses_horizontal_item_scrollbar(next_mode);
+        if previous_horizontal == next_horizontal {
+            return;
+        }
+
+        let Some(pane) = self.panes.pane_mut(pane_id) else {
+            return;
+        };
+        let extent = ITEM_VIEW_SCROLLBAR_RESERVED_EXTENT;
+        if next_horizontal {
+            pane.view.viewport_width =
+                fika_core::normalize_viewport_extent(pane.view.viewport_width + extent);
+            pane.view.viewport_height =
+                fika_core::normalize_viewport_extent(pane.view.viewport_height - extent);
+        } else {
+            pane.view.viewport_width =
+                fika_core::normalize_viewport_extent(pane.view.viewport_width - extent);
+            pane.view.viewport_height =
+                fika_core::normalize_viewport_extent(pane.view.viewport_height + extent);
+        }
+        pane.view.max_scroll_x = 0.0;
+        pane.view.max_scroll_y = 0.0;
     }
 
     fn set_pane_sort_role(&mut self, pane_id: PaneId, role: SortRole) {
@@ -7035,6 +7071,38 @@ mod tests {
             ViewMode::Compact
         );
         assert_eq!(app.status_message_for_pane(first), "Compact view");
+    }
+
+    #[test]
+    fn set_pane_view_mode_primes_viewport_for_scrollbar_axis_change() {
+        let mut app = test_app_with_entries("/tmp/fika-view-mode-axis-switch", &["one.txt"]);
+        let pane_id = app.panes.focused().unwrap();
+        {
+            let pane = app.panes.pane_mut(pane_id).unwrap();
+            pane.view.view_mode = ViewMode::Icons;
+            pane.view.viewport_width = 626.0;
+            pane.view.viewport_height = 360.0;
+            pane.view.scroll_y = 120.0;
+            pane.view.max_scroll_y = 1_000.0;
+        }
+
+        app.set_pane_view_mode(pane_id, ViewMode::Compact);
+
+        let view = &app.panes.pane(pane_id).unwrap().view;
+        assert_eq!(view.view_mode, ViewMode::Compact);
+        assert_eq!(view.viewport_width, 640.0);
+        assert_eq!(view.viewport_height, 346.0);
+        assert_eq!(view.scroll_x, 0.0);
+        assert_eq!(view.scroll_y, 0.0);
+        assert_eq!(view.max_scroll_x, 0.0);
+        assert_eq!(view.max_scroll_y, 0.0);
+
+        app.set_pane_view_mode(pane_id, ViewMode::Details);
+
+        let view = &app.panes.pane(pane_id).unwrap().view;
+        assert_eq!(view.view_mode, ViewMode::Details);
+        assert_eq!(view.viewport_width, 626.0);
+        assert_eq!(view.viewport_height, 360.0);
     }
 
     #[test]
