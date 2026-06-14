@@ -409,7 +409,6 @@ pub(crate) fn application_chooser_overlay(
                                     applications.as_slice(),
                                     range,
                                 );
-                                this.start_pending_icon_loads(cx);
                                 visible_range
                                     .filter_map(|index| {
                                         let app = applications.get(index)?.clone();
@@ -895,7 +894,6 @@ fn application_chooser_icon_slot(app_name: &str, icon: Option<FileIconSnapshot>)
     let snapshot = icon.unwrap_or_else(|| FileIconSnapshot {
         icon_name: Arc::from("application-x-executable"),
         path: None,
-        render_image: None,
         fallback_marker: Arc::from(application_marker(app_name)),
         fallback_fg: 0x2f6fed,
         fallback_bg: 0xe8eef7,

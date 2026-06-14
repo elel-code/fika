@@ -130,7 +130,6 @@ pub struct ModelEntry {
     pub entry: Entry,
     pub metadata_role: Option<EntryMetadataRole>,
     pub metadata_refresh_pending: bool,
-    pub icon_name: Option<Arc<str>>,
     pub thumbnail_path: Option<PathBuf>,
 }
 
@@ -141,7 +140,6 @@ impl ModelEntry {
             entry,
             metadata_role: None,
             metadata_refresh_pending: false,
-            icon_name: None,
             thumbnail_path: None,
         }
     }

@@ -124,12 +124,20 @@ impl ThumbnailScheduler {
         generation: Generation,
         candidates: impl IntoIterator<Item = ThumbnailCandidate>,
     ) -> bool {
-        let mut queued = false;
+        let mut keep = HashSet::new();
+        let mut pending = Vec::new();
         for candidate in candidates {
             let (key, request) = thumbnail_candidate_request(pane_id, generation, candidate);
             let Some(request) = request else {
                 continue;
             };
+            keep.insert(key.clone());
+            pending.push((key, request));
+        }
+        self.prune_generation_work(pane_id, generation, &keep);
+
+        let mut queued = false;
+        for (key, request) in pending {
             if self.seen.contains(&key) {
                 if request.priority() == ThumbnailRequestPriority::Visible
                     && ((self.requests.contains(&request)
@@ -237,6 +245,34 @@ impl ThumbnailScheduler {
             requests.push(request);
         }
         requests
+    }
+
+    fn prune_generation_work(
+        &mut self,
+        pane_id: PaneId,
+        generation: Generation,
+        keep: &HashSet<ThumbnailWorkKey>,
+    ) {
+        let removed_queued = self.requests.cancel_matching(|request| {
+            request.pane_id() == pane_id
+                && request.generation() == generation
+                && !keep.contains(&ThumbnailWorkKey::from_request(request))
+        });
+        for request in removed_queued {
+            self.seen.remove(&ThumbnailWorkKey::from_request(&request));
+        }
+
+        if let Some(cancel) = &self.probe_cancel {
+            for key in cancel.cancel_matching(|key, _| {
+                key.pane_id == pane_id && key.generation == generation && !keep.contains(key)
+            }) {
+                self.seen.remove(&key);
+            }
+        }
+
+        self.seen.retain(|key| {
+            key.pane_id != pane_id || key.generation != generation || keep.contains(key)
+        });
     }
 }
 
@@ -664,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_scheduler_keeps_generation_work_until_navigation_or_close() {
+    fn thumbnail_scheduler_prunes_deferred_work_outside_current_resolve_set() {
         let pane_id = PaneId(1);
         let generation = Generation(1);
         let mut scheduler = ThumbnailScheduler::new(PathBuf::from("/tmp/fika-thumbnail-active"));
@@ -678,16 +714,21 @@ mod tests {
         assert_eq!(scheduler.seen_len(), 2);
 
         assert!(!scheduler.queue_candidates(pane_id, generation, vec![keep.clone()]));
-        assert_eq!(scheduler.seen_len(), 2);
+        assert_eq!(scheduler.seen_len(), 1);
         assert!(scheduler.contains_seen(&ThumbnailWorkKey::from_candidate(
             pane_id, generation, &keep
         )));
-        assert!(scheduler.contains_seen(&ThumbnailWorkKey::from_candidate(
+        assert!(!scheduler.contains_seen(&ThumbnailWorkKey::from_candidate(
             pane_id, generation, &stale
         )));
 
-        assert!(!scheduler.queue_candidates(pane_id, generation, vec![stale]));
-        assert!(scheduler.pop_next_request().is_none());
+        assert!(scheduler.queue_candidates(pane_id, generation, vec![stale.clone()]));
+        assert_eq!(scheduler.seen_len(), 1);
+        assert!(scheduler.contains_seen(&ThumbnailWorkKey::from_candidate(
+            pane_id, generation, &stale
+        )));
+        let requeued = scheduler.pop_next_request().unwrap();
+        assert_eq!(requeued.item_id(), stale.item_id);
     }
 
     #[test]

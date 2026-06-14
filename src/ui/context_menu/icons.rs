@@ -236,7 +236,6 @@ fn context_menu_icon_fallback_snapshot(icon: ContextMenuIcon) -> FileIconSnapsho
     FileIconSnapshot {
         icon_name: Arc::from(format!("{icon:?}")),
         path: None,
-        render_image: None,
         fallback_marker: Arc::from(marker),
         fallback_fg: fg,
         fallback_bg: bg,

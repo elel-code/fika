@@ -265,10 +265,10 @@ impl ListingWorkerState {
             if !self.is_current(request) {
                 continue;
             }
-            self.results_by_pane
-                .entry(request.pane_id)
-                .or_default()
-                .extend(retarget_listing_events(events, request));
+            append_listing_results_for_pane(
+                self.results_by_pane.entry(request.pane_id).or_default(),
+                retarget_listing_events(events, request),
+            );
             published = true;
         }
         if published && let Some(entries) = listing_refreshed_entries(events) {
@@ -560,6 +560,56 @@ fn listing_refreshed_entries(events: &[DirectoryListerEvent]) -> Option<Arc<Vec<
     })
 }
 
+fn append_listing_results_for_pane(
+    results: &mut Vec<DirectoryListerEvent>,
+    events: Vec<DirectoryListerEvent>,
+) {
+    for event in events {
+        match event {
+            DirectoryListerEvent::ListingRefreshed { .. }
+            | DirectoryListerEvent::CurrentDirectoryRemoved { .. }
+            | DirectoryListerEvent::Error { .. } => {
+                results.clear();
+                results.push(event);
+            }
+            DirectoryListerEvent::ItemsAdded { entries, .. } if entries.is_empty() => {}
+            DirectoryListerEvent::ItemsAdded {
+                pane_id,
+                generation,
+                request_serial,
+                path,
+                mut entries,
+            } => {
+                if let Some(DirectoryListerEvent::ItemsAdded {
+                    pane_id: last_pane_id,
+                    generation: last_generation,
+                    request_serial: last_request_serial,
+                    path: last_path,
+                    entries: last_entries,
+                }) = results.last_mut()
+                    && *last_pane_id == pane_id
+                    && *last_generation == generation
+                    && *last_request_serial == request_serial
+                    && *last_path == path
+                {
+                    last_entries.append(&mut entries);
+                } else {
+                    results.push(DirectoryListerEvent::ItemsAdded {
+                        pane_id,
+                        generation,
+                        request_serial,
+                        path,
+                        entries,
+                    });
+                }
+            }
+            DirectoryListerEvent::ItemsDeleted { paths, .. } if paths.is_empty() => {}
+            DirectoryListerEvent::ItemsRefreshed { pairs, .. } if pairs.is_empty() => {}
+            event => results.push(event),
+        }
+    }
+}
+
 pub fn update_loading_state_for_event(
     loading_panes: &mut HashMap<PaneId, LoadingPaneState>,
     pane: Option<&PaneState>,
@@ -811,6 +861,55 @@ mod tests {
         let results = state.drain_results();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0][0].request_serial(), RequestSerial(2));
+    }
+
+    #[test]
+    fn listing_worker_state_coalesces_pending_streamed_items_added() {
+        let mut state = ListingWorkerState::default();
+        let request = listing_request(1, 1);
+        let batch = listing_batch(vec![request.clone()]);
+
+        state.schedule(request.clone());
+        assert!(
+            state.publish_batch_if_current(&batch, &[listing_items_added(&request, &["a.txt"])])
+        );
+        assert!(
+            state.publish_batch_if_current(&batch, &[listing_items_added(&request, &["b.txt"])])
+        );
+
+        let results = state.drain_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].len(), 1);
+        let DirectoryListerEvent::ItemsAdded { entries, .. } = &results[0][0] else {
+            panic!("expected coalesced items");
+        };
+        assert_eq!(entry_names(entries), vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn listing_worker_state_reset_event_replaces_pending_streamed_items() {
+        let mut state = ListingWorkerState::default();
+        let request = listing_request(1, 1);
+        let batch = listing_batch(vec![request.clone()]);
+        let refreshed_entries = test_entries(&["fresh.txt"]);
+
+        state.schedule(request.clone());
+        assert!(
+            state
+                .publish_batch_if_current(&batch, &[listing_items_added(&request, &["stale.txt"])])
+        );
+        assert!(state.publish_batch_if_current(
+            &batch,
+            &[listing_refreshed(&request, Arc::clone(&refreshed_entries))]
+        ));
+
+        let results = state.drain_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].len(), 1);
+        let DirectoryListerEvent::ListingRefreshed { entries, .. } = &results[0][0] else {
+            panic!("expected refreshed listing");
+        };
+        assert!(Arc::ptr_eq(entries, &refreshed_entries));
     }
 
     #[test]
@@ -1195,6 +1294,16 @@ mod tests {
             request_serial: request.request_serial,
             path: request.path.clone(),
             entries,
+        }
+    }
+
+    fn listing_items_added(request: &ListingRequest, names: &[&str]) -> DirectoryListerEvent {
+        DirectoryListerEvent::ItemsAdded {
+            pane_id: request.pane_id,
+            generation: request.generation,
+            request_serial: request.request_serial,
+            path: request.path.clone(),
+            entries: test_entries(names).as_ref().clone(),
         }
     }
 

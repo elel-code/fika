@@ -31,11 +31,6 @@ pub(crate) fn format_entry_kind_label(entry: &fika_core::ModelEntry) -> String {
     }
     if entry.is_dir {
         "Folder".to_string()
-    } else if !entry.effective_metadata_complete()
-        && entry.effective_size_bytes() == 0
-        && entry.effective_modified_secs().is_none()
-    {
-        "-".to_string()
     } else {
         fika_core::format_size(entry.effective_size_bytes())
     }
@@ -117,7 +112,6 @@ pub(crate) struct RawVisibleItemSnapshot {
     pub(crate) metadata_refresh_pending: bool,
     pub(crate) mime_type: Option<Arc<str>>,
     pub(crate) mime_magic_checked: bool,
-    pub(crate) icon_name: Option<Arc<str>>,
     pub(crate) selected: bool,
     pub(crate) drop_target: Option<FileTransferMode>,
     pub(crate) draft_name: Option<String>,
@@ -152,11 +146,9 @@ pub(crate) struct RawDetailsItemSnapshot {
     pub(crate) is_dir: bool,
     pub(crate) name: Arc<str>,
     pub(crate) size_bytes: u64,
-    pub(crate) metadata_complete: bool,
-    pub(crate) metadata_refresh_pending: bool,
+    pub(crate) modified_secs: Option<u64>,
     pub(crate) mime_type: Option<Arc<str>>,
     pub(crate) mime_magic_checked: bool,
-    pub(crate) icon_name: Option<Arc<str>>,
     pub(crate) selected: bool,
     pub(crate) drop_target: Option<FileTransferMode>,
     pub(crate) size_label: String,
@@ -182,23 +174,17 @@ pub(crate) enum RawFileGridSnapshot {
 }
 
 pub(crate) struct FileGridIconRequest<'a> {
-    pub(crate) item_id: ItemId,
     pub(crate) path: &'a Path,
     pub(crate) is_dir: bool,
-    pub(crate) metadata_complete: bool,
-    pub(crate) size_bytes: u64,
     pub(crate) mime_type: Option<Arc<str>>,
-    pub(crate) mime_magic_checked: bool,
-    pub(crate) icon_name: Option<Arc<str>>,
     pub(crate) icon_size: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct IconPreloadCandidate {
+#[derive(Clone, Debug)]
+pub(crate) struct FileGridIconWarmCandidate {
     pub(crate) path: PathBuf,
     pub(crate) is_dir: bool,
     pub(crate) mime_type: Option<Arc<str>>,
-    pub(crate) icon_name: Option<Arc<str>>,
     pub(crate) icon_size: f32,
 }
 
@@ -316,11 +302,9 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
                         is_dir: entry.is_dir,
                         name: entry.name.clone(),
                         size_bytes: entry.effective_size_bytes(),
-                        metadata_complete: entry.effective_metadata_complete(),
-                        metadata_refresh_pending: entry.metadata_refresh_pending,
+                        modified_secs: entry.effective_modified_secs(),
                         mime_type: entry.effective_mime_type_cloned(),
                         mime_magic_checked: entry.effective_mime_magic_checked(),
-                        icon_name: entry.icon_name.clone(),
                         selected,
                         drop_target,
                         size_label: details_size_label(entry),
@@ -348,6 +332,34 @@ impl RawFileGridSnapshot {
         }
     }
 
+    pub(crate) fn warm_visible_file_icons<F>(&self, mut icon_for_item: F)
+    where
+        F: for<'a> FnMut(FileGridIconRequest<'a>),
+    {
+        match self {
+            Self::Compact { items, .. } | Self::Icons { items, .. } => {
+                for item in items {
+                    icon_for_item(FileGridIconRequest {
+                        path: &item.path,
+                        is_dir: item.is_dir,
+                        mime_type: item.mime_type.clone(),
+                        icon_size: item.layout.icon_rect.width,
+                    });
+                }
+            }
+            Self::Details { items, .. } => {
+                for item in items {
+                    icon_for_item(FileGridIconRequest {
+                        path: &item.path,
+                        is_dir: item.is_dir,
+                        mime_type: item.mime_type.clone(),
+                        icon_size: super::details::DETAILS_ICON_SIZE,
+                    });
+                }
+            }
+        }
+    }
+
     pub(crate) fn into_file_grid_snapshot<F>(
         self,
         selection_count: usize,
@@ -365,14 +377,9 @@ impl RawFileGridSnapshot {
                             return None;
                         }
                         let icon = icon_for_item(FileGridIconRequest {
-                            item_id: item.item_id,
                             path: &item.path,
                             is_dir: item.is_dir,
-                            metadata_complete: item.metadata_complete,
-                            size_bytes: item.size_bytes,
                             mime_type: item.mime_type.clone(),
-                            mime_magic_checked: item.mime_magic_checked,
-                            icon_name: item.icon_name.clone(),
                             icon_size: item.layout.icon_rect.width,
                         });
                         Some(VisibleItemSnapshot {
@@ -405,14 +412,9 @@ impl RawFileGridSnapshot {
                             return None;
                         }
                         let icon = icon_for_item(FileGridIconRequest {
-                            item_id: item.item_id,
                             path: &item.path,
                             is_dir: item.is_dir,
-                            metadata_complete: item.metadata_complete,
-                            size_bytes: item.size_bytes,
                             mime_type: item.mime_type.clone(),
-                            mime_magic_checked: item.mime_magic_checked,
-                            icon_name: item.icon_name.clone(),
                             icon_size: item.layout.icon_rect.width,
                         });
                         Some(VisibleItemSnapshot {
@@ -442,14 +444,9 @@ impl RawFileGridSnapshot {
                     .into_iter()
                     .map(|item| {
                         let icon = icon_for_item(FileGridIconRequest {
-                            item_id: item.item_id,
                             path: &item.path,
                             is_dir: item.is_dir,
-                            metadata_complete: item.metadata_complete,
-                            size_bytes: item.size_bytes,
                             mime_type: item.mime_type.clone(),
-                            mime_magic_checked: item.mime_magic_checked,
-                            icon_name: item.icon_name.clone(),
                             icon_size: super::details::DETAILS_ICON_SIZE,
                         });
                         DetailsItemSnapshot {
@@ -478,9 +475,7 @@ impl RawFileGridSnapshot {
             Self::Compact { items, .. } | Self::Icons { items, .. } => {
                 raw_visible_layout_range_and_count(items)
             }
-            Self::Details { items, .. } => {
-                layout_index_range_and_count(items.iter().map(|item| item.row_index))
-            }
+            Self::Details { .. } => None,
         }
     }
 
@@ -489,7 +484,6 @@ impl RawFileGridSnapshot {
         scheduler: &mut MetadataRoleScheduler,
         pane_id: PaneId,
         generation: Generation,
-        deferred_candidates: impl IntoIterator<Item = MetadataRoleCandidate>,
     ) -> bool {
         match self {
             Self::Compact { items, .. } | Self::Icons { items, .. } => scheduler.queue_candidates(
@@ -501,8 +495,6 @@ impl RawFileGridSnapshot {
                         metadata_role_update_needed(
                             item.is_dir,
                             item.size_bytes,
-                            item.metadata_complete,
-                            item.metadata_refresh_pending,
                             item.mime_type.as_deref(),
                             item.mime_magic_checked,
                         )
@@ -510,8 +502,11 @@ impl RawFileGridSnapshot {
                     .map(|item| MetadataRoleCandidate {
                         item_id: item.item_id,
                         path: item.path.clone(),
-                    })
-                    .chain(deferred_candidates),
+                        size_bytes: item.size_bytes,
+                        modified_secs: item.modified_secs,
+                        mime_type: item.mime_type.as_ref().map(|mime| mime.to_string()),
+                        mime_magic_checked: item.mime_magic_checked,
+                    }),
             ),
             Self::Details { items, .. } => scheduler.queue_candidates(
                 pane_id,
@@ -522,8 +517,6 @@ impl RawFileGridSnapshot {
                         metadata_role_update_needed(
                             item.is_dir,
                             item.size_bytes,
-                            item.metadata_complete,
-                            item.metadata_refresh_pending,
                             item.mime_type.as_deref(),
                             item.mime_magic_checked,
                         )
@@ -531,8 +524,11 @@ impl RawFileGridSnapshot {
                     .map(|item| MetadataRoleCandidate {
                         item_id: item.item_id,
                         path: item.path.clone(),
-                    })
-                    .chain(deferred_candidates),
+                        size_bytes: item.size_bytes,
+                        modified_secs: item.modified_secs,
+                        mime_type: item.mime_type.as_ref().map(|mime| mime.to_string()),
+                        mime_magic_checked: item.mime_magic_checked,
+                    }),
             ),
         }
     }
@@ -563,18 +559,10 @@ impl RawFileGridSnapshot {
 fn metadata_role_update_needed(
     is_dir: bool,
     size_bytes: u64,
-    metadata_complete: bool,
-    metadata_refresh_pending: bool,
     mime_type: Option<&str>,
     mime_magic_checked: bool,
 ) -> bool {
-    if is_dir {
-        return false;
-    }
-
-    !metadata_complete
-        || metadata_refresh_pending
-        || mime_magic_resolution_required(is_dir, size_bytes, mime_type, mime_magic_checked)
+    mime_magic_resolution_required(is_dir, size_bytes, mime_type, mime_magic_checked)
 }
 
 fn active_rename_draft_for_path<'a>(
@@ -610,7 +598,6 @@ fn raw_visible_item_snapshot(
         metadata_refresh_pending: entry.metadata_refresh_pending,
         mime_type: entry.effective_mime_type_cloned(),
         mime_magic_checked: entry.effective_mime_magic_checked(),
-        icon_name: entry.icon_name.clone(),
         selected,
         drop_target,
         draft_name: active_rename_draft.map(|draft| draft.draft_name.clone()),
@@ -669,45 +656,13 @@ pub(crate) fn deferred_thumbnail_candidates_for_model<'a>(
         })
 }
 
-pub(crate) fn deferred_metadata_role_candidates_for_model<'a>(
-    raw_file_grid: &RawFileGridSnapshot,
-    model: &'a DirectoryModel,
-    filtered: Option<&'a FilteredModel>,
-    item_count: usize,
-) -> impl Iterator<Item = MetadataRoleCandidate> + 'a {
-    raw_file_grid
-        .visible_layout_range_and_count()
-        .into_iter()
-        .flat_map(move |(visible_range, visible_count)| {
-            thumbnail_read_ahead_indexes(visible_range, item_count, visible_count)
-        })
-        .filter_map(move |layout_index| {
-            let model_index = model_index_for_layout_index(filtered, layout_index)?;
-            let entry = model.get(model_index)?;
-            if !metadata_role_update_needed(
-                entry.is_dir,
-                entry.effective_size_bytes(),
-                entry.effective_metadata_complete(),
-                entry.metadata_refresh_pending,
-                entry.effective_mime_type().map(Arc::as_ref),
-                entry.effective_mime_magic_checked(),
-            ) {
-                return None;
-            }
-            Some(MetadataRoleCandidate {
-                item_id: entry.id,
-                path: model.path_for_index(model_index)?,
-            })
-        })
-}
-
-pub(crate) fn deferred_icon_preload_candidates_for_model<'a>(
+pub(crate) fn deferred_icon_candidates_for_model<'a>(
     raw_file_grid: &RawFileGridSnapshot,
     model: &'a DirectoryModel,
     filtered: Option<&'a FilteredModel>,
     item_count: usize,
     icon_size: f32,
-) -> impl Iterator<Item = IconPreloadCandidate> + 'a {
+) -> impl Iterator<Item = FileGridIconWarmCandidate> + 'a {
     raw_file_grid
         .visible_layout_range_and_count()
         .into_iter()
@@ -717,11 +672,11 @@ pub(crate) fn deferred_icon_preload_candidates_for_model<'a>(
         .filter_map(move |layout_index| {
             let model_index = model_index_for_layout_index(filtered, layout_index)?;
             let entry = model.get(model_index)?;
-            Some(IconPreloadCandidate {
-                path: model.path_for_index(model_index)?,
+            let path = model.path_for_index(model_index)?;
+            Some(FileGridIconWarmCandidate {
+                path,
                 is_dir: entry.is_dir,
                 mime_type: entry.effective_mime_type_cloned(),
-                icon_name: entry.icon_name.clone(),
                 icon_size,
             })
         })
@@ -795,7 +750,6 @@ mod tests {
             entry: fika_core::Entry::new(data),
             metadata_role: None,
             metadata_refresh_pending: false,
-            icon_name: None,
             thumbnail_path: None,
         }
     }
@@ -808,7 +762,6 @@ mod tests {
             metadata_role: None,
             metadata_refresh_pending: false,
             thumbnail_path: Some(thumbnail.clone()),
-            icon_name: None,
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("photo.jpg"),
                 name_width_units: 9,
@@ -827,7 +780,6 @@ mod tests {
             metadata_role: None,
             metadata_refresh_pending: false,
             thumbnail_path: Some(thumbnail.clone()),
-            icon_name: None,
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("Pictures"),
                 name_width_units: 8,
@@ -869,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_file_metadata_does_not_render_fake_zero_size() {
+    fn incomplete_file_metadata_keeps_stable_size_label() {
         let entry = model_entry(fika_core::EntryData {
             name: Arc::from("payload"),
             name_width_units: 7,
@@ -883,8 +835,8 @@ mod tests {
             is_dir: false,
         });
 
-        assert_eq!(format_entry_kind_label(&entry), "-");
-        assert_eq!(format_entry_detail_label(&entry), "-");
+        assert_eq!(format_entry_kind_label(&entry), "0 B");
+        assert_eq!(format_entry_detail_label(&entry), "0 B");
     }
 
     #[test]
@@ -959,7 +911,6 @@ mod tests {
                 metadata_refresh_pending: visible_entry.metadata_refresh_pending,
                 mime_type: visible_entry.effective_mime_type_cloned(),
                 mime_magic_checked: visible_entry.effective_mime_magic_checked(),
-                icon_name: None,
                 selected: false,
                 drop_target: None,
                 draft_name: None,
@@ -981,12 +932,12 @@ mod tests {
     }
 
     #[test]
-    fn deferred_metadata_role_candidates_stream_from_model_read_ahead() {
-        let directory = PathBuf::from("/tmp/fika-deferred-metadata-candidates");
+    fn deferred_icon_candidates_stream_from_model_read_ahead() {
+        let directory = PathBuf::from("/tmp/fika-deferred-icon-candidates");
         let entries = Arc::new(vec![
             test_entry("a-visible.txt", Some("text/plain"), true, Some(10)),
-            incomplete_test_entry("b-needs-role"),
-            test_entry("c-complete.txt", Some("text/plain"), true, Some(30)),
+            test_entry("b-next.png", Some("image/png"), true, Some(20)),
+            test_entry("c-config", Some("text/plain"), true, Some(30)),
         ]);
         let mut model = DirectoryModel::for_directory(directory.clone());
         model.replace_listing(directory.clone(), entries);
@@ -1008,7 +959,6 @@ mod tests {
                 metadata_refresh_pending: visible_entry.metadata_refresh_pending,
                 mime_type: visible_entry.effective_mime_type_cloned(),
                 mime_magic_checked: visible_entry.effective_mime_magic_checked(),
-                icon_name: None,
                 selected: false,
                 drop_target: None,
                 draft_name: None,
@@ -1020,92 +970,21 @@ mod tests {
         };
 
         let candidates =
-            deferred_metadata_role_candidates_for_model(&raw_file_grid, &model, None, model.len())
+            deferred_icon_candidates_for_model(&raw_file_grid, &model, None, model.len(), 64.0)
                 .collect::<Vec<_>>();
+        let paths = candidates
+            .iter()
+            .map(|candidate| candidate.path.clone())
+            .collect::<Vec<_>>();
 
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].path, directory.join("b-needs-role"));
-    }
-
-    #[test]
-    fn metadata_role_queue_keeps_visible_before_read_ahead_candidates() {
-        let visible = test_raw_visible_item(1, "a-visible", 0);
-        let raw_file_grid = RawFileGridSnapshot::Icons {
-            layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
-            items: vec![RawVisibleItemSnapshot {
-                metadata_complete: false,
-                ..visible
-            }],
-        };
-        let mut scheduler = MetadataRoleScheduler::default();
-
-        assert!(raw_file_grid.queue_metadata_role_candidates(
-            &mut scheduler,
-            PaneId(1),
-            Generation(1),
-            vec![MetadataRoleCandidate {
-                item_id: ItemId(2),
-                path: PathBuf::from("/tmp/b-deferred"),
-            }]
-        ));
-        let batch = scheduler.start_role_batch(8).unwrap();
-
-        assert_eq!(batch.requests.len(), 2);
-        assert_eq!(batch.requests[0].item_id(), ItemId(1));
-        assert_eq!(batch.requests[1].item_id(), ItemId(2));
-    }
-
-    #[test]
-    fn deferred_icon_preload_candidates_stream_from_model_read_ahead() {
-        let directory = PathBuf::from("/tmp/fika-deferred-icon-candidates");
-        let entries = Arc::new(vec![
-            test_entry("a-visible.txt", Some("text/plain"), true, Some(10)),
-            test_entry("b-next.png", Some("image/png"), true, Some(20)),
-        ]);
-        let mut model = DirectoryModel::for_directory(directory.clone());
-        model.replace_listing(directory.clone(), entries);
-        let visible_entry = model.get(0).unwrap();
-        let raw_file_grid = RawFileGridSnapshot::Icons {
-            layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
-            items: vec![RawVisibleItemSnapshot {
-                slot_id: 0,
-                layout: test_layout(0),
-                item_id: visible_entry.id,
-                path: model.path_for_index(0).unwrap(),
-                is_dir: visible_entry.is_dir,
-                name: visible_entry.name.clone(),
-                detail_label: String::new(),
-                thumbnail_path: None,
-                modified_secs: visible_entry.effective_modified_secs(),
-                size_bytes: visible_entry.effective_size_bytes(),
-                metadata_complete: visible_entry.effective_metadata_complete(),
-                metadata_refresh_pending: visible_entry.metadata_refresh_pending,
-                mime_type: visible_entry.effective_mime_type_cloned(),
-                mime_magic_checked: visible_entry.effective_mime_magic_checked(),
-                icon_name: Some(Arc::from("text-plain")),
-                selected: false,
-                drop_target: None,
-                draft_name: None,
-                draft_caret: None,
-                draft_selection: None,
-                draft_error: None,
-                draft_warning: None,
-            }],
-        };
-
-        let candidates = deferred_icon_preload_candidates_for_model(
-            &raw_file_grid,
-            &model,
-            None,
-            model.len(),
-            64.0,
-        )
-        .collect::<Vec<_>>();
-
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].path, directory.join("b-next.png"));
-        assert_eq!(candidates[0].mime_type.as_deref(), Some("image/png"));
-        assert_eq!(candidates[0].icon_size, 64.0);
+        assert!(!paths.contains(&directory.join("a-visible.txt")));
+        assert!(paths.contains(&directory.join("b-next.png")));
+        assert!(paths.contains(&directory.join("c-config")));
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.icon_size == 64.0)
+        );
     }
 
     #[test]
@@ -1124,11 +1003,7 @@ mod tests {
         let mut requests = Vec::new();
         let icon = test_icon_snapshot();
         let snapshot = raw_file_grid.into_file_grid_snapshot(2, |request| {
-            requests.push((
-                request.item_id,
-                request.path.to_path_buf(),
-                request.icon_size,
-            ));
+            requests.push((request.path.to_path_buf(), request.icon_size));
             icon.clone()
         });
 
@@ -1138,24 +1013,40 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|item| item.slot_id != 0));
         assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].0, ItemId(1));
-        assert_eq!(requests[0].1, PathBuf::from("/tmp/alpha.txt"));
+        assert_eq!(requests[0].0, PathBuf::from("/tmp/alpha.txt"));
     }
 
     #[test]
-    fn raw_file_grid_snapshot_queues_incomplete_refresh_and_magic_metadata() {
+    fn raw_file_grid_snapshot_warms_visible_icons_before_final_conversion() {
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(2, fika_core::IconsLayoutOptions::default()),
+            items: vec![
+                test_raw_visible_item(1, "alpha.txt", 0),
+                test_raw_visible_item(2, "beta.txt", 1),
+            ],
+        };
+        let mut requests = Vec::new();
+
+        raw_file_grid.warm_visible_file_icons(|request| {
+            requests.push((request.path.to_path_buf(), request.icon_size));
+        });
+
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].0, PathBuf::from("/tmp/alpha.txt"));
+        assert_eq!(requests[1].0, PathBuf::from("/tmp/beta.txt"));
+    }
+
+    #[test]
+    fn raw_file_grid_snapshot_queues_only_generic_magic_metadata() {
         let mut complete = test_raw_visible_item(1, "complete.txt", 0);
         complete.metadata_complete = true;
-        complete.icon_name = Some(Arc::from("text-plain"));
         let mut missing_icon = test_raw_visible_item(2, "missing-icon.txt", 1);
         missing_icon.metadata_complete = true;
-        missing_icon.icon_name = None;
         let mut incomplete = test_raw_visible_item(3, "incomplete.txt", 2);
         incomplete.metadata_complete = false;
         let mut refresh_pending = test_raw_visible_item(4, "refresh-pending.txt", 3);
         refresh_pending.metadata_complete = true;
         refresh_pending.metadata_refresh_pending = true;
-        refresh_pending.icon_name = Some(Arc::from("text-plain"));
         let mut generic_unchecked = test_raw_visible_item(5, "payload", 4);
         generic_unchecked.metadata_complete = true;
         generic_unchecked.size_bytes = 12;
@@ -1176,21 +1067,13 @@ mod tests {
         assert!(raw_file_grid.queue_metadata_role_candidates(
             &mut scheduler,
             PaneId(1),
-            Generation(1),
-            std::iter::empty()
+            Generation(1)
         ));
         let batch = scheduler.start_role_batch(8).unwrap();
 
-        assert_eq!(batch.requests.len(), 3);
-        assert_eq!(batch.requests[0].item_id(), ItemId(3));
-        assert_eq!(batch.requests[0].path(), Path::new("/tmp/incomplete.txt"));
-        assert_eq!(batch.requests[1].item_id(), ItemId(4));
-        assert_eq!(
-            batch.requests[1].path(),
-            Path::new("/tmp/refresh-pending.txt")
-        );
-        assert_eq!(batch.requests[2].item_id(), ItemId(5));
-        assert_eq!(batch.requests[2].path(), Path::new("/tmp/payload"));
+        assert_eq!(batch.requests.len(), 1);
+        assert_eq!(batch.requests[0].item_id(), ItemId(5));
+        assert_eq!(batch.requests[0].path(), Path::new("/tmp/payload"));
     }
 
     #[test]
@@ -1210,8 +1093,7 @@ mod tests {
         assert!(!raw_file_grid.queue_metadata_role_candidates(
             &mut scheduler,
             PaneId(1),
-            Generation(1),
-            std::iter::empty()
+            Generation(1)
         ));
         assert!(scheduler.start_role_batch(8).is_none());
     }
@@ -1280,21 +1162,6 @@ mod tests {
         })
     }
 
-    fn incomplete_test_entry(name: &str) -> fika_core::Entry {
-        fika_core::Entry::new(fika_core::EntryData {
-            name: Arc::from(name),
-            name_width_units: name.chars().count() as u16,
-            size_bytes: 12,
-            modified_secs: Some(42),
-            metadata_complete: false,
-            mime_type: Some(Arc::from("application/octet-stream")),
-            mime_magic_checked: false,
-            trash_original_path: None,
-            trash_deletion_time: None,
-            is_dir: false,
-        })
-    }
-
     fn test_raw_visible_item(id: u64, name: &str, model_index: usize) -> RawVisibleItemSnapshot {
         RawVisibleItemSnapshot {
             slot_id: 0,
@@ -1311,7 +1178,6 @@ mod tests {
             metadata_refresh_pending: false,
             mime_type: Some(Arc::from("text/plain")),
             mime_magic_checked: true,
-            icon_name: Some(Arc::from("text-plain")),
             selected: false,
             drop_target: None,
             draft_name: None,
@@ -1326,7 +1192,6 @@ mod tests {
         FileIconSnapshot {
             icon_name: Arc::from("text-plain"),
             path: None,
-            render_image: None,
             fallback_marker: Arc::from("TXT"),
             fallback_fg: 0xffffff,
             fallback_bg: 0x222222,

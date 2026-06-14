@@ -306,17 +306,10 @@ impl DirectoryModel {
         let had_reusable_thumbnail = self.data.entries[index].thumbnail_path.is_some();
         let old_size = self.data.entries[index].effective_size_bytes();
         let old_modified = self.data.entries[index].effective_modified_secs();
-        let old_mime_type = self.data.entries[index].effective_mime_type_cloned();
-        let old_mime_magic_checked = self.data.entries[index].effective_mime_magic_checked();
         self.data.entries[index].metadata_role =
             (!metadata_role_matches_base_entry(&self.data.entries[index], &role))
                 .then_some(role.clone());
         self.data.entries[index].metadata_refresh_pending = false;
-        if old_mime_type != self.data.entries[index].effective_mime_type_cloned()
-            || old_mime_magic_checked != self.data.entries[index].effective_mime_magic_checked()
-        {
-            self.data.entries[index].icon_name = None;
-        }
         if had_reusable_thumbnail
             && (old_size != self.data.entries[index].effective_size_bytes()
                 || old_modified != self.data.entries[index].effective_modified_secs())
@@ -338,29 +331,6 @@ impl DirectoryModel {
         }
 
         let index = self.index_of_id(id).unwrap_or(index);
-        self.mark_metadata_changed();
-        vec![DirectoryModelSignal::ItemsChanged(
-            vec![ItemRange {
-                start: index,
-                len: 1,
-            }],
-            ChangedRoles::metadata(),
-        )]
-    }
-
-    pub fn set_icon_name_role(
-        &mut self,
-        id: ItemId,
-        icon_name: Option<Arc<str>>,
-    ) -> Vec<DirectoryModelSignal> {
-        let Some(index) = self.index_of_id(id) else {
-            return Vec::new();
-        };
-        if self.data.entries[index].icon_name == icon_name {
-            return Vec::new();
-        }
-
-        self.data.entries[index].icon_name = icon_name;
         self.mark_metadata_changed();
         vec![DirectoryModelSignal::ItemsChanged(
             vec![ItemRange {
@@ -804,7 +774,6 @@ fn reusable_thumbnail_path(old: &ModelEntry, new: &ModelEntry) -> Option<PathBuf
 
 fn preserve_refreshed_entry_roles(old: &ModelEntry, new: &mut ModelEntry) {
     preserve_pending_entry_metadata_role(old, new);
-    new.icon_name = reusable_icon_name(old, new);
     new.thumbnail_path = reusable_thumbnail_path(old, new);
 }
 
@@ -818,40 +787,14 @@ fn preserve_pending_entry_metadata_role(old: &ModelEntry, new: &mut ModelEntry) 
     }
 
     let old_role = old.effective_metadata_role();
-    if new.entry.metadata_complete {
-        let mut role = base_metadata_role(new);
-        if old_role.mime_magic_checked
-            && old_role.size_bytes == role.size_bytes
-            && old_role.modified_secs == role.modified_secs
-        {
-            new.metadata_role =
-                (!metadata_role_matches_base_entry(new, &old_role)).then_some(old_role);
-            return;
-        }
-        role.mime_type = old.effective_mime_type_cloned().or(role.mime_type);
-        role.mime_magic_checked = old.effective_mime_magic_checked();
-        new.metadata_role = Some(role);
-    } else {
-        new.metadata_role = Some(old_role);
+    if !old_role.mime_magic_checked {
+        return;
     }
-    new.metadata_refresh_pending = true;
-}
 
-fn reusable_icon_name(old: &ModelEntry, new: &ModelEntry) -> Option<Arc<str>> {
-    if old.name != new.name || old.is_dir != new.is_dir || !old.effective_metadata_complete() {
-        return None;
+    let role = base_metadata_role(new);
+    if old_role.size_bytes == role.size_bytes && old_role.modified_secs == role.modified_secs {
+        new.metadata_role = (!metadata_role_matches_base_entry(new, &old_role)).then_some(old_role);
     }
-    if new.metadata_refresh_pending {
-        return old.icon_name.clone();
-    }
-    if new.effective_metadata_complete()
-        && (old.effective_mime_type().map(Arc::as_ref)
-            != new.effective_mime_type().map(Arc::as_ref)
-            || old.effective_mime_magic_checked() != new.effective_mime_magic_checked())
-    {
-        return None;
-    }
-    old.icon_name.clone()
 }
 
 fn new_requires_async_metadata_role(entry: &ModelEntry) -> bool {
@@ -1498,7 +1441,7 @@ mod tests {
     }
 
     #[test]
-    fn same_listing_lightweight_reload_preserves_visible_metadata_while_refresh_pending() {
+    fn same_listing_lightweight_reload_drops_stale_visible_metadata() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -1511,7 +1454,6 @@ mod tests {
         );
         let item_id = model.entries()[0].id;
         let thumbnail_path = PathBuf::from("/tmp/thumbs/notes.png");
-        model.set_icon_name_role(item_id, Some(Arc::from("text-x-generic")));
         model.set_thumbnail_path(item_id, Some(thumbnail_path.clone()));
 
         model.replace_listing(
@@ -1528,15 +1470,11 @@ mod tests {
         let entry = &model.entries()[0];
         assert_eq!(entry.id, item_id);
         assert!(!entry.entry.metadata_complete);
-        assert!(entry.effective_metadata_complete());
-        assert!(entry.metadata_refresh_pending);
-        assert_eq!(entry.effective_size_bytes(), 512);
-        assert_eq!(entry.effective_modified_secs(), Some(100));
-        assert_eq!(entry.icon_name.as_deref(), Some("text-x-generic"));
-        assert_eq!(
-            entry.thumbnail_path.as_deref(),
-            Some(thumbnail_path.as_path())
-        );
+        assert!(!entry.effective_metadata_complete());
+        assert!(!entry.metadata_refresh_pending);
+        assert_eq!(entry.effective_size_bytes(), 0);
+        assert_eq!(entry.effective_modified_secs(), None);
+        assert!(entry.thumbnail_path.is_none());
     }
 
     #[test]
@@ -1547,7 +1485,6 @@ mod tests {
             listing(vec![entry_with_metadata("Documents", true, 0, Some(100))]),
         );
         let item_id = model.entries()[0].id;
-        model.set_icon_name_role(item_id, Some(Arc::from("folder")));
 
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -1566,11 +1503,10 @@ mod tests {
         assert!(!entry.metadata_refresh_pending);
         assert!(entry.metadata_role.is_none());
         assert_eq!(entry.effective_size_bytes(), 0);
-        assert_eq!(entry.icon_name.as_deref(), Some("folder"));
     }
 
     #[test]
-    fn size_sorted_lightweight_reload_preserves_visible_metadata_and_order() {
+    fn size_sorted_lightweight_reload_drops_stale_visible_metadata() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -1587,7 +1523,6 @@ mod tests {
         });
         let large_id = model.entries()[0].id;
         let thumbnail_path = PathBuf::from("/tmp/thumbs/large.png");
-        model.set_icon_name_role(large_id, Some(Arc::from("text-x-generic")));
         model.set_thumbnail_path(large_id, Some(thumbnail_path.clone()));
         let index_generation = model.index_generation;
 
@@ -1607,25 +1542,22 @@ mod tests {
             )]
         );
         assert_eq!(model.index_generation, index_generation);
-        assert_eq!(model.entries()[0].name.as_ref(), "large.txt");
-        assert_eq!(model.entries()[0].id, large_id);
-        assert!(!model.entries()[0].entry.metadata_complete);
-        assert!(model.entries()[0].effective_metadata_complete());
-        assert!(model.entries()[0].metadata_refresh_pending);
-        assert_eq!(model.entries()[0].effective_size_bytes(), 100);
-        assert_eq!(model.entries()[0].effective_modified_secs(), Some(20));
-        assert_eq!(
-            model.entries()[0].icon_name.as_deref(),
-            Some("text-x-generic")
-        );
-        assert_eq!(
-            model.entries()[0].thumbnail_path.as_deref(),
-            Some(thumbnail_path.as_path())
-        );
+        let large = model
+            .entries()
+            .iter()
+            .find(|entry| entry.id == large_id)
+            .unwrap();
+        assert_eq!(large.name.as_ref(), "large.txt");
+        assert!(!large.entry.metadata_complete);
+        assert!(!large.effective_metadata_complete());
+        assert!(!large.metadata_refresh_pending);
+        assert_eq!(large.effective_size_bytes(), 0);
+        assert_eq!(large.effective_modified_secs(), None);
+        assert!(large.thumbnail_path.is_none());
     }
 
     #[test]
-    fn refreshed_item_lightweight_update_preserves_visible_metadata() {
+    fn refreshed_item_lightweight_update_drops_stale_visible_metadata() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -1637,7 +1569,6 @@ mod tests {
             )]),
         );
         let item_id = model.entries()[0].id;
-        model.set_icon_name_role(item_id, Some(Arc::from("text-x-generic")));
         let index_generation = model.index_generation;
 
         let signals = model.apply_items_refreshed(vec![crate::core::directory::RefreshPair {
@@ -1661,14 +1592,10 @@ mod tests {
         assert_eq!(model.index_generation, index_generation);
         assert_eq!(model.entries()[0].id, item_id);
         assert!(!model.entries()[0].entry.metadata_complete);
-        assert!(model.entries()[0].effective_metadata_complete());
-        assert!(model.entries()[0].metadata_refresh_pending);
-        assert_eq!(model.entries()[0].effective_size_bytes(), 512);
-        assert_eq!(model.entries()[0].effective_modified_secs(), Some(100));
-        assert_eq!(
-            model.entries()[0].icon_name.as_deref(),
-            Some("text-x-generic")
-        );
+        assert!(!model.entries()[0].effective_metadata_complete());
+        assert!(!model.entries()[0].metadata_refresh_pending);
+        assert_eq!(model.entries()[0].effective_size_bytes(), 0);
+        assert_eq!(model.entries()[0].effective_modified_secs(), None);
     }
 
     #[test]
@@ -1818,57 +1745,6 @@ mod tests {
     }
 
     #[test]
-    fn icon_name_role_update_is_model_local_metadata() {
-        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
-        model.replace_listing(
-            PathBuf::from("/tmp"),
-            listing(vec![entry("settings.conf", false)]),
-        );
-        let item_id = model.entries()[0].id;
-
-        let signals = model.set_icon_name_role(item_id, Some(Arc::from("text-x-conf")));
-
-        assert_eq!(
-            signals,
-            vec![DirectoryModelSignal::ItemsChanged(
-                vec![ItemRange { start: 0, len: 1 }],
-                ChangedRoles::metadata(),
-            )]
-        );
-        assert_eq!(model.entries()[0].id, item_id);
-        assert_eq!(model.entries()[0].icon_name.as_deref(), Some("text-x-conf"));
-        assert!(
-            model
-                .set_icon_name_role(item_id, Some(Arc::from("text-x-conf")))
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn same_listing_reload_preserves_icon_name_role() {
-        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
-        model.replace_listing(
-            PathBuf::from("/tmp"),
-            listing(vec![entry("settings.conf", false)]),
-        );
-        let item_id = model.entries()[0].id;
-        model.set_icon_name_role(item_id, Some(Arc::from("text-x-conf")));
-
-        model.replace_listing(
-            PathBuf::from("/tmp"),
-            listing(vec![entry_with_metadata(
-                "settings.conf",
-                false,
-                12,
-                Some(100),
-            )]),
-        );
-
-        assert_eq!(model.entries()[0].id, item_id);
-        assert_eq!(model.entries()[0].icon_name.as_deref(), Some("text-x-conf"));
-    }
-
-    #[test]
     fn same_listing_reload_keeps_resolved_mime_as_finished_role_when_metadata_matches() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
@@ -1882,7 +1758,6 @@ mod tests {
             )]),
         );
         let item_id = model.entries()[0].id;
-        model.set_icon_name_role(item_id, Some(Arc::from("text-plain")));
 
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -1905,11 +1780,10 @@ mod tests {
             Some("text/plain")
         );
         assert!(entry.effective_mime_magic_checked());
-        assert_eq!(entry.icon_name.as_deref(), Some("text-plain"));
     }
 
     #[test]
-    fn same_listing_reload_marks_resolved_mime_pending_when_metadata_changes() {
+    fn same_listing_reload_drops_resolved_mime_when_metadata_changes() {
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -1922,7 +1796,6 @@ mod tests {
             )]),
         );
         let item_id = model.entries()[0].id;
-        model.set_icon_name_role(item_id, Some(Arc::from("text-plain")));
 
         model.replace_listing(
             PathBuf::from("/tmp"),
@@ -1937,70 +1810,12 @@ mod tests {
 
         let entry = &model.entries()[0];
         assert_eq!(entry.id, item_id);
-        assert!(entry.metadata_refresh_pending);
+        assert!(!entry.metadata_refresh_pending);
         assert_eq!(
             entry.effective_mime_type().map(Arc::as_ref),
-            Some("text/plain")
+            Some(GENERIC_BINARY_MIME)
         );
-        assert!(entry.effective_mime_magic_checked());
-        assert_eq!(entry.icon_name.as_deref(), Some("text-plain"));
-    }
-
-    #[test]
-    fn incomplete_metadata_reload_keeps_icon_name_role_until_refresh_finishes() {
-        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
-        model.replace_listing(
-            PathBuf::from("/tmp"),
-            listing(vec![entry_with_metadata(
-                "settings.conf",
-                false,
-                12,
-                Some(100),
-            )]),
-        );
-        let item_id = model.entries()[0].id;
-        model.set_icon_name_role(item_id, Some(Arc::from("text-x-conf")));
-
-        model.replace_listing(
-            PathBuf::from("/tmp"),
-            listing(vec![entry_with_metadata_state(
-                "settings.conf",
-                false,
-                0,
-                None,
-                false,
-            )]),
-        );
-
-        assert_eq!(model.entries()[0].id, item_id);
-        assert_eq!(model.entries()[0].icon_name.as_deref(), Some("text-x-conf"));
-    }
-
-    #[test]
-    fn metadata_role_update_clears_stale_icon_name_role() {
-        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
-        model.replace_listing(
-            PathBuf::from("/tmp"),
-            listing(vec![entry_with_metadata_state(
-                "payload", false, 0, None, false,
-            )]),
-        );
-        let item_id = model.entries()[0].id;
-        model.set_icon_name_role(item_id, Some(Arc::from("application-octet-stream")));
-
-        model.set_metadata_role(
-            item_id,
-            Path::new("/tmp/payload"),
-            EntryMetadataRole {
-                size_bytes: 12,
-                modified_secs: Some(42),
-                mime_type: Some(Arc::from("text/plain")),
-                mime_magic_checked: true,
-            },
-        );
-
-        assert!(model.entries()[0].effective_metadata_complete());
-        assert!(model.entries()[0].icon_name.is_none());
+        assert!(!entry.effective_mime_magic_checked());
     }
 
     #[test]

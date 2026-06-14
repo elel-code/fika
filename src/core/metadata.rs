@@ -1,10 +1,11 @@
 use super::entries::{EntryMetadataRole, ItemId};
-use super::mime::MimeDatabase;
+use super::mime::{MimeDatabase, mime_magic_resolution_required, read_mime_magic};
 use super::model::DirectoryModel;
 use super::pane::{Generation, PaneId};
 use std::collections::{HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct MetadataRoleWorkKey {
@@ -12,6 +13,8 @@ pub struct MetadataRoleWorkKey {
     pub generation: Generation,
     pub item_id: ItemId,
     pub path_hash: u64,
+    pub modified_secs: Option<u64>,
+    pub mime_type: Option<String>,
 }
 
 impl MetadataRoleWorkKey {
@@ -25,6 +28,8 @@ impl MetadataRoleWorkKey {
             generation,
             item_id: candidate.item_id,
             path_hash: stable_hash(&candidate.path),
+            modified_secs: candidate.modified_secs,
+            mime_type: candidate.mime_type.clone(),
         }
     }
 
@@ -34,6 +39,8 @@ impl MetadataRoleWorkKey {
             generation: request.generation,
             item_id: request.item_id,
             path_hash: stable_hash(&request.path),
+            modified_secs: request.modified_secs,
+            mime_type: request.mime_type.clone(),
         }
     }
 
@@ -43,6 +50,11 @@ impl MetadataRoleWorkKey {
             generation: result.generation,
             item_id: result.item_id,
             path_hash: stable_hash(&result.path),
+            modified_secs: result.role.as_ref().and_then(|role| role.modified_secs),
+            mime_type: result
+                .role
+                .as_ref()
+                .and_then(|role| role.mime_type.as_ref().map(|mime| mime.to_string())),
         }
     }
 }
@@ -57,6 +69,10 @@ fn stable_hash(value: impl Hash) -> u64 {
 pub struct MetadataRoleCandidate {
     pub item_id: ItemId,
     pub path: PathBuf,
+    pub size_bytes: u64,
+    pub modified_secs: Option<u64>,
+    pub mime_type: Option<String>,
+    pub mime_magic_checked: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,6 +81,9 @@ pub struct MetadataRoleRequest {
     generation: Generation,
     item_id: ItemId,
     path: PathBuf,
+    size_bytes: u64,
+    modified_secs: Option<u64>,
+    mime_type: Option<String>,
 }
 
 impl MetadataRoleRequest {
@@ -72,13 +91,24 @@ impl MetadataRoleRequest {
         pane_id: PaneId,
         generation: Generation,
         candidate: MetadataRoleCandidate,
-    ) -> Self {
-        Self {
+    ) -> Option<Self> {
+        if !mime_magic_resolution_required(
+            false,
+            candidate.size_bytes,
+            candidate.mime_type.as_deref(),
+            candidate.mime_magic_checked,
+        ) {
+            return None;
+        }
+        Some(Self {
             pane_id,
             generation,
             item_id: candidate.item_id,
             path: candidate.path,
-        }
+            size_bytes: candidate.size_bytes,
+            modified_secs: candidate.modified_secs,
+            mime_type: candidate.mime_type,
+        })
     }
 
     pub fn pane_id(&self) -> PaneId {
@@ -95,6 +125,18 @@ impl MetadataRoleRequest {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+
+    pub fn modified_secs(&self) -> Option<u64> {
+        self.modified_secs
+    }
+
+    pub fn mime_type(&self) -> Option<&str> {
+        self.mime_type.as_deref()
     }
 }
 
@@ -132,7 +174,10 @@ impl MetadataRoleScheduler {
         for candidate in candidates {
             let key = MetadataRoleWorkKey::from_candidate(pane_id, generation, &candidate);
             keep.insert(key.clone());
-            let request = MetadataRoleRequest::from_candidate(pane_id, generation, candidate);
+            let Some(request) = MetadataRoleRequest::from_candidate(pane_id, generation, candidate)
+            else {
+                continue;
+            };
             pending.push((key, request));
         }
         self.prune_queued_for_snapshot(pane_id, generation, &keep);
@@ -257,16 +302,16 @@ pub fn metadata_role_results_for_requests(
 }
 
 pub fn metadata_role_result_for_request(request: MetadataRoleRequest) -> MetadataRoleResult {
-    let role = std::fs::metadata(&request.path).ok().and_then(|metadata| {
-        let name = request.path.file_name()?.to_string_lossy();
-        let is_dir = metadata.is_dir();
-        Some(EntryMetadataRole::resolved_from_path(
-            name.as_ref(),
-            &request.path,
-            is_dir,
-            &metadata,
-            MimeDatabase::shared(),
-        ))
+    let mime_type = read_mime_magic(request.path())
+        .ok()
+        .flatten()
+        .and_then(|magic| MimeDatabase::shared().mime_for_path(request.path(), false, Some(&magic)))
+        .or_else(|| request.mime_type().map(Arc::from));
+    let role = Some(EntryMetadataRole {
+        size_bytes: request.size_bytes(),
+        modified_secs: request.modified_secs(),
+        mime_type,
+        mime_magic_checked: true,
     });
     MetadataRoleResult {
         pane_id: request.pane_id,
@@ -284,6 +329,18 @@ pub fn apply_metadata_role_result_to_model(
     let Some(role) = result.role else {
         return false;
     };
+    let Some(index) = model.index_of_id(result.item_id) else {
+        return false;
+    };
+    let Some(entry) = model.get(index) else {
+        return false;
+    };
+    if entry.is_dir
+        || entry.effective_modified_secs() != role.modified_secs
+        || model.path_for_index(index).as_deref() != Some(result.path.as_path())
+    {
+        return false;
+    }
     !model
         .set_metadata_role(result.item_id, &result.path, role)
         .is_empty()
@@ -301,10 +358,7 @@ mod tests {
         let pane_id = PaneId(1);
         let generation = Generation(1);
         let mut scheduler = MetadataRoleScheduler::default();
-        let candidate = MetadataRoleCandidate {
-            item_id: ItemId(1),
-            path: PathBuf::from("/tmp/fika-metadata/payload"),
-        };
+        let candidate = metadata_candidate(ItemId(1), PathBuf::from("/tmp/fika-metadata/payload"));
 
         assert!(scheduler.queue_candidates(pane_id, generation, vec![candidate.clone()]));
         assert!(!scheduler.queue_candidates(pane_id, generation, vec![candidate]));
@@ -322,14 +376,8 @@ mod tests {
     #[test]
     fn metadata_role_scheduler_prunes_invisible_queued_requests() {
         let root = PathBuf::from("/tmp/fika-metadata-prune");
-        let first = MetadataRoleCandidate {
-            item_id: ItemId(1),
-            path: root.join("first"),
-        };
-        let second = MetadataRoleCandidate {
-            item_id: ItemId(2),
-            path: root.join("second"),
-        };
+        let first = metadata_candidate(ItemId(1), root.join("first"));
+        let second = metadata_candidate(ItemId(2), root.join("second"));
         let mut scheduler = MetadataRoleScheduler::default();
 
         assert!(scheduler.queue_candidates(PaneId(1), Generation(1), vec![first.clone()]));
@@ -349,14 +397,8 @@ mod tests {
     #[test]
     fn metadata_role_scheduler_releases_finished_active_keys_but_keeps_queued_keys() {
         let root = PathBuf::from("/tmp/fika-metadata-active");
-        let first = MetadataRoleCandidate {
-            item_id: ItemId(1),
-            path: root.join("first"),
-        };
-        let second = MetadataRoleCandidate {
-            item_id: ItemId(2),
-            path: root.join("second"),
-        };
+        let first = metadata_candidate(ItemId(1), root.join("first"));
+        let second = metadata_candidate(ItemId(2), root.join("second"));
         let mut scheduler = MetadataRoleScheduler::default();
 
         assert!(scheduler.queue_candidates(
@@ -377,31 +419,22 @@ mod tests {
     }
 
     #[test]
-    fn metadata_role_scheduler_keeps_failed_active_key_seen() {
+    fn metadata_role_scheduler_releases_active_key_after_batch_finish() {
         let root = PathBuf::from("/tmp/fika-metadata-failed");
-        let candidate = MetadataRoleCandidate {
-            item_id: ItemId(1),
-            path: root.join("missing"),
-        };
+        let candidate = metadata_candidate(ItemId(1), root.join("missing"));
         let mut scheduler = MetadataRoleScheduler::default();
 
         assert!(scheduler.queue_candidates(PaneId(1), Generation(1), vec![candidate.clone()]));
-        let batch = scheduler.start_role_batch(8).unwrap();
-        scheduler.finish_role_batch_with_results(&[MetadataRoleResult {
-            pane_id: PaneId(1),
-            generation: Generation(1),
-            item_id: batch.requests[0].item_id(),
-            path: batch.requests[0].path().to_path_buf(),
-            role: None,
-        }]);
+        let _batch = scheduler.start_role_batch(8).unwrap();
+        scheduler.finish_role_batch();
 
-        assert!(!scheduler.queue_candidates(PaneId(1), Generation(1), vec![candidate]));
-        assert_eq!(scheduler.queued_len(), 0);
+        assert!(scheduler.queue_candidates(PaneId(1), Generation(1), vec![candidate]));
+        assert_eq!(scheduler.queued_len(), 1);
         assert_eq!(scheduler.seen_len(), 1);
     }
 
     #[test]
-    fn metadata_role_result_applies_only_to_matching_model_item_and_path() {
+    fn metadata_role_result_applies_only_to_matching_model_item_path_and_mtime() {
         let root = PathBuf::from("/tmp/fika-metadata-result");
         let mut model = DirectoryModel::for_directory(root.clone());
         model.replace_listing(
@@ -409,11 +442,11 @@ mod tests {
             Arc::new(vec![Entry::new(EntryData {
                 name: Arc::from("payload"),
                 name_width_units: 7,
-                size_bytes: 0,
-                modified_secs: None,
-                metadata_complete: false,
-                mime_type: None,
-                mime_magic_checked: true,
+                size_bytes: 12,
+                modified_secs: Some(42),
+                metadata_complete: true,
+                mime_type: Some(Arc::from(super::super::mime::GENERIC_BINARY_MIME)),
+                mime_magic_checked: false,
                 trash_original_path: None,
                 trash_deletion_time: None,
                 is_dir: false,
@@ -437,7 +470,30 @@ mod tests {
                 role: Some(role.clone()),
             },
         ));
-        assert!(!model.entries()[0].effective_metadata_complete());
+        assert_eq!(
+            model.entries()[0].effective_mime_type().map(Arc::as_ref),
+            Some(super::super::mime::GENERIC_BINARY_MIME)
+        );
+
+        assert!(!apply_metadata_role_result_to_model(
+            &mut model,
+            MetadataRoleResult {
+                pane_id: PaneId(1),
+                generation: Generation(1),
+                item_id,
+                path: root.join("payload"),
+                role: Some(EntryMetadataRole {
+                    size_bytes: 12,
+                    modified_secs: Some(43),
+                    mime_type: Some(Arc::from("text/plain")),
+                    mime_magic_checked: true,
+                }),
+            },
+        ));
+        assert_eq!(
+            model.entries()[0].effective_mime_type().map(Arc::as_ref),
+            Some(super::super::mime::GENERIC_BINARY_MIME)
+        );
 
         assert!(apply_metadata_role_result_to_model(
             &mut model,
@@ -449,12 +505,16 @@ mod tests {
                 role: Some(role),
             },
         ));
-        assert!(model.entries()[0].effective_metadata_complete());
         assert_eq!(model.entries()[0].effective_size_bytes(), 12);
+        assert_eq!(model.entries()[0].effective_modified_secs(), Some(42));
+        assert_eq!(
+            model.entries()[0].effective_mime_type().map(Arc::as_ref),
+            Some("text/plain")
+        );
     }
 
     #[test]
-    fn metadata_role_result_reads_filesystem_metadata() {
+    fn metadata_role_result_reads_magic_without_restating_file() {
         let root = std::env::temp_dir().join(format!(
             "fika-metadata-role-{}-{}",
             std::process::id(),
@@ -464,14 +524,17 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("payload.txt");
-        std::fs::write(&path, b"hello").unwrap();
+        let path = root.join("payload");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nrest").unwrap();
 
         let result = metadata_role_result_for_request(MetadataRoleRequest {
             pane_id: PaneId(1),
             generation: Generation(2),
             item_id: ItemId(3),
             path: path.clone(),
+            size_bytes: 12,
+            modified_secs: Some(42),
+            mime_type: Some(super::super::mime::GENERIC_BINARY_MIME.to_string()),
         });
 
         assert_eq!(result.pane_id, PaneId(1));
@@ -479,10 +542,22 @@ mod tests {
         assert_eq!(result.item_id, ItemId(3));
         assert_eq!(result.path, path);
         let role = result.role.unwrap();
-        assert_eq!(role.size_bytes, 5);
-        assert_eq!(role.mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(role.size_bytes, 12);
+        assert_eq!(role.modified_secs, Some(42));
+        assert_eq!(role.mime_type.as_deref(), Some("image/png"));
         assert!(role.mime_magic_checked);
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn metadata_candidate(item_id: ItemId, path: PathBuf) -> MetadataRoleCandidate {
+        MetadataRoleCandidate {
+            item_id,
+            path,
+            size_bytes: 12,
+            modified_secs: Some(42),
+            mime_type: Some(super::super::mime::GENERIC_BINARY_MIME.to_string()),
+            mime_magic_checked: false,
+        }
     }
 }

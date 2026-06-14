@@ -151,7 +151,6 @@ mod tests {
             entry: fika_core::Entry::new(entry),
             metadata_role: None,
             metadata_refresh_pending: false,
-            icon_name: None,
             thumbnail_path: None,
         }
     }

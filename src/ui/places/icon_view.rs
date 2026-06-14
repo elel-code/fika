@@ -402,7 +402,6 @@ mod tests {
         FileIconSnapshot {
             icon_name: std::sync::Arc::from(icon_name),
             path: None,
-            render_image: None,
             fallback_marker: std::sync::Arc::from(fallback_marker),
             fallback_fg: 0x1f4fbf,
             fallback_bg: 0xeaf1ff,

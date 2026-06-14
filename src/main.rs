@@ -12,15 +12,14 @@ use fika_core::{
 };
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
-    DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, ItemId,
-    ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult, MetadataRoleScheduler,
-    OperationQueue, PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove,
-    SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult, ThumbnailScheduler,
-    TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange,
-    apply_thumbnail_probe_result_to_model, breadcrumb_segments, complete_location_input, file_ops,
-    listing_requests_from_events, metadata_role_results_for_requests, nearest_existing_ancestor,
-    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
-    update_loading_state_for_event,
+    DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, ListingRequest,
+    ListingWorker, LoadingPaneState, MetadataRoleResult, MetadataRoleScheduler, OperationQueue,
+    PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder,
+    SortRole, ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload,
+    UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model,
+    breadcrumb_segments, complete_location_input, file_ops, listing_requests_from_events,
+    metadata_role_results_for_requests, nearest_existing_ancestor, perform_device_place_operation,
+    resolve_location_input, thumbnail_probe_results_for_requests, update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -76,18 +75,14 @@ use ui::drag_drop::{
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput,
     PaneViewportGeometry, RawFileGridSnapshotInput, VisibleItemSlotPool, compact_text_width,
-    compact_text_width_for_name, content_item_hit_at_point,
-    deferred_icon_preload_candidates_for_model, deferred_metadata_role_candidates_for_model,
+    compact_text_width_for_name, content_item_hit_at_point, deferred_icon_candidates_for_model,
     deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
     pane_layout_projection, raw_file_grid_snapshot,
 };
 use ui::filter_bar::{
     FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState, cached_filtered_model_for_pane,
 };
-use ui::icons::{
-    FileIconCache, FileIconLoadBatch, FileIconLoadResult, FileIconSnapshot,
-    file_icon_snapshot_for_model_role, finish_metadata_role_results_with_icon_roles,
-};
+use ui::icons::{FileIconCache, FileIconSnapshot};
 use ui::item_view::ItemViewScrollState;
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
@@ -745,7 +740,7 @@ impl FikaApp {
         let focused_pane = self.panes.focused();
         let pane_ids = self.panes.pane_ids().to_vec();
         let pane_count = pane_ids.len();
-        let snapshots = pane_ids
+        pane_ids
             .into_iter()
             .filter_map(|pane_id| {
                 self.sync_pane_view_from_item_view_scroll_handle(pane_id);
@@ -762,6 +757,7 @@ impl FikaApp {
                     filter_bar,
                     view,
                     raw_file_grid,
+                    read_ahead_icon_candidates,
                     rubber_band,
                     focused,
                     selection_count,
@@ -807,17 +803,10 @@ impl FikaApp {
                             .entry(pane_id)
                             .or_default(),
                     });
-                    let icon_size = view.icon_size();
                     let metadata_role_queued = raw_file_grid.queue_metadata_role_candidates(
                         &mut self.metadata_role_scheduler,
                         pane_id,
                         generation,
-                        deferred_metadata_role_candidates_for_model(
-                            &raw_file_grid,
-                            &pane.model,
-                            filtered,
-                            item_count,
-                        ),
                     );
                     let thumbnail_probe_queued = raw_file_grid.queue_thumbnail_candidates(
                         &mut self.thumbnail_scheduler,
@@ -830,30 +819,21 @@ impl FikaApp {
                             item_count,
                         ),
                     );
-                    for candidate in deferred_icon_preload_candidates_for_model(
+                    let read_ahead_icon_candidates = deferred_icon_candidates_for_model(
                         &raw_file_grid,
                         &pane.model,
                         filtered,
                         item_count,
-                        icon_size,
-                    ) {
-                        let ui::file_grid::IconPreloadCandidate {
-                            path,
-                            is_dir,
-                            mime_type,
-                            icon_name,
-                            icon_size,
-                        } = candidate;
-                        self.file_icons.preload_icon_for_model_role(
-                            icon_name, &path, is_dir, mime_type, icon_size,
-                        );
-                    }
+                        view.icon_size(),
+                    )
+                    .collect::<Vec<_>>();
                     (
                         breadcrumb_segments(&pane.current_dir),
                         location_draft,
                         self.filter_bar_snapshot(pane_id, focused_pane, item_count),
                         view.clone(),
                         raw_file_grid,
+                        read_ahead_icon_candidates,
                         self.rubber_band.and_then(|band| {
                             (band.pane_id == pane_id).then(|| band.viewport_rect(&view))
                         }),
@@ -873,17 +853,27 @@ impl FikaApp {
                 let mut raw_file_grid = raw_file_grid;
                 raw_file_grid
                     .assign_visible_item_slots(self.visible_item_slots.entry(pane_id).or_default());
-                let file_grid = raw_file_grid.into_file_grid_snapshot(selection_count, |request| {
-                    self.icon_snapshot_for_model_item(
-                        pane_id,
-                        request.item_id,
+                raw_file_grid.warm_visible_file_icons(|request| {
+                    let _ = self.icon_snapshot_for_model_item(
                         request.path,
                         request.is_dir,
-                        request.metadata_complete,
-                        request.size_bytes,
                         request.mime_type.clone(),
-                        request.mime_magic_checked,
-                        request.icon_name.clone(),
+                        request.icon_size,
+                    );
+                });
+                for candidate in read_ahead_icon_candidates {
+                    let _ = self.icon_snapshot_for_model_item(
+                        &candidate.path,
+                        candidate.is_dir,
+                        candidate.mime_type,
+                        candidate.icon_size,
+                    );
+                }
+                let file_grid = raw_file_grid.into_file_grid_snapshot(selection_count, |request| {
+                    self.icon_snapshot_for_model_item(
+                        request.path,
+                        request.is_dir,
+                        request.mime_type.clone(),
                         request.icon_size,
                     )
                 });
@@ -907,9 +897,7 @@ impl FikaApp {
                     focused,
                 })
             })
-            .collect();
-        self.start_pending_icon_loads(cx);
-        snapshots
+            .collect()
     }
 
     fn start_listing_result_monitor(receiver: mpsc::Receiver<()>, cx: &mut Context<Self>) {
@@ -1210,71 +1198,27 @@ impl FikaApp {
     }
 
     fn finish_metadata_role_results(&mut self, results: Vec<MetadataRoleResult>) -> bool {
-        finish_metadata_role_results_with_icon_roles(&mut self.panes, &mut self.file_icons, results)
+        let mut changed = false;
+        for result in results {
+            let Some(pane) = self.panes.pane_mut(result.pane_id) else {
+                continue;
+            };
+            if pane.generation != result.generation {
+                continue;
+            }
+            changed |= fika_core::apply_metadata_role_result_to_model(&mut pane.model, result);
+        }
+        changed
     }
 
     fn icon_snapshot_for_model_item(
         &mut self,
-        pane_id: PaneId,
-        item_id: ItemId,
         path: &Path,
         is_dir: bool,
-        metadata_complete: bool,
-        size_bytes: u64,
         mime_type: Option<Arc<str>>,
-        mime_magic_checked: bool,
-        icon_name: Option<Arc<str>>,
         icon_size: f32,
     ) -> FileIconSnapshot {
-        let snapshot = file_icon_snapshot_for_model_role(
-            &mut self.file_icons,
-            icon_name,
-            path,
-            is_dir,
-            metadata_complete,
-            size_bytes,
-            mime_type.clone(),
-            mime_magic_checked,
-            icon_size,
-        );
-        if let Some(icon_name) = snapshot.icon_name_to_store
-            && let Some(pane) = self.panes.pane_mut(pane_id)
-        {
-            let _ = pane.model.set_icon_name_role(item_id, Some(icon_name));
-        }
-        snapshot.icon
-    }
-
-    fn start_pending_icon_loads(&mut self, cx: &mut Context<Self>) {
-        const ICON_LOAD_BATCH_SIZE: usize = 128;
-        if let Some(batch) = self.file_icons.take_icon_load_batch(ICON_LOAD_BATCH_SIZE) {
-            self.start_icon_load_batch(batch, cx);
-        }
-    }
-
-    fn start_icon_load_batch(&mut self, batch: FileIconLoadBatch, cx: &mut Context<Self>) {
-        cx.spawn(
-            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    let result = cx
-                        .background_spawn(async move { FileIconCache::load_icon_batch(batch) })
-                        .await;
-                    let _ = this.update(&mut cx, |app, cx| {
-                        let changed = app.finish_icon_load_batch(result);
-                        app.start_pending_icon_loads(cx);
-                        if changed {
-                            cx.notify();
-                        }
-                    });
-                }
-            },
-        )
-        .detach();
-    }
-
-    fn finish_icon_load_batch(&mut self, result: FileIconLoadResult) -> bool {
-        self.file_icons.finish_icon_load_batch(result)
+        self.file_icons.icon_for(path, is_dir, mime_type, icon_size)
     }
 
     fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
@@ -6419,7 +6363,6 @@ impl Render for FikaApp {
                 context_menu_icon_snapshots(&mut self.file_icons, menu, clipboard_available)
             })
             .unwrap_or_default();
-        self.start_pending_icon_loads(cx);
         let app = cx.weak_entity();
         div()
             .relative()
@@ -11957,7 +11900,7 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn deferred_thumbnail_candidates_stay_queued_for_current_generation() {
+    fn deferred_thumbnail_candidates_prune_outside_current_resolve_set() {
         let mut app = test_app_with_entries(
             "/tmp/fika-thumbnail-prune-deferred",
             &["keep.png", "stale.png"],
@@ -11998,22 +11941,22 @@ text/plain=viewer.desktop;\n",
             !app.thumbnail_scheduler
                 .queue_candidates(pane_id, generation, vec![keep.clone()])
         );
-        assert_eq!(app.thumbnail_scheduler.queued_len(), 2);
-        assert_eq!(app.thumbnail_scheduler.seen_len(), 2);
+        assert_eq!(app.thumbnail_scheduler.queued_len(), 1);
+        assert_eq!(app.thumbnail_scheduler.seen_len(), 1);
         let remaining = app.thumbnail_scheduler.pop_next_request().unwrap();
         assert_eq!(remaining.item_id(), keep_id);
-        let next = app.thumbnail_scheduler.pop_next_request().unwrap();
-        assert_eq!(next.item_id(), stale_id);
+        assert!(app.thumbnail_scheduler.pop_next_request().is_none());
 
         assert!(
-            !app.thumbnail_scheduler
+            app.thumbnail_scheduler
                 .queue_candidates(pane_id, generation, vec![stale])
         );
-        assert!(app.thumbnail_scheduler.pop_next_request().is_none());
+        let next = app.thumbnail_scheduler.pop_next_request().unwrap();
+        assert_eq!(next.item_id(), stale_id);
     }
 
     #[test]
-    fn active_deferred_thumbnail_candidates_stay_seen_for_current_generation() {
+    fn active_deferred_thumbnail_candidates_prune_outside_current_resolve_set() {
         let mut app = test_app_with_entries(
             "/tmp/fika-thumbnail-active-cancel",
             &["keep.png", "stale.png"],
@@ -12060,19 +12003,20 @@ text/plain=viewer.desktop;\n",
                 .queue_candidates(pane_id, generation, vec![keep.clone()])
         );
 
-        assert_eq!(app.thumbnail_scheduler.seen_len(), 2);
+        assert_eq!(app.thumbnail_scheduler.seen_len(), 1);
         assert!(app.thumbnail_scheduler.contains_seen(
             &fika_core::ThumbnailWorkKey::from_candidate(pane_id, generation, &keep)
         ));
-        assert!(app.thumbnail_scheduler.contains_seen(
+        assert!(!app.thumbnail_scheduler.contains_seen(
             &fika_core::ThumbnailWorkKey::from_candidate(pane_id, generation, &stale)
         ));
 
         assert!(
-            !app.thumbnail_scheduler
+            app.thumbnail_scheduler
                 .queue_candidates(pane_id, generation, vec![stale])
         );
-        assert!(app.thumbnail_scheduler.pop_next_request().is_none());
+        let requeued = app.thumbnail_scheduler.pop_next_request().unwrap();
+        assert_eq!(requeued.item_id(), stale_id);
     }
 
     #[test]
@@ -12268,11 +12212,11 @@ text/plain=viewer.desktop;\n",
             Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from("payload"),
                 name_width_units: 7,
-                size_bytes: 0,
-                modified_secs: None,
-                metadata_complete: false,
-                mime_type: None,
-                mime_magic_checked: true,
+                size_bytes: 12,
+                modified_secs: Some(42),
+                metadata_complete: true,
+                mime_type: Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+                mime_magic_checked: false,
                 trash_original_path: None,
                 trash_deletion_time: None,
                 is_dir: false,
@@ -12295,7 +12239,12 @@ text/plain=viewer.desktop;\n",
             path: path.join("payload"),
             role: Some(role.clone()),
         }]));
-        assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].effective_metadata_complete());
+        assert_eq!(
+            app.panes.pane(pane_id).unwrap().model.entries()[0]
+                .effective_mime_type()
+                .map(Arc::as_ref),
+            Some(fika_core::GENERIC_BINARY_MIME)
+        );
 
         assert!(!app.finish_metadata_role_results(vec![MetadataRoleResult {
             pane_id,
@@ -12304,7 +12253,12 @@ text/plain=viewer.desktop;\n",
             path: path.join("other"),
             role: Some(role.clone()),
         }]));
-        assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].effective_metadata_complete());
+        assert_eq!(
+            app.panes.pane(pane_id).unwrap().model.entries()[0]
+                .effective_mime_type()
+                .map(Arc::as_ref),
+            Some(fika_core::GENERIC_BINARY_MIME)
+        );
 
         assert!(app.finish_metadata_role_results(vec![MetadataRoleResult {
             pane_id,
@@ -12378,12 +12332,6 @@ text/plain=viewer.desktop;\n",
                 .thumbnail_path
                 .as_deref(),
             Some(thumbnail_path.as_path())
-        );
-        assert_eq!(
-            app.panes.pane(pane_id).unwrap().model.entries()[0]
-                .icon_name
-                .as_deref(),
-            Some("image-png")
         );
     }
 
@@ -12512,7 +12460,6 @@ text/plain=viewer.desktop;\n",
                 mime_magic_checked: true,
                 is_dir,
             }),
-            icon_name: None,
             thumbnail_path: None,
         }
     }

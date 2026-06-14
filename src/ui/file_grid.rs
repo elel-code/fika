@@ -14,8 +14,7 @@ pub(crate) use projection::{
 };
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
-    IconPreloadCandidate, RawFileGridSnapshotInput, VisibleItemSnapshot,
-    deferred_icon_preload_candidates_for_model, deferred_metadata_role_candidates_for_model,
+    RawFileGridSnapshotInput, VisibleItemSnapshot, deferred_icon_candidates_for_model,
     deferred_thumbnail_candidates_for_model, raw_file_grid_snapshot,
 };
 
