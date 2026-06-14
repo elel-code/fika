@@ -69,15 +69,13 @@ pub use core::location::{
     normalize_start_dir, resolve_location_input,
 };
 pub use core::metadata::{
-    MetadataProbeBatch, MetadataProbeCandidate, MetadataProbeRequest, MetadataProbeResult,
-    MetadataProbeScheduler, MetadataWorkKey, apply_metadata_probe_result_to_model,
-    metadata_probe_result_for_request, metadata_probe_results_for_requests,
+    MetadataRoleBatch, MetadataRoleCandidate, MetadataRoleRequest, MetadataRoleResult,
+    MetadataRoleScheduler, MetadataRoleWorkKey, apply_metadata_role_result_to_model,
+    metadata_role_result_for_request, metadata_role_results_for_requests,
 };
 pub use core::mime::{
-    MimeDatabase, MimeProbeBatch, MimeProbeCandidate, MimeProbeRequest, MimeProbeResult,
-    MimeProbeScheduler, MimeWorkKey, apply_mime_probe_result_to_model, detect_mime_from_magic,
-    generic_mime_icon_name, mime_icon_name, mime_magic_probe_required,
-    mime_probe_results_for_requests,
+    GENERIC_BINARY_MIME, MimeDatabase, detect_mime_from_magic, generic_mime_icon_name,
+    mime_icon_name, mime_magic_resolution_required,
 };
 pub use core::model::{
     ChangedRoles, DirectoryModel, DirectoryModelSignal, ItemRange, ItemRangeList, SortDescriptor,

@@ -84,7 +84,7 @@ pub(crate) fn cached_filtered_model_for_pane(
     let source_revision = filter_source_revision(&filter);
     let model = model?;
     let key = FilteredModelCacheKey {
-        model_generation: model.data_generation(),
+        model_generation: model.structure_generation(),
         filter,
     };
     if let Some(cached) = filtered_models
@@ -108,7 +108,8 @@ pub(crate) fn cached_filtered_model_for_pane(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fika_core::{Entry, EntryData};
+    use fika_core::{Entry, EntryData, EntryMetadataRole};
+    use std::path::Path;
     use std::sync::Arc;
 
     #[test]
@@ -155,6 +156,43 @@ mod tests {
     }
 
     #[test]
+    fn cached_filtered_model_for_pane_reuses_cache_after_metadata_role_update() {
+        let pane_id = PaneId(1);
+        let mut filters = HashMap::new();
+        let mut cache = HashMap::new();
+        let mut model = test_model(["alpha.rs", "beta.txt", "gamma.rs"]);
+        filters.insert(
+            pane_id,
+            PaneFilterState {
+                visible: true,
+                focused: true,
+                query: "*.rs".to_string(),
+                ..PaneFilterState::default()
+            },
+        );
+        let first = cached_filtered_model_for_pane(pane_id, &filters, &mut cache, Some(&model))
+            .expect("filtered model");
+        let first_cached = cache.get(&pane_id).cloned().expect("cache entry");
+        let item_id = model.entries()[0].id;
+
+        model.set_metadata_role(
+            item_id,
+            Path::new("/tmp/fika-filter-cache/alpha.rs"),
+            EntryMetadataRole {
+                size_bytes: 1024,
+                modified_secs: Some(42),
+                mime_type: Some(Arc::from("text/rust")),
+                mime_magic_checked: true,
+            },
+        );
+        let second = cached_filtered_model_for_pane(pane_id, &filters, &mut cache, Some(&model))
+            .expect("filtered model");
+
+        assert_eq!(second.0, first.0);
+        assert_eq!(cache.get(&pane_id), Some(&first_cached));
+    }
+
+    #[test]
     fn cached_filtered_model_for_pane_clears_cache_without_active_filter() {
         let pane_id = PaneId(1);
         let filters = HashMap::new();
@@ -164,7 +202,7 @@ mod tests {
             pane_id,
             FilteredModelCacheEntry {
                 key: FilteredModelCacheKey {
-                    model_generation: model.data_generation(),
+                    model_generation: model.structure_generation(),
                     filter: NameFilter::glob("*.rs"),
                 },
                 model: FilteredModel::from_model(&model, &NameFilter::glob("*.rs")),

@@ -14,6 +14,7 @@ pub(crate) fn file_icon_snapshot_for_model_role(
     stored_icon_name: Option<Arc<str>>,
     path: &Path,
     is_dir: bool,
+    metadata_complete: bool,
     size_bytes: u64,
     mime_type: Option<Arc<str>>,
     mime_magic_checked: bool,
@@ -35,9 +36,14 @@ pub(crate) fn file_icon_snapshot_for_model_role(
         mime_type.clone(),
         icon_size,
     );
-    let icon_name_to_store =
-        file_icon_role_is_final(is_dir, size_bytes, mime_type.as_deref(), mime_magic_checked)
-            .then_some(icon_name);
+    let icon_name_to_store = file_icon_role_is_final(
+        metadata_complete,
+        is_dir,
+        size_bytes,
+        mime_type.as_deref(),
+        mime_magic_checked,
+    )
+    .then_some(icon_name);
 
     FileIconRoleSnapshot {
         icon,
@@ -46,18 +52,25 @@ pub(crate) fn file_icon_snapshot_for_model_role(
 }
 
 pub(crate) fn file_icon_role_is_final(
+    metadata_complete: bool,
     is_dir: bool,
     size_bytes: u64,
     mime_type: Option<&str>,
     mime_magic_checked: bool,
 ) -> bool {
-    !fika_core::mime_magic_probe_required(is_dir, size_bytes, mime_type, mime_magic_checked)
+    metadata_complete
+        && !fika_core::mime_magic_resolution_required(
+            is_dir,
+            size_bytes,
+            mime_type,
+            mime_magic_checked,
+        )
 }
 
-pub(crate) fn finish_mime_probe_results_with_icon_roles(
+pub(crate) fn finish_metadata_role_results_with_icon_roles(
     panes: &mut fika_core::PaneController,
     cache: &mut FileIconCache,
-    results: Vec<fika_core::MimeProbeResult>,
+    results: Vec<fika_core::MetadataRoleResult>,
 ) -> bool {
     let mut changed = false;
     let mut icon_role_updates = Vec::new();
@@ -72,7 +85,7 @@ pub(crate) fn finish_mime_probe_results_with_icon_roles(
         if pane.generation != result.generation {
             continue;
         }
-        if fika_core::apply_mime_probe_result_to_model(&mut pane.model, result) {
+        if fika_core::apply_metadata_role_result_to_model(&mut pane.model, result) {
             changed = true;
             if let Some(index) = pane.model.index_of_id(item_id)
                 && let Some(entry) = pane.model.get(index)
@@ -115,13 +128,14 @@ mod tests {
     const GENERIC_BINARY_MIME: &str = "application/octet-stream";
 
     #[test]
-    fn generic_unchecked_file_icon_is_widget_local_until_magic_probe_finishes() {
+    fn incomplete_generic_file_icon_is_widget_local_until_role_resolution() {
         let mut cache = FileIconCache::default();
 
         let snapshot = file_icon_snapshot_for_model_role(
             &mut cache,
             None,
             Path::new("settings.conf"),
+            false,
             false,
             12,
             Some(Arc::from(GENERIC_BINARY_MIME)),
@@ -134,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_mime_icon_name_is_returned_for_model_storage() {
+    fn complete_file_without_icon_role_uses_fast_mime_icon_until_role_update() {
         let mut cache = FileIconCache::default();
 
         let snapshot = file_icon_snapshot_for_model_role(
@@ -142,6 +156,7 @@ mod tests {
             None,
             Path::new("notes.txt"),
             false,
+            true,
             12,
             Some(Arc::from("text/plain")),
             true,
@@ -153,6 +168,46 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_metadata_with_known_mime_uses_fast_icon_until_role_update() {
+        let mut cache = FileIconCache::default();
+
+        let snapshot = file_icon_snapshot_for_model_role(
+            &mut cache,
+            None,
+            Path::new("notes.txt"),
+            false,
+            false,
+            12,
+            Some(Arc::from("text/plain")),
+            true,
+            48.0,
+        );
+
+        assert_eq!(snapshot.icon.icon_name.as_ref(), "text-plain");
+        assert_eq!(snapshot.icon_name_to_store, None);
+    }
+
+    #[test]
+    fn directory_without_icon_role_uses_widget_local_folder_icon() {
+        let mut cache = FileIconCache::default();
+
+        let snapshot = file_icon_snapshot_for_model_role(
+            &mut cache,
+            None,
+            Path::new("Documents"),
+            true,
+            false,
+            0,
+            Some(Arc::from("inode/directory")),
+            true,
+            48.0,
+        );
+
+        assert_eq!(snapshot.icon.icon_name.as_ref(), "folder");
+        assert_eq!(snapshot.icon_name_to_store, None);
+    }
+
+    #[test]
     fn stored_icon_name_role_is_used_without_recomputing_from_mime() {
         let mut cache = FileIconCache::default();
 
@@ -160,6 +215,27 @@ mod tests {
             &mut cache,
             Some(Arc::from("text-x-source")),
             Path::new("notes.txt"),
+            false,
+            true,
+            12,
+            Some(Arc::from("text/plain")),
+            true,
+            48.0,
+        );
+
+        assert_eq!(snapshot.icon.icon_name.as_ref(), "text-x-source");
+        assert_eq!(snapshot.icon_name_to_store, None);
+    }
+
+    #[test]
+    fn stored_icon_name_role_is_used_while_metadata_refresh_is_pending() {
+        let mut cache = FileIconCache::default();
+
+        let snapshot = file_icon_snapshot_for_model_role(
+            &mut cache,
+            Some(Arc::from("text-x-source")),
+            Path::new("notes.txt"),
+            false,
             false,
             12,
             Some(Arc::from("text/plain")),
@@ -172,8 +248,8 @@ mod tests {
     }
 
     #[test]
-    fn mime_probe_result_updates_final_icon_role_without_clearing_thumbnail() {
-        let directory = std::path::PathBuf::from("/tmp/fika-icon-role-mime");
+    fn metadata_role_result_updates_final_icon_role_without_clearing_thumbnail() {
+        let directory = std::path::PathBuf::from("/tmp/fika-icon-role-metadata");
         let mut panes = fika_core::PaneController::new(directory.clone());
         let pane_id = panes.focused().unwrap();
         panes.pane_mut(pane_id).unwrap().model.replace_listing(
@@ -201,17 +277,20 @@ mod tests {
             .set_thumbnail_path(item_id, Some(thumbnail_path.clone()));
 
         let mut cache = FileIconCache::default();
-        let changed = finish_mime_probe_results_with_icon_roles(
+        let changed = finish_metadata_role_results_with_icon_roles(
             &mut panes,
             &mut cache,
-            vec![fika_core::MimeProbeResult {
+            vec![fika_core::MetadataRoleResult {
                 pane_id,
                 generation,
                 item_id,
                 path: directory.join("payload"),
-                modified_secs: Some(42),
-                mime_type: Some(Arc::from("text/plain")),
-                mime_magic_checked: true,
+                role: Some(fika_core::EntryMetadataRole {
+                    size_bytes: 12,
+                    modified_secs: Some(42),
+                    mime_type: Some(Arc::from("text/plain")),
+                    mime_magic_checked: true,
+                }),
             }],
         );
 

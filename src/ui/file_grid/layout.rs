@@ -76,7 +76,7 @@ impl CompactColumnWidthCache {
     ) -> CompactColumnMetrics {
         let item_count = filtered.map_or_else(|| model.len(), fika_core::FilteredModel::len);
         let key = CompactColumnWidthCacheKey {
-            generation: model.data_generation(),
+            generation: model.structure_generation(),
             source_revision,
             item_count,
             rows_per_column,
@@ -262,8 +262,8 @@ fn compact_layout_for_model_view(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fika_core::{DirectoryModel, Entry, EntryData, ViewState};
-    use std::path::PathBuf;
+    use fika_core::{DirectoryModel, Entry, EntryData, EntryMetadataRole, ViewState};
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     fn test_entry(name: &str) -> Entry {
@@ -329,5 +329,38 @@ mod tests {
         let layout = compact_layout_for_model_with_text_override(&mut cache, &model, &view, None);
 
         assert!(layout.item(239).unwrap().item_rect.width > 168.0);
+    }
+
+    #[test]
+    fn compact_column_width_cache_survives_metadata_role_updates() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            Arc::new(vec![test_entry("a.txt"), test_entry("long-name.txt")]),
+        );
+        let item_id = model.entries()[0].id;
+        let view = ViewState {
+            viewport_width: 220.0,
+            viewport_height: 200.0,
+            ..ViewState::default()
+        };
+        let mut cache = CompactColumnWidthCache::default();
+
+        let _ = compact_layout_for_model_with_text_override(&mut cache, &model, &view, None);
+        let key = cache.cached[0].key;
+        model.set_metadata_role(
+            item_id,
+            Path::new("/tmp/a.txt"),
+            EntryMetadataRole {
+                size_bytes: 1024,
+                modified_secs: Some(42),
+                mime_type: Some(Arc::from("text/plain")),
+                mime_magic_checked: true,
+            },
+        );
+        let _ = compact_layout_for_model_with_text_override(&mut cache, &model, &view, None);
+
+        assert_eq!(cache.cached.len(), 1);
+        assert_eq!(cache.cached[0].key, key);
     }
 }

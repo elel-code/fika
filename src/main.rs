@@ -12,16 +12,15 @@ use fika_core::{
 };
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
-    DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, Generation,
-    ItemId, ListingRequest, ListingWorker, LoadingPaneState, MetadataProbeResult,
-    MetadataProbeScheduler, MimeProbeResult, MimeProbeScheduler, OperationQueue, PaneController,
-    PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole,
-    ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace,
-    ViewMode, ViewPoint, ViewRect, ZoomChange, apply_metadata_probe_result_to_model,
+    DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, ItemId,
+    ListingRequest, ListingWorker, LoadingPaneState, MetadataRoleResult, MetadataRoleScheduler,
+    OperationQueue, PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove,
+    SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult, ThumbnailScheduler,
+    TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange,
     apply_thumbnail_probe_result_to_model, breadcrumb_segments, complete_location_input, file_ops,
-    listing_requests_from_events, metadata_probe_results_for_requests,
-    mime_probe_results_for_requests, nearest_existing_ancestor, perform_device_place_operation,
-    resolve_location_input, thumbnail_probe_results_for_requests, update_loading_state_for_event,
+    listing_requests_from_events, metadata_role_results_for_requests, nearest_existing_ancestor,
+    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
+    update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -31,8 +30,8 @@ use fika_core::{
 };
 #[cfg(test)]
 use fika_core::{
-    ServiceMenuAction, ThumbnailCandidate, ThumbnailRequestPriority, ViewState, home_dir,
-    is_network_root_path, network_root_path,
+    Generation, ServiceMenuAction, ThumbnailCandidate, ThumbnailRequestPriority, ViewState,
+    home_dir, is_network_root_path, network_root_path,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -76,8 +75,8 @@ use ui::drag_drop::{
 };
 use ui::file_grid::{
     CompactColumnWidthCache, ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput,
-    PaneViewportGeometry, RawFileGridSnapshot, RawFileGridSnapshotInput, VisibleItemSlotPool,
-    compact_text_width, compact_text_width_for_name, content_item_hit_at_point,
+    PaneViewportGeometry, RawFileGridSnapshotInput, VisibleItemSlotPool, compact_text_width,
+    compact_text_width_for_name, content_item_hit_at_point,
     deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
     pane_layout_projection, raw_file_grid_snapshot,
 };
@@ -86,7 +85,7 @@ use ui::filter_bar::{
 };
 use ui::icons::{
     FileIconCache, FileIconRenderResult, FileIconSnapshot, file_icon_snapshot_for_model_role,
-    finish_mime_probe_results_with_icon_roles,
+    finish_metadata_role_results_with_icon_roles,
 };
 use ui::item_view::ItemViewScrollState;
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
@@ -183,8 +182,7 @@ fn listing_cache_debug_summary(
     )
 }
 const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
-const MIME_PROBE_BATCH_SIZE: usize = 64;
-const METADATA_PROBE_BATCH_SIZE: usize = 128;
+const METADATA_ROLE_BATCH_SIZE: usize = 1;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
 
@@ -260,8 +258,7 @@ pub(crate) struct FikaApp {
     loading_panes: HashMap<PaneId, LoadingPaneState>,
     item_view_scroll: ItemViewScrollState,
     item_view_authoritative_scroll: HashMap<PaneId, u8>,
-    metadata_probe_scheduler: MetadataProbeScheduler,
-    mime_probe_scheduler: MimeProbeScheduler,
+    metadata_role_scheduler: MetadataRoleScheduler,
     thumbnail_scheduler: ThumbnailScheduler,
     pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
     pane_split_ratios: HashMap<PaneId, f32>,
@@ -339,8 +336,7 @@ impl FikaApp {
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
             item_view_authoritative_scroll: HashMap::new(),
-            metadata_probe_scheduler: MetadataProbeScheduler::default(),
-            mime_probe_scheduler: MimeProbeScheduler::default(),
+            metadata_role_scheduler: MetadataRoleScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
@@ -767,8 +763,7 @@ impl FikaApp {
                     rubber_band,
                     focused,
                     selection_count,
-                    generation,
-                    metadata_probe_queued,
+                    metadata_role_queued,
                     thumbnail_probe_queued,
                     trash_view,
                 ) = {
@@ -810,8 +805,8 @@ impl FikaApp {
                             .entry(pane_id)
                             .or_default(),
                     });
-                    let metadata_probe_queued = raw_file_grid.queue_metadata_probe_candidates(
-                        &mut self.metadata_probe_scheduler,
+                    let metadata_role_queued = raw_file_grid.queue_metadata_role_candidates(
+                        &mut self.metadata_role_scheduler,
                         pane_id,
                         generation,
                     );
@@ -837,16 +832,14 @@ impl FikaApp {
                         }),
                         focused_pane == Some(pane_id),
                         selection_count,
-                        generation,
-                        metadata_probe_queued,
+                        metadata_role_queued,
                         thumbnail_probe_queued,
                         trash_view,
                     )
                 };
-                if metadata_probe_queued {
-                    self.maybe_start_metadata_probe(cx);
+                if metadata_role_queued {
+                    self.maybe_start_metadata_role(cx);
                 }
-                self.schedule_mime_probe_requests(pane_id, generation, &raw_file_grid, cx);
                 if thumbnail_probe_queued {
                     self.maybe_start_thumbnail_probe(cx);
                 }
@@ -859,6 +852,7 @@ impl FikaApp {
                         request.item_id,
                         request.path,
                         request.is_dir,
+                        request.metadata_complete,
                         request.size_bytes,
                         request.mime_type.clone(),
                         request.mime_magic_checked,
@@ -1041,8 +1035,13 @@ impl FikaApp {
                 .as_ref()
                 .map_or_else(|| pane.model.len(), |(filtered, _)| filtered.len());
             let selection_count = pane.selection.count_for_model(pane.model.len());
+            let model_generation = if selection_count == 0 {
+                pane.model.structure_generation()
+            } else {
+                pane.model.data_generation()
+            };
             let key = StatusSummaryCacheKey {
-                model_generation: pane.model.data_generation(),
+                model_generation,
                 model_len: pane.model.len(),
                 filter_revision,
                 visible_len,
@@ -1112,10 +1111,10 @@ impl FikaApp {
         self.space_info.finish_request(&path, snapshot)
     }
 
-    fn maybe_start_metadata_probe(&mut self, cx: &mut Context<Self>) {
+    fn maybe_start_metadata_role(&mut self, cx: &mut Context<Self>) {
         let Some(batch) = self
-            .metadata_probe_scheduler
-            .start_probe_batch(METADATA_PROBE_BATCH_SIZE)
+            .metadata_role_scheduler
+            .start_role_batch(METADATA_ROLE_BATCH_SIZE)
         else {
             return;
         };
@@ -1127,13 +1126,13 @@ impl FikaApp {
                 async move {
                     let results = cx
                         .background_spawn(
-                            async move { metadata_probe_results_for_requests(requests) },
+                            async move { metadata_role_results_for_requests(requests) },
                         )
                         .await;
                     let _ = this.update(&mut cx, |app, cx| {
-                        app.metadata_probe_scheduler.finish_probe_batch();
-                        let changed = app.finish_metadata_probe_results(results);
-                        app.maybe_start_metadata_probe(cx);
+                        app.metadata_role_scheduler.finish_role_batch();
+                        let changed = app.finish_metadata_role_results(results);
+                        app.maybe_start_metadata_role(cx);
                         if changed {
                             cx.notify();
                         }
@@ -1144,70 +1143,8 @@ impl FikaApp {
         .detach();
     }
 
-    fn finish_metadata_probe_results(&mut self, results: Vec<MetadataProbeResult>) -> bool {
-        let mut changed = false;
-        for result in results {
-            let Some(pane) = self.panes.pane_mut(result.pane_id) else {
-                continue;
-            };
-            if pane.generation != result.generation {
-                continue;
-            }
-            if apply_metadata_probe_result_to_model(&mut pane.model, result) {
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    fn schedule_mime_probe_requests(
-        &mut self,
-        pane_id: PaneId,
-        generation: Generation,
-        raw_file_grid: &RawFileGridSnapshot,
-        cx: &mut Context<Self>,
-    ) {
-        if raw_file_grid.queue_mime_probe_candidates(
-            &mut self.mime_probe_scheduler,
-            pane_id,
-            generation,
-        ) {
-            self.maybe_start_mime_probe(cx);
-        }
-    }
-
-    fn maybe_start_mime_probe(&mut self, cx: &mut Context<Self>) {
-        let Some(batch) = self
-            .mime_probe_scheduler
-            .start_probe_batch(MIME_PROBE_BATCH_SIZE)
-        else {
-            return;
-        };
-        let requests = batch.requests;
-
-        cx.spawn(
-            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    let results = cx
-                        .background_spawn(async move { mime_probe_results_for_requests(requests) })
-                        .await;
-                    let _ = this.update(&mut cx, |app, cx| {
-                        app.mime_probe_scheduler.finish_probe_batch();
-                        let changed = app.finish_mime_probe_results(results);
-                        app.maybe_start_mime_probe(cx);
-                        if changed {
-                            cx.notify();
-                        }
-                    });
-                }
-            },
-        )
-        .detach();
-    }
-
-    fn finish_mime_probe_results(&mut self, results: Vec<MimeProbeResult>) -> bool {
-        finish_mime_probe_results_with_icon_roles(&mut self.panes, &mut self.file_icons, results)
+    fn finish_metadata_role_results(&mut self, results: Vec<MetadataRoleResult>) -> bool {
+        finish_metadata_role_results_with_icon_roles(&mut self.panes, &mut self.file_icons, results)
     }
 
     fn icon_snapshot_for_model_item(
@@ -1216,6 +1153,7 @@ impl FikaApp {
         item_id: ItemId,
         path: &Path,
         is_dir: bool,
+        metadata_complete: bool,
         size_bytes: u64,
         mime_type: Option<Arc<str>>,
         mime_magic_checked: bool,
@@ -1228,6 +1166,7 @@ impl FikaApp {
             icon_name,
             path,
             is_dir,
+            metadata_complete,
             size_bytes,
             mime_type.clone(),
             mime_magic_checked,
@@ -1282,29 +1221,16 @@ impl FikaApp {
         self.file_icons.finish_render_image(result)
     }
 
-    fn cancel_metadata_probe_work_for_pane(&mut self, pane_id: PaneId) {
-        self.metadata_probe_scheduler.cancel_pane(pane_id);
+    fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
+        self.metadata_role_scheduler.cancel_pane(pane_id);
     }
 
-    fn cancel_stale_metadata_probe_work_for_pane(&mut self, pane_id: PaneId) {
+    fn cancel_stale_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
         let Some(generation) = self.panes.pane(pane_id).map(|pane| pane.generation) else {
-            self.cancel_metadata_probe_work_for_pane(pane_id);
+            self.cancel_metadata_role_work_for_pane(pane_id);
             return;
         };
-        self.metadata_probe_scheduler
-            .cancel_stale_pane_generations(pane_id, generation);
-    }
-
-    fn cancel_mime_probe_work_for_pane(&mut self, pane_id: PaneId) {
-        self.mime_probe_scheduler.cancel_pane(pane_id);
-    }
-
-    fn cancel_stale_mime_probe_work_for_pane(&mut self, pane_id: PaneId) {
-        let Some(generation) = self.panes.pane(pane_id).map(|pane| pane.generation) else {
-            self.cancel_mime_probe_work_for_pane(pane_id);
-            return;
-        };
-        self.mime_probe_scheduler
+        self.metadata_role_scheduler
             .cancel_stale_pane_generations(pane_id, generation);
     }
 
@@ -1915,8 +1841,7 @@ impl FikaApp {
         self.filtered_models.remove(&pane_id);
         self.loading_panes.remove(&pane_id);
         self.remove_item_view_scroll_for_pane(pane_id);
-        self.cancel_metadata_probe_work_for_pane(pane_id);
-        self.cancel_mime_probe_work_for_pane(pane_id);
+        self.cancel_metadata_role_work_for_pane(pane_id);
         self.cancel_thumbnail_work_for_pane(pane_id);
         self.pane_viewport_geometries.remove(&pane_id);
         self.rubber_band_selection_panes.remove(&pane_id);
@@ -1968,8 +1893,7 @@ impl FikaApp {
         self.status_summaries.remove(&pane_id);
         self.filtered_models.remove(&pane_id);
         self.reset_item_view_scroll_for_pane(pane_id);
-        self.cancel_stale_metadata_probe_work_for_pane(pane_id);
-        self.cancel_stale_mime_probe_work_for_pane(pane_id);
+        self.cancel_stale_metadata_role_work_for_pane(pane_id);
         self.cancel_stale_thumbnail_work_for_pane(pane_id);
         self.location_edit_metrics.remove(&pane_id);
         if self
@@ -12186,7 +12110,7 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn metadata_probe_results_update_matching_model_role_only() {
+    fn metadata_role_results_update_matching_model_role_only() {
         let path = PathBuf::from("/tmp/fika-metadata-result");
         let mut app = test_app_with_entries("/tmp/fika-metadata-result", &[]);
         let pane_id = app.panes.focused().unwrap();
@@ -12215,29 +12139,25 @@ text/plain=viewer.desktop;\n",
             mime_magic_checked: true,
         };
 
-        assert!(
-            !app.finish_metadata_probe_results(vec![MetadataProbeResult {
-                pane_id,
-                generation: Generation(generation.0 + 1),
-                item_id,
-                path: path.join("payload"),
-                role: Some(role.clone()),
-            }])
-        );
+        assert!(!app.finish_metadata_role_results(vec![MetadataRoleResult {
+            pane_id,
+            generation: Generation(generation.0 + 1),
+            item_id,
+            path: path.join("payload"),
+            role: Some(role.clone()),
+        }]));
         assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].metadata_complete);
 
-        assert!(
-            !app.finish_metadata_probe_results(vec![MetadataProbeResult {
-                pane_id,
-                generation,
-                item_id,
-                path: path.join("other"),
-                role: Some(role.clone()),
-            }])
-        );
+        assert!(!app.finish_metadata_role_results(vec![MetadataRoleResult {
+            pane_id,
+            generation,
+            item_id,
+            path: path.join("other"),
+            role: Some(role.clone()),
+        }]));
         assert!(!app.panes.pane(pane_id).unwrap().model.entries()[0].metadata_complete);
 
-        assert!(app.finish_metadata_probe_results(vec![MetadataProbeResult {
+        assert!(app.finish_metadata_role_results(vec![MetadataRoleResult {
             pane_id,
             generation,
             item_id,
@@ -12252,10 +12172,10 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn mime_probe_results_update_matching_model_role_only() {
-        let path = PathBuf::from("/tmp/fika-mime-result");
+    fn metadata_role_result_updates_final_mime_icon_and_keeps_thumbnail() {
+        let path = PathBuf::from("/tmp/fika-metadata-final-role");
         let payload = path.join("payload");
-        let mut app = test_app_with_entries("/tmp/fika-mime-result", &[]);
+        let mut app = test_app_with_entries("/tmp/fika-metadata-final-role", &[]);
         let pane_id = app.panes.focused().unwrap();
         app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
             path.clone(),
@@ -12282,48 +12202,17 @@ text/plain=viewer.desktop;\n",
             .model
             .set_thumbnail_path(item_id, Some(thumbnail_path.clone()));
 
-        assert!(!app.finish_mime_probe_results(vec![MimeProbeResult {
-            pane_id,
-            generation: Generation(generation.0 + 1),
-            item_id,
-            path: payload.clone(),
-            modified_secs: Some(42),
-            mime_type: Some(Arc::from("image/png")),
-            mime_magic_checked: true,
-        }]));
-        assert_eq!(
-            app.panes.pane(pane_id).unwrap().model.entries()[0]
-                .mime_type
-                .as_deref(),
-            Some("application/octet-stream")
-        );
-
-        assert!(!app.finish_mime_probe_results(vec![MimeProbeResult {
-            pane_id,
-            generation,
-            item_id,
-            path: path.join("other"),
-            modified_secs: Some(42),
-            mime_type: Some(Arc::from("image/png")),
-            mime_magic_checked: true,
-        }]));
-        assert!(!app.finish_mime_probe_results(vec![MimeProbeResult {
-            pane_id,
-            generation,
-            item_id,
-            path: payload.clone(),
-            modified_secs: Some(43),
-            mime_type: Some(Arc::from("image/png")),
-            mime_magic_checked: true,
-        }]));
-        assert!(app.finish_mime_probe_results(vec![MimeProbeResult {
+        assert!(app.finish_metadata_role_results(vec![MetadataRoleResult {
             pane_id,
             generation,
             item_id,
             path: payload,
-            modified_secs: Some(42),
-            mime_type: Some(Arc::from("image/png")),
-            mime_magic_checked: true,
+            role: Some(fika_core::EntryMetadataRole {
+                size_bytes: 12,
+                modified_secs: Some(42),
+                mime_type: Some(Arc::from("image/png")),
+                mime_magic_checked: true,
+            }),
         }]));
 
         assert_eq!(
@@ -12338,10 +12227,11 @@ text/plain=viewer.desktop;\n",
                 .as_deref(),
             Some(thumbnail_path.as_path())
         );
-        assert!(
+        assert_eq!(
             app.panes.pane(pane_id).unwrap().model.entries()[0]
                 .icon_name
-                .is_some()
+                .as_deref(),
+            Some("image-png")
         );
     }
 
@@ -12374,8 +12264,7 @@ text/plain=viewer.desktop;\n",
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
             item_view_authoritative_scroll: HashMap::new(),
-            metadata_probe_scheduler: MetadataProbeScheduler::default(),
-            mime_probe_scheduler: MimeProbeScheduler::default(),
+            metadata_role_scheduler: MetadataRoleScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             pane_viewport_geometries: HashMap::new(),
             pane_split_ratios: HashMap::new(),
@@ -12457,6 +12346,7 @@ text/plain=viewer.desktop;\n",
     ) -> fika_core::ModelEntry {
         fika_core::ModelEntry {
             id: fika_core::ItemId(id),
+            metadata_refresh_pending: false,
             entry: fika_core::Entry::new(fika_core::EntryData {
                 name: Arc::from(name),
                 name_width_units: name.len() as u16,

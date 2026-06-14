@@ -108,6 +108,8 @@ pub(crate) fn details_visible_row_range(
 pub(crate) fn details_size_label(entry: &EntryData) -> String {
     if entry.is_dir {
         "Folder".to_string()
+    } else if !entry.metadata_complete && entry.size_bytes == 0 && entry.modified_secs.is_none() {
+        "-".to_string()
     } else {
         format_size(entry.size_bytes)
     }
@@ -136,6 +138,7 @@ pub(crate) fn details_deletion_time_label(entry: &EntryData) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn trash_details_columns_include_original_path_and_deletion_time() {
@@ -163,5 +166,43 @@ mod tests {
         assert_eq!(details_visible_row_range(100, 56.0, 84.0), 2..5);
         assert_eq!(details_visible_row_range(3, 500.0, 0.0), 0..3);
         assert_eq!(details_visible_row_range(0, 500.0, 0.0), 0..0);
+    }
+
+    #[test]
+    fn incomplete_file_metadata_uses_unknown_size_and_modified_labels() {
+        let entry = EntryData {
+            name: Arc::from("payload"),
+            name_width_units: 7,
+            size_bytes: 0,
+            modified_secs: None,
+            metadata_complete: false,
+            mime_type: Some(Arc::from("application/octet-stream")),
+            mime_magic_checked: false,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir: false,
+        };
+
+        assert_eq!(details_size_label(&entry), "-");
+        assert_eq!(details_modified_label(&entry), "-");
+    }
+
+    #[test]
+    fn pending_metadata_keeps_last_known_size_and_modified_labels() {
+        let entry = EntryData {
+            name: Arc::from("payload"),
+            name_width_units: 7,
+            size_bytes: 1536,
+            modified_secs: Some(42),
+            metadata_complete: false,
+            mime_type: Some(Arc::from("text/plain")),
+            mime_magic_checked: true,
+            trash_original_path: None,
+            trash_deletion_time: None,
+            is_dir: false,
+        };
+
+        assert_eq!(details_size_label(&entry), "1.5 KB");
+        assert_eq!(details_modified_label(&entry), "1970-01-01 00:00");
     }
 }

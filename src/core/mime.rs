@@ -1,18 +1,12 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-pub mod roles;
-
-pub use roles::{
-    MimeProbeBatch, MimeProbeCandidate, MimeProbeRequest, MimeProbeResult, MimeProbeScheduler,
-    MimeWorkKey, apply_mime_probe_result_to_model, mime_magic_probe_required,
-    mime_probe_results_for_requests,
-};
-
 pub const GENERIC_BINARY_MIME: &str = "application/octet-stream";
+const MIME_MAGIC_READ_LIMIT: usize = 4096;
 
 #[derive(Clone, Debug)]
 pub struct MimeDatabase {
@@ -146,6 +140,26 @@ pub fn generic_mime_icon_name(mime: &str) -> Option<&'static str> {
         Some("application") => Some("application-octet-stream"),
         _ => None,
     }
+}
+
+pub fn mime_magic_resolution_required(
+    is_dir: bool,
+    size_bytes: u64,
+    mime_type: Option<&str>,
+    mime_magic_checked: bool,
+) -> bool {
+    !mime_magic_checked && !is_dir && size_bytes > 0 && mime_type == Some(GENERIC_BINARY_MIME)
+}
+
+pub(crate) fn read_mime_magic(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut bytes = vec![0; MIME_MAGIC_READ_LIMIT];
+    let read = file.read(&mut bytes)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    bytes.truncate(read);
+    Ok(Some(bytes))
 }
 
 pub fn detect_mime_from_magic(bytes: &[u8]) -> Option<&'static str> {
