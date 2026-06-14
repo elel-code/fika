@@ -270,6 +270,8 @@ pub enum SelectionMove {
 pub struct ViewState {
     pub scroll_x: f32,
     pub scroll_y: f32,
+    pub max_scroll_x: f32,
+    pub max_scroll_y: f32,
     pub viewport_width: f32,
     pub viewport_height: f32,
     pub zoom_level: i32,
@@ -281,6 +283,8 @@ impl Default for ViewState {
         Self {
             scroll_x: 0.0,
             scroll_y: 0.0,
+            max_scroll_x: 0.0,
+            max_scroll_y: 0.0,
             viewport_width: 720.0,
             viewport_height: 520.0,
             zoom_level: DEFAULT_ZOOM_LEVEL,
@@ -843,11 +847,19 @@ impl PaneController {
         max_scroll_y: f32,
     ) -> Option<ViewState> {
         let pane = self.panes.get_mut(&pane_id)?;
-        let next_x = (pane.view.scroll_x + delta_x).clamp(0.0, max_scroll_x.max(0.0));
-        let next_y = (pane.view.scroll_y + delta_y).clamp(0.0, max_scroll_y.max(0.0));
-        if next_x == pane.view.scroll_x && next_y == pane.view.scroll_y {
+        let max_scroll_x = max_scroll_x.max(0.0);
+        let max_scroll_y = max_scroll_y.max(0.0);
+        let next_x = (pane.view.scroll_x + delta_x).clamp(0.0, max_scroll_x);
+        let next_y = (pane.view.scroll_y + delta_y).clamp(0.0, max_scroll_y);
+        if next_x == pane.view.scroll_x
+            && next_y == pane.view.scroll_y
+            && viewport_value_eq(pane.view.max_scroll_x, max_scroll_x)
+            && viewport_value_eq(pane.view.max_scroll_y, max_scroll_y)
+        {
             return Some(pane.view.clone());
         }
+        pane.view.max_scroll_x = max_scroll_x;
+        pane.view.max_scroll_y = max_scroll_y;
         pane.view.scroll_x = next_x;
         pane.view.scroll_y = next_y;
         Some(pane.view.clone())
@@ -862,8 +874,10 @@ impl PaneController {
         max_scroll_y: f32,
     ) -> Option<ViewState> {
         let pane = self.panes.get_mut(&pane_id)?;
-        pane.view.scroll_x = scroll_x.clamp(0.0, max_scroll_x.max(0.0));
-        pane.view.scroll_y = scroll_y.clamp(0.0, max_scroll_y.max(0.0));
+        pane.view.max_scroll_x = max_scroll_x.max(0.0);
+        pane.view.max_scroll_y = max_scroll_y.max(0.0);
+        pane.view.scroll_x = scroll_x.clamp(0.0, pane.view.max_scroll_x);
+        pane.view.scroll_y = scroll_y.clamp(0.0, pane.view.max_scroll_y);
         Some(pane.view.clone())
     }
 
@@ -878,10 +892,14 @@ impl PaneController {
         let pane = self.panes.get_mut(&pane_id)?;
         let viewport_width = normalize_viewport_extent(viewport_width);
         let viewport_height = normalize_viewport_extent(viewport_height);
-        let scroll_x = pane.view.scroll_x.clamp(0.0, max_scroll_x.max(0.0));
-        let scroll_y = pane.view.scroll_y.clamp(0.0, max_scroll_y.max(0.0));
+        let max_scroll_x = max_scroll_x.max(0.0);
+        let max_scroll_y = max_scroll_y.max(0.0);
+        let scroll_x = pane.view.scroll_x.clamp(0.0, max_scroll_x);
+        let scroll_y = pane.view.scroll_y.clamp(0.0, max_scroll_y);
         if viewport_value_eq(pane.view.viewport_width, viewport_width)
             && viewport_value_eq(pane.view.viewport_height, viewport_height)
+            && viewport_value_eq(pane.view.max_scroll_x, max_scroll_x)
+            && viewport_value_eq(pane.view.max_scroll_y, max_scroll_y)
             && viewport_value_eq(pane.view.scroll_x, scroll_x)
             && viewport_value_eq(pane.view.scroll_y, scroll_y)
         {
@@ -889,6 +907,8 @@ impl PaneController {
         }
         pane.view.viewport_width = viewport_width;
         pane.view.viewport_height = viewport_height;
+        pane.view.max_scroll_x = max_scroll_x;
+        pane.view.max_scroll_y = max_scroll_y;
         pane.view.scroll_x = scroll_x;
         pane.view.scroll_y = scroll_y;
         Some(true)
@@ -1517,6 +1537,8 @@ mod tests {
             Some(ViewState {
                 scroll_x: 120.0,
                 scroll_y: 30.0,
+                max_scroll_x: 200.0,
+                max_scroll_y: 40.0,
                 ..ViewState::default()
             })
         );
@@ -1525,6 +1547,8 @@ mod tests {
             Some(ViewState {
                 scroll_x: 200.0,
                 scroll_y: 40.0,
+                max_scroll_x: 200.0,
+                max_scroll_y: 40.0,
                 ..ViewState::default()
             })
         );
@@ -1533,6 +1557,8 @@ mod tests {
             Some(ViewState {
                 scroll_x: 0.0,
                 scroll_y: 0.0,
+                max_scroll_x: 200.0,
+                max_scroll_y: 40.0,
                 ..ViewState::default()
             })
         );
@@ -1552,6 +1578,8 @@ mod tests {
             Some(ViewState {
                 scroll_x: 200.0,
                 scroll_y: 40.0,
+                max_scroll_x: 200.0,
+                max_scroll_y: 40.0,
                 ..ViewState::default()
             })
         );
@@ -1560,6 +1588,8 @@ mod tests {
             Some(ViewState {
                 scroll_x: 0.0,
                 scroll_y: 0.0,
+                max_scroll_x: 200.0,
+                max_scroll_y: 40.0,
                 ..ViewState::default()
             })
         );
@@ -1843,7 +1873,6 @@ mod tests {
             modified_secs: None,
             mime_type: None,
             mime_magic_checked: true,
-            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,

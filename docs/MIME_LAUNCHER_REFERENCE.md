@@ -57,11 +57,17 @@ icon selection, Open With menu, and future process launching path.
   - It maps literal filenames, multi-suffix patterns, simple extensions, and
     common magic bytes to MIME names.
 - Entry construction lives in `src/core/entries.rs`.
-  - Directory listing always stores a `mime_type` on `EntryData`.
-  - The fast path uses shared-mime-info filename/glob data.
-  - Only generic `application/octet-stream` files read a small prefix for magic
-    sniffing, so common extension-mapped files do not open file contents during
-    listing.
+  - Directory listing stores filename/glob MIME data on `EntryData` without
+    opening ordinary files for magic sniffing.
+  - Generic non-empty `application/octet-stream` files keep
+    `mime_magic_checked=false` until the visible role updater probes a small
+    prefix in the background.
+  - `src/core/mime/roles.rs` mirrors Dolphin's expensive-role split: visible
+    item snapshots produce `MimeProbeCandidate`s, the scheduler batches bounded
+    background reads, and `DirectoryModel::set_mime_role()` marks the MIME role
+    checked even when magic still resolves to `application/octet-stream`.
+  - MIME scheduler `seen` keys cover only queued or active work, so scrolling
+    through a large directory does not retain every historical generic file.
 - UI icon selection lives in `src/ui/icons.rs` and `src/ui/icons/cache.rs`.
   - File icons are cached by MIME/file kind and icon size.
   - Candidate order mirrors Dolphin: specific MIME icon names first, then

@@ -10,8 +10,8 @@ pub use core::archive::{
 };
 pub use core::bus::{BusCallTarget, BusConfig, BusController, BusError, BusKind};
 pub use core::cache::{
-    DirectoryCache, DirectoryCacheLimits, DirectoryCacheSnapshot, DirectoryCacheState,
-    DirectoryCacheStats, normalize_cache_path,
+    DirectoryCache, DirectoryCacheDebugSnapshot, DirectoryCacheDirectorySummary,
+    DirectoryCacheLimits, DirectoryCacheSnapshot, DirectoryCacheStats, normalize_cache_path,
 };
 pub use core::clipboard::{
     FileClipboardPayload, FileClipboardRole, decode_file_clipboard_text, encode_file_clipboard_text,
@@ -111,13 +111,13 @@ pub use core::thumbnails::{
     ThumbnailRequest, ThumbnailRequestPriority, ThumbnailRequestQueue, ThumbnailScheduler,
     ThumbnailSize, ThumbnailWorkKey, ThumbnailerRegistry, apply_thumbnail_probe_result_to_model,
     cached_thumbnail_for_path, cached_thumbnail_for_request, cached_thumbnail_for_uri,
-    default_thumbnail_cache_root, deferred_thumbnail_columns,
-    external_thumbnailer_commands_for_path, generate_thumbnail_with_external_thumbnailer,
+    default_thumbnail_cache_root, external_thumbnailer_commands_for_path,
+    generate_thumbnail_with_external_thumbnailer,
     generate_thumbnail_with_external_thumbnailer_registry, record_thumbnail_failure,
     thumbnail_cache_key, thumbnail_cache_path, thumbnail_cache_paths_for_uri, thumbnail_cache_root,
     thumbnail_candidate_failure_is_cached, thumbnail_failure_is_cached, thumbnail_failure_path,
-    thumbnail_metadata, thumbnail_probe_results_for_requests, thumbnail_uri_for_path,
-    write_thumbnail_metadata,
+    thumbnail_metadata, thumbnail_probe_results_for_requests, thumbnail_read_ahead_indexes,
+    thumbnail_uri_for_path, write_thumbnail_metadata,
 };
 pub use core::trash_monitor::TrashEmptinessMonitor;
 pub use core::view::{

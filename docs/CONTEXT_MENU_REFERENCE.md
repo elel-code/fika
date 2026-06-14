@@ -132,10 +132,10 @@ item-vs-blank event boundaries, and later submenu behavior.
 - `src/main.rs`
   - `item_at_content_point()` performs model hit testing and then filters by
     `visual_rect`.
-  - `start_rubber_band_from_blank()` refuses to start if the pointer is inside
-    an item visual rect, and blank left press clears the current selection
-    before entering rubber-band state so blank-click clear does not depend on a
-    later synthesized click event.
+  - `press_rubber_band_from_blank()` refuses to arm if the pointer is inside an
+    item visual rect. Blank left press clears the current selection and records
+    a pending rubber-band origin; only a subsequent viewport drag activates the
+    rubber-band state, matching Dolphin's press/move/release controller split.
   - Window-coordinate blank press/click/right-click must map into the measured
     file viewport before it can clear selection, start rubber-band, or open a
     blank menu. Fika stores the full viewport window rect, not just its origin,

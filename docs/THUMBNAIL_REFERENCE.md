@@ -62,13 +62,14 @@ GPUI should only render the resolved image path for visible items.
     `evince-thumbnailer`). Generated PNGs are patched with freedesktop
     `Thumb::URI` and `Thumb::MTime` metadata before being moved into the normal
     thumbnail cache.
-- `src/core/entries.rs`
-  - `EntryData` carries `thumbnail_path: Option<PathBuf>` as a lightweight model
-    role.
-  - Directory loading leaves `thumbnail_path` empty. Thumbnail cache probing is
-    treated as a Dolphin-style preview role update and is scheduled from the
-    visible item band instead of running across the whole directory before the
-    first model reset.
+- `src/core/model.rs`
+  - `ModelEntry` carries `thumbnail_path: Option<PathBuf>` as the pane-local
+    preview role, matching Dolphin's `iconPixmap` separation from base file
+    metadata.
+  - Directory loading leaves the preview role empty. Thumbnail cache probing is
+    scheduled from the visible/read-ahead item band instead of running across
+    the whole directory before the first model reset. Same-file reloads preserve
+    the role only when name, size, and mtime still match; changed files clear it.
 - `src/main.rs` and `src/ui/file_grid/snapshot.rs`
   - Pane snapshots copy ordinary-file thumbnail roles into
     `VisibleItemSnapshot::thumbnail_path`. The snapshot type lives in
@@ -81,23 +82,26 @@ GPUI should only render the resolved image path for visible items.
   - Owns the UI-neutral scheduling support around `ThumbnailRequestQueue`:
     `ThumbnailScheduler`, `ThumbnailCandidate`, `ThumbnailWorkKey`,
     `ThumbnailProbeResult`, request queue and seen-set state, active batch
-    cancellation, deferred-column band calculation, candidate-to-request
-    conversion, matching failure-marker checks, bounded worker queue, and
+    cancellation, Dolphin `KFileItemModelRolesUpdater::indexesToResolve()` style
+    read-ahead index calculation, candidate-to-request conversion, matching
+    failure-marker checks, bounded worker queue, and
     `ItemId + path` guarded probe-result application to `DirectoryModel`.
+    Long-lived work keys store pane/generation/item/mtime plus path and MIME
+    hashes rather than retaining full paths or MIME strings.
   - A bounded background cache-probe batch is processed by a fixed worker queue
     with at most four in-flight requests; each worker checks freedesktop cache
     hits, attempts external thumbnail generation on miss, and returns results
     that `src/main.rs` writes back to `DirectoryModel` by
     `PaneId + generation + ItemId + path`.
-  - Thumbnail scheduling is visible-first. The snapshot path also queues a small
-    deferred band of columns immediately before and after the visible column
-    range, capped per frame, instead of walking or enqueuing the whole directory.
-    Deferred requests that are still queued are pruned when the next snapshot no
-    longer includes them in the visible/deferred band, and a queued deferred
-    request is promoted when the same item becomes visible. Requests already
-    popped into the current background batch carry a shared cancel handle; if a
-    deferred request leaves the band before a worker starts it, the worker skips
-    it without touching the cache or launching a thumbnailer.
+  - Thumbnail scheduling is visible-first. Visible indexes are queued first;
+    read-ahead follows Dolphin's order: after the visible range, before the
+    visible range in reverse, last page, first page, then remaining indexes up
+    to the resolve limit. Pane snapshots add candidates to the current
+    pane-generation work set without pruning already-seen items just because
+    the current visible/read-ahead range changed; that avoids zoom/scroll
+    cycles cancelling and recreating the same thumbnail work. Queued deferred
+    requests are promoted when the same item becomes visible. Work is cleared
+    when the pane closes or its generation changes.
   - Matching failure markers are checked before visible work is enqueued. Skipped
     failures are remembered in the pane-local work key for the same mtime, and a
     later mtime change is allowed to enqueue a new request.
@@ -107,9 +111,13 @@ GPUI should only render the resolved image path for visible items.
     a matching failure marker on an attempted thumbnailer failure without
     retrying the same mtime.
 - `src/ui/file_grid.rs`
-  - Item rendering tries `thumbnail_path` first, then falls back to the resolved
-    theme/MIME icon image, then to the compact text marker. Thumbnail images do
-    not change compact layout geometry and do not enter the theme icon cache.
+  - Item rendering uses `thumbnail_path` when the preview role exists. The
+    normal theme/MIME icon role is used only when no preview role exists,
+    matching Dolphin's `iconPixmap` before `iconName` paint order. Thumbnail
+    images do not change compact layout geometry and do not enter the theme icon
+    cache. MIME/iconName role updates must leave an existing `thumbnail_path`
+    intact, so a resolved preview is not replaced by the ordinary PNG/image
+    theme icon.
 - Pending visible thumbnail work is cancelled when panes navigate or close.
 
 ## Remaining Work

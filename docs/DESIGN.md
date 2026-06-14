@@ -52,7 +52,6 @@ src/
     pane.rs                      Pane identity, state, split/close routing
     places.rs                    Places model (bookmarks, devices, network)
     privilege.rs                 Privileged operation API surface
-    scroll.rs                    Smooth-scroll easing and kinetic tracker
     thumbnails.rs                Freedesktop thumbnail URI and cache keys
     view.rs                      Compact layout, viewport math, visible range
     devices.rs                   UDisks2 device discovery (entry point)
@@ -93,17 +92,18 @@ src/
     drag_drop/
       state.rs                   DnD state, export payloads, modifier-to-mode, target matching
     file_grid/
-      layout.rs                  Compact column-width cache and layout assembly
+      layout.rs                  Dolphin-style model-keyed compact size-hint/column-width cache and layout assembly
       slots.rs                   Visible-item slot pool (recycled element IDs)
       snapshot.rs                Visible-item snapshot data
     filter_bar/
       state.rs                   Filter snapshot and filtered model cache
     icons/
-      cache.rs                   FileIconCache, MIME candidate, theme resolution
+      cache.rs                   FileIconCache, MIME candidate, theme resolution, shared icon snapshots
+      roles.rs                   Dolphin iconName role snapshot/update policy
+      view.rs                    Cached theme icon rendering helper
     item_view/
       scroll_bar.rs              Pane-decoupled item-view horizontal scrollbar
-      scroll_bar/
-        state.rs                 Scrollbar geometry and track/thumb drag math
+      scroll_state.rs            Pane-local ScrollHandle map and view/handle sync
     location_bar/
       draft.rs                   Editable location draft and caret state
       metrics.rs                 Editable metrics, hit-test, scroll math
@@ -185,6 +185,10 @@ All outputs carry `PaneId`, `generation`, and path context so stale events can b
 
 The GPUI pane consumes snapshots and signals. It does not decide whether a filesystem event is an add, delete, refresh, or full reload. During navigation it cancels transient interactions but retains the old model/layout until the new listing is ready, matching Dolphin's no-blank-frame loading behavior.
 
+Path and item-id lookup use Dolphin-style lazy block indexes. Role-only updates
+such as thumbnail/MIME resolution, or a reload whose sorted item identity is
+unchanged, update metadata without rebuilding those indexes.
+
 ### Listing Worker and Cache
 
 `ListingWorkerState` is a per-app singleton that receives listing requests keyed
@@ -192,11 +196,19 @@ by `(path, mode)`. Requests from multiple panes showing the same directory are
 coalesced into a single `read_dir`. Results are shared as `Arc<Vec<Entry>>` and
 retargeted to each requesting pane with pane-local `ModelEntry` identity.
 
-`DirectoryCache` stores fresh listing results keyed by canonical path. On a
-`Load` request the cache returns a cached `ListingRefreshed + ListingCompleted`
+`DirectoryCache` stores only fresh listing results keyed by canonical path. On
+a `Load` request the cache returns a cached `ListingRefreshed + ListingCompleted`
 pair without queuing a background `read_dir`. Entries are evicted via LRU with
-per-directory and total entry budgets. Stale cache is not used for `Load`, and
-`Reload` marks the entry as stale.
+per-directory and total entry budgets. `Reload`, watcher invalidation, and
+directory fingerprint mismatch drop the cached payload immediately instead of
+retaining stale entries.
+
+Large directories that exceed the cache entry budget are tracked as lightweight
+path/count summaries only. They never retain `Entry` payloads, but they are
+visible through the listing-worker debug snapshot. `FIKA_DEBUG_CACHE=1`,
+`FIKA_DEBUG_NAV=1`, or `FIKA_PERF_ITEM_VIEW=1` prints cache hit/miss,
+invalidation, eviction, pending-work, cached-entry, and skipped-large-directory
+statistics while the app runs.
 
 ### Location Resolution
 
@@ -260,7 +272,23 @@ the model supports `TrashOriginalPath` and `TrashDeletionTime` sort roles.
 - Thumbnail URI derivation from file path and modification time
 - Cache key generation and cache-hit checking
 - Failure marker handling
-- `EntryData` path role for thumbnail resolution on visible items
+- Pane-local `ModelEntry.thumbnail_path` preview role for visible items
+- Dolphin `KFileItemModelRolesUpdater::indexesToResolve()` style visible-first
+  read-ahead for preview role updates
+- Lightweight thumbnail/MIME scheduler keys that keep pane/generation/item
+  identity and path/MIME hashes without retaining full path strings outside
+  bounded request/result payloads
+
+Theme file icons follow the same Dolphin role split. `ModelEntry.icon_name`
+stores the MIME-derived `iconName` role; files still waiting for generic
+`application/octet-stream` magic probing render a temporary widget-local icon
+and do not write that preliminary value into the model role. `FileIconCache`
+resolves theme paths from the stored role name, does not synthesize
+extension-specific theme names, and loads decoded `RenderImage` data in a
+background task. `src/ui/icons/roles.rs` owns the widget-local-vs-model-role
+decision, leaving `src/main.rs` to route pane lookup, model writeback, and GPUI
+background loading. File-grid rendering only uses already cached render images
+or the non-I/O fallback marker.
 
 ### Devices
 
@@ -377,11 +405,15 @@ reproduces Zed's `ScrollHandle` scrollbar model inside Fika:
   from `ScrollHandle::bounds()`, `max_offset()` and `offset()`, then writes
   drag/track-click changes back with `ScrollHandle::set_offset()` using the
   same negative-offset convention as Zed.
+- Wheel input uses the same pane-local offset path as scrollbar drag. Compact
+  view maps wheel input to Dolphin's horizontal scroll orientation;
+  icons/details map wheel input vertically. There is no active smooth-scroller
+  tick task or kinetic gesture state in the current code.
 
-Wheel input is handled by GPUI's tracked scroll container; Ctrl/secondary+wheel
-remains pane-local zoom.
-Smooth/kinetic scrolling is intentionally absent after the deletion pass and
-must be rebuilt only on top of the independent item-view component.
+Wheel input is mapped by view mode first: compact view uses Dolphin's
+horizontal orientation, icons/details use vertical scrolling. Ctrl/secondary
+wheel remains pane-local zoom. Scrollbar thumb/track interaction remains direct
+and does not start kinetic release.
 
 #### Location Bar (`src/ui/location_bar.rs`)
 

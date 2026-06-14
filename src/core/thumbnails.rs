@@ -19,8 +19,8 @@ pub mod scheduler;
 pub use scheduler::{
     ThumbnailCandidate, ThumbnailProbeBatch, ThumbnailProbeCancelHandle, ThumbnailProbeResult,
     ThumbnailScheduler, ThumbnailWorkKey, apply_thumbnail_probe_result_to_model,
-    deferred_thumbnail_columns, thumbnail_candidate_failure_is_cached,
-    thumbnail_probe_results_for_requests,
+    thumbnail_candidate_failure_is_cached, thumbnail_probe_results_for_requests,
+    thumbnail_read_ahead_indexes,
 };
 
 const THUMBNAILS_DIR: &str = "thumbnails";
@@ -326,6 +326,33 @@ impl ThumbnailRequestQueue {
         predicate: impl Fn(&ThumbnailRequest) -> bool,
     ) -> Vec<ThumbnailRequest> {
         let mut removed = Vec::new();
+        self.deferred.retain(|request| {
+            if predicate(request) {
+                removed.push(request.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for request in &removed {
+            self.pending.remove(&request.key());
+        }
+        removed
+    }
+
+    pub fn cancel_matching(
+        &mut self,
+        predicate: impl Fn(&ThumbnailRequest) -> bool,
+    ) -> Vec<ThumbnailRequest> {
+        let mut removed = Vec::new();
+        self.visible.retain(|request| {
+            if predicate(request) {
+                removed.push(request.clone());
+                false
+            } else {
+                true
+            }
+        });
         self.deferred.retain(|request| {
             if predicate(request) {
                 removed.push(request.clone());

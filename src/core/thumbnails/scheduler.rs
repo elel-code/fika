@@ -1,4 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -16,15 +18,17 @@ use super::{
 };
 
 const THUMBNAIL_PROBE_WORKER_LIMIT: usize = 4;
+const THUMBNAIL_RESOLVE_ALL_ITEMS_LIMIT: usize = 500;
+const THUMBNAIL_READ_AHEAD_PAGES: usize = 5;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ThumbnailWorkKey {
     pub pane_id: PaneId,
     pub generation: Generation,
     pub item_id: ItemId,
-    pub path: PathBuf,
     pub modified_secs: u64,
-    pub mime_type: Option<String>,
+    pub path_hash: u64,
+    pub mime_hash: Option<u64>,
 }
 
 impl ThumbnailWorkKey {
@@ -37,9 +41,9 @@ impl ThumbnailWorkKey {
             pane_id,
             generation,
             item_id: candidate.item_id,
-            path: candidate.path.clone(),
             modified_secs: candidate.modified_secs,
-            mime_type: candidate.mime_type.clone(),
+            path_hash: stable_hash(&candidate.path),
+            mime_hash: candidate.mime_type.as_deref().map(stable_hash),
         }
     }
 
@@ -48,11 +52,17 @@ impl ThumbnailWorkKey {
             pane_id: request.pane_id(),
             generation: request.generation(),
             item_id: request.item_id(),
-            path: request.path().to_path_buf(),
             modified_secs: request.modified_secs(),
-            mime_type: request.mime_type().map(str::to_string),
+            path_hash: stable_hash(request.path()),
+            mime_hash: request.mime_type().map(stable_hash),
         }
     }
+}
+
+fn stable_hash(value: impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,12 +122,6 @@ impl ThumbnailScheduler {
         generation: Generation,
         candidates: Vec<ThumbnailCandidate>,
     ) -> bool {
-        let keep_deferred = candidates
-            .iter()
-            .map(|candidate| ThumbnailWorkKey::from_candidate(pane_id, generation, candidate))
-            .collect::<HashSet<_>>();
-        self.prune_deferred_for_snapshot(pane_id, generation, &keep_deferred);
-
         let mut queued = false;
         for candidate in candidates {
             let (key, request, failure_cached) = thumbnail_candidate_failure_is_cached(
@@ -214,36 +218,6 @@ impl ThumbnailScheduler {
 
     pub fn contains_seen(&self, key: &ThumbnailWorkKey) -> bool {
         self.seen.contains(key)
-    }
-
-    fn prune_deferred_for_snapshot(
-        &mut self,
-        pane_id: PaneId,
-        generation: Generation,
-        keep: &HashSet<ThumbnailWorkKey>,
-    ) -> bool {
-        let removed = self.requests.cancel_deferred_matching(|request| {
-            request.pane_id() == pane_id
-                && request.generation() == generation
-                && !keep.contains(&ThumbnailWorkKey::from_request(request))
-        });
-        let removed_queued = !removed.is_empty();
-        for request in removed {
-            self.seen.remove(&ThumbnailWorkKey::from_request(&request));
-        }
-        let canceled_active = self
-            .probe_cancel
-            .as_ref()
-            .map(|cancel| {
-                cancel.cancel_deferred_matching(|key| {
-                    key.pane_id == pane_id && key.generation == generation && !keep.contains(key)
-                })
-            })
-            .unwrap_or_default();
-        for key in &canceled_active {
-            self.seen.remove(key);
-        }
-        removed_queued || !canceled_active.is_empty()
     }
 
     fn cancel_active_deferred_request(&self, request: &ThumbnailRequest) -> bool {
@@ -345,27 +319,64 @@ impl ThumbnailProbeCancelHandle {
     }
 }
 
-pub fn deferred_thumbnail_columns(
-    visible_columns: Range<usize>,
-    column_count: usize,
-    radius: usize,
+pub fn thumbnail_read_ahead_indexes(
+    visible_indexes: Range<usize>,
+    item_count: usize,
+    maximum_visible_items: usize,
 ) -> Vec<usize> {
-    if visible_columns.is_empty() || column_count == 0 || radius == 0 {
+    if item_count == 0 || visible_indexes.is_empty() {
         return Vec::new();
     }
-    let visible_start = visible_columns.start.min(column_count);
-    let visible_end = visible_columns.end.min(column_count);
-    let mut columns = Vec::with_capacity(radius.saturating_mul(2));
-    for distance in 1..=radius {
-        if let Some(left) = visible_start.checked_sub(distance) {
-            columns.push(left);
-        }
-        let right = visible_end + distance - 1;
-        if right < column_count {
-            columns.push(right);
-        }
+
+    let visible_start = visible_indexes.start.min(item_count);
+    let visible_end = visible_indexes.end.min(item_count).max(visible_start);
+    if visible_start >= visible_end {
+        return Vec::new();
     }
-    columns
+
+    let maximum_visible_items = maximum_visible_items.max(1);
+    let read_ahead_items = (THUMBNAIL_READ_AHEAD_PAGES * maximum_visible_items)
+        .min(THUMBNAIL_RESOLVE_ALL_ITEMS_LIMIT / 2);
+    let last_visible = visible_end - 1;
+    let end_extended = (last_visible + read_ahead_items).min(item_count - 1);
+    let begin_extended = visible_start.saturating_sub(read_ahead_items);
+
+    let mut indexes = Vec::new();
+
+    for index in visible_end..=end_extended {
+        indexes.push(index);
+    }
+    for index in (begin_extended..visible_start).rev() {
+        indexes.push(index);
+    }
+
+    let begin_last_page = (end_extended + 1).max(item_count.saturating_sub(maximum_visible_items));
+    for index in begin_last_page..item_count {
+        indexes.push(index);
+    }
+
+    let end_first_page = begin_extended.min(maximum_visible_items);
+    for index in 0..end_first_page {
+        indexes.push(index);
+    }
+
+    let mut remaining = THUMBNAIL_RESOLVE_ALL_ITEMS_LIMIT.saturating_sub(indexes.len());
+    for index in (end_extended + 1)..begin_last_page {
+        if remaining == 0 {
+            break;
+        }
+        indexes.push(index);
+        remaining -= 1;
+    }
+    for index in (end_first_page..begin_extended).rev() {
+        if remaining == 0 {
+            break;
+        }
+        indexes.push(index);
+        remaining -= 1;
+    }
+
+    indexes
 }
 
 pub fn thumbnail_candidate_failure_is_cached(
@@ -496,12 +507,19 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn deferred_thumbnail_columns_stay_bounded_around_visible_columns() {
-        assert_eq!(deferred_thumbnail_columns(4..6, 10, 2), vec![3, 6, 2, 7]);
-        assert_eq!(deferred_thumbnail_columns(0..2, 5, 3), vec![2, 3, 4]);
-        assert_eq!(deferred_thumbnail_columns(3..5, 5, 3), vec![2, 1, 0]);
-        assert!(deferred_thumbnail_columns(0..0, 10, 2).is_empty());
-        assert!(deferred_thumbnail_columns(4..6, 10, 0).is_empty());
+    fn thumbnail_read_ahead_indexes_follow_dolphin_roles_updater_order() {
+        assert_eq!(
+            thumbnail_read_ahead_indexes(10..20, 100, 10),
+            (20..=69)
+                .chain((0..10).rev())
+                .chain(90..100)
+                .chain(70..90)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(thumbnail_read_ahead_indexes(0..2, 5, 2), vec![2, 3, 4]);
+        assert_eq!(thumbnail_read_ahead_indexes(3..5, 5, 2), vec![2, 1, 0]);
+        assert!(thumbnail_read_ahead_indexes(0..0, 10, 2).is_empty());
+        assert!(thumbnail_read_ahead_indexes(0..2, 0, 2).is_empty());
     }
 
     #[test]
@@ -529,7 +547,26 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_scheduler_cancels_active_deferred_before_worker_start() {
+    fn thumbnail_work_key_keeps_path_and_mime_identity_without_storing_paths() {
+        let pane_id = PaneId(1);
+        let generation = Generation(1);
+        let image = thumbnail_candidate(1, "image.png", ThumbnailRequestPriority::Visible);
+        let renamed = thumbnail_candidate(1, "renamed.png", ThumbnailRequestPriority::Visible);
+        let mut retagged = image.clone();
+        retagged.mime_type = Some("image/webp".to_string());
+
+        assert_ne!(
+            ThumbnailWorkKey::from_candidate(pane_id, generation, &image),
+            ThumbnailWorkKey::from_candidate(pane_id, generation, &renamed)
+        );
+        assert_ne!(
+            ThumbnailWorkKey::from_candidate(pane_id, generation, &image),
+            ThumbnailWorkKey::from_candidate(pane_id, generation, &retagged)
+        );
+    }
+
+    #[test]
+    fn thumbnail_scheduler_keeps_generation_work_until_navigation_or_close() {
         let pane_id = PaneId(1);
         let generation = Generation(1);
         let mut scheduler = ThumbnailScheduler::new(PathBuf::from("/tmp/fika-thumbnail-active"));
@@ -543,18 +580,16 @@ mod tests {
         assert_eq!(scheduler.seen_len(), 2);
 
         assert!(!scheduler.queue_candidates(pane_id, generation, vec![keep.clone()]));
-        assert_eq!(scheduler.seen_len(), 1);
+        assert_eq!(scheduler.seen_len(), 2);
         assert!(scheduler.contains_seen(&ThumbnailWorkKey::from_candidate(
             pane_id, generation, &keep
         )));
-        assert!(!scheduler.contains_seen(&ThumbnailWorkKey::from_candidate(
+        assert!(scheduler.contains_seen(&ThumbnailWorkKey::from_candidate(
             pane_id, generation, &stale
         )));
 
-        assert!(scheduler.queue_candidates(pane_id, generation, vec![stale]));
-        let requeued = scheduler.pop_next_request().unwrap();
-        assert_eq!(requeued.item_id(), ItemId(2));
-        assert_eq!(requeued.priority(), ThumbnailRequestPriority::Deferred);
+        assert!(!scheduler.queue_candidates(pane_id, generation, vec![stale]));
+        assert!(scheduler.pop_next_request().is_none());
     }
 
     #[test]
@@ -804,7 +839,6 @@ mod tests {
             modified_secs: Some(42),
             mime_type: Some(Arc::from("image/png")),
             mime_magic_checked: true,
-            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,

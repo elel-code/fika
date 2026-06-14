@@ -1,11 +1,9 @@
 use crate::FikaApp;
 use crate::ui::filter_bar::{FilterToggleSnapshot, filter_toggle_snapshot};
-use crate::ui::icons::{FileIconCache, FileIconSnapshot};
+use crate::ui::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
 use fika_core::PaneId;
 use gpui::prelude::*;
-use gpui::{
-    Context, Div, MouseButton, ParentElement, Stateful, Styled, StyledImage, div, img, px, rgb,
-};
+use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, px, rgb};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PaneToolbarSnapshot {
@@ -193,20 +191,15 @@ fn toolbar_icon_or_label(
     label: &'static str,
     enabled: bool,
 ) -> gpui::AnyElement {
-    match icon.path {
-        Some(path) => div()
-            .w(px(18.0))
-            .h(px(18.0))
-            .flex_none()
-            .overflow_hidden()
-            .child(
-                img(path)
-                    .size_full()
-                    .with_fallback(move || toolbar_icon_fallback_label(label, enabled)),
-            )
-            .into_any_element(),
-        None => toolbar_icon_fallback_label(label, enabled),
-    }
+    div()
+        .w(px(18.0))
+        .h(px(18.0))
+        .flex_none()
+        .overflow_hidden()
+        .child(cached_icon_or_fallback(&icon, move || {
+            toolbar_icon_fallback_label(label, enabled)
+        }))
+        .into_any_element()
 }
 
 fn toolbar_icon_fallback_label(label: &'static str, enabled: bool) -> gpui::AnyElement {
@@ -234,7 +227,7 @@ mod tests {
         assert!(single.split_enabled);
         assert!(!single.close_enabled);
         assert!(matches!(
-            single.split_icon.icon_name.as_str(),
+            single.split_icon.icon_name.as_ref(),
             "view-split-left-right" | "view-split-left-right-symbolic" | "view-restore"
         ));
 
@@ -243,7 +236,7 @@ mod tests {
         assert!(split.close_enabled);
         assert!(split.filter_toggle.active);
         assert!(matches!(
-            split.close_icon.icon_name.as_str(),
+            split.close_icon.icon_name.as_ref(),
             "window-close" | "dialog-close" | "edit-delete"
         ));
     }

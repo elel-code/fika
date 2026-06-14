@@ -10,17 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectoryCacheState {
-    Fresh,
-    Stale,
-}
-
 #[derive(Clone, Debug)]
 pub struct DirectoryCacheSnapshot {
     path: PathBuf,
     entries: Arc<Vec<Entry>>,
-    state: DirectoryCacheState,
     loaded_at: u64,
     fingerprint: Option<DirectoryCacheFingerprint>,
 }
@@ -32,10 +25,6 @@ impl DirectoryCacheSnapshot {
 
     pub fn entries(&self) -> &Arc<Vec<Entry>> {
         &self.entries
-    }
-
-    pub fn state(&self) -> DirectoryCacheState {
-        self.state
     }
 
     pub fn loaded_at(&self) -> u64 {
@@ -60,6 +49,53 @@ pub struct DirectoryCacheStats {
     pub evicted_directories: usize,
     pub skipped_large_directories: usize,
     pub cached_entries: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectoryCacheDirectorySummary {
+    path: PathBuf,
+    entry_count: usize,
+    observed_at: u64,
+}
+
+impl DirectoryCacheDirectorySummary {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+
+    pub fn observed_at(&self) -> u64 {
+        self.observed_at
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectoryCacheDebugSnapshot {
+    stats: DirectoryCacheStats,
+    limits: DirectoryCacheLimits,
+    cached_directories: Vec<DirectoryCacheDirectorySummary>,
+    skipped_large_directories: Vec<DirectoryCacheDirectorySummary>,
+}
+
+impl DirectoryCacheDebugSnapshot {
+    pub fn stats(&self) -> DirectoryCacheStats {
+        self.stats
+    }
+
+    pub fn limits(&self) -> DirectoryCacheLimits {
+        self.limits
+    }
+
+    pub fn cached_directories(&self) -> &[DirectoryCacheDirectorySummary] {
+        &self.cached_directories
+    }
+
+    pub fn skipped_large_directories(&self) -> &[DirectoryCacheDirectorySummary] {
+        &self.skipped_large_directories
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +134,8 @@ pub struct DirectoryCache {
     cached_entries: usize,
     entries_by_path: HashMap<PathBuf, DirectoryCacheSnapshot>,
     lru: VecDeque<PathBuf>,
+    skipped_large_by_path: HashMap<PathBuf, DirectoryCacheDirectorySummary>,
+    skipped_large_lru: VecDeque<PathBuf>,
 }
 
 impl Default for DirectoryCache {
@@ -126,6 +164,8 @@ impl DirectoryCache {
             cached_entries: 0,
             entries_by_path: HashMap::new(),
             lru: VecDeque::new(),
+            skipped_large_by_path: HashMap::new(),
+            skipped_large_lru: VecDeque::new(),
         }
     }
 
@@ -137,10 +177,39 @@ impl DirectoryCache {
         self.cached_entries
     }
 
+    pub fn can_store_entry_count(&self, entry_count: usize) -> bool {
+        entry_count <= self.limits.max_entries_per_dir && entry_count <= self.limits.max_entries
+    }
+
     pub fn stats(&self) -> DirectoryCacheStats {
         DirectoryCacheStats {
             cached_entries: self.cached_entries,
             ..self.stats
+        }
+    }
+
+    pub fn debug_snapshot(&self) -> DirectoryCacheDebugSnapshot {
+        let cached_directories = self
+            .lru
+            .iter()
+            .filter_map(|path| self.entries_by_path.get(path))
+            .map(|snapshot| DirectoryCacheDirectorySummary {
+                path: snapshot.path.clone(),
+                entry_count: snapshot.entry_count(),
+                observed_at: snapshot.loaded_at,
+            })
+            .collect();
+        let skipped_large_directories = self
+            .skipped_large_lru
+            .iter()
+            .filter_map(|path| self.skipped_large_by_path.get(path).cloned())
+            .collect();
+
+        DirectoryCacheDebugSnapshot {
+            stats: self.stats(),
+            limits: self.limits,
+            cached_directories,
+            skipped_large_directories,
         }
     }
 
@@ -159,13 +228,8 @@ impl DirectoryCache {
     pub fn get_fresh(&mut self, path: &Path) -> Option<DirectoryCacheSnapshot> {
         let key = normalize_cache_path(path);
         let snapshot = self.get(&key)?;
-        if snapshot.state != DirectoryCacheState::Fresh {
-            return None;
-        }
         if !snapshot.matches_current_directory() {
-            if let Some(snapshot) = self.entries_by_path.get_mut(&key) {
-                snapshot.state = DirectoryCacheState::Stale;
-            }
+            self.remove_normalized(&key);
             self.stats.stale_invalidations += 1;
             return None;
         }
@@ -178,10 +242,9 @@ impl DirectoryCache {
         entries: Arc<Vec<Entry>>,
     ) -> Option<DirectoryCacheSnapshot> {
         let key = normalize_cache_path(path.as_ref());
-        if entries.len() > self.limits.max_entries_per_dir
-            || entries.len() > self.limits.max_entries
-        {
+        if !self.can_store_entry_count(entries.len()) {
             self.remove_normalized(&key);
+            self.record_skipped_large_normalized(key, entries.len());
             self.stats.skipped_large_directories += 1;
             return None;
         }
@@ -190,11 +253,11 @@ impl DirectoryCache {
         let snapshot = DirectoryCacheSnapshot {
             path: key.clone(),
             entries,
-            state: DirectoryCacheState::Fresh,
             loaded_at: self.clock,
             fingerprint: DirectoryCacheFingerprint::for_path(&key),
         };
         self.remove_normalized(&key);
+        self.remove_skipped_large_normalized(&key);
         self.cached_entries += snapshot.entry_count();
         self.entries_by_path.insert(key.clone(), snapshot.clone());
         self.touch(&key);
@@ -204,10 +267,21 @@ impl DirectoryCache {
 
     pub fn mark_stale(&mut self, path: &Path) -> bool {
         let key = normalize_cache_path(path);
-        let Some(snapshot) = self.entries_by_path.get_mut(&key) else {
+        let removed = self.remove_normalized(&key);
+        if removed {
+            self.stats.stale_invalidations += 1;
+        }
+        removed
+    }
+
+    pub fn record_uncached_directory(&mut self, path: &Path, entry_count: usize) -> bool {
+        if self.can_store_entry_count(entry_count) {
             return false;
-        };
-        snapshot.state = DirectoryCacheState::Stale;
+        }
+        let key = normalize_cache_path(path);
+        self.remove_normalized(&key);
+        self.record_skipped_large_normalized(key, entry_count);
+        self.stats.skipped_large_directories += 1;
         true
     }
 
@@ -279,7 +353,7 @@ impl DirectoryCache {
 
     pub fn remove(&mut self, path: &Path) -> bool {
         let key = normalize_cache_path(path);
-        self.remove_normalized(&key)
+        self.remove_normalized(&key) | self.remove_skipped_large_normalized(&key)
     }
 
     fn update_fresh_entries(
@@ -291,9 +365,6 @@ impl DirectoryCache {
         let Some(snapshot) = self.entries_by_path.get(&key).cloned() else {
             return false;
         };
-        if snapshot.state != DirectoryCacheState::Fresh {
-            return false;
-        }
 
         let mut entries = snapshot.entries.iter().cloned().collect::<Vec<_>>();
         if !update(&key, &mut entries) {
@@ -308,10 +379,9 @@ impl DirectoryCache {
         entries: Vec<Entry>,
         old_entry_count: usize,
     ) -> bool {
-        if entries.len() > self.limits.max_entries_per_dir
-            || entries.len() > self.limits.max_entries
-        {
+        if !self.can_store_entry_count(entries.len()) {
             self.remove_normalized(&key);
+            self.record_skipped_large_normalized(key, entries.len());
             self.stats.skipped_large_directories += 1;
             return false;
         }
@@ -321,7 +391,6 @@ impl DirectoryCache {
         let snapshot = DirectoryCacheSnapshot {
             path: key.clone(),
             entries: Arc::new(entries),
-            state: DirectoryCacheState::Fresh,
             loaded_at: self.clock,
             fingerprint: DirectoryCacheFingerprint::for_path(&key),
         };
@@ -330,6 +399,7 @@ impl DirectoryCache {
             .saturating_sub(old_entry_count)
             .saturating_add(new_entry_count);
         self.entries_by_path.insert(key.clone(), snapshot);
+        self.remove_skipped_large_normalized(&key);
         self.touch(&key);
         self.evict_oldest();
         true
@@ -342,6 +412,31 @@ impl DirectoryCache {
         };
         self.cached_entries = self.cached_entries.saturating_sub(removed.entry_count());
         true
+    }
+
+    fn remove_skipped_large_normalized(&mut self, key: &Path) -> bool {
+        self.skipped_large_lru
+            .retain(|candidate| candidate.as_path() != key);
+        self.skipped_large_by_path.remove(key).is_some()
+    }
+
+    fn record_skipped_large_normalized(&mut self, key: PathBuf, entry_count: usize) {
+        self.clock = self.clock.wrapping_add(1);
+        self.skipped_large_lru
+            .retain(|candidate| candidate.as_path() != key);
+        let summary = DirectoryCacheDirectorySummary {
+            path: key.clone(),
+            entry_count,
+            observed_at: self.clock,
+        };
+        self.skipped_large_by_path.insert(key.clone(), summary);
+        self.skipped_large_lru.push_back(key);
+        while self.skipped_large_lru.len() > self.limits.max_dirs {
+            let Some(path) = self.skipped_large_lru.pop_front() else {
+                break;
+            };
+            self.skipped_large_by_path.remove(&path);
+        }
     }
 
     fn touch(&mut self, key: &Path) {
@@ -441,7 +536,6 @@ mod tests {
             modified_secs: None,
             mime_type: None,
             mime_magic_checked: true,
-            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,
@@ -497,16 +591,16 @@ mod tests {
     }
 
     #[test]
-    fn cache_marks_directory_stale_without_dropping_payload() {
+    fn cache_invalidates_directory_by_dropping_payload() {
         let mut cache = DirectoryCache::new(2);
         let payload = entries(&["a"]);
         assert!(cache.insert_fresh("/tmp/a", Arc::clone(&payload)).is_some());
 
         assert!(cache.mark_stale(Path::new("/tmp/a")));
-        let snapshot = cache.get(Path::new("/tmp/a")).unwrap();
 
-        assert_eq!(snapshot.state(), DirectoryCacheState::Stale);
-        assert!(Arc::ptr_eq(snapshot.entries(), &payload));
+        assert!(cache.get(Path::new("/tmp/a")).is_none());
+        assert_eq!(cache.cached_entry_count(), 0);
+        assert_eq!(cache.stats().stale_invalidations, 1);
     }
 
     #[test]
@@ -520,7 +614,6 @@ mod tests {
         assert!(cache.apply_items_added(&root, &[entry("b.txt")]));
         let snapshot = cache.get_fresh(&root).unwrap();
         assert_eq!(entry_names(snapshot.entries()), vec!["a.txt", "b.txt"]);
-        assert_eq!(snapshot.state(), DirectoryCacheState::Fresh);
 
         fs::rename(root.join("b.txt"), root.join("c.txt")).unwrap();
         assert!(cache.apply_items_refreshed(
@@ -570,9 +663,8 @@ mod tests {
         fs::write(root.join("new.txt"), b"changed").unwrap();
 
         assert!(cache.get_fresh(&root).is_none());
-        let snapshot = cache.get(&root).unwrap();
-        assert_eq!(snapshot.state(), DirectoryCacheState::Stale);
-        assert!(Arc::ptr_eq(snapshot.entries(), &payload));
+        assert!(cache.get(&root).is_none());
+        assert_eq!(cache.cached_entry_count(), 0);
         assert_eq!(cache.stats().stale_invalidations, 1);
 
         let _ = fs::remove_dir_all(root);
@@ -612,6 +704,8 @@ mod tests {
             max_entries_per_dir: 2,
         });
 
+        assert!(cache.can_store_entry_count(2));
+        assert!(!cache.can_store_entry_count(3));
         assert!(
             cache
                 .insert_fresh("/tmp/large", entries(&["a", "b", "c"]))
@@ -621,5 +715,47 @@ mod tests {
         assert!(cache.get(Path::new("/tmp/large")).is_none());
         assert_eq!(cache.cached_entry_count(), 0);
         assert_eq!(cache.stats().skipped_large_directories, 1);
+    }
+
+    #[test]
+    fn cache_debug_snapshot_reports_cached_and_uncached_directory_summaries() {
+        let mut cache = DirectoryCache::with_limits(DirectoryCacheLimits {
+            max_dirs: 2,
+            max_entries: 4,
+            max_entries_per_dir: 2,
+        });
+
+        assert!(
+            cache
+                .insert_fresh("/tmp/small", entries(&["a", "b"]))
+                .is_some()
+        );
+        assert!(cache.record_uncached_directory(Path::new("/tmp/large"), 3));
+
+        let snapshot = cache.debug_snapshot();
+
+        assert_eq!(snapshot.limits().max_entries_per_dir, 2);
+        assert_eq!(snapshot.stats().cached_entries, 2);
+        assert_eq!(snapshot.stats().skipped_large_directories, 1);
+        assert_eq!(snapshot.cached_directories().len(), 1);
+        assert_eq!(
+            snapshot.cached_directories()[0].path(),
+            Path::new("/tmp/small")
+        );
+        assert_eq!(snapshot.cached_directories()[0].entry_count(), 2);
+        assert_eq!(snapshot.skipped_large_directories().len(), 1);
+        assert_eq!(
+            snapshot.skipped_large_directories()[0].path(),
+            Path::new("/tmp/large")
+        );
+        assert_eq!(snapshot.skipped_large_directories()[0].entry_count(), 3);
+
+        assert!(cache.remove(Path::new("/tmp/large")));
+        assert!(
+            cache
+                .debug_snapshot()
+                .skipped_large_directories()
+                .is_empty()
+        );
     }
 }

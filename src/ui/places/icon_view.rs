@@ -1,6 +1,6 @@
-use gpui::{Div, IntoElement, ParentElement, Styled, StyledImage, div, img, px, rgb};
+use gpui::{Div, IntoElement, ParentElement, Styled, div, px, rgb};
 
-use crate::ui::icons::FileIconSnapshot;
+use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 
 pub(super) fn place_icon_view(icon: &FileIconSnapshot, active: bool) -> Div {
     let fallback_kind = place_fallback_kind_for_snapshot(icon);
@@ -16,14 +16,9 @@ pub(super) fn place_icon_view(icon: &FileIconSnapshot, active: bool) -> Div {
         .justify_center()
         .overflow_hidden();
 
-    match &icon.path {
-        Some(path) => {
-            container.child(img(path.clone()).size_full().with_fallback(move || {
-                place_fallback_icon(fallback_kind, fallback_fg, fallback_bg)
-            }))
-        }
-        None => container.child(place_fallback_icon(fallback_kind, fallback_fg, fallback_bg)),
-    }
+    container.child(cached_icon_or_fallback(icon, move || {
+        place_fallback_icon(fallback_kind, fallback_fg, fallback_bg)
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,7 +37,7 @@ enum PlaceFallbackKind {
 }
 
 fn place_fallback_kind_for_snapshot(icon: &FileIconSnapshot) -> PlaceFallbackKind {
-    let icon_name = icon.icon_name.as_str();
+    let icon_name = icon.icon_name.as_ref();
     if icon_name.contains("home") {
         PlaceFallbackKind::Home
     } else if icon_name.contains("desktop") || icon_name.contains("display") {
@@ -405,9 +400,10 @@ mod tests {
 
     fn icon_snapshot(icon_name: &str, fallback_marker: &str) -> FileIconSnapshot {
         FileIconSnapshot {
-            icon_name: icon_name.to_string(),
+            icon_name: std::sync::Arc::from(icon_name),
             path: None,
-            fallback_marker: fallback_marker.to_string(),
+            render_image: None,
+            fallback_marker: std::sync::Arc::from(fallback_marker),
             fallback_fg: 0x1f4fbf,
             fallback_bg: 0xeaf1ff,
         }

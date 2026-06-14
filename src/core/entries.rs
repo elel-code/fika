@@ -29,7 +29,6 @@ pub struct EntryData {
     pub modified_secs: Option<u64>,
     pub mime_type: Option<Arc<str>>,
     pub mime_magic_checked: bool,
-    pub thumbnail_path: Option<PathBuf>,
     pub trash_original_path: Option<PathBuf>,
     pub trash_deletion_time: Option<Arc<str>>,
     pub is_dir: bool,
@@ -75,6 +74,8 @@ impl EntryData {
 pub struct ModelEntry {
     pub id: ItemId,
     pub entry: Entry,
+    pub icon_name: Option<Arc<str>>,
+    pub thumbnail_path: Option<PathBuf>,
 }
 
 impl ModelEntry {
@@ -82,6 +83,8 @@ impl ModelEntry {
         Self {
             id: ItemId::UNASSIGNED,
             entry,
+            icon_name: None,
+            thumbnail_path: None,
         }
     }
 
@@ -303,7 +306,6 @@ fn to_entry_data(path: &Path, name: String, metadata: Metadata, mime: &MimeDatab
         modified_secs,
         mime_type,
         mime_magic_checked,
-        thumbnail_path: None,
         trash_original_path: None,
         trash_deletion_time: None,
         is_dir,
@@ -392,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn entry_data_defers_thumbnail_path_to_visible_role_update() {
+    fn model_entry_defers_thumbnail_path_to_visible_role_update() {
         let dir = std::env::temp_dir().join(format!(
             "fika-entry-thumbnail-deferred-{}-{}",
             std::process::id(),
@@ -412,14 +414,15 @@ mod tests {
         let path = dir.join("image.png");
         fs::write(&path, b"\x89PNG\r\n\x1a\nrest").unwrap();
 
-        let entry = to_entry_data(
+        let entry = Entry::new(to_entry_data(
             &path,
             "image.png".to_string(),
             fs::metadata(&path).unwrap(),
             MimeDatabase::shared(),
-        );
+        ));
+        let model_entry = ModelEntry::unassigned(entry);
 
-        assert_eq!(entry.thumbnail_path, None);
+        assert_eq!(model_entry.thumbnail_path, None);
     }
 
     #[test]

@@ -30,9 +30,7 @@ pub(crate) struct CompactColumnWidthCache {
 #[derive(Clone, Debug)]
 pub(crate) struct CompactColumnWidthCacheEntry {
     key: CompactColumnWidthCacheKey,
-    widths: Vec<f32>,
-    pub(crate) resolved_columns: Vec<bool>,
-    metrics: Option<CompactColumnMetrics>,
+    metrics: CompactColumnMetrics,
 }
 
 impl CompactColumnWidthCache {
@@ -99,25 +97,25 @@ impl CompactColumnWidthCache {
                 if self.cached.len() >= Self::MAX_CACHED_LAYOUTS {
                     self.cached.remove(0);
                 }
+                let widths = resolve_all_column_widths(
+                    model,
+                    filtered,
+                    item_count,
+                    rows_per_column,
+                    options,
+                    text_override,
+                );
                 self.cached.push(CompactColumnWidthCacheEntry::new(
                     key,
                     column_count,
                     options,
+                    widths,
                 ));
                 self.cached.len() - 1
             }
         };
 
-        let entry = &mut self.cached[position];
-        entry.resolve_all_columns(
-            model,
-            filtered,
-            item_count,
-            rows_per_column,
-            options,
-            text_override,
-        );
-        entry.metrics(options)
+        self.cached[position].metrics.clone()
     }
 }
 
@@ -126,108 +124,48 @@ impl CompactColumnWidthCacheEntry {
         key: CompactColumnWidthCacheKey,
         column_count: usize,
         options: CompactLayoutOptions,
+        widths: Vec<f32>,
     ) -> Self {
         Self {
             key,
-            widths: vec![options.item_width; column_count],
-            resolved_columns: vec![false; column_count],
-            metrics: None,
+            metrics: CompactColumnMetrics::new(
+                column_count,
+                options.item_width,
+                options.padding,
+                options.gap,
+                widths,
+            ),
         }
     }
+}
 
-    fn metrics(&mut self, options: CompactLayoutOptions) -> CompactColumnMetrics {
-        if let Some(metrics) = &self.metrics {
-            return metrics.clone();
+fn resolve_all_column_widths(
+    model: &fika_core::DirectoryModel,
+    filtered: Option<&fika_core::FilteredModel>,
+    item_count: usize,
+    rows_per_column: usize,
+    options: CompactLayoutOptions,
+    text_override: Option<CompactTextWidthOverride>,
+) -> Vec<f32> {
+    let column_count = item_count.div_ceil(rows_per_column);
+    let mut widths = vec![options.item_width; column_count];
+    for layout_index in 0..item_count {
+        let column = layout_index / rows_per_column;
+        let Some(model_index) = model_index_for_layout_index(filtered, layout_index) else {
+            continue;
+        };
+        let Some(entry) = model.get(model_index) else {
+            continue;
+        };
+        let override_text_width = text_override
+            .filter(|override_| override_.model_index == model_index)
+            .map(|override_| override_.text_width);
+        let width = required_compact_item_width(entry, options, override_text_width);
+        if let Some(cached_width) = widths.get_mut(column) {
+            *cached_width = cached_width.max(width);
         }
-        let metrics = CompactColumnMetrics::new(
-            self.widths.len(),
-            options.item_width,
-            options.padding,
-            options.gap,
-            self.widths.clone(),
-        );
-        self.metrics = Some(metrics.clone());
-        metrics
     }
-
-    fn resolve_all_columns(
-        &mut self,
-        model: &fika_core::DirectoryModel,
-        filtered: Option<&fika_core::FilteredModel>,
-        item_count: usize,
-        rows_per_column: usize,
-        options: CompactLayoutOptions,
-        text_override: Option<CompactTextWidthOverride>,
-    ) {
-        if self.widths.is_empty() {
-            return;
-        }
-
-        self.resolve_columns(
-            model,
-            filtered,
-            item_count,
-            rows_per_column,
-            options,
-            text_override,
-            0..self.widths.len(),
-        );
-    }
-
-    fn resolve_columns(
-        &mut self,
-        model: &fika_core::DirectoryModel,
-        filtered: Option<&fika_core::FilteredModel>,
-        item_count: usize,
-        rows_per_column: usize,
-        options: CompactLayoutOptions,
-        text_override: Option<CompactTextWidthOverride>,
-        columns: std::ops::Range<usize>,
-    ) -> bool {
-        let mut width_changed = false;
-        for column in columns {
-            if self
-                .resolved_columns
-                .get(column)
-                .copied()
-                .unwrap_or_default()
-            {
-                continue;
-            }
-            let start = column * rows_per_column;
-            let end = (start + rows_per_column).min(item_count);
-            let mut width = options.item_width;
-            for layout_index in start..end {
-                let Some(model_index) = model_index_for_layout_index(filtered, layout_index) else {
-                    continue;
-                };
-                if let Some(entry) = model.get(model_index) {
-                    let override_text_width = text_override
-                        .filter(|override_| override_.model_index == model_index)
-                        .map(|override_| override_.text_width);
-                    width = width.max(required_compact_item_width(
-                        entry,
-                        options,
-                        override_text_width,
-                    ));
-                }
-            }
-            if let Some(resolved) = self.resolved_columns.get_mut(column) {
-                *resolved = true;
-            }
-            if let Some(cached_width) = self.widths.get_mut(column)
-                && (*cached_width - width).abs() > f32::EPSILON
-            {
-                *cached_width = width;
-                width_changed = true;
-            }
-        }
-
-        if width_changed {
-            self.metrics = None;
-        }
-        width_changed
-    }
+    widths
 }
 
 fn required_compact_item_width(
@@ -336,7 +274,6 @@ mod tests {
             modified_secs: None,
             mime_type: None,
             mime_magic_checked: true,
-            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,
@@ -371,5 +308,25 @@ mod tests {
         );
 
         assert!(expanded.item(0).unwrap().item_rect.width > base.item(0).unwrap().item_rect.width);
+    }
+
+    #[test]
+    fn compact_column_width_cache_resolves_all_columns_before_first_layout() {
+        let mut entries = (0..240)
+            .map(|index| test_entry(&format!("file-{index}.txt")))
+            .collect::<Vec<_>>();
+        entries[239] = test_entry("this-name-is-intentionally-far-outside-the-viewport.txt");
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(PathBuf::from("/tmp"), Arc::new(entries));
+        let view = ViewState {
+            viewport_width: 220.0,
+            viewport_height: 200.0,
+            ..ViewState::default()
+        };
+        let mut cache = CompactColumnWidthCache::default();
+
+        let layout = compact_layout_for_model_with_text_override(&mut cache, &model, &view, None);
+
+        assert!(layout.item(239).unwrap().item_rect.width > 168.0);
     }
 }

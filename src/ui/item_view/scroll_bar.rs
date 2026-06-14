@@ -50,10 +50,15 @@ pub(crate) fn item_view_scrollbar_container(
                 .overflow_x_scroll()
                 .overflow_y_scroll(),
         )
-        .when_some(rubber_band, |wrapper, rect| {
-            wrapper.child(rubber_band_overlay(rect))
-        })
+        .when_some(
+            rubber_band.filter(|rect| rubber_band_rect_is_visible(*rect)),
+            |wrapper, rect| wrapper.child(rubber_band_overlay(rect)),
+        )
         .child(item_view_scrollbar_overlay(state))
+}
+
+fn rubber_band_rect_is_visible(rect: ViewRect) -> bool {
+    rect.width >= 2.0 && rect.height >= 2.0
 }
 
 struct ItemViewScrollbarState {
@@ -393,8 +398,8 @@ fn rubber_band_overlay(rect: ViewRect) -> Stateful<Div> {
         .absolute()
         .left(px(rect.x))
         .top(px(rect.y))
-        .w(px(rect.width.max(1.0)))
-        .h(px(rect.height.max(1.0)))
+        .w(px(rect.width))
+        .h(px(rect.height))
         .border_1()
         .rounded_sm()
         .border_color(rgb(0x2563eb))

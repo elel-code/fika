@@ -217,7 +217,6 @@ mod tests {
             modified_secs: None,
             mime_type: None,
             mime_magic_checked: true,
-            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             is_dir: false,

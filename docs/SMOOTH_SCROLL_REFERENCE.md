@@ -2,9 +2,11 @@
 
 This document records Dolphin's item-list smooth scrolling model. Fika's
 previous `src/core/scroll.rs` and `src/ui/item_view_container/*` smooth paths
-were deleted with the broken pane-coupled scrollbar. The current code keeps
-only direct item-view scrolling in `src/ui/item_view/scroll_bar.rs`; smooth and
-kinetic scrolling are pending a fresh rebuild on that independent component.
+were deleted with the broken pane-coupled scrollbar. The current code keeps the
+independent item-view scrollbar in `src/ui/item_view/scroll_bar.rs`; wheel input
+updates the pane `ViewState` directly through the Dolphin `setScrollOffset()`
+ownership model. Smooth and kinetic scrolling are reference behavior for a
+future rebuild, not active compatibility code.
 
 ## Dolphin Source
 
@@ -46,16 +48,18 @@ kinetic scrolling are pending a fresh rebuild on that independent component.
   `src/ui/item_view/scroll_bar.rs`, mounted by `src/ui/file_grid.rs` as a
   sibling overlay of the tracked item viewport rather than by `src/ui/pane.rs`;
   geometry and drag math read/write the pane-local `gpui::ScrollHandle`.
+- Dolphin `KItemListSmoothScroller` is documented here only as the future
+  smooth/kinetic target. Fika currently has no active smooth-scroller module,
+  no animation tick task, and no viewport kinetic state.
 - Dolphin scrollbar maximum invalidation and `updateGeometries()` -> viewport
-  bounds are owned by GPUI `track_scroll()`. Zoom changes invalidate compact
-  column metrics but preserve the pane-local `ScrollHandle` offset; pane
-  loading and pane content clear reset the handle.
+  bounds are owned by GPUI `track_scroll()`. `ViewState` owns the current
+  maximum scroll offsets and clamps the current scroll position when layout
+  bounds report a different maximum.
 - Dolphin `setScrollOffset()` synchronous layout path maps to GPUI
-  `ScrollHandle` offset changes, followed by pane snapshot sync into
-  `ViewState.scroll_x` for compact visible-item virtualization.
-- Dolphin `KItemListSmoothScroller` and `QScroller` kinetic behavior are not
-  present in the current code after the deletion pass. Rebuild them only after
-  the independent scrollbar drag and wheel path are verified.
+  `ScrollHandle` offset changes and the same offset is written into
+  `ViewState.scroll_x` / `ViewState.scroll_y` for visible-item virtualization.
+- Dolphin `QScroller` kinetic gesture behavior is not wired in the current
+  code. It must stay separate from scrollbar thumb release when rebuilt.
 - Zed `SplitEditorView` / `PaneGroup` resize behavior -> splitter drag is
   resolved against the parent row bounds and pane flex allocation. Fika projects
   that allocation into `viewport_width` before building the compact layout, so
@@ -68,11 +72,16 @@ kinetic scrolling are pending a fresh rebuild on that independent component.
   implementation and `item_view_container` rewrite have been removed. There is
   no active `scroll_pane_smooth()`, cached scrollbar track or
   `src/core/scroll.rs` module in the current code.
-- Ordinary pane wheel events go through GPUI's tracked viewport and update the
-  pane-local `ScrollHandle` directly. Scrollbar page press and thumb drag write
-  the view offset immediately through the same handle. Ctrl/secondary+wheel
-  remains routed to pane-local zoom.
+- Ordinary wheel events compute the Dolphin orientation mapping first
+  (compact = horizontal, icons/details = vertical), then call the same
+  pane-local scroll offset path used by scrollbar drag. The wheel handler is
+  installed on the viewport and item visual rows, so hovering an item does not
+  bypass pane scrolling. Scrollbar page press and thumb drag write the view
+  offset immediately through the same handle and do not enter smooth scrolling
+  or kinetic release. Ctrl/secondary+wheel remains routed to pane-local zoom.
 - Directory navigation/back/forward resets `ViewState` scroll to `0,0` in core.
+- Zoom/layout changes preserve the current scroll offset by writing the
+  view-owned offset back into the `ScrollHandle` until layout bounds settle.
 - Viewport width/height are normalized from GPUI's measured pane bounds before
   layout. Fractional widths are rounded down, not up, so the horizontal scrollbar
   cannot become wider than the current pane visible width and then be clipped by
@@ -87,6 +96,9 @@ kinetic scrolling are pending a fresh rebuild on that independent component.
   viewport `ScrollHandle`.
 - Ctrl/secondary+wheel is routed to pane-local zoom, cancels active rubber-band
   selection, and does not update horizontal scroll state.
+- Blank press records a pending rubber-band origin, but drawing and selection
+  only start after the Dolphin drag-distance threshold is crossed; plain blank
+  clicks clear selection without painting a tiny rectangle.
 - The model remains unchanged: scrolling only changes view offset and does not
   allocate extra visible items beyond the existing virtualized range.
 - Scroll state stays as `f32`; GPUI rendering rounds the translated content

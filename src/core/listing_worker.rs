@@ -1,4 +1,4 @@
-use super::cache::DirectoryCache;
+use super::cache::{DirectoryCache, DirectoryCacheDebugSnapshot};
 use super::directory::{DirectoryLister, DirectoryListerEvent, LoadMode, RefreshPair};
 use super::entries::Entry;
 use super::pane::{Generation, PaneId, PaneState, RequestSerial};
@@ -154,6 +154,18 @@ impl ListingWorkerState {
 
     fn cache_listing_snapshot(&mut self, path: &Path, entries: Arc<Vec<Entry>>) -> bool {
         self.cache.insert_fresh(path, entries).is_some()
+    }
+
+    fn can_cache_entry_count(&self, entry_count: usize) -> bool {
+        self.cache.can_store_entry_count(entry_count)
+    }
+
+    fn record_uncached_directory(&mut self, path: &Path, entry_count: usize) -> bool {
+        self.cache.record_uncached_directory(path, entry_count)
+    }
+
+    fn cache_debug_snapshot(&self) -> DirectoryCacheDebugSnapshot {
+        self.cache.debug_snapshot()
     }
 
     fn cached_events_for(&mut self, request: &ListingRequest) -> Option<Vec<DirectoryListerEvent>> {
@@ -354,6 +366,28 @@ impl ListingWorker {
             return false;
         }
         state.cache_listing_snapshot(path, entries)
+    }
+
+    pub fn can_cache_entry_count(&self, entry_count: usize) -> bool {
+        let (lock, _) = &*self.state;
+        let state = lock.lock().expect("listing worker state poisoned");
+        !state.shutdown && state.can_cache_entry_count(entry_count)
+    }
+
+    pub fn record_uncached_directory(&self, path: &Path, entry_count: usize) -> bool {
+        let (lock, _) = &*self.state;
+        let mut state = lock.lock().expect("listing worker state poisoned");
+        if state.shutdown {
+            return false;
+        }
+        state.record_uncached_directory(path, entry_count)
+    }
+
+    pub fn cache_debug_snapshot(&self) -> DirectoryCacheDebugSnapshot {
+        let (lock, _) = &*self.state;
+        lock.lock()
+            .expect("listing worker state poisoned")
+            .cache_debug_snapshot()
     }
 
     pub fn cancel_pane(&self, pane_id: PaneId) {
@@ -631,7 +665,6 @@ fn listing_worker_loop(state: Arc<(Mutex<ListingWorkerState>, Condvar)>) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::cache::DirectoryCacheState;
     use super::*;
     use std::fs;
     use std::process;
@@ -704,7 +737,6 @@ mod tests {
             name_width_units: 10,
             size_bytes: 4,
             modified_secs: None,
-            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             mime_type: None,
@@ -849,6 +881,33 @@ mod tests {
     }
 
     #[test]
+    fn listing_worker_reports_cache_entry_budget_before_snapshot_build() {
+        let state = ListingWorkerState::default();
+
+        assert!(state.can_cache_entry_count(10_000));
+        assert!(!state.can_cache_entry_count(10_001));
+    }
+
+    #[test]
+    fn listing_worker_debug_snapshot_reports_uncached_large_directories() {
+        let mut state = ListingWorkerState::default();
+
+        assert!(state.record_uncached_directory(Path::new("/tmp/fika-large-listing"), 10_001));
+
+        let snapshot = state.cache_debug_snapshot();
+        assert_eq!(snapshot.stats().skipped_large_directories, 1);
+        assert_eq!(snapshot.skipped_large_directories().len(), 1);
+        assert_eq!(
+            snapshot.skipped_large_directories()[0].path(),
+            Path::new("/tmp/fika-large-listing")
+        );
+        assert_eq!(
+            snapshot.skipped_large_directories()[0].entry_count(),
+            10_001
+        );
+    }
+
+    #[test]
     fn listing_worker_cache_hit_does_not_schedule_background_reload() {
         let mut state = ListingWorkerState::default();
         let first = listing_request_at(1, 1, "/tmp/fika-cached-listing");
@@ -892,8 +951,8 @@ mod tests {
         assert!(state.schedule_or_cached(request.clone()).is_none());
         assert_eq!(state.pending.len(), 1);
         assert_eq!(state.pending[0], request);
-        let snapshot = state.cache.get(&root).unwrap();
-        assert_eq!(snapshot.state(), DirectoryCacheState::Stale);
+        assert!(state.cache.get(&root).is_none());
+        assert_eq!(state.cache.cached_entry_count(), 0);
 
         let _ = fs::remove_dir_all(root);
     }
@@ -915,11 +974,12 @@ mod tests {
 
         assert!(state.cached_events_for(&reload).is_none());
         state.schedule(reload);
-        let snapshot = state
-            .cache
-            .get(Path::new("/tmp/fika-cached-listing"))
-            .expect("cache should retain stale payload");
-        assert_eq!(snapshot.state(), DirectoryCacheState::Stale);
+        assert!(
+            state
+                .cache
+                .get(Path::new("/tmp/fika-cached-listing"))
+                .is_none()
+        );
         assert!(
             state
                 .cached_events_for(&listing_request_at(3, 3, "/tmp/fika-cached-listing"))
@@ -1130,7 +1190,6 @@ mod tests {
                         name_width_units: name.len() as u16,
                         size_bytes: 0,
                         modified_secs: None,
-                        thumbnail_path: None,
                         trash_original_path: None,
                         trash_deletion_time: None,
                         mime_type: None,

@@ -7,15 +7,14 @@ use fika_core::{MimeApplication, PaneId, ViewRect};
 use gpui::prelude::*;
 use gpui::{
     Bounds, Context, Div, Hitbox, HitboxBehavior, MouseButton, ParentElement, Pixels, Stateful,
-    Styled, UniformListScrollHandle, canvas, div, fill, img, point, px, rgb, rgba, size,
-    uniform_list,
+    Styled, UniformListScrollHandle, canvas, div, fill, point, px, rgb, rgba, size, uniform_list,
 };
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::icons::{FileIconCache, FileIconSnapshot};
+use super::icons::{FileIconCache, FileIconSnapshot, cached_icon_or_fallback};
 use identity::{application_marker, sanitize_element_id};
 pub(crate) use matching::{
     application_chooser_filtered_applications, dedup_application_chooser_applications,
@@ -893,9 +892,10 @@ fn application_chooser_row(
 
 fn application_chooser_icon_slot(app_name: &str, icon: Option<FileIconSnapshot>) -> Div {
     let snapshot = icon.unwrap_or_else(|| FileIconSnapshot {
-        icon_name: "application-x-executable".to_string(),
+        icon_name: Arc::from("application-x-executable"),
         path: None,
-        fallback_marker: application_marker(app_name),
+        render_image: None,
+        fallback_marker: Arc::from(application_marker(app_name)),
         fallback_fg: 0x2f6fed,
         fallback_bg: 0xe8eef7,
     });
@@ -912,19 +912,12 @@ fn application_chooser_icon_slot(app_name: &str, icon: Option<FileIconSnapshot>)
         .justify_center()
         .overflow_hidden();
 
-    match snapshot.path {
-        Some(path) => container.child(img(path).size_full().with_fallback(move || {
-            application_chooser_fallback_icon(fallback.clone(), fallback_fg, fallback_bg)
-        })),
-        None => container.child(application_chooser_fallback_icon(
-            fallback,
-            fallback_fg,
-            fallback_bg,
-        )),
-    }
+    container.child(cached_icon_or_fallback(&snapshot, move || {
+        application_chooser_fallback_icon(fallback.clone(), fallback_fg, fallback_bg)
+    }))
 }
 
-fn application_chooser_fallback_icon(marker: String, fg: u32, bg: u32) -> gpui::AnyElement {
+fn application_chooser_fallback_icon(marker: Arc<str>, fg: u32, bg: u32) -> gpui::AnyElement {
     div()
         .size_full()
         .rounded_md()
@@ -934,7 +927,7 @@ fn application_chooser_fallback_icon(marker: String, fg: u32, bg: u32) -> gpui::
         .bg(rgb(bg))
         .text_sm()
         .text_color(rgb(fg))
-        .child(marker)
+        .child(marker.as_ref().to_string())
         .into_any_element()
 }
 

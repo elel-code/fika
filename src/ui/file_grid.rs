@@ -29,7 +29,7 @@ use fika_core::{
 use gpui::prelude::*;
 use gpui::{
     Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Render,
-    Rgba, ScrollHandle, Stateful, Styled, StyledImage, Window, div, img, px, rgb, rgba,
+    Rgba, ScrollHandle, Stateful, Styled, Window, div, img, px, rgb, rgba,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,6 +38,7 @@ use super::drag_drop::{
     FileTransferMode, ItemDragPayload, file_transfer_mode_for_modifiers,
     refresh_active_drag_cursor_for_transfer_mode, refresh_active_drag_cursor_not_allowed,
 };
+use super::icons::{FileIconSnapshot, cached_icon_or_fallback};
 use super::item_view::item_view_scrollbar_container;
 use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
@@ -263,9 +264,9 @@ fn file_grid_viewport_shell(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                let started = this.start_rubber_band_from_window_if_blank(pane_id, event.position);
+                let pressed = this.press_rubber_band_from_window_if_blank(pane_id, event.position);
                 cx.stop_propagation();
-                if started {
+                if pressed {
                     cx.notify();
                 }
             }),
@@ -321,9 +322,15 @@ fn file_grid_viewport_shell(
                     .as_ref()
                     .is_some_and(|band| band.pane_id == pane_id)
                 {
+                    if this.activate_pending_rubber_band_from_window(pane_id, event.event.position)
+                    {
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
                     return;
                 }
                 if this.update_rubber_band_from_window(pane_id, event.event.position) {
+                    cx.stop_propagation();
                     cx.notify();
                 }
             },
@@ -539,6 +546,11 @@ fn details_row(
         .block_mouse_except_scroll()
         .cursor_pointer()
         .hover(move |row| row.bg(item_tile_hover_background(selected, drop_target)))
+        .on_scroll_wheel(
+            cx.listener(move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
+                handle_file_grid_wheel(this, pane_id, event, cx);
+            }),
+        )
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
@@ -820,10 +832,7 @@ fn details_cell(
 }
 
 fn details_name_cell(item: &DetailsItemSnapshot, width: f32, selected: bool) -> gpui::AnyElement {
-    let icon_path = item.icon.path.clone();
-    let fallback = item.icon.fallback_marker.clone();
-    let fallback_fg = item.icon.fallback_fg;
-    let fallback_bg = item.icon.fallback_bg;
+    let icon = item.icon.clone();
     div()
         .w(px(width))
         .h_full()
@@ -838,12 +847,7 @@ fn details_name_cell(item: &DetailsItemSnapshot, width: f32, selected: bool) -> 
                 .h(px(DETAILS_ICON_SIZE))
                 .rounded_sm()
                 .overflow_hidden()
-                .child(icon_image_or_fallback(
-                    icon_path,
-                    fallback,
-                    fallback_fg,
-                    fallback_bg,
-                )),
+                .child(icon_image_or_fallback(icon)),
         )
         .child(
             div()
@@ -897,6 +901,9 @@ pub(crate) fn handle_file_grid_wheel(
     if wheel_modifiers_request_zoom(event.modifiers) {
         app.finish_rubber_band(pane_id);
         app.zoom_pane_from_wheel(pane_id, event.delta);
+        cx.stop_propagation();
+        cx.notify();
+    } else if app.scroll_pane_from_wheel(pane_id, event.delta) {
         cx.stop_propagation();
         cx.notify();
     }
@@ -1032,6 +1039,11 @@ fn item_tile(
                 .block_mouse_except_scroll()
                 .cursor_pointer()
                 .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
+                .on_scroll_wheel(cx.listener(
+                    move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
+                        handle_file_grid_wheel(this, pane_id, event, cx);
+                    },
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
@@ -1340,10 +1352,7 @@ fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {
     let visual = layout.visual_rect;
     let icon = layout.icon_rect;
     let thumbnail_path = item.thumbnail_path.clone();
-    let icon_path = item.icon.path.clone();
-    let fallback = item.icon.fallback_marker.clone();
-    let fallback_fg = item.icon.fallback_fg;
-    let fallback_bg = item.icon.fallback_bg;
+    let icon_snapshot = item.icon.clone();
     let icon_container = div()
         .absolute()
         .left(px(icon.x - visual.x))
@@ -1357,41 +1366,21 @@ fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {
         .overflow_hidden();
 
     match thumbnail_path {
-        Some(path) => icon_container.child(img(path).size_full().with_fallback(move || {
-            icon_image_or_fallback(
-                icon_path.clone(),
-                fallback.clone(),
-                fallback_fg,
-                fallback_bg,
-            )
-        })),
-        None => icon_container.child(icon_image_or_fallback(
-            icon_path,
-            fallback,
-            fallback_fg,
-            fallback_bg,
-        )),
+        Some(path) => icon_container.child(img(path).size_full()),
+        None => icon_container.child(icon_image_or_fallback(icon_snapshot)),
     }
 }
 
-fn icon_image_or_fallback(
-    path: Option<PathBuf>,
-    fallback: String,
-    fallback_fg: u32,
-    fallback_bg: u32,
-) -> gpui::AnyElement {
-    match path {
-        Some(path) => img(path)
-            .size_full()
-            .with_fallback(move || {
-                fallback_icon_element(fallback.clone(), fallback_fg, fallback_bg)
-            })
-            .into_any_element(),
-        None => fallback_icon_element(fallback, fallback_fg, fallback_bg),
-    }
+fn icon_image_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
+    let fallback = icon.fallback_marker.clone();
+    let fallback_fg = icon.fallback_fg;
+    let fallback_bg = icon.fallback_bg;
+    cached_icon_or_fallback(&icon, move || {
+        fallback_icon_element(fallback.clone(), fallback_fg, fallback_bg)
+    })
 }
 
-fn fallback_icon_element(marker: String, fg: u32, bg: u32) -> gpui::AnyElement {
+fn fallback_icon_element(marker: Arc<str>, fg: u32, bg: u32) -> gpui::AnyElement {
     div()
         .size_full()
         .rounded_md()
@@ -1402,7 +1391,7 @@ fn fallback_icon_element(marker: String, fg: u32, bg: u32) -> gpui::AnyElement {
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(fg))
         .bg(rgb(bg))
-        .child(marker)
+        .child(marker.as_ref().to_string())
         .into_any_element()
 }
 

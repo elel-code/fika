@@ -49,7 +49,7 @@ mod tests {
         assert!(!search.active);
         assert_eq!(search.label, "Search");
         assert!(matches!(
-            search.icon.icon_name.as_str(),
+            search.icon.icon_name.as_ref(),
             "edit-find" | "system-search" | "search"
         ));
 
@@ -57,7 +57,7 @@ mod tests {
         assert!(close.active);
         assert_eq!(close.label, "Close");
         assert!(matches!(
-            close.icon.icon_name.as_str(),
+            close.icon.icon_name.as_ref(),
             "window-close" | "dialog-close" | "edit-clear"
         ));
     }

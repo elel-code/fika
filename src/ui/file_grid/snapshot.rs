@@ -25,7 +25,7 @@ pub(crate) fn format_entry_detail_label(entry: &fika_core::EntryData) -> String 
     format_entry_kind_label(entry)
 }
 
-pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::EntryData) -> Option<PathBuf> {
+pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::ModelEntry) -> Option<PathBuf> {
     if entry.is_dir {
         None
     } else {
@@ -60,29 +60,37 @@ mod tests {
     #[test]
     fn visible_item_thumbnail_path_uses_file_cache_hit_only() {
         let thumbnail = PathBuf::from("/tmp/fika-thumbnail-cache/normal/hash.png");
-        let file = fika_core::EntryData {
-            name: Arc::from("photo.jpg"),
-            name_width_units: 9,
-            size_bytes: 12,
-            modified_secs: Some(42),
-            mime_type: Some(Arc::from("image/jpeg")),
-            mime_magic_checked: true,
+        let file = fika_core::ModelEntry {
+            id: fika_core::ItemId(1),
             thumbnail_path: Some(thumbnail.clone()),
-            trash_original_path: None,
-            trash_deletion_time: None,
-            is_dir: false,
+            icon_name: None,
+            entry: fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from("photo.jpg"),
+                name_width_units: 9,
+                size_bytes: 12,
+                modified_secs: Some(42),
+                mime_type: Some(Arc::from("image/jpeg")),
+                mime_magic_checked: true,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                is_dir: false,
+            }),
         };
-        let dir = fika_core::EntryData {
-            name: Arc::from("Pictures"),
-            name_width_units: 8,
-            size_bytes: 0,
-            modified_secs: Some(42),
-            mime_type: None,
-            mime_magic_checked: true,
+        let dir = fika_core::ModelEntry {
+            id: fika_core::ItemId(2),
             thumbnail_path: Some(thumbnail.clone()),
-            trash_original_path: None,
-            trash_deletion_time: None,
-            is_dir: true,
+            icon_name: None,
+            entry: fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from("Pictures"),
+                name_width_units: 8,
+                size_bytes: 0,
+                modified_secs: Some(42),
+                mime_type: None,
+                mime_magic_checked: true,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                is_dir: true,
+            }),
         };
 
         assert_eq!(visible_item_thumbnail_path(&file), Some(thumbnail));
@@ -98,7 +106,6 @@ mod tests {
             modified_secs: Some(42),
             mime_type: Some(Arc::from("text/plain")),
             mime_magic_checked: true,
-            thumbnail_path: None,
             trash_original_path: Some(PathBuf::from("/home/user/Documents/deleted.txt")),
             trash_deletion_time: Some(Arc::from("2026-06-13T12:30:00")),
             is_dir: false,

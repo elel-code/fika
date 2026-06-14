@@ -12,16 +12,17 @@ use fika_core::{
 };
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
-    DevicePlaceOperationResult, DirectoryListerEvent, Generation, IconsLayout, ListingRequest,
-    ListingWorker, LoadingPaneState, MimeProbeCandidate, MimeProbeResult, MimeProbeScheduler,
-    OperationQueue, PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove,
-    SortDescriptor, SortOrder, SortRole, ThumbnailCandidate, ThumbnailProbeResult,
-    ThumbnailRequestPriority, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload, UserPlace,
-    ViewMode, ViewPoint, ViewRect, ZoomChange, apply_mime_probe_result_to_model,
-    apply_thumbnail_probe_result_to_model, breadcrumb_segments, complete_location_input,
-    deferred_thumbnail_columns, file_ops, listing_requests_from_events, mime_magic_probe_required,
-    mime_probe_results_for_requests, nearest_existing_ancestor, perform_device_place_operation,
-    resolve_location_input, thumbnail_probe_results_for_requests, update_loading_state_for_event,
+    DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, Generation,
+    IconsLayout, ItemId, ListingRequest, ListingWorker, LoadingPaneState, MimeProbeCandidate,
+    MimeProbeResult, MimeProbeScheduler, OperationQueue, PaneController, PaneId, RefreshPair,
+    RenameUndoItem, SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailCandidate,
+    ThumbnailProbeResult, ThumbnailRequestPriority, ThumbnailScheduler, TrashEmptinessMonitor,
+    UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange,
+    apply_thumbnail_probe_result_to_model, breadcrumb_segments, complete_location_input, file_ops,
+    listing_requests_from_events, mime_magic_probe_required, mime_probe_results_for_requests,
+    nearest_existing_ancestor, perform_device_place_operation, resolve_location_input,
+    thumbnail_probe_results_for_requests, thumbnail_read_ahead_indexes,
+    update_loading_state_for_event,
 };
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
@@ -38,6 +39,7 @@ use gpui::{
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -84,7 +86,10 @@ use ui::filter_bar::{
     FilterBarSnapshot, FilteredModelCacheEntry, FilteredModelCacheKey, PaneFilterState,
     filter_source_revision,
 };
-use ui::icons::FileIconCache;
+use ui::icons::{
+    FileIconCache, FileIconRenderResult, FileIconSnapshot, file_icon_snapshot_for_model_role,
+    finish_mime_probe_results_with_icon_roles,
+};
 use ui::item_view::ItemViewScrollState;
 use ui::location_bar::{LocationDraft, LocationEditMetrics};
 use ui::pane::{
@@ -133,16 +138,56 @@ use ui::trash_conflict::{TrashConflictDialogState, trash_conflict_dialog_overlay
 const DROP_TARGET_STALE_TIMEOUT: Duration = Duration::from_millis(3000);
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+const DEBUG_CACHE_ENV: &str = "FIKA_DEBUG_CACHE";
+const DEBUG_NAV_ENV: &str = "FIKA_DEBUG_NAV";
+const PERF_ITEM_VIEW_ENV: &str = "FIKA_PERF_ITEM_VIEW";
+
+fn env_flag_is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name).is_ok_and(|value| env_flag_is_truthy(&value))
+}
+
+fn listing_cache_debug_enabled() -> bool {
+    env_flag_enabled(DEBUG_CACHE_ENV)
+        || env_flag_enabled(DEBUG_NAV_ENV)
+        || env_flag_enabled(PERF_ITEM_VIEW_ENV)
+}
+
+fn listing_cache_debug_summary(
+    reason: &str,
+    snapshot: &DirectoryCacheDebugSnapshot,
+    pending_count: usize,
+) -> String {
+    let stats = snapshot.stats();
+    let largest_skipped = snapshot
+        .skipped_large_directories()
+        .iter()
+        .max_by_key(|summary| summary.entry_count())
+        .map(|summary| format!(" {}:{}", summary.path().display(), summary.entry_count()))
+        .unwrap_or_default();
+
+    format!(
+        "[fika cache] {reason}: pending={pending_count} cached_dirs={} cached_entries={} hits={} misses={} stale_invalidations={} evicted_dirs={} skipped_large={} large_summaries={} largest_skipped={largest_skipped}",
+        snapshot.cached_directories().len(),
+        stats.cached_entries,
+        stats.hits,
+        stats.misses,
+        stats.stale_invalidations,
+        stats.evicted_directories,
+        stats.skipped_large_directories,
+        snapshot.skipped_large_directories().len(),
+    )
+}
 const THUMBNAIL_PROBE_BATCH_SIZE: usize = 32;
-const THUMBNAIL_DEFERRED_COLUMN_RADIUS: usize = 2;
-const THUMBNAIL_DEFERRED_MAX_PER_SNAPSHOT: usize = 64;
 const MIME_PROBE_BATCH_SIZE: usize = 64;
 
 const CONTEXT_SUBMENU_HIDE_DELAY: Duration = Duration::from_millis(300);
-
-fn scroll_value_eq(left: f32, right: f32) -> bool {
-    (left - right).abs() < 0.5
-}
 
 fn zoom_level_after_change(current: i32, change: ZoomChange) -> i32 {
     match change {
@@ -160,6 +205,80 @@ fn view_mode_status(view_mode: ViewMode) -> &'static str {
         ViewMode::Details => "Details view",
     }
 }
+
+fn wheel_scroll_delta_for_view_mode(view_mode: ViewMode, delta: ScrollDelta) -> (f32, f32) {
+    let delta = delta.pixel_delta(px(20.0));
+    let x = delta.x.as_f32();
+    let y = delta.y.as_f32();
+    match view_mode {
+        ViewMode::Compact => {
+            let primary = if x.abs() > y.abs() { x } else { y };
+            (-primary, 0.0)
+        }
+        ViewMode::Icons | ViewMode::Details => {
+            if x.abs() > y.abs() {
+                (-x, 0.0)
+            } else {
+                (0.0, -y)
+            }
+        }
+    }
+}
+
+fn scroll_offset_matches(left: f32, right: f32) -> bool {
+    (left - right).abs() < 0.5
+}
+
+fn rubber_band_drag_distance_reached(start: ViewPoint, current: ViewPoint) -> bool {
+    (start.x - current.x).abs() + (start.y - current.y).abs() >= RUBBER_BAND_START_DRAG_DISTANCE
+}
+
+fn visible_thumbnail_candidate(
+    item_id: fika_core::ItemId,
+    path: &Path,
+    is_dir: bool,
+    thumbnail_path: Option<&PathBuf>,
+    modified_secs: Option<u64>,
+    size_bytes: u64,
+    mime_type: Option<&Arc<str>>,
+    mime_magic_checked: bool,
+) -> Option<ThumbnailCandidate> {
+    if is_dir
+        || thumbnail_path.is_some()
+        || mime_magic_probe_required(
+            is_dir,
+            size_bytes,
+            mime_type.map(Arc::as_ref),
+            mime_magic_checked,
+        )
+    {
+        return None;
+    }
+    Some(ThumbnailCandidate {
+        item_id,
+        path: path.to_path_buf(),
+        modified_secs: modified_secs?,
+        mime_type: mime_type.map(|mime| mime.as_ref().to_string()),
+        priority: ThumbnailRequestPriority::Visible,
+    })
+}
+
+fn layout_index_range(indexes: impl IntoIterator<Item = usize>) -> Option<Range<usize>> {
+    let mut indexes = indexes.into_iter();
+    let first = indexes.next()?;
+    let (start, end) = indexes.fold((first, first), |(start, end), index| {
+        (start.min(index), end.max(index))
+    });
+    Some(start..end + 1)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PendingRubberBand {
+    pane_id: PaneId,
+    start: ViewPoint,
+}
+
+const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
 
 pub(crate) struct FikaApp {
     pub(crate) panes: PaneController,
@@ -180,6 +299,7 @@ pub(crate) struct FikaApp {
     status_summaries: HashMap<PaneId, StatusSummaryCacheEntry>,
     loading_panes: HashMap<PaneId, LoadingPaneState>,
     item_view_scroll: ItemViewScrollState,
+    item_view_authoritative_scroll: HashMap<PaneId, u8>,
     mime_probe_scheduler: MimeProbeScheduler,
     thumbnail_scheduler: ThumbnailScheduler,
     pane_viewport_geometries: HashMap<PaneId, PaneViewportGeometry>,
@@ -204,6 +324,7 @@ pub(crate) struct FikaApp {
     chooser: Option<ChooserState>,
     listing_worker: ListingWorker,
     _keystroke_subscription: Option<gpui::Subscription>,
+    rubber_band_pending: Option<PendingRubberBand>,
     pub(crate) rubber_band: Option<RubberBandState>,
     rubber_band_selection_panes: HashSet<PaneId>,
     context_menu: Option<ContextMenuState>,
@@ -258,6 +379,7 @@ impl FikaApp {
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
+            item_view_authoritative_scroll: HashMap::new(),
             mime_probe_scheduler: MimeProbeScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             pane_viewport_geometries: HashMap::new(),
@@ -282,6 +404,7 @@ impl FikaApp {
             chooser,
             listing_worker: ListingWorker::new(),
             _keystroke_subscription: None,
+            rubber_band_pending: None,
             rubber_band: None,
             rubber_band_selection_panes: HashSet::new(),
             context_menu: None,
@@ -551,12 +674,33 @@ impl FikaApp {
             .panes
             .pane(pane_id)
             .map_or(0.0, |pane| pane.view.scroll_y);
-        let Some(sync) =
+        let view_max_scroll_x = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.max_scroll_x);
+        let view_max_scroll_y = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.max_scroll_y);
+        if self.item_view_authoritative_scroll.contains_key(&pane_id) {
             self.item_view_scroll
-                .sync_from_handle(pane_id, view_scroll_x, view_scroll_y)
-        else {
+                .sync_handle_to_view(pane_id, view_scroll_x, view_scroll_y);
+            return;
+        }
+        let Some(sync) = self.item_view_scroll.sync_from_handle(
+            pane_id,
+            view_scroll_x,
+            view_scroll_y,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        ) else {
             return;
         };
+        if !scroll_offset_matches(view_scroll_x, sync.scroll_x)
+            || !scroll_offset_matches(view_scroll_y, sync.scroll_y)
+        {
+            self.item_view_authoritative_scroll.remove(&pane_id);
+        }
         let _ = self.panes.set_view_scroll(
             pane_id,
             sync.scroll_x,
@@ -575,67 +719,39 @@ impl FikaApp {
             .panes
             .pane(pane_id)
             .map_or(0.0, |pane| pane.view.scroll_y);
-        let (scroll_x, scroll_y) =
-            self.item_view_scroll
-                .preserve_for_layout_change(pane_id, view_scroll_x, view_scroll_y);
-        let _ = self
+        let view_max_scroll_x = self
             .panes
-            .set_view_scroll(pane_id, scroll_x, scroll_y, scroll_x, scroll_y);
-    }
-
-    fn prime_pending_item_view_scroll_handle_for_render(
-        &self,
-        pane_id: PaneId,
-        scroll_handle: &ScrollHandle,
-    ) {
-        self.item_view_scroll
-            .prime_pending_for_render(pane_id, scroll_handle);
-    }
-
-    fn restore_pending_item_view_scroll_for_pane(
-        &mut self,
-        pane_id: PaneId,
-        max_scroll_x: f32,
-        max_scroll_y: f32,
-    ) -> bool {
-        let Some(restore) = self.item_view_scroll.restore_pending(
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.max_scroll_x);
+        let view_max_scroll_y = self
+            .panes
+            .pane(pane_id)
+            .map_or(0.0, |pane| pane.view.max_scroll_y);
+        let (scroll_x, scroll_y) = self.item_view_scroll.preserve_for_layout_change(
             pane_id,
-            max_scroll_x,
-            max_scroll_y,
-            scroll_value_eq,
-        ) else {
-            return false;
-        };
-        let previous_scroll_x = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.scroll_x);
-        let previous_scroll_y = self
-            .panes
-            .pane(pane_id)
-            .map_or(0.0, |pane| pane.view.scroll_y);
-        let view_changed = self
-            .panes
-            .set_view_scroll(
-                pane_id,
-                restore.scroll_x,
-                restore.scroll_y,
-                restore.effective_max_scroll_x,
-                restore.effective_max_scroll_y,
-            )
-            .is_some_and(|_| {
-                !scroll_value_eq(previous_scroll_x, restore.scroll_x)
-                    || !scroll_value_eq(previous_scroll_y, restore.scroll_y)
-            });
-        view_changed || restore.handle_changed || restore.needs_another_pass
+            view_scroll_x,
+            view_scroll_y,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        );
+        self.item_view_authoritative_scroll.insert(pane_id, 2);
+        let _ = self.panes.set_view_scroll(
+            pane_id,
+            scroll_x,
+            scroll_y,
+            view_max_scroll_x,
+            view_max_scroll_y,
+        );
     }
 
     fn reset_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
         self.item_view_scroll.reset_pane(pane_id);
+        self.item_view_authoritative_scroll.remove(&pane_id);
     }
 
     fn remove_item_view_scroll_for_pane(&mut self, pane_id: PaneId) {
         self.item_view_scroll.remove_pane(pane_id);
+        self.item_view_authoritative_scroll.remove(&pane_id);
     }
 
     fn clear_filter_focus_for_pane(&mut self, pane_id: PaneId) {
@@ -708,7 +824,6 @@ impl FikaApp {
             .filter_map(|pane_id| {
                 self.sync_pane_view_from_item_view_scroll_handle(pane_id);
                 let scroll_handle = self.item_view_scroll_handle_for_pane(pane_id);
-                self.prime_pending_item_view_scroll_handle_for_render(pane_id, &scroll_handle);
                 let filtered_model = self.filtered_model_for_pane(pane_id);
                 let split_ratio = self.pane_split_ratio(pane_id);
                 let projected_viewport_width = self.projected_pane_width(pane_id);
@@ -1042,63 +1157,100 @@ impl FikaApp {
                             )
                             .collect::<Vec<_>>(),
                     };
-                    let mut thumbnail_candidates = visible_data
-                        .iter()
-                        .chain(icons_visible_data.iter())
-                        .filter_map(
-                            |(
-                                _,
-                                item_id,
-                                path,
-                                is_dir,
-                                _,
-                                _,
-                                thumbnail_path,
-                                modified_secs,
-                                size_bytes,
-                                mime_type,
-                                mime_magic_checked,
-                                _,
-                                _,
-                                _,
-                                _,
-                                _,
-                                _,
-                                _,
-                            )| {
-                                (!*is_dir
-                                    && thumbnail_path.is_none()
-                                    && !mime_magic_probe_required(
+                    let mut thumbnail_candidates = match view.view_mode {
+                        ViewMode::Compact => visible_data
+                            .iter()
+                            .filter_map(
+                                |(
+                                    _,
+                                    item_id,
+                                    path,
+                                    is_dir,
+                                    _,
+                                    _,
+                                    thumbnail_path,
+                                    modified_secs,
+                                    size_bytes,
+                                    mime_type,
+                                    mime_magic_checked,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                )| {
+                                    visible_thumbnail_candidate(
+                                        *item_id,
+                                        path,
                                         *is_dir,
+                                        thumbnail_path.as_ref(),
+                                        *modified_secs,
                                         *size_bytes,
-                                        mime_type.as_deref(),
+                                        mime_type.as_ref(),
                                         *mime_magic_checked,
-                                    ))
-                                .then(|| {
-                                    modified_secs.map(|modified_secs| ThumbnailCandidate {
-                                        item_id: *item_id,
-                                        path: path.clone(),
-                                        modified_secs,
-                                        mime_type: mime_type.as_deref().map(str::to_string),
-                                        priority: ThumbnailRequestPriority::Visible,
-                                    })
-                                })?
-                            },
-                        )
-                        .collect::<Vec<_>>();
-                    let visible_columns = layout.visible_column_range();
-                    let mut deferred_count = 0usize;
-                    'deferred: for column in deferred_thumbnail_columns(
-                        visible_columns,
-                        layout.column_count(),
-                        THUMBNAIL_DEFERRED_COLUMN_RADIUS,
-                    ) {
-                        let start = column * layout.rows_per_column();
-                        let end = (start + layout.rows_per_column()).min(item_count);
-                        for layout_index in start..end {
-                            if deferred_count >= THUMBNAIL_DEFERRED_MAX_PER_SNAPSHOT {
-                                break 'deferred;
-                            }
+                                    )
+                                },
+                            )
+                            .collect::<Vec<_>>(),
+                        ViewMode::Icons => icons_visible_data
+                            .iter()
+                            .filter_map(
+                                |(
+                                    _,
+                                    item_id,
+                                    path,
+                                    is_dir,
+                                    _,
+                                    _,
+                                    thumbnail_path,
+                                    modified_secs,
+                                    size_bytes,
+                                    mime_type,
+                                    mime_magic_checked,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                )| {
+                                    visible_thumbnail_candidate(
+                                        *item_id,
+                                        path,
+                                        *is_dir,
+                                        thumbnail_path.as_ref(),
+                                        *modified_secs,
+                                        *size_bytes,
+                                        mime_type.as_ref(),
+                                        *mime_magic_checked,
+                                    )
+                                },
+                            )
+                            .collect::<Vec<_>>(),
+                        ViewMode::Details => Vec::new(),
+                    };
+                    let visible_layout_indexes = match view.view_mode {
+                        ViewMode::Compact => visible_data
+                            .iter()
+                            .map(|(layout, ..)| layout.model_index)
+                            .collect::<Vec<_>>(),
+                        ViewMode::Icons => icons_visible_data
+                            .iter()
+                            .map(|(layout, ..)| layout.model_index)
+                            .collect::<Vec<_>>(),
+                        ViewMode::Details => Vec::new(),
+                    };
+                    if let Some(visible_range) =
+                        layout_index_range(visible_layout_indexes.iter().copied())
+                    {
+                        for layout_index in thumbnail_read_ahead_indexes(
+                            visible_range,
+                            item_count,
+                            visible_layout_indexes.len(),
+                        ) {
                             let Some(model_index) =
                                 model_index_for_layout_index(filtered, layout_index)
                             else {
@@ -1131,7 +1283,6 @@ impl FikaApp {
                                 mime_type: entry.mime_type.as_deref().map(str::to_string),
                                 priority: ThumbnailRequestPriority::Deferred,
                             });
-                            deferred_count += 1;
                         }
                     }
                     (
@@ -1163,10 +1314,21 @@ impl FikaApp {
                 };
                 self.schedule_mime_probe_requests(pane_id, generation, mime_candidates, cx);
                 self.schedule_thumbnail_requests(pane_id, generation, thumbnail_candidates, cx);
-                let visible_ids = visible_data
-                    .iter()
-                    .chain(icons_visible_data.iter())
-                    .map(|(_, item_id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| *item_id);
+                let visible_ids = match view.view_mode {
+                    ViewMode::Compact => visible_data
+                        .iter()
+                        .map(
+                            |(_, item_id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| *item_id,
+                        )
+                        .collect::<Vec<_>>(),
+                    ViewMode::Icons => icons_visible_data
+                        .iter()
+                        .map(
+                            |(_, item_id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| *item_id,
+                        )
+                        .collect::<Vec<_>>(),
+                    ViewMode::Details => Vec::new(),
+                };
                 let slot_by_item_id = self
                     .visible_item_slots
                     .entry(pane_id)
@@ -1196,11 +1358,16 @@ impl FikaApp {
                             draft_warning,
                         )| {
                             let slot_id = slot_by_item_id.get(&item_id).copied()?;
-                            let icon = self.file_icons.icon_for(
+                            let icon = self.icon_snapshot_for_model_item(
+                                pane_id,
+                                item_id,
                                 &path,
                                 is_dir,
+                                _size_bytes,
                                 mime_type,
+                                _mime_magic_checked,
                                 layout.icon_rect.width,
+                                cx,
                             );
                             Some(VisibleItemSnapshot {
                                 slot_id,
@@ -1247,11 +1414,16 @@ impl FikaApp {
                             draft_warning,
                         )| {
                             let slot_id = slot_by_item_id.get(&item_id).copied()?;
-                            let icon = self.file_icons.icon_for(
+                            let icon = self.icon_snapshot_for_model_item(
+                                pane_id,
+                                item_id,
                                 &path,
                                 is_dir,
+                                _size_bytes,
                                 mime_type,
+                                _mime_magic_checked,
                                 layout.icon_rect.width,
+                                cx,
                             );
                             Some(VisibleItemSnapshot {
                                 slot_id,
@@ -1279,7 +1451,7 @@ impl FikaApp {
                     .map(
                         |(
                             row_index,
-                            _item_id,
+                            item_id,
                             path,
                             is_dir,
                             name,
@@ -1294,11 +1466,16 @@ impl FikaApp {
                             original_path_label,
                             deletion_time_label,
                         )| {
-                            let icon = self.file_icons.icon_for(
+                            let icon = self.icon_snapshot_for_model_item(
+                                pane_id,
+                                item_id,
                                 &path,
                                 is_dir,
+                                _size_bytes,
                                 mime_type,
+                                _mime_magic_checked,
                                 DETAILS_ICON_SIZE,
+                                cx,
                             );
                             DetailsItemSnapshot {
                                 row_index,
@@ -1613,19 +1790,88 @@ impl FikaApp {
     }
 
     fn finish_mime_probe_results(&mut self, results: Vec<MimeProbeResult>) -> bool {
-        let mut changed = false;
-        for result in results {
-            let Some(pane) = self.panes.pane_mut(result.pane_id) else {
-                continue;
-            };
-            if pane.generation != result.generation {
-                continue;
-            }
-            if apply_mime_probe_result_to_model(&mut pane.model, result) {
-                changed = true;
-            }
+        finish_mime_probe_results_with_icon_roles(&mut self.panes, &mut self.file_icons, results)
+    }
+
+    fn icon_snapshot_for_model_item(
+        &mut self,
+        pane_id: PaneId,
+        item_id: ItemId,
+        path: &Path,
+        is_dir: bool,
+        size_bytes: u64,
+        mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
+        icon_size: f32,
+        cx: &mut Context<Self>,
+    ) -> FileIconSnapshot {
+        let icon_name = self
+            .panes
+            .pane(pane_id)
+            .and_then(|pane| {
+                pane.model
+                    .index_of_id(item_id)
+                    .and_then(|index| pane.model.get(index))
+            })
+            .and_then(|entry| entry.icon_name.clone());
+
+        let snapshot = file_icon_snapshot_for_model_role(
+            &mut self.file_icons,
+            icon_name,
+            path,
+            is_dir,
+            size_bytes,
+            mime_type.clone(),
+            mime_magic_checked,
+            icon_size,
+        );
+        if let Some(icon_name) = snapshot.icon_name_to_store
+            && let Some(pane) = self.panes.pane_mut(pane_id)
+        {
+            let _ = pane.model.set_icon_name_role(item_id, Some(icon_name));
         }
-        changed
+        self.queue_icon_render_image(&snapshot.icon, cx);
+        snapshot.icon
+    }
+
+    fn queue_icon_render_image(&mut self, icon: &FileIconSnapshot, cx: &mut Context<Self>) {
+        let Some(path) = self.file_icons.queue_render_image(icon) else {
+            return;
+        };
+        self.start_icon_render_image_load(path, cx);
+    }
+
+    fn queue_icon_render_images<'a>(
+        &mut self,
+        icons: impl IntoIterator<Item = &'a FileIconSnapshot>,
+        cx: &mut Context<Self>,
+    ) {
+        for icon in icons {
+            self.queue_icon_render_image(icon, cx);
+        }
+    }
+
+    fn start_icon_render_image_load(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        cx.spawn(
+            move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_spawn(async move { FileIconCache::load_render_image(path) })
+                        .await;
+                    let _ = this.update(&mut cx, |app, cx| {
+                        if app.finish_icon_render_image(result) {
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn finish_icon_render_image(&mut self, result: FileIconRenderResult) -> bool {
+        self.file_icons.finish_render_image(result)
     }
 
     fn cancel_mime_probe_work_for_pane(&mut self, pane_id: PaneId) {
@@ -2225,15 +2471,26 @@ impl FikaApp {
     }
 
     fn close_pane(&mut self, pane_id: PaneId) {
-        let closing_snapshot = self.panes.pane(pane_id).map(|pane| {
-            (
+        let closing_snapshot = match self.panes.pane(pane_id) {
+            Some(pane) if self.listing_worker.can_cache_entry_count(pane.model.len()) => Some((
                 pane.model.directory().to_path_buf(),
                 pane.model.listing_snapshot(),
-            )
-        });
+            )),
+            Some(pane) => {
+                let path = pane.model.directory().to_path_buf();
+                let entry_count = pane.model.len();
+                self.listing_worker
+                    .record_uncached_directory(&path, entry_count);
+                self.log_listing_cache_debug(&format!("close-pane-uncached {}", path.display()));
+                None
+            }
+            None => None,
+        };
         if self.panes.close(pane_id) {
             if let Some((path, entries)) = closing_snapshot {
-                self.listing_worker.cache_listing_snapshot(&path, entries);
+                if self.listing_worker.cache_listing_snapshot(&path, entries) {
+                    self.log_listing_cache_debug(&format!("close-pane-cached {}", path.display()));
+                }
             }
             self.listing_worker.cancel_pane(pane_id);
             self.clear_pane_lifecycle_state(pane_id);
@@ -2581,7 +2838,6 @@ impl FikaApp {
         }
         self.preserve_item_view_scroll_for_layout_change(pane_id);
         let Some(view) = self.panes.set_zoom_level(pane_id, next_level) else {
-            self.item_view_scroll.remove_pending(pane_id);
             return;
         };
         self.compact_column_widths.remove(&pane_id);
@@ -2602,6 +2858,47 @@ impl FikaApp {
         }
     }
 
+    pub(crate) fn scroll_pane_from_wheel(&mut self, pane_id: PaneId, delta: ScrollDelta) -> bool {
+        let Some(view) = self.panes.pane(pane_id).map(|pane| pane.view.clone()) else {
+            return false;
+        };
+        let (delta_x, delta_y) = wheel_scroll_delta_for_view_mode(view.view_mode, delta);
+        if delta_x.abs() < f32::EPSILON && delta_y.abs() < f32::EPSILON {
+            return false;
+        }
+
+        let max_scroll_x = view.max_scroll_x.max(0.0);
+        let max_scroll_y = view.max_scroll_y.max(0.0);
+        let before = (
+            view.scroll_x,
+            view.scroll_y,
+            view.max_scroll_x,
+            view.max_scroll_y,
+        );
+        let Some(next_view) =
+            self.panes
+                .scroll_view(pane_id, delta_x, delta_y, max_scroll_x, max_scroll_y)
+        else {
+            return false;
+        };
+        let changed = before
+            != (
+                next_view.scroll_x,
+                next_view.scroll_y,
+                next_view.max_scroll_x,
+                next_view.max_scroll_y,
+            );
+        if changed {
+            self.item_view_authoritative_scroll.remove(&pane_id);
+            let _ = self.item_view_scroll.sync_handle_to_view(
+                pane_id,
+                next_view.scroll_x,
+                next_view.scroll_y,
+            );
+        }
+        changed
+    }
+
     pub(crate) fn set_zoom_level(&mut self, pane_id: PaneId, level: i32) {
         let Some(previous_level) = self.panes.pane(pane_id).map(|pane| pane.view.zoom_level) else {
             return;
@@ -2611,7 +2908,6 @@ impl FikaApp {
             self.preserve_item_view_scroll_for_layout_change(pane_id);
         }
         let Some(view) = self.panes.set_zoom_level(pane_id, next_level) else {
-            self.item_view_scroll.remove_pending(pane_id);
             return;
         };
         if view.zoom_level != previous_level {
@@ -2872,22 +3168,31 @@ impl FikaApp {
         max_scroll_x: f32,
         max_scroll_y: f32,
     ) -> bool {
-        let (effective_max_scroll_x, effective_max_scroll_y) = self
-            .item_view_scroll
-            .effective_max_scroll_for_bounds(pane_id, max_scroll_x, max_scroll_y);
         let changed = self
             .panes
             .set_viewport_bounds(
                 pane_id,
                 viewport_width,
                 viewport_height,
-                effective_max_scroll_x,
-                effective_max_scroll_y,
+                max_scroll_x,
+                max_scroll_y,
             )
             .unwrap_or(false);
-        let restored =
-            self.restore_pending_item_view_scroll_for_pane(pane_id, max_scroll_x, max_scroll_y);
-        changed || restored
+        let handle_changed = self.panes.pane(pane_id).is_some_and(|pane| {
+            self.item_view_scroll.sync_handle_to_view(
+                pane_id,
+                pane.view.scroll_x,
+                pane.view.scroll_y,
+            )
+        });
+        if let Some(remaining) = self.item_view_authoritative_scroll.get_mut(&pane_id) {
+            if *remaining <= 1 {
+                self.item_view_authoritative_scroll.remove(&pane_id);
+            } else {
+                *remaining -= 1;
+            }
+        }
+        changed || handle_changed
     }
 
     fn content_point_from_window(
@@ -3088,18 +3393,19 @@ impl FikaApp {
         self.clear_selection(pane_id);
     }
 
-    fn start_rubber_band_from_blank(&mut self, pane_id: PaneId, start: ViewPoint) -> bool {
+    fn press_rubber_band_from_blank(&mut self, pane_id: PaneId, start: ViewPoint) -> bool {
         self.panes.focus(pane_id);
         self.dismiss_context_menu();
         if self.item_at_content_point(pane_id, start).is_some() {
             return false;
         }
         self.clear_selection_from_blank(pane_id);
-        self.start_rubber_band(pane_id, start);
+        self.rubber_band = None;
+        self.rubber_band_pending = Some(PendingRubberBand { pane_id, start });
         true
     }
 
-    pub(crate) fn start_rubber_band_from_window_if_blank(
+    pub(crate) fn press_rubber_band_from_window_if_blank(
         &mut self,
         pane_id: PaneId,
         position: gpui::Point<gpui::Pixels>,
@@ -3107,7 +3413,29 @@ impl FikaApp {
         let Some(start) = self.content_point_from_window(pane_id, position) else {
             return false;
         };
-        self.start_rubber_band_from_blank(pane_id, start)
+        self.press_rubber_band_from_blank(pane_id, start)
+    }
+
+    pub(crate) fn activate_pending_rubber_band_from_window(
+        &mut self,
+        pane_id: PaneId,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> bool {
+        let Some(pending) = self
+            .rubber_band_pending
+            .filter(|pending| pending.pane_id == pane_id)
+        else {
+            return false;
+        };
+        let Some(current) = self.clamped_content_point_from_window(pane_id, position) else {
+            return false;
+        };
+        if !rubber_band_drag_distance_reached(pending.start, current) {
+            return false;
+        }
+        self.start_rubber_band(pane_id, pending.start);
+        self.update_rubber_band(pane_id, current);
+        true
     }
 
     pub(crate) fn update_rubber_band_from_window(
@@ -3144,6 +3472,7 @@ impl FikaApp {
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
         self.clear_place_draft_for_pane(pane_id);
+        self.rubber_band_pending = None;
         self.rubber_band = Some(RubberBandState {
             pane_id,
             start,
@@ -3175,6 +3504,12 @@ impl FikaApp {
     }
 
     fn finish_rubber_band(&mut self, pane_id: PaneId) {
+        if self
+            .rubber_band_pending
+            .is_some_and(|pending| pending.pane_id == pane_id)
+        {
+            self.rubber_band_pending = None;
+        }
         if self
             .rubber_band
             .as_ref()
@@ -6583,6 +6918,7 @@ impl FikaApp {
         self.update_loading_state(&event, previous_summary);
         if let DirectoryListerEvent::CurrentDirectoryRemoved { pane_id, path, .. } = &event {
             self.listing_worker.remove_cached_directory(path);
+            self.log_listing_cache_debug(&format!("current-directory-removed {}", path.display()));
             self.update_trash_emptiness_state_from_lister_event(&event);
             let still_current = self.panes.pane(*pane_id).is_some_and(|pane| {
                 event.matches_target(pane.id, pane.generation, &pane.current_dir)
@@ -6596,7 +6932,9 @@ impl FikaApp {
             return;
         }
 
-        self.listing_worker.apply_cache_event(&event);
+        if self.listing_worker.apply_cache_event(&event) {
+            self.log_listing_cache_debug("lister-cache-delta");
+        }
 
         self.retarget_rename_draft_for_lister_event(&event);
 
@@ -6704,14 +7042,37 @@ impl FikaApp {
         }
     }
 
+    fn log_listing_cache_debug(&self, reason: &str) {
+        if !listing_cache_debug_enabled() {
+            return;
+        }
+        eprintln!(
+            "{}",
+            listing_cache_debug_summary(
+                reason,
+                &self.listing_worker.cache_debug_snapshot(),
+                self.listing_worker.pending_count(),
+            )
+        );
+    }
+
     fn schedule_listing(&self, event: &DirectoryListerEvent) -> Option<Vec<DirectoryListerEvent>> {
         let request = ListingRequest::from_event(event)?;
-        self.listing_worker.schedule_or_cached(request)
+        let path = request.path.clone();
+        let cached_events = self.listing_worker.schedule_or_cached(request);
+        let reason = if cached_events.is_some() {
+            format!("load-cache-hit {}", path.display())
+        } else {
+            format!("load-scheduled {}", path.display())
+        };
+        self.log_listing_cache_debug(&reason);
+        cached_events
     }
 
     fn schedule_listings<'a>(&self, events: impl IntoIterator<Item = &'a DirectoryListerEvent>) {
         self.listing_worker
             .schedule_all(listing_requests_from_events(events));
+        self.log_listing_cache_debug("batch-scheduled");
     }
 
     fn apply_cached_listing_events(&mut self, events: Option<Vec<DirectoryListerEvent>>) {
@@ -6816,6 +7177,7 @@ impl Render for FikaApp {
                 context_menu_icon_snapshots(&mut self.file_icons, menu, clipboard_available)
             })
             .unwrap_or_default();
+        self.queue_icon_render_images(context_menu_icons.values(), cx);
         let app = cx.weak_entity();
         div()
             .relative()
@@ -6966,6 +7328,43 @@ fn main() {
 mod tests {
     use super::*;
     use fika_core::ServiceMenuPriority;
+
+    #[test]
+    fn app_env_flag_truthy_values_are_explicit() {
+        assert!(env_flag_is_truthy("1"));
+        assert!(env_flag_is_truthy(" true "));
+        assert!(env_flag_is_truthy("YES"));
+        assert!(env_flag_is_truthy("on"));
+        assert!(!env_flag_is_truthy(""));
+        assert!(!env_flag_is_truthy("0"));
+        assert!(!env_flag_is_truthy("false"));
+        assert!(!env_flag_is_truthy("disabled"));
+    }
+
+    #[test]
+    fn listing_cache_debug_summary_reports_cache_and_large_directory_state() {
+        let mut cache = fika_core::DirectoryCache::with_limits(fika_core::DirectoryCacheLimits {
+            max_dirs: 4,
+            max_entries: 4,
+            max_entries_per_dir: 2,
+        });
+        assert!(
+            cache
+                .insert_fresh("/tmp/fika-small-cache", test_entries(&["a", "b"]))
+                .is_some()
+        );
+        assert!(cache.record_uncached_directory(Path::new("/tmp/fika-large-cache"), 3));
+
+        let line = listing_cache_debug_summary("test", &cache.debug_snapshot(), 7);
+
+        assert!(line.contains("[fika cache] test"));
+        assert!(line.contains("pending=7"));
+        assert!(line.contains("cached_dirs=1"));
+        assert!(line.contains("cached_entries=2"));
+        assert!(line.contains("skipped_large=1"));
+        assert!(line.contains("large_summaries=1"));
+        assert!(line.contains("/tmp/fika-large-cache:3"));
+    }
 
     #[test]
     fn active_place_prefers_longest_path_prefix() {
@@ -7927,7 +8326,7 @@ mod tests {
                 id: "service-menu:tools.desktop::checksum".to_string(),
                 label: "Checksum".to_string(),
                 source_name: "Tools".to_string(),
-                icon: None,
+                icon: Some("tools-checksum".to_string()),
                 submenu: Some("Tools".to_string()),
                 priority: ServiceMenuPriority::Normal,
             });
@@ -7962,6 +8361,27 @@ mod tests {
             tools.first().map(|item| item.label.as_str()),
             Some("Checksum")
         );
+        assert_eq!(
+            tools.first().and_then(|item| item.icon.as_ref()),
+            Some(&ContextMenuIcon::Named("tools-checksum".to_string()))
+        );
+        let menu = ContextMenuState {
+            pane_id: PaneId(1),
+            target,
+            position: ViewPoint { x: 0.0, y: 0.0 },
+            active_submenu: Some(ContextMenuOpenSubmenu {
+                submenu: ContextMenuSubmenu::ServiceMenu,
+                parent_index: 0,
+                nested: Some(ContextMenuNestedSubmenu {
+                    submenu: ContextMenuSubmenu::ServiceMenuGroup(0),
+                    parent_index: 0,
+                }),
+            }),
+        };
+        let mut cache = FileIconCache::default();
+        let snapshots = context_menu_icon_snapshots(&mut cache, &menu, false);
+
+        assert!(snapshots.contains_key(&ContextMenuIcon::Named("tools-checksum".to_string())));
     }
 
     #[test]
@@ -8464,8 +8884,8 @@ mod tests {
 
         assert_eq!(snapshots.len(), 1);
         let viewer = snapshots.get(&0).unwrap();
-        assert_eq!(viewer.icon_name, "accessories-text-editor");
-        assert_eq!(viewer.fallback_marker, "VI");
+        assert_eq!(viewer.icon_name.as_ref(), "accessories-text-editor");
+        assert_eq!(viewer.fallback_marker.as_ref(), "VI");
         assert!(!snapshots.contains_key(&1));
 
         let snapshots = ui::application_chooser::application_chooser_visible_icon_snapshots(
@@ -8474,8 +8894,8 @@ mod tests {
             1..2,
         );
         let writer = snapshots.get(&1).unwrap();
-        assert_eq!(writer.icon_name, "application-x-executable");
-        assert_eq!(writer.fallback_marker, "WR");
+        assert_eq!(writer.icon_name.as_ref(), "application-x-executable");
+        assert_eq!(writer.fallback_marker.as_ref(), "WR");
     }
 
     #[test]
@@ -10385,6 +10805,24 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn compact_wheel_scroll_maps_vertical_wheel_to_horizontal_axis() {
+        assert_eq!(
+            wheel_scroll_delta_for_view_mode(
+                ViewMode::Compact,
+                ScrollDelta::Lines(gpui::point(0.0, -3.0))
+            ),
+            (60.0, 0.0)
+        );
+        assert_eq!(
+            wheel_scroll_delta_for_view_mode(
+                ViewMode::Details,
+                ScrollDelta::Lines(gpui::point(0.0, -3.0))
+            ),
+            (0.0, 60.0)
+        );
+    }
+
+    #[test]
     fn compact_layout_options_derive_size_from_zoom_level() {
         let default_options = ui::file_grid::compact_layout_options(&ViewState::default(), 0.0);
         assert_eq!(default_options.icon_size, 48.0);
@@ -10693,11 +11131,6 @@ text/plain=viewer.desktop;\n",
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
         assert!(!app.compact_column_widths.contains_key(&pane_id));
-        assert_eq!(app.item_view_scroll.pending_scroll_x(pane_id), Some(180.0));
-
-        scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
-        app.prime_pending_item_view_scroll_handle_for_render(pane_id, &scroll_handle);
-        assert_eq!(scroll_handle.offset().x, px(-180.0));
 
         scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
         app.sync_pane_view_from_item_view_scroll_handle(pane_id);
@@ -10706,23 +11139,18 @@ text/plain=viewer.desktop;\n",
         assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        assert!(app.item_view_scroll.has_pending(pane_id));
 
         scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
         app.sync_pane_view_from_item_view_scroll_handle(pane_id);
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        app.prime_pending_item_view_scroll_handle_for_render(pane_id, &scroll_handle);
-        assert_eq!(scroll_handle.offset().x, px(-180.0));
 
         app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0);
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        assert!(app.item_view_scroll.has_pending(pane_id));
 
         app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0);
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        assert!(app.item_view_scroll.has_pending(pane_id));
 
         scroll_handle.set_offset(gpui::point(px(-220.0), px(0.0)));
         app.panes
@@ -10738,7 +11166,7 @@ text/plain=viewer.desktop;\n",
         app.sync_pane_view_from_item_view_scroll_handle(pane_id);
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 220.0);
 
-        assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
+        app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0);
         assert_eq!(scroll_handle.offset().x, px(-220.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 220.0);
     }
@@ -10758,7 +11186,6 @@ text/plain=viewer.desktop;\n",
 
         assert_eq!(scroll_handle.offset().y, px(-240.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_y, 240.0);
-        assert_eq!(app.item_view_scroll.pending_scroll_y(pane_id), Some(240.0));
 
         scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
         app.sync_pane_view_from_item_view_scroll_handle(pane_id);
@@ -10770,29 +11197,13 @@ text/plain=viewer.desktop;\n",
 
         scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
         assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 0.0, 0.0));
-        assert_eq!(scroll_handle.offset().y, px(-240.0));
-        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_y, 240.0);
+        assert_eq!(scroll_handle.offset().y, px(0.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_y, 0.0);
     }
 
     #[test]
-    fn zoom_preserves_unsynced_item_view_scroll_handle_offset() {
-        let mut app = test_app_with_entries("/tmp/fika-zoom-scroll-unsynced", &["one.txt"]);
-        let pane_id = app.panes.focused().unwrap();
-        let scroll_handle = app.item_view_scroll_handle_for_pane(pane_id);
-
-        scroll_handle.set_offset(gpui::point(px(-180.0), px(0.0)));
-        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 0.0);
-
-        app.apply_zoom_change(pane_id, ZoomChange::In);
-
-        assert_eq!(scroll_handle.offset().x, px(-180.0));
-        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        assert_eq!(app.item_view_scroll.pending_scroll_x(pane_id), Some(180.0));
-    }
-
-    #[test]
-    fn repeated_zoom_keeps_pending_scroll_when_gpui_temporarily_reports_start() {
-        let mut app = test_app_with_entries("/tmp/fika-zoom-scroll-repeated-zero", &["one.txt"]);
+    fn repeated_zoom_ignores_lagging_handle_maximum() {
+        let mut app = test_app_with_entries("/tmp/fika-zoom-scroll-lagging-max", &["one.txt"]);
         let pane_id = app.panes.focused().unwrap();
         let scroll_handle = app.item_view_scroll_handle_for_pane(pane_id);
 
@@ -10803,20 +11214,18 @@ text/plain=viewer.desktop;\n",
 
         app.apply_zoom_change(pane_id, ZoomChange::In);
         scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
-        app.panes
-            .set_view_scroll(pane_id, 0.0, 0.0, 0.0, 0.0)
-            .unwrap();
+        app.sync_pane_view_from_item_view_scroll_handle(pane_id);
 
         app.apply_zoom_change(pane_id, ZoomChange::In);
 
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        assert_eq!(app.item_view_scroll.pending_scroll_x(pane_id), Some(180.0));
     }
 
     #[test]
-    fn zoom_restore_rejects_transient_zero_scroll_handle_offset() {
-        let mut app = test_app_with_entries("/tmp/fika-zoom-scroll-transient-zero", &["one.txt"]);
+    fn zoom_syncs_handle_when_layout_bounds_arrive_after_lagging_handle_maximum() {
+        let mut app =
+            test_app_with_entries("/tmp/fika-zoom-scroll-lagging-max-bounds", &["one.txt"]);
         let pane_id = app.panes.focused().unwrap();
         let scroll_handle = app.item_view_scroll_handle_for_pane(pane_id);
 
@@ -10827,25 +11236,21 @@ text/plain=viewer.desktop;\n",
 
         app.apply_zoom_change(pane_id, ZoomChange::In);
         scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
-
-        assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
-        assert_eq!(scroll_handle.offset().x, px(-180.0));
-        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        assert!(app.item_view_scroll.has_pending(pane_id));
-
-        assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
-        assert!(app.item_view_scroll.has_pending(pane_id));
 
         app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0);
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-        assert!(app.item_view_scroll.has_pending(pane_id));
+
+        app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0);
+
+        app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0);
+        assert_eq!(scroll_handle.offset().x, px(-180.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
     }
 
     #[test]
-    fn zoom_restore_survives_repeated_transient_zero_scroll_bounds() {
-        let mut app =
-            test_app_with_entries("/tmp/fika-zoom-scroll-transient-zero-bounds", &["one.txt"]);
+    fn zoom_clamps_to_zero_when_layout_really_has_no_scroll_range() {
+        let mut app = test_app_with_entries("/tmp/fika-zoom-scroll-zero-bounds", &["one.txt"]);
         let pane_id = app.panes.focused().unwrap();
         let scroll_handle = app.item_view_scroll_handle_for_pane(pane_id);
 
@@ -10856,18 +11261,13 @@ text/plain=viewer.desktop;\n",
 
         app.apply_zoom_change(pane_id, ZoomChange::In);
 
-        for _ in 0..8 {
-            scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
-            assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 0.0, 0.0));
-            assert_eq!(scroll_handle.offset().x, px(-180.0));
-            assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
-            assert_eq!(app.item_view_scroll.pending_scroll_x(pane_id), Some(180.0));
-        }
-
-        scroll_handle.set_offset(gpui::point(px(0.0), px(0.0)));
         assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 1_000.0, 0.0));
         assert_eq!(scroll_handle.offset().x, px(-180.0));
         assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 180.0);
+
+        assert!(app.set_pane_viewport_bounds(pane_id, 640.0, 360.0, 0.0, 0.0));
+        assert_eq!(scroll_handle.offset().x, px(0.0));
+        assert_eq!(app.panes.pane(pane_id).unwrap().view.scroll_x, 0.0);
     }
 
     #[test]
@@ -11788,14 +12188,14 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn blank_press_clears_selection_and_starts_rubber_band() {
+    fn blank_press_clears_selection_and_records_pending_rubber_band() {
         let mut app = test_app_with_entries("/tmp/fika-blank-press", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
         app.select_only(pane_id, PathBuf::from("/tmp/fika-blank-press/alpha.txt"));
 
         assert_eq!(app.panes.selected_count(pane_id), Some(1));
 
-        assert!(app.start_rubber_band_from_blank(
+        assert!(app.press_rubber_band_from_blank(
             pane_id,
             ViewPoint {
                 x: 10_000.0,
@@ -11804,15 +12204,15 @@ text/plain=viewer.desktop;\n",
         ));
 
         assert_eq!(app.panes.selected_count(pane_id), Some(0));
+        assert!(app.rubber_band.is_none());
         assert!(
-            app.rubber_band
-                .as_ref()
-                .is_some_and(|band| band.pane_id == pane_id)
+            app.rubber_band_pending
+                .is_some_and(|pending| pending.pane_id == pane_id)
         );
     }
 
     #[test]
-    fn blank_window_press_uses_viewport_geometry_for_rubber_band() {
+    fn blank_window_press_uses_viewport_geometry_for_pending_rubber_band() {
         let mut app = test_app_with_entries("/tmp/fika-blank-window-press", &["alpha.txt"]);
         let pane_id = app.panes.focused().unwrap();
         app.select_only(
@@ -11830,12 +12230,13 @@ text/plain=viewer.desktop;\n",
         ));
 
         assert!(
-            app.start_rubber_band_from_window_if_blank(pane_id, gpui::point(px(500.0), px(300.0)))
+            app.press_rubber_band_from_window_if_blank(pane_id, gpui::point(px(500.0), px(300.0)))
         );
 
         assert_eq!(app.panes.selected_count(pane_id), Some(0));
-        assert!(app.rubber_band.as_ref().is_some_and(|band| {
-            band.pane_id == pane_id && band.start == ViewPoint { x: 400.0, y: 250.0 }
+        assert!(app.rubber_band.is_none());
+        assert!(app.rubber_band_pending.is_some_and(|pending| {
+            pending.pane_id == pane_id && pending.start == ViewPoint { x: 400.0, y: 250.0 }
         }));
     }
 
@@ -11857,17 +12258,18 @@ text/plain=viewer.desktop;\n",
             }
         ));
 
-        assert!(!app.start_rubber_band_from_window_if_blank(
+        assert!(!app.press_rubber_band_from_window_if_blank(
             pane_id,
             gpui::point(px(500.0), px(300.0)),
         ));
 
         assert_eq!(app.panes.selected_count(pane_id), Some(1));
         assert!(app.rubber_band.is_none());
+        assert!(app.rubber_band_pending.is_none());
     }
 
     #[test]
-    fn rubber_band_window_update_clamps_to_viewport() {
+    fn rubber_band_drag_activates_pending_and_clamps_to_viewport() {
         let mut app = test_app_with_entries("/tmp/fika-rubber-clamp", &[]);
         let pane_id = app.panes.focused().unwrap();
         assert!(app.set_pane_viewport_geometry(
@@ -11881,10 +12283,24 @@ text/plain=viewer.desktop;\n",
         ));
         assert!(app.set_pane_viewport_bounds(pane_id, 300.0, 200.0, 0.0, 0.0));
         assert!(
-            app.start_rubber_band_from_window_if_blank(pane_id, gpui::point(px(120.0), px(70.0)),)
+            app.press_rubber_band_from_window_if_blank(pane_id, gpui::point(px(120.0), px(70.0)),)
         );
 
-        assert!(app.update_rubber_band_from_window(pane_id, gpui::point(px(1000.0), px(900.0)),));
+        assert!(
+            !app.activate_pending_rubber_band_from_window(
+                pane_id,
+                gpui::point(px(123.0), px(72.0)),
+            )
+        );
+        assert!(app.rubber_band.is_none());
+        assert!(app.rubber_band_pending.is_some());
+
+        assert!(
+            app.activate_pending_rubber_band_from_window(
+                pane_id,
+                gpui::point(px(1000.0), px(900.0)),
+            )
+        );
 
         let band = app.rubber_band.unwrap();
         assert_eq!(band.current, ViewPoint { x: 300.0, y: 200.0 });
@@ -11910,11 +12326,12 @@ text/plain=viewer.desktop;\n",
         );
 
         assert!(
-            !app.start_rubber_band_from_window_if_blank(pane_id, gpui::point(px(500.0), px(300.0)))
+            !app.press_rubber_band_from_window_if_blank(pane_id, gpui::point(px(500.0), px(300.0)))
         );
 
         assert_eq!(app.panes.selected_count(pane_id), Some(1));
         assert!(app.rubber_band.is_none());
+        assert!(app.rubber_band_pending.is_none());
     }
 
     #[test]
@@ -12255,7 +12672,7 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
-    fn stale_deferred_thumbnail_candidate_is_pruned_from_queue_and_seen_set() {
+    fn deferred_thumbnail_candidates_stay_queued_for_current_generation() {
         let mut app = test_app_with_entries(
             "/tmp/fika-thumbnail-prune-deferred",
             &["keep.png", "stale.png"],
@@ -12294,22 +12711,22 @@ text/plain=viewer.desktop;\n",
             !app.thumbnail_scheduler
                 .queue_candidates(pane_id, generation, vec![keep.clone()])
         );
-        assert_eq!(app.thumbnail_scheduler.queued_len(), 1);
-        assert_eq!(app.thumbnail_scheduler.seen_len(), 1);
+        assert_eq!(app.thumbnail_scheduler.queued_len(), 2);
+        assert_eq!(app.thumbnail_scheduler.seen_len(), 2);
         let remaining = app.thumbnail_scheduler.pop_next_request().unwrap();
         assert_eq!(remaining.item_id(), keep_id);
+        let next = app.thumbnail_scheduler.pop_next_request().unwrap();
+        assert_eq!(next.item_id(), stale_id);
 
         assert!(
-            app.thumbnail_scheduler
+            !app.thumbnail_scheduler
                 .queue_candidates(pane_id, generation, vec![stale])
         );
-        let requeued = app.thumbnail_scheduler.pop_next_request().unwrap();
-        assert_eq!(requeued.item_id(), stale_id);
-        assert_eq!(requeued.path(), stale_path.as_path());
+        assert!(app.thumbnail_scheduler.pop_next_request().is_none());
     }
 
     #[test]
-    fn active_deferred_thumbnail_candidate_is_cancelled_before_worker_start() {
+    fn active_deferred_thumbnail_candidates_stay_seen_for_current_generation() {
         let mut app = test_app_with_entries(
             "/tmp/fika-thumbnail-active-cancel",
             &["keep.png", "stale.png"],
@@ -12354,21 +12771,19 @@ text/plain=viewer.desktop;\n",
                 .queue_candidates(pane_id, generation, vec![keep.clone()])
         );
 
-        assert_eq!(app.thumbnail_scheduler.seen_len(), 1);
+        assert_eq!(app.thumbnail_scheduler.seen_len(), 2);
         assert!(app.thumbnail_scheduler.contains_seen(
             &fika_core::ThumbnailWorkKey::from_candidate(pane_id, generation, &keep)
         ));
-        assert!(!app.thumbnail_scheduler.contains_seen(
+        assert!(app.thumbnail_scheduler.contains_seen(
             &fika_core::ThumbnailWorkKey::from_candidate(pane_id, generation, &stale)
         ));
 
         assert!(
-            app.thumbnail_scheduler
+            !app.thumbnail_scheduler
                 .queue_candidates(pane_id, generation, vec![stale])
         );
-        let requeued = app.thumbnail_scheduler.pop_next_request().unwrap();
-        assert_eq!(requeued.item_id(), stale_id);
-        assert_eq!(requeued.priority(), ThumbnailRequestPriority::Deferred);
+        assert!(app.thumbnail_scheduler.pop_next_request().is_none());
     }
 
     #[test]
@@ -12562,7 +12977,6 @@ text/plain=viewer.desktop;\n",
                 name_width_units: 7,
                 size_bytes: 12,
                 modified_secs: Some(42),
-                thumbnail_path: None,
                 trash_original_path: None,
                 trash_deletion_time: None,
                 mime_type: Some(Arc::from("application/octet-stream")),
@@ -12573,6 +12987,12 @@ text/plain=viewer.desktop;\n",
         let pane = app.panes.pane(pane_id).unwrap();
         let generation = pane.generation;
         let item_id = pane.model.entries()[0].id;
+        let thumbnail_path = PathBuf::from("/tmp/fika-thumbnail-cache/normal/payload.png");
+        app.panes
+            .pane_mut(pane_id)
+            .unwrap()
+            .model
+            .set_thumbnail_path(item_id, Some(thumbnail_path.clone()));
 
         assert!(!app.finish_mime_probe_results(vec![MimeProbeResult {
             pane_id,
@@ -12624,6 +13044,17 @@ text/plain=viewer.desktop;\n",
                 .as_deref(),
             Some("image/png")
         );
+        assert_eq!(
+            app.panes.pane(pane_id).unwrap().model.entries()[0]
+                .thumbnail_path
+                .as_deref(),
+            Some(thumbnail_path.as_path())
+        );
+        assert!(
+            app.panes.pane(pane_id).unwrap().model.entries()[0]
+                .icon_name
+                .is_some()
+        );
     }
 
     fn test_app_with_entries(path: &str, names: &[&str]) -> FikaApp {
@@ -12654,6 +13085,7 @@ text/plain=viewer.desktop;\n",
             status_summaries: HashMap::new(),
             loading_panes: HashMap::new(),
             item_view_scroll: ItemViewScrollState::default(),
+            item_view_authoritative_scroll: HashMap::new(),
             mime_probe_scheduler: MimeProbeScheduler::default(),
             thumbnail_scheduler: ThumbnailScheduler::default(),
             pane_viewport_geometries: HashMap::new(),
@@ -12678,6 +13110,7 @@ text/plain=viewer.desktop;\n",
             chooser: None,
             listing_worker: ListingWorker::new(),
             _keystroke_subscription: None,
+            rubber_band_pending: None,
             rubber_band: None,
             rubber_band_selection_panes: HashSet::new(),
             context_menu: None,
@@ -12699,7 +13132,6 @@ text/plain=viewer.desktop;\n",
             name_width_units: name.len() as u16,
             size_bytes: 0,
             modified_secs: None,
-            thumbnail_path: None,
             trash_original_path: None,
             trash_deletion_time: None,
             mime_type: None,
@@ -12742,13 +13174,14 @@ text/plain=viewer.desktop;\n",
                 name_width_units: name.len() as u16,
                 size_bytes,
                 modified_secs: None,
-                thumbnail_path: None,
                 trash_original_path: None,
                 trash_deletion_time: None,
                 mime_type: None,
                 mime_magic_checked: true,
                 is_dir,
             }),
+            icon_name: None,
+            thumbnail_path: None,
         }
     }
 

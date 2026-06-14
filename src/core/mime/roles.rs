@@ -1,4 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -19,9 +21,9 @@ pub struct MimeWorkKey {
     pub pane_id: PaneId,
     pub generation: Generation,
     pub item_id: ItemId,
-    pub path: PathBuf,
     pub modified_secs: Option<u64>,
-    pub mime_type: Option<String>,
+    pub path_hash: u64,
+    pub mime_hash: Option<u64>,
 }
 
 impl MimeWorkKey {
@@ -34,9 +36,9 @@ impl MimeWorkKey {
             pane_id,
             generation,
             item_id: candidate.item_id,
-            path: candidate.path.clone(),
             modified_secs: candidate.modified_secs,
-            mime_type: candidate.mime_type.clone(),
+            path_hash: stable_hash(&candidate.path),
+            mime_hash: candidate.mime_type.as_deref().map(stable_hash),
         }
     }
 
@@ -45,11 +47,17 @@ impl MimeWorkKey {
             pane_id: request.pane_id,
             generation: request.generation,
             item_id: request.item_id,
-            path: request.path.clone(),
             modified_secs: request.modified_secs,
-            mime_type: request.mime_type.clone(),
+            path_hash: stable_hash(&request.path),
+            mime_hash: request.mime_type.as_deref().map(stable_hash),
         }
     }
+}
+
+fn stable_hash(value: impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -390,7 +398,12 @@ mod tests {
             Some("application/octet-stream"),
             false
         ));
-        assert!(!mime_magic_probe_required(false, 10, Some("image/png"), false));
+        assert!(!mime_magic_probe_required(
+            false,
+            10,
+            Some("image/png"),
+            false
+        ));
         assert!(!mime_magic_probe_required(
             false,
             10,
@@ -430,6 +443,26 @@ mod tests {
     }
 
     #[test]
+    fn mime_work_key_keeps_path_and_mime_identity_without_storing_paths() {
+        let root = temp_root("mime-work-key");
+        let pane_id = PaneId(1);
+        let generation = Generation(1);
+        let first = mime_candidate(1, root.join("first"));
+        let renamed = mime_candidate(1, root.join("renamed"));
+        let mut retagged = first.clone();
+        retagged.mime_type = Some("application/x-custom".to_string());
+
+        assert_ne!(
+            MimeWorkKey::from_candidate(pane_id, generation, &first),
+            MimeWorkKey::from_candidate(pane_id, generation, &renamed)
+        );
+        assert_ne!(
+            MimeWorkKey::from_candidate(pane_id, generation, &first),
+            MimeWorkKey::from_candidate(pane_id, generation, &retagged)
+        );
+    }
+
+    #[test]
     fn mime_probe_scheduler_deduplicates_and_prunes_invisible_requests() {
         let root = temp_root("mime-probe-scheduler");
         let first = mime_candidate(1, root.join("first"));
@@ -448,6 +481,31 @@ mod tests {
         assert_eq!(batch.requests[0].item_id(), second.item_id);
         scheduler.finish_probe_batch();
         assert!(scheduler.is_empty());
+        assert_eq!(scheduler.seen_len(), 0);
+    }
+
+    #[test]
+    fn mime_probe_scheduler_releases_finished_active_keys_but_keeps_queued_keys() {
+        let root = temp_root("mime-probe-scheduler-active");
+        let first = mime_candidate(1, root.join("first"));
+        let second = mime_candidate(2, root.join("second"));
+        let mut scheduler = MimeProbeScheduler::default();
+
+        assert!(scheduler.queue_candidates(
+            PaneId(1),
+            Generation(1),
+            vec![first.clone(), second.clone()]
+        ));
+        assert_eq!(scheduler.seen_len(), 2);
+
+        let batch = scheduler.start_probe_batch(1).unwrap();
+        assert_eq!(batch.requests.len(), 1);
+        assert_eq!(scheduler.queued_len(), 1);
+        scheduler.finish_probe_batch();
+
+        assert_eq!(scheduler.seen_len(), 1);
+        assert!(!scheduler.queue_candidates(PaneId(1), Generation(1), vec![second]));
+        assert_eq!(scheduler.queued_len(), 1);
     }
 
     #[test]
@@ -463,7 +521,6 @@ mod tests {
                 modified_secs: Some(42),
                 mime_type: Some(Arc::from(GENERIC_BINARY_MIME)),
                 mime_magic_checked: false,
-                thumbnail_path: None,
                 trash_original_path: None,
                 trash_deletion_time: None,
                 is_dir: false,
@@ -530,6 +587,46 @@ mod tests {
                 ChangedRoles::metadata(),
             )]
         );
+    }
+
+    #[test]
+    fn mime_probe_result_marks_same_generic_mime_as_checked() {
+        let root = PathBuf::from("/tmp/fika-mime-probe-same-result");
+        let mut model = DirectoryModel::for_directory(root.clone());
+        model.replace_listing(
+            root.clone(),
+            Arc::new(vec![Entry::new(EntryData {
+                name: Arc::from("payload"),
+                name_width_units: 7,
+                size_bytes: 12,
+                modified_secs: Some(42),
+                mime_type: Some(Arc::from(GENERIC_BINARY_MIME)),
+                mime_magic_checked: false,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                is_dir: false,
+            })]),
+        );
+        let item_id = model.entries()[0].id;
+
+        assert!(apply_mime_probe_result_to_model(
+            &mut model,
+            MimeProbeResult {
+                pane_id: PaneId(1),
+                generation: Generation(1),
+                item_id,
+                path: root.join("payload"),
+                modified_secs: Some(42),
+                mime_type: Some(Arc::from(GENERIC_BINARY_MIME)),
+                mime_magic_checked: true,
+            },
+        ));
+
+        assert_eq!(
+            model.entries()[0].mime_type.as_deref(),
+            Some(GENERIC_BINARY_MIME)
+        );
+        assert!(model.entries()[0].mime_magic_checked);
     }
 
     fn mime_candidate(item_id: u64, path: PathBuf) -> MimeProbeCandidate {
