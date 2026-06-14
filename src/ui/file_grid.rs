@@ -5,7 +5,7 @@ mod slots;
 mod snapshot;
 
 pub(crate) use details::{
-    DETAILS_ICON_SIZE, DetailsItemSnapshot, details_content_height, details_content_width,
+    DetailsItemSnapshot, DetailsLayoutMetrics, details_content_height, details_content_width,
 };
 pub(crate) use layout::{CompactColumnWidthCache, compact_text_width, compact_text_width_for_name};
 pub(crate) use projection::{
@@ -42,9 +42,7 @@ use super::item_view::{
 use super::places::PlaceDrag;
 use super::rename::RENAME_TEXT_INSET_X;
 use super::rubber_band::RubberBandDrag;
-use details::{
-    DETAILS_HEADER_HEIGHT, DETAILS_ROW_HEIGHT, DetailsColumn, DetailsColumnKind, details_columns,
-};
+use details::{DetailsColumn, DetailsColumnKind, details_columns};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FileGridMode {
@@ -75,7 +73,14 @@ pub(crate) enum FileGridSnapshot {
     Details {
         items: Vec<DetailsItemSnapshot>,
         row_count: usize,
+        metrics: DetailsLayoutMetrics,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemTileTextAlignment {
+    Start,
+    Center,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -158,11 +163,9 @@ pub(crate) fn file_grid(
                     .relative()
                     .w(px(content_size.width))
                     .h(px(content_size.height))
-                    .children(
-                        items
-                            .into_iter()
-                            .map(|item| item_tile(pane_id, item, mode, cx)),
-                    ),
+                    .children(items.into_iter().map(|item| {
+                        item_tile(pane_id, item, mode, ItemTileTextAlignment::Center, cx)
+                    })),
             );
             (content_size.width, content_size.height, viewport)
         }
@@ -173,17 +176,19 @@ pub(crate) fn file_grid(
                     .relative()
                     .w(px(content_size.width))
                     .h(px(content_size.height))
-                    .children(
-                        items
-                            .into_iter()
-                            .map(|item| item_tile(pane_id, item, mode, cx)),
-                    ),
+                    .children(items.into_iter().map(|item| {
+                        item_tile(pane_id, item, mode, ItemTileTextAlignment::Start, cx)
+                    })),
             );
             (content_size.width, content_size.height, viewport)
         }
-        FileGridSnapshot::Details { items, row_count } => {
+        FileGridSnapshot::Details {
+            items,
+            row_count,
+            metrics,
+        } => {
             let content_width = details_content_width(trash_view).max(1.0);
-            let content_height = details_content_height(row_count).max(1.0);
+            let content_height = details_content_height(row_count, metrics).max(1.0);
             let viewport =
                 file_grid_viewport_shell(pane_id, drop_target, mode, cx).child(details_table(
                     pane_id,
@@ -192,6 +197,7 @@ pub(crate) fn file_grid(
                     trash_view,
                     content_width,
                     content_height,
+                    metrics,
                     mode,
                     cx,
                 ));
@@ -514,6 +520,7 @@ fn details_table(
     trash_view: bool,
     content_width: f32,
     content_height: f32,
+    metrics: DetailsLayoutMetrics,
     mode: FileGridMode,
     cx: &mut Context<FikaApp>,
 ) -> Div {
@@ -522,20 +529,20 @@ fn details_table(
         .relative()
         .w(px(content_width))
         .h(px(content_height))
-        .child(details_header(&columns, content_width))
+        .child(details_header(&columns, content_width, metrics))
         .children(
             items
                 .into_iter()
-                .map(|item| details_row(pane_id, item, &columns, content_width, mode, cx)),
+                .map(|item| details_row(pane_id, item, &columns, content_width, metrics, mode, cx)),
         )
         .when(row_count == 0, |table| {
             table.child(
                 div()
                     .absolute()
-                    .top(px(DETAILS_HEADER_HEIGHT))
+                    .top(px(metrics.header_height))
                     .left_0()
                     .w(px(content_width))
-                    .h(px(DETAILS_ROW_HEIGHT))
+                    .h(px(metrics.row_height))
                     .px_2()
                     .flex()
                     .items_center()
@@ -546,13 +553,17 @@ fn details_table(
         })
 }
 
-fn details_header(columns: &[DetailsColumn], content_width: f32) -> Div {
+fn details_header(
+    columns: &[DetailsColumn],
+    content_width: f32,
+    metrics: DetailsLayoutMetrics,
+) -> Div {
     div()
         .absolute()
         .top_0()
         .left_0()
         .w(px(content_width))
-        .h(px(DETAILS_HEADER_HEIGHT))
+        .h(px(metrics.header_height))
         .flex()
         .items_center()
         .border_b_1()
@@ -579,10 +590,11 @@ fn details_row(
     item: DetailsItemSnapshot,
     columns: &[DetailsColumn],
     content_width: f32,
+    metrics: DetailsLayoutMetrics,
     mode: FileGridMode,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
-    let top = DETAILS_HEADER_HEIGHT + item.row_index as f32 * DETAILS_ROW_HEIGHT;
+    let top = metrics.header_height + item.row_index as f32 * metrics.row_height;
     let selected = item.selected;
     let drop_target = item.drop_target;
     let path_for_mouse_down = item.path.clone();
@@ -613,7 +625,7 @@ fn details_row(
         .left_0()
         .top(px(top))
         .w(px(content_width))
-        .h(px(DETAILS_ROW_HEIGHT))
+        .h(px(metrics.row_height))
         .flex()
         .items_center()
         .bg(details_row_background(
@@ -896,7 +908,7 @@ fn details_row(
         .children(
             columns
                 .iter()
-                .map(|column| details_cell(&item, *column, selected)),
+                .map(|column| details_cell(&item, *column, selected, metrics)),
         )
 }
 
@@ -920,9 +932,10 @@ fn details_cell(
     item: &DetailsItemSnapshot,
     column: DetailsColumn,
     selected: bool,
+    metrics: DetailsLayoutMetrics,
 ) -> gpui::AnyElement {
     match column.kind {
-        DetailsColumnKind::Name => details_name_cell(item, column.width, selected),
+        DetailsColumnKind::Name => details_name_cell(item, column.width, selected, metrics),
         DetailsColumnKind::Size => details_text_cell(column.width, item.size_label.clone()),
         DetailsColumnKind::Modified => details_text_cell(column.width, item.modified_label.clone()),
         DetailsColumnKind::OriginalPath => {
@@ -934,7 +947,12 @@ fn details_cell(
     }
 }
 
-fn details_name_cell(item: &DetailsItemSnapshot, width: f32, selected: bool) -> gpui::AnyElement {
+fn details_name_cell(
+    item: &DetailsItemSnapshot,
+    width: f32,
+    selected: bool,
+    metrics: DetailsLayoutMetrics,
+) -> gpui::AnyElement {
     let icon = item.icon.clone();
     div()
         .w(px(width))
@@ -946,8 +964,8 @@ fn details_name_cell(item: &DetailsItemSnapshot, width: f32, selected: bool) -> 
         .gap_2()
         .child(
             div()
-                .w(px(DETAILS_ICON_SIZE))
-                .h(px(DETAILS_ICON_SIZE))
+                .w(px(metrics.icon_size))
+                .h(px(metrics.icon_size))
                 .rounded_sm()
                 .overflow_hidden()
                 .child(icon_image_or_fallback(icon)),
@@ -1093,6 +1111,7 @@ fn item_tile(
     pane_id: PaneId,
     item: VisibleItemSnapshot,
     mode: FileGridMode,
+    text_alignment: ItemTileTextAlignment,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
     let id = format!("item-slot-{}-{}", pane_id.0, item.slot_id);
@@ -1439,6 +1458,7 @@ fn item_tile(
                     &display_name,
                     &item.detail_label,
                     item.layout,
+                    text_alignment,
                     renaming,
                     selected,
                     item.draft_caret,
@@ -1546,6 +1566,7 @@ fn text_view(
     display_name: &str,
     detail_label: &str,
     layout: ItemLayout,
+    text_alignment: ItemTileTextAlignment,
     renaming: bool,
     selected: bool,
     rename_caret: Option<usize>,
@@ -1594,28 +1615,24 @@ fn text_view(
             )
             .into_any_element()
         } else {
-            item_name_label_view(display_name, selected, rename_layout.name_height)
-                .into_any_element()
+            match text_alignment {
+                ItemTileTextAlignment::Start => {
+                    rename_name_view(display_name, false, selected, None, None)
+                        .h(px(rename_layout.name_height))
+                        .into_any_element()
+                }
+                ItemTileTextAlignment::Center => {
+                    item_name_label_view(display_name, selected, rename_layout.name_height)
+                        .into_any_element()
+                }
+            }
         })
-        .child(
-            div()
-                .h(px(rename_layout.helper_height))
-                .w_full()
-                .min_h_0()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .max_w_full()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(helper_color)
-                        .truncate()
-                        .child(helper_text.to_string()),
-                ),
-        )
+        .child(item_helper_label_view(
+            helper_text,
+            helper_color,
+            rename_layout.helper_height,
+            text_alignment,
+        ))
 }
 
 fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div {
@@ -1641,6 +1658,40 @@ fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div 
                 .text_color(text_color)
                 .child(display_name.to_string()),
         )
+}
+
+fn item_helper_label_view(
+    helper_text: &str,
+    helper_color: Rgba,
+    height: f32,
+    text_alignment: ItemTileTextAlignment,
+) -> Div {
+    match text_alignment {
+        ItemTileTextAlignment::Start => div()
+            .h(px(height))
+            .min_h_0()
+            .text_xs()
+            .text_color(helper_color)
+            .truncate()
+            .child(helper_text.to_string()),
+        ItemTileTextAlignment::Center => div()
+            .h(px(height))
+            .w_full()
+            .min_h_0()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .max_w_full()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(helper_color)
+                    .truncate()
+                    .child(helper_text.to_string()),
+            ),
+    }
 }
 
 fn rename_editor_view(

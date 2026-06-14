@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::details::{
-    DetailsItemSnapshot, details_deletion_time_label, details_modified_label,
-    details_original_path_label, details_size_label, details_visible_row_range,
+    DetailsItemSnapshot, DetailsLayoutMetrics, details_deletion_time_label, details_layout_metrics,
+    details_modified_label, details_original_path_label, details_size_label,
+    details_visible_row_range,
 };
 use super::layout::{
     CompactColumnWidthCache, CompactTextWidthOverride,
@@ -172,6 +173,7 @@ pub(crate) enum RawFileGridSnapshot {
     Details {
         items: Vec<RawDetailsItemSnapshot>,
         row_count: usize,
+        metrics: DetailsLayoutMetrics,
     },
 }
 
@@ -289,34 +291,40 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
         }
         ViewMode::Details => {
             let row_count = item_count;
-            let items = details_visible_row_range(row_count, view.viewport_height, view.scroll_y)
-                .filter_map(|row_index| {
-                    let model_index = model_index_for_layout_index(filtered, row_index)?;
-                    let entry = model.get(model_index)?;
-                    let path = model.path_for_index(model_index)?;
-                    let selected = selection.is_selected(entry.id);
-                    let drop_target =
-                        item_drop_target_mode_for_directory(item_drop_target, pane_id, &path);
-                    Some(RawDetailsItemSnapshot {
-                        row_index,
-                        item_id: entry.id,
-                        path,
-                        is_dir: entry.is_dir,
-                        name: entry.name.clone(),
-                        size_bytes: entry.effective_size_bytes(),
-                        modified_secs: entry.effective_modified_secs(),
-                        mime_type: entry.effective_mime_type_cloned(),
-                        mime_magic_checked: entry.effective_mime_magic_checked(),
-                        selected,
-                        drop_target,
-                        size_label: details_size_label(entry),
-                        modified_label: details_modified_label(entry),
-                        original_path_label: details_original_path_label(entry),
-                        deletion_time_label: details_deletion_time_label(entry),
+            let metrics = details_layout_metrics(view.icon_size());
+            let items =
+                details_visible_row_range(row_count, view.viewport_height, view.scroll_y, metrics)
+                    .filter_map(|row_index| {
+                        let model_index = model_index_for_layout_index(filtered, row_index)?;
+                        let entry = model.get(model_index)?;
+                        let path = model.path_for_index(model_index)?;
+                        let selected = selection.is_selected(entry.id);
+                        let drop_target =
+                            item_drop_target_mode_for_directory(item_drop_target, pane_id, &path);
+                        Some(RawDetailsItemSnapshot {
+                            row_index,
+                            item_id: entry.id,
+                            path,
+                            is_dir: entry.is_dir,
+                            name: entry.name.clone(),
+                            size_bytes: entry.effective_size_bytes(),
+                            modified_secs: entry.effective_modified_secs(),
+                            mime_type: entry.effective_mime_type_cloned(),
+                            mime_magic_checked: entry.effective_mime_magic_checked(),
+                            selected,
+                            drop_target,
+                            size_label: details_size_label(entry),
+                            modified_label: details_modified_label(entry),
+                            original_path_label: details_original_path_label(entry),
+                            deletion_time_label: details_deletion_time_label(entry),
+                        })
                     })
-                })
-                .collect::<Vec<_>>();
-            RawFileGridSnapshot::Details { items, row_count }
+                    .collect::<Vec<_>>();
+            RawFileGridSnapshot::Details {
+                items,
+                row_count,
+                metrics,
+            }
         }
     }
 }
@@ -349,13 +357,13 @@ impl RawFileGridSnapshot {
                     });
                 }
             }
-            Self::Details { items, .. } => {
+            Self::Details { items, metrics, .. } => {
                 for item in items {
                     icon_for_item(FileGridIconRequest {
                         path: &item.path,
                         is_dir: item.is_dir,
                         mime_type: item.mime_type.clone(),
-                        icon_size: super::details::DETAILS_ICON_SIZE,
+                        icon_size: metrics.icon_size,
                     });
                 }
             }
@@ -441,7 +449,11 @@ impl RawFileGridSnapshot {
                     .collect::<Vec<_>>();
                 FileGridSnapshot::Icons { layout, items }
             }
-            Self::Details { items, row_count } => {
+            Self::Details {
+                items,
+                row_count,
+                metrics,
+            } => {
                 let items = items
                     .into_iter()
                     .map(|item| {
@@ -449,7 +461,7 @@ impl RawFileGridSnapshot {
                             path: &item.path,
                             is_dir: item.is_dir,
                             mime_type: item.mime_type.clone(),
-                            icon_size: super::details::DETAILS_ICON_SIZE,
+                            icon_size: metrics.icon_size,
                         });
                         DetailsItemSnapshot {
                             row_index: item.row_index,
@@ -467,7 +479,11 @@ impl RawFileGridSnapshot {
                         }
                     })
                     .collect::<Vec<_>>();
-                FileGridSnapshot::Details { items, row_count }
+                FileGridSnapshot::Details {
+                    items,
+                    row_count,
+                    metrics,
+                }
             }
         }
     }
@@ -1036,6 +1052,7 @@ mod tests {
         let mut raw_file_grid = RawFileGridSnapshot::Details {
             items: Vec::new(),
             row_count: 0,
+            metrics: details_layout_metrics(48.0),
         };
 
         raw_file_grid.assign_visible_item_slots(&mut slots);

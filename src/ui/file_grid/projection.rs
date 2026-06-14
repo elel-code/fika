@@ -7,7 +7,7 @@ use fika_core::{
 
 use crate::ui::rename::RenameDraft;
 
-use super::details::{DETAILS_HEADER_HEIGHT, DETAILS_ROW_HEIGHT, details_content_width};
+use super::details::{DetailsLayoutMetrics, details_content_width, details_layout_metrics};
 use super::icons_layout_options;
 use super::layout::{
     CompactColumnWidthCache, compact_layout_for_filtered_model_with_text_override,
@@ -94,6 +94,7 @@ pub(crate) fn pane_layout_projection(input: PaneLayoutProjectionInput<'_>) -> Pa
         ViewMode::Details => PaneLayout::Details {
             row_count: item_count,
             content_width: details_content_width(trash_view).max(1.0),
+            metrics: details_layout_metrics(view.icon_size()),
         },
     };
     PaneLayoutProjection::new(layout, filtered.cloned())
@@ -158,6 +159,7 @@ pub(crate) enum PaneLayout {
     Details {
         row_count: usize,
         content_width: f32,
+        metrics: DetailsLayoutMetrics,
     },
 }
 
@@ -166,7 +168,9 @@ impl PaneLayout {
         match self {
             PaneLayout::Compact(layout) => layout.hit_test_content_point(point),
             PaneLayout::Icons(layout) => layout.hit_test_content_point(point),
-            PaneLayout::Details { row_count, .. } => details_row_index_for_point(point, *row_count),
+            PaneLayout::Details {
+                row_count, metrics, ..
+            } => details_row_index_for_point(point, *row_count, *metrics),
         }
     }
 
@@ -185,7 +189,8 @@ impl PaneLayout {
             PaneLayout::Details {
                 row_count,
                 content_width,
-            } => details_item_layout(layout_index, *row_count, *content_width),
+                metrics,
+            } => details_item_layout(layout_index, *row_count, *content_width, *metrics),
         }
     }
 
@@ -196,7 +201,8 @@ impl PaneLayout {
             PaneLayout::Details {
                 row_count,
                 content_width,
-            } => details_indexes_intersecting(rect, *row_count, *content_width),
+                metrics,
+            } => details_indexes_intersecting(rect, *row_count, *content_width, *metrics),
         }
     }
 }
@@ -208,11 +214,15 @@ fn active_rename_draft_for_path<'a>(
     rename_draft.filter(|draft| draft.original_path == path)
 }
 
-fn details_row_index_for_point(point: ViewPoint, row_count: usize) -> Option<usize> {
-    if point.y < DETAILS_HEADER_HEIGHT {
+fn details_row_index_for_point(
+    point: ViewPoint,
+    row_count: usize,
+    metrics: DetailsLayoutMetrics,
+) -> Option<usize> {
+    if point.y < metrics.header_height {
         return None;
     }
-    let row = ((point.y - DETAILS_HEADER_HEIGHT) / DETAILS_ROW_HEIGHT).floor();
+    let row = ((point.y - metrics.header_height) / metrics.row_height).floor();
     if row < 0.0 {
         return None;
     }
@@ -224,17 +234,20 @@ fn details_item_layout(
     row_index: usize,
     row_count: usize,
     content_width: f32,
+    metrics: DetailsLayoutMetrics,
 ) -> Option<ItemLayout> {
     if row_index >= row_count {
         return None;
     }
-    let y = DETAILS_HEADER_HEIGHT + row_index as f32 * DETAILS_ROW_HEIGHT;
+    let y = metrics.header_height + row_index as f32 * metrics.row_height;
     let item_rect = ViewRect {
         x: 0.0,
         y,
         width: content_width,
-        height: DETAILS_ROW_HEIGHT,
+        height: metrics.row_height,
     };
+    let icon_y = y + (metrics.row_height - metrics.icon_size).max(0.0) / 2.0;
+    let text_left = metrics.icon_size + 16.0;
     Some(ItemLayout {
         model_index: row_index,
         column: 0,
@@ -243,15 +256,15 @@ fn details_item_layout(
         visual_rect: item_rect,
         icon_rect: ViewRect {
             x: 8.0,
-            y: y + 5.0,
-            width: 18.0,
-            height: 18.0,
+            y: icon_y,
+            width: metrics.icon_size,
+            height: metrics.icon_size,
         },
         text_rect: ViewRect {
-            x: 34.0,
+            x: text_left,
             y,
-            width: (content_width - 34.0).max(0.0),
-            height: DETAILS_ROW_HEIGHT,
+            width: (content_width - text_left).max(0.0),
+            height: metrics.row_height,
         },
     })
 }
@@ -260,12 +273,13 @@ fn details_indexes_intersecting(
     rect: ViewRect,
     row_count: usize,
     content_width: f32,
+    metrics: DetailsLayoutMetrics,
 ) -> Vec<usize> {
     if row_count == 0 || rect.right() <= 0.0 || rect.x >= content_width {
         return Vec::new();
     }
-    let start = ((rect.y - DETAILS_HEADER_HEIGHT) / DETAILS_ROW_HEIGHT).floor() as isize;
-    let end = ((rect.bottom() - DETAILS_HEADER_HEIGHT) / DETAILS_ROW_HEIGHT).ceil() as isize;
+    let start = ((rect.y - metrics.header_height) / metrics.row_height).floor() as isize;
+    let end = ((rect.bottom() - metrics.header_height) / metrics.row_height).ceil() as isize;
     (start.max(0) as usize..(end.max(0) as usize).min(row_count)).collect()
 }
 
@@ -332,6 +346,7 @@ mod tests {
             PaneLayout::Details {
                 row_count: 3,
                 content_width: 480.0,
+                metrics: details_layout_metrics(48.0),
             },
             None,
         );
@@ -390,12 +405,68 @@ mod tests {
         let PaneLayout::Details {
             row_count,
             content_width,
+            metrics,
         } = projection.layout
         else {
             panic!("expected details projection");
         };
         assert_eq!(row_count, 1);
         assert_eq!(content_width, details_content_width(true).max(1.0));
+        assert_eq!(metrics, details_layout_metrics(view.icon_size()));
+    }
+
+    #[test]
+    fn pane_layout_projection_scales_details_rows_with_zoom() {
+        let entries = Arc::new(vec![test_entry("alpha.txt")]);
+        let mut model = DirectoryModel::for_directory("/tmp/fika-projection-details-zoom".into());
+        model.replace_listing("/tmp/fika-projection-details-zoom".into(), entries);
+        let mut compact_column_widths = CompactColumnWidthCache::default();
+        let default_view = ViewState {
+            view_mode: ViewMode::Details,
+            zoom_level: 3,
+            ..ViewState::default()
+        };
+        let zoomed_view = ViewState {
+            view_mode: ViewMode::Details,
+            zoom_level: 8,
+            ..ViewState::default()
+        };
+
+        let default_projection = pane_layout_projection(PaneLayoutProjectionInput {
+            model: &model,
+            view: &default_view,
+            filtered: None,
+            source_revision: 0,
+            rename_draft: None,
+            trash_view: false,
+            compact_column_widths: &mut compact_column_widths,
+        });
+        let zoomed_projection = pane_layout_projection(PaneLayoutProjectionInput {
+            model: &model,
+            view: &zoomed_view,
+            filtered: None,
+            source_revision: 0,
+            rename_draft: None,
+            trash_view: false,
+            compact_column_widths: &mut compact_column_widths,
+        });
+        let PaneLayout::Details {
+            metrics: default_metrics,
+            ..
+        } = default_projection.layout
+        else {
+            panic!("expected default details projection");
+        };
+        let PaneLayout::Details {
+            metrics: zoomed_metrics,
+            ..
+        } = zoomed_projection.layout
+        else {
+            panic!("expected zoomed details projection");
+        };
+
+        assert!(zoomed_metrics.icon_size > default_metrics.icon_size);
+        assert!(zoomed_metrics.row_height > default_metrics.row_height);
     }
 
     #[test]
@@ -411,6 +482,7 @@ mod tests {
             PaneLayout::Details {
                 row_count: 3,
                 content_width: 480.0,
+                metrics: details_layout_metrics(48.0),
             },
             None,
         );

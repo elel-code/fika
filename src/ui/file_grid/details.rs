@@ -12,6 +12,25 @@ use crate::ui::icons::FileIconSnapshot;
 pub(crate) const DETAILS_HEADER_HEIGHT: f32 = 28.0;
 pub(crate) const DETAILS_ROW_HEIGHT: f32 = 28.0;
 pub(crate) const DETAILS_ICON_SIZE: f32 = 18.0;
+const DETAILS_ICON_SCALE: f32 = DETAILS_ICON_SIZE / 48.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DetailsLayoutMetrics {
+    pub(crate) header_height: f32,
+    pub(crate) row_height: f32,
+    pub(crate) icon_size: f32,
+}
+
+pub(crate) fn details_layout_metrics(view_icon_size: f32) -> DetailsLayoutMetrics {
+    let icon_size = (view_icon_size * DETAILS_ICON_SCALE)
+        .round()
+        .clamp(16.0, 96.0);
+    DetailsLayoutMetrics {
+        header_height: DETAILS_HEADER_HEIGHT,
+        row_height: DETAILS_ROW_HEIGHT.max(icon_size + 10.0),
+        icon_size,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DetailsColumnKind {
@@ -87,23 +106,24 @@ pub(crate) fn details_content_width(trash_view: bool) -> f32 {
         .sum()
 }
 
-pub(crate) fn details_content_height(row_count: usize) -> f32 {
-    DETAILS_HEADER_HEIGHT + row_count as f32 * DETAILS_ROW_HEIGHT
+pub(crate) fn details_content_height(row_count: usize, metrics: DetailsLayoutMetrics) -> f32 {
+    metrics.header_height + row_count as f32 * metrics.row_height
 }
 
 pub(crate) fn details_visible_row_range(
     row_count: usize,
     viewport_height: f32,
     scroll_y: f32,
+    metrics: DetailsLayoutMetrics,
 ) -> Range<usize> {
     if row_count == 0 {
         return 0..0;
     }
-    let visible_top = (scroll_y.max(0.0) - DETAILS_HEADER_HEIGHT).max(0.0);
+    let visible_top = (scroll_y.max(0.0) - metrics.header_height).max(0.0);
     let visible_bottom =
-        (scroll_y.max(0.0) + viewport_height.max(1.0) - DETAILS_HEADER_HEIGHT).max(visible_top);
-    let start = (visible_top / DETAILS_ROW_HEIGHT).floor() as usize;
-    let end = (visible_bottom / DETAILS_ROW_HEIGHT).ceil() as usize + 1;
+        (scroll_y.max(0.0) + viewport_height.max(1.0) - metrics.header_height).max(visible_top);
+    let start = (visible_top / metrics.row_height).floor() as usize;
+    let end = (visible_bottom / metrics.row_height).ceil() as usize + 1;
     start.min(row_count)..end.min(row_count)
 }
 
@@ -177,11 +197,23 @@ mod tests {
 
     #[test]
     fn details_visible_row_range_uses_vertical_scroll_and_viewport_height() {
-        assert_eq!(details_visible_row_range(100, 56.0, 0.0), 0..2);
-        assert_eq!(details_visible_row_range(100, 56.0, 28.0), 0..3);
-        assert_eq!(details_visible_row_range(100, 56.0, 84.0), 2..5);
-        assert_eq!(details_visible_row_range(3, 500.0, 0.0), 0..3);
-        assert_eq!(details_visible_row_range(0, 500.0, 0.0), 0..0);
+        let metrics = details_layout_metrics(48.0);
+        assert_eq!(details_visible_row_range(100, 56.0, 0.0, metrics), 0..2);
+        assert_eq!(details_visible_row_range(100, 56.0, 28.0, metrics), 0..3);
+        assert_eq!(details_visible_row_range(100, 56.0, 84.0, metrics), 2..5);
+        assert_eq!(details_visible_row_range(3, 500.0, 0.0, metrics), 0..3);
+        assert_eq!(details_visible_row_range(0, 500.0, 0.0, metrics), 0..0);
+    }
+
+    #[test]
+    fn details_layout_metrics_scale_with_zoom_without_changing_default() {
+        let default = details_layout_metrics(48.0);
+        assert_eq!(default.icon_size, DETAILS_ICON_SIZE);
+        assert_eq!(default.row_height, DETAILS_ROW_HEIGHT);
+
+        let zoomed = details_layout_metrics(128.0);
+        assert!(zoomed.icon_size > default.icon_size);
+        assert!(zoomed.row_height > default.row_height);
     }
 
     #[test]
