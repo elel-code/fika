@@ -6,7 +6,9 @@ use super::mime::mime_magic_resolution_required;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
+use std::ptr;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -482,34 +484,7 @@ impl DirectoryModel {
         }
 
         let sort = self.data.sort;
-        let old = std::mem::take(&mut self.data.entries);
-        let total_len = old.len() + added.len();
-        let mut old_items = old.into_iter().peekable();
-        let mut added_items = added.into_iter().peekable();
-        let mut merged = Vec::with_capacity(total_len);
-        let mut inserted_indexes = Vec::new();
-
-        while old_items.peek().is_some() || added_items.peek().is_some() {
-            let take_added = match (old_items.peek(), added_items.peek()) {
-                (Some(old), Some(added)) => sort_cmp(added, old, sort) != Ordering::Greater,
-                (None, Some(_)) => true,
-                (Some(_), None) => false,
-                (None, None) => false,
-            };
-
-            if take_added {
-                let index = merged.len();
-                if let Some(entry) = added_items.next() {
-                    merged.push(entry);
-                    inserted_indexes.push(index);
-                }
-            } else if let Some(entry) = old_items.next() {
-                merged.push(entry);
-            }
-        }
-
-        self.data.entries = merged;
-        ranges_from_indexes(inserted_indexes)
+        merge_sorted_model_entries_in_place(&mut self.data.entries, added, sort)
     }
 
     pub fn apply_items_deleted(&mut self, paths: &[PathBuf]) -> Vec<DirectoryModelSignal> {
@@ -963,6 +938,78 @@ fn sort_model_entries(entries: &mut [ModelEntry], sort: SortDescriptor) {
     entries.sort_by(|left, right| sort_cmp(left, right, sort));
 }
 
+fn merge_sorted_model_entries_in_place(
+    entries: &mut Vec<ModelEntry>,
+    added: Vec<ModelEntry>,
+    sort: SortDescriptor,
+) -> ItemRangeList {
+    debug_assert!(!added.is_empty());
+    debug_assert!(!entries.is_empty());
+
+    let existing_len = entries.len();
+    let added_len = added.len();
+    let total_len = existing_len + added_len;
+    let mut inserted_ranges = Vec::with_capacity(added_len.min(existing_len + 1));
+
+    entries.reserve(added_len);
+    let added = ManuallyDrop::new(added);
+
+    unsafe {
+        // SAFETY: `entries` has enough spare capacity for `added_len` items.
+        // Existing items are moved from the initialized prefix toward the tail
+        // with `ptr::read` + `ptr::write`; every vacated source slot is either
+        // overwritten by a later write or stays outside the final untouched
+        // prefix. Every `added` item is read exactly once before `entries.len`
+        // is extended to `total_len`, so both vectors have one owner per item.
+        let entries_ptr = entries.as_mut_ptr();
+        let added_ptr = added.as_ptr();
+        let mut target = total_len;
+        let mut existing = existing_len;
+        let mut new = added_len;
+
+        while new > 0 {
+            let take_existing = existing > 0
+                && sort_cmp(
+                    &*added_ptr.add(new - 1),
+                    &*entries_ptr.add(existing - 1),
+                    sort,
+                ) == Ordering::Less;
+
+            target -= 1;
+            if take_existing {
+                existing -= 1;
+                ptr::write(
+                    entries_ptr.add(target),
+                    ptr::read(entries_ptr.add(existing)),
+                );
+            } else {
+                new -= 1;
+                record_reverse_inserted_range(&mut inserted_ranges, target);
+                ptr::write(entries_ptr.add(target), ptr::read(added_ptr.add(new)));
+            }
+        }
+
+        entries.set_len(total_len);
+    }
+
+    inserted_ranges.reverse();
+    inserted_ranges
+}
+
+fn record_reverse_inserted_range(ranges: &mut ItemRangeList, index: usize) {
+    if let Some(range) = ranges.last_mut()
+        && range.start == index + 1
+    {
+        range.start = index;
+        range.len += 1;
+        return;
+    }
+    ranges.push(ItemRange {
+        start: index,
+        len: 1,
+    });
+}
+
 fn sort_cmp(left: &ModelEntry, right: &ModelEntry, sort: SortDescriptor) -> Ordering {
     if sort.hidden_last {
         match left_is_hidden(left).cmp(&left_is_hidden(right)) {
@@ -1355,6 +1402,28 @@ mod tests {
             .map(|entry| entry.name.as_ref())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn tail_added_batch_uses_single_final_inserted_range() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(PathBuf::from("/tmp"), listing(vec![entry("a.txt", false)]));
+
+        let signals = model.apply_items_added(vec![entry("c.txt", false), entry("b.txt", false)]);
+
+        assert_eq!(
+            signals,
+            vec![DirectoryModelSignal::ItemsInserted(vec![ItemRange {
+                start: 1,
+                len: 2,
+            }])]
+        );
+        let names = model
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["a.txt", "b.txt", "c.txt"]);
     }
 
     #[test]

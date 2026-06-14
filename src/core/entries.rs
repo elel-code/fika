@@ -314,10 +314,14 @@ pub fn read_entry_sync(directory: &Path, path: &Path) -> io::Result<Entry> {
 }
 
 pub fn sort_entries(entries: &mut [Entry], trash: bool) {
+    entries.sort_by(|left, right| entry_sort_cmp(left, right, trash));
+}
+
+pub(crate) fn entry_sort_cmp(left: &Entry, right: &Entry, trash: bool) -> Ordering {
     if trash {
-        entries.sort_by(trash_sort_cmp);
+        trash_sort_cmp(left, right)
     } else {
-        entries.sort_by(Entry::sort_cmp);
+        left.sort_cmp(right)
     }
 }
 

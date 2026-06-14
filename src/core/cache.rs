@@ -1,9 +1,12 @@
 use super::directory::RefreshPair;
-use super::entries::{Entry, directory_entry_path, sort_entries};
+use super::entries::{Entry, directory_entry_path, entry_sort_cmp, sort_entries};
 use super::file_ops;
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
+use std::mem::ManuallyDrop;
 use std::path::{Component, Path, PathBuf};
+use std::ptr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -290,14 +293,37 @@ impl DirectoryCache {
             return false;
         }
         self.update_fresh_entries(path, |directory, cached_entries| {
+            let mut replaced_existing = false;
+            let mut index_by_name = HashMap::with_capacity(cached_entries.len());
+            for (index, entry) in cached_entries.iter().enumerate() {
+                index_by_name.insert(Arc::clone(&entry.name), index);
+            }
+
+            let mut added = Vec::new();
+            let mut added_index_by_name = HashMap::new();
             for entry in entries {
-                if let Some(index) = entry_index_for_name(cached_entries, entry.name.as_ref()) {
+                if let Some(index) = index_by_name.get(entry.name.as_ref()).copied() {
                     cached_entries[index] = entry.clone();
+                    replaced_existing = true;
+                } else if let Some(index) = added_index_by_name.get(entry.name.as_ref()).copied() {
+                    added[index] = entry.clone();
                 } else {
-                    cached_entries.push(entry.clone());
+                    added_index_by_name.insert(Arc::clone(&entry.name), added.len());
+                    added.push(entry.clone());
                 }
             }
-            sort_cache_entries(directory, cached_entries);
+
+            if replaced_existing {
+                sort_cache_entries(directory, cached_entries);
+            }
+            if !added.is_empty() {
+                sort_cache_entries(directory, &mut added);
+                merge_sorted_cache_entries(
+                    cached_entries,
+                    added,
+                    file_ops::is_trash_files_dir(directory),
+                );
+            }
             true
         })
     }
@@ -499,6 +525,58 @@ fn sort_cache_entries(directory: &Path, entries: &mut [Entry]) {
     sort_entries(entries, file_ops::is_trash_files_dir(directory));
 }
 
+fn merge_sorted_cache_entries(entries: &mut Vec<Entry>, added: Vec<Entry>, trash: bool) {
+    if added.is_empty() {
+        return;
+    }
+    if entries.is_empty() {
+        *entries = added;
+        return;
+    }
+
+    let existing_len = entries.len();
+    let added_len = added.len();
+    let total_len = existing_len + added_len;
+
+    entries.reserve(added_len);
+    let added = ManuallyDrop::new(added);
+
+    unsafe {
+        // SAFETY: `entries` has capacity for the final length. Existing cache
+        // entries are moved once from the initialized prefix toward the tail,
+        // and every item from `added` is read exactly once before the final
+        // length is published.
+        let entries_ptr = entries.as_mut_ptr();
+        let added_ptr = added.as_ptr();
+        let mut target = total_len;
+        let mut existing = existing_len;
+        let mut new = added_len;
+
+        while new > 0 {
+            let take_existing = existing > 0
+                && entry_sort_cmp(
+                    &*added_ptr.add(new - 1),
+                    &*entries_ptr.add(existing - 1),
+                    trash,
+                ) == Ordering::Less;
+
+            target -= 1;
+            if take_existing {
+                existing -= 1;
+                ptr::write(
+                    entries_ptr.add(target),
+                    ptr::read(entries_ptr.add(existing)),
+                );
+            } else {
+                new -= 1;
+                ptr::write(entries_ptr.add(target), ptr::read(added_ptr.add(new)));
+            }
+        }
+
+        entries.set_len(total_len);
+    }
+}
+
 pub fn normalize_cache_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -632,6 +710,28 @@ mod tests {
         let snapshot = cache.get_fresh(&root).unwrap();
         assert_eq!(entry_names(snapshot.entries()), vec!["c.txt"]);
         assert_eq!(cache.cached_entry_count(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_merges_added_batch_without_resorting_existing_entries() {
+        let root = temp_root("merge-added");
+        fs::write(root.join("a.txt"), b"a").unwrap();
+        let mut cache = DirectoryCache::new(2);
+        assert!(
+            cache
+                .insert_fresh(&root, entries(&["b.txt", "d.txt"]))
+                .is_some()
+        );
+
+        assert!(cache.apply_items_added(&root, &[entry("e.txt"), entry("a.txt")]));
+
+        let snapshot = cache.get_fresh(&root).unwrap();
+        assert_eq!(
+            entry_names(snapshot.entries()),
+            vec!["a.txt", "b.txt", "d.txt", "e.txt"]
+        );
 
         let _ = fs::remove_dir_all(root);
     }
