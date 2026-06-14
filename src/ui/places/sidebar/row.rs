@@ -81,48 +81,49 @@ pub(super) fn place_row(
         cx,
     );
 
+    let row_content = row
+        .child(place_icon_view(&place.icon, active))
+        .child(
+            div()
+                .flex_1()
+                .truncate()
+                .text_sm()
+                .text_color(if place.active {
+                    rgb(0x1f4fbf)
+                } else if !place.mounted {
+                    rgb(0x6b7280)
+                } else {
+                    rgb(0x24292f)
+                })
+                .child(place.label),
+        )
+        .when(place.trash_place, |row| {
+            row.child(
+                div()
+                    .id(format!("place-trash-state-{visible_index}"))
+                    .w(px(7.0))
+                    .h(px(7.0))
+                    .rounded_full()
+                    .bg(if place.trash_has_items {
+                        rgb(0x2f6fed)
+                    } else {
+                        rgb(0xc8ced6)
+                    }),
+            )
+        });
+
     div()
         .id(format!("place-wrap-{visible_index}"))
         .relative()
         .flex()
         .flex_col()
+        .child(row_content)
         .when(show_insert_before && place.insert_before, |row| {
             row.child(place_insert_indicator(
                 format!("place-insert-before-{visible_index}"),
                 PlaceInsertIndicatorEdge::Before,
             ))
         })
-        .child(
-            row.child(place_icon_view(&place.icon, active))
-                .child(
-                    div()
-                        .flex_1()
-                        .truncate()
-                        .text_sm()
-                        .text_color(if place.active {
-                            rgb(0x1f4fbf)
-                        } else if !place.mounted {
-                            rgb(0x6b7280)
-                        } else {
-                            rgb(0x24292f)
-                        })
-                        .child(place.label),
-                )
-                .when(place.trash_place, |row| {
-                    row.child(
-                        div()
-                            .id(format!("place-trash-state-{visible_index}"))
-                            .w(px(7.0))
-                            .h(px(7.0))
-                            .rounded_full()
-                            .bg(if place.trash_has_items {
-                                rgb(0x2f6fed)
-                            } else {
-                                rgb(0xc8ced6)
-                            }),
-                    )
-                }),
-        )
         .when(place.insert_after, |row| {
             row.child(place_insert_indicator(
                 format!("place-insert-after-{visible_index}"),

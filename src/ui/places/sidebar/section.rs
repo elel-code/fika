@@ -36,11 +36,11 @@ pub(super) fn group_heading(
         .relative()
         .flex()
         .flex_col()
+        .child(heading)
         .when(insert_before, |row| {
             row.child(place_insert_indicator(
                 format!("place-insert-before-group-{label}"),
                 PlaceInsertIndicatorEdge::Before,
             ))
         })
-        .child(heading)
 }

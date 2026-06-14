@@ -149,26 +149,40 @@ pub(super) fn install_place_row_dnd(
                 return;
             }
             let drag = event.drag(cx);
-            let Some(insert_index) = place_drag_insert_index_for_zone(
-                drag.source_index(),
-                insert_before_index,
-                place_drop_zone(event),
-            ) else {
-                let changed = this.clear_drag_drop_targets();
-                refresh_active_drag_cursor_not_allowed(window, cx);
-                if changed {
-                    cx.notify();
+            let drop_zone = place_drop_zone(event);
+            let changed = match drop_zone {
+                PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter if drag.movable() => {
+                    let insert_index = place_drag_insert_index_for_zone(
+                        drag.source_index(),
+                        insert_before_index,
+                        drop_zone,
+                    )
+                    .unwrap_or(insert_after_index);
+                    this.set_place_drag_drop_target_for_insert(insert_index)
                 }
-                cx.stop_propagation();
-                return;
+                PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter => {
+                    if mounted {
+                        this.set_drop_menu_position(event.event.position);
+                        this.set_place_drag_drop_target_for_path(path_for_place_drag_leave.clone())
+                    } else {
+                        this.clear_drag_drop_targets()
+                    }
+                }
+                PlaceDropZone::OnPlace if mounted => {
+                    this.set_drop_menu_position(event.event.position);
+                    this.set_place_drag_drop_target_for_path(path_for_place_drag_leave.clone())
+                }
+                PlaceDropZone::OnPlace => this.clear_drag_drop_targets(),
             };
-            let changed = if drag.movable() {
-                this.set_place_drag_drop_target_for_insert(insert_index)
-            } else {
-                this.clear_drag_drop_targets()
-            };
-            if drag.movable() {
+            if matches!(
+                drop_zone,
+                PlaceDropZone::InsertBefore | PlaceDropZone::InsertAfter
+            ) && drag.movable()
+            {
                 refresh_active_drag_cursor_for_transfer_mode(FileTransferMode::Move, window, cx);
+                this.schedule_drop_target_stale_clear(cx);
+            } else if mounted {
+                refresh_active_drag_cursor_for_drop_menu(window, cx);
                 this.schedule_drop_target_stale_clear(cx);
             } else {
                 refresh_active_drag_cursor_not_allowed(window, cx);
