@@ -259,14 +259,14 @@ pub(crate) fn read_entry_batches_sync_cancellable(
         }
 
         if decorate_trash_metadata {
-            if let Ok(metadata) = item.metadata() {
+            if let Ok(metadata) = directory_entry_metadata(&item) {
                 let item_path = item.path();
                 let mut data = complete_entry_data(name, metadata, mime_database);
                 decorate_trash_entry(&mut data, &item_path);
                 batch.push(Entry::new(data));
             }
         } else {
-            let Ok(metadata) = item.metadata() else {
+            let Ok(metadata) = directory_entry_metadata(&item) else {
                 continue;
             };
             batch.push(Entry::new(complete_entry_data(
@@ -435,6 +435,14 @@ fn name_width_units(name: &str) -> u16 {
         .map(|ch| if ch.is_ascii() { 1u32 } else { 2u32 })
         .sum::<u32>()
         .min(u16::MAX as u32) as u16
+}
+
+fn directory_entry_metadata(item: &std::fs::DirEntry) -> io::Result<Metadata> {
+    let file_type = item.file_type()?;
+    if file_type.is_symlink() {
+        return std::fs::metadata(item.path()).or_else(|_| item.metadata());
+    }
+    item.metadata()
 }
 
 fn complete_entry_data(name: String, metadata: Metadata, mime: &MimeDatabase) -> EntryData {
@@ -622,6 +630,39 @@ mod tests {
             Some("application/octet-stream")
         );
         assert!(!generic.mime_magic_checked);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_listing_treats_symlink_to_directory_as_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "fika-entry-symlink-directory-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(dir.join("usr/bin")).unwrap();
+        std::os::unix::fs::symlink("usr/bin", dir.join("bin")).unwrap();
+        struct DirGuard(PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = DirGuard(dir.clone());
+
+        let entries = read_entries_sync(&dir).unwrap();
+        let bin = entries
+            .iter()
+            .find(|entry| entry.name.as_ref() == "bin")
+            .unwrap();
+
+        assert!(bin.is_dir);
+        assert_eq!(bin.size_bytes, 0);
+        assert_eq!(bin.mime_type.as_deref(), Some("inode/directory"));
+        assert!(bin.mime_magic_checked);
     }
 
     #[test]

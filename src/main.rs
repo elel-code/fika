@@ -1744,6 +1744,38 @@ impl FikaApp {
         });
     }
 
+    pub(crate) fn open_directory_from_item(
+        &mut self,
+        pane_id: PaneId,
+        path: PathBuf,
+        is_dir_hint: bool,
+    ) -> bool {
+        if !self.item_path_is_directory(pane_id, &path, is_dir_hint) {
+            return false;
+        }
+
+        self.load_pane(pane_id, path);
+        true
+    }
+
+    pub(crate) fn item_path_is_directory(
+        &self,
+        pane_id: PaneId,
+        path: &Path,
+        is_dir_hint: bool,
+    ) -> bool {
+        is_dir_hint
+            || self
+                .panes
+                .pane(pane_id)
+                .and_then(|pane| {
+                    pane.model
+                        .index_of_path(path)
+                        .and_then(|index| pane.model.get(index))
+                })
+                .is_some_and(|entry| entry.is_dir)
+    }
+
     fn load_pane(&mut self, pane_id: PaneId, path: PathBuf) {
         let previous_summary = self.status_summary_for_pane(pane_id);
         let url_changed = self
@@ -10129,6 +10161,42 @@ text/plain=viewer.desktop;\n",
         app.load_pane(second, PathBuf::from("/tmp/fika-panes-load-b"));
 
         assert_eq!(app.pane_split_ratios, ratios);
+    }
+
+    #[test]
+    fn item_directory_activation_uses_model_when_snapshot_hint_is_stale() {
+        let root = test_dir("activate-model-directory-root");
+        let child = root.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        let root_arg = root.display().to_string();
+        let mut app = test_app_with_entries(&root_arg, &[]);
+        let pane_id = app.panes.focused().unwrap();
+        app.panes.pane_mut(pane_id).unwrap().model.replace_listing(
+            root.clone(),
+            Arc::new(vec![fika_core::Entry::new(fika_core::EntryData {
+                name: Arc::from("child"),
+                name_width_units: 5,
+                size_bytes: 0,
+                modified_secs: None,
+                metadata_complete: true,
+                trash_original_path: None,
+                trash_deletion_time: None,
+                mime_type: Some(Arc::from("inode/directory")),
+                mime_magic_checked: true,
+                is_dir: true,
+            })]),
+        );
+
+        assert!(app.open_directory_from_item(pane_id, child.clone(), false));
+
+        assert_eq!(
+            app.panes
+                .pane(pane_id)
+                .map(|pane| pane.current_dir.as_path()),
+            Some(child.as_path())
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

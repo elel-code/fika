@@ -553,6 +553,10 @@ fn metadata_role_update_needed(
     mime_type: Option<&str>,
     mime_magic_checked: bool,
 ) -> bool {
+    if is_dir {
+        return false;
+    }
+
     !metadata_complete
         || metadata_refresh_pending
         || mime_magic_resolution_required(is_dir, size_bytes, mime_type, mime_magic_checked)
@@ -979,6 +983,28 @@ mod tests {
         );
         assert_eq!(batch.requests[2].item_id(), ItemId(5));
         assert_eq!(batch.requests[2].path(), Path::new("/tmp/payload"));
+    }
+
+    #[test]
+    fn raw_file_grid_snapshot_does_not_queue_directory_metadata_role() {
+        let mut directory = test_raw_visible_item(1, "Documents", 0);
+        directory.is_dir = true;
+        directory.metadata_complete = false;
+        directory.metadata_refresh_pending = true;
+        directory.mime_type = Some(Arc::from("inode/directory"));
+        directory.mime_magic_checked = true;
+        let raw_file_grid = RawFileGridSnapshot::Icons {
+            layout: IconsLayout::new(1, fika_core::IconsLayoutOptions::default()),
+            items: vec![directory],
+        };
+        let mut scheduler = MetadataRoleScheduler::default();
+
+        assert!(!raw_file_grid.queue_metadata_role_candidates(
+            &mut scheduler,
+            PaneId(1),
+            Generation(1)
+        ));
+        assert!(scheduler.start_role_batch(8).is_none());
     }
 
     fn test_entry(

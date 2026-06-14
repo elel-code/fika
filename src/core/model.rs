@@ -873,13 +873,14 @@ fn reusable_icon_name(old: &ModelEntry, new: &ModelEntry) -> Option<Arc<str>> {
 }
 
 fn new_requires_async_metadata_role(entry: &ModelEntry) -> bool {
-    !entry.entry.metadata_complete
-        || mime_magic_resolution_required(
-            entry.is_dir,
-            entry.entry.size_bytes,
-            entry.entry.mime_type.as_deref(),
-            entry.entry.mime_magic_checked,
-        )
+    !entry.is_dir
+        && (!entry.entry.metadata_complete
+            || mime_magic_resolution_required(
+                entry.is_dir,
+                entry.entry.size_bytes,
+                entry.entry.mime_type.as_deref(),
+                entry.entry.mime_magic_checked,
+            ))
 }
 
 fn base_metadata_role(entry: &ModelEntry) -> EntryMetadataRole {
@@ -1460,6 +1461,36 @@ mod tests {
             entry.thumbnail_path.as_deref(),
             Some(thumbnail_path.as_path())
         );
+    }
+
+    #[test]
+    fn same_listing_directory_reload_does_not_enter_metadata_refresh() {
+        let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_metadata("Documents", true, 0, Some(100))]),
+        );
+        let item_id = model.entries()[0].id;
+        model.set_icon_name_role(item_id, Some(Arc::from("folder")));
+
+        model.replace_listing(
+            PathBuf::from("/tmp"),
+            listing(vec![entry_with_metadata_state(
+                "Documents",
+                true,
+                0,
+                None,
+                false,
+            )]),
+        );
+
+        let entry = &model.entries()[0];
+        assert_eq!(entry.id, item_id);
+        assert!(entry.is_dir);
+        assert!(!entry.metadata_refresh_pending);
+        assert!(entry.metadata_role.is_none());
+        assert_eq!(entry.effective_size_bytes(), 0);
+        assert_eq!(entry.icon_name.as_deref(), Some("folder"));
     }
 
     #[test]

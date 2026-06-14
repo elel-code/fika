@@ -931,10 +931,11 @@ fn handle_item_mouse_down(
     let extend = event.modifiers.shift;
     let toggle = event.modifiers.secondary();
     let double_click = event.click_count >= 2;
+    let is_dir = app.item_path_is_directory(pane_id, &path, is_dir);
     match mode {
         FileGridMode::Manager => {
             if double_click && is_dir {
-                app.load_pane(pane_id, path);
+                app.open_directory_from_item(pane_id, path, true);
             } else if !double_click {
                 if extend {
                     app.select_range_to(pane_id, path);
@@ -950,7 +951,7 @@ fn handle_item_mouse_down(
             multiple,
         } => {
             if double_click && is_dir {
-                app.load_pane(pane_id, path);
+                app.open_directory_from_item(pane_id, path, true);
             } else if directories {
                 if !is_dir {
                     return true;
