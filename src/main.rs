@@ -2377,7 +2377,6 @@ impl FikaApp {
             return;
         };
         self.reset_item_view_scroll_for_pane(pane_id);
-        self.visible_item_slots.remove(&pane_id);
         self.compact_column_widths.remove(&pane_id);
         self.set_pane_status(pane_id, view_mode_status(view.view_mode));
     }
@@ -6983,6 +6982,16 @@ mod tests {
         let mut app = test_app_with_entries("/tmp/fika-view-mode-switch", &["one.txt"]);
         let first = app.panes.focused().unwrap();
         let second = app.panes.split(first).unwrap();
+        let first_item_id = app.panes.pane(first).unwrap().model.entries()[0].id;
+        app.visible_item_slots
+            .entry(first)
+            .or_default()
+            .update_visible_items([first_item_id]);
+        let first_item_slot = app
+            .visible_item_slots
+            .get(&first)
+            .and_then(|slots| slots.slot_for_item(first_item_id))
+            .unwrap();
         let scroll_handle = app.item_view_scroll_handle_for_pane(first);
         scroll_handle.set_offset(gpui::point(px(-180.0), px(-40.0)));
         app.panes
@@ -6998,6 +7007,12 @@ mod tests {
         assert_eq!(first_view.scroll_x, 0.0);
         assert_eq!(first_view.scroll_y, 0.0);
         assert_eq!(scroll_handle.offset(), gpui::point(px(0.0), px(0.0)));
+        assert_eq!(
+            app.visible_item_slots
+                .get(&first)
+                .and_then(|slots| slots.slot_for_item(first_item_id)),
+            Some(first_item_slot)
+        );
         assert!(!app.compact_column_widths.contains_key(&first));
         assert_eq!(
             app.panes.pane(second).unwrap().view.view_mode,

@@ -330,7 +330,7 @@ impl RawFileGridSnapshot {
                     item.slot_id = slots.slot_for_item(item.item_id).unwrap_or_default();
                 }
             }
-            Self::Details { .. } => slots.update_visible_items(std::iter::empty::<ItemId>()),
+            Self::Details { .. } => {}
         }
     }
 
@@ -1025,6 +1025,22 @@ mod tests {
         assert!(items.iter().all(|item| item.slot_id != 0));
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].0, PathBuf::from("/tmp/alpha.txt"));
+    }
+
+    #[test]
+    fn details_snapshot_preserves_item_view_slot_pool() {
+        let mut slots = VisibleItemSlotPool::default();
+        let item_id = ItemId(7);
+        slots.update_visible_items([item_id]);
+        let slot_id = slots.slot_for_item(item_id);
+        let mut raw_file_grid = RawFileGridSnapshot::Details {
+            items: Vec::new(),
+            row_count: 0,
+        };
+
+        raw_file_grid.assign_visible_item_slots(&mut slots);
+
+        assert_eq!(slots.slot_for_item(item_id), slot_id);
     }
 
     #[test]

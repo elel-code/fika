@@ -1489,22 +1489,30 @@ fn drop_target_item_background(mode: FileTransferMode) -> Rgba {
 fn icon_view(item: &VisibleItemSnapshot, layout: ItemLayout) -> Div {
     let visual = layout.visual_rect;
     let icon = layout.icon_rect;
+    let icon_left = (icon.x - visual.x).round();
+    let icon_top = (icon.y - visual.y).round();
+    let icon_width = icon.width.round().max(1.0);
+    let icon_height = icon.height.round().max(1.0);
     let thumbnail_path = item.thumbnail_path.clone();
     let icon_snapshot = item.icon.clone();
     let icon_container = div()
         .absolute()
-        .left(px(icon.x - visual.x))
-        .top(px(icon.y - visual.y))
-        .w(px(icon.width))
-        .h(px(icon.height))
-        .rounded_md()
+        .left(px(icon_left))
+        .top(px(icon_top))
+        .w(px(icon_width))
+        .h(px(icon_height))
         .flex()
         .items_center()
-        .justify_center()
-        .overflow_hidden();
+        .justify_center();
 
     match thumbnail_path {
-        Some(path) => icon_container.child(img(path).size_full()),
+        Some(path) => icon_container.child(
+            div()
+                .size_full()
+                .rounded_md()
+                .overflow_hidden()
+                .child(img(path).size_full()),
+        ),
         None => icon_container.child(icon_image_or_fallback(icon_snapshot)),
     }
 }
@@ -1586,18 +1594,52 @@ fn text_view(
             )
             .into_any_element()
         } else {
-            rename_name_view(display_name, false, selected, None, None)
-                .h(px(rename_layout.name_height))
+            item_name_label_view(display_name, selected, rename_layout.name_height)
                 .into_any_element()
         })
         .child(
             div()
                 .h(px(rename_layout.helper_height))
+                .w_full()
                 .min_h_0()
-                .text_xs()
-                .text_color(helper_color)
+                .min_w_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .max_w_full()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(helper_color)
+                        .truncate()
+                        .child(helper_text.to_string()),
+                ),
+        )
+}
+
+fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div {
+    let text_color = if selected {
+        rgb(0x0f172a)
+    } else {
+        rgb(0x24292f)
+    };
+    div()
+        .h(px(height))
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .max_w_full()
+                .min_w_0()
+                .text_sm()
                 .truncate()
-                .child(helper_text.to_string()),
+                .text_color(text_color)
+                .child(display_name.to_string()),
         )
 }
 

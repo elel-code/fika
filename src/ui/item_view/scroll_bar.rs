@@ -92,15 +92,21 @@ pub(crate) fn item_view_scrollbar_container(
 
     let viewport = viewport
         .relative()
+        .size_full()
+        .track_scroll(scroll_handle)
+        .overflow_x_scroll()
+        .overflow_y_scroll();
+
+    let viewport_frame = div()
+        .relative()
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .track_scroll(scroll_handle)
-        .overflow_x_scroll()
-        .overflow_y_scroll()
+        .overflow_hidden()
+        .child(viewport)
         .when_some(
             rubber_band.filter(|rect| rubber_band_rect_is_visible(*rect)),
-            |viewport, rect| viewport.child(rubber_band_overlay(rect)),
+            |frame, rect| frame.child(rubber_band_overlay(rect)),
         );
 
     let wrapper = div()
@@ -115,11 +121,11 @@ pub(crate) fn item_view_scrollbar_container(
     match axis {
         ItemViewScrollbarAxis::Horizontal => wrapper
             .flex_col()
-            .child(viewport)
+            .child(viewport_frame)
             .child(item_view_scrollbar(state, axis)),
         ItemViewScrollbarAxis::Vertical => wrapper
             .flex_row()
-            .child(viewport)
+            .child(viewport_frame)
             .child(item_view_scrollbar(state, axis)),
     }
 }
