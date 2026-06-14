@@ -6,7 +6,7 @@ use gpui::{Context, Div, MouseButton, ParentElement, Stateful, Styled, div, rgb}
 
 use dnd::install_section_dnd;
 
-use super::super::style::place_insert_indicator;
+use super::super::style::{PlaceInsertIndicatorEdge, place_insert_indicator};
 
 pub(super) fn group_heading(
     label: &'static str,
@@ -33,12 +33,14 @@ pub(super) fn group_heading(
 
     div()
         .id(format!("place-group-wrap-{label}"))
+        .relative()
         .flex()
         .flex_col()
         .when(insert_before, |row| {
-            row.child(place_insert_indicator(format!(
-                "place-insert-before-group-{label}"
-            )))
+            row.child(place_insert_indicator(
+                format!("place-insert-before-group-{label}"),
+                PlaceInsertIndicatorEdge::Before,
+            ))
         })
         .child(heading)
 }

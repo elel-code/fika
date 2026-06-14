@@ -10,7 +10,7 @@ use super::super::drag::{PlaceDrag, PlaceDragPreview};
 use super::super::icon_view::place_icon_view;
 use super::super::snapshot::PlaceSnapshot;
 use super::super::style::{
-    place_insert_indicator, place_row_background, place_row_border_color,
+    PlaceInsertIndicatorEdge, place_insert_indicator, place_row_background, place_row_border_color,
     place_row_hover_background,
 };
 
@@ -25,6 +25,7 @@ pub(super) fn place_row(
     let place_drag = PlaceDrag::new(
         place.path.clone(),
         place.label.as_str(),
+        place.icon.clone(),
         place.index,
         place.editable && place.removable,
     );
@@ -82,12 +83,14 @@ pub(super) fn place_row(
 
     div()
         .id(format!("place-wrap-{visible_index}"))
+        .relative()
         .flex()
         .flex_col()
         .when(show_insert_before && place.insert_before, |row| {
-            row.child(place_insert_indicator(format!(
-                "place-insert-before-{visible_index}"
-            )))
+            row.child(place_insert_indicator(
+                format!("place-insert-before-{visible_index}"),
+                PlaceInsertIndicatorEdge::Before,
+            ))
         })
         .child(
             row.child(place_icon_view(&place.icon, active))
@@ -121,8 +124,9 @@ pub(super) fn place_row(
                 }),
         )
         .when(place.insert_after, |row| {
-            row.child(place_insert_indicator(format!(
-                "place-insert-after-{visible_index}"
-            )))
+            row.child(place_insert_indicator(
+                format!("place-insert-after-{visible_index}"),
+                PlaceInsertIndicatorEdge::After,
+            ))
         })
 }

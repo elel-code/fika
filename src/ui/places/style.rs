@@ -1,5 +1,11 @@
 use gpui::{InteractiveElement, IntoElement, Styled, div, px, rgb, rgba};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PlaceInsertIndicatorEdge {
+    Before,
+    After,
+}
+
 pub(super) fn place_row_background(active: bool, drop_target: bool) -> gpui::Rgba {
     if drop_target {
         place_drop_target_background()
@@ -42,11 +48,20 @@ fn place_drop_target_border_color() -> gpui::Rgba {
     rgb(0xd97706)
 }
 
-pub(super) fn place_insert_indicator(id: String) -> impl IntoElement {
-    div()
+pub(super) fn place_insert_indicator(
+    id: String,
+    edge: PlaceInsertIndicatorEdge,
+) -> impl IntoElement {
+    let indicator = div()
         .id(id)
-        .mx_2()
+        .absolute()
+        .left(px(8.0))
+        .right(px(8.0))
         .h(px(2.0))
         .rounded_full()
-        .bg(rgb(0x2f6fed))
+        .bg(rgb(0xd97706));
+    match edge {
+        PlaceInsertIndicatorEdge::Before => indicator.top(px(0.0)),
+        PlaceInsertIndicatorEdge::After => indicator.bottom(px(0.0)),
+    }
 }

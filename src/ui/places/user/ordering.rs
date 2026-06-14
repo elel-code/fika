@@ -60,11 +60,7 @@ pub(crate) fn user_place_insert_index(places: &[PlaceEntry], index: usize) -> us
         .iter()
         .position(|place| !place.group.is_empty())
         .unwrap_or(places.len());
-    let first_user = places
-        .iter()
-        .position(|place| place.editable && place.removable)
-        .unwrap_or(first_grouped);
-    index.clamp(first_user, first_grouped)
+    index.clamp(0, first_grouped)
 }
 
 #[cfg(test)]
@@ -80,14 +76,29 @@ mod tests {
             place("Devices", "Root", "/", false),
         ];
 
-        assert_eq!(user_place_insert_index(&places, 0), 1);
+        assert_eq!(user_place_insert_index(&places, 0), 0);
         assert_eq!(user_place_insert_index(&places, 1), 1);
         assert_eq!(user_place_insert_index(&places, 2), 2);
         assert_eq!(user_place_insert_index(&places, 10), 3);
     }
 
     #[test]
-    fn insert_user_place_at_preserves_builtin_and_grouped_entries() {
+    fn user_place_insert_index_allows_bookmarks_above_home_and_trash() {
+        let places = vec![
+            place("", "Home", "/home/yk", false),
+            place("", "Trash", "/home/yk/.local/share/Trash/files", false),
+            place("", "Alpha", "/home/yk/Alpha", true),
+            place("Devices", "Root", "/", false),
+        ];
+
+        assert_eq!(user_place_insert_index(&places, 0), 0);
+        assert_eq!(user_place_insert_index(&places, 1), 1);
+        assert_eq!(user_place_insert_index(&places, 2), 2);
+        assert_eq!(user_place_insert_index(&places, 10), 3);
+    }
+
+    #[test]
+    fn insert_user_place_at_allows_inserting_above_home() {
         let mut places = vec![
             place("", "Home", "/home/yk", false),
             place("Devices", "Root", "/", false),
@@ -105,11 +116,11 @@ mod tests {
                 .iter()
                 .map(|place| place.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Home", "Work", "Root"]
+            vec!["Work", "Home", "Root"]
         );
-        assert!(places[1].editable);
-        assert!(places[1].removable);
-        assert_eq!(places[1].marker, "B");
+        assert!(places[0].editable);
+        assert!(places[0].removable);
+        assert_eq!(places[0].marker, "B");
     }
 
     #[test]
@@ -144,6 +155,30 @@ mod tests {
                 move_user_place_to_insert_index(&mut places, 2, end_index)
             },
             MoveUserPlaceResult::AlreadyThere
+        );
+    }
+
+    #[test]
+    fn move_user_place_can_reorder_above_home_and_trash() {
+        let mut places = vec![
+            place("", "Home", "/home/yk", false),
+            place("", "Trash", "/home/yk/.local/share/Trash/files", false),
+            place("", "Alpha", "/home/yk/Alpha", true),
+            place("Devices", "Root", "/", false),
+        ];
+
+        assert_eq!(
+            move_user_place_to_insert_index(&mut places, 2, 0),
+            MoveUserPlaceResult::Moved {
+                label: "Alpha".to_string()
+            }
+        );
+        assert_eq!(
+            places
+                .iter()
+                .map(|place| place.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Alpha", "Home", "Trash", "Root"]
         );
     }
 

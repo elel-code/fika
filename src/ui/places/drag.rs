@@ -1,25 +1,34 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui::{Context, IntoElement, ParentElement, Render, Styled, div, rgb};
+use gpui::{Context, IntoElement, ParentElement, Render, Styled, div, px, rgb};
 
 use super::super::drag_drop::{DragExportPayload, place_drag_export_payload};
+use crate::ui::icons::{FileIconSnapshot, cached_icon_or_fallback};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlaceDrag {
     path: PathBuf,
     label: Arc<str>,
+    icon: FileIconSnapshot,
     source_index: usize,
     movable: bool,
     pub(crate) export: Option<DragExportPayload>,
 }
 
 impl PlaceDrag {
-    pub(crate) fn new(path: PathBuf, label: &str, source_index: usize, movable: bool) -> Self {
+    pub(crate) fn new(
+        path: PathBuf,
+        label: &str,
+        icon: FileIconSnapshot,
+        source_index: usize,
+        movable: bool,
+    ) -> Self {
         let export = place_drag_export_payload(&path);
         Self {
             path,
             label: Arc::from(label),
+            icon,
             source_index,
             movable,
             export,
@@ -42,6 +51,7 @@ impl PlaceDrag {
 pub(crate) struct PlaceDragPreview {
     label: Arc<str>,
     path: PathBuf,
+    icon: FileIconSnapshot,
 }
 
 impl PlaceDragPreview {
@@ -49,6 +59,7 @@ impl PlaceDragPreview {
         Self {
             label: drag.label.clone(),
             path: drag.path.clone(),
+            icon: drag.icon.clone(),
         }
     }
 }
@@ -92,21 +103,54 @@ fn place_drop_zone_for_y(local_y: f32, height: f32) -> PlaceDropZone {
 
 impl Render for PlaceDragPreview {
     fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let icon = self.icon.clone();
         div()
             .px_2()
-            .py_1()
+            .h(px(36.0))
             .rounded_md()
             .border_1()
             .border_color(rgb(0x94a3b8))
             .bg(rgb(0xffffff))
+            .shadow_md()
+            .flex()
+            .items_center()
+            .gap_2()
             .text_sm()
             .text_color(rgb(0x1f2937))
-            .child(format!(
+            .child(
+                div()
+                    .w(px(26.0))
+                    .h(px(26.0))
+                    .rounded_sm()
+                    .overflow_hidden()
+                    .child(place_drag_icon_or_fallback(icon)),
+            )
+            .child(div().max_w(px(180.0)).truncate().child(format!(
                 "{} -> {}",
                 self.label,
                 display_path_for_drag(&self.path)
-            ))
+            )))
     }
+}
+
+fn place_drag_icon_or_fallback(icon: FileIconSnapshot) -> gpui::AnyElement {
+    let marker = icon.fallback_marker.clone();
+    let fg = icon.fallback_fg;
+    let bg = icon.fallback_bg;
+    cached_icon_or_fallback(&icon, move || {
+        div()
+            .size_full()
+            .rounded_sm()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_xs()
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(rgb(fg))
+            .bg(rgb(bg))
+            .child(marker.as_ref().to_string())
+            .into_any_element()
+    })
 }
 
 fn display_path_for_drag(path: &Path) -> String {
@@ -120,6 +164,7 @@ fn display_path_for_drag(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn place_drop_zone_uses_edges_for_insert_targets() {
@@ -186,7 +231,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&file, "not exported").unwrap();
 
-        let dir_drag = PlaceDrag::new(dir.clone(), "dir", 0, true);
+        let dir_drag = PlaceDrag::new(dir.clone(), "dir", test_icon_snapshot(), 0, true);
         assert_eq!(
             dir_drag
                 .export
@@ -194,9 +239,19 @@ mod tests {
                 .map(|payload| payload.paths.clone()),
             Some(vec![dir])
         );
-        let file_drag = PlaceDrag::new(file, "file", 1, true);
+        let file_drag = PlaceDrag::new(file, "file", test_icon_snapshot(), 1, true);
         assert_eq!(file_drag.export, None);
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn test_icon_snapshot() -> FileIconSnapshot {
+        FileIconSnapshot {
+            icon_name: Arc::from("test-place"),
+            path: None,
+            fallback_marker: Arc::from("P"),
+            fallback_fg: 0x1f4fbf,
+            fallback_bg: 0xeaf1ff,
+        }
     }
 }

@@ -86,7 +86,7 @@ mod tests {
                 .iter()
                 .map(|place| place.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Home", "Dropped", "Root"]
+            vec!["Dropped", "Home", "Root"]
         );
         assert_eq!(
             add_user_place_from_dropped_paths(&mut places, std::slice::from_ref(&dropped), 0)

@@ -43,7 +43,8 @@ pub(crate) fn places_sidebar(
                 ));
             }
         }
-        rows.push(place_row(index, place, !starts_group, cx));
+        let show_insert_before = !starts_group || place.group.is_empty();
+        rows.push(place_row(index, place, show_insert_before, cx));
     }
 
     div()

@@ -28,7 +28,7 @@ use gpui::{
     Context, Div, Empty, ExternalPaths, MouseButton, NavigationDirection, ParentElement, Render,
     Rgba, ScrollHandle, Stateful, Styled, Window, div, img, px, rgb, rgba,
 };
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::drag_drop::{
@@ -93,6 +93,7 @@ pub(crate) struct ItemDrag {
     pane_id: PaneId,
     path: PathBuf,
     name: Arc<str>,
+    icon: FileIconSnapshot,
     selected: bool,
     selection_count: usize,
 }
@@ -108,7 +109,9 @@ impl ItemDrag {
 }
 
 struct DragPreview {
+    icon: FileIconSnapshot,
     label: String,
+    count: usize,
     cursor_offset_x: f32,
     cursor_offset_y: f32,
 }
@@ -117,14 +120,8 @@ const DRAG_PREVIEW_CURSOR_GAP: f32 = 10.0;
 const DRAG_PREVIEW_MIN_WIDTH: f32 = 220.0;
 const DRAG_PREVIEW_MIN_HEIGHT: f32 = 36.0;
 
-fn drag_move_hits_item_path<T>(
-    app: &mut FikaApp,
-    pane_id: PaneId,
-    path: &Path,
-    event: &gpui::DragMoveEvent<T>,
-) -> bool {
+fn drag_move_hits_item_path<T>(event: &gpui::DragMoveEvent<T>) -> bool {
     event.bounds.contains(&event.event.position)
-        && app.window_position_hits_item_path_in_pane(pane_id, event.event.position, path)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -307,7 +304,7 @@ fn measured_viewport_for_scrollbar_axis(
 
 fn file_grid_viewport_shell(
     pane_id: PaneId,
-    drop_target: bool,
+    _drop_target: bool,
     mode: FileGridMode,
     cx: &mut Context<FikaApp>,
 ) -> Stateful<Div> {
@@ -317,11 +314,7 @@ fn file_grid_viewport_shell(
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .bg(if drop_target {
-            drop_target_viewport_background()
-        } else {
-            rgba(0x00000000)
-        })
+        .bg(rgba(0x00000000))
         .occlude()
         .overflow_hidden()
         .on_scroll_wheel(
@@ -602,11 +595,6 @@ fn details_row(
     let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
     let target_dir_for_drop = item.path.clone();
-    let path_for_place_drag_hit = item.path.clone();
-    let path_for_directory_item_drag_hit = item.path.clone();
-    let path_for_directory_external_drag_hit = item.path.clone();
-    let path_for_file_item_drag_hit = item.path.clone();
-    let path_for_file_external_drag_hit = item.path.clone();
     let is_dir_for_click = item.is_dir;
     let is_dir_for_menu = item.is_dir;
     let is_dir_for_drop = item.is_dir;
@@ -615,6 +603,7 @@ fn details_row(
         pane_id,
         path: path_for_drag,
         name: item.name.clone(),
+        icon: item.icon.clone(),
         selected,
         selection_count: item.selection_count,
     };
@@ -634,7 +623,6 @@ fn details_row(
             drop_target,
             item.row_index,
         ))
-        .when(drop_target, |row| row.shadow_md())
         .block_mouse_except_scroll()
         .cursor_pointer()
         .hover(move |row| row.bg(item_tile_hover_background(selected, drop_target)))
@@ -694,15 +682,16 @@ fn details_row(
             });
             let (cursor_offset_x, cursor_offset_y) = drag_preview_cursor_offset(cursor_offset);
             cx.new(|_| DragPreview {
+                icon: drag.icon.clone(),
                 label: drag_preview_label(drag.name.as_ref(), drag.selected, drag.selection_count),
+                count: drag.selection_count,
                 cursor_offset_x,
                 cursor_offset_y,
             })
         })
         .on_drag_move::<PlaceDrag>(cx.listener(
             move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                let contains =
-                    drag_move_hits_item_path(this, pane_id, &path_for_place_drag_hit, event);
+                let contains = drag_move_hits_item_path(event);
                 let changed = contains && this.set_item_drag_drop_target_for_pane(pane_id);
                 if contains {
                     this.set_drop_menu_position(event.event.position);
@@ -747,12 +736,7 @@ fn details_row(
             )
             .on_drag_move::<ItemDrag>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                    let contains = drag_move_hits_item_path(
-                        this,
-                        pane_id,
-                        &path_for_directory_item_drag_hit,
-                        event,
-                    );
+                    let contains = drag_move_hits_item_path(event);
                     let valid_target =
                         contains && this.item_drag_can_drop_to_directory(&target_dir_for_move);
                     let changed = if valid_target {
@@ -784,12 +768,7 @@ fn details_row(
             ))
             .on_drag_move::<ExternalPaths>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                    let contains = drag_move_hits_item_path(
-                        this,
-                        pane_id,
-                        &path_for_directory_external_drag_hit,
-                        event,
-                    );
+                    let contains = drag_move_hits_item_path(event);
                     let changed = if contains {
                         this.set_drop_menu_position(event.event.position);
                         this.set_item_drag_drop_target_for_directory(
@@ -842,12 +821,7 @@ fn details_row(
         .when(!is_dir_for_drop, |row| {
             row.on_drag_move::<ItemDrag>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                    let contains = drag_move_hits_item_path(
-                        this,
-                        pane_id,
-                        &path_for_file_item_drag_hit,
-                        event,
-                    );
+                    let contains = drag_move_hits_item_path(event);
                     let changed = contains && {
                         this.set_drop_menu_position(event.event.position);
                         this.set_item_drag_drop_target_for_pane(pane_id)
@@ -866,12 +840,7 @@ fn details_row(
             ))
             .on_drag_move::<ExternalPaths>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                    let contains = drag_move_hits_item_path(
-                        this,
-                        pane_id,
-                        &path_for_file_external_drag_hit,
-                        event,
-                    );
+                    let contains = drag_move_hits_item_path(event);
                     let changed = contains && {
                         this.set_drop_menu_position(event.event.position);
                         this.set_item_drag_drop_target_for_pane(pane_id)
@@ -1119,11 +1088,6 @@ fn item_tile(
     let path_for_menu = item.path.clone();
     let path_for_drag = item.path.clone();
     let target_dir_for_drop = item.path.clone();
-    let path_for_place_drag_hit = item.path.clone();
-    let path_for_directory_item_drag_hit = item.path.clone();
-    let path_for_directory_external_drag_hit = item.path.clone();
-    let path_for_file_item_drag_hit = item.path.clone();
-    let path_for_file_external_drag_hit = item.path.clone();
     let is_dir_for_click = item.is_dir;
     let is_dir_for_menu = item.is_dir;
     let is_dir_for_drop = item.is_dir;
@@ -1133,6 +1097,7 @@ fn item_tile(
         pane_id,
         path: path_for_drag,
         name: item.name.clone(),
+        icon: item.icon.clone(),
         selected,
         selection_count: item.selection_count,
     };
@@ -1155,7 +1120,6 @@ fn item_tile(
                 .h(px(visual.height))
                 .rounded_md()
                 .bg(item_tile_background(selected, drop_target))
-                .when(drop_target, |tile| tile.shadow_md())
                 .block_mouse_except_scroll()
                 .cursor_pointer()
                 .hover(move |tile| tile.bg(item_tile_hover_background(selected, drop_target)))
@@ -1220,23 +1184,20 @@ fn item_tile(
                     let (cursor_offset_x, cursor_offset_y) =
                         drag_preview_cursor_offset(cursor_offset);
                     cx.new(|_| DragPreview {
+                        icon: drag.icon.clone(),
                         label: drag_preview_label(
                             drag.name.as_ref(),
                             drag.selected,
                             drag.selection_count,
                         ),
+                        count: drag.selection_count,
                         cursor_offset_x,
                         cursor_offset_y,
                     })
                 })
                 .on_drag_move::<PlaceDrag>(cx.listener(
                     move |this, event: &gpui::DragMoveEvent<PlaceDrag>, window, cx| {
-                        let contains = drag_move_hits_item_path(
-                            this,
-                            pane_id,
-                            &path_for_place_drag_hit,
-                            event,
-                        );
+                        let contains = drag_move_hits_item_path(event);
                         let changed = contains && this.set_item_drag_drop_target_for_pane(pane_id);
                         if contains {
                             this.set_drop_menu_position(event.event.position);
@@ -1281,12 +1242,7 @@ fn item_tile(
                     )
                     .on_drag_move::<ItemDrag>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                            let contains = drag_move_hits_item_path(
-                                this,
-                                pane_id,
-                                &path_for_directory_item_drag_hit,
-                                event,
-                            );
+                            let contains = drag_move_hits_item_path(event);
                             let valid_target = contains
                                 && this.item_drag_can_drop_to_directory(&target_dir_for_move);
                             let changed = if valid_target {
@@ -1321,12 +1277,7 @@ fn item_tile(
                     ))
                     .on_drag_move::<ExternalPaths>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                            let contains = drag_move_hits_item_path(
-                                this,
-                                pane_id,
-                                &path_for_directory_external_drag_hit,
-                                event,
-                            );
+                            let contains = drag_move_hits_item_path(event);
                             let changed = if contains {
                                 this.set_drop_menu_position(event.event.position);
                                 this.set_item_drag_drop_target_for_directory(
@@ -1379,12 +1330,7 @@ fn item_tile(
                 .when(!is_dir_for_drop, |tile| {
                     tile.on_drag_move::<ItemDrag>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<ItemDrag>, window, cx| {
-                            let contains = drag_move_hits_item_path(
-                                this,
-                                pane_id,
-                                &path_for_file_item_drag_hit,
-                                event,
-                            );
+                            let contains = drag_move_hits_item_path(event);
                             let changed = contains && {
                                 this.set_drop_menu_position(event.event.position);
                                 this.set_item_drag_drop_target_for_pane(pane_id)
@@ -1403,12 +1349,7 @@ fn item_tile(
                     ))
                     .on_drag_move::<ExternalPaths>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<ExternalPaths>, window, cx| {
-                            let contains = drag_move_hits_item_path(
-                                this,
-                                pane_id,
-                                &path_for_file_external_drag_hit,
-                                event,
-                            );
+                            let contains = drag_move_hits_item_path(event);
                             let changed = contains && {
                                 this.set_drop_menu_position(event.event.position);
                                 this.set_item_drag_drop_target_for_pane(pane_id)
@@ -1478,10 +1419,6 @@ fn item_tile_hover_background(selected: bool, drop_target: bool) -> Rgba {
     } else {
         rgb(0xeaf1ff)
     }
-}
-
-fn drop_target_viewport_background() -> Rgba {
-    rgba(0xf59e0b24)
 }
 
 fn drop_target_item_background() -> Rgba {
@@ -1795,24 +1732,59 @@ impl Render for DragPreview {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let left = self.cursor_offset_x + DRAG_PREVIEW_CURSOR_GAP;
         let top = self.cursor_offset_y + DRAG_PREVIEW_CURSOR_GAP;
+        let icon = self.icon.clone();
+        let show_count = self.count > 1;
+        let count = self.count;
         div()
             .relative()
             .w(px(left + DRAG_PREVIEW_MIN_WIDTH))
-            .h(px(top + DRAG_PREVIEW_MIN_HEIGHT))
+            .h(px(top + DRAG_PREVIEW_MIN_HEIGHT + 6.0))
             .child(
                 div()
                     .absolute()
                     .left(px(left))
                     .top(px(top))
+                    .h(px(DRAG_PREVIEW_MIN_HEIGHT))
                     .px_2()
-                    .py_1()
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(0x94a3b8))
                     .bg(rgb(0xffffff))
+                    .shadow_md()
+                    .flex()
+                    .items_center()
+                    .gap_2()
                     .text_sm()
                     .text_color(rgb(0x1f2937))
-                    .child(self.label.clone()),
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(26.0))
+                            .h(px(26.0))
+                            .rounded_sm()
+                            .overflow_hidden()
+                            .child(icon_image_or_fallback(icon))
+                            .when(show_count, |icon| {
+                                icon.child(
+                                    div()
+                                        .absolute()
+                                        .right(px(-1.0))
+                                        .bottom(px(-1.0))
+                                        .min_w(px(14.0))
+                                        .h(px(14.0))
+                                        .px(px(3.0))
+                                        .rounded_full()
+                                        .bg(rgb(0xd97706))
+                                        .text_xs()
+                                        .text_color(rgb(0xffffff))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(count.to_string()),
+                                )
+                            }),
+                    )
+                    .child(div().max_w(px(170.0)).truncate().child(self.label.clone())),
             )
     }
 }

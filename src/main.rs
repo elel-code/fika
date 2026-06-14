@@ -2862,19 +2862,6 @@ impl FikaApp {
         self.item_at_content_point(pane_id, point).is_none()
     }
 
-    pub(crate) fn window_position_hits_item_path_in_pane(
-        &mut self,
-        pane_id: PaneId,
-        position: gpui::Point<gpui::Pixels>,
-        path: &Path,
-    ) -> bool {
-        let Some(point) = self.content_point_from_window(pane_id, position) else {
-            return false;
-        };
-        self.item_at_content_point(pane_id, point)
-            .is_some_and(|hit| hit.path == path)
-    }
-
     fn start_rubber_band(&mut self, pane_id: PaneId, start: ViewPoint) {
         self.clear_rename_draft_for_pane(pane_id);
         self.clear_location_draft_for_pane(pane_id);
@@ -9572,12 +9559,12 @@ text/plain=viewer.desktop;\n",
         assert!(app.set_place_drag_drop_target_for_insert(0));
         assert!(place_drop_target_matches_insert(
             app.drop_targets.place(),
-            1
+            0
         ));
         assert!(
             app.place_snapshots()
                 .into_iter()
-                .find(|place| place.label == "User")
+                .find(|place| place.label == "Home")
                 .is_some_and(|place| place.insert_before)
         );
 
@@ -9642,7 +9629,7 @@ text/plain=viewer.desktop;\n",
         assert!(!app.clear_place_drop_target_for_insert(2));
         assert!(place_drop_target_matches_insert(
             app.drop_targets.place(),
-            1
+            0
         ));
         assert!(app.clear_place_drop_target_for_insert(0));
         assert!(app.drop_targets.stale_generation() > insert_generation);
@@ -9757,13 +9744,13 @@ text/plain=viewer.desktop;\n",
         app.begin_item_drag(payload.clone());
         app.drop_item_drag_to_place_insert(payload, 0);
 
-        assert_eq!(app.places[1].path, dropped);
+        assert_eq!(app.places[0].path, dropped);
         assert_eq!(
-            app.places[1].label,
-            default_place_label(&app.places[1].path)
+            app.places[0].label,
+            default_place_label(&app.places[0].path)
         );
-        assert!(app.places[1].editable);
-        assert!(app.places[1].removable);
+        assert!(app.places[0].editable);
+        assert!(app.places[0].removable);
         assert!(app.active_item_drag.is_none());
         assert!(app.drop_targets.place().is_none());
         assert!(
@@ -9774,15 +9761,15 @@ text/plain=viewer.desktop;\n",
             fika_core::load_user_places(&app.user_places_path),
             Ok(vec![
                 UserPlace::new(
-                    default_place_label(&app.places[1].path),
-                    app.places[1].path.clone()
+                    default_place_label(&app.places[0].path),
+                    app.places[0].path.clone()
                 ),
                 UserPlace::new("Existing".to_string(), existing.clone()),
             ])
         );
 
         let _ = std::fs::remove_dir_all(current);
-        let _ = std::fs::remove_dir_all(app.places[1].path.clone());
+        let _ = std::fs::remove_dir_all(app.places[0].path.clone());
         let _ = std::fs::remove_dir_all(existing);
     }
 
@@ -12020,13 +12007,24 @@ text/plain=viewer.desktop;\n",
             px(50.0 + item.visual_rect.y - view.scroll_y + 8.0),
         );
 
-        assert!(app.window_position_hits_item_path_in_pane(pane_id, point_on_alpha, &alpha));
-        assert!(!app.window_position_hits_item_path_in_pane(pane_id, point_on_alpha, &beta));
-        assert!(!app.window_position_hits_item_path_in_pane(
-            pane_id,
-            gpui::point(px(420.0), px(80.0)),
-            &alpha
-        ));
+        let point = app
+            .content_point_from_window(pane_id, point_on_alpha)
+            .unwrap();
+        assert_eq!(
+            app.item_at_content_point(pane_id, point)
+                .map(|hit| hit.path),
+            Some(alpha)
+        );
+        assert_ne!(
+            app.item_at_content_point(pane_id, point)
+                .map(|hit| hit.path),
+            Some(beta)
+        );
+        assert!(
+            app.content_point_from_window(pane_id, gpui::point(px(420.0), px(80.0)))
+                .and_then(|point| app.item_at_content_point(pane_id, point))
+                .is_none()
+        );
     }
 
     #[test]
