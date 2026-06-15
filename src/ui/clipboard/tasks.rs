@@ -1,9 +1,8 @@
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
 
 use fika_core::{
-    PaneId, TransferTaskResult, file_ops, paste_text_result_async, transfer_paths_result_async,
+    OperationController, PaneId, TransferTaskResult, paste_text_result_async,
+    transfer_paths_result_async,
 };
 #[cfg(test)]
 use fika_core::{paste_text_result, transfer_paths_result};
@@ -15,8 +14,7 @@ pub(crate) fn paste_clipboard_result(
     pane_id: PaneId,
     target_dir: PathBuf,
     clipboard: ClipboardState,
-    cancel: Option<Arc<AtomicBool>>,
-    progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
+    controller: Option<OperationController>,
 ) -> TransferTaskResult {
     let clipboard_mode = clipboard.mode;
     if let Some(text) = clipboard.text.as_deref() {
@@ -31,8 +29,7 @@ pub(crate) fn paste_clipboard_result(
         clipboard.paths,
         label,
         clipboard_mode == ClipboardMode::Cut,
-        cancel,
-        progress,
+        controller,
     )
 }
 
@@ -40,8 +37,7 @@ pub(crate) async fn paste_clipboard_result_async(
     pane_id: PaneId,
     target_dir: PathBuf,
     clipboard: ClipboardState,
-    cancel: Option<Arc<AtomicBool>>,
-    progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
+    controller: Option<OperationController>,
 ) -> TransferTaskResult {
     let clipboard_mode = clipboard.mode;
     let label = clipboard.action_label();
@@ -56,8 +52,7 @@ pub(crate) async fn paste_clipboard_result_async(
         clipboard.paths,
         label,
         clipboard_mode == ClipboardMode::Cut,
-        cancel,
-        progress,
+        controller,
     )
     .await
 }
@@ -82,7 +77,6 @@ mod tests {
             PaneId(7),
             target_dir.clone(),
             ClipboardState::files(ClipboardMode::Copy, vec![source.clone()]),
-            None,
             None,
         );
 
@@ -117,7 +111,6 @@ mod tests {
             temp.clone(),
             ClipboardState::text("plain text".to_string()).unwrap(),
             None,
-            None,
         );
 
         let destination = temp.join("Pasted Text.txt");
@@ -149,18 +142,17 @@ mod tests {
         std::fs::create_dir_all(&target_dir).unwrap();
         let source = source_dir.join("note.bin");
         std::fs::write(&source, vec![42_u8; 32 * 1024]).unwrap();
-        let progress = Arc::new(Mutex::new(file_ops::TransferProgress::default()));
+        let controller = OperationController::new();
 
         let result = paste_clipboard_result(
             PaneId(13),
             target_dir,
             ClipboardState::files(ClipboardMode::Copy, vec![source]),
-            None,
-            Some(Arc::clone(&progress)),
+            Some(controller.clone()),
         );
 
         assert_eq!(result.success_count, 1);
-        let progress = *progress.lock().unwrap();
+        let progress = controller.progress();
         assert_eq!(progress.bytes_total, 32 * 1024);
         assert_eq!(progress.bytes_done, 32 * 1024);
         let _ = std::fs::remove_dir_all(temp);
@@ -175,14 +167,14 @@ mod tests {
         std::fs::create_dir_all(&target_dir).unwrap();
         let source = source_dir.join("note.bin");
         std::fs::write(&source, "cancel").unwrap();
-        let cancel = Arc::new(AtomicBool::new(true));
+        let controller = OperationController::new();
+        controller.cancel();
 
         let result = paste_clipboard_result(
             PaneId(14),
             target_dir.clone(),
             ClipboardState::files(ClipboardMode::Copy, vec![source]),
-            Some(cancel),
-            None,
+            Some(controller),
         );
 
         assert_eq!(result.success_count, 0);
@@ -205,7 +197,6 @@ mod tests {
             PaneId(8),
             target_dir.clone(),
             ClipboardState::files(ClipboardMode::Cut, vec![source.clone()]),
-            None,
             None,
         );
 

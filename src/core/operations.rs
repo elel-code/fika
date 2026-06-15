@@ -35,6 +35,110 @@ pub enum UndoPayload {
     Transfer { items: Vec<TransferUndoItem> },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Operation {
+    Transfer {
+        pane_id: PaneId,
+        mode: FileTransferMode,
+        item_count: usize,
+        label: String,
+        clear_clipboard: bool,
+    },
+    PasteText {
+        pane_id: PaneId,
+    },
+    TrashSelection {
+        pane_id: PaneId,
+        item_count: usize,
+    },
+    TrashView {
+        pane_id: PaneId,
+        operation: TrashViewOperation,
+        item_count: usize,
+    },
+    Rename {
+        pane_id: PaneId,
+        path: PathBuf,
+    },
+    Create {
+        pane_id: PaneId,
+        kind: CreatedItemKind,
+    },
+    Undo {
+        pane_id: PaneId,
+        label: String,
+    },
+    External {
+        pane_id: PaneId,
+        title: String,
+        cancellable: bool,
+    },
+}
+
+impl Operation {
+    pub fn pane_id(&self) -> PaneId {
+        match self {
+            Self::Transfer { pane_id, .. }
+            | Self::PasteText { pane_id }
+            | Self::TrashSelection { pane_id, .. }
+            | Self::TrashView { pane_id, .. }
+            | Self::Rename { pane_id, .. }
+            | Self::Create { pane_id, .. }
+            | Self::Undo { pane_id, .. }
+            | Self::External { pane_id, .. } => *pane_id,
+        }
+    }
+
+    pub fn title(&self) -> String {
+        match self {
+            Self::Transfer {
+                mode, item_count, ..
+            } => mode.progress_label(*item_count),
+            Self::PasteText { .. } => "Pasting text".to_string(),
+            Self::TrashSelection { item_count, .. } => {
+                format!("Moving {item_count} item(s) to trash")
+            }
+            Self::TrashView {
+                operation,
+                item_count,
+                ..
+            } => operation.progress_label(*item_count),
+            Self::Rename { path, .. } => format!("Renaming {}", path.display()),
+            Self::Create { kind, .. } => {
+                format!("Creating {}", created_item_label(*kind).to_ascii_lowercase())
+            }
+            Self::Undo { label, .. } => format!("Undoing {label}"),
+            Self::External { title, .. } => title.clone(),
+        }
+    }
+
+    pub fn progress_label(&self) -> String {
+        match self {
+            Self::Transfer { label, .. } => label.clone(),
+            Self::PasteText { .. } => "Paste".to_string(),
+            _ => self.title(),
+        }
+    }
+
+    pub fn cancellable(&self) -> bool {
+        match self {
+            Self::Transfer { .. } | Self::PasteText { .. } => true,
+            Self::External { cancellable, .. } => *cancellable,
+            _ => false,
+        }
+    }
+
+    pub fn clear_clipboard(&self) -> bool {
+        matches!(
+            self,
+            Self::Transfer {
+                clear_clipboard: true,
+                ..
+            }
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CreatedItemKind {
     File,

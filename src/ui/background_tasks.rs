@@ -1,10 +1,9 @@
 use crate::FikaApp;
-use fika_core::PaneId;
+use fika_core::{OperationId, PaneId};
 use gpui::prelude::*;
 use gpui::{Context, Div, ParentElement, Stateful, Styled, div, px, rgb};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct BackgroundTaskId(pub(crate) u64);
+pub(crate) type BackgroundTaskId = OperationId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BackgroundTasksSnapshot {

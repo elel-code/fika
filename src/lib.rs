@@ -72,12 +72,16 @@ pub use core::network::{
     is_supported_network_scheme, network_root_location, network_root_path, normalize_network_uri,
     parse_network_location, supported_network_schemes,
 };
-pub use core::operation_runtime::{OperationRuntime, run_operation_task};
+pub use core::operation_runtime::{
+    OperationController, OperationId, OperationRuntime, OperationRuntimeError, OperationSnapshot,
+    run_operation_task, run_registered_operation,
+};
 pub use core::operations::{
     AffectedDirectoryRefresh, CreateItemResult, CreateUndoItem, CreatedItemKind, FileTransferMode,
-    OperationQueue, RenameItemResult, RenameUndoItem, TransferTaskResult, TransferUndoItem,
-    TrashSelectionResult, TrashUndoItem, TrashViewOperation, TrashViewOperationResult, UndoPayload,
-    UndoRecord, UndoSerial, UndoTaskResult, action_status, create_item_result,
+    Operation, OperationQueue, RenameItemResult, RenameUndoItem, TransferTaskResult,
+    TransferUndoItem, TrashSelectionResult, TrashUndoItem, TrashViewOperation,
+    TrashViewOperationResult, UndoPayload, UndoRecord, UndoSerial, UndoTaskResult, action_status,
+    create_item_result,
     create_item_result_async, created_item_label, default_created_item_name, parent_dirs,
     paste_text_result, paste_text_result_async, push_unique_path, rename_item_result,
     rename_item_result_async, transfer_paths_result, transfer_paths_result_async,

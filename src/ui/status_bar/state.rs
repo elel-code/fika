@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fika_core::file_ops;
+use fika_core::OperationController;
 
 #[derive(Clone, Debug)]
 pub(crate) struct StatusBarSnapshot {
@@ -106,8 +104,8 @@ pub(crate) struct StatusSummaryCacheEntry {
 #[derive(Clone, Debug)]
 pub(crate) struct OperationProgressHandle {
     pub(crate) label: String,
-    pub(crate) progress: Arc<Mutex<file_ops::TransferProgress>>,
-    pub(crate) cancel: Option<Arc<AtomicBool>>,
+    pub(crate) controller: OperationController,
+    pub(crate) cancellable: bool,
     pub(crate) started_at: Instant,
 }
 
@@ -116,16 +114,13 @@ impl OperationProgressHandle {
         if !progress_delay_elapsed(self.started_at, now) {
             return None;
         }
-        let progress = *self
-            .progress
-            .lock()
-            .expect("operation progress state poisoned");
+        let progress = self.controller.progress();
         Some(OperationProgressSnapshot {
             label: self.label.clone(),
             bytes_done: progress.bytes_done,
             bytes_total: progress.bytes_total,
             percent: progress_percent(progress.bytes_done, progress.bytes_total),
-            cancellable: self.cancel.is_some(),
+            cancellable: self.cancellable,
         })
     }
 }

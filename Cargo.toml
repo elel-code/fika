@@ -9,7 +9,7 @@ default-run = "fika"
 name = "fika_core"
 
 [dependencies]
-compio = { version = "0.19", default-features = false, features = ["fs", "io", "macros", "polling", "runtime"] }
+compio = { version = "0.19", default-features = false, features = ["fs", "io", "io-uring", "macros", "runtime"] }
 futures-lite = "2"
 gio = "0.22"
 gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }

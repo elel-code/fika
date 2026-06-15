@@ -1,10 +1,8 @@
-use crate::core::operation_runtime::run_operation_blocking;
+use crate::core::operation_runtime::{OperationController, run_operation_blocking};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use compio::buf::{BufResult, IntoInner};
@@ -44,7 +42,7 @@ pub fn perform_transfer_with_progress(
     source: &Path,
     target_dir: &Path,
     conflict_policy: &str,
-    cancel: Option<Arc<AtomicBool>>,
+    controller: Option<OperationController>,
     progress: impl FnMut(TransferProgress),
 ) -> Result<PathBuf, String> {
     let outcome = perform_transfer_with_progress_outcome(
@@ -52,7 +50,7 @@ pub fn perform_transfer_with_progress(
         source,
         target_dir,
         conflict_policy,
-        cancel,
+        controller,
         progress,
     )?;
     if let Some(backup) = outcome.overwritten_backup {
@@ -66,7 +64,7 @@ pub fn perform_transfer_with_progress_outcome(
     source: &Path,
     target_dir: &Path,
     conflict_policy: &str,
-    cancel: Option<Arc<AtomicBool>>,
+    controller: Option<OperationController>,
     mut progress: impl FnMut(TransferProgress),
 ) -> Result<TransferOutcome, String> {
     if !path_exists(source) {
@@ -95,8 +93,8 @@ pub fn perform_transfer_with_progress_outcome(
     };
 
     let result = match operation {
-        "move" => move_path(source, &destination, cancel.as_ref(), &mut progress),
-        "copy" => copy_path(source, &destination, cancel.as_ref(), &mut progress),
+        "move" => move_path(source, &destination, controller.as_ref(), &mut progress),
+        "copy" => copy_path(source, &destination, controller.as_ref(), &mut progress),
         "link" => link_path(source, &destination),
         _ => unreachable!("operation was validated before dispatch"),
     };
@@ -127,7 +125,7 @@ pub async fn perform_transfer_with_progress_outcome_async(
     source: &Path,
     target_dir: &Path,
     conflict_policy: &str,
-    cancel: Option<Arc<AtomicBool>>,
+    controller: Option<OperationController>,
     mut progress: impl FnMut(TransferProgress),
 ) -> Result<TransferOutcome, String> {
     let plan = prepare_transfer_async(
@@ -139,8 +137,12 @@ pub async fn perform_transfer_with_progress_outcome_async(
     .await?;
 
     let result = match operation {
-        "move" => move_path_async(source, &plan.destination, cancel.as_ref(), &mut progress).await,
-        "copy" => copy_path_async(source, &plan.destination, cancel.as_ref(), &mut progress).await,
+        "move" => {
+            move_path_async(source, &plan.destination, controller.as_ref(), &mut progress).await
+        }
+        "copy" => {
+            copy_path_async(source, &plan.destination, controller.as_ref(), &mut progress).await
+        }
         "link" => link_path_async(source, &plan.destination).await,
         _ => unreachable!("operation was validated before dispatch"),
     };
@@ -793,7 +795,7 @@ pub fn trash_restore_conflict(trash_path: &Path) -> Result<Option<TrashRestoreCo
 fn move_path(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     progress: &mut impl FnMut(TransferProgress),
 ) -> io::Result<()> {
     ensure_not_cancelled(cancel)?;
@@ -829,7 +831,7 @@ fn move_path(
 fn copy_path(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     progress: &mut impl FnMut(TransferProgress),
 ) -> io::Result<()> {
     ensure_not_cancelled(cancel)?;
@@ -855,7 +857,7 @@ fn copy_path(
 fn copy_path_inner(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     bytes_done: &mut u64,
     bytes_total: u64,
     progress: &mut impl FnMut(TransferProgress),
@@ -895,7 +897,7 @@ fn copy_path_inner(
 fn copy_symlink(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     bytes_done: &mut u64,
     bytes_total: u64,
     link_size: u64,
@@ -930,7 +932,7 @@ fn copy_symlink(
 fn copy_directory(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     bytes_done: &mut u64,
     bytes_total: u64,
     progress: &mut impl FnMut(TransferProgress),
@@ -960,7 +962,7 @@ fn copy_directory(
 fn copy_file(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     bytes_done: &mut u64,
     bytes_total: u64,
     progress: &mut impl FnMut(TransferProgress),
@@ -992,7 +994,7 @@ fn copy_file(
 async fn move_path_async(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     progress: &mut impl FnMut(TransferProgress),
 ) -> io::Result<()> {
     ensure_not_cancelled(cancel)?;
@@ -1028,7 +1030,7 @@ async fn move_path_async(
 async fn copy_path_async(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     progress: &mut impl FnMut(TransferProgress),
 ) -> io::Result<()> {
     ensure_not_cancelled(cancel)?;
@@ -1055,7 +1057,7 @@ async fn copy_path_async(
 fn copy_path_inner_async<'a, P>(
     source: &'a Path,
     destination: &'a Path,
-    cancel: Option<&'a Arc<AtomicBool>>,
+    cancel: Option<&'a OperationController>,
     bytes_done: &'a mut u64,
     bytes_total: u64,
     progress: &'a mut P,
@@ -1103,7 +1105,7 @@ where
 async fn copy_symlink_async(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     bytes_done: &mut u64,
     bytes_total: u64,
     link_size: u64,
@@ -1138,7 +1140,7 @@ async fn copy_symlink_async(
 async fn copy_directory_async(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     bytes_done: &mut u64,
     bytes_total: u64,
     progress: &mut impl FnMut(TransferProgress),
@@ -1168,7 +1170,7 @@ async fn copy_directory_async(
 async fn copy_file_async(
     source: &Path,
     destination: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&OperationController>,
     bytes_done: &mut u64,
     bytes_total: u64,
     progress: &mut impl FnMut(TransferProgress),
@@ -1245,7 +1247,9 @@ async fn blocking_io<T>(task: impl FnOnce() -> io::Result<T> + Send + 'static) -
 where
     T: Send + 'static,
 {
-    run_operation_blocking(task).await
+    run_operation_blocking(task)
+        .await
+        .map_err(|err| io::Error::other(err.to_string()))?
 }
 
 async fn blocking_string<T>(
@@ -1254,7 +1258,9 @@ async fn blocking_string<T>(
 where
     T: Send + 'static,
 {
-    run_operation_blocking(task).await
+    run_operation_blocking(task)
+        .await
+        .map_err(|err| err.to_string())?
 }
 
 async fn copy_path_preflight_async(source: &Path, destination: &Path) -> io::Result<(bool, u64)> {
@@ -1326,8 +1332,8 @@ fn path_size(path: &Path) -> io::Result<u64> {
     }
 }
 
-fn ensure_not_cancelled(cancel: Option<&Arc<AtomicBool>>) -> io::Result<()> {
-    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+fn ensure_not_cancelled(cancel: Option<&OperationController>) -> io::Result<()> {
+    if cancel.is_some_and(OperationController::is_cancelled) {
         Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "operation cancelled",
@@ -1689,7 +1695,6 @@ pub fn path_exists(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn copy_reports_progress() {
@@ -1730,15 +1735,15 @@ mod tests {
         fs::create_dir(&target).unwrap();
         fs::write(&source, vec![11_u8; 256 * 1024]).unwrap();
 
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_from_progress = Arc::clone(&cancel);
+        let controller = OperationController::new();
+        let cancel_from_progress = controller.clone();
         let result = perform_transfer_with_progress(
             "copy",
             &source,
             &target,
             "keep-both",
-            Some(cancel),
-            move |_| cancel_from_progress.store(true, Ordering::Relaxed),
+            Some(controller),
+            move |_| cancel_from_progress.cancel(),
         );
 
         assert!(result.is_err());
@@ -1758,15 +1763,15 @@ mod tests {
         fs::write(nested.join("first.bin"), vec![13_u8; 128 * 1024]).unwrap();
         fs::write(source.join("second.bin"), vec![17_u8; 128 * 1024]).unwrap();
 
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_from_progress = Arc::clone(&cancel);
+        let controller = OperationController::new();
+        let cancel_from_progress = controller.clone();
         let result = perform_transfer_with_progress(
             "copy",
             &source,
             &target,
             "keep-both",
-            Some(cancel),
-            move |_| cancel_from_progress.store(true, Ordering::Relaxed),
+            Some(controller),
+            move |_| cancel_from_progress.cancel(),
         );
 
         assert!(result.is_err());

@@ -7,21 +7,23 @@ use fika_core::SystemdLaunchResult;
 use fika_core::{
     CreateItemResult, FileTransferMode, RenameItemResult, TransferTaskResult, TrashSelectionResult,
     TrashViewOperation, TrashViewOperationResult, UndoTaskResult, action_status,
-    create_item_result_async, created_item_label, rename_item_result_async, run_operation_task,
-    transfer_paths_result_async, trash_selection_result_async, trash_view_operation_result_async,
-    undo_record_result_async,
+    create_item_result_async, created_item_label, rename_item_result_async,
+    run_registered_operation, transfer_paths_result_async, trash_selection_result_async,
+    trash_view_operation_result_async, undo_record_result_async,
 };
 use fika_core::{
     CreateUndoItem, CreatedItemKind, DeviceInfo, DeviceMonitorMessage, DevicePlaceOperation,
     DevicePlaceOperationResult, DirectoryCacheDebugSnapshot, DirectoryListerEvent, ListingRequest,
     ListingWorker, LoadingPaneState, MetadataRoleResult, MetadataRoleScheduler, OperationQueue,
-    PaneController, PaneId, RefreshPair, RenameUndoItem, SelectionMove, SortDescriptor, SortOrder,
-    SortRole, ThumbnailProbeResult, ThumbnailScheduler, TrashEmptinessMonitor, UndoPayload,
-    UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange, apply_thumbnail_probe_result_to_model,
-    breadcrumb_segments, complete_location_input, file_ops, listing_requests_from_events,
-    metadata_role_results_for_requests, nearest_existing_ancestor, perform_device_place_operation,
-    resolve_location_input, thumbnail_probe_results_for_requests, update_loading_state_for_event,
+    OperationRuntime, OperationSnapshot, PaneController, PaneId, RefreshPair, RenameUndoItem,
+    SelectionMove, SortDescriptor, SortOrder, SortRole, ThumbnailProbeResult, ThumbnailScheduler,
+    TrashEmptinessMonitor, UndoPayload, UserPlace, ViewMode, ViewPoint, ViewRect, ZoomChange,
+    apply_thumbnail_probe_result_to_model, breadcrumb_segments, complete_location_input, file_ops,
+    listing_requests_from_events, metadata_role_results_for_requests, nearest_existing_ancestor,
+    perform_device_place_operation, resolve_location_input, thumbnail_probe_results_for_requests,
+    update_loading_state_for_event,
 };
+use fika_core::{Operation, OperationId};
 use fika_core::{
     DesktopLaunchPlan, LauncherError, MimeApplication, MimeApplicationCache, NewWindowLaunchResult,
     OpenWithLaunchResult, ServiceMenuLaunchResult, ServiceMenuTarget, ark_compress_launch_plan,
@@ -42,8 +44,7 @@ use gpui::{
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 use ui::application_chooser::{
     ApplicationChooserState, application_chooser_filtered_applications,
@@ -125,9 +126,9 @@ use ui::shortcuts::{
     zoom_change_for_wheel_delta,
 };
 use ui::status_bar::{
-    OperationProgressHandle, OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot,
-    StatusBarSnapshot, StatusSummaryCacheEntry, StatusSummaryCacheKey, filesystem_space_info,
-    progress_delay_elapsed, status_summary_for_model, status_summary_for_model_indexes,
+    OperationProgressSnapshot, SpaceInfoCache, SpaceInfoSnapshot, StatusBarSnapshot,
+    StatusSummaryCacheEntry, StatusSummaryCacheKey, filesystem_space_info, progress_delay_elapsed,
+    status_summary_for_model, status_summary_for_model_indexes,
 };
 #[cfg(test)]
 use ui::status_bar::{
@@ -266,13 +267,6 @@ struct BackgroundTaskHistoryRecord {
     state: BackgroundTaskState,
 }
 
-#[derive(Clone, Debug)]
-struct ActiveBackgroundTaskRecord {
-    pane_id: PaneId,
-    message: String,
-    progress: Option<OperationProgressHandle>,
-}
-
 const RUBBER_BAND_START_DRAG_DISTANCE: f32 = 6.0;
 
 pub(crate) struct FikaApp {
@@ -328,8 +322,6 @@ pub(crate) struct FikaApp {
     trash_conflict_dialog: Option<TrashConflictDialogState>,
     application_chooser: Option<ApplicationChooserState>,
     pane_statuses: HashMap<PaneId, String>,
-    next_background_task_id: u64,
-    active_background_tasks: BTreeMap<BackgroundTaskId, ActiveBackgroundTaskRecord>,
     background_tasks_expanded: bool,
     background_task_history: VecDeque<BackgroundTaskHistoryRecord>,
 }
@@ -409,8 +401,6 @@ impl FikaApp {
             trash_conflict_dialog: None,
             application_chooser: None,
             pane_statuses: HashMap::new(),
-            next_background_task_id: 0,
-            active_background_tasks: BTreeMap::new(),
             background_tasks_expanded: false,
             background_task_history: VecDeque::new(),
         };
@@ -439,10 +429,7 @@ impl FikaApp {
                                 if app.drain_watchers()
                                     | app.drain_trash_monitor()
                                     | app.drain_device_monitor_messages()
-                                    | app
-                                        .active_background_tasks
-                                        .values()
-                                        .any(|task| task.progress.is_some())
+                                    | !app.operation_snapshots().is_empty()
                                     | !app.loading_panes.is_empty()
                                 {
                                     cx.notify();
@@ -1154,18 +1141,75 @@ impl FikaApp {
         &mut self,
         pane_id: PaneId,
         message: impl Into<String>,
-    ) -> BackgroundTaskId {
-        let task_id = BackgroundTaskId(self.next_background_task_id);
-        self.next_background_task_id = self.next_background_task_id.saturating_add(1);
-        self.active_background_tasks.insert(
-            task_id,
-            ActiveBackgroundTaskRecord {
-                pane_id,
-                message: message.into(),
-                progress: None,
-            },
-        );
-        task_id
+    ) -> Option<BackgroundTaskId> {
+        self.begin_operation(Operation::External {
+            pane_id,
+            title: message.into(),
+            cancellable: false,
+        })
+    }
+
+    fn begin_operation(&mut self, operation: Operation) -> Option<BackgroundTaskId> {
+        let pane_id = operation.pane_id();
+        match OperationRuntime::shared() {
+            Ok(runtime) => {
+                let handle = runtime.register_operation(operation);
+                Some(handle.id)
+            }
+            Err(err) => {
+                self.set_pane_status(pane_id, format!("Cannot start operation: {err}"));
+                None
+            }
+        }
+    }
+
+    fn operation_snapshots(&self) -> Vec<OperationSnapshot> {
+        OperationRuntime::shared()
+            .map(OperationRuntime::active_operations)
+            .unwrap_or_default()
+    }
+
+    fn operation_progress_snapshot_from_operation(
+        operation: &OperationSnapshot,
+        now: Instant,
+    ) -> Option<OperationProgressSnapshot> {
+        progress_delay_elapsed(operation.started_at, now).then(|| OperationProgressSnapshot {
+            label: operation.operation.progress_label(),
+            bytes_done: operation.progress.bytes_done,
+            bytes_total: operation.progress.bytes_total,
+            percent: progress_percent(operation.progress.bytes_done, operation.progress.bytes_total),
+            cancellable: operation.operation.cancellable(),
+        })
+    }
+
+    fn background_task_snapshot(
+        &self,
+        operation: OperationSnapshot,
+        now: Instant,
+    ) -> BackgroundTaskSnapshot {
+        let progress = Self::operation_progress_snapshot_from_operation(&operation, now);
+        let percent = progress.as_ref().and_then(|progress| progress.percent);
+        let title = if operation.cancelled && operation.operation.cancellable() {
+            format!("Cancelling {}", operation.operation.progress_label())
+        } else if operation.operation.cancellable() {
+            operation.operation.progress_label()
+        } else {
+            operation.operation.title()
+        };
+        let detail = match percent {
+            Some(percent) => format!("{percent}% complete"),
+            None if progress.is_some() => "Working".to_string(),
+            None if operation.operation.cancellable() => "Preparing".to_string(),
+            None => "Working".to_string(),
+        };
+        BackgroundTaskSnapshot {
+            id: operation.id,
+            pane_id: operation.operation.pane_id(),
+            title,
+            detail,
+            percent,
+            cancellable: operation.operation.cancellable(),
+        }
     }
 
     fn finish_pane_operation(
@@ -1201,54 +1245,17 @@ impl FikaApp {
     }
 
     fn background_task_snapshots(&self, now: Instant) -> Vec<BackgroundTaskSnapshot> {
-        self.active_background_tasks
-            .iter()
-            .map(|(id, task)| self.background_task_snapshot(*id, task, now))
+        self.operation_snapshots()
+            .into_iter()
+            .map(|operation| self.background_task_snapshot(operation, now))
             .collect()
     }
 
-    fn background_task_snapshot(
-        &self,
-        id: BackgroundTaskId,
-        task: &ActiveBackgroundTaskRecord,
-        now: Instant,
-    ) -> BackgroundTaskSnapshot {
-        let progress = task
-            .progress
-            .as_ref()
-            .and_then(|progress| progress.snapshot(now));
-        let percent = progress.as_ref().and_then(|progress| progress.percent);
-        let title = progress
-            .as_ref()
-            .map(|progress| progress.label.clone())
-            .unwrap_or_else(|| task.message.clone());
-        let detail = match percent {
-            Some(percent) => format!("{percent}% complete"),
-            None if task.progress.is_some() => "Preparing".to_string(),
-            None => "Working".to_string(),
-        };
-        BackgroundTaskSnapshot {
-            id,
-            pane_id: task.pane_id,
-            title,
-            detail,
-            percent,
-            cancellable: task
-                .progress
-                .as_ref()
-                .is_some_and(|progress| progress.cancel.is_some()),
-        }
-    }
-
     fn record_background_task_result(&mut self, task_id: BackgroundTaskId, message: &str) {
-        let title = self
-            .active_background_tasks
-            .remove(&task_id)
-            .map(|task| {
-                task.progress
-                    .map(|progress| progress.label)
-                    .unwrap_or(task.message)
-            })
+        let title = OperationRuntime::shared()
+            .ok()
+            .and_then(|runtime| runtime.complete_operation(task_id))
+            .map(|operation| operation.operation.progress_label())
             .unwrap_or_else(|| message.to_string());
         self.background_task_history
             .push_front(BackgroundTaskHistoryRecord {
@@ -1267,15 +1274,15 @@ impl FikaApp {
 
     pub(crate) fn clear_background_task_history(&mut self) {
         self.background_task_history.clear();
-        if self.active_background_tasks.is_empty() {
+        if self.operation_snapshots().is_empty() {
             self.background_tasks_expanded = false;
         }
     }
 
     fn has_active_background_task_for_pane(&self, pane_id: PaneId) -> bool {
-        self.active_background_tasks
-            .values()
-            .any(|task| task.pane_id == pane_id)
+        self.operation_snapshots()
+            .iter()
+            .any(|operation| operation.operation.pane_id() == pane_id)
     }
 
     #[cfg(test)]
@@ -1284,11 +1291,10 @@ impl FikaApp {
         pane_id: PaneId,
         now: Instant,
     ) -> Option<OperationProgressSnapshot> {
-        self.active_background_tasks
-            .values()
-            .filter(|task| task.pane_id == pane_id)
-            .filter_map(|task| task.progress.as_ref())
-            .find_map(|progress| progress.snapshot(now))
+        self.operation_snapshots()
+            .iter()
+            .filter(|operation| operation.operation.pane_id() == pane_id)
+            .find_map(|operation| Self::operation_progress_snapshot_from_operation(operation, now))
     }
 
     fn loading_progress_snapshot(
@@ -1307,46 +1313,29 @@ impl FikaApp {
         })
     }
 
-    fn start_transfer_progress(
-        &mut self,
-        task_id: BackgroundTaskId,
-        label: String,
-    ) -> (Arc<AtomicBool>, Arc<Mutex<file_ops::TransferProgress>>) {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let progress = Arc::new(Mutex::new(file_ops::TransferProgress::default()));
-        if let Some(task) = self.active_background_tasks.get_mut(&task_id) {
-            task.progress = Some(OperationProgressHandle {
-                label,
-                progress: Arc::clone(&progress),
-                cancel: Some(Arc::clone(&cancel)),
-                started_at: Instant::now(),
-            });
-        }
-        (cancel, progress)
-    }
-
     pub(crate) fn cancel_operation_or_loading(&mut self, pane_id: PaneId) {
-        if let Some((_task_id, task)) = self
-            .active_background_tasks
-            .iter_mut()
-            .find(|(_task_id, task)| task.pane_id == pane_id)
-            && let Some(progress) = &task.progress
-            && let Some(cancel) = &progress.cancel
-        {
-            cancel.store(true, Ordering::Relaxed);
-            task.message = format!("Cancelling {}", progress.label);
+        let Some(operation) = self
+            .operation_snapshots()
+            .into_iter()
+            .find(|operation| {
+                operation.operation.pane_id() == pane_id && operation.operation.cancellable()
+            })
+        else {
+            self.cancel_loading(pane_id);
             return;
+        };
+        if let Ok(runtime) = OperationRuntime::shared() {
+            runtime.cancel_operation(operation.id);
         }
-        self.cancel_loading(pane_id);
+        self.set_pane_status(
+            pane_id,
+            format!("Cancelling {}", operation.operation.progress_label()),
+        );
     }
 
     pub(crate) fn cancel_background_operation(&mut self, task_id: BackgroundTaskId) {
-        if let Some(task) = self.active_background_tasks.get_mut(&task_id)
-            && let Some(progress) = &task.progress
-            && let Some(cancel) = &progress.cancel
-        {
-            cancel.store(true, Ordering::Relaxed);
-            task.message = format!("Cancelling {}", progress.label);
+        if let Ok(runtime) = OperationRuntime::shared() {
+            runtime.cancel_operation(task_id);
         }
     }
 
@@ -1839,7 +1828,9 @@ impl FikaApp {
         operation: DevicePlaceOperation,
         cx: &mut Context<Self>,
     ) {
-        let task_id = self.begin_pane_operation(pane_id, operation.in_progress_message(&label));
+        let Some(task_id) = self.begin_pane_operation(pane_id, operation.in_progress_message(&label)) else {
+            return;
+        };
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
@@ -3955,18 +3946,33 @@ impl FikaApp {
         let Some(draft) = self.rename_draft.take() else {
             return;
         };
-        let task_id = self.begin_pane_operation(
-            draft.pane_id,
-            format!("Renaming {}", draft.original_path.display()),
-        );
+        let pane_id = draft.pane_id;
+        let original_path = draft.original_path.clone();
+        let Some((task_id, _controller)) = self.begin_operation(Operation::Rename {
+            pane_id,
+            path: original_path.clone(),
+        }) else {
+            return;
+        };
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = run_operation_task(move || async move {
-                        rename_item_result_async(draft.pane_id, draft.original_path, new_name).await
-                    })
-                    .await;
+                    let fallback_path = original_path.clone();
+                    let result =
+                        match run_registered_operation(task_id, move |_controller| async move {
+                            rename_item_result_async(pane_id, original_path, new_name).await
+                        })
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(err) => RenameItemResult {
+                                pane_id,
+                                original_path: fallback_path.clone(),
+                                affected_dirs: fika_core::parent_dirs([fallback_path.clone()]),
+                                result: Err(err.to_string()),
+                            },
+                        };
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_rename_item(task_id, result);
                         cx.notify();
@@ -4089,18 +4095,30 @@ impl FikaApp {
         if self.chooser.is_some() {
             return;
         }
-        let task_id = self.begin_pane_operation(
-            pane_id,
-            format!("Creating {}", created_item_label(kind).to_ascii_lowercase()),
-        );
+        let Some((task_id, _controller)) =
+            self.begin_operation(Operation::Create { pane_id, kind })
+        else {
+            return;
+        };
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = run_operation_task(move || async move {
-                        create_item_result_async(pane_id, parent_dir, kind).await
-                    })
-                    .await;
+                    let fallback_parent = parent_dir.clone();
+                    let result =
+                        match run_registered_operation(task_id, move |_controller| async move {
+                            create_item_result_async(pane_id, parent_dir, kind).await
+                        })
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(err) => CreateItemResult {
+                                pane_id,
+                                kind,
+                                affected_dirs: vec![fallback_parent],
+                                result: Err(err.to_string()),
+                            },
+                        };
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_create_item(task_id, result);
                         cx.notify();
@@ -4287,24 +4305,57 @@ impl FikaApp {
             return;
         }
 
-        let progress_label = clipboard.progress_label();
-        let task_id = self.begin_pane_operation(pane_id, progress_label.clone());
-        let (cancel, progress) = self.start_transfer_progress(task_id, progress_label);
+        let operation = if clipboard.text.is_some() {
+            Operation::PasteText { pane_id }
+        } else {
+            Operation::Transfer {
+                pane_id,
+                mode: clipboard.mode.transfer_mode(),
+                item_count: clipboard.paths.len(),
+                label: clipboard.action_label().to_string(),
+                clear_clipboard: clipboard.mode == ClipboardMode::Cut,
+            }
+        };
+        let Some((task_id, _controller)) = self.begin_operation(operation) else {
+            return;
+        };
         cx.spawn(
             move |this: gpui::WeakEntity<FikaApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    let result = run_operation_task(move || async move {
+                    let fallback_target = target_dir.clone();
+                    let fallback_mode = if clipboard.text.is_some() {
+                        FileTransferMode::Copy
+                    } else {
+                        clipboard.mode.transfer_mode()
+                    };
+                    let fallback_label = clipboard.action_label();
+                    let fallback_clear_clipboard = clipboard.mode == ClipboardMode::Cut;
+                    let result = match run_registered_operation(task_id, move |controller| async move {
                         paste_clipboard_result_async(
                             pane_id,
                             target_dir,
                             clipboard,
-                            Some(cancel),
-                            Some(progress),
+                            Some(controller),
                         )
                         .await
                     })
-                    .await;
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => TransferTaskResult {
+                            pane_id,
+                            mode: fallback_mode,
+                            label: fallback_label,
+                            clear_clipboard: fallback_clear_clipboard,
+                            success_count: 0,
+                            failure_count: 1,
+                            affected_dirs: Vec::new(),
+                            refresh_dirs: vec![fallback_target],
+                            undo_items: Vec::new(),
+                            created_items: Vec::new(),
+                        },
+                    };
                     let _ = this.update(&mut cx, |app, cx| {
                         app.finish_transfer(task_id, result);
                         cx.notify();
@@ -13786,8 +13837,6 @@ text/plain=viewer.desktop;\n",
             trash_conflict_dialog: None,
             application_chooser: None,
             pane_statuses: HashMap::new(),
-            next_background_task_id: 0,
-            active_background_tasks: BTreeMap::new(),
             background_tasks_expanded: false,
             background_task_history: VecDeque::new(),
         }

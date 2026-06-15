@@ -2,11 +2,9 @@ use super::{
     CreateUndoItem, CreatedItemKind, TransferUndoItem, TrashUndoItem, UndoPayload, UndoRecord,
 };
 use crate::core::file_ops;
-use crate::core::operation_runtime::run_operation_blocking;
+use crate::core::operation_runtime::{OperationController, run_operation_blocking};
 use crate::core::pane::PaneId;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileTransferMode {
@@ -152,7 +150,15 @@ pub async fn rename_item_result_async(
     original_path: PathBuf,
     new_name: String,
 ) -> RenameItemResult {
-    run_operation_blocking(move || rename_item_result(pane_id, original_path, new_name)).await
+    let fallback_path = original_path.clone();
+    run_operation_blocking(move || rename_item_result(pane_id, original_path, new_name))
+        .await
+        .unwrap_or_else(|err| RenameItemResult {
+            pane_id,
+            affected_dirs: parent_dirs([fallback_path.clone()]),
+            original_path: fallback_path,
+            result: Err(err.to_string()),
+        })
 }
 
 pub fn create_item_result(
@@ -181,7 +187,15 @@ pub async fn create_item_result_async(
     parent_dir: PathBuf,
     kind: CreatedItemKind,
 ) -> CreateItemResult {
-    run_operation_blocking(move || create_item_result(pane_id, parent_dir, kind)).await
+    let fallback_parent = parent_dir.clone();
+    run_operation_blocking(move || create_item_result(pane_id, parent_dir, kind))
+        .await
+        .unwrap_or_else(|err| CreateItemResult {
+            pane_id,
+            kind,
+            affected_dirs: vec![fallback_parent],
+            result: Err(err.to_string()),
+        })
 }
 
 pub fn default_created_item_name(kind: CreatedItemKind) -> &'static str {
@@ -238,7 +252,21 @@ pub async fn paste_text_result_async(
     target_dir: PathBuf,
     text: String,
 ) -> TransferTaskResult {
-    run_operation_blocking(move || paste_text_result(pane_id, target_dir, &text)).await
+    let fallback_target = target_dir.clone();
+    run_operation_blocking(move || paste_text_result(pane_id, target_dir, &text))
+        .await
+        .unwrap_or_else(|_| TransferTaskResult {
+            pane_id,
+            mode: FileTransferMode::Copy,
+            label: "Paste",
+            clear_clipboard: false,
+            success_count: 0,
+            failure_count: 1,
+            affected_dirs: Vec::new(),
+            refresh_dirs: vec![fallback_target],
+            undo_items: Vec::new(),
+            created_items: Vec::new(),
+        })
 }
 
 pub fn transfer_paths_result(
@@ -248,8 +276,7 @@ pub fn transfer_paths_result(
     paths: Vec<PathBuf>,
     label: &'static str,
     clear_clipboard: bool,
-    cancel: Option<Arc<AtomicBool>>,
-    progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
+    controller: Option<OperationController>,
 ) -> TransferTaskResult {
     let operation = mode.operation();
     let mut success_count = 0;
@@ -259,25 +286,23 @@ pub fn transfer_paths_result(
     let mut undo_items = Vec::new();
 
     for source in paths {
-        if cancel
+        if controller
             .as_ref()
-            .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+            .is_some_and(OperationController::is_cancelled)
         {
             failure_count += 1;
             continue;
         }
-        let progress = progress.clone();
+        let progress_controller = controller.clone();
         match file_ops::perform_transfer_with_progress_outcome(
             operation,
             &source,
             &target_dir,
             "keep-both",
-            cancel.clone(),
+            controller.clone(),
             move |transfer_progress| {
-                if let Some(progress) = &progress
-                    && let Ok(mut progress) = progress.lock()
-                {
-                    *progress = transfer_progress;
+                if let Some(controller) = &progress_controller {
+                    controller.set_progress(transfer_progress);
                 }
             },
         ) {
@@ -328,8 +353,7 @@ pub async fn transfer_paths_result_async(
     paths: Vec<PathBuf>,
     label: &'static str,
     clear_clipboard: bool,
-    cancel: Option<Arc<AtomicBool>>,
-    progress: Option<Arc<Mutex<file_ops::TransferProgress>>>,
+    controller: Option<OperationController>,
 ) -> TransferTaskResult {
     let operation = mode.operation();
     let mut success_count = 0;
@@ -339,25 +363,23 @@ pub async fn transfer_paths_result_async(
     let mut undo_items = Vec::new();
 
     for source in paths {
-        if cancel
+        if controller
             .as_ref()
-            .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+            .is_some_and(OperationController::is_cancelled)
         {
             failure_count += 1;
             continue;
         }
-        let progress = progress.clone();
+        let progress_controller = controller.clone();
         match file_ops::perform_transfer_with_progress_outcome_async(
             operation,
             &source,
             &target_dir,
             "keep-both",
-            cancel.clone(),
+            controller.clone(),
             move |transfer_progress| {
-                if let Some(progress) = &progress
-                    && let Ok(mut progress) = progress.lock()
-                {
-                    *progress = transfer_progress;
+                if let Some(controller) = &progress_controller {
+                    controller.set_progress(transfer_progress);
                 }
             },
         )
@@ -441,7 +463,15 @@ pub async fn trash_selection_result_async(
     pane_id: PaneId,
     selected_paths: Vec<PathBuf>,
 ) -> TrashSelectionResult {
-    run_operation_blocking(move || trash_selection_result(pane_id, selected_paths)).await
+    run_operation_blocking(move || trash_selection_result(pane_id, selected_paths))
+        .await
+        .unwrap_or_else(|_| TrashSelectionResult {
+            pane_id,
+            success_count: 0,
+            failure_count: 1,
+            affected_dirs: Vec::new(),
+            undo_items: Vec::new(),
+        })
 }
 
 pub fn trash_view_operation_result(
@@ -490,7 +520,16 @@ pub async fn trash_view_operation_result_async(
     operation: TrashViewOperation,
     paths: Vec<PathBuf>,
 ) -> TrashViewOperationResult {
-    run_operation_blocking(move || trash_view_operation_result(pane_id, operation, paths)).await
+    run_operation_blocking(move || trash_view_operation_result(pane_id, operation, paths))
+        .await
+        .unwrap_or_else(|_| TrashViewOperationResult {
+            pane_id,
+            operation,
+            success_count: 0,
+            failure_count: 1,
+            affected_dirs: Vec::new(),
+            restore_conflicts: Vec::new(),
+        })
 }
 
 pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
@@ -562,7 +601,13 @@ pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
 }
 
 pub async fn undo_record_result_async(record: UndoRecord) -> UndoTaskResult {
-    run_operation_blocking(move || undo_record_result(record)).await
+    let fallback_record = record.clone();
+    run_operation_blocking(move || undo_record_result(record))
+        .await
+        .unwrap_or_else(|err| UndoTaskResult {
+            record: fallback_record,
+            result: Err(err.to_string()),
+        })
 }
 
 pub fn parent_dirs(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
@@ -724,7 +769,6 @@ mod tests {
             "Copy",
             false,
             None,
-            None,
         );
 
         let destination = target_dir.join("note.txt");
@@ -767,7 +811,6 @@ mod tests {
             "Move",
             true,
             None,
-            None,
         );
 
         let destination = target_dir.join("note.txt");
@@ -800,7 +843,7 @@ mod tests {
         std::fs::create_dir_all(&target_dir).unwrap();
         let source = source_dir.join("note.bin");
         std::fs::write(&source, vec![42_u8; 32 * 1024]).unwrap();
-        let progress = Arc::new(Mutex::new(file_ops::TransferProgress::default()));
+        let controller = OperationController::new();
 
         let result = transfer_paths_result(
             PaneId(13),
@@ -809,12 +852,11 @@ mod tests {
             vec![source],
             "Copy",
             false,
-            None,
-            Some(Arc::clone(&progress)),
+            Some(controller.clone()),
         );
 
         assert_eq!(result.success_count, 1);
-        let progress = *progress.lock().unwrap();
+        let progress = controller.progress();
         assert_eq!(progress.bytes_total, 32 * 1024);
         assert_eq!(progress.bytes_done, 32 * 1024);
         let _ = std::fs::remove_dir_all(temp);
@@ -829,13 +871,13 @@ mod tests {
         std::fs::create_dir_all(&target_dir).unwrap();
         let source = source_dir.join("note.bin");
         std::fs::write(&source, vec![7_u8; 96 * 1024]).unwrap();
-        let progress = Arc::new(Mutex::new(file_ops::TransferProgress::default()));
+        let controller = OperationController::new();
 
         let result =
             futures_lite::future::block_on(crate::core::operation_runtime::run_operation_task({
                 let target_dir = target_dir.clone();
                 let source = source.clone();
-                let progress = Arc::clone(&progress);
+                let controller = controller.clone();
                 move || async move {
                     transfer_paths_result_async(
                         PaneId(21),
@@ -844,19 +886,19 @@ mod tests {
                         vec![source],
                         "Copy",
                         false,
-                        None,
-                        Some(progress),
+                        Some(controller),
                     )
                     .await
                 }
-            }));
+            }))
+            .unwrap();
 
         assert_eq!(result.success_count, 1);
         assert_eq!(
             std::fs::read(target_dir.join("note.bin")).unwrap(),
             vec![7_u8; 96 * 1024]
         );
-        let progress = *progress.lock().unwrap();
+        let progress = controller.progress();
         assert_eq!(progress.bytes_total, 96 * 1024);
         assert_eq!(progress.bytes_done, 96 * 1024);
         let _ = std::fs::remove_dir_all(temp);
@@ -871,7 +913,8 @@ mod tests {
         std::fs::create_dir_all(&target_dir).unwrap();
         let source = source_dir.join("note.bin");
         std::fs::write(&source, "cancel").unwrap();
-        let cancel = Arc::new(AtomicBool::new(true));
+        let controller = OperationController::new();
+        controller.cancel();
 
         let result = transfer_paths_result(
             PaneId(14),
@@ -880,8 +923,7 @@ mod tests {
             vec![source],
             "Copy",
             false,
-            Some(cancel),
-            None,
+            Some(controller),
         );
 
         assert_eq!(result.success_count, 0);
@@ -905,7 +947,6 @@ mod tests {
             vec![temp.join("missing.txt")],
             "Copy",
             false,
-            None,
             None,
         );
 
@@ -1076,7 +1117,6 @@ mod tests {
             vec![source.clone()],
             "Move",
             true,
-            None,
             None,
         );
         assert_eq!(transfer.success_count, 1);
