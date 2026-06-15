@@ -6,7 +6,7 @@ use fika_core::{
 use std::ops::Range;
 
 const AVERAGE_COMPACT_CHAR_WIDTH: f32 = 8.5;
-const DOLPHIN_TEXT_ELLIPSIS: char = '\u{2026}';
+const DOLPHIN_WRAP_OPPORTUNITY: char = '\u{200B}';
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CompactColumnWidthCacheKey {
@@ -198,9 +198,9 @@ pub(crate) fn compact_text_width_for_name(name: &str) -> f32 {
 
 fn estimated_name_char_width(ch: char) -> f32 {
     match ch {
+        DOLPHIN_WRAP_OPPORTUNITY => 0.0,
         'i' | 'l' | 'I' | '!' | '.' | ',' | ':' | ';' | '\'' | '`' | '|' => 4.0,
         ' ' | '-' | '_' => 5.0,
-        '\u{2026}' => 8.0,
         'm' | 'w' | 'M' | 'W' | '@' | '%' | '#' => 11.0,
         'A'..='Z' => 9.0,
         '0'..='9' => 8.0,
@@ -225,24 +225,26 @@ fn capped_icon_item_name_text_height(text_height: f32) -> f32 {
     text_height.max(min_height).min(max_height)
 }
 
-pub(crate) fn dolphin_icon_display_name(
-    name: &str,
-    available_text_width: f32,
-    max_lines: usize,
-) -> String {
-    let max_lines = max_lines.max(1);
-    let lines = wrapped_item_name_line_ranges(name, available_text_width);
-    if lines.len() <= max_lines {
-        return name.to_string();
+pub(crate) fn dolphin_preprocess_wrap(text: &str) -> String {
+    let mut processed = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        processed.push(ch);
+        let Some(next) = chars.peek().copied() else {
+            continue;
+        };
+        if dolphin_wrap_opportunity_after(ch)
+            && !next.is_whitespace()
+            && next != DOLPHIN_WRAP_OPPORTUNITY
+        {
+            processed.push(DOLPHIN_WRAP_OPPORTUNITY);
+        }
     }
+    processed
+}
 
-    let last_line_start = lines[max_lines - 1].start;
-    let last_line = &name[last_line_start..];
-    format!(
-        "{}{}",
-        &name[..last_line_start],
-        elide_middle_to_width(last_line, available_text_width)
-    )
+fn dolphin_wrap_opportunity_after(ch: char) -> bool {
+    ch.is_ascii_punctuation()
 }
 
 fn wrapped_item_name_line_count(name: &str, available_text_width: f32) -> usize {
@@ -338,62 +340,10 @@ fn estimated_text_width(text: &str) -> f32 {
 }
 
 fn is_estimated_wrap_candidate(ch: char) -> bool {
+    if ch == DOLPHIN_WRAP_OPPORTUNITY {
+        return true;
+    }
     ch.is_whitespace() || !(ch.is_ascii_alphanumeric() || matches!(ch, '\u{00C0}'..='\u{024F}'))
-}
-
-fn elide_middle_to_width(text: &str, max_width: f32) -> String {
-    let max_width = max_width.max(1.0);
-    if estimated_text_width(text) <= max_width {
-        return text.to_string();
-    }
-
-    let ellipsis_width = estimated_name_char_width(DOLPHIN_TEXT_ELLIPSIS);
-    if ellipsis_width >= max_width {
-        return DOLPHIN_TEXT_ELLIPSIS.to_string();
-    }
-
-    let budget = max_width - ellipsis_width;
-    let spans = text
-        .char_indices()
-        .map(|(start, ch)| (start, start + ch.len_utf8(), estimated_name_char_width(ch)))
-        .collect::<Vec<_>>();
-    let mut left = 0usize;
-    let mut right = spans.len();
-    let mut left_width = 0.0f32;
-    let mut right_width = 0.0f32;
-
-    while left < right {
-        if left_width <= right_width {
-            let width = spans[left].2;
-            if left_width + right_width + width > budget {
-                break;
-            }
-            left_width += width;
-            left += 1;
-        } else {
-            let width = spans[right - 1].2;
-            if left_width + right_width + width > budget {
-                break;
-            }
-            right -= 1;
-            right_width += width;
-        }
-    }
-
-    let prefix_end = spans
-        .get(left.saturating_sub(1))
-        .map(|(_, end, _)| *end)
-        .unwrap_or(0);
-    let suffix_start = spans
-        .get(right)
-        .map(|(start, _, _)| *start)
-        .unwrap_or(text.len());
-    format!(
-        "{}{}{}",
-        &text[..prefix_end],
-        DOLPHIN_TEXT_ELLIPSIS,
-        &text[suffix_start..]
-    )
 }
 
 pub(crate) fn entry_name_text_width(entry: &fika_core::EntryData) -> f32 {
@@ -577,7 +527,10 @@ fn icon_item_heights_for_model(
             {
                 item_name_text_height_for_width(override_.text_width, available_text_width)
             } else {
-                item_name_text_height_for_name(&entry.name, available_text_width)
+                item_name_text_height_for_name(
+                    &dolphin_preprocess_wrap(&entry.name),
+                    available_text_width,
+                )
             };
             options.padding * 3.0
                 + options.icon_size
@@ -668,13 +621,18 @@ mod tests {
     }
 
     #[test]
-    fn dolphin_icon_display_name_elides_last_line_without_ascii_dots() {
-        let name = "elzykosuda227446+breuyev@hotmail.cpa.2026-06-22.json";
-        let display_name = dolphin_icon_display_name(name, 92.0, 3);
+    fn dolphin_preprocess_wrap_adds_invisible_breaks_without_ellipsis() {
+        let name = "alpha-beta.gamma";
+        let display_name = dolphin_preprocess_wrap(name);
 
-        assert!(display_name.contains(DOLPHIN_TEXT_ELLIPSIS));
+        assert!(display_name.contains(DOLPHIN_WRAP_OPPORTUNITY));
         assert!(!display_name.contains("..."));
-        assert!(wrapped_item_name_line_count(&display_name, 92.0) <= 3);
+        assert!(!display_name.contains('\u{2026}'));
+        assert_eq!(display_name.replace(DOLPHIN_WRAP_OPPORTUNITY, ""), name);
+        assert_eq!(
+            compact_text_width_for_name(&display_name),
+            compact_text_width_for_name(name)
+        );
     }
 
     #[test]

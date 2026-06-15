@@ -1338,7 +1338,7 @@ fn text_view(
         .h(px(text.height))
         .flex()
         .flex_col()
-        .overflow_hidden()
+        .when(!renaming, |view| view.overflow_hidden())
         .when(
             (!renaming && matches!(text_alignment, ItemTileTextAlignment::Start))
                 || (renaming && !show_helper),
@@ -1355,6 +1355,10 @@ fn text_view(
                 rename_layout.name_height,
                 cx,
             )
+            .when(
+                matches!(text_alignment, ItemTileTextAlignment::Start),
+                |editor| editor.relative().left(px(-1.0)).top(px(1.0)),
+            )
             .into_any_element()
         } else {
             match text_alignment {
@@ -1363,13 +1367,10 @@ fn text_view(
                         .h(px(rename_layout.name_height))
                         .into_any_element()
                 }
-                ItemTileTextAlignment::Center => item_name_label_view(
-                    display_name,
-                    selected,
-                    text.width,
-                    rename_layout.name_height,
-                )
-                .into_any_element(),
+                ItemTileTextAlignment::Center => {
+                    item_name_label_view(display_name, selected, rename_layout.name_height)
+                        .into_any_element()
+                }
             }
         })
         .child(item_helper_label_view(
@@ -1380,14 +1381,14 @@ fn text_view(
         ))
 }
 
-fn item_name_label_view(display_name: &str, selected: bool, width: f32, height: f32) -> Div {
+fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div {
     let text_color = if selected {
         rgb(0x0f172a)
     } else {
         rgb(0x24292f)
     };
     let max_lines = (height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
-    let display_name = layout::dolphin_icon_display_name(display_name, width, max_lines);
+    let display_name = layout::dolphin_preprocess_wrap(display_name);
     div()
         .h(px(height))
         .w_full()
