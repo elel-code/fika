@@ -33,96 +33,144 @@ src/
   lib.rs                         UI-neutral core module exports
   main.rs                        GPUI application and chooser shell
   core.rs                        Core module re-exports
+  cli.rs                         CLI argument parsing entry point
+  cli/
+    args.rs                      Chooser mode metadata and help parsing
   core/
     archive.rs                   Ark DnD extraction and classification
     bus.rs                       D-Bus session/system bus controller
     cache.rs                     Directory entry cache (LRU, shared Arc payloads)
     clipboard.rs                 URI-list encode/decode and GPUI round-trip
+    devices.rs                   GIO/GVfs device discovery entry point
+    devices/
+      actions.rs                 Mount/unmount/eject/safely-remove operations
     directory.rs                 Directory lister and watcher events
     entries.rs                   File entry metadata and sorting
     file_ops.rs                  File transfer/trash/create/rename primitives
     filter.rs                    Name filter model (plain-text, glob)
     launcher.rs                  .desktop / mimeapps.list application discovery
+    launcher/
+      ark.rs                     Ark archive launch plan construction
+      results.rs                 Launch result types
     listing_worker.rs            Background directory-read worker
-    location.rs                  Path resolution, breadcrumbs, tab-completion
+    location.rs                  Path resolution, breadcrumbs, Tab completion
+    metadata.rs                  Entry metadata role resolution
     mime.rs                      MIME detection via shared-mime-info
     model.rs                     Directory model snapshots and signals
     network.rs                   GVfs/remote filesystem classification
+    operation_runtime.rs         Tokio + Compio operation runtime bridge
     operations.rs                Operation queue and undo boundary
+    operations/
+      tasks.rs                   File operation task result types
     pane.rs                      Pane identity, state, split/close routing
     places.rs                    Places model (bookmarks, devices, network)
     privilege.rs                 Privileged operation API surface
     thumbnails.rs                Freedesktop thumbnail URI and cache keys
+    thumbnails/
+      scheduler.rs               Dolphin-style visible-first thumbnail scheduling
+    trash_monitor.rs             App-owned Trash emptiness state and watcher
     view.rs                      Compact layout, viewport math, visible range
-    devices.rs                   GIO/GVfs device discovery (entry point)
-    devices/
-      actions.rs                 Mount/unmount/eject/safely-remove operations
-    launcher/
-      ark.rs                     Ark archive launch plan construction
-      results.rs                 Launch result types
-    operations/
-      tasks.rs                   File operation task result types
   ui.rs                          UI module re-exports
   ui/
-    application_chooser.rs       "Other Application…" chooser
-    chooser.rs                   File chooser mode
-    clipboard.rs                 Clipboard interaction
-    context_menu.rs              Context menu target/action/icon model
-    controls.rs                  Shared UI control helpers
-    drag_drop.rs                 Drag-and-drop
-    file_grid.rs                 File grid and visible-item virtualization
-    filter_bar.rs                Filter bar
-    icons.rs                     File/named icon resolution
-    location_bar.rs              Location bar (breadcrumb + editable)
-    pane.rs                      Pane shell
-    places.rs                    Places sidebar
-    properties_dialog.rs         Properties dialog
-    rename.rs                    Inline rename
-    rubber_band.rs               Rubber-band selection
-    shortcuts.rs                 Keyboard shortcut classification
-    status_bar.rs                Status bar
-    place_draft.rs               Places Add/Edit draft
+    application_chooser.rs       "Other Application…" chooser entry point
     application_chooser/
       identity.rs                Application chooser item identity
-      search.rs                  Application chooser search caret and hit-test
+      matching.rs                Application dedup and search matching
+      search.rs                  Search box caret, hit-test, and input
+    background_tasks.rs          Sidebar background task panel
+    chooser.rs                   File chooser mode entry point
     chooser/
       state.rs                   Chooser state and portal metadata output
+    clipboard.rs                 Clipboard UI entry point
     clipboard/
-      state.rs                   Copy/cut mode and GPUI ClipboardItem state
+      state.rs                   Copy/cut mode and ClipboardItem state
+      tasks.rs                   Paste task result and progress tracking
+    context_menu.rs              Context menu target, action, icon model
+    context_menu/
+      actions.rs                 Root action generation and routing
+      icons.rs                   Context menu icon resolution
+      items.rs                   Menu item construction and grouping
+      layout.rs                  Menu dimension, viewport clamp, and flip math
+      overlay.rs                 Context menu overlay rendering
+      service.rs                 Service-menu action dispatch
+    controls.rs                  Shared UI control helpers
+    drag_drop.rs                 Drag-drop UI entry point
     drag_drop/
       state.rs                   DnD state, export payloads, modifier-to-mode, target matching
+    file_grid.rs                 File grid UI entry point
     file_grid/
-      layout.rs                  Dolphin-style model-keyed compact size-hint/column-width cache and layout assembly
+      details.rs                 Details-view column layout and rendering
+      layout.rs                  Compact column-width cache and layout assembly
+      projection.rs              Hit-test projection and filtered layout mapping
       slots.rs                   Visible-item slot pool (recycled element IDs)
       snapshot.rs                Visible-item snapshot data
+    filter_bar.rs                Filter bar UI entry point
     filter_bar/
+      icon.rs                    Filter mode toggle icons
       state.rs                   Filter snapshot and filtered model cache
+    icons.rs                     File/named icon entry point
     icons/
-      cache.rs                   FileIconCache, MIME candidate, theme resolution, shared icon snapshots
-      roles.rs                   Dolphin iconName role snapshot/update policy
+      cache.rs                   FileIconCache, MIME candidate, theme resolution
       view.rs                    Cached theme icon rendering helper
+    item_view.rs                 Item-view scroll ownership
     item_view/
-      scroll_bar.rs              Pane-decoupled item-view horizontal scrollbar
-      scroll_state.rs            Pane-local ScrollHandle map and view/handle sync
+      scroll_bar.rs              Pane-decoupled tracked scrollbar
+      scroll_state.rs            Per-pane ScrollHandle map and view/handle sync
+    location_bar.rs              Location bar UI entry point
     location_bar/
       draft.rs                   Editable location draft and caret state
       metrics.rs                 Editable metrics, hit-test, scroll math
+    pane.rs                      Pane shell UI entry point
     pane/
       snapshot.rs                Pane rendering snapshot
+      sort.rs                    Pane sort-status formatting
       splitter.rs                Splitter drag payload and ratio geometry
+      toolbar.rs                 Pane header Split/Close/Search buttons
+    place_draft.rs               Places Add/Edit draft entry point
+    place_draft/
+      overlay.rs                 Draft dialog and field rendering
+      state.rs                   Draft state, field switching, and text input
+    places.rs                    Places sidebar UI entry point
     places/
+      devices.rs                 Removable device section replacement and sorting
+      drag.rs                    PlaceDrag payload, preview, drop-zone math
+      icon_view.rs               Place icon rendering and fallback classification
       model.rs                   Place entry, grouping, icon snapshots
+      projection.rs              Place row snapshot projection and state mapping
       snapshot.rs                Place icon and snapshot types
+      sidebar.rs                 Places panel layout and background task slot
+      sidebar/
+        row.rs                   Place row visual structure, click, context menu
+        section.rs               Section header visual structure and context menu
+      style.rs                   Row/drop-target/insert-indicator color helpers
+      user.rs                    User bookmark entry point
+      user/
+        dropped.rs               Dropped-folder add validation
+        edit.rs                  Add/Edit draft submission and dedup
+        entry.rs                 User bookmark PlaceEntry construction
+        ordering.rs              Insert-index, insertion, and reorder
+        persistence.rs           XBEL persistence projection
+        removal.rs               Deletion result and removable gate
+      visibility.rs              Hidden place/section state filtering
+    properties_dialog.rs         Properties dialog entry point
     properties_dialog/
       metadata.rs                File metadata reader and row generation
+    rename.rs                    Inline rename entry point
     rename/
-      draft.rs                   Pane-local rename draft state
+      draft.rs                   Pane-local rename draft state and caret
       metrics.rs                 Rename caret hit-test and text inset metrics
+    rubber_band.rs               Rubber-band selection entry point
     rubber_band/
       state.rs                   Rubber-band drag payload and rect projection
+    shortcuts.rs                 Keyboard shortcut classification
+    status_bar.rs                Status bar UI entry point
     status_bar/
+      progress.rs                Operation progress/busy view and Stop routing
+      space.rs                   Filesystem space info view and usage color
       state.rs                   Snapshot, space info cache, progress handle
       summary.rs                 Pane selection/model summary formatting
+      zoom.rs                    Zoom track/segment rendering and drag update
+    trash_conflict.rs            Trash restore conflict dialog
   bin/
     fika-xdp-filechooser.rs      XDG Desktop Portal FileChooser backend
     fika-privileged-helper.rs    System-bus privileged helper
@@ -279,16 +327,17 @@ the model supports `TrashOriginalPath` and `TrashDeletionTime` sort roles.
   identity and path/MIME hashes without retaining full path strings outside
   bounded request/result payloads
 
-Theme file icons follow the same Dolphin role split. `ModelEntry.icon_name`
-stores the MIME-derived `iconName` role; files still waiting for generic
-`application/octet-stream` magic probing render a temporary widget-local icon
-and do not write that preliminary value into the model role. `FileIconCache`
-resolves theme paths from the stored role name, does not synthesize
-extension-specific theme names, and loads decoded `RenderImage` data in a
-background task. `src/ui/icons/roles.rs` owns the widget-local-vs-model-role
-decision, leaving `src/main.rs` to route pane lookup, model writeback, and GPUI
-background loading. File-grid rendering only uses already cached render images
-or the non-I/O fallback marker.
+Theme file icons are resolved on-demand through `FileIconCache`
+(`src/ui/icons/cache.rs`). The cache is keyed by `FileIconKind + icon_size` and
+named icon, and resolves theme paths from the item's MIME type, extension, and
+file kind. Icons are NOT written back into the model as a persistent role; the
+model role writeback path (`ModelEntry.icon_name` and
+`src/ui/icons/roles.rs`) has been removed. Visible snapshot construction warms
+the icon cache for the current visible range, and read-ahead candidates follow
+Dolphin `KFileItemModelRolesUpdater::updateVisibleIcons()` order. File-grid
+rendering uses GPUI `img(path).with_fallback()`, letting GPUI's own image cache
+handle lazy loading, so Fika no longer decodes `RenderImage` data in its own
+background tasks.
 
 ### Devices
 
@@ -325,8 +374,8 @@ Fika uses a dual-runtime design:
 - `compio` — completion-based file I/O (`io_uring` on Linux, polling fallback)
 
 Runtimes are independent and do not share futures. Cross-runtime data transfer
-uses channels. The `io-uring` feature is Linux-only and can be disabled for
-other platforms.
+uses channels. Fika targets Linux exclusively; `compio` is configured with the
+`polling` driver (plan: enable `io-uring` for Linux-native completion I/O).
 
 ## GPUI Layer
 

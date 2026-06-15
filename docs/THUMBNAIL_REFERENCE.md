@@ -78,6 +78,10 @@ GPUI should only render the resolved image path for visible items.
   - Visible ordinary files without a thumbnail role are queued through
     `ThumbnailRequestQueue` using the entry's existing mtime metadata, so the UI
     frame path does not restat files.
+  - Theme file icons are resolved on-demand through `FileIconCache`
+    (`src/ui/icons/cache.rs`). The model role writeback path
+    (`ModelEntry.icon_name` and `src/ui/icons/roles.rs`) has been removed.
+    File-grid rendering uses GPUI `img(path).with_fallback()` directly.
 - `src/core/thumbnails/scheduler.rs`
   - Owns the UI-neutral scheduling support around `ThumbnailRequestQueue`:
     `ThumbnailScheduler`, `ThumbnailCandidate`, `ThumbnailWorkKey`,

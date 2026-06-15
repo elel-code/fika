@@ -1,6 +1,6 @@
 # Fika TODO: GPUI Mainline
 
-本文档是当前任务板。仓库已经切到单包 GPUI 主线；后续任务只应进入
+本文档是当前任务板。仓库已切到单包 GPUI 主线；后续任务只应进入
 `src/` 下的 core modules、GPUI UI modules、`src/main.rs` 和 `src/bin/`。
 
 状态说明：
@@ -10,391 +10,106 @@
 - `[ ]` 未开始
 - `[!]` 阻塞项或必须先解决的决策
 
-## Commit Baseline Exploration
-
-- [x] 本轮继续探索 Zed `ScrollHandle` 滚动条前后的历史提交，统一用 debug `/etc` 启动 2 秒后的 `smaps_rollup` `Private_Dirty` 作为私有内存对照。已确认 `fcf16b7`、`06fefd0`、`4444948`、`dd0ed45`、`3f99f49` 和 `2f4e6ee` 都在约 48MB 私有脏页范围，滚动条改为 GPUI `ScrollHandle`、根级 overlay、hover 背景和早期按主题路径图标 cache 本身不是内存膨胀源。
-- [x] 当前 HEAD 复测为约 49MB 私有脏页，已回到上述低内存基线附近；剩余性能问题应继续按 Dolphin 的 visible/read-ahead role updater、icon cache、thumbnail scheduler 和 listing worker 热路径排查，而不是把启动后常驻内存作为唯一判断。
-- [x] 不可作为“完美状态”基线的提交已标记：`b46e71c` 可编译但启动触发 `zbus` reactor 和 GPUI paint 约束 panic；`81149fb` 删除旧滚动模块后源码接口不完整不可编译；`024b4ab` 引入 `src/ui/icons/roles.rs`、`ModelEntry.icon_name`、`DirectoryModel::set_icon_name_role()`、Fika 自解码 `RenderImage` icon cache 和 model icon role 写回方向，且不是干净可运行基线；`83fb24f` 当前干净 checkout 也存在接口不一致编译错误，不能再当已验证运行基线。
-- [x] 图标历史结论：`024b4ab` 是错误 icon role 架构的引入点；当前 HEAD 已移除 `RenderImage`、`role_cached`、`pending_render_images`、`set_icon_name_role` 和 model-level `icon_name`，只保留按 theme icon name / file kind / size 的轻量路径缓存，后续继续按 Dolphin `KFileItemModelRolesUpdater` 与 `KStandardItemListWidget::pixmapForIcon()` 分层优化。
-- [x] 改为按实现三方对比，不再用粗 commit 边界判断：`9e527ec` 的 `FileIconCache` 已经是按 `FileIconKind + size` / named icon 缓存主题路径，不是按 item 缓存；当前 HEAD 延续该模型并把 snapshot 改成 `Arc<str>` / `Arc<Path>`，同时增加绝对 icon path 支持。和 Dolphin 的差异仍在于 Fika 仍有手写 theme path resolver，而 Dolphin 交给 `KIconLoader` / `QIcon::fromTheme` / `QPixmapCache`。
-- [x] listing/model 实现对比：当前 `DirectoryLister::read_listing_events_streaming_cancellable()`、`ListingWorkerState::publish_batch_if_current()`、`append_listing_results_for_pane()` 和 `DirectoryModel::insert_sorted_model_entries()` 比 `9e527ec` 更接近 Dolphin `KFileItemModel::slotItemsAdded()` / `m_pendingItemsToInsert` / `dispatchPendingItemsToInsert()` / `insertItems()`；保留 2000ms maximum update interval、按 pane 当前 request 发布、结果队列 coalesce 和从尾部 O(N) 原地归并。
-- [x] role/thumbnail 实现对比：当前 metadata magic 只对非空 `application/octet-stream` 且未 magic checked 的文件触发，不再为目录或已知 text/glob MIME 反复 probe；这比错误 icon role 架构更接近 Dolphin 的 fast role / async role 分层。thumbnail 已补齐 Dolphin `KFileItemModelRolesUpdater::m_finishedItems` 语义：成功 preview 写入 `thumbnail_path`，失败 preview 写入轻量 `thumbnail_failed` finished role；同一 item 的 size/mtime 未变时不会重复排队，MIME 精化只清失败状态，不清已成功缩略图。
-
 ## Hard Rules
 
 - [x] Dolphin 是第一参考目标。目录加载、刷新、删除、rename、undo 后刷新必须先确认 Dolphin 源码执行流，再实现 Fika 对应层。
 - [x] 每个 pane 必须有稳定 `PaneId`。所有 lister、watcher、async result、selection、thumbnail、file operation result 都按 `PaneId + generation` 路由。
 - [x] 主构建路径只保留 GPUI/core package。
 - [x] GPUI 从 Zed 官方仓库通过 git 依赖获取，不写 concrete crate release、branch 或 revision。
-- [x] 直接 crates.io 依赖不使用 `*`。版本声明保持最新稳定大版本范围（例如 `tokio = "1"`、`zbus = "5"`），不锁到 patch/minor，实际解析版本由 `Cargo.lock` 和 `cargo update` 维护；Fika 自身不直接引入 `async-io` crate，也不强制启用会污染 GPUI transitive 调用的 `zbus/tokio` executor feature。
+- [x] 直接 crates.io 依赖不使用 `*`。版本声明保持最新稳定大版本范围，不锁到 patch/minor。
 - [x] 新实现不得把 UI widget identity 当作文件模型 identity。GPUI view/entity 是渲染层，文件身份属于 core model。
-  - 验收：`DirectoryModel` 的 pane-local `ModelEntry` 携带 core `ItemId`，共享 `EntryData` 只保存文件元数据；`DirectoryModel` 负责分配、索引和 refresh/rename 身份延续；GPUI item id 使用 `ItemId`，pane selection 存储 `ItemId` 并按当前 model 派生 path。
-- [x] 功能提炼与集成：Dolphin 是 UI 行为和文件操作流程的第一参考（目录加载、右键菜单、拖拽、缩略图、trash、搜索、地址栏、状态栏）；cosmic-files 是纯 Rust 系统集成的参考源（MIME 识别、GIO/GVfs 设备和网络 mounter、systemd 进程启动）。两个源码库中提炼的功能统一集成到 `fika-core`，UI 层只做渲染和输入路由。新增功能必须先确定参考源码路径并写入对应 `docs/*_REFERENCE.md`，再开始实现。
-- [x] Dolphin 分层模型对齐：fika 架构必须对齐 Dolphin 的经典分层——`DolphinMainWindow → DolphinViewContainer → DolphinView → KItemListView`（渲染/容器层）对应 fika 的 GPUI window → pane shell → file grid；`KDirLister → KFileItemModel → KFileItemListWidgetInformant`（数据/模型层）对应 fika 的 `DirectoryLister → DirectoryModel → Entry`；`KFileItemActions / DolphinContextMenu`（交互层）对应 fika 的 Context Menu / DragDrop / Keyboard Action。每层职责边界清晰：渲染层不做数据决策，模型层不持有 UI 句柄，交互层不直接操作文件系统。新增模块必须先映射到 Dolphin 对应层，确认职责归属后再实现。
-- [~] 后续重构必须持续拆分 `.rs` 文件和目录，禁止继续把右键菜单、滚动条、拖拽、缩略图等大块行为堆进 `src/main.rs`。新增或重构功能优先落到 `src/core/*`、`src/ui/*` 或新的职责明确模块；需要继续扩展的 UI 模块优先采用现代 Rust 目录式模块（`feature.rs` 作为入口，`feature/*.rs` 承接子职责），`src/main.rs` 只保留 app 状态编排和跨模块路由。
-  - 当前拆分进展：旧 pane scrollbar 模块、两版 `item_view_container` prototype、旧 UI smooth-scroll bridge、`src/core/scroll.rs` 和 pending scroll restore 均已删除；当前 `ViewState` 按 Dolphin layouter 语义保存 pane-local scroll offset 和 maximum scroll offset，`src/ui/item_view.rs`、`src/ui/item_view/scroll_bar.rs` 和 `src/ui/item_view/scroll_state.rs` 只保存 pane-local `ScrollHandle` 并按 `KItemListView::setScrollOffset()`/`KItemListContainer::updateScrollOffsetScrollBar()` 的 ownership 同步 view/handle；其它模块继续按下面各条目录式拆分记录维护。
-  - Places 用户书签已继续目录式拆分：`src/ui/places/user.rs` 仅保留入口和 re-export；`src/ui/places/user/entry.rs` 承接用户书签 `PlaceEntry` 构造；`src/ui/places/user/ordering.rs` 承接 insert-index、插入和重排；`src/ui/places/user/dropped.rs` 承接 dropped folder 添加校验和文案；`src/ui/places/user/edit.rs` 承接 Add/Edit draft 提交校验、重复检测和模型写回；`src/ui/places/user/persistence.rs` 承接 XBEL 持久化投影；`src/ui/places/user/removal.rs` 承接删除结果和 removable gate。
-  - Places 拖拽已继续目录式拆分：`src/ui/places/drag.rs` 承接 `PlaceDrag` payload、drag preview、row drop-zone 计算和拖拽重排 insert-index 数学，`src/ui/places/sidebar.rs` 组合 sidebar/row 事件处理。
-  - Places 图标视图已继续目录式拆分：`src/ui/places/icon_view.rs` 承接 place icon image/fallback 渲染、fallback kind 分类和形状绘制测试，`src/ui/places/sidebar.rs` 只引用 `place_icon_view()`。
-  - Places sidebar 已继续目录式拆分：`src/ui/places.rs` 保持入口/re-export，`src/ui/places/sidebar.rs` 作为 Places 面板入口和根容器组装，`src/ui/places/sidebar/section.rs` 承接 section header 视觉结构和右键菜单，`src/ui/places/sidebar/section/dnd.rs` 承接 section insert drop target、internal/external path drop 和 place reorder drop 事件绑定，`src/ui/places/sidebar/row.rs` 承接 place row 视觉结构、点击和右键，`src/ui/places/sidebar/row/dnd.rs` 承接 place row 的 internal/external/place drag move、drop target 和 drop/reorder 事件绑定，`src/ui/places/style.rs` 承接 row/drop-target/insert-indicator 颜色与样式 helper。
-  - 状态栏 UI 已继续目录式拆分：`src/ui/status_bar.rs` 保持状态栏入口和主布局，`src/ui/status_bar/zoom.rs` 承接 zoom track/segment 渲染、drag payload、点击/拖拽更新和 `zoom_level_for_track_x()` 映射，`src/ui/status_bar/progress.rs` 承接 operation progress/busy 视图和 Stop 路由，`src/ui/status_bar/space.rs` 承接 filesystem space info 视图和使用率颜色。
-  - Pane toolbar 已继续目录式拆分：`src/ui/pane/toolbar.rs` 承接 pane header Search/Close、Split 和 Close Pane 按钮的 snapshot、主题图标候选、fallback label 和 GPUI 渲染/点击路由。
-  - Places Add/Edit draft 已继续目录式拆分：`src/ui/place_draft.rs` 仅保留入口和 re-export；`src/ui/place_draft/state.rs` 承接 `PlaceDraft`/`PlaceDraftField`、Add/Edit 构造、pane-scoped clear/focus、字段切换、Backspace 和文本插入；`src/ui/place_draft/overlay.rs` 承接 overlay/dialog/field 渲染，`src/main.rs` 只响应 Cancel/Commit/Edited/Ignore 路由。
+- [x] 功能提炼与集成：Dolphin 是 UI 行为和文件操作流程的第一参考；cosmic-files 是纯 Rust 系统集成的参考源。两个源码库中提炼的功能统一集成到 `fika-core`，UI 层只做渲染和输入路由。
+- [x] Dolphin 分层模型对齐：渲染层不做数据决策，模型层不持有 UI 句柄，交互层不直接操作文件系统。
+- [x] 文件拆分：`src/main.rs` 只保留 app 状态编排和跨模块路由。所有功能模块已拆入 `src/core/`（domain logic）和 `src/ui/`（rendering），子职责继续按目录式模块拆分。
+- [x] 图标模型已收敛为按需路径缓存：删除 `ModelEntry.icon_name`、`src/ui/icons/roles.rs`、`RenderImage` 自解码路径；图标由 `FileIconCache` 按 `FileIconKind + icon_size` / named icon 缓存，GPUI `img(path).with_fallback()` 懒加载。
 
-  - 本轮新增拆分：`src/cli.rs` 已作为 CLI 入口，`src/cli/args.rs` 承接启动参数、chooser mode metadata 和 help 文案解析；`src/ui/application_chooser/identity.rs` 承接 Other Application chooser 的 row/widget identity、fallback marker 和 element id sanitizer，`src/ui/application_chooser/search.rs` 承接 chooser 搜索框 caret、UTF-8 边界和点击 hit-test；`src/core/launcher/results.rs` 承接 Open With/New Window/Service Menu 启动结果、目标 label 和状态栏文案格式化；`src/core/launcher/ark.rs` 承接 Ark Compress/Extract fallback 的 `DesktopLaunchPlan` 构造和测试；`src/ui/filter_bar/state.rs` 承接 filter source revision 计算；`src/ui/file_grid/snapshot.rs` 承接 visible item kind label 和 thumbnail path 投影 helper；`src/ui/file_grid/projection.rs` 承接 file-grid hit-test/projection 数据结构和 filtered layout index 映射测试；`src/ui/clipboard/tasks.rs` 承接 clipboard paste task result 构造、text paste/create undo 和 copy/move progress/cancel 测试；`src/ui/pane/sort.rs` 承接 pane sort status 文案 helper；`src/ui/places/projection.rs` 承接 Places row snapshot 投影和 hidden/active/drop target 映射测试；`src/ui/places/devices.rs` 承接 removable device section 替换和动态设备排序测试；`src/ui/places/user.rs` 作为用户书签入口承接插入位置、插入、重排、dropped folder 添加和持久化投影测试，`src/ui/places/user/removal.rs` 承接删除结果和 removable gate 测试；`src/ui/places/visibility.rs` 承接 Places hidden place/section 状态测试，保持 `src/cli.rs`、`src/core/launcher.rs`、`src/ui/filter_bar.rs`、`src/ui/file_grid.rs`、`src/ui/clipboard.rs`、`src/ui/pane.rs`、`src/ui/places.rs` 作为入口模块，子职责放入对应目录。
-  - 本轮继续拆分：`src/ui/places/user.rs` 从实现文件收敛为入口模块，用户书签排序、拖放添加、Add/Edit draft 提交、持久化投影、删除和 entry 构造分别落到 `src/ui/places/user/*.rs`；`src/main.rs` 的 `commit_place_draft()` 只保留 pane 当前目录获取、持久化和状态栏路由。
-  - 本轮继续拆分：`src/ui/place_draft.rs` 从实现文件收敛为入口模块，draft 构造、pane-scoped clear/focus 和状态编辑规则落到 `src/ui/place_draft/state.rs`，GPUI overlay 渲染落到 `src/ui/place_draft/overlay.rs`。
-  - 本轮继续拆分：`src/ui/places/drag.rs` 承接 Places drag payload/preview 和 drop-zone/insert-index 纯函数，减少 `src/ui/places.rs` 入口模块的状态定义和拖拽数学。
-  - 本轮继续拆分：`src/ui/places/icon_view.rs` 承接 Places 图标渲染和 fallback icon 分类，减少 `src/ui/places.rs` 入口模块的绘制细节。
-  - 本轮继续拆分：`src/ui/places/sidebar.rs` 承接 Places 面板根容器和 rows 组装，`src/ui/places/sidebar/row.rs` 承接 Places row 视觉结构、点击和右键，`src/ui/places/sidebar/row/dnd.rs` 承接 row 的 internal item、external path 和 place reorder DnD 事件绑定，`src/ui/places/sidebar/section.rs` 承接 section header 视觉结构和右键，`src/ui/places/sidebar/section/dnd.rs` 承接 section insert drop、internal/external path drop 和 place reorder drop 事件绑定，`src/ui/places/style.rs` 承接 Places row 背景、边框、hover、drop-target 和插入线样式，`src/ui/places.rs` 收敛为现代 Rust 目录式入口模块。
-  - 本轮继续拆分：`src/ui/status_bar/zoom.rs` 承接状态栏 zoom 控制的 track/segment UI、drag payload、点击/拖拽更新和 track-x 到 zoom level 的映射，`src/ui/status_bar/progress.rs` 承接 operation progress/busy 视图和 Stop 路由，`src/ui/status_bar/space.rs` 承接 filesystem space info 视图和使用率颜色，`src/ui/status_bar.rs` 只组合状态栏主布局。
-  - 本轮继续拆分：`src/ui/pane/toolbar.rs` 承接 pane header 按钮 snapshot、主题图标候选、fallback label 和按钮渲染/事件路由，`src/ui/pane.rs` 只组合 toolbar 与 location/filter/file-grid/status-bar。
-  - 本轮回收图标模型：删除 `src/ui/icons/roles.rs`、`ModelEntry.icon_name`、`DirectoryModel::set_icon_name_role()`、metadata 完成后的 icon role 写回、Fika 自解码 `RenderImage` 路径和运行时主题目录整目录索引缓存；`src/ui/icons/cache.rs` 回到 GPUI 成熟阶段的按需 path cache，按 `FileIconKind + icon_size` / named icon 缓存 `FileIconSnapshot`，渲染层通过 `img(path).with_fallback()` 交给 GPUI 图片缓存懒加载。
-  - 本轮继续对照：按 Dolphin `KFileItemModel::retrieveData()` / `KFileItemModelRolesUpdater::updateVisibleIcons()` / `KStandardItemListWidget::pixmapForIcon()` 边界确认图标模型：基础 model 不为 MIME 未知项同步解析昂贵 iconName，role updater 先处理可见项再处理 read-ahead，像素缓存由 name+size+mode 维度命中。Fika 的 `RawFileGridSnapshot` 现在在 final snapshot 转换前先 warm 当前可见项 icon cache，并按同一 visible range 生成 read-ahead icon warm candidates；渲染阶段再次请求同一 path/is_dir/MIME/icon_size 时只命中 `FileIconCache`，不再滚到新类型时才做主题路径查找，也不把图标结果写回 item role。
-  - 本轮继续拆分：`src/ui/filter_bar/state.rs` 承接 pane-local active filter 解析、filter source revision、`FilteredModelCacheKey`、filtered model cache hit/rebuild/clear 逻辑和测试；`src/main.rs` 只保留 filter state map、cache owner 和调用路由，不再直接构造 filter projection cache key 或重建 `FilteredModel`。
-  - 本轮继续拆分：`src/ui/file_grid/snapshot.rs` 承接 `VisibleItemSnapshot`、`RawVisibleItemSnapshot`、`RawDetailsItemSnapshot`、`RawFileGridSnapshot`、`RawFileGridSnapshotInput`、当前 view-mode raw projection、visible slot 绑定、raw→final `FileGridSnapshot` 转换、可见 thumbnail candidate 生成、metadata/thumbnail scheduler candidate 提交和 read-ahead range/count helper；`src/ui/file_grid/projection.rs` 承接 `PaneLayoutProjectionInput`、当前 view-mode layout projection 构造、content hit-test 和 rubber-band visual-rect intersect 到 model-index 的映射；`src/main.rs` 不再持有 file-grid raw snapshot 类型定义或三种 view mode 的 item 构造/转换/投影逻辑，只准备 pane-local 输入、调用 file-grid snapshot/projection helper、启动后台 metadata/thumbnail 任务并处理 pane lifecycle。
-  - 本轮继续拆分：`src/ui/context_menu/icons.rs` 承接 context menu 的主题 named icon 候选、service/open-with/create/trash 等图标快照、fallback 图标 slot 和菜单可见图标收集；`src/ui/context_menu/service.rs` 承接 service menu TopLevel 提升、More Actions 分组、`X-KDE-Submenu` 二级分组投影，以及 Ark Compress/Extract fallback 的去重判定；`src/ui/context_menu/layout.rs` 承接 root/submenu/nested submenu 的 viewport clamp、anchor flip、级联定位和菜单尺寸常量；`src/ui/context_menu/actions.rs` 承接 root/submenu action 生成和 Open With 应用去重/投影；`src/ui/context_menu/items.rs` 承接 item 构造和 `ContextMenuAction` 到默认 `ContextMenuIcon` 的映射；`src/ui/context_menu/overlay.rs` 承接 root/submenu/nested overlay 和 row GPUI 渲染/hover/click 路由；service menu action 自己的 `Icon=` 会覆盖默认 Service 图标并在 root/More Actions/`X-KDE-Submenu` nested snapshot 收集中保留，`FileIconCache::named_icon()` 也按 desktop spec 支持主题名和绝对图标路径；`src/ui/context_menu.rs` 继续收敛为菜单状态类型和模块入口。
-  - 本轮继续删除/重写：`src/ui/item_view/scroll_restore.rs` 和 pending restore 状态机已删除；`src/ui/item_view/scroll_state.rs` 只承接 per-pane `ScrollHandle` map、handle/view 同步和 reset/remove lifecycle。`ViewState` 现在同时保存 scroll offset 与 layout 计算出的 maximum scroll offset，wheel 使用 view-owned maximum，handle 只有在 GPUI 观测到的 maximum 不落后于 view maximum 时才可反向同步 offset；zoom/layout 改变时按 Dolphin `KItemListView::setScrollOffset()` 语义保留 view-owned offset 并写回 handle，viewport bounds 到达时按 content bounds clamp 后再次对齐，避免旧多帧 settle pass、旧 transient-zero 特判和 handle 瞬时 0 maximum 造成 zoom 后回到开头、item 延迟显示或闪烁。
-  - 本轮继续拆分：`src/core/thumbnails/scheduler.rs` 承接 thumbnail candidate、轻量 work key、probe result、`ThumbnailScheduler` 队列/seen/active-batch 状态、active-batch cancel handle、Dolphin `KFileItemModelRolesUpdater::indexesToResolve()` 式 read-ahead index 计算、candidate→request/failure-cache gate、bounded worker queue，以及 probe result 到 `DirectoryModel` 的 `ItemId + path` guard 回写 helper；`src/main.rs` 只保存单个 `ThumbnailScheduler`，pane snapshot 构造后调用 file-grid snapshot helper 入队候选，并保留后台任务启动、pane generation guard 和 pane lifecycle cancel 路由。
-  - 本轮删除/重写：彻底移除旧 pane scrollbar 实现（`src/ui/scrollbar.rs`、`src/ui/scrollbar/*`、pane shell scrollbar slot、`ActiveScrollBarDrag`、pane-local track cache、旧 core `HorizontalScrollBarLayout` / `horizontal_scroll_bar_layout` API 和相关测试），不保留旧兼容路径。
-  - 本轮删除：彻底移除旧 UI smooth-scroll bridge（`src/ui/scrolling.rs`、`src/ui/scrolling/*`、`FikaApp::smooth_scrolls`、GPUI 16ms tick driver 和旧 smooth-scroll app 测试）以及重建后仍有拖拽问题的 `src/core/scroll.rs`。
-  - 本轮继续删除/重写：彻底移除第一版和第二版 `src/ui/item_view_container.rs` / `src/ui/item_view_container/*`，清掉 `FikaApp::item_view_container_*` drag、wheel gesture、smooth-scroll state、pane shell scrollbar slot、file-grid wheel 到旧 container/value/smooth 层转发、value/drag/smooth API、生命周期清理调用和相关测试；当前只保留 `src/ui/item_view.rs` + `src/ui/item_view/scroll_bar.rs` 的 Zed `ScrollHandle` scrollbar 复现路径。
-  - 本轮对照：Dolphin `KItemListView::setScrollOffset()` / `KItemListContainer::updateScrollOffsetScrollBar()` 的 ownership 继续作为 scroll 约束；zoom/layout 改变后 `ViewState` 成为短期 authoritative scroll source，前两个 viewport-bounds 同步周期只把 pane-owned offset 写回 `ScrollHandle`，避免 GPUI handle 瞬时 0 offset/maximum 把 pane 拉回开头；bounds 稳定后释放 guard，scrollbar drag/wheel 重新由 handle 输入。
-  - 本轮对照：Dolphin `KFileItemModelRolesUpdater::startUpdating()` / `killPreviewJob()` / `indexesToResolve()` 继续作为 thumbnail 约束；Fika 的 `ThumbnailScheduler` 现在用当前 pane snapshot 的 visible/read-ahead 候选作为唯一 resolve set，queued work 中不在当前 set 的请求会立即移除，未开始的 active deferred work 会通过 cancel handle 标记取消并释放 `seen` key，避免长时间滚动大目录时后台 thumbnail 队列和 finished/seen 集合跨 viewport 增长；read-ahead 顺序继续对齐 Dolphin：visible 后方、visible 前方反向、last page、first page、剩余 resolve limit。
-  - 本轮对照：Dolphin `KItemListSizeHintResolver` / `KStandardItemListWidgetInformant::calculateCompactLayoutItemSizeHints()` 的 size-hint/cache 模型继续作为 compact 列宽约束；Fika 的 compact column width cache 保持 model-keyed entry，cache miss 时一次性解析该布局下所有列宽，后续滚动不再改变远端列几何；每列宽度仍由该列最长 name 决定。图标路径恢复到 `da860ee` / `88f3aa2` 附近的轻量模型：`FileIconSnapshot` 只共享 `Arc<str>` / `Arc<Path>` 和 fallback 信息，不保存 `RenderImage`；`ModelEntry` 不再持有 `iconName` role；metadata role 完成不再写回图标 role；`FileIconCache` 只缓存 kind+size / named icon 的主题路径，主题查找不再把访问过的目录整目录索引进内存，渲染交给 GPUI `img(path).with_fallback()` 懒加载。
-  - 本轮对照：Dolphin `KItemListView::updateVisibleItems()` 只基于当前 layouter 和当前可见范围更新 item widgets；Fika 的 `FikaApp::snapshots()` 现在只按当前 `ViewMode` 生成一个 `RawFileGridSnapshot`，不再在每帧同时构造 Compact、Icons 和 Details 三套可见项/详情行中间数据。metadata role updater、thumbnail visible/read-ahead、visible slot pool 更新和最终 `FileGridSnapshot` 转换都消费同一个 raw snapshot；raw projection、slot id 绑定和 raw→final snapshot conversion 已下沉到 `src/ui/file_grid/snapshot.rs`，layout projection、item hit-test 和 rubber-band intersect 已下沉到 `src/ui/file_grid/projection.rs`，减少 pane snapshot/输入热路径中的额外 `Vec`、`PathBuf`、label、slot lookup、layout projection 和 icon snapshot 分散逻辑。
-  - 本轮继续对照：`VisibleItemSlotPool::update_visible_items()` 改为 epoch 标记的原地 `HashMap<ItemId, VisibleItemSlot>` 更新模型，去掉每帧可见 id `Vec`、`sort_unstable()`、`dedup()`、`binary_search()` 和临时 membership set；更新顺序仍按 Dolphin `recycleInvisibleItems()` / `KItemListCreatorBase` 语义先标记当前可见项、回收不可见 slot、再给新可见项复用回收池 slot。raw visible/details snapshot 只携带可见项渲染所需的 path/is_dir/effective MIME/size/mtime/thumbnail 信息，最终 icon snapshot 直接从 `FileIconCache::icon_for()` 取得，不再通过 `ItemId` 回查模型或写回模型 icon role。
-  - 本轮继续对照：thumbnail read-ahead 的当前可见范围参数不再通过 `visible_layout_indexes: Vec<usize>` 构造；`RawFileGridSnapshot` 直接扫描当前 raw visible items 得到 `Range<usize> + visible_count`，再传给 Dolphin-style `thumbnail_read_ahead_indexes()`；`thumbnail_read_ahead_indexes()` 现在返回轻量 `ExactSizeIterator`，不再为了 read-ahead 顺序分配索引 `Vec`。
-  - 本轮继续对照：`MetadataRoleScheduler::queue_candidates()` 和 `ThumbnailScheduler::queue_candidates()` 改为直接消费 `IntoIterator`；`RawFileGridSnapshot` 直接把当前可见 metadata/thumbnail 候选提交给 scheduler，不再在 `FikaApp::snapshots()` 中先构造可见 metadata candidate `Vec` 或可见 thumbnail candidate `Vec`。metadata role scheduler 现在恢复 Dolphin/旧 MIME role updater 的 active/queued 分层：当前 snapshot 不再可见的 queued metadata 请求会被裁剪，active 完成后从 `seen` 释放；metadata role 按单项推进，避免一次结果回到 UI 后批量修改大量 item。thumbnail read-ahead 的 deferred candidate 现在由 `src/ui/file_grid/snapshot.rs` 按当前 `DirectoryModel + FilteredModel` 流式派生并在 pane model borrow 内立即入队，`main.rs` 不再保存 deferred candidate 列表。
-  - 本轮继续对照：Dolphin `KFileItemModelRolesUpdater` 的 `m_finishedItems` 会在任何 I/O 前挡住已处理项，thumbnail plugin list 也只在 updater 构造时读取一次；Fika 的 `ThumbnailScheduler::queue_candidates()` 现在先按 `ThumbnailWorkKey` 检查 `seen`，只有未见过的候选才探测 failure cache，避免同一 read-ahead work 每帧在 UI 线程查缩略图失败文件；`ThumbnailerRegistry::shared_system()` 把系统 thumbnailer desktop 解析和 `TryExec` 探测变成进程级共享，不再每个 probe batch 重新扫描 thumbnailer 目录。
-  - 本轮继续对照：Dolphin `KFileItemModelRolesUpdater::m_finishedItems` 对“item 未变化”不重新进入异步 role 的语义已下沉到 `DirectoryModel::preserve_pending_entry_metadata_role()`；同目录 reload/增量刷新如果 size/mtime 未变且旧 MIME magic role 已完成，会直接继承旧 role 并保持 finished。visible metadata updater 不再为 `metadata_complete=false` 或 refresh pending 的 item 做后台 `stat()`，只对非空 `application/octet-stream` 且未 magic checked 的文件读取少量 magic 并写回 MIME role，避免滚动加载时 size/mtime、thumbnail 和 icon 在基础 role 与异步 role 之间反复切换。`IconThemeResolver` 维持轻量按需路径缓存，不再保存 GPUI `RenderImage` 或模型 icon role；普通 `text/*`、archive 和 generic binary 不再进入 visible/read-ahead preview queue，thumbnail scheduler 入口继续按 Dolphin preview gate 过滤。
-  - 本轮继续对照：Dolphin `KDirLister::itemsAdded` -> `KFileItemModel::slotItemsAdded()` -> `m_pendingItemsToInsert` -> `dispatchPendingItemsToInsert()` -> `insertItems()` 的加载链路已落到 Fika：`read_entry_batches_sync_cancellable()` 只负责后台分批枚举和取消检查；`DirectoryLister` 先把 batch 追加到 pending entries，只有 listing completed 或 Dolphin 同款 maximum update interval 到达时才发布合并后的 `ItemsAdded`，避免 512 小批次连续打到 UI 线程；`ListingWorker` 发布结果后通过 result notifier 立即唤醒 GPUI drain，不再依赖 350ms listing 轮询；新目录首个 dispatch 替换旧模型，空目录在 completed 时清空旧模型，后续 dispatch 走 `DirectoryModel::insert_sorted_model_entries()`，按 Dolphin `insertItems()` 的有序 merge 生成 `ItemsInserted` ranges，不再每批全量 `ModelReset` / 全量 sort。完成加载后再把当前 model snapshot 写入 directory cache，超预算大目录只记录 skipped summary。
-  - 本轮继续对照：`ListingWorkerState::results_by_pane` 不再对同一 pane 当前 request 无界追加 streaming result event；连续 `ItemsAdded` 会在 pending result 中原地合并，空增量会丢弃，`ListingRefreshed` / `CurrentDirectoryRemoved` / `Error` 会替换旧 pending result 并释放已经过时的 `Entry` batch。这样保持 UI drain 落后一帧时仍不丢增量，同时避免后台 result queue 持有大量同 pane 重复事件。
-  - 本轮继续对照：Dolphin `KFileItemModel::insertItems()` 的反向原地归并已落到 `DirectoryModel::insert_sorted_model_entries()`：删除旧的 `std::mem::take(entries) + 新 Vec merged` 路径，改为保留现有 model storage、预留新增容量、从尾部把旧 item 和新增 batch 写回，`ItemsInserted` ranges 仍按最终可见索引上报，避免滚动加载时间片里反复复制整张模型并抬高内存峰值。`DirectoryCache::apply_items_added()` 同步改为纯新增 batch 只排序新增项并归并到已有缓存；只有同名替换才重排已有缓存，避免后台 cache 在大目录加载时跟 UI 线程一起做重复全表排序。
-  - 本轮继续对照：Dolphin `KFileItemModelRolesUpdater` 的 role 更新不把“值未变”伪装成可见变更；Fika 的 `DirectoryModel::set_metadata_role()` 在 effective role 相同的情况下只清除/规范化 pane-local pending role，不再发 `ItemsChanged` 触发 size/thumbnail 重绘；metadata scheduler 的 active/queued/seen 只覆盖当前可见 MIME magic work，active batch 完成后释放 seen，下一次 snapshot 仍由 MIME magic required gate 决定是否排队；listing/model 信号不再写入 “N model signal(s)” 状态栏调试文本，状态栏不再跟随 batch 刷新闪烁；zoom 改变不再清空 Compact column width cache，cache key 自己区分 rows/zoom/layout 参数，来回 zoom 可复用已有 size-hint 缓存。
-  - 本轮继续拆分：`src/ui/drag_drop/state.rs` 承接 Dolphin drag/drop 交互层的 drop target 状态机，item target、Places target、互斥替换、重复 hover 刷新 lease generation、精确 leave 清理和 lease timeout 兜底清理都集中在 `DropTargetState`；`src/main.rs` 不再直接持有 `item_drop_target` / `place_drop_target` / `drop_target_lease_generation` 三份状态，只保留 active drag payload、业务路由和 GPUI lease timer。
-  - 本轮继续对照：`DirectoryLister::drain_watcher_events()` 现在先收集同一 drain 周期内的 notify 事件，再按 Dolphin/KDirLister 增量语义做保守批内 coalesce；相邻同类 Create/Remove/Modify 会合并路径并去重，FullReload 覆盖已有增量，CurrentDirectoryRemoved 覆盖全部，减少 watcher burst 对同一路径重复 `read_entry_sync()` 和重复 UI/model signal。
-  - 本轮继续对照：为 Dolphin `KFileItemModel` role updater 分层保留 metadata role 底座，但撤销 Fika 自己引入的 icon role 层；`EntryData` 只保存 listing 同步返回的基础 role（name/isDir/size/mtime/filename MIME hint），`ModelEntry` 只持有 pane-local MIME magic role 和 thumbnail preview role。后台 `MetadataRoleUpdater` 不再重新 `stat()` 可见文件，也不再补齐 size/mtime；它只通过 `ItemId + path + mtime` guard 写回 generic binary 的最终 MIME。`DirectoryModel::set_metadata_role()` 不再改写基础 `EntryData`，只更新 pane-local metadata role，并在 Size/Modified sort 下按 effective role 按需重排；UI、Details、状态栏、thumbnail 候选和右键 service target 都读取 `ModelEntry::effective_*()`。普通目录 listing 阶段读取 size/mtime 和 filename/glob MIME，但不读取文件 magic；目录不进入文件 metadata/magic role 队列，目录双击打开以 pane model 为事实来源，snapshot 只作为 hint。Trash view 因 original/deletion role 和排序需求仍保留专用 metadata 装饰。
-  - 本轮对照：Dolphin `KFileItemModel` 基础 item 只保存文件名/metadata，完整 URL/path 按需派生；Fika 的普通目录 `read_entries_sync_cancellable()` 不再为每个 entry 调 `DirEntry::path()` 分配完整 `PathBuf` 给 MIME filename/glob 快路径，`MimeDatabase::mime_for_name()` 直接按文件名处理 literal、multi-suffix、extension 和 magic fallback；只有 Trash metadata 装饰仍按需派生完整 path 读取 `.trashinfo`。
+## Completed Features
 
-## Completed Cutover
+以下功能已实现并通过验证。保留摘要记录以备查考，不再维护逐项验收清单。
 
-- [x] 建立 Dolphin 源码参考清单。
-  - 验收：`docs/GPUI_DOLPHIN_MIGRATION_PLAN.md` 包含 `DolphinView::loadDirectory()`、`KFileItemModel::{loadDirectory, refreshDirectory}`、KDirLister signal、model slot 和 current-directory-removed 处理路径。
-- [x] 移除多包 Cargo 布局。
-  - 验收：root `Cargo.toml` 是单一 package，并从 `src/` 构建 core library 和三个 binary。
-- [x] 建立 UI-neutral core。
-  - 验收：`fika-core` 不依赖 GPUI 或 window 类型。
-- [x] 新增 GPUI app shell。
-  - 验收：`fika` binary 位于 `src/main.rs`，可打开窗口、加载目录、分屏、关闭 pane、刷新目录。
-- [x] 实现初版 `DirectoryLister`、`DirectoryModel` 和 pane-scoped watcher。
-  - 验收：加载、刷新、watcher event 和 current-directory-removed 都走 core event path。
-- [x] 保留 portal/backend 和 privileged-helper 二进制边界。
-  - 验收：两个二进制从 root package 构建。
-- [x] 清理旧主路径。
-  - 验收：root manifest 不再引用旧 UI 构建路径；旧 UI 源目录和构建脚本已从主代码树移除。
-- [x] 更新 README、DESIGN 和 REFERENCE。
-  - 验收：文档描述当前 GPUI package 和剩余功能缺口。
+### 目录加载与模型
+`DirectoryLister` → `DirectoryModel` 完整 Dolphin 对齐：`read_dir` 流式发布、2000ms maximum update interval、per-pane request coalescing、fresh/stale cache LRU、`Arc<Vec<Entry>>` 跨 pane 共享。`ListingWorkerState` 按 `(path, mode)` 合并请求，`DirectoryCache` 按 canonical path 缓存。Large directory 保留轻量 path/count summary。
 
-## Directory Core
+### 右键菜单
+完整 Dolphin 对齐：Open/Open in New Pane/Open in New Window、Cut/Copy/Paste、Rename、Move to Trash、Delete Permanently、Properties、Create New 子菜单、Open With（`mimeapps.list` 优先级 + Other Application chooser）、KDE/Fika Service Menu（含 `X-KDE-Submenu` 二级子菜单、TopLevel 提升、条件过滤）、Sort By（含 Trash 专用 Original Path/Deletion Time）、Compress/Extract Ark 集成。Trash 专用菜单：Restore、Delete Permanently、Empty Trash。Places 右键菜单：Open/Edit/Remove/Hide/Empty Trash/Copy Location/Properties，按条目类型启用。菜单定位使用 viewport clamp/flip。
 
-- [x] 完善 `DirectoryLister` event 分类。
-  - 验收：watcher add/delete/refresh 能稳定映射到 model delta；不能分类时才整目录 reload。
-- [x] 对齐 Dolphin `KDirLister` 加载生命周期。
-  - 验收：目录 listing 不再每个 request `spawn` 一个线程；GPUI shell 使用单 worker，pending request 和 pending result 都只保留每个 pane 最新项；同一路径和 mode 的 pending listing 请求会合并为一次 `read_dir`，再按各自 `PaneId + generation + request_serial` 发布；watcher drain 和文件操作 affected-dir refresh 会先收集同一轮 `LoadingStarted` 事件再批量入队，只唤醒 worker 一次，减少分屏同目录 reload 被拆成多次读取的概率；`ListingRefreshed` 的 entries 在 worker result queue 中使用共享 `Arc<Vec<Entry>>`，分屏同目录不会在队列里复制整份大目录 entries；应用到 `DirectoryModel` 时不再 `Arc::try_unwrap` 失败后 clone 整个 entries vec，而是为每个 pane 派生轻量 `ModelEntry`；关闭 pane 会从 worker 中删除该 pane 的 pending request、latest request key 和 pending result，in-flight 读取会在取消检查时停止；`read_dir` 循环按 request stale/shutdown 状态可取消，对齐 `KFileItemModel::cancelDirectoryLoading()`/`KDirLister::stop()` 的释放语义，旧的大目录 `Vec<Entry>` 不进入 UI result queue。
-- [~] 完善 `DirectoryModel`。
-  - 已完成：目录条目有 stable `ItemId`；`Entry` 不保存完整 path，只保存 name/raw metadata，完整 path 由 `DirectoryModel` 的目录根按需派生；`Entry` 已拆成共享不可变 `EntryData` 载荷和 pane-local `ModelEntry { ItemId, Entry, metadata_role, metadata_refresh_pending, thumbnail_path }`，同一 listing 结果应用到多个 pane 时共享底层文件名、trash 文本和 metadata payload，但 metadata/thumbnail role 保持 pane-local；`DirectoryModel` 不再用 `Arc<DirectoryModelData>` 和 `Arc::make_mut` 做隐式 COW，split 通过 `fork_for_pane()` 显式复制轻量 `ModelEntry` 向量并继续共享底层 `EntryData`，一个 pane 的增量变更不会复制或污染另一个 pane 的模型；文件名和 trash 文本 payload 使用 `Arc<str>`，同一 listing 结果被多个 pane 应用时不会深拷贝每个文件名字符串；visible item snapshot 复用共享 name，右键菜单 target 和 content hit-test 不再携带未使用的 name 副本；UI layout/hit-test 路径不再 clone `DirectoryModel`；lazy path index 的 key 复用 `Entry.name` 的 `Arc<str>`，按需索引时不再复制一份 `OsString` 文件名；`ItemId` lookup 也按 Dolphin `KFileItemModel::index(QUrl)` 的 1000 项分块 hash 模型 lazy 构建，selection、thumbnail 和 metadata role 回写不再线性扫描全目录；thumbnail/metadata-only role update 只增加 data generation，不重置 path/id index；full reload 若同目录、同顺序、同 name/is_dir，则按 Dolphin role update 语义只替换 metadata payload、复用旧 name storage、保留 path/id lazy index；`thumbnail_path` role 只在 name/size/mtime 仍匹配时保留，文件变化时清除；full reload 对同 path 保持身份；watcher rename/refresh 对 old path 延续身份；path index 按 Dolphin `KFileItemModel::index(QUrl)` 的思路按需分块扩展，不在加载时为全目录 eager 构造 HashMap。
-  - 剩余验收：支持过滤和更完整的 trash metadata/model 映射。
-- [~] 实现目录缓存（Directory Cache）。
-  - 参考：Dolphin `KDirectoryListerCache` 跨 view 共享 `KDirLister` 实例的缓存策略；`KFileItemModel` 已加载条目保持和不必要的 reload 避免。
-  - 已完成：后台 listing worker 已按路径/mode 合并同一批 pending 请求，合并结果共享 entries 载荷；watcher/operation refresh 路径批量调度同一轮 listing request；`Entry` 文本字段使用共享 `Arc<str>`，减少分屏同目录时 pane-local `ItemId` 重建造成的文件名深拷贝；`DirectoryModel` 现在只为 pane 分配轻量 `ModelEntry` 身份，底层 `EntryData` 在 split pane 和 retargeted listing 之间共享；pane close 会清理该 pane 的 visible slot pool、compact column width cache、viewport origin、rubber-band/context menu/rename state 和 properties modal，并在真正关闭前先用 cache entry budget 判断是否可缓存，只有预算内目录才构造当前 `DirectoryModel` 的 `model.directory()` + `Arc<Vec<Entry>>` 快照并提升到 worker cache，超出上限的大目录不会为了随后被 cache 拒绝而额外复制整份 entries；pane load/reload/back/forward 只清理 transient 交互状态并保留旧模型/布局到 `ListingRefreshed`，刷新提交时再替换布局缓存，避免旧大目录缓存长期滞留同时避免切目录空白闪烁；`src/core/cache.rs` 已新增 `DirectoryCache`，缓存键做路径规范化，只保存 fresh 的共享 `Arc<Vec<Entry>>`、加载序号、目录 fingerprint、目录 LRU、总 entry 预算、单目录 entry 上限和命中/未命中/stale invalidation/淘汰/跳过统计；超出 entry budget 的大目录只保留 path/count 轻量 summary，不持有 entries payload；`ListingWorkerState` 成为 per-app cache owner，成功的 `ListingRefreshed` 或关闭 pane 提升的可见模型快照会写入 fresh cache，普通 `Load` 只在 fresh cache 命中且目录 metadata fingerprint 仍匹配时即时投递 cached `ListingRefreshed + ListingCompleted`，并直接完成该请求，不再排队后台全量 `read_dir`；目录 fingerprint 变化、`Reload`、watcher invalidation 或增量更新失败都会立即释放对应 cache payload 并重新排队后台 listing，不保留不可用的 stale entries；watcher add/delete/refresh 会先按 Dolphin/KFileItemModel 的 delta 语义增量更新 fresh cache payload：create 同名替换或追加、delete 按目录子路径移除、modify/rename 使用 `RefreshPair { old_path, entry }` 替换/新增/移除并重排；增量更新超出 entry 预算或 current-directory-removed 会删除对应缓存；`ListingWorker::cache_debug_snapshot()` 暴露 cache stats、limits、cached directory summaries 和 skipped-large summaries，app 在 `FIKA_DEBUG_CACHE=1`、`FIKA_DEBUG_NAV=1` 或 `FIKA_PERF_ITEM_VIEW=1` 时输出 pending、hit/miss、invalidation、eviction、cached entries 和 skipped large directory 摘要。这先解决分屏同目录时重复 `read_dir`、worker result queue 重复大 `Vec<Entry>`、entries clone 中重复字符串分配、切目录期间首帧空白、fresh cache 误用陈旧目录、watcher delta 后不必要全量重读、历史 cache 长期抓住大目录内存和缓存行为不可观测的问题。
-  - 剩余验收：如后续需要对超大目录做二次命中优化，再补不持有完整 entries 的摘要索引结构；当前实现只做轻量 path/count summary 和性能日志，不用 stale payload 作为缓存。
-  - 注意：缓存是性能优化，不改变 `PaneId + generation` 路由语义。缓存命中后 pane 依然分配独立 generation，后续 lister event 仍按 `PaneId + generation` 路由。
-- [x] 实现 current-directory-removed。
-  - 验收：当前目录删除或 rename 后，pane 跳到最近存在 ancestor，符合 Dolphin 的 `slotCurrentDirectoryRemoved()` 行为。
-- [x] 为 directory core 增加覆盖。
-  - 验收：包含 stale generation、split pane、同目录双 pane、current-directory-removed、watcher refresh、同路径 listing batch、批量事件 request 提取、共享 entries retarget 和关闭 pane 取消 listing worker 状态测试。
+### 拖拽 (Drag & Drop)
+内部 item/place drag 完整：pane↔pane、pane↔Places 互相拖拽，GPUI `ExternalPaths` 外部 drop，Copy/Move/Link drop menu，目录 drop target 琥珀色高亮，Places 插入线 bookmark insert/reorder，精确 leave 清理，3s lease timeout 兜底。`DragExportPayload`（`text/uri-list` + `text/plain`）已构造，Places drag preview 含 cursor offset 补偿。
 
-## GPUI Pane and View
+### 缩略图
+Freedesktop thumbnail spec 完整实现：MD5 URI cache key、`normal/` + `large/` cache path、failure marker（`fail/gnome-thumbnail-factory`）、`Thumb::URI` / `Thumb::MTime` 校验、thumbnailer `.desktop` 注册表 + fallback 命令列表。Dolphin `indexesToResolve()` visible-first scheduling + read-ahead，`ThumbnailScheduler` 管理 pane/generation/item 工作 key。成功写入 `thumbnail_path`，失败写入 `thumbnail_failed`。
 
-- [x] 建立 GPUI pane shell。
-  - 验收：pane toolbar action 全部按 `PaneId` 路由；完整 pane 外壳已抽到 `src/ui/pane.rs`，主渲染只按 pane snapshot 数量实例化同一个可复用组件；pane 内不再放操作按钮，split/close 等操作改由 pane-local keyboard action 路由；pane root 可收缩到 split 可用宽度，不再用固定最小宽度截断滚动条或 overlay；splitter 尺寸对齐 Dolphin `QSplitter::sizes()` 语义和 Zed `SplitEditorView` / `PaneGroup` 的父容器 resize 模式，只由窗口/sidebar 推导出的 row 可用宽度、pane flex 权重和 splitter 拖拽更新，不再从目录内容或 child bounds 回写；splitter 渲染为 1px divider + 8px 独立 hitbox，`on_drag_move` 挂在 pane row 父容器上，用 row bounds 计算相邻 pane 权重，不再用移动中的 splitter bounds 反推；旧的 `pane_row_measurement` 子树测量入口已移除，目录内容不能再反向改变分屏比例；snapshot 阶段直接用 pane 分配宽度投影 `viewport_width`，虚拟网格/滚动条不再拖拽时等待下一帧 viewport prepaint 回写；split/close 后立即按当前 row 宽度归一化，每个 pane 的状态栏和滚动条填满该 pane 父容器宽度，滚动映射只读实际控件 bounds；关闭 pane 会清理可见 item slot pool、layout cache、viewport origin、rubber-band state、context menu/rename state 和后台 listing worker 状态；pane load/reload/back/forward 按 Dolphin 模型先取消拖拽、框选、菜单、rename/location draft、滚动条拖拽等 transient 交互状态，但保留旧 `DirectoryModel` 和可视布局缓存，直到当前 request 的 `ListingRefreshed` 到达后再替换模型和重建布局，避免切换目录出现空白闪烁。
-- [x] 实现每个 pane 的地址栏（Location Bar）。
-  - 参考：Dolphin `DolphinUrlNavigator` / `KUrlNavigator` 的 breadcrumb 模式和可编辑文本模式。
-  - 验收：每个 pane 顶部有独立地址栏，显示当前目录的 breadcrumb 路径（如 `Home > user > Documents > project`）；每个 breadcrumb 段可点击，点击后导航到对应目录；点击 breadcrumb 右侧空白区域或按 Ctrl+L 切换到可编辑文本模式，直接输入路径后回车导航；文本模式提供路径自动补全（基于文件系统）；路径变更后 breadcrumb 同步更新；地址栏按 `PaneId` 隔离，分屏各自独立；导航通过地址栏的操作计入 pane-local navigation history。
-  - 已完成：新增 `docs/LOCATION_BAR_REFERENCE.md`，记录 Dolphin `DolphinUrlNavigator` / `KUrlNavigator` 入口；pane snapshot 现在携带 breadcrumb segments 和 pane-scoped `LocationDraft`；pane header 渲染 breadcrumb/编辑两态，breadcrumb 点击、空白点击编辑、Ctrl+L/Alt+D/F6、Enter/Escape/Tab/Backspace/text 输入都按 focused `PaneId` 路由；编辑态使用文本光标和 pane-local 水平 scroll，caret 移动只调整到可见范围，长路径在窄 pane 内稳定截断且不反向撑大 pane；地址栏 metrics 记录可见宽度并对极窄 pane 的光标位置做安全 clamp，避免分屏收窄后 cursor 计算越界；路径输入支持绝对路径、相对路径和 `~`，Tab 补全从文件系统读取并稳定排序；`src/core/location.rs` 现在统一提供 `BreadcrumbSegment`、`breadcrumb_segments()`、`expand_user_path()`、`normalize_start_dir()`、`resolve_location_input()`、`complete_location_input()` 和 `home_dir()`，启动参数、Places Add/Edit path 输入、breadcrumb 构造和地址栏提交/补全复用同一 core 解析逻辑；`src/ui/location_bar.rs` 是地址栏 UI 入口，`src/ui/location_bar/draft.rs` 按目录式模块承接 editable draft/caret/snapshot，`src/ui/location_bar/metrics.rs` 按目录式模块承接 editable metrics/hit-test 数据；地址栏导航走 `load_pane()`，因此进入 pane-local history。
-- [x] 建立 dynamic split pane。
-  - 验收：split open/close 不复制全局 UI state；每个 pane 独立加载目录；1、3、4 个 pane 都走同一个 pane 组件路径。
-- [x] 接入 pane-local navigation history。
-  - 验收：Back/Forward 通过 `PaneId` 路由，切换 focused pane 不会改变历史事件目标；鼠标侧键按 Dolphin `BackButton` / `ForwardButton` 语义绑定到鼠标所在 pane，而不是全局焦点 pane；文件区 viewport、item visual rect 和 Places 侧栏都显式拦截 Navigate Back/Forward，避免子控件 mouse occlusion 后侧键失效。
-- [~] 建立 chooser shell。
-  - 验收：支持文件/目录选择、multi-select 输出、filter/choice metadata 输出。
-- [x] 实现 pane-local selection controller。
-  - 验收：single select、Ctrl/secondary toggle、Shift range、Ctrl/secondary+A、select all、clear selection、方向键移动、Shift+方向键范围选择、chooser multi-select、model change pruning 和 GPUI rubber-band selection 都进入 `fika-core::PaneState`；selection 内部存储 core `ItemId`，rename/refresh 后选择跟随同一 model item；select-all 使用 compact all-selected 状态和 exclusion list，不为大目录分配全量 selected id。
-- [x] 实现 Dolphin compact file view。
-  - 验收：core compact layout、model-index hit-test、selection rect、rubber-band overlay、GPUI item rendering 使用 `src/core/view.rs` 的布局结果；文件网格已抽到 `src/ui/file_grid.rs`，compact layout cache/model projection 已拆到 `src/ui/file_grid/layout.rs`；普通滚轮通过独立 `src/ui/item_view/scroll_bar.rs` 驱动 pane-local 横向 scroll state；条目按列优先布局；snapshot 和 thumbnail role updater 只消费当前 view mode 的可见条目；visible item slot pool 保持 pane-local 复用。
-  - 当前状态：旧 pane scrollbar、两版 `item_view_container` prototype、UI smooth-scroll bridge、`src/core/scroll.rs`、pending scroll restore 状态机和重建后的 `src/ui/item_view/smooth_scroller.rs` 均已删除；当前 `src/ui/item_view/scroll_state.rs` 为每个 pane 只持有独立 `gpui::ScrollHandle`，`src/ui/file_grid.rs` 用 `track_scroll()` / `overflow_x_scroll()` 建立真实横向滚动 viewport；普通 wheel 在 compact view 中按 Dolphin 横向 scroll orientation 直接写 pane-local `ViewState` 和同一个 handle，icons/details 保持纵向 wheel；`src/ui/item_view/scroll_bar.rs` 作为该 viewport wrapper 的 absolute sibling overlay 读取同一个 handle 的 bounds/max_offset/offset 并写回 `ScrollHandle::set_offset()`，app 层只在 handle maximum 已追上 view maximum 后接受反向 offset；zoom 后立即同步 pane-local `ScrollHandle` 和 `ViewState.scroll_x`。
-- [x] 实现 Dolphin icons file view。
-  - 验收：core `IconsLayout` 独立于 compact layout，按 Dolphin `IconsLayout` 语义使用行优先、纵向滚动、图标在上文字在下；`ViewMode::Icons` 为 pane-local state，分屏后互不影响；`PaneLayoutProjection` 根据当前 view mode 切换 Compact/Icons/Details hit-test、框选和空白判断；snapshot 只投影 `IconsLayout::visible_items()` 返回的可见条目，继续复用 pane-local visible item slot pool、icon cache、thumbnail 可见候选、item drag/drop 和右键菜单事件路径。
-  - 已完成：`src/core/view.rs` 新增 `IconsLayoutOptions` / `IconsLayout`、row-major hit-test、visible item projection 和 selection rect；`src/ui/file_grid.rs` 新增 Icons 分支和 `icons_layout_options()`，复用统一 item shell；`src/ui/file_grid/projection.rs` 改为当前 view mode 的 projection enum；右键菜单 View Mode 的 Icons/Compact/Details 都启用并路由到 `ViewState::view_mode`。
-- [~] 实现滚动条平滑插值滚动。
-  - 参考：Dolphin `QScroller` / `QPropertyAnimation` 驱动的平滑滚动和 kinetic scrolling（惯性滚动）实现；`KItemListView` 中 scrollbar drag 和滚轮事件的动画过渡。
-  - 验收：滚轮滚动时 scroll offset 使用缓出（ease-out）插值而非瞬时跳跃，过渡时长约 150–200ms；viewport gesture 的 kinetic scrolling 由 `QScroller` 对应路径处理，不能错误接到 scrollbar handle release；大目录下平滑滚动不丢帧，插值计算在渲染帧回调中完成；pane 目录切换时取消当前滚动动画并从 offset 0 开始；纵向滚动（列表模式/详情模式预留）同样走插值路径；滚动动画使用 `f32` 亚像素精度，渲染时 round 到物理像素。
-  - 已完成：新增 `docs/SMOOTH_SCROLL_REFERENCE.md`，记录 Dolphin `KItemListSmoothScroller`、`KItemListContainer`、`KItemListView::setScrollOffset()` 和 `QScroller` 对应路径；旧 UI smooth-scroll bridge、`src/core/scroll.rs`、`src/ui/item_view_container/smooth.rs` 和重建后引入阻塞/闪烁的 `src/ui/item_view/smooth_scroller.rs` 已删除，避免继续保留拖拽卡死路径；当前 wheel 先按 Dolphin orientation 映射，再直接调用 pane-local scroll offset 路径并同步同一个 `ScrollHandle`。
-  - 当前恢复状态：当前普通 wheel 在 compact view 中按 Dolphin 横向 scroll orientation 直接更新 offset，icons/details 保持纵向 wheel；没有 active smooth tick 或 kinetic gesture 状态；滚动条 thumb drag/track click 仍直接写 `ScrollHandle`，不接入 release kinetic，避免旧拖拽卡死路径。
-- [~] 滚动条拖拽诊断：鼠标拖动 handle 困难，已移除 pane-coupled 路径和旧 smooth/gesture 状态，仍需实机复核。
-  - 当前状态：旧 pane 横向 scrollbar、`item_view_container`、drag/cache、smooth tick、canvas hitbox 旧实现和相关测试已删除；当前 `src/ui/item_view/scroll_bar.rs` 复现 Zed scrollbar 的 tracked handle、thumb range、track click、thumb drag 和 bubble/capture phase 事件模型，滚动条作为 tracked viewport 的 sibling overlay 挂载，track 宽度直接来自 `ScrollHandle::bounds()` 的可见宽度；当 `max_offset.x == 0` 时不绘制横向 scrollbar，和当前 GPUI/Zed 模型保持一致。
-  - 注意：当前没有 scrollbar release kinetic，也没有 viewport gesture kinetic；后续若恢复，必须在独立 item-view 层重建，不能重新引入 pane-coupled 旧路径。
-- [x] 实现 pane-local zoom（缩放）。
-  - 参考：Dolphin `DolphinView::zoomIn()` / `zoomOut()` / `zoomReset()` 和 `KItemListView::setZoomLevel(int)`，zoom level 影响图标大小和 compact view 网格布局。
-  - 验收：每个 pane 有独立 zoom level，按 `PaneId` 隔离；Ctrl+Plus 放大 / Ctrl+Minus 缩小 / Ctrl+0 重置，zoom 快捷键按 focused `PaneId` 路由；zoom level 直接影响 compact view 的 icon size、列宽（column width）和行高（row height），`CompactColumnMetrics` 在 zoom 变更时失效重建；icon size 范围对齐 Dolphin（约 16px–256px，默认随系统字体 scale）；zoom level 持久化到 pane state，新建 pane 继承当前 focus pane 的 zoom level；状态栏或 toolbar 显示 zoom slider（可选 UI，首版可仅快捷键）；zoom 变更不触发热重载目录，仅更新 rendering layout。
-  - 已完成：新增 `docs/ZOOM_REFERENCE.md`，记录 Dolphin `ZoomLevelInfo`、`DolphinViewActionHandler::zoomIn/zoomOut/zoomReset`、`DolphinView::setZoomLevel` 和 `DolphinItemListView::setZoomLevel`；`ViewState` 改为存储 pane-local `zoom_level`，通过 Dolphin 式 0..16 level 映射到 16px..256px icon size；Ctrl+Plus/Ctrl+Minus/Ctrl+0 和 Ctrl/secondary+mouse-wheel 按目标/focused `PaneId` 路由；compact layout 的 icon size、基础列宽和行高由 zoom level 派生；zoom 后只清理目标 pane 的 `CompactColumnMetrics` cache，不触发 directory reload；split pane 继承源 pane `ViewState`，因此继承 zoom。
-- [x] 实现状态栏（Status Bar）。
-  - 参考：Dolphin `DolphinStatusBar` 选中条目信息、可用空间、zoom slider 和进度指示。
-  - 验收：每个 pane 底部都有自己的状态栏，作为可复用 pane 的一部分；左侧显示该 pane 的选中条目数量和总大小（如 "3 items (14.2 MiB)"）；右侧显示该 pane 所在分区的可用空间（如 "Free space: 23.4 GiB"）；中间嵌入 zoom slider（水平滑块），拖动时实时更新该 pane 的 zoom level；大文件复制/移动操作进行时只在触发操作的 pane 显示进度条和取消按钮；状态栏高度紧凑（单行 24–28px）。
-  - 已完成：新增 `docs/STATUS_BAR_REFERENCE.md`，记录 `DolphinViewContainer -> DolphinStatusBar -> DolphinView` 状态文本、zoom slider、space info 和 progress/stop 执行流；每个 pane 底部已有 28px pane-local GPUI 状态栏，pane 内 item count 已移除；状态栏按 `PaneId` 派生目录/选择摘要，不调用 `selected_paths()`，select-all 保持 compact selection；状态栏根控件不再使用旧 viewport 像素宽度参与布局，而是 `w_full + min_w_0 + max_w_full` 填满 pane 父容器，右侧 progress/zoom/space 固定内容按 pane 分配宽度降级隐藏，不能反向形成状态栏最小宽度；可用空间由该 pane 路径后台刷新到 cache，渲染路径只读 snapshot；zoom 控制是可拖动水平 track，路由到目标 pane，更新 pane-local zoom 并失效该 pane 列宽 cache；内部 Copy/Cut/Paste 已把 core `TransferProgress` 和取消 `AtomicBool` 接入操作 pane 的状态栏进度条/Stop 按钮；目录 loading 状态按 `PaneId + generation + request_serial` 跟踪，Stop 只取消目标 pane 当前 listing request；加载新目录时保留上一份状态摘要直到新 listing 完成，避免状态栏先闪成 `0 folders, 0 files`；状态消息不再从 focused pane 回退；进度条按 Dolphin 的 delayed progress bar 行为延迟显示，短操作不闪进度 UI；`src/ui/status_bar.rs` 是状态栏 UI 入口，`src/ui/status_bar/state.rs` 按目录式模块承接 snapshot/cache/progress/space helper，`src/ui/status_bar/summary.rs` 承接 model/filtered-selection 状态摘要生成。
-- [~] 实现 keyboard shortcuts。
-  - 已完成：方向键、Shift+方向键、Ctrl/secondary+A、Ctrl/secondary+C/X/V、Ctrl/secondary+L、Ctrl/secondary+Plus/Minus/0、Ctrl/secondary+Shift+N、F2 rename、F6 editable location、Escape、F5、F3、Backspace、Alt+Left、Alt+Right、Alt+D、Delete、Ctrl/secondary+W 和 Ctrl/secondary+Z 都按 focused `PaneId` 路由到 pane-local action；rename 编辑态补齐 Shift+Left/Right、Shift+Home/End 选区扩展和 Ctrl/secondary+A 全名选择；快捷键分类、Ctrl/secondary+wheel zoom delta 映射和 rename/location/place/filter 文本输入分类已拆到 `src/ui/shortcuts.rs`，`src/main.rs` 只把分类后的 action 分发到 pane-local app 方法。
-  - 剩余验收：后续新增交互继续按 pane-local action 路由。
-- [x] 实现每个 pane 自己的搜索框。
-  - 参考：Dolphin 搜索栏（`DolphinSearchBox` / `KUrlNavigator` 中的 filter/search 切换）。
-  - 验收：每个 pane 有独立搜索框（inline filter bar），输入实时过滤当前目录条目；支持名称过滤和基本通配符；搜索框清空后恢复完整目录视图；搜索状态按 `PaneId` 隔离，分屏互不影响；激活搜索不影响 selection 和 navigation history。
-  - 已完成：新增 `docs/SEARCH_REFERENCE.md`，记录 Dolphin `FilterBar -> DolphinViewContainer -> DolphinView -> KFileItemModel` 执行流；每个 pane 有独立 inline filter bar，`/` 和 `Ctrl/Secondary+I` 激活；输入实时更新 pane-local `NameFilter`，默认 Glob、大小写不敏感，并支持 Plain Text/Glob 切换和 Match Case；过滤栏 UI 类型已按目录式模块拆到 `src/ui/filter_bar.rs` 和 `src/ui/filter_bar/state.rs`，其中 state 子模块承接 snapshot、pane-local filter state 和 filtered model cache key/entry；过滤输入区使用文本鼠标光标，点击聚焦，caret 跟随 query 末尾，空 query 聚焦时 caret 在 placeholder 前，Mode/Case/Close 按钮保持 pointer；过滤在模型投影层生成缓存的 visible model-index 映射，GPUI grid、hit-test、rubber-band、range selection、select-all 和键盘移动都消费过滤后的索引，不在渲染热路径扫描全目录；关闭 filter 清空 query 并释放 filtered model/列宽/status cache；目录 URL 变化按 Dolphin `clearIfUnlocked()` 默认行为清空 query，reload 保留当前过滤；filter 激活不写 pane-local navigation history。
-- [~] 实现 Wayland 下的粘贴/复制操作协议。
-  - 参考：Wayland `wl_data_device_manager` / `wl-clipboard` / `smithay-clipboard` 生态。
-  - 验收：Ctrl+C 将选中文件路径写入 Wayland 剪贴板（`text/uri-list` 和 `text/plain`）；Ctrl+V 从剪贴板读取文件路径或文本，触发 paste file operation；支持 primary selection（中键粘贴）和 clipboard selection 两种 Wayland data device；拖拽过程中的 data offer 也走同一协议栈。
-  - 已完成：新增 `docs/CLIPBOARD_REFERENCE.md`，记录 Dolphin `DolphinView::{cutSelectedItemsToClipboard,copySelectedItemsToClipboard,pasteToUrl}`、`KFileItemModel::createMimeData()`、`KFileItemClipboard` 和 GPUI `ClipboardItem` / `ClipboardEntry::ExternalPaths` / clipboard-primary API 对应关系；新增 `src/core/clipboard.rs`，提供 `FileClipboardRole`、URI-list 编码、cut/copy marker 解析、GNOME/KDE 风格文本解析和 plain absolute path 解析；`src/ui/clipboard.rs` / `src/ui/clipboard/state.rs` 承接 GPUI clipboard bridge 和 `ClipboardState`；Fika Copy/Cut 会把选中文件路径写入 GPUI clipboard，并在 Linux/FreeBSD 同步写 primary selection；Paste 会先导入系统 clipboard，再在 Linux/FreeBSD 回退 primary selection；中键 paste 已走 primary-selection-only 路径，空白 pane 粘贴到当前目录，目录 item 粘贴到该目录，且不回退普通 clipboard；URI-list/path payload 进入现有 copy/move file operation，plain text payload 写入 keep-both 命名的 `Pasted Text.txt`；paste 结果按 Dolphin created-item 思路分别记录 transfer undo 和 create undo；已补 core 编解码、GPUI `ClipboardItem` 往返、URI-list 导入、plain text 导入、primary/clipboard 选择语义和文本 paste 测试。
-  - 剩余验收：GPUI 应用层还不能显式发布 Wayland 多 MIME data source，因此还需等/改 GPUI Wayland backend 后直接提供 `text/uri-list` + `text/plain`；外部 clipboard 若只提供 `text/uri-list` 还需 backend 读取支持；GPUI `ExternalPaths` 路径列表拖入已接入 pane file operation pipeline，任意非路径或 multi-MIME drag offer 仍需 backend 暴露后才能与同一个 `FileClipboardPayload` 模型统一。
+### MIME & 应用启动
+`shared-mime-info` glob/literal/suffix/magic 检测。`.desktop` 解析（Desktop Entry/Action/MimeType/Exec field codes）、`mimeinfo.cache`、`mimeapps.list` Default/Added/Removed Associations、`type/*` wildcard 匹配。systemd user transient unit 启动。KDE service menu 专用目录扫描、条件过滤。
 
-## Context Menu（右键菜单）
+### 文件操作 & Undo & Trash
+Copy/Move/Link/Trash/Create/Rename/Delete primitives → core file ops → affected dirs → pane refresh。Undo serial 防 stale。XDG Trash：`.trashinfo` 读写、Restore（含 Replace Existing 冲突对话框）、Delete Permanently、Empty Trash。`TrashEmptinessMonitor` app-owned 状态。Trash model 按 Deletion Time 排序。
 
-> **全局参考**：Dolphin 右键菜单实现路径 `../dolphin/src/dolphincontextmenu.cpp`、
-> `DolphinContextMenu`、`KFileItemActions`、`DolphinMainWindow` 中的 context menu event 处理。
-> 子菜单定位和延迟消失参考 `QMenu::popup()`、`QMenu::setHideDelay()` 和 Dolphin 的
-> `DolphinContextMenu::open()` / `DolphinContextMenu::showEvent()`。
+### Places 侧栏
+Home/XDG dirs/Trash/Devices/Root/Network sections。User bookmark XBEL 持久化（`fika/places.xbel`）。GIO/GVfs 动态 Removable Devices section，mount/unmount/eject。右键菜单、拖拽重排、Add/Edit draft。Hidden place/section 过滤。
 
-- [x] 建立 Dolphin 右键菜单源码执行流参考清单。
-  - 已完成：新增 `docs/CONTEXT_MENU_REFERENCE.md`，记录 `DolphinContextMenu::{addAllActions, addViewportContextMenu, addItemContextMenu, createPasteAction}` 和 `KItemListController` 右键/空白区事件边界；补充 Fika 当前 `ContextMenuSubmenu` 级联定位、延迟消失、Places、Trash、Open With 动态菜单、设备 Places context menu、GIO/GVfs/Solid teardown 映射、Places drag/drop 与 `DragAndDropHelper` 执行流。
-- [~] 实现基础右键菜单（空白区域）。
-  - 已完成：pane 空白区域右键弹出 GPUI overlay menu；包含 Create New、Paste、Sort By、View Mode、Select All、Refresh、Properties；Paste 按内部 clipboard 状态启用/禁用；空白菜单会按当前目录 `inode/directory` 目标只加载专用 service menu 目录中的动作并显示图标，不从 application `.desktop Actions=` 生成 service 行；右键必须能映射到真实 viewport 空白点，缺少 viewport origin 或落在滚动条/pane chrome 时不打开空白菜单；终端类入口不再作为内建 `Open Terminal Here` 硬编码项出现，统一来自专用 service menu 文件；Sort By / View Mode 走可复用 `ContextMenuSubmenu` 级联结构；Sort By 已路由到 pane-local `DirectoryModel` 排序，支持 Name、Modified、Size、Ascending、Descending、Folders First 和 Hidden Files Last，并按 Dolphin `preferredSortOrder(role)` 思路在每个 pane 内记录每个排序字段自己的升/降序；Folders First / Hidden Files Last 是 pane-local toggle，分屏后互不影响；root menu 已按 Dolphin-like action grouping 分隔 create、paste、service actions、sort/view、select/refresh 和 properties；root menu 使用鼠标位置作为 anchor 后 clamp 到 viewport 内，不再围绕指针做镜像翻转；context menu layer、root menu 和子菜单都使用 GPUI `occlude()` 作为真实 mouse hitbox，防止 hover/click 穿透到底下 item；菜单或 modal overlay 存在时 file grid 禁用底层 item hover 样式，避免 GPUI hover 状态在 overlay 下继续高亮；点击外部或 Esc 关闭；空白右键不启动 rubber-band；Properties 只读取当前目录自身 metadata，不递归扫描。
-  - 当前状态更新：空白菜单首项已改为 Dolphin-like `Create New` 子菜单，子项包含 Folder 和 Text File；菜单根定位使用鼠标点作为 anchor，能放下时保持 top-left 对齐，右/下越界且左/上有空间时按轴翻转到 `anchor - menu_size`，空间不足时才 clamp；context menu layer 在 capture 阶段处理菜单树外鼠标按下并阻断传播，避免点击或 hover 穿透到底层 item；View Mode 子菜单已启用 Icons、Compact 和 Details，action 路由到 pane-local `ViewState::view_mode` 并重置该 pane 的 scroll handle / compact column cache。
-  - 参考：Dolphin 在空白目录区域右键弹出 `DolphinContextMenu`（包含 Paste、Sort By、View Mode、Properties 等）。
-- [~] 实现文件/目录右键菜单。
-  - 已完成：item core 区域右键弹出菜单；未选中 item 先按 `PaneId` 选中；菜单包含 Open/Open With、Rename、Copy、Copy Location、Cut、Move to Trash、Properties；Copy Location 使用 GPUI clipboard 写入真实系统剪贴板；目录 item 增加 Open in New Pane 和 Open in New Window；Open in New Window 通过当前 Fika 可执行文件构造 `DesktopLaunchPlan` 并复用 `launch_with_systemd_user()` systemd transient unit 路径启动独立窗口，不直接 `std::process::Command`；单目录右键 Paste 目标为该目录，和 Dolphin `createPasteAction()` 一致；文件 item 的 Open With 走 core `MimeApplicationCache`，按 `mimeapps.list` default/added/removed 规则和 `.desktop` `MimeType=` 生成动态子菜单，应用行读取 `.desktop Icon=` 并在菜单 icon slot 里优先显示主题 named icon；右键 item 停止 rubber-band；单项右键菜单已按 Dolphin-like action grouping 分隔 open、clipboard/paste、service actions、rename/delete 和 properties；单项右键菜单已增加 core 驱动的 Actions 子菜单，只来自 Fika/KDE 专用 service menu 目录中的 `Type=Service` + `X-KDE-ServiceTypes=KonqPopupMenu/Plugin` 或 `KFileItemAction/Plugin` desktop 文件，不从 application `.desktop Actions=` 提升；action 执行复用 systemd launcher；service menu 支持 TopLevel 提升和 `X-KDE-Submenu` 在 More Actions 内渲染为真实二级级联 submenu，带 KDE submenu 的 action 不再因数量少或关键词被打散到根菜单，减少 Actions 平铺混乱；service action 会读取 service menu desktop entry 和 `[Desktop Action ...]` 的 `Icon=` 并在菜单行用主题 named icon 渲染；新增 `src/core/archive.rs` 轻量 archive classifier；当没有匹配的 Compress service menu 时，普通文件/目录 item 和多选菜单会提供 `Compress...` fallback，执行 `ark --add ...` 并复用 systemd launcher；单个已识别 archive 文件不显示 Compress fallback，而是在没有匹配 Extract service menu 时显示 `Extract Here` 和 `Extract To...` fallback，分别执行 `ark --batch --destination <archive-parent> <archive>` 与 `ark --batch --dialog --destination <archive-parent> <archive>` 并复用 systemd launcher；多选右键菜单也会显示整组选中项共同匹配且支持 `%F/%U` 多路径 Exec 的 Actions。
-  - 当前状态更新：目录 item 菜单在 Open/Open in New Pane/Open in New Window 后加入 Dolphin-like `Create New` 子菜单，子项新建目标是被右键的目录本身；`Open in New Window` 使用当前 Fika 可执行文件和 systemd user transient unit 打开新的 Fika，service menu 中的 Open in New Window/Open New Window/Open Window/Open in Window/Open Tab/Open Pane 等内置重名项会过滤，避免第三方 service 覆盖内置行为。`Open in New Window` 使用 `window-new` 图标，`Create New` 使用 `list-add` 图标，service menu 和 Open With 行继续使用 desktop/service 提供的 named icon。
-  - 参考：Dolphin 选中单文件时右键菜单包含 Open With、Cut/Copy、Rename、Move to Trash、Properties 等；选中目录时额外包含 Open in New Tab/Window、Open With 和 `Create New`。
-  - 剩余验收：补更多 multi-select 差异菜单和按文件类型动态 action state。
-- [~] 实现多选右键菜单。
-  - 已完成：右键目标属于多选时，菜单生成批量 Copy、Cut、Move to Trash、Properties，不再显示单文件/单目录专属 Open、Open With、Rename 或 Open in New Pane；Properties 汇总数量、类型计数和非目录文件大小，不递归扫描目录；多选 Actions 子菜单只显示所有选中项共同匹配并支持多路径 Exec field code 的 service actions，执行时把整组选中路径传给 systemd launcher；没有匹配的 Compress service menu 时提供 `Compress...` Ark fallback，且不会和系统 service menu 的 Compress 重复。
-  - 参考：Dolphin 多选时右键菜单不包含单文件专属项（如 Open With），只显示批量操作。
-  - 剩余验收：补“全是目录”的批量专属操作和 batch rename。
-- [~] 实现子菜单定位。
-  - 参考：Dolphin 使用 `QMenu::popup()` 时传入 `QPoint` 指定弹出位置，子菜单（Open With、Sort By 等）由 Qt 自动处理级联定位；Dolphin 不对子菜单做自定义偏移。
-  - 已完成：当前 GPUI overlay 支持一级 `ContextMenuSubmenu`，父菜单项 hover/点击打开右侧子菜单；根据窗口宽度自动翻转到左侧，并按父菜单行计算垂直位置；Sort By / View Mode 已接入该结构。
-  - 验收：子菜单（Open With、Sort By、Create New 等）在父菜单项右侧弹出，不超出窗口边界；窗口靠右边缘时子菜单自动翻转到左侧；多级子菜单级联展开位置正确。
-- [x] 实现子菜单延迟消失（hide delay）。
-  - 参考：Dolphin 使用 `QMenu` 默认 hide delay（约 300ms），鼠标短暂离开菜单区域不会关闭；子菜单之间移动时有 grace period。
-  - 验收：鼠标在父菜单和子菜单之间移动时有 ~300ms 过渡窗口，菜单不立即关闭；鼠标直接从父菜单项滑入子菜单不会触发菜单消失；鼠标完全离开整个菜单树（父+子）后延迟关闭。
-  - 已完成：`ContextMenuSubmenu` 使用 pane app 内的 generation 取消模型，父菜单非 submenu 行和 submenu parent 离开时只调度 300ms delayed hide；进入 submenu overlay 会取消 pending hide，离开 submenu overlay 后重新调度；旧 timer 只能清理 generation 未变化的当前 submenu，避免鼠标快速切换父菜单项时关闭新 submenu；已补 stale/current generation 单元测试。
-- [~] 实现 Places 侧栏右键菜单。
-  - 参考：Dolphin Places 面板右键菜单（`DolphinPlacesModel` 的 context menu），包含 Add Entry、Edit、Remove、Hide Section 等。
-  - 已完成：对照 Dolphin `PlacesPanel::slotContextMenuAboutToShow()` / `KFilePlacesView` 的入口，侧栏空白区域右键提供 Add Entry 和 Show Hidden Places；普通 place 条目提供 Open、Open in New Pane、Open in New Window、Edit Entry、Remove Entry、Hide、Copy Location、Properties；内置 place 的 Edit/Remove 保持 disabled；用户 bookmark 的 Edit/Remove 可用；Trash place 提供 Open、Open in New Pane、Open in New Window、Empty Trash、Hide、Copy Location、Properties，Empty Trash 按 trash 状态启用；section header 右键提供 Hide Section，单个 place 和 section 隐藏状态只过滤 sidebar snapshot，不删除 places model，也不写入 Fika Places 文件；Add/Edit 通过 pane-local draft dialog 写入 places model，Remove 只允许 removable bookmark；用户 bookmark 使用 XBEL 格式持久化到 Fika 自己的 `$XDG_DATA_HOME/fika/places.xbel`（回退 `~/.local/share/fika/places.xbel`），不再读取或写入 Dolphin 的 `$XDG_DATA_HOME/user-places.xbel`；内置 Home/Trash/Root 等路径优先且不会被持久化 bookmark 覆盖；已补菜单启用规则、Add/Edit/Remove、Hide/Hide Section、XBEL 读写、启动加载和输入分类测试。
-  - 剩余验收：设备 place 的真实硬件/Polkit teardown 流程和多分区安全移除行为仍需端到端验证。
-- [x] 实现 Trash 视图右键菜单。
-  - 参考：Dolphin trash 目录右键菜单包含 Empty Trash、Restore、Delete Permanently。
-  - 验收：在 trash 视图中右键文件增加 Restore 选项；右键空白区域增加 Empty Trash 选项；无 Restore 目标时 Restore 置灰。
-  - 已完成：Trash blank context menu 提供 Empty Trash 并按 trash 是否有内容启用；Trash item context menu 提供 Restore to Former Location、Copy、Delete Permanently 和 Properties；Restore 按 `.trashinfo` 可解析性启用；action 路由到 pane-local Trash 操作并刷新 affected dirs。
+### 状态栏 & 工具栏 & 地址栏
+Pane-local selection summary、free-space info、zoom slider、operation progress with Stop。Dolphin breadcrumb + editable text mode、caret navigation、Tab 补全。Pane toolbar：Search/Close filter、Split/Close Pane 按钮。
 
-## Drag and Drop（拖拽）
+### Inline Rename
+Pane-local draft state、UTF-8 caret、selection range、Shift+←→ 扩展选区、Ctrl+A 全选。扩展名修改琥珀色警示。Tab 连续 rename。Watcher rename/refresh 重定向 draft。空名/重名 inline 错误提示。
 
-> **全局参考**：Dolphin 拖拽实现路径 `../dolphin/src/dolphinview.cpp` 中的
-> drag 和 drop event handler（`startDrag()`、`dropEvent()`、`dragEnterEvent()`、
-> `dragMoveEvent()`、`dragLeaveEvent()`）；`KItemListView` 中的拖拽 widget 创建；
-> Places 面板拖拽（`../dolphin/src/places/` 下的 model/view drag support）。
+### 异步运行时代码
+Tokio 多线程 + Compio 专用操作线程。Bounded `mpsc::channel(1)` 提交，`compio::runtime::spawn(...).detach()`。Compio 文件 I/O + `spawn_blocking` 同步 fallback。`OperationRuntime::shared()`。
 
-- [x] 建立 Dolphin 拖拽源码执行流参考清单。
-  - 验收：`docs/` 下新建 `DRAG_DROP_REFERENCE.md`，记录 Dolphin view drag start/move/enter/leave/drop 完整执行路径、`QDrag` 对象构造、mime data 填充、drop action 判断和 Places panel drop 处理。
-  - 已完成：新增 `docs/DRAG_DROP_REFERENCE.md`，记录 `KItemListController::{mouseMoveEvent,startDragging,dragEnterEvent,dragMoveEvent,dragLeaveEvent,dropEvent}`、`KFileItemModel::createMimeData()`、`KItemListView::showDropIndicator()`、`DolphinView::slotItemDropEvent/dropUrls()`、`DragAndDropHelper::{dropUrls,supportsDropping,updateDropAction}`、Places 和 tab drop 入口。
-- [~] 实现 pane item 拖拽源（drag source）。
-  - 已完成：item `visual_rect` 拥有独立 GPUI drag source 和基础拖拽预览，item 上拖拽不再触发空白 rubber-band；拖拽已选中 item 时预览显示当前 pane selection count，语义对齐 Dolphin “拖拽已选中 item = 拖拽选中集合”，且只向 tile 传递轻量 count，不复制完整 selected path 列表；`ActiveItemDrag` 现在同时持有外部导出用 `DragExportPayload`，包含 Dolphin-like 路径集、`text/uri-list` 和 `text/plain`，并复用 core clipboard URI-list 编码；导出路径会在父目录已包含时裁剪子路径，避免外部应用收到重复语义的 URL。
-  - 参考：Dolphin `DolphinView::startDrag()` 创建 `QDrag`，设置 pixmap、mime data（`text/uri-list`），支持 `MoveAction` / `CopyAction` / `LinkAction`。
-  - 剩余验收：GPUI/backend 还缺少 app drag source 对外发布 MIME 的 API；待该入口存在后把 `DragExportPayload` 发布为 `text/uri-list` + `text/plain`。
-- [~] 实现 pane item 拖拽目标（drop target）。
-  - 参考：Dolphin `DolphinView::dropEvent()` 判断 drop action，对目录执行 move/copy/link 操作。
-  - 已完成：pane file grid 已接收内部 item drag 和 GPUI `ExternalPaths`；内部/外部路径列表在入口统一归一化，去重并在父目录已包含时裁剪子路径；拖到目录 item、pane 空白、breadcrumb segment 或 Places row 会先用共享 `item_drop_reject_reason()` 拒绝空列表、非目录目标、source/self 和 descendant 目录目标，只有有效 hover 才设置 transient `ItemDropTarget` / `PlaceDropTarget`；拖到非目录 item 或 pane 空白区域时 target 回到当前 pane 目录并可执行 drop；drop 后显示 `DropOperation` context menu，由菜单动作选择 Copy/Move/Link，再复用 core file transfer primitives 执行并 refresh 受影响目录；GPUI `ExternalPaths` 外部文件 drop 已接入 file-grid blank/directory、breadcrumb segment、Places row 和 section insert target，并与内部 item drag 使用同一目标解析和拒绝逻辑；breadcrumb path segment 会在 drop 前把目标 pane 导航到对应目录；pane blank、目录 item、breadcrumb segment、Places row 和 section header 的 drag-move 离开分支只清理自己当前持有的 target，避免旧高亮等 3s lease timeout 才消失，也避免 sibling 刚设置的新 target 被误清；drop target 设置会刷新 pane-local lease generation，若超过 3s 没有任何 drag-move 刷新则作为 drag cancel/backend 缺少 leave 的兜底清理 pane/Places 高亮；drop、chooser 拒绝、operation busy、pane lifecycle clear 都会清理 drag/drop transient state；新增 drop target state、路径归一化、descendant/self drop 拒绝、`ExternalPaths` drop、drop menu 路由和精确 leave 清理测试。
-  - 验收：拖拽文件到目录上时目录高亮显示（与普通 hover 不同的高亮颜色）；拖拽到空白区域、目录 item、breadcrumb 或 Places 目标时先弹出 Copy/Move/Link drop menu；breadcrumb drop 先导航到对应目录；内部 item drag 与 GPUI `ExternalPaths` 外部 drop 使用同一目标校验、路径归一化和菜单执行路径。
-  - 剩余验收：Move 专用 drag cursor/icon 仍需 GPUI/backend 暴露对应 cursor style 后补齐；任意外部 multi-MIME data offer（包括 Ark service/path）仍需 GPUI/backend 暴露，当前普通文件路径拖入依赖 GPUI `ExternalPaths`；3s lease timeout 仍保留为 drag cancel/后端无后续 move 事件的兜底。
-- [~] 实现 Places 侧栏 item 拖拽源。
-  - 参考：Dolphin Places panel 允许拖出 bookmark 到外部。
-  - 验收：侧栏中的 places 条目可拖拽到 pane 中打开；侧栏条目拖拽到外部应用时传递文件路径（如果对应目录存在）。
-  - 已完成：Places 行作为 GPUI 内部 `PlaceDrag` source，拖拽预览显示 label/path，且对 GPUI 整行 drag hitbox 的 cursor offset 做补偿，避免 Home/长标签从文字区域拖出时 preview 远离鼠标；file grid 接收 `PlaceDrag`，拖到 pane 空白或 item 上会导航目标 pane 到对应 place path，并清理 pane/Places drop target；`PlaceDrag` 会为存在且为目录的 place path 生成同一 `DragExportPayload`，非目录或不存在路径不导出外部 MIME payload；已补目标 pane 导航、外部 payload gate 和状态清理测试。
-  - 剩余验收：底层 GPUI/Wayland backend 还未提供从 app 内部 drag source 向外部应用发布 `text/uri-list` 的路径，因此拖出到外部应用的实际 MIME 传递仍待后续 backend 支持。
-- [x] 实现 Places 侧栏 drop target。
-  - 参考：Dolphin Places panel 接受文件/目录拖入创建新 bookmark，根据 drop 位置区分：拖到已有条目上 → 复制到该目录；拖到条目之间 → 插入新 bookmark。
-  - 验收：从 pane 拖拽目录到侧栏条目之间时插入新 places bookmark；从 pane 拖拽目录到侧栏已有条目上时执行 copy/move 到该目标目录；侧栏根据 drop 位置显示不同高亮：插入位置显示插入线（insertion indicator），目标目录显示背景高亮；两种高亮使用不同颜色区分。
-  - 已完成：Places sidebar 维护独立 `PlaceDropTarget`，和 pane drop target 互斥；拖到 place 行中部时对内部 item drag 或外部 `ExternalPaths` 显示有效 on-place target，drop 后弹出 Copy/Move/Link menu 并执行到该 place 目录；拖到行上下边缘或 section boundary 时显示 2px 蓝色插入线，并只接受单个新的已有目录插入为 user bookmark（写入 Fika 的 `fika/places.xbel`），非目录、多路径或重复 place 会被拒绝；Places 内部 `PlaceDrag` 对齐 Dolphin，只在 Places sidebar 内产生 insert/reorder target，不触发行主体 drop-on-place 文件操作；primary Places 条目（含 active place 和内置 Home/Trash）都可作为重排 source，grouped Network/Devices 不参与 primary 重排；持久化投影仍只写 editable/removable user bookmarks，避免动态或内置条目写入 Fika Places 文件；已补 Places drop target 状态、bookmark 插入、拒绝路径和 reorder 测试。
-- [~] 实现 pane 到侧栏、侧栏到 pane 的互相拖拽。
-  - 验收：从 pane 拖到侧栏 → 行为如上（插入 bookmark 或 copy 到目标目录）；从侧栏拖到 pane → 导航到该目录。
-  - 已完成：pane item drag 和外部 `ExternalPaths` 可拖到 Places 行/插入位置，分别弹出 drop menu 执行到 place 目录或插入单个新目录 bookmark；Places 内部 `PlaceDrag` 可拖到 pane 并导航目标 pane，也可在 Places sidebar 内重排 primary Places 条目。
-  - 剩余验收：把 item/Places drag 已构造的 `DragExportPayload` 接到未来 GPUI/backend 外部 MIME 发布 API。
-- [~] 实现拖拽过程中的视觉反馈。
-  - 参考：Dolphin 拖拽悬停在目录上时该目录条目显示高亮背景；拖拽悬停在侧栏条目之间时显示插入指示线。
-  - 已完成：pane 目录 drop target、pane 空白 tint、breadcrumb path segment 和 Places drop-on-row 使用专用琥珀色 drop-target 背景/边框，和 selected 蓝色背景、普通 hover 浅灰背景区分；目录 drop target 额外加阴影并提高背景透明度，作为拖拽终点项的实时提示；Places drop-between 使用 2px 蓝色插入线；内部 item drag 和外部 `ExternalPaths` drag 移动到其它 pane/目录/Places target 会替换上一 target；pane 空白区、目录/非目录 tile、breadcrumb segment、Places row 和 section header 的 drag-move handler 会刷新 active drag cursor，有效 file-operation target 使用 contextual-menu cursor，bookmark insert/reorder 使用 Copy/Move 类 cursor；拖到内部 drag 的源目录自身、源目录 descendant、不可挂载 place 行中部、不可移动 place reorder 位置或当前 place 自身无效 reorder 位置时，会立即清掉旧 drop target 并切到平台 `not-allowed` cursor；pane blank、目录 item、breadcrumb segment、Places row 和 section header 在 drag-move 发现 pointer 已离开自身 bounds 时，会精确清理自己持有的 target 或 insert line，拖拽离开区域后不再主要依赖 3s lease timeout；drop 和 pane 生命周期清理会移除高亮；GPUI 没有 backend 级 drag cancel/leave 时，当前仍保留 3s lease timeout 作为无后续 drag-move 的兜底。
-  - 验收：pane 中目录 drop target 高亮颜色与 selected 高亮颜色明确区分；侧栏插入线为 2px 粗线，颜色与系统强调色一致；拖拽离开区域后高亮立即清除；有效文件操作 drop target 使用 drop-menu 光标反馈，无效目标使用 not-allowed 光标。
-  - 剩余验收：Move 专用 drag cursor/icon 仍需 GPUI/backend 支持；若 GPUI 后续暴露 backend 级 drag cancel/leave，可移除或缩短当前 lease-timeout 兜底。
-- [x] 为搜索栏添加启动按钮。
-  - 参考：Dolphin `DolphinSearchBox` / `KUrlNavigator` 中的搜索按钮触发搜索模式。
-  - 验收：pane toolbar 或地址栏旁边有可见搜索按钮，点击后进入搜索模式（显示搜索输入框）；搜索按钮在普通浏览模式下可见，搜索模式下切换为关闭搜索按钮；快捷键（Ctrl+F）和按钮点击行为一致，都路由到 focused `PaneId`；按钮使用系统主题搜索图标（`edit-find` / `system-search`），无主题时回退到文本 label。
-  - 已完成：每个 pane 的地址栏行右侧增加 pane-local Search/Close 按钮；普通模式按钮使用 `edit-find` / `system-search` / `search` named icon 候选，搜索模式按钮使用 `window-close` / `dialog-close` / `edit-clear` 候选，主题缺失时回退到文本 label；点击 Search 会 focus 对应 pane 并调用现有 `show_filter_bar()`，点击 Close 会先 focus 对应 pane 再调用 `close_filter_bar()` 清空过滤；`Ctrl+F` 已补入 `PaneShortcut::ShowFilter`，和 `/`、`Ctrl+I` 一起走 focused pane 的同一路由。
+### D-Bus 总线控制
+`BusController`：lazy connection、30s idle timeout、3 次 timeout/retry。Session/System bus proxy。Systemd launcher、privileged-helper、Ark DnD 通过共享 bus helper 路由。不引入 `async-io`。
 
-- [x] 为分屏添加工具栏按钮。
-  - 参考：Dolphin `DolphinViewActionHandler::slotSplitView()` / `slotCloseSplitView()` 的分屏/关闭行为。
-  - 验收：pane toolbar 或状态栏提供 Split（分屏）和 Close Pane（关闭当前分屏）按钮；Split 按钮在只有单个 pane 时可用，点击后在当前 focused pane 右侧创建新 pane；Close Pane 按钮在多个 pane 时可用，点击后关闭当前 focused pane；按钮使用系统主题图标（`view-split-left-right` / `window-close`），行为和现有 keyboard shortcut 一致；分屏后新 pane 继承源 pane 的 zoom level 和当前目录。
-  - 已完成：每个 pane header 右侧提供 Split 和 Close Pane 按钮；Split 按钮只有单 pane 时启用并复用现有 `split_pane()` 路由，Close Pane 按钮只有多 pane 时启用并复用现有 `close_pane()` 路由；按钮 snapshot 使用 `view-split-left-right` / `view-split-left-right-symbolic` / `view-restore` 与 `window-close` / `dialog-close` / `edit-delete` 主题图标候选，主题缺失时回退文本 label；按钮路由会先 focus 目标 pane，并在路由层重复校验 pane 数量以避免 UI 状态滞后一帧误操作。
+### 键盘快捷键
+Pane-scoped navigation、selection、zoom、filter、clipboard、undo、inline rename。`PaneId` 路由。
 
-- [~] 优化 inline rename 交互体验。
-  - 参考：Dolphin `DolphinView::renameSelectedItems()` / `KItemListView` inline rename widget；macOS Finder / Windows Explorer 的 inline rename 交互模式。
-  - 已完成：`src/ui/rename.rs`、`src/ui/rename/draft.rs` 和 `src/ui/rename/metrics.rs` 已承接 pane-local rename draft 状态、UTF-8 边界编辑和 caret hit-test metrics；基础 inline rename 文本输入和 Enter/Escape 提交/取消已实现；空名称和目标重名会保留 inline rename draft，在文件名区域显示红色边框和错误文本，并同步 pane-local 状态栏，不再丢失编辑态；rename 编辑态按 Tab 会提交当前 draft 并进入同目录模型顺序中的下一个 item rename，未修改名称时立即跳转，真实 rename 操作成功后续接下一项；文件 rename 修改、移除或新增扩展名时在 inline helper 文案显示琥珀色警示，目录不触发扩展名警示；rename draft 现在持有 caret 和 selection range，进入 rename 时默认选中文件名主体（不含最后扩展名），输入文本会替换选区，Backspace/Delete 支持删除选区或 UTF-8 字符边界，Left/Right/Home/End 可移动 caret，存在选区时 Left/Right 会先折叠到选区起点/终点；Shift+Left/Right 和 Shift+Home/End 会从当前 anchor 扩展选区，Ctrl/secondary+A 会选中完整文件名（含扩展名）；file grid rename 文本行会渲染选区高亮和 1px caret，并使用 text cursor；rename 文本左键按 window x 经过 pane viewport/content projection、filtered layout reverse mapping 和估算文本 metrics 定位到 UTF-8 安全 caret，并清除原选区；active rename draft 的估算文本宽度会作为 pane-local compact column override 进入布局，长 draft name 可扩展 inline 编辑框宽度，snapshot、item hit-test、rubber-band visual intersection 和 caret hit-test 共用同一 expanded layout；inline rename 视觉已拆成稳定 name/helper 两行，只有 20px 文件名行显示文本输入框边框、白底、选区和 caret，类型/错误/扩展名警告 helper 保持在下方，不再被输入框边框包住；watcher rename/refresh pair 应用到模型前会按同一 `PaneId + generation + current_dir` 边界把 active rename draft 的 `original_path` 从 old path 重定向到 new path，保留用户已输入的 draft name、caret、selection 和 inline error，selection 继续按 core `ItemId` 跟随新路径。
-  - 下一步：继续做真实运行中的 rename 视觉验收；随后回到 DnD/GPUI backend，处理外部 URI-list 发布。
-  - 验收：inline rename 编辑框在文件名上原位展开，不弹出独立对话框；编辑框宽度自动适配文件名长度，最小宽度不低于当前列宽；rename 编辑时自动选中文件名主体（不含扩展名），扩展名修改时给出警示；Tab 键在 rename 编辑态跳转到同目录下一个文件并进入 rename；rename 过程中目录外部变更（watcher event）不打断或丢失当前 rename draft；rename 提交后焦点保持在重命名后的文件上，支持连续 Tab 重命名多个文件；rename 冲突（目标文件名已存在）时显示 inline 错误提示而非弹出模态对话框；视觉上 rename 编辑框与文件 item 无缝衔接，使用相同字体和颜色方案。
+### 属性对话框 & 搜索栏 & Filter Bar
+多选 metadata rows。Pane-local plain-text/glob filter、case-sensitive toggle、match count、filtered model cache。
 
-## File Operations and Undo
+### KDE 集成
+Ark DnD 解析与 `extractSelectedFilesTo()`。Compress/Extract fallback（`ark --add`/`--batch`）。Service menu 二级子菜单。
 
-- [~] 迁移 file operation primitives 到 core。
-  - 已完成：create file/folder、rename、move-to-trash 和内部 Copy/Cut/Paste 都通过 GPUI 后台任务调用 core file operation primitives，并返回 affected dirs / undo payload。
-  - 验收：copy/move/link/trash/rename/create/delete 结果只返回 affected dirs / pane ids / undo registration，不直接触碰 UI。
-- [~] 迁移 undo serial。
-  - 已完成：create file/folder、rename、move-to-trash 和内部 Copy/Cut/Paste 会记录 core undo payload 和受影响目录；Undo 取最新 serial，恢复后通过 affected panes 的 lister refresh。
-  - 验收：undo start/finish 以 serial 防 stale result；undo 完成后通过 affected panes 的 lister refresh。
-- [~] 实现完整的 Trash 功能和视图。
-  - 参考：Dolphin trash 实现 `../dolphin/src/trash/`、`TrashBase`、`DolphinTrash`；XDG trash spec（`freedesktop.org/wiki/Specifications/trash-spec/`）；trash 目录结构 `$XDG_DATA_HOME/Trash/files/` 和 `$XDG_DATA_HOME/Trash/info/`。
-  - 已完成：新增 `docs/TRASH_REFERENCE.md`，记录 Dolphin `Trash` singleton、`KIO::DeleteOrTrashJob`、`KFileItemModel` Trash PathRole/DeletionTimeRole、Trash context menu 和 Places trash emptiness 更新来源；Fika 以 `$XDG_DATA_HOME/Trash/files` 作为当前 Trash 视图路径，`Entry` 从 `.trashinfo` 读取 `trash_original_path` 和 `trash_deletion_time`；Trash 右键菜单已有 Restore、Delete Permanently 和 Empty Trash；普通 Delete 路由到 move-to-trash 并记录 Undo；Empty Trash 清理 `files/` 和孤立 `info/`；`.trashinfo` watcher refresh 映射回同一个 `files/` item；Trash model 按 deletion time 排序并在 reload/metadata refresh 时保持同名 trash item 的 `ItemId`；Trash 空白右键 Sort By 使用 Trash 专用 submenu，支持 Name、Original Path 和 Deletion Time，并在 model 层提供 `TrashOriginalPath` / `TrashDeletionTime` sort role；Trash compact item snapshot 现在携带 role-derived detail label，在 item helper 中显示原始位置和删除时间；View Mode 的 Details 视图已暴露 Trash Original Path 和 Deletion Time 列；Places 侧栏 Trash 条目由 `FikaApp` 持有 Dolphin-like app-owned empty/non-empty state，projection 不再直接 polling 文件系统，状态从启动时读一次、Trash 操作 affected dirs、Trash pane lister event 和 core `TrashEmptinessMonitor` 独立 watcher 更新，渲染状态点和 marker 颜色，右键菜单包含 Open、Empty Trash、Copy Location 和 Properties，Empty Trash 使用同一 app-owned state 启用/禁用并从当前 focused pane 的 pane-local 状态栏显示进度；core 会维护 Dolphin `Trash::isEmpty()` 对应的 `$XDG_CONFIG_HOME/trashrc` `[Status] Empty=`，Trash 操作和 monitor refresh 会同步该状态；Trash restore 目标冲突会按 core `TrashRestoreConflictPolicy` 先回传 pane-local conflict dialog，用户选择 Skip 只关闭对话框，选择 Replace Existing 会通过同一 Trash operation 路由重新执行 restore，先备份现有目标，移动成功后清理 trash `files/` 和 `info/` 条目并刷新 Trash 与原始目录，失败时恢复备份。
-  - 剩余：Trash backend 仍未实现 Dolphin/KIO 的 `trash:/` 多存储聚合和 removable storage `.Trash-$uid` 可访问性刷新。
-  - 验收：
-    - Trash 目录作为特殊虚拟目录加载，`DirectoryModel` 可展示 `files/` 下所有被删除文件及其原始路径（从 `info/` 中 `.trashinfo` 文件读取）。
-    - `Entry` 携带 trash metadata：原始路径（`orig_path`）、删除时间（`deletion_date`），在 trash 视图中作为额外列或 tooltip 显示。
-    - trash 视图右键菜单包含 Restore（恢复文件到原始路径）和 Delete Permanently（清空回收站/永久删除）。
-    - 普通目录中 Delete 键执行 move-to-trash（通过 `FileOps::trash_file()`），undo 后恢复。
-    - Empty Trash 操作清空 `files/` 和 `info/`，完成后触发 pane 刷新。
-    - trash `files/` 和 `info/` 的外部变化（watcher event）映射到同一个 model item 的 trash metadata 更新。
-    - Places 侧栏 Trash 条目显示非空状态图标（有/无内容两种状态），右键包含 Empty Trash。
-  - 详细验收：
-    - trash 创建：`trash_file()` 生成唯一 trash 文件名（`path_basename.trashinfo` 对应），写入 `.trashinfo`（包含 `[Trash Info]`、`Path=`、`DeletionDate=`），移动原文件到 `files/`。
-    - trash 恢复：`restore_file()` 读取 `.trashinfo` 获取原始路径，将文件移回，若原始路径已存在则弹出覆盖确认对话框；用户确认 Replace Existing 后先备份现有目标再覆盖恢复，成功后清理 trash 中残留的 `files/` 和 `info/` 条目，失败时恢复备份。
-    - trash 永久删除：`delete_permanently()` 直接删除 `files/` 中文件和对应 `info/` 条目，不可撤销。
-    - trash 视图排序：支持按 Name、Original Path、Deletion Date 排序，model 层提供对应的 `SortRole`。
-    - trash 状态变更通过 lister event 路径通知所有相关 pane，走 `PaneId + generation` 路由。
+## Remaining Work
 
-## Desktop Integration
+### GPUI Backend / External MIME Drag (阻塞)
+- [~] 外部 MIME 拖出：`DragExportPayload`（`text/uri-list` + `text/plain`）已构造，但 GPUI/Wayland backend 尚未提供从 app 内部 drag source 向外部应用发布 MIME 的 API。待 backend 支持后接入。
+- [~] 外部 MIME 拖入：Ark service/path MIME（`application/x-kde-ark-dndextract-service/path`）已就绪 core parser 和 executor，但 GPUI/backend 多 MIME data offer API 仍待支持。当前普通文件路径拖入通过 `ExternalPaths` 工作。
+- [~] Move 专用 drag cursor/icon 仍需 GPUI/backend 暴露对应 cursor style。
 
-- [~] D-Bus 总线控制（Bus Control）。
-  - 参考：cosmic-files 中 `zbus` Connection 管理（session bus + system bus 统一生命周期）；Dolphin 的 `KDirNotify` / `org.freedesktop.FileManager1` D-Bus 接口；`fika-privileged-helper` 现有的 system bus 连接模式。
-  - 已完成：新增 `docs/BUS_CONTROL_REFERENCE.md`，梳理 Dolphin `KDBusService` / `DBusInterface` / Ark DnD / KDirNotify、cosmic-files FileManager1 zbus applet、Fika 当前 systemd launcher / privileged-helper / portal backend 的分散 zbus 使用；新增 `src/core/bus.rs`，提供 `BusKind`、`BusCallTarget`、`BusConfig`、`BusController`、结构化 `BusError`、session/system connection cache、owned proxy 创建和 timeout/retry 调用 helper；Fika 直接依赖的 crates.io 依赖不使用 `*` 版本，保持最新主版本的宽 semver 约束（例如 `tokio = "1"`、`zbus = "5"`、`notify = "8"`），避免 patch/minor 级别过度锁死；`zbus`/`zbus_polkit` 已关闭默认 feature，且不再由 Fika 直接启用 `zbus/tokio`、`zbus/async-io` 或 `zbus/blocking-api`，避免 crate-global executor feature 把 GPUI/AccessKit 的 transitive portal/a11y D-Bus 调用错误切到 Tokio；连接创建、proxy 创建、method call timeout/retry、privileged-helper 客户端 readiness polling 和 helper 服务端 external-edit unit watcher 的 Fika-owned timer/sleep 边界仍走 `with_bus_tokio_context()`，避免 GPUI 非 Tokio 线程触发 Fika 自身 Tokio timer 的 “no reactor running”；`launch_with_systemd_user()` 的 systemd `StartTransientUnit` 已通过共享 session bus helper 路由；`src/core/archive.rs` 已新增 Ark DnD executor 边界，能把已校验 `ArkDndExtractPayload + destination` 转成 `org.kde.ark.DndExtract.extractSelectedFilesTo(destination)` 并通过共享 session bus helper 执行；privileged-helper 的 client 侧文件操作、external edit prepare/commit/discard/associate 和 session helper readiness check 已改用共享 system/session bus connection helper，service 注册和基于 caller header 的 polkit 授权仍保留自身连接上下文。
-  - 验收：`fika-core` 新增 `src/core/bus.rs`，统一管理系统总线（system bus）和会话总线（session bus）的 `zbus::Connection`；连接按需延迟建立，空闲超时后自动断开（默认 30s）；D-Bus 方法调用支持超时重试（默认 3 次，间隔递进）；systemd `StartTransientUnit` 调用通过统一 bus 层路由到 `launcher.rs`；Portal `org.freedesktop.impl.portal.FileChooser` 接口通过 session bus 注册，走统一 bus 层管理；`privileged-helper` 的 system bus 服务注册和 Polkit 授权检查复用同一 bus 层；D-Bus 错误统一转换为 `fika-core` 结构化错误类型（`BusError`），包含服务名、方法名和错误详情。
-- [ ] 异步运行时架构：tokio + compio 双运行时。
-  - 参考：cosmic-files 的 `Cargo.toml` 双运行时依赖布局——tokio 用于通用异步（进程、同步、D-Bus、网络），compio 用于 completion-based 文件 I/O（io_uring / IOCP / polling）；compio 的 thread-per-core 模型和 tokio 的 work-stealing 模型各自独立运行，不混用 future。
-  - 验收：
-    - `Cargo.toml` 引入 `tokio` 和 `compio`，不写 concrete crate release、branch 或 revision；Linux 上默认启用 `io-uring` feature，其他平台回退到 polling/runtime 支持。
-    - `fika-core` 新增 `src/core/runtime.rs`，封装双运行时初始化逻辑：tokio 多线程 runtime 作为主异步环境（D-Bus、进程启动、网络请求）；compio runtime 专用于文件 I/O（`read_dir`、`stat`、`copy`、缩略图读写）。
-    - `DirectoryLister` 的 `read_dir` 和 `FileOps` 的 copy/move/delete 操作使用 compio 异步文件 API 替代 `std::fs` + `spawn_blocking`；watcher 事件回调仍走 tokio（因为 `notify` crate 基于 tokio/blocking）。
-    - 缩略图管线的 PNG/JPEG 解码和 thumbnail cache 读写走 compio 文件 I/O，解码在 tokio `spawn_blocking` 中（因为 `image` crate 是 CPU bound 同步操作）。
-    - 双运行时不共享 future：compio 的 `AsyncRead`/`AsyncWrite` future 仅在 compio runtime 上 `block_on` 或 spawn；tokio future 仅在 tokio runtime 上 spawn；跨运行时数据传输通过 `async-channel` 或 `tokio::sync::oneshot` channel 桥接。
-    - 性能目标：`read_dir` 大目录（100K 条目）通过 compio io_uring 批量 `getdents64` + 批量 `statx` 完成时间比 `std::fs::read_dir` + `spawn_blocking` 减少 30%+；编译期 feature flag `io-uring` 可关闭（回退 compio polling 模式），确保非 Linux 平台工作。
-    - 参考文档：`docs/RUNTIME_REFERENCE.md` 记录 cosmic-files 双运行时集成细节、compio 文件和线程模型、与 tokio spawn_blocking 的性能对比数据。
-- [~] MIME 类型自我识别。
-  - 参考：cosmic-files `src/mime_icon.rs` 的 `xdg_mime::SharedMimeInfo` / fallback MIME 识别；Dolphin `KFileItemModel::retrieveData()`、`KFileItemModelRolesUpdater` 和 `KFileItemListView` 的 iconName/genericIconName 执行流；`xdg-mime` / `shared-mime-info` 数据库。
-  - 已完成：新增 `src/core/mime.rs`，读取系统 shared-mime-info 的 `globs2`、`icons`、`generic-icons` 和 MIME XML 图标声明；支持 literal filename、multi-suffix、extension 和常见 magic bytes 双重识别；`EntryData` 已携带 `mime_type: Option<Arc<str>>` 和 `mime_magic_checked`；目录 entry 构建只走 filename/glob 快路径，不在 listing 热路径打开普通文件；fallback 到 `application/octet-stream` 的非空文件由 `EntryMetadataRole::resolved_from_path()` 在 metadata role updater 中读取少量前缀并一次性写回最终 MIME，magic 结果仍为 octet-stream 时也标记 checked，避免每帧重复解析；图标不再写入 model role，而是在可见 snapshot 构造时通过 `FileIconCache::icon_for()` 按 MIME、扩展名和主题路径缓存直接取得；图标候选使用 MIME-specific icon、shared-mime-info icon、generic icon、extension fallback 和 unknown fallback。
-  - 已完成补充：新增 `src/core/launcher.rs`，解析 `.desktop` `Desktop Entry`、`Desktop Action`、`MimeType=`、desktop-file-utils `mimeinfo.cache` `[MIME Cache]`、Exec field code 和 `mimeapps.list` 的 Default/Added/Removed Associations；`src/main.rs` 只消费 core 输出的 `MimeApplication` 列表生成 Open With 子菜单，不在 GPUI widget 内解析 desktop 文件；Open With launch plan 已转换为 systemd user transient unit 并通过 session bus `StartTransientUnit()` 启动；core 已把 Open With application discovery 和 service menu discovery 分离：Open With 扫描 XDG `applications`、`mimeinfo.cache` 和 `mimeapps.list`，service menu 先扫描 Fika 自己的 `$XDG_DATA_HOME/fika/servicemenus` / `~/.local/share/fika/servicemenus`，再兼容 KDE/Dolphin 的 `kio/servicemenus`、`kservices5/ServiceMenus`、`konqueror/servicemenus` 专用目录；core 解析专用 service menu 中的 `Type=Service` + `X-KDE-ServiceTypes=KonqPopupMenu/Plugin` 或 `KFileItemAction/Plugin` + `Actions=`，并按目标 MIME/目录类型生成右键 Actions 子菜单项，点击后通过同一 systemd launcher 执行；应用 `.desktop Actions=` 不再提升为 service menu 行，避免 Zed/Nautilus 这类 application action 混入空白菜单；KDE service menu 进一步支持 `X-KDE-Protocols=file`、`X-KDE-RequiredNumberOfUrls`、`X-KDE-MinNumberOfUrls`、`X-KDE-MaxNumberOfUrls`、`X-KDE-ShowIfExecutable`、`X-KDE-Priority=TopLevel` 和 `X-KDE-Submenu`，先在 core 过滤掉远程协议/数量不符/缺少可执行文件的 action，再让 TopLevel action 在右键根菜单提升，并在 More Actions 内把 `X-KDE-Submenu` 渲染为真实二级级联 submenu，减少无关 Actions 混入菜单；Open With 应用查询已支持 `.desktop MimeType=` 与 `mimeinfo.cache` 的 `type/*` wildcard，并在精确/wildcard 无命中时把 text-like child MIME fallback 到 `text/plain` parent associations，同时保持 Removed Associations 过滤。
-  - 剩余验收：Service Menu 仍需补依赖 KIO/权限上下文的高级 `X-KDE-*` 条件。
-- [x] 通过 systemd 创建子进程（Open With / 应用启动）。
-  - 参考：cosmic-files 中 `process.rs` / `exec.rs` 使用 systemd `busctl` / `org.freedesktop.systemd1` 启动应用进程；`zbus` crate 的 systemd Manager interface。
-  - 验收：`fika-core` 新增 `src/core/launcher.rs`，通过 D-Bus 调用 `org.freedesktop.systemd1.Manager.StartTransientUnit()` 启动应用进程；`Open With` action 接受 desktop file path / MIME type，查找关联的 `.desktop` 文件，通过 launcher 启动；进程生命周期由 systemd user instance 管理，fika 不持有子进程句柄；启动失败时返回结构化错误（找不到应用、权限不足等）。
-  - 已完成：`DesktopLaunchPlan` 现在生成 `SystemdLaunchUnit`，解析可执行文件绝对路径，构造 `Description`、`Type=exec`、`ExecStart` 和必要桌面环境变量属性；`launch_with_systemd_user()` 通过 session bus 创建 systemd manager proxy 并调用 `StartTransientUnit()`；Open With action 从 pane-local context menu 路由到该 launcher，成功/失败都回写触发 pane 的状态栏；没有 `std::process::Command` fallback。
-- [~] Open With / Service Menu 完整实现。
-  - 参考：Dolphin 的 `KFileItemActions`、`addOpenWithActions()`、`addAdditionalActions()` 和 service menu；`xdg-mime` 的 `mimeapps.list` 关联。
-  - 已完成：Open With 子菜单动态列出可打开单文件 MIME 类型的应用，默认应用排在顶部，desktop-file-utils `mimeinfo.cache` 会并入 MIME 应用索引，`mimeapps.list` Added Associations 排在 cached/desktop 自声明关联之前，Removed Associations 会从菜单中移除；`.desktop MimeType=` 与 `mimeinfo.cache` wildcard（如 `image/*`）会在 parent MIME fallback 之前命中，若当前 MIME 没有精确/wildcard 应用则 text-like MIME fallback 到 `text/plain` 应用；`.desktop` `Actions=` 已在 core parser 中保留为结构化 `DesktopAction`，但只作为 application metadata，不生成 service menu 行；点击具体应用会生成 core launch plan 并通过 systemd user transient unit 启动，pane-local 状态反馈真实 launch 结果，不直接 `std::process::Command` 启动；Open With 子菜单和 Other Application 选择器行都会读取应用 `.desktop Icon=` 并优先显示主题 named icon；Other Application 选择器列出 core desktop application cache 中的所有应用，弹窗 UI 已拆到 `src/ui/application_chooser.rs`，应用去重与搜索匹配已拆到 `src/ui/application_chooser/matching.rs`；列表使用 GPUI `uniform_list` 和持久 `UniformListScrollHandle`，显式按 row count 计算列表高度并 capped 到弹窗可用高度（当前 360px），避免虚拟列表在弹窗中布局成 0 高度空白，只渲染可见 rows，并且只为可见 row range 解析 named icon，避免打开弹窗时全量扫描/布局所有 desktop application；弹窗搜索直接截获按键输入，按 name/id/exec/desktop path 过滤，Esc 先清空搜索再关闭弹窗，过滤后滚回顶部；搜索框持有真实 byte caret，Left/Right/Home/End 移动 caret，Backspace/Delete 在 caret 位置编辑，鼠标点击根据当前 search text bounds 命中 UTF-8 安全 caret，并始终使用 text cursor；chooser projection 按 desktop id、desktop path 和 name+exec 去重并保留 default badge；当前不为 scrollbar 引入 Zed GPL `ui` crate，弹窗在 GPUI 虚拟列表上绘制本地可拖动 scrollbar，paint-phase capture 直接更新 `UniformListScrollHandle`，move 时只要 chooser drag state 仍存在就刷新当前帧 hitbox capture，避免重绘或无 offset 变化时拖拽断流；选择后复用同一 `DesktopLaunchPlan` + systemd launcher 路径；当 MIME 类型已知时，Other Application 选择器在弹窗底部提供独立 Set Default toggle，选择应用时按 toggle 写入用户 `mimeapps.list` 的 `[Default Applications]`，同步 `[Added Associations]` 并从 `[Removed Associations]` 移除同一应用，随后重载 launcher cache 并刷新 Default badge；KDE/Fika service menu action 已统一为 core `ServiceMenuAction`，单项右键 Actions 子菜单可执行匹配当前 MIME/目录类型的 action；多选 Actions 子菜单按选中项 MIME/目录类型取交集，且只显示支持 `%F/%U` 的多路径 action；More Actions 按 `X-KDE-Submenu` 渲染真实二级 submenu。
-  - 验收：右键菜单 Open With 子菜单动态列出可打开该 MIME 类型的应用（按 `mimeapps.list` 优先级排序）；顶部显示默认应用，底部显示 "Other Application..." 选项弹出应用选择列表；Service Menu 只根据专用 service menu 目录里的 `Type=Service` desktop file `Actions=` 和 `X-KDE-ServiceTypes=` 动态生成额外操作项（如 "Send To"、"Compress"）；service menu action 执行通过 systemd launcher 启动对应进程。
-- [~] Ark 压缩文件集成。
-  - 参考：Dolphin 通过 `kerfuffle`（Ark 核心库）和 service menu 实现压缩/解压集成；`KFileItemActions` 的 `Compress` / `Extract` action；Ark 的 D-Bus 接口（`org.kde.ark`）或命令行调用（`ark --extract` / `ark --add`）；KIO slave（`tar:/`、`zip:/`）实现压缩文件内部浏览。
-  - 已完成：新增 `docs/ARK_REFERENCE.md`，记录 Dolphin `DolphinContextMenu` / `KFileItemActions` service action 入口、Ark DnD MIME (`application/x-kde-ark-dndextract-service` / `application/x-kde-ark-dndextract-path`) 和 `org.kde.ark.DndExtract.extractSelectedFilesTo()` 执行流；Fika 先复用 service menu/systemd launcher；`src/core/archive.rs` 已提供 MIME/扩展名 archive classifier，并能把 Ark DnD service/path MIME 字节解析为校验后的 `ArkDndExtractPayload`，也能构造 `ArkDndExtractRequest` 并通过共享 session bus helper 调用 `extractSelectedFilesTo(destination)`；当 KDE service menu 没有提供等价 Compress 时，普通文件/目录 item 和多选菜单提供 `Compress...` fallback 并执行 `ark --add ...`；当单个 archive 文件没有匹配 Extract service menu 时，提供 `Extract Here` 和 `Extract To...` fallback，分别执行 `ark --batch --destination <archive-parent> <archive>` 与 `ark --batch --dialog --destination <archive-parent> <archive>`，都通过 systemd user transient unit 启动。
-  - 验收：
-    - 压缩：选中文件/目录后右键菜单包含 Compress → 子菜单列出可用格式（`.zip`、`.tar.gz`、`.tar.bz2`、`.tar.xz`、`.7z`），点击后弹出对话框指定文件名和路径，确认后调用 ark（首选 D-Bus `org.kde.ark /Kerfuffle addFiles`，回退到 `ark --add-to` 命令行）；压缩操作在后台进行，状态栏显示进度条。
-    - 解压：右键压缩文件（`.zip`/`.tar.gz`/`.tar.bz2`/`.tar.xz`/`.7z`/`.rar`）包含 Extract Here（解压到当前目录）、Extract To...（选择目标目录）、Extract Archive To...（自动创建同名子目录解压）；解压操作通过 ark D-Bus 或命令行执行，后台运行+状态栏进度。
-    - ark 检测：启动时检测 ark 是否安装（检查 `org.kde.ark` D-Bus 服务或 `ark` 二进制），未安装时 Compress/Extract 菜单项置灰并使用 fallback 纯 Rust 库（`zip`/`tar`/`flate2`/`xz2`/`bzip2`/`sevenz-rust` crates）提供基础压缩/解压功能。
-    - DnD 解压：外部 drag data offer 包含 Ark service/path MIME 时，使用 core parser 读取远端 Ark D-Bus service/object path，把 drop endpoint 目录作为 destination 调用 `org.kde.ark.DndExtract.extractSelectedFilesTo(destination)`；core executor 已就绪，但 GPUI/backend 多 MIME offer wiring 仍待接入；该 payload 不能落入普通 copy/move/link 路径。
-    - 压缩文件内部浏览（stretch goal）：通过 ark KIO slave 或内置解析器将压缩文件作为虚拟目录挂载到 `DirectoryModel`，允许在 pane 中浏览压缩文件内容；支持从压缩文件中拖出单个文件或拖入新文件（更新压缩包）；`DirectoryLister` 对压缩文件内部仅支持有限操作（复制出来、删除压缩包内条目）。
-    - 右键菜单整合：Compress/Extract 操作出现在多选右键菜单和空白区域右键菜单中（空白区域 Compress 默认打包当前目录）；压缩格式子菜单根据选中文件类型动态排序（如选中的已是 `.tar` 文件则优先建议 `.tar.gz`/`.tar.xz`）。
-- [~] Devices 设备识别（U 盘等）。
-  - 参考：cosmic-files `src/mounter/mod.rs` / `src/mounter/gvfs.rs` 的 GIO/GVfs mounter 实现；Dolphin 的 `DeviceNotifier` 和 `KFilePlacesModel` 设备集成。
-  - 已完成：新增 `docs/DEVICES_REFERENCE.md`，记录 Dolphin `KFilePlacesModel`/Solid Places 集成和 cosmic-files `gio::VolumeMonitor` mounter 模型；`src/core/devices.rs` 已全面切到 GIO/GVfs，使用 `VolumeMonitor` 枚举 mount/volume、订阅 add/remove/change 信号，并输出包含 opaque device id、mount point、URI、filesystem type、label、capacity、removable、mounted 和 eject capability 的 `DeviceInfo` 快照；Places 启动和运行中设备刷新都消费 `read_gio_devices()` / `watch_devices()`，动态替换 `Removable Devices` section，设备条目不写入 Fika Places 文件；未挂载设备保留为不可导航行，点击后走 GIO mount 操作并导航到返回的本地挂载点；UI 不再传 `/dev/*` 或 backend object path。
-  - 验收：`fika-core` 的设备发现只通过 GIO/GVfs `VolumeMonitor`；设备插入/拔出事件通过 GIO/GVfs monitor 通知 UI；Places 侧栏动态显示/移除 Removable Devices section。
-- [~] 设备挂载/卸载/eject 操作。
-  - 参考：cosmic-files `src/mounter/gvfs.rs` 通过 GIO `Volume`/`Mount` 执行 mount、unmount 和 eject；Dolphin/Solid 负责把 teardown 请求映射到底层平台能力。
-  - 已完成：core 通过 opaque GIO device id 在执行时重新解析当前 `Volume`/`Mount`，`mount_device()`、`unmount_device()` 和 `eject_device()` 分别调用对应 GIO 方法；Places 未挂载设备点击会挂载并导航到返回的挂载点，右键设备行会按 mounted/eject capability 提供 Mount、Unmount、Eject，成功后强制刷新设备 snapshot。
-  - 验收：Places 侧栏设备条目点击时自动挂载（如未挂载）并导航到挂载点；右键菜单包含可用的 Unmount / Eject；卸载操作完成后 Places 条目仍然显示但状态变为 unmounted；挂载/卸载失败时显示错误通知；Polkit/认证交互后续通过 GIO mount operation 统一补齐。
-- [~] Network 网络文件系统支持。
-  - 参考：cosmic-files `src/mounter/mod.rs` / `src/mounter/gvfs.rs` / `src/tab.rs` / `src/app.rs` 的 GIO/GVfs 远程文件系统发现、认证、挂载、扫描和 `Location::Network` 模型；Dolphin 的 KIO 远程 URL 支持、`remote:/` 入口、`KCoreDirLister` redirection、KIOFuse 终端桥接、`knetattach` Add Network Folder 和远程 metadata 降级策略。
-  - 已完成：新增 `docs/NETWORK_REFERENCE.md`，记录 Dolphin KIO 远程 URL/KIOFuse/knetattach/slow KIO listing/remote size 策略，以及 cosmic-files GVfs mounter/auth/network scan/sidebar routing 参考路径；新增 `src/core/network.rs`，提供 Dolphin `remote:/` / cosmic-files `network:///` 到 Fika canonical `network:///` 的 root 规范化，支持 `smb`、`sftp`、`fish`、`ftp`、`ftps`、`nfs`、`dav`、`davs` 等远程 URL scheme 解析，输出 UI-neutral `NetworkLocation { uri, display_name, local_path, scheme, icon_name }`；新增 `NetworkAuth` 且 Debug 会隐藏密码；新增 remote/GVfs filesystem type 分类，为后续 MIME/thumbnail/size/watcher 降级提供 core 判定；Places 侧栏已加入 Network root，使用 `folder-remote` 图标候选，不持久化到 Fika Places 文件，也不当作本地 mounted path 直接加载；异步/D-Bus 工作后续继续复用现有 Tokio/shared bus，不引入 `async-io`。
-  - 验收：`fika-core` 新增 `src/core/network.rs`，支持解析远程 URL scheme（`smb://`、`sftp://`、`ftp://`、`nfs://`）并建立连接；通过系统挂载工具（如 `mount.cifs`、`sshfs`、`curlftpfs`）或 GVfs FUSE 挂载点访问远程文件系统；远程目录的 `DirectoryLister` 复用本地加载路径，但 lister 内部针对网络延迟做节流（减少 watcher 频率、批量加载）；连接失败时显示结构化错误（认证失败、超时、主机不可达）；Places 侧栏增加 Network 入口，展开后显示可用网络位置和已保存的远程书签；远程连接支持用户名/密码和 SSH key 认证；远程文件操作（复制/移动/删除）复用 core `FileOps` 路径，由底层挂载点透明处理。
-- [~] Thumbnail 缩略图管线完整实现。
-  - 参考：Dolphin 缩略图实现 `../dolphin/src/kitemviews/` 中的 `KFileItemModelRolesUpdater` 和 thumbnail role；freedesktop thumbnail spec（`specifications.freedesktop.org/thumbnail-spec/`）；Dolphin 的 thumbnail cache、failure cache、visible-first scheduling 逻辑。
-  - 已完成：新增 `docs/THUMBNAIL_REFERENCE.md`，记录 Dolphin `KFileItemModelRolesUpdater` / item widget preview role 和 freedesktop thumbnail cache/failure cache 路径；新增 `src/core/thumbnails.rs`，提供 absolute path → file URI 百分号编码、freedesktop `md5(uri).png` cache key、`normal/` 与 `large/` cache path、`fail/gnome-thumbnail-factory` failure marker path、normal-before-large cache 命中、failure marker 写入和默认 `$XDG_CACHE_HOME` / `~/.cache` cache root 推导；cache hit 会解析 PNG `tEXt` 中的 `Thumb::URI` / `Thumb::MTime`，path-based lookup 只信任 URI 与源文件 mtime 都匹配的缩略图；failure marker 现在同样写入并校验 `Thumb::URI` / `Thumb::MTime`，过期 marker 不会永久压制同一路径的新文件；cache miss 后会加载 `$XDG_DATA_HOME/thumbnailers` 和 `$XDG_DATA_DIRS/*/thumbnailers` 下的 freedesktop thumbnailer desktop 文件，按 request MIME 匹配 `MimeType=`，展开 thumbnailer `%i/%u/%o/%s` 字段和常见 freedesktop `%f/%F/%U/%d/%D/%n/%N/%%` 字段并尝试已安装 thumbnailer；没有 registry 命中时再按文件类型使用内置常见 image/video/document fallback（`gdk-pixbuf-thumbnailer`、`ffmpegthumbnailer`、`totem-video-thumbnailer`、`evince-thumbnailer`），生成 PNG 后补写 freedesktop metadata 再移入 normal cache，实际执行失败会写入 matching failure marker，系统没有对应 thumbnailer 时不把文件标记为永久失败；`thumbnail_path` 已从基础 `EntryData` 移到 pane-local `ModelEntry` preview role，目录基础读取不解析普通文件已有 cache hit，thumbnail cache probe 作为 Dolphin-style `iconPixmap` role update 只由可见/read-ahead item 调度并通过 `DirectoryModel::set_thumbnail_path()` 回写；pane snapshot 会把普通文件的 thumbnail path 传给 `src/ui/file_grid/snapshot.rs` 中的 `VisibleItemSnapshot`，`src/ui/file_grid.rs` 渲染时有 preview role 就显示 thumbnail，没有 preview role 才显示主题/MIME icon；`DirectoryModel::set_thumbnail_path()` 已提供按 `ItemId` 更新 thumbnail role 的 metadata signal 路径，同一 listing reload 仅在 name/size/mtime 仍匹配时保留该 role，文件变化会清除，避免缩略图退回普通 PNG 图标；GPUI snapshot 会把当前 viewport 中缺 thumbnail 的普通文件投递到 `ThumbnailRequestQueue`，请求携带 `PaneId + generation + ItemId + path + mtime + mime`，scheduler 长期 key 只保存 `ItemId + mtime + path/mime hash` 等轻量身份，不复制完整路径字符串；使用 entry 已有 mtime/MIME 构造请求而不在 UI 帧路径 restat，viewport 内 item 以 `Visible` 优先级排队，viewport 外按 Dolphin `indexesToResolve()` 顺序生成 `Deferred` read-ahead，不扫描或排队整个大目录；入队前会按同一 URI/mtime 跳过 freedesktop failure cache，queued deferred 请求在每次 snapshot 时按当前 visible/read-ahead index set 裁剪，离开 read-ahead 且尚未被 worker batch 取走的 deferred 会从 queue 和 seen set 中移除，同一 item 从 deferred 进入 visible 后会提升到 visible 队列；已经弹入当前 background batch 的请求持有共享 cancel handle，deferred 在 worker 开始前离开 read-ahead 会被跳过，pane 导航/关闭也会取消同 pane 尚未 started 的 active batch 请求；后台 bounded cache-probe batch 由最多 4 个 worker 并发处理，命中 freedesktop cache 或生成缩略图后按 generation/path guard 回写模型。thumbnail 不进入 icon theme cache，也不改变 compact layout 几何。该层只保存路径和 marker，不把像素数据放入 `DirectoryModel`。
-  - 验收：
-    - `fika-core` 新增 `src/core/thumbnails.rs`，实现 freedesktop thumbnail cache 读/写（`~/.cache/thumbnails/normal/` 和 `large/`）；`ModelEntry` 持有 pane-local `thumbnail_path: Option<PathBuf>` preview role。
-    - thumbnail cache 优先命中：先查 `normal/`（128x128），再查 `large/`（256x256），命中直接在 UI 显示；可见 item 缺 role 时会后台 probe cache / 外部 thumbnailer 生成并动态回写模型。
-    - failure cache：对无法生成缩略图的文件（如损坏的图片）记录到 `~/.cache/thumbnails/fail/gnome-thumbnail-factory/` 同名 PNG（按 freedesktop spec），避免重复尝试；marker 按 URI + mtime 校验，源文件 metadata 变化后允许重新尝试。
-    - visible-first scheduling：缩略图生成请求按可视区域优先级排序，viewport 内 item 优先，viewport 外延迟；目录跳转时取消所有 pending thumbnail 请求。（当前已接入 viewport 内 missing-thumbnail cache probe、Dolphin `indexesToResolve()` 式 bounded deferred read-ahead、queued deferred set 裁剪、deferred→visible 提升和 active batch 未 started deferred 跳过。）
-    - thumbnail 生成走外部 thumbnailer 进程（如 `tumbler`、`ffmpegthumbnailer`）或内置图片解码，不阻塞 UI。（当前接入 freedesktop thumbnailer desktop 文件 discovery 和常见系统 thumbnailer fallback。）
-    - 大目录下 thumbnail 生成限制并发数（默认 4），通过 bounded worker queue 控制；剩余请求继续排队，不阻塞 UI。
-    - 优化：缩略图懒加载，item 滚入 viewport 后才请求生成；离开 viewport 且未完成的请求取消。
-    - `DirectoryModel` 不直接持有缩略图像素数据，只存储 pane-local thumbnail path role；GPUI 渲染层有 preview role 时只显示 thumbnail，没有 preview role 时才显示普通 icon。
-- [~] Places 侧栏完善。
-  - 已完成：GPUI shell 增加 Dolphin-like Places sidebar，入口包括 Home、XDG user dirs、Trash、mounted removable devices 和 Root；active place 按当前 pane 路径派生；点击 place 通过 focused pane 加载目标目录；侧栏容器和条目改为圆角样式；侧栏 place 行使用主题语义图标，缺主题图标时退回图形化小图标而不是 `H`/`Doc`/`Down` 这类文本缩写；右键菜单已支持 blank Add Entry、条目 Open/Open in New Pane、用户 bookmark Edit/Remove、Copy Location/Properties 和 Trash Empty；用户 bookmark 已读写 Fika 自己的 `$XDG_DATA_HOME/fika/places.xbel`；mounted removable devices 使用独立 `Removable Devices` 动态 section，不参与用户 bookmark 持久化。
-  - 验收：后续继续对齐 Dolphin `PlacesPanel` / `KFilePlacesModel`，补齐 devices、section hide、drag/drop、trash state signal 和异步设备操作。
-- [~] Portal chooser。
-  - 验收：portal backend 调用 GPUI chooser shell，并共享 core selection/output 常量。
+### Network 网络文件系统
+- [~] Backend 边界决策：GVfs/GIO、KIOFuse 或二者兼容的小型抽象层。`src/core/network.rs` 已完成 URL scheme 解析、`NetworkLocation` 模型、`NetworkAuth`、GVfs filesystem type 分类。
+- [ ] Saved network bookmarks 和 Add Network Drive UI。
+- [ ] 认证交互、取消、结构化错误报告。
+- [ ] `DirectoryLister` 集成 network scan，无 pane 闪烁。
+- [ ] Remote/GVfs metadata 降级（MIME、thumbnail、size、watcher）。
+- [ ] Remote 位置的文件操作和 DnD 语义。
 
-## Documentation and Checks
+### KDE Service Menu 高级条件
+- [ ] 依赖 KIO/权限上下文的 `X-KDE-*` 高级条件（如 `X-KDE-Require=`、`X-KDE-ShowIfRunning=` 等）。
 
-- [x] README 只描述当前 GPUI package。
-- [x] DESIGN 只描述当前 GPUI/core 架构。
-- [x] REFERENCE 路径指向 `src/...`。
-- [x] 为新增模块新建 Dolphin/cosmic-files 源码参考清单文档：
-  - [x] `docs/CONTEXT_MENU_REFERENCE.md` - Dolphin 右键菜单完整执行流
-  - [x] `docs/DRAG_DROP_REFERENCE.md` - Dolphin 拖拽完整执行流
-  - [x] `docs/THUMBNAIL_REFERENCE.md` - Dolphin 缩略图管线和 freedesktop spec
-  - [x] `docs/MIME_LAUNCHER_REFERENCE.md` - cosmic-files MIME 识别和 systemd 进程启动
-  - [x] `docs/DEVICES_REFERENCE.md` - cosmic-files GIO/GVfs 设备发现和挂载
-  - [x] `docs/TRASH_REFERENCE.md` - Dolphin trash 实现和 XDG trash spec
-  - [x] `docs/SEARCH_REFERENCE.md` - Dolphin 搜索框实现
-  - [x] `docs/LOCATION_BAR_REFERENCE.md` - Dolphin 地址栏（`KUrlNavigator`）breadcrumb 和文本模式
-  - [x] `docs/ZOOM_REFERENCE.md` - Dolphin zoom level、icon size 映射和 item list grid update
-  - [x] `docs/STATUS_BAR_REFERENCE.md` - Dolphin 状态栏（`DolphinStatusBar`）信息显示和 zoom slider
-  - [x] `docs/CLIPBOARD_REFERENCE.md` - Dolphin/KIO 文件剪贴板和 GPUI clipboard/primary 映射
-  - [x] `docs/NETWORK_REFERENCE.md` - cosmic-files/Dolphin 远程文件系统挂载和协议支持
-  - [x] `docs/SMOOTH_SCROLL_REFERENCE.md` - Dolphin 平滑滚动（`QScroller`）和 kinetic scrolling 实现
-  - [x] `docs/BUS_CONTROL_REFERENCE.md` - D-Bus 总线控制：zbus 连接管理、systemd/Portal 路由
-  - [x] `docs/ARK_REFERENCE.md` - Dolphin Ark/kerfuffle 压缩文件集成和 D-Bus 接口
-- [~] 为 core 和 GPUI shell 补齐任务级测试。
-  - 已完成：core `ItemId` 稳定身份、rename/refresh 后 selection 跟随、cancellable directory listing、per-pane coalesced listing worker、compact select-all/exclusion、column-first compact layout、visible item virtualization、large-directory visible range bound、pane-local reusable visible item slot pool、recycled slot cap、pane-local scroll clamp、Ctrl/secondary wheel zoom routing、pane-local zoom level / split inheritance / shortcut classification / zoom-derived compact layout options / Ctrl+wheel zoom delta mapping、pane-local filter matching / shortcut classification / input routing / filtered model projection / cache invalidation / navigation clear behavior、clipboard URI-list 编解码 / GPUI `ClipboardItem` metadata 往返 / URI-list 导入 / plain text 导入 / primary-only paste 选择语义 / 文本 paste create undo、compact item `visual_rect` 按 required text width 收窄、blank press 清 selection 并记录 pending rubber-band、缺少 viewport geometry 或 window 点超出 viewport 不触发空白清选/框选、rubber-band drag 激活 pending 并 clamp 到 viewport、overlay viewport-local 投影、rubber-band 右键只在已选 item visual/core 内打开菜单、root context menu edge clamp、scrollbar drag 不依赖 hover 更新 pane scroll、scrollbar stationary move 保留 active drag session、系统主题图标解析/MIME 候选/主题继承/尺寸缓存测试、`.desktop` / `mimeapps.list` Open With 应用排序、Open With wildcard / parent MIME fallback / removed association 过滤、Open With 默认应用写回、Other Application visible range 图标解析测试、Exec field code 和 systemd transient unit/property 生成测试、当前可执行文件 systemd launch plan、KDE service menu protocol/URL-count/executable/TopLevel priority/submenu grouping/Icon 条件、右键菜单 action 生成覆盖 Paste enabled state、Dolphin-like action grouping、空白目录 service action 生成、Open With 动态子菜单去重、service action 根菜单提升/More Actions 分流、KDE service menu 二级 nested submenu、Open With pane 状态回写、目录 Open in New Pane/Open in New Window、单目录 Paste、Ark Compress/Extract fallback 显示/去重和 systemd launch plan、Ark DnD service/path MIME parser、Ark DnD session-bus request/executor destination validation、Properties 和多选批量菜单、pane-local 状态栏摘要/space info 格式化/zoom track 映射/进度百分比/internal paste progress 和取消路由、目录 loading state 的 request-key 生命周期、pane load 保留旧模型直到 `ListingRefreshed`、pane close 提升可见模型快照到 listing cache、pane item drag selection payload / same-directory drop reject / drop target lifecycle / lease timeout、DnD move bounds guard / path normalization / drop target validation / `ExternalPaths` drop / `DropOperation` menu routing、Places drop target 状态/插入 bookmark/拒绝路径、Places drag-to-pane 导航、Places primary reorder 和 Fika 私有 Places 持久化、GIO/GVfs 设备快照和 Removable Devices section 投影/替换/持久化隔离、Trash metadata 读取、Trash 删除时间排序、Trash reload/metadata refresh 保持 `ItemId`、Trash restore/delete permanently 操作结果和 affected dirs、thumbnail URI/cache key/cache hit/failure marker/metadata validation/ModelEntry preview role、visible item thumbnail path 只用于普通文件。
-  - 当前新增覆盖：右键菜单、应用选择器、rename、filter、Icons/Details projection、DnD/Places、service menu、device/network/trash/cache、thumbnail、metadata 和 scroll/zoom 的现有测试覆盖继续保留；图标相关覆盖已改为按需 `FileIconCache::icon_for()` path cache、named icon 绝对路径、GPUI `img(path)` fallback、可见应用图标快照和 MIME/extension candidate 顺序，不再覆盖已删除的模型图标 role 或自解码图片缓存。
-  - 当前修正：上条中关于 `Arc<RenderImage>`、Dolphin-style `iconName` model role 写入/保留、metadata 后同步最终 `iconName`、按已有 `iconName` 渲染的覆盖项已撤销；当前代码没有 `src/ui/icons/roles.rs`、没有 `ModelEntry.icon_name`，图标只在可见 snapshot 阶段按 `FileIconCache::icon_for()` 解析为主题路径。
-  - 剩余：宿主机已安装 thumbnailer 的真实系统端到端测试、GIO/GVfs 挂载/卸载/eject 真实设备/Polkit 端到端测试、拖拽测试、右键菜单 action 测试、Wayland 多 MIME clipboard backend 测试。
-- [~] 持续性能优化。
-  - 参考：现有性能问题见 `docs/OPTIMIZATION.md`（存档）和 `docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md`（存档）；Dolphin 的性能优化策略（lazy icon loading、`KItemListCreatorBase` slot reuse、大目录分批渲染）；cosmic-files 的异步加载和缓存策略。
-  - 验收：
-    - 启动性能：冷启动到首帧渲染 < 500ms，热启动（缓存命中）< 200ms；使用 `tracing` / `tracy` 做启动阶段计时。
-    - 大目录性能：100,000 条目目录从 `read_dir` 完成到首帧渲染 < 100ms（利用可见条目虚拟化和 compact layout）；滚动帧率保持 60fps（利用 slot pool 复用和 lazy icon loading）。
-    - 内存占用：空闲状态（单 pane、空目录）< 50 MiB RSS；100,000 条目目录 < 200 MiB RSS（利用条目元数据紧凑存储 + `CompactLayout::visible_items()` 投影）。
-    - 缩略图性能：缩略图生成不阻塞 UI 线程；大目录下 thumbnail 并发数由 bounded worker queue 限制（默认 4），剩余排队按 viewport 优先级调度。
-    - I/O 优化：`read_dir` 批量获取后按需惰性 `stat`（先不获取 size/mime，滚动到 viewport 时按需补全）；watcher 事件合并去抖（debounce 100ms 内的同类事件）。
-    - 跨 pane 缓存共享：目录缓存命中避免重复 `read_dir`（见 Directory Cache 条目）。
-    - 性能回归检测：CI 中加入 benchmark gate（`cargo bench` 对比基线），大目录加载和滚动帧率不低于前次 release。
-    - 性能剖析：定期使用 `perf` / `flamegraph` 对关键路径（目录加载、渲染、滚动、文件操作）做热点分析，结果记录到 `docs/perf/`。
-  - 当前进展：目录基础 listing 不再为每个普通文件同步探测 freedesktop thumbnail cache，也不再为 generic MIME 文件同步读取 magic；普通目录初始 listing 只保存轻量 name/is_dir/filename-MIME hint，`ModelEntry.thumbnail_path` preview role 初始为空，`mime_magic_checked` 区分 filename/glob MIME 和待 metadata role updater 解析的 MIME。可见项 metadata scheduler 按 pane generation 后台 stat，并在同一个 metadata role result 中补齐 size/mtime/final MIME；`DirectoryModel::set_metadata_role()` 只接受 `ItemId + path` guarded metadata role，不再触发 icon role 写回。`FileIconCache::icon_for()` 按当前 effective MIME、扩展名和 icon size 解析主题路径，保留 `text-x-{extension}` / `application-x-{extension}` fallback，避免配置文件直接退成 generic binary；主题图标像素解码不在 Fika 滚动 snapshot 路径同步执行，交给 GPUI `img(path).with_fallback()` 懒加载。thumbnail read-ahead 已从旧列半径算法改为 Dolphin `indexesToResolve()` 顺序；thumbnail scheduler 的长期 key 不再保存完整 `PathBuf` 和 MIME `String`，只保存 pane/generation/item/mtime 与 path/mime hash，路径仍只在 bounded request/result 中用于最终 guard。Watcher drain 已增加批内 coalesce，合并相邻同类路径并让 FullReload/CurrentDirectoryRemoved 覆盖增量，减少外部变更 burst 时的重复 stat、重复 model signal 和重复 cache delta。Metadata role 已拆出完整性标记、refresh pending、可见项 scheduler、后台 stat result 和 guarded model 回写；thumbnail 候选必须等待 metadata 完整且没有 refresh pending。
-- [x] 持续运行：
-  - `cargo fmt --all`
-  - `cargo test`
-  - `cargo check`
-  - `cargo build --release`
-  - `timeout 4s target/release/fika`
+### Trash 多存储聚合
+- [ ] Dolphin/KIO 的 `trash:/` 多存储聚合（removable storage `.Trash-$uid`）。
+- [ ] Removable storage trash 可访问性刷新。
+
+### 交互细化
+- [ ] 真实运行中 inline rename 端到端视觉验收。
+- [~] 设备操作（mount/unmount/eject）的 Polkit 交互和用户取消流程仍需端到端验证。
+- [ ] View Mode 下的 Icons/Details 视图切换（当前只有 Compact 主视图和 Details 列视图）。
+
+### 双运行时对齐（COSMIC Files）
+
+Fika 的 `operation_runtime.rs` 在 Tokio+Compio 线程边界层面对齐 COSMIC Files，
+但在操作抽象层差距很大。详见 `docs/OPERATION_RUNTIME_REFERENCE.md`。
+
+- [ ] **Phase 1.1** — 启用 `io-uring`：`Cargo.toml` 中 `compio` features 从 `polling` 切换到 `io-uring`。
+- [ ] **Phase 1.2** — 引入 `OperationId(u64)`：`submit()` 返回 operation id，runtime 层获得操作级身份。
+- [ ] **Phase 1.3** — 非 panic 错误路径：替换 `.expect()` 为 `Result` 传播，runtime shutdown 可被 GPUI 层优雅处理。
+- [ ] **Phase 2.1** — 定义 `Operation` enum：统一 Transfer/Trash/Rename/Create/Undo/TrashView 提交路径。
+- [ ] **Phase 2.2** — 添加 `OperationController`：统一的 cancel/progress/pause 状态，替换 `AtomicBool` + `Arc<Mutex<TransferProgress>>`。
+- [ ] **Phase 2.3** — Runtime 级操作跟踪：`BTreeMap<OperationId, (Operation, OperationController)>` 移入 `OperationRuntime`，GPUI 层只查询不自行维护 `active_background_tasks`。
+- [ ] **Phase 3.1** — 递归复制模块：`src/core/operations/recursive.rs` 使用 Compio async API 做目录遍历和文件复制。
+- [ ] **Phase 3.2** — GIO fallback：GVfs 远程文件通过 `spawn_blocking` 路由 GIO `File::copy()`。
+
+### 验证与测试
+- [ ] 端到端测试：多 pane 同时访问同一目录的并发安全。
+- [ ] 端到端测试：D-Bus session bus 不可用时的降级行为。

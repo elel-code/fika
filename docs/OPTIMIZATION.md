@@ -1,7 +1,8 @@
 # Fika 性能优化
 
-> 归档说明：本文档记录旧 Slint 实现的性能优化历史，不再作为未来架构方向。新的工作以
-> `docs/TODO.md`、`docs/DESIGN.md` 和 `docs/GPUI_DOLPHIN_MIGRATION_PLAN.md` 为准。
+> **归档说明**：本文档记录旧 Slint 实现的性能优化历史，**不再作为未来架构方向**。
+> 旧 Slint UI 已完全移除，当前架构为 GPUI。新的工作以 `docs/TODO.md`、
+> `docs/DESIGN.md` 和 `docs/REFERENCE.md` 为准。本文档仅作历史记录保留。
 
 本文档记录 Fika 的性能改进方向，涵盖主栏列优先横向虚拟化和焦点（focus）切换两大系统。
 每个条目包含问题描述、涉及代码、改进方案和预估收益。

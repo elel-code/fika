@@ -68,7 +68,7 @@
 | `KDirLister` | `src/core/directory.rs` |
 | `KFileItemModel` | `src/core/model.rs` |
 | `KItemListView` | layout in `src/core/view.rs`, rendering in `src/ui/file_grid.rs` |
-| `KItemListSmoothScroller` | documented in `docs/SMOOTH_SCROLL_REFERENCE.md`; no active module |
+| `KItemListSmoothScroller` | documented in `docs/SMOOTH_SCROLL_REFERENCE.md`; removed from active code |
 | `KDirectoryListerCache` | `src/core/cache.rs` |
 | `KItemListCreatorBase` (slot reuse) | `src/ui/file_grid/slots.rs` |
 | `KItemListSizeHintResolver` (column width) | `src/ui/file_grid/layout.rs` |
@@ -104,6 +104,15 @@
 | application chooser | `src/ui/application_chooser.rs` |
 | icon cache / theme resolution | `src/ui/icons.rs` + `src/ui/icons/cache.rs` |
 | keyboard shortcut classification | `src/ui/shortcuts.rs` |
+| entry metadata role resolution | `src/core/metadata.rs` |
+| operation runtime (Tokio + Compio) | `src/core/operation_runtime.rs` |
+| Trash emptiness monitor | `src/core/trash_monitor.rs` |
+| thumbnail scheduler | `src/core/thumbnails/scheduler.rs` |
+| background task panel | `src/ui/background_tasks.rs` |
+| CLI argument parsing | `src/cli.rs` + `src/cli/args.rs` |
+| trash conflict dialog | `src/ui/trash_conflict.rs` |
+| details-view columns | `src/ui/file_grid/details.rs` |
+| file-grid hit-test projection | `src/ui/file_grid/projection.rs` |
 
 ## Cargo Boundaries
 
@@ -142,6 +151,7 @@ Before adding a new UI feature:
 - [SCROLL_ZOOM_PERFORMANCE_PLAN.md](SCROLL_ZOOM_PERFORMANCE_PLAN.md) — Archived scroll/zoom notes
 - [OPTIMIZATION.md](OPTIMIZATION.md) — Archived optimization notes
 - [BUG_ANALYSIS_BLANK_DIRECTORY.md](BUG_ANALYSIS_BLANK_DIRECTORY.md) — Blank-directory bug analysis
+- [BUG_ANALYSIS_SCROLLBAR_DRAG.md](BUG_ANALYSIS_SCROLLBAR_DRAG.md) — Scrollbar drag-regression bug analysis
 
 ### Dolphin / Fika Reference
 - [LOCATION_BAR_REFERENCE.md](LOCATION_BAR_REFERENCE.md) — `KUrlNavigator` breadcrumb and editable modes

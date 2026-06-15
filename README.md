@@ -58,8 +58,9 @@ The current cutover build contains:
 - Network/GVfs remote filesystem classification and Places Network root.
 - D-Bus bus controller: session/system connection cache, timeout/retry helpers,
   owned proxy creation, structured `BusError`.
-- Async runtime scaffolding: `tokio` for general async and D-Bus; `compio` for
-  completion-based file I/O (behind feature flag).
+- COSMIC-style operation runtime: a Tokio multi-thread context plus a dedicated
+  Compio operation thread, bounded task submission, and Compio blocking
+  fallback for synchronous file-operation pieces.
 
 ### UI (GPUI)
 
@@ -67,8 +68,10 @@ The current cutover build contains:
 - Dynamic split panes (`Split` / `Close Pane` via keyboard shortcut).
 - Pane-local location bar (breadcrumb mode and editable text mode with caret,
   horizontal scroll, and Tab completion).
-- Pane-local status bar: selection summary, free-space info, zoom slider,
-  progress bar with Stop button for file operations and directory loading.
+- Pane-local status bar: selection summary, free-space info, zoom slider, and
+  directory-loading progress with Stop.
+- Sidebar background task panel: active file operations, per-task Stop, recent
+  history, and progress, placed at the bottom of the Places sidebar.
 - Pane-local filter bar: plain-text/glob toggle, case-sensitive toggle, match
   count, and close button.
 - Places sidebar: Home, XDG user dirs, Trash, removable devices, Root, Network;
@@ -93,8 +96,8 @@ The current cutover build contains:
 - Inline rename: pane-local draft state, text input, Enter/Escape
   commit/cancel.
 - Properties dialog: single-path and multi-select metadata rows.
-- Clipboard interaction: internal Copy/Cut/Paste with progress bar and undo;
-  primary-selection paste via middle-click.
+- Clipboard interaction: internal Copy/Cut/Paste routed through the background
+  task panel with undo; primary-selection paste via middle-click.
 - Chooser shell: file/directory selection, multi-select, filter/choice/portal
   metadata output.
 - Keyboard shortcuts: pane-scoped navigation, selection, zoom, filter,
@@ -118,75 +121,145 @@ src/
   lib.rs                         UI-neutral core module exports
   main.rs                        GPUI application and chooser shell
   core.rs                        Core module re-exports
-  core/archive.rs                Ark DnD extraction and classification
-  core/bus.rs                    D-Bus session/system bus controller
-  core/cache.rs                  Directory entry cache (LRU, per-pane)
-  core/clipboard.rs              URI-list encode/decode and GPUI round-trip
-  core/devices.rs                GIO/GVfs device discovery entry point
-  core/devices/actions.rs        Mount/unmount/eject/safely-remove ops
-  core/directory.rs              Directory lister and watcher events
-  core/entries.rs                File entry metadata and sorting
-  core/file_ops.rs               File transfer/trash/create/rename primitives
-  core/filter.rs                 Name filter model (plain-text, glob)
-  core/launcher.rs               .desktop / mimeapps.list app discovery
-  core/launcher/ark.rs           Ark archive launch plan construction
-  core/launcher/results.rs       Launch result types
-  core/listing_worker.rs         Background directory-read worker
-  core/location.rs               Path resolution, breadcrumbs, tab-completion
-  core/mime.rs                   MIME detection via shared-mime-info
-  core/model.rs                  Directory model snapshots and signals
-  core/network.rs                GVfs/remote filesystem classification
-  core/operations.rs             Operation queue and undo boundary
-  core/operations/tasks.rs       File operation task result types
-  core/pane.rs                   Pane identity, state, split/close routing
-  core/places.rs                 Places model (bookmarks, devices, network)
-  core/privilege.rs              Privileged operation API surface
-  core/scroll.rs                 Smooth-scroll easing and kinetic tracker
-  core/thumbnails.rs             Freedesktop thumbnail URI and cache keys
-  core/view.rs                   Compact layout, viewport math, visible range
+  cli.rs                         CLI argument parsing entry point
+  cli/
+    args.rs                      Chooser mode metadata and help parsing
+  core/
+    archive.rs                   Ark DnD extraction and classification
+    bus.rs                       D-Bus session/system bus controller
+    cache.rs                     Directory entry cache (LRU, shared Arc payloads)
+    clipboard.rs                 URI-list encode/decode and GPUI round-trip
+    devices.rs                   GIO/GVfs device discovery entry point
+    devices/
+      actions.rs                 Mount/unmount/eject/safely-remove operations
+    directory.rs                 Directory lister and watcher events
+    entries.rs                   File entry metadata and sorting
+    file_ops.rs                  File transfer/trash/create/rename primitives
+    filter.rs                    Name filter model (plain-text, glob)
+    launcher.rs                  .desktop / mimeapps.list application discovery
+    launcher/
+      ark.rs                     Ark archive launch plan construction
+      results.rs                 Launch result types
+    listing_worker.rs            Background directory-read worker
+    location.rs                  Path resolution, breadcrumbs, Tab completion
+    metadata.rs                  Entry metadata role resolution
+    mime.rs                      MIME detection via shared-mime-info
+    model.rs                     Directory model snapshots and signals
+    network.rs                   GVfs/remote filesystem classification
+    operation_runtime.rs         Tokio + Compio operation runtime bridge
+    operations.rs                Operation queue and undo boundary
+    operations/
+      tasks.rs                   File operation task result types
+    pane.rs                      Pane identity, state, split/close routing
+    places.rs                    Places model (bookmarks, devices, network)
+    privilege.rs                 Privileged operation API surface
+    thumbnails.rs                Freedesktop thumbnail URI and cache keys
+    thumbnails/
+      scheduler.rs               Dolphin-style visible-first thumbnail scheduling
+    trash_monitor.rs             App-owned Trash emptiness state and watcher
+    view.rs                      Compact layout, viewport math, visible range
   ui.rs                          UI module re-exports
-  ui/application_chooser.rs      "Other Application…" chooser entry point
-  ui/application_chooser/
-    identity.rs                  Application chooser item identity
-  ui/chooser.rs                  File chooser mode entry point
-  ui/chooser/state.rs            Chooser state and portal metadata output
-  ui/clipboard.rs                Clipboard UI entry point
-  ui/clipboard/state.rs          Copy/cut mode and GPUI ClipboardItem state
-  ui/context_menu.rs             Context menu target, action, icon model
-  ui/controls.rs                 Shared UI control helpers
-  ui/drag_drop.rs                Drag-drop UI entry point
-  ui/drag_drop/state.rs          DnD state, path normalization, target matching
-  ui/file_grid.rs                File grid UI entry point
-  ui/file_grid/layout.rs         Compact column-width cache and layout assembly
-  ui/file_grid/slots.rs          Visible-item slot pool (recycled IDs)
-  ui/file_grid/snapshot.rs       Visible-item snapshot data
-  ui/filter_bar.rs               Filter bar UI entry point
-  ui/filter_bar/state.rs         Filter snapshot and filtered model cache
-  ui/icons.rs                    File/named icon entry point
-  ui/icons/cache.rs              FileIconCache, MIME candidate, theme resolve
-  ui/location_bar.rs             Location bar UI entry point
-  ui/location_bar/draft.rs       Editable location draft and caret state
-  ui/location_bar/metrics.rs     Editable metrics, hit-test, and scroll math
-  ui/pane.rs                     Pane shell UI entry point
-  ui/pane/snapshot.rs            Pane rendering snapshot
-  ui/pane/splitter.rs            Splitter drag payload and ratio geometry
-  ui/place_draft.rs              Places Add/Edit draft state
-  ui/places.rs                   Places sidebar UI entry point
-  ui/places/model.rs             Place entry, grouping, and icon snapshots
-  ui/places/snapshot.rs          Place icon and snapshot types
-  ui/properties_dialog.rs        Properties dialog entry point
-  ui/properties_dialog/
-    metadata.rs                  File metadata reader and row generation
-  ui/rename.rs                   Inline rename entry point
-  ui/rename/draft.rs             Pane-local rename draft state
-  ui/rubber_band.rs              Rubber-band selection entry point
-  ui/rubber_band/state.rs        Rubber-band drag payload and rect projection
-  ui/scrollbar.rs                Horizontal scrollbar, paint-phase capture
-  ui/shortcuts.rs                Keyboard shortcut classification
-  ui/status_bar.rs               Status bar UI entry point
-  ui/status_bar/state.rs         Snapshot, space info cache, progress handle
-  ui/status_bar/summary.rs       Pane selection/model summary formatting
-  src/bin/
+  ui/
+    application_chooser.rs       "Other Application…" chooser entry point
+    application_chooser/
+      identity.rs                Application chooser item identity
+      matching.rs                Application dedup and search matching
+      search.rs                  Search box caret, hit-test, and input
+    background_tasks.rs          Sidebar background task panel
+    chooser.rs                   File chooser mode entry point
+    chooser/
+      state.rs                   Chooser state and portal metadata output
+    clipboard.rs                 Clipboard UI entry point
+    clipboard/
+      state.rs                   Copy/cut mode and ClipboardItem state
+      tasks.rs                   Paste task result and progress tracking
+    context_menu.rs              Context menu target, action, icon model
+    context_menu/
+      actions.rs                 Root action generation and routing
+      icons.rs                   Context menu icon resolution
+      items.rs                   Menu item construction and grouping
+      layout.rs                  Menu dimension, viewport clamp, and flip math
+      overlay.rs                 Context menu overlay rendering
+      service.rs                 Service-menu action dispatch
+    controls.rs                  Shared UI control helpers
+    drag_drop.rs                 Drag-drop UI entry point
+    drag_drop/
+      state.rs                   DnD state, path normalization, target matching
+    file_grid.rs                 File grid UI entry point
+    file_grid/
+      details.rs                 Details-view column layout and rendering
+      layout.rs                  Compact column-width cache and layout assembly
+      projection.rs              Hit-test projection and filtered layout mapping
+      slots.rs                   Visible-item slot pool (recycled element IDs)
+      snapshot.rs                Visible-item snapshot data and icon projection
+    filter_bar.rs                Filter bar UI entry point
+    filter_bar/
+      icon.rs                    Filter mode toggle icons
+      state.rs                   Filter snapshot and filtered model cache
+    icons.rs                     File/named icon entry point
+    icons/
+      cache.rs                   FileIconCache, MIME candidate, theme resolution
+      view.rs                     Cached theme icon rendering helper
+    item_view.rs                 Item-view scroll ownership
+    item_view/
+      scroll_bar.rs              Pane-decoupled tracked scrollbar
+      scroll_state.rs            Per-pane ScrollHandle map and view/handle sync
+    location_bar.rs              Location bar UI entry point
+    location_bar/
+      draft.rs                   Editable location draft and caret state
+      metrics.rs                 Editable metrics, hit-test, and scroll math
+    pane.rs                      Pane shell UI entry point
+    pane/
+      snapshot.rs                Pane rendering snapshot
+      sort.rs                    Pane sort-status formatting
+      splitter.rs                Splitter drag payload and ratio geometry
+      toolbar.rs                 Pane header Search/Close, Split, Close Pane buttons
+    place_draft.rs               Places Add/Edit draft entry point
+    place_draft/
+      overlay.rs                 Draft dialog and field rendering
+      state.rs                   Draft state, field switching, and text input
+    places.rs                    Places sidebar UI entry point
+    places/
+      devices.rs                 Removable device section replacement and sorting
+      drag.rs                    PlaceDrag payload, preview, drop-zone math
+      icon_view.rs               Place icon rendering and fallback classification
+      model.rs                   Place entry, grouping, and icon snapshots
+      projection.rs              Place row snapshot projection and state mapping
+      snapshot.rs                Place icon and snapshot types
+      sidebar.rs                 Places panel layout and background task slot
+      sidebar/
+        row.rs                   Place row visual structure, click, and context menu
+        section.rs               Section header visual structure and context menu
+      style.rs                   Row/drop-target/insert-indicator color helpers
+      user.rs                    User bookmark entry point
+      user/
+        dropped.rs               Dropped-folder add validation
+        edit.rs                  Add/Edit draft submission and dedup
+        entry.rs                 User bookmark PlaceEntry construction
+        ordering.rs              Insert-index, insertion, and reorder
+        persistence.rs           XBEL persistence projection
+        removal.rs               Deletion result and removable gate
+      visibility.rs              Hidden place/section state filtering
+    properties_dialog.rs         Properties dialog entry point
+    properties_dialog/
+      metadata.rs                File metadata reader and row generation
+    rename.rs                    Inline rename entry point
+    rename/
+      draft.rs                   Pane-local rename draft state and caret
+      metrics.rs                 Rename caret hit-test and text inset metrics
+    rubber_band.rs               Rubber-band selection entry point
+    rubber_band/
+      state.rs                   Rubber-band drag payload and rect projection
+    shortcuts.rs                 Keyboard shortcut classification
+    status_bar.rs                Status bar UI entry point
+    status_bar/
+      progress.rs                Operation progress/busy view and Stop routing
+      space.rs                   Filesystem space info view and usage color
+      state.rs                   Snapshot, space info cache, progress handle
+      summary.rs                 Pane selection/model summary formatting
+      zoom.rs                    Zoom track/segment rendering and drag update
+    trash_conflict.rs            Trash restore conflict dialog
+  bin/
     fika-xdp-filechooser.rs      XDG Desktop Portal FileChooser backend
     fika-privileged-helper.rs    System-bus privileged helper
 ```
@@ -274,6 +347,7 @@ FileChooser backend, opt in through `xdg-desktop-portal` configuration. See
 - [docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md](docs/SCROLL_ZOOM_PERFORMANCE_PLAN.md) — Archived scroll/zoom performance plan.
 - [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) — Archived optimization notes.
 - [docs/BUG_ANALYSIS_BLANK_DIRECTORY.md](docs/BUG_ANALYSIS_BLANK_DIRECTORY.md) — Blank-directory bug analysis.
+- [docs/BUG_ANALYSIS_SCROLLBAR_DRAG.md](docs/BUG_ANALYSIS_SCROLLBAR_DRAG.md) — Scrollbar drag-regression bug analysis.
 
 ### Dolphin / Fika Reference
 
@@ -298,6 +372,7 @@ FileChooser backend, opt in through `xdg-desktop-portal` configuration. See
 - [docs/THUMBNAIL_REFERENCE.md](docs/THUMBNAIL_REFERENCE.md) — Freedesktop thumbnail spec and pipeline.
 - [docs/NETWORK_REFERENCE.md](docs/NETWORK_REFERENCE.md) — GVfs remote filesystem classification and mounts.
 - [docs/BUS_CONTROL_REFERENCE.md](docs/BUS_CONTROL_REFERENCE.md) — D-Bus bus control, zbus connections, systemd/Portal routing.
+- [docs/OPERATION_RUNTIME_REFERENCE.md](docs/OPERATION_RUNTIME_REFERENCE.md) — COSMIC-style Tokio + Compio operation runtime.
 - [docs/ARK_REFERENCE.md](docs/ARK_REFERENCE.md) — Ark/kerfuffle archive integration and D-Bus interface.
 
 ## License

@@ -51,8 +51,9 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
 - Network/GVfs 远程文件系统分类和 Places Network root。
 - D-Bus bus controller：session/system 连接缓存，超时重试 helper，
   owned proxy 创建，结构化 `BusError`。
-- 异步运行时脚手架：`tokio` 用于通用异步和 D-Bus；`compio` 用于
-  completion-based 文件 I/O（feature flag 控制）。
+- COSMIC-style 操作运行时：Tokio multi-thread context 加 dedicated Compio
+  操作线程，使用 bounded task submission，并通过 Compio blocking fallback
+  承接同步文件操作片段。
 
 ### UI (GPUI)
 
@@ -60,8 +61,10 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
 - 动态分屏（通过快捷键 Split / Close Pane）。
 - Pane-local 地址栏：breadcrumb 模式和可编辑文本模式（带光标、水平滚动、
   Tab 补全）。
-- Pane-local 状态栏：选中摘要，可用空间信息，zoom slider，
-  文件操作/目录加载进度条和 Stop 按钮。
+- Pane-local 状态栏：选中摘要，可用空间信息，zoom slider，以及目录加载
+  进度和 Stop。
+- 侧栏后台任务面板：active file operations、per-task Stop、最近历史和
+  progress，放在 Places 侧栏底部。
 - Pane-local 过滤栏：plain-text/glob 切换，大小写切换，匹配计数，关闭按钮。
 - Places 侧栏：Home、XDG user dirs、Trash、removable devices、Root、
   Network；用户 bookmark 持久化（`user-places.xbel`）；右键菜单（Open、
@@ -83,8 +86,8 @@ GPUI 依赖来自 Zed 官方仓库：`https://github.com/zed-industries/zed`。m
   Copy/Move/Link drop menu 和 hover 反馈，Places bookmark 插入和重排。
 - Inline rename：pane-local draft 状态，文本输入，Enter/Escape 提交/取消。
 - Properties 对话框：单路径和多选 metadata 行。
-- 剪贴板交互：内部 Copy/Cut/Paste 含进度条和 undo；中键 primary-selection
-  粘贴。
+- 剪贴板交互：内部 Copy/Cut/Paste 通过后台任务面板展示进度并支持 undo；
+  中键 primary-selection 粘贴。
 - Chooser shell：文件/目录选择，多选，filter/choice/portal metadata 输出。
 - 键盘快捷键：pane-scoped 导航、选择、缩放、过滤、剪贴板、undo 和文本输入
   分类。
@@ -125,16 +128,17 @@ src/
   core/network.rs                GVfs/远程文件系统分类
   core/operations.rs             操作队列和 undo 边界
   core/operations/tasks.rs       文件操作任务结果类型
+  core/operation_runtime.rs       Tokio + Compio 操作运行时 bridge
   core/pane.rs                   Pane identity、state、split/close 路由
   core/places.rs                 Places model（书签、设备、网络）
   core/privilege.rs              特权操作 API surface
-  core/scroll.rs                 平滑滚动 easing 和 kinetic tracker
   core/thumbnails.rs             Freedesktop 缩略图 URI 和缓存键
   core/view.rs                   Compact 布局、viewport 数学、可见范围
   ui.rs                          UI 模块重导出
   ui/application_chooser.rs      "Other Application…" 选择器入口
   ui/application_chooser/
     identity.rs                  应用选择器条目 identity
+  ui/background_tasks.rs         侧栏后台任务面板
   ui/chooser.rs                  文件选择器模式入口
   ui/chooser/state.rs            选择器状态和 portal metadata 输出
   ui/clipboard.rs                剪贴板 UI 入口
@@ -151,6 +155,9 @@ src/
   ui/filter_bar/state.rs         过滤 snapshot 和过滤后 model 缓存
   ui/icons.rs                    文件/命名图标入口
   ui/icons/cache.rs              FileIconCache、MIME 候选、主题解析
+  ui/item_view.rs                item-view scroll ownership
+  ui/item_view/scroll_bar.rs     tracked 横向滚动条
+  ui/item_view/scroll_state.rs   per-pane scroll handle 状态
   ui/location_bar.rs             地址栏 UI 入口
   ui/location_bar/draft.rs       可编辑地址栏 draft 和 caret 状态
   ui/location_bar/metrics.rs     可编辑 metrics、hit-test、滚动数学
@@ -159,6 +166,7 @@ src/
   ui/pane/splitter.rs            Splitter drag payload 和比例几何
   ui/place_draft.rs              Places Add/Edit draft 状态
   ui/places.rs                   Places 侧栏 UI 入口
+  ui/places/sidebar.rs           Places 面板布局和后台任务 slot
   ui/places/model.rs             Place 条目、分组、图标 snapshot
   ui/places/snapshot.rs          Place 图标和 snapshot 类型
   ui/properties_dialog.rs        Properties 对话框入口
@@ -168,7 +176,6 @@ src/
   ui/rename/draft.rs             Pane-local rename draft 状态
   ui/rubber_band.rs              Rubber-band 框选入口
   ui/rubber_band/state.rs        Rubber-band drag payload 和 rect 投影
-  ui/scrollbar.rs                横向滚动条、paint-phase capture
   ui/shortcuts.rs                键盘快捷键分类
   ui/status_bar.rs               状态栏 UI 入口
   ui/status_bar/state.rs         Snapshot、空间信息缓存、进度句柄
@@ -283,6 +290,7 @@ scripts/check-runtime-integration.sh
 - [docs/THUMBNAIL_REFERENCE.md](docs/THUMBNAIL_REFERENCE.md) — Freedesktop 缩略图规范和管线。
 - [docs/NETWORK_REFERENCE.md](docs/NETWORK_REFERENCE.md) — GVfs 远程文件系统分类和挂载。
 - [docs/BUS_CONTROL_REFERENCE.md](docs/BUS_CONTROL_REFERENCE.md) — D-Bus 总线控制、zbus 连接、systemd/Portal 路由。
+- [docs/OPERATION_RUNTIME_REFERENCE.md](docs/OPERATION_RUNTIME_REFERENCE.md) — COSMIC-style Tokio + Compio 操作运行时。
 - [docs/ARK_REFERENCE.md](docs/ARK_REFERENCE.md) — Ark/kerfuffle 压缩文件集成和 D-Bus 接口。
 
 ## 许可证

@@ -161,31 +161,27 @@ The shared `src/core/bus.rs` layer should own the cross-feature D-Bus boundary:
   window object. Incoming URIs should validate and normalize before routing to
   pane/window actions.
 
-## Initial Implementation Slices
+## Implementation Status
 
 Completed:
 
-- Added the core error and request types:
-  `BusKind`, `BusCallTarget`, `BusError`, `BusConfig`, and `BusController`.
-- Moved `launch_with_systemd_user()` to the shared session bus helper while
-  preserving existing `SystemdLaunchResult` and tests.
-- Added the core Ark DnD executor boundary:
-  `ArkDndExtractRequest` validates the destination and maps the Ark service/path
-  payload to `org.kde.ark.DndExtract.extractSelectedFilesTo(destination)`, then
-  executes it through the shared session bus helper.
-- Moved privileged-helper client calls for file operations, external edit
-  prepare/commit/discard/associate, and session helper readiness checks to the
-  shared bus connection helper while preserving the helper service API.
+- Core bus controller: `BusKind`, `BusCallTarget`, `BusError`, `BusConfig`,
+  `BusController` with lazy connection cache, 30s idle timeout, and 3-attempt
+  method-call timeout/retry.
+- `launch_with_systemd_user()` migrated to shared session bus helper.
+- Ark DnD executor boundary: `ArkDndExtractRequest` →
+  `org.kde.ark.DndExtract.extractSelectedFilesTo(destination)` through shared bus.
+- Privileged-helper client calls (file ops, external edit lifecycle, session
+  helper readiness) migrated to shared bus connection helper.
+- Privileged-helper service external-edit unit watcher uses async zbus proxies
+  on local Tokio runtime instead of `zbus::blocking`.
 
 Remaining:
 
 1. Wire GPUI/backend multi-MIME external drag offers carrying Ark MIME values
-   into the core Ark DnD executor instead of the ordinary file copy/move/link
-   path.
-2. Move the remaining privileged-helper blocking user-unit watcher connection
-   path where practical, or document it as a blocking service-side exception.
-3. Add FileManager1 registration after the core router can safely dispatch
-   incoming URI requests to an app/window action queue.
+   into the core Ark DnD executor (blocked on GPUI/backend API, see TODO.md).
+2. Add FileManager1 (`org.freedesktop.FileManager1`) session bus registration
+   with `ShowFolders`/`ShowItems`/`ShowItemProperties`.
 
 ## Constraints
 
