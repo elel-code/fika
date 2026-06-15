@@ -77,7 +77,7 @@ use ui::file_grid::{
     PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshotInput, VisibleItemSlotPool,
     compact_text_width, compact_text_width_for_name, content_item_hit_at_point,
     deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
-    pane_layout_projection, raw_file_grid_snapshot,
+    pane_layout_projection, raw_file_grid_snapshot, rename_editor_required_text_width,
 };
 use ui::filter_bar::{
     FILTER_BAR_HEIGHT, FilterBarSnapshot, FilteredModelCacheEntry, PaneFilterState,
@@ -3622,8 +3622,9 @@ impl FikaApp {
         let Some(layout_index) = projection.layout_index_for_model_index(model_index) else {
             return false;
         };
-        let required_text_width =
-            compact_text_width(name_width_units).max(compact_text_width_for_name(&draft_name));
+        let required_text_width = compact_text_width(name_width_units).max(
+            rename_editor_required_text_width(compact_text_width_for_name(&draft_name)),
+        );
         let Some(item) = projection
             .layout
             .item_with_required_text_width(layout_index, Some(required_text_width))
@@ -10819,6 +10820,29 @@ text/plain=viewer.desktop;\n",
     }
 
     #[test]
+    fn icons_layout_options_follow_dolphin_zoom_formula() {
+        let default_options = ui::file_grid::icons_layout_options(&ViewState::default(), 0.0);
+        assert_eq!(default_options.icon_size, 48.0);
+        assert_eq!(default_options.padding, 2.0);
+        assert_eq!(default_options.gap, 8.0);
+        assert_eq!(default_options.item_width, 96.0);
+        assert_eq!(default_options.item_height, 72.0);
+        assert_eq!(default_options.text_height, 18.0);
+
+        let zoomed_options = ui::file_grid::icons_layout_options(
+            &ViewState {
+                zoom_level: fika_core::MAX_ZOOM_LEVEL,
+                ..ViewState::default()
+            },
+            0.0,
+        );
+        assert_eq!(zoomed_options.icon_size, 256.0);
+        assert_eq!(zoomed_options.item_width, 269.0);
+        assert_eq!(zoomed_options.item_height, 280.0);
+        assert_eq!(zoomed_options.text_height, 18.0);
+    }
+
+    #[test]
     fn pane_ratios_are_owned_by_splitter_state() {
         let mut app = test_app_with_entries("/tmp/fika-panes", &[]);
         let first = app.panes.focused().unwrap();
@@ -11533,7 +11557,12 @@ text/plain=viewer.desktop;\n",
             .layout_projection_for_pane(pane_id)
             .unwrap()
             .layout
-            .item_with_required_text_width(0, Some(compact_text_width("alpha.txt".len() as u16)))
+            .item_with_required_text_width(
+                0,
+                Some(rename_editor_required_text_width(compact_text_width(
+                    "alpha.txt".len() as u16,
+                ))),
+            )
             .unwrap();
         let window_x = 100.0 + item.text_rect.x + RENAME_TEXT_INSET_X + 6.0;
         let window_y = 200.0 + item.text_rect.y + 4.0;
@@ -11577,7 +11606,12 @@ text/plain=viewer.desktop;\n",
             .layout_projection_for_pane(pane_id)
             .unwrap()
             .layout
-            .item_with_required_text_width(0, Some(compact_text_width_for_name(long_name)))
+            .item_with_required_text_width(
+                0,
+                Some(rename_editor_required_text_width(
+                    compact_text_width_for_name(long_name),
+                )),
+            )
             .unwrap();
         assert!(item.item_rect.width > base_width);
         assert!(item.text_rect.width > compact_text_width_for_name("a.txt"));

@@ -9,9 +9,8 @@ use super::details::{
 };
 use super::layout::{
     CompactColumnWidthCache, compact_layout_for_filtered_model_with_text_override,
-    compact_layout_for_model_with_text_override, entry_name_text_width,
-    icons_layout_options_for_model, model_index_for_layout_index, rename_text_override_for_model,
-    required_text_width_for_entry,
+    compact_layout_for_model_with_text_override, entry_name_text_width, icons_layout_for_model,
+    model_index_for_layout_index, rename_text_override_for_model, required_text_width_for_entry,
 };
 use super::{FileGridSnapshot, VisibleItemSlotPool};
 use crate::ui::drag_drop::{ItemDropTarget, item_drop_target_matches_directory};
@@ -213,17 +212,8 @@ pub(crate) fn raw_file_grid_snapshot(input: RawFileGridSnapshotInput<'_>) -> Raw
             RawFileGridSnapshot::Compact { layout, items }
         }
         ViewMode::Icons => {
-            let layout = IconsLayout::new(
-                item_count,
-                icons_layout_options_for_model(
-                    model,
-                    filtered,
-                    item_count,
-                    view,
-                    rename_draft,
-                    0.0,
-                ),
-            );
+            let layout =
+                icons_layout_for_model(model, filtered, item_count, view, rename_draft, 0.0);
             let items = layout
                 .visible_items()
                 .filter_map(|visible_item| {

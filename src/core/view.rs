@@ -84,12 +84,12 @@ impl Default for IconsLayoutOptions {
             reserved_bottom: 0.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
-            padding: 8.0,
+            padding: 2.0,
             gap: 8.0,
-            item_width: 128.0,
-            item_height: 112.0,
+            item_width: 96.0,
+            item_height: 72.0,
             icon_size: 48.0,
-            text_height: 40.0,
+            text_height: 18.0,
         }
     }
 }
@@ -179,7 +179,20 @@ pub struct IconsLayout {
     item_count: usize,
     columns_per_row: usize,
     row_count: usize,
+    column_start_x: f32,
+    column_pitch: f32,
+    rows: IconsLayoutRows,
     content_size: ViewSize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum IconsLayoutRows {
+    Uniform,
+    Variable {
+        item_heights: Arc<[f32]>,
+        row_heights: Arc<[f32]>,
+        row_offsets: Arc<[f32]>,
+    },
 }
 
 impl CompactLayout {
@@ -459,21 +472,18 @@ impl IconsLayout {
     pub fn new(item_count: usize, options: IconsLayoutOptions) -> Self {
         let columns_per_row = columns_per_row(options);
         let row_count = item_count.div_ceil(columns_per_row);
+        let column_metrics = icons_column_metrics(options, item_count, columns_per_row);
         let content_width = if item_count == 0 {
             EMPTY_CONTENT_EXTENT
         } else {
-            (options.padding * 2.0
-                + columns_per_row as f32 * options.item_width
-                + columns_per_row.saturating_sub(1) as f32 * options.gap)
-                .max(options.viewport_width)
+            icons_content_width(options, item_count, columns_per_row, column_metrics)
         };
         let content_height = if item_count == 0 {
             EMPTY_CONTENT_EXTENT
         } else {
-            (options.padding * 2.0
-                + row_count as f32 * options.item_height
-                + row_count.saturating_sub(1) as f32 * options.gap)
-                .max(options.viewport_height)
+            (options.gap.max(0.0)
+                + row_count as f32 * (options.item_height.max(1.0) + options.gap.max(0.0)))
+            .max(options.viewport_height)
         };
 
         Self {
@@ -481,6 +491,75 @@ impl IconsLayout {
             item_count,
             columns_per_row,
             row_count,
+            column_start_x: column_metrics.start_x,
+            column_pitch: column_metrics.pitch,
+            rows: IconsLayoutRows::Uniform,
+            content_size: ViewSize {
+                width: content_width,
+                height: content_height,
+            },
+        }
+    }
+
+    pub fn new_with_item_heights(
+        item_count: usize,
+        options: IconsLayoutOptions,
+        item_heights: impl Into<Arc<[f32]>>,
+    ) -> Self {
+        if item_count == 0 {
+            return Self::new(item_count, options);
+        }
+
+        let base_height = options.item_height.max(1.0);
+        let supplied = item_heights.into();
+        let mut normalized = Vec::with_capacity(item_count);
+        let mut has_variable_height = false;
+        for index in 0..item_count {
+            let height = supplied.get(index).copied().unwrap_or(base_height);
+            let height = height.max(base_height);
+            has_variable_height |= height != base_height;
+            normalized.push(height);
+        }
+
+        if !has_variable_height {
+            return Self::new(item_count, options);
+        }
+
+        let columns_per_row = columns_per_row(options);
+        let row_count = item_count.div_ceil(columns_per_row);
+        let column_metrics = icons_column_metrics(options, item_count, columns_per_row);
+        let mut row_offsets = Vec::with_capacity(row_count);
+        let mut row_heights = Vec::with_capacity(row_count);
+        let mut y = options.gap.max(0.0);
+
+        for row in 0..row_count {
+            row_offsets.push(y);
+            let row_start = row * columns_per_row;
+            let row_end = (row_start + columns_per_row).min(item_count);
+            let row_height = normalized[row_start..row_end]
+                .iter()
+                .copied()
+                .fold(base_height, f32::max);
+            row_heights.push(row_height);
+            y += row_height + options.gap.max(0.0);
+        }
+
+        let content_width =
+            icons_content_width(options, item_count, columns_per_row, column_metrics);
+        let content_height = y.max(options.viewport_height);
+
+        Self {
+            options,
+            item_count,
+            columns_per_row,
+            row_count,
+            column_start_x: column_metrics.start_x,
+            column_pitch: column_metrics.pitch,
+            rows: IconsLayoutRows::Variable {
+                item_heights: Arc::from(normalized),
+                row_heights: Arc::from(row_heights),
+                row_offsets: Arc::from(row_offsets),
+            },
             content_size: ViewSize {
                 width: content_width,
                 height: content_height,
@@ -523,13 +602,14 @@ impl IconsLayout {
         }
         let column = model_index % self.columns_per_row;
         let row = model_index / self.columns_per_row;
-        let x = self.options.padding + column as f32 * (self.options.item_width + self.options.gap);
-        let y = self.options.padding + row as f32 * (self.options.item_height + self.options.gap);
+        let x = self.column_start_x + column as f32 * self.column_pitch;
+        let y = self.row_y(row)?;
+        let item_height = self.item_height(model_index)?;
         let item_rect = ViewRect {
             x,
             y,
             width: self.options.item_width,
-            height: self.options.item_height,
+            height: item_height,
         };
         let icon_rect = ViewRect {
             x: x + (self.options.item_width - self.options.icon_size).max(0.0) / 2.0,
@@ -544,9 +624,9 @@ impl IconsLayout {
             .clamp(0.0, available_text_width);
         let text_rect = ViewRect {
             x: x + (self.options.item_width - text_width).max(0.0) / 2.0,
-            y: icon_rect.bottom() + self.options.gap,
+            y: y + self.options.icon_size + self.options.padding * 2.0,
             width: text_width,
-            height: self.options.text_height,
+            height: self.item_text_height(item_height),
         };
         let visual_left = icon_rect.x.min(text_rect.x);
         let visual_right = icon_rect.right().max(text_rect.right());
@@ -586,18 +666,15 @@ impl IconsLayout {
         if self.item_count == 0 {
             return None;
         }
-        let pitch_x = self.options.item_width + self.options.gap;
-        let pitch_y = self.options.item_height + self.options.gap;
-        if pitch_x <= 0.0 || pitch_y <= 0.0 {
+        if self.column_pitch <= 0.0 {
             return None;
         }
-        let column = ((point.x - self.options.padding) / pitch_x).floor();
-        let row = ((point.y - self.options.padding) / pitch_y).floor();
-        if column < 0.0 || row < 0.0 {
+        let column = ((point.x - self.column_start_x) / self.column_pitch).floor();
+        if column < 0.0 {
             return None;
         }
         let column = column as usize;
-        let row = row as usize;
+        let row = self.row_at_y(point.y)?;
         if column >= self.columns_per_row || row >= self.row_count {
             return None;
         }
@@ -623,25 +700,106 @@ impl IconsLayout {
     }
 
     fn row_range_intersecting_y(&self, visible_start: f32, visible_end: f32) -> Range<usize> {
-        visible_axis_range(
-            visible_start,
-            visible_end,
-            self.options.padding,
-            self.options.item_height,
-            self.options.gap,
-            self.row_count,
-        )
+        match &self.rows {
+            IconsLayoutRows::Uniform => visible_axis_range(
+                visible_start,
+                visible_end,
+                self.options.gap.max(0.0),
+                self.options.item_height.max(1.0),
+                self.options.gap.max(0.0),
+                self.row_count,
+            ),
+            IconsLayoutRows::Variable {
+                row_heights,
+                row_offsets,
+                ..
+            } => {
+                if visible_end <= visible_start {
+                    return 0..0;
+                }
+                let start = first_row_with_bottom_after(row_offsets, row_heights, visible_start);
+                let end = first_row_starting_at_or_after(row_offsets, visible_end);
+                start..end.max(start).min(self.row_count)
+            }
+        }
     }
 
     fn column_range_intersecting_x(&self, visible_start: f32, visible_end: f32) -> Range<usize> {
         visible_axis_range(
             visible_start,
             visible_end,
-            self.options.padding,
+            self.column_start_x,
             self.options.item_width,
-            self.options.gap,
+            self.column_pitch - self.options.item_width,
             self.columns_per_row,
         )
+    }
+
+    fn row_y(&self, row: usize) -> Option<f32> {
+        if row >= self.row_count {
+            return None;
+        }
+        Some(match &self.rows {
+            IconsLayoutRows::Uniform => {
+                self.options.gap.max(0.0)
+                    + row as f32 * (self.options.item_height.max(1.0) + self.options.gap.max(0.0))
+            }
+            IconsLayoutRows::Variable { row_offsets, .. } => row_offsets[row],
+        })
+    }
+
+    fn row_height(&self, row: usize) -> Option<f32> {
+        if row >= self.row_count {
+            return None;
+        }
+        Some(match &self.rows {
+            IconsLayoutRows::Uniform => self.options.item_height.max(1.0),
+            IconsLayoutRows::Variable { row_heights, .. } => row_heights[row],
+        })
+    }
+
+    fn item_height(&self, model_index: usize) -> Option<f32> {
+        if model_index >= self.item_count {
+            return None;
+        }
+        Some(match &self.rows {
+            IconsLayoutRows::Uniform => self.options.item_height.max(1.0),
+            IconsLayoutRows::Variable { item_heights, .. } => item_heights[model_index],
+        })
+    }
+
+    fn item_text_height(&self, item_height: f32) -> f32 {
+        (item_height - self.options.icon_size - self.options.padding * 3.0)
+            .max(self.options.text_height.max(1.0))
+    }
+
+    fn row_at_y(&self, y: f32) -> Option<usize> {
+        match &self.rows {
+            IconsLayoutRows::Uniform => {
+                let pitch_y = self.options.item_height.max(1.0) + self.options.gap.max(0.0);
+                if pitch_y <= 0.0 {
+                    return None;
+                }
+                let row = ((y - self.options.gap.max(0.0)) / pitch_y).floor();
+                if row < 0.0 {
+                    return None;
+                }
+                let row = row as usize;
+                let row_y = self.row_y(row)?;
+                let row_height = self.row_height(row)?;
+                (y >= row_y && y < row_y + row_height).then_some(row)
+            }
+            IconsLayoutRows::Variable {
+                row_heights,
+                row_offsets,
+                ..
+            } => {
+                let row = first_row_with_bottom_after(row_offsets, row_heights, y);
+                let row_y = *row_offsets.get(row)?;
+                let row_height = row_heights[row];
+                (y >= row_y && y < row_y + row_height).then_some(row)
+            }
+        }
     }
 }
 
@@ -702,10 +860,57 @@ fn compact_available_height(options: CompactLayoutOptions) -> f32 {
 }
 
 fn columns_per_row(options: IconsLayoutOptions) -> usize {
-    let available = (options.viewport_width - options.padding * 2.0).max(options.item_width);
-    ((available + options.gap) / (options.item_width + options.gap))
-        .floor()
-        .max(1.0) as usize
+    let item_margin = options.gap.max(0.0);
+    let item_width = options.item_width.max(1.0);
+    let column_width = item_width + item_margin;
+    let width_for_columns = (options.viewport_width - item_margin).max(column_width);
+    (width_for_columns / column_width).floor().max(1.0) as usize
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IconsColumnMetrics {
+    start_x: f32,
+    pitch: f32,
+}
+
+fn icons_column_metrics(
+    options: IconsLayoutOptions,
+    item_count: usize,
+    columns_per_row: usize,
+) -> IconsColumnMetrics {
+    let item_margin = options.gap.max(0.0);
+    let item_width = options.item_width.max(1.0);
+    let mut pitch = item_width + item_margin;
+    let width_for_columns = (options.viewport_width - item_margin).max(pitch);
+    let mut start_x = item_margin;
+
+    if item_count > columns_per_row && pitch >= 32.0 {
+        let unused_width = width_for_columns - columns_per_row as f32 * pitch;
+        if unused_width > 0.0 {
+            let column_inc = unused_width / (columns_per_row as f32 + 1.0);
+            pitch += column_inc;
+            start_x += column_inc;
+        }
+    }
+
+    IconsColumnMetrics { start_x, pitch }
+}
+
+fn icons_content_width(
+    options: IconsLayoutOptions,
+    item_count: usize,
+    columns_per_row: usize,
+    column_metrics: IconsColumnMetrics,
+) -> f32 {
+    let visible_columns = item_count.min(columns_per_row);
+    if visible_columns == 0 {
+        return EMPTY_CONTENT_EXTENT;
+    }
+    (column_metrics.start_x
+        + visible_columns.saturating_sub(1) as f32 * column_metrics.pitch
+        + options.item_width
+        + options.gap.max(0.0))
+    .max(options.viewport_width)
 }
 
 fn normalize_column_widths(
@@ -785,6 +990,34 @@ fn visible_axis_range(
     let start = ((visible_start - padding - item_extent) / pitch).floor() as isize + 1;
     let end = ((visible_end - padding) / pitch).ceil() as isize;
     start.max(0) as usize..(end.max(0) as usize).min(count)
+}
+
+fn first_row_with_bottom_after(offsets: &[f32], heights: &[f32], y: f32) -> usize {
+    let mut low = 0usize;
+    let mut high = offsets.len().min(heights.len());
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if offsets[mid] + heights[mid] <= y {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+fn first_row_starting_at_or_after(offsets: &[f32], y: f32) -> usize {
+    let mut low = 0usize;
+    let mut high = offsets.len();
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if offsets[mid] < y {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
 }
 
 #[cfg(test)]
@@ -1130,12 +1363,57 @@ mod tests {
         );
 
         assert_eq!(
-            layout.hit_test_content_point(ViewPoint { x: 118.0, y: 8.0 }),
+            layout.hit_test_content_point(ViewPoint { x: 128.0, y: 12.0 }),
             Some(1)
         );
         assert_eq!(
-            layout.hit_test_content_point(ViewPoint { x: 8.0, y: 98.0 }),
+            layout.hit_test_content_point(ViewPoint { x: 18.0, y: 102.0 }),
             Some(2)
         );
+    }
+
+    #[test]
+    fn icons_layout_uses_row_maximum_item_height() {
+        let layout = IconsLayout::new_with_item_heights(
+            6,
+            IconsLayoutOptions {
+                viewport_width: 230.0,
+                item_width: 100.0,
+                item_height: 80.0,
+                gap: 10.0,
+                padding: 4.0,
+                ..IconsLayoutOptions::default()
+            },
+            vec![120.0, 80.0, 80.0, 80.0, 80.0, 80.0],
+        );
+
+        assert_eq!(layout.columns_per_row(), 2);
+        assert_eq!(layout.item(0).unwrap().item_rect.height, 120.0);
+        assert_eq!(layout.item(1).unwrap().item_rect.height, 80.0);
+        assert_eq!(layout.item(2).unwrap().item_rect.y, 140.0);
+        assert_eq!(
+            layout.hit_test_content_point(ViewPoint { x: 18.0, y: 135.0 }),
+            None
+        );
+    }
+
+    #[test]
+    fn icons_layout_item_height_only_offsets_following_rows() {
+        let layout = IconsLayout::new_with_item_heights(
+            6,
+            IconsLayoutOptions {
+                viewport_width: 230.0,
+                item_width: 100.0,
+                item_height: 80.0,
+                gap: 10.0,
+                padding: 4.0,
+                ..IconsLayoutOptions::default()
+            },
+            vec![80.0, 80.0, 120.0, 80.0, 80.0, 80.0],
+        );
+
+        assert_eq!(layout.item(0).unwrap().item_rect.y, 10.0);
+        assert_eq!(layout.item(2).unwrap().item_rect.y, 100.0);
+        assert_eq!(layout.item(4).unwrap().item_rect.y, 230.0);
     }
 }

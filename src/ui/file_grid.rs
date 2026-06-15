@@ -7,7 +7,10 @@ mod snapshot;
 pub(crate) use details::{
     DetailsItemSnapshot, DetailsLayoutMetrics, details_content_height, details_content_width,
 };
-pub(crate) use layout::{CompactColumnWidthCache, compact_text_width, compact_text_width_for_name};
+pub(crate) use layout::{
+    CompactColumnWidthCache, compact_text_width, compact_text_width_for_name,
+    rename_editor_required_text_width,
+};
 pub(crate) use projection::{
     ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput, content_item_hit_at_point,
     model_indexes_intersecting_visual_rect, pane_layout_projection,
@@ -299,6 +302,10 @@ const RENAME_NAME_HEIGHT: f32 = 20.0;
 pub(crate) const ITEM_NAME_LINE_HEIGHT: f32 = 18.0;
 const DEFAULT_TILE_TEXT_HEIGHT: f32 = 40.0;
 const DOLPHIN_ITEM_PADDING: f32 = 2.0;
+const DOLPHIN_ICON_TEXT_WIDTH_INDEX: f32 = 1.0;
+const DOLPHIN_ICON_FONT_FACTOR: f32 = 1.0;
+const DOLPHIN_ICON_MARGIN: f32 = 8.0;
+pub(crate) const DOLPHIN_ICON_MAX_TEXT_LINES: usize = 3;
 const DOLPHIN_COMPACT_SIDE_PADDING: f32 = 8.0;
 const DOLPHIN_COMPACT_COLUMN_GAP: f32 = 8.0;
 const DOLPHIN_COMPACT_TEXT_GAP: f32 = DOLPHIN_ITEM_PADDING * 2.0;
@@ -1302,10 +1309,11 @@ fn text_view(
 ) -> Div {
     let visual = layout.visual_rect;
     let text = layout.text_rect;
+    let show_helper = rename_error.is_some() || rename_warning.is_some();
     let rename_layout = if !renaming {
         display_text_layout(display_name, text.width, text.height, text_alignment)
     } else {
-        rename_text_layout(text.height)
+        rename_text_layout(text.height, show_helper)
     };
     let helper_text = rename_error.or(rename_warning).unwrap_or_default();
     let helper_color = if rename_error.is_some() {
@@ -1332,7 +1340,8 @@ fn text_view(
         .flex_col()
         .overflow_hidden()
         .when(
-            !renaming && matches!(text_alignment, ItemTileTextAlignment::Start),
+            (!renaming && matches!(text_alignment, ItemTileTextAlignment::Start))
+                || (renaming && !show_helper),
             |view| view.justify_center(),
         )
         .child(if renaming {
@@ -1374,6 +1383,7 @@ fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div 
     } else {
         rgb(0x24292f)
     };
+    let max_lines = (height / ITEM_NAME_LINE_HEIGHT).round().max(1.0) as usize;
     div()
         .h(px(height))
         .w_full()
@@ -1384,12 +1394,15 @@ fn item_name_label_view(display_name: &str, selected: bool, height: f32) -> Div 
         .justify_center()
         .child(
             div()
+                .w_full()
                 .max_w_full()
                 .min_w_0()
                 .text_sm()
                 .line_height(px(ITEM_NAME_LINE_HEIGHT))
                 .text_center()
                 .whitespace_normal()
+                .line_clamp(max_lines)
+                .text_ellipsis()
                 .text_color(text_color)
                 .child(display_name.to_string()),
         )
@@ -1521,12 +1534,16 @@ fn rename_caret_view() -> Div {
     div().w(px(1.0)).h(px(16.0)).flex_none().bg(rgb(0x2f6fed))
 }
 
-fn rename_text_layout(text_height: f32) -> RenameTextLayout {
+fn rename_text_layout(text_height: f32, show_helper: bool) -> RenameTextLayout {
     let text_height = text_height.max(0.0);
     let name_height = text_height.min(RENAME_NAME_HEIGHT);
     RenameTextLayout {
         name_height,
-        helper_height: (text_height - name_height).max(0.0),
+        helper_height: if show_helper {
+            (text_height - name_height).max(0.0)
+        } else {
+            0.0
+        },
     }
 }
 
@@ -1750,12 +1767,16 @@ mod tests {
 
     #[test]
     fn rename_text_layout_keeps_editor_on_name_line() {
-        let layout = rename_text_layout(40.0);
+        let layout = rename_text_layout(40.0, true);
 
         assert_eq!(layout.name_height, 20.0);
         assert_eq!(layout.helper_height, 20.0);
 
-        let compact = rename_text_layout(12.0);
+        let without_helper = rename_text_layout(40.0, false);
+        assert_eq!(without_helper.name_height, 20.0);
+        assert_eq!(without_helper.helper_height, 0.0);
+
+        let compact = rename_text_layout(12.0, true);
         assert_eq!(compact.name_height, 12.0);
         assert_eq!(compact.helper_height, 0.0);
     }
@@ -1818,10 +1839,14 @@ pub(crate) fn compact_layout_options(
 
 pub(crate) fn icons_layout_options(view: &ViewState, reserved_bottom: f32) -> IconsLayoutOptions {
     let icon_size = view.icon_size();
-    let padding = 8.0;
-    let gap = 8.0;
-    let text_height = DEFAULT_TILE_TEXT_HEIGHT;
-    let item_width = (icon_size * 2.25).max(128.0);
+    let padding = DOLPHIN_ITEM_PADDING;
+    let gap = DOLPHIN_ICON_MARGIN;
+    let text_height = ITEM_NAME_LINE_HEIGHT;
+    let zoom_factor = (view.zoom_level as f32 / 13.0).exp();
+    let item_width = (16.0
+        + DOLPHIN_ICON_TEXT_WIDTH_INDEX * 64.0 * DOLPHIN_ICON_FONT_FACTOR * zoom_factor)
+        .max(icon_size + padding * 2.0 * zoom_factor)
+        .floor();
     IconsLayoutOptions {
         viewport_width: view.viewport_width.max(1.0),
         viewport_height: view.viewport_height.max(1.0),
@@ -1831,7 +1856,7 @@ pub(crate) fn icons_layout_options(view: &ViewState, reserved_bottom: f32) -> Ic
         padding,
         gap,
         item_width,
-        item_height: padding * 3.0 + icon_size + gap + text_height,
+        item_height: padding * 3.0 + icon_size + text_height,
         icon_size,
         text_height,
         ..IconsLayoutOptions::default()

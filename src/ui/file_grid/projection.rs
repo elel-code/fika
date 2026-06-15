@@ -12,9 +12,8 @@ use super::details::{
 };
 use super::layout::{
     CompactColumnWidthCache, compact_layout_for_filtered_model_with_text_override,
-    compact_layout_for_model_with_text_override, entry_name_text_width,
-    icons_layout_options_for_model, model_index_for_layout_index, rename_text_override_for_model,
-    required_text_width_for_entry,
+    compact_layout_for_model_with_text_override, entry_name_text_width, icons_layout_for_model,
+    model_index_for_layout_index, rename_text_override_for_model, required_text_width_for_entry,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,9 +69,13 @@ pub(crate) fn pane_layout_projection(input: PaneLayoutProjectionInput<'_>) -> Pa
     } = input;
     let item_count = filtered.map_or_else(|| model.len(), FilteredModel::len);
     let layout = match view.view_mode {
-        ViewMode::Icons => PaneLayout::Icons(IconsLayout::new(
+        ViewMode::Icons => PaneLayout::Icons(icons_layout_for_model(
+            model,
+            filtered,
             item_count,
-            icons_layout_options_for_model(model, filtered, item_count, view, rename_draft, 0.0),
+            view,
+            rename_draft,
+            0.0,
         )),
         ViewMode::Compact => {
             let rename_text_override = rename_text_override_for_model(model, rename_draft);
@@ -352,13 +355,13 @@ mod tests {
         assert_eq!(
             projection
                 .layout
-                .hit_test_content_point(ViewPoint { x: 118.0, y: 8.0 }),
+                .hit_test_content_point(ViewPoint { x: 128.0, y: 12.0 }),
             Some(1)
         );
         assert_eq!(
             projection
                 .layout
-                .hit_test_content_point(ViewPoint { x: 8.0, y: 98.0 }),
+                .hit_test_content_point(ViewPoint { x: 18.0, y: 102.0 }),
             Some(2)
         );
     }
