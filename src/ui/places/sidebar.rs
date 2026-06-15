@@ -4,11 +4,14 @@ mod section;
 use crate::FikaApp;
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Div, Entity, Hitbox, HitboxBehavior, MouseButton, NavigationDirection,
-    ParentElement, Pixels, ScrollHandle, Size, Stateful, Styled, Window, canvas, div, fill, point,
-    px, rgb, rgba, size,
+    App, Bounds, Context, Div, Entity, ExternalPaths, Hitbox, HitboxBehavior, MouseButton,
+    NavigationDirection, ParentElement, Pixels, ScrollHandle, Size, Stateful, Styled, Window,
+    canvas, div, fill, point, px, rgb, rgba, size,
 };
 
+use crate::ui::file_grid::ItemDrag;
+
+use super::drag::PlaceDrag;
 use super::snapshot::PlaceSnapshot;
 use row::place_row;
 use section::group_heading;
@@ -57,6 +60,39 @@ pub(crate) fn places_sidebar(
         .overflow_hidden()
         .px_2()
         .py_2()
+        .on_drag_move::<ItemDrag>(cx.listener(
+            |this, event: &gpui::DragMoveEvent<ItemDrag>, _window, cx| {
+                if clear_places_drop_target_after_sidebar_leave(
+                    this,
+                    event.bounds,
+                    event.event.position,
+                ) {
+                    cx.notify();
+                }
+            },
+        ))
+        .on_drag_move::<ExternalPaths>(cx.listener(
+            |this, event: &gpui::DragMoveEvent<ExternalPaths>, _window, cx| {
+                if clear_places_drop_target_after_sidebar_leave(
+                    this,
+                    event.bounds,
+                    event.event.position,
+                ) {
+                    cx.notify();
+                }
+            },
+        ))
+        .on_drag_move::<PlaceDrag>(cx.listener(
+            |this, event: &gpui::DragMoveEvent<PlaceDrag>, _window, cx| {
+                if clear_places_drop_target_after_sidebar_leave(
+                    this,
+                    event.bounds,
+                    event.event.position,
+                ) {
+                    cx.notify();
+                }
+            },
+        ))
         .on_mouse_down(
             MouseButton::Navigate(NavigationDirection::Back),
             cx.listener(|this, _event: &gpui::MouseDownEvent, _window, cx| {
@@ -115,6 +151,24 @@ pub(crate) fn places_sidebar(
                 )
                 .child(places_sidebar_scrollbar(state)),
         )
+}
+
+fn clear_places_drop_target_after_sidebar_leave(
+    app: &mut FikaApp,
+    bounds: Bounds<Pixels>,
+    position: gpui::Point<Pixels>,
+) -> bool {
+    if places_sidebar_contains_drag_position(bounds, position) {
+        return false;
+    }
+    app.clear_place_drop_target()
+}
+
+fn places_sidebar_contains_drag_position(
+    bounds: Bounds<Pixels>,
+    position: gpui::Point<Pixels>,
+) -> bool {
+    bounds.contains(&position)
 }
 
 struct PlacesSidebarScrollState {
@@ -400,5 +454,19 @@ mod tests {
             ),
             300.0
         );
+    }
+
+    #[test]
+    fn places_sidebar_drag_leave_geometry_clears_only_outside_bounds() {
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(220.0), px(300.0)));
+
+        assert!(places_sidebar_contains_drag_position(
+            bounds,
+            point(px(24.0), px(80.0))
+        ));
+        assert!(!places_sidebar_contains_drag_position(
+            bounds,
+            point(px(240.0), px(80.0))
+        ));
     }
 }

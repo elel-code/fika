@@ -34,8 +34,9 @@ use fika_core::{
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, IntoElement, ParentElement, Render, ScrollDelta,
-    ScrollHandle, ScrollStrategy, Styled, Window, WindowBounds, WindowOptions, div, px, rgb, size,
+    App, Bounds, ClipboardItem, Context, ExternalPaths, IntoElement, ParentElement, Render,
+    ScrollDelta, ScrollHandle, ScrollStrategy, Styled, Window, WindowBounds, WindowOptions, div,
+    px, rgb, size,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
@@ -72,9 +73,9 @@ use ui::drag_drop::{
     place_drop_target_matches_insert, place_drop_target_matches_place,
 };
 use ui::file_grid::{
-    CompactColumnWidthCache, ContentItemHit, PaneLayoutProjection, PaneLayoutProjectionInput,
-    PaneViewportGeometry, RawFileGridSnapshotInput, VisibleItemSlotPool, compact_text_width,
-    compact_text_width_for_name, content_item_hit_at_point, deferred_icon_candidates_for_model,
+    CompactColumnWidthCache, ContentItemHit, ItemDrag, PaneLayoutProjection,
+    PaneLayoutProjectionInput, PaneViewportGeometry, RawFileGridSnapshotInput, VisibleItemSlotPool,
+    compact_text_width, compact_text_width_for_name, content_item_hit_at_point,
     deferred_thumbnail_candidates_for_model, model_indexes_intersecting_visual_rect,
     pane_layout_projection, raw_file_grid_snapshot,
 };
@@ -100,7 +101,7 @@ use ui::places::{
     build_places_with_devices, place_is_mounted,
 };
 use ui::places::{
-    PlaceEntry, PlaceSnapshot, build_places, default_place_label, place_snapshots_for,
+    PlaceDrag, PlaceEntry, PlaceSnapshot, build_places, default_place_label, place_snapshots_for,
     read_live_device_snapshot,
 };
 use ui::properties_dialog::{
@@ -835,19 +836,28 @@ impl FikaApp {
                 let item_drop_target = self.drop_targets.item().cloned();
                 let pane_drop_target =
                     item_drop_target_matches_pane(item_drop_target.as_ref(), pane_id);
+                let rename_draft = self
+                    .rename_draft
+                    .as_ref()
+                    .filter(|draft| draft.pane_id == pane_id)
+                    .cloned();
+                let location_draft = self
+                    .location_draft
+                    .as_ref()
+                    .filter(|draft| draft.pane_id == pane_id)
+                    .map(LocationDraft::snapshot);
+                let rubber_band_state = self.rubber_band;
                 let (
                     breadcrumbs,
-                    location_draft,
-                    filter_bar,
                     view,
                     raw_file_grid,
-                    read_ahead_icon_candidates,
                     rubber_band,
                     focused,
                     selection_count,
                     metadata_role_queued,
                     thumbnail_probe_queued,
                     trash_view,
+                    item_count,
                 ) = {
                     let pane = self.panes.pane(pane_id)?;
                     let generation = pane.generation;
@@ -860,15 +870,6 @@ impl FikaApp {
                     let filtered = filtered_model.as_ref().map(|(model, _)| model);
                     let source_revision =
                         filtered_model.as_ref().map_or(0, |(_, revision)| *revision);
-                    let rename_draft = self
-                        .rename_draft
-                        .as_ref()
-                        .filter(|draft| draft.pane_id == pane_id);
-                    let location_draft = self
-                        .location_draft
-                        .as_ref()
-                        .filter(|draft| draft.pane_id == pane_id)
-                        .map(LocationDraft::snapshot);
                     let selection_count = pane.selection.count_for_model(pane.model.len());
                     let item_count =
                         filtered.map_or_else(|| pane.model.len(), fika_core::FilteredModel::len);
@@ -880,7 +881,7 @@ impl FikaApp {
                         view: &view,
                         filtered,
                         source_revision,
-                        rename_draft,
+                        rename_draft: rename_draft.as_ref(),
                         item_drop_target: item_drop_target.as_ref(),
                         compact_column_widths: self
                             .compact_column_widths
@@ -903,22 +904,11 @@ impl FikaApp {
                             item_count,
                         ),
                     );
-                    let read_ahead_icon_candidates = deferred_icon_candidates_for_model(
-                        &raw_file_grid,
-                        &pane.model,
-                        filtered,
-                        item_count,
-                        view.icon_size(),
-                    )
-                    .collect::<Vec<_>>();
                     (
                         breadcrumb_segments(&pane.current_dir),
-                        location_draft,
-                        self.filter_bar_snapshot(pane_id, focused_pane, item_count),
                         view.clone(),
                         raw_file_grid,
-                        read_ahead_icon_candidates,
-                        self.rubber_band.and_then(|band| {
+                        rubber_band_state.and_then(|band| {
                             (band.pane_id == pane_id).then(|| band.viewport_rect(&view))
                         }),
                         focused_pane == Some(pane_id),
@@ -926,8 +916,10 @@ impl FikaApp {
                         metadata_role_queued,
                         thumbnail_probe_queued,
                         trash_view,
+                        item_count,
                     )
                 };
+                let filter_bar = self.filter_bar_snapshot(pane_id, focused_pane, item_count);
                 if metadata_role_queued {
                     self.maybe_start_metadata_role(cx);
                 }
@@ -942,22 +934,16 @@ impl FikaApp {
                         request.path,
                         request.is_dir,
                         request.mime_type.clone(),
+                        request.mime_magic_checked,
                         request.icon_size,
                     );
                 });
-                for candidate in read_ahead_icon_candidates {
-                    let _ = self.icon_snapshot_for_model_item(
-                        &candidate.path,
-                        candidate.is_dir,
-                        candidate.mime_type,
-                        candidate.icon_size,
-                    );
-                }
                 let file_grid = raw_file_grid.into_file_grid_snapshot(selection_count, |request| {
                     self.icon_snapshot_for_model_item(
                         request.path,
                         request.is_dir,
                         request.mime_type.clone(),
+                        request.mime_magic_checked,
                         request.icon_size,
                     )
                 });
@@ -1300,9 +1286,11 @@ impl FikaApp {
         path: &Path,
         is_dir: bool,
         mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
         icon_size: f32,
     ) -> FileIconSnapshot {
-        self.file_icons.icon_for(path, is_dir, mime_type, icon_size)
+        self.file_icons
+            .icon_for(path, is_dir, mime_type, mime_magic_checked, icon_size)
     }
 
     fn cancel_metadata_role_work_for_pane(&mut self, pane_id: PaneId) {
@@ -4240,7 +4228,7 @@ impl FikaApp {
             .set_place(PlaceDropTarget::Insert { index })
     }
 
-    fn clear_place_drop_target(&mut self) -> bool {
+    pub(crate) fn clear_place_drop_target(&mut self) -> bool {
         let changed = self.drop_targets.clear_place();
         if !self.drop_targets.has_target() {
             self.drop_menu_position = None;
@@ -6944,6 +6932,42 @@ impl Render for FikaApp {
                                     .min_w_0()
                                     .min_h_0()
                                     .overflow_hidden()
+                                    .on_drag_move::<ItemDrag>(cx.listener(
+                                        |this,
+                                         event: &gpui::DragMoveEvent<ItemDrag>,
+                                         _window,
+                                         cx| {
+                                            if event.bounds.contains(&event.event.position)
+                                                && this.clear_place_drop_target()
+                                            {
+                                                cx.notify();
+                                            }
+                                        },
+                                    ))
+                                    .on_drag_move::<ExternalPaths>(cx.listener(
+                                        |this,
+                                         event: &gpui::DragMoveEvent<ExternalPaths>,
+                                         _window,
+                                         cx| {
+                                            if event.bounds.contains(&event.event.position)
+                                                && this.clear_place_drop_target()
+                                            {
+                                                cx.notify();
+                                            }
+                                        },
+                                    ))
+                                    .on_drag_move::<PlaceDrag>(cx.listener(
+                                        |this,
+                                         event: &gpui::DragMoveEvent<PlaceDrag>,
+                                         _window,
+                                         cx| {
+                                            if event.bounds.contains(&event.event.position)
+                                                && this.clear_place_drop_target()
+                                            {
+                                                cx.notify();
+                                            }
+                                        },
+                                    ))
                                     .on_drag_move::<PaneSplitterDrag>(cx.listener(
                                         move |this,
                                               event: &gpui::DragMoveEvent<PaneSplitterDrag>,
@@ -9803,6 +9827,30 @@ text/plain=viewer.desktop;\n",
 
         let _ = std::fs::remove_dir_all(current);
         let _ = std::fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn pane_drop_target_clears_place_insert_target() {
+        let current = test_dir("pane-drop-target-clears-place-insert");
+        std::fs::create_dir_all(&current).unwrap();
+        let current_arg = current.display().to_string();
+        let mut app = test_app_with_entries(&current_arg, &[]);
+        let pane_id = app.panes.focused().unwrap();
+
+        assert!(app.set_place_drag_drop_target_for_insert(0));
+        assert!(place_drop_target_matches_insert(
+            app.drop_targets.place(),
+            0
+        ));
+
+        assert!(app.set_item_drag_drop_target_for_pane(pane_id));
+        assert!(app.drop_targets.place().is_none());
+        assert!(item_drop_target_matches_pane(
+            app.drop_targets.item(),
+            pane_id
+        ));
+
+        let _ = std::fs::remove_dir_all(current);
     }
 
     #[test]
@@ -12969,6 +13017,34 @@ text/plain=viewer.desktop;\n",
         assert_eq!(
             entry.effective_mime_type().map(Arc::as_ref),
             Some("text/plain")
+        );
+    }
+
+    #[test]
+    fn pending_generic_binary_icon_snapshot_uses_preliminary_unknown_icon() {
+        let mut app = test_app_with_entries("/tmp/fika-preliminary-icon", &[]);
+        let payload = PathBuf::from("/tmp/fika-preliminary-icon/payload");
+
+        let pending = app.icon_snapshot_for_model_item(
+            &payload,
+            false,
+            Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+            false,
+            48.0,
+        );
+        let resolved_binary = app.icon_snapshot_for_model_item(
+            &payload,
+            false,
+            Some(Arc::from(fika_core::GENERIC_BINARY_MIME)),
+            true,
+            48.0,
+        );
+
+        assert_eq!(pending.icon_name.as_ref(), "unknown");
+        assert_ne!(pending.icon_name.as_ref(), "application-octet-stream");
+        assert_eq!(
+            resolved_binary.icon_name.as_ref(),
+            "application-octet-stream"
         );
     }
 

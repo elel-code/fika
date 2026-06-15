@@ -104,6 +104,14 @@ impl SelectionState {
         }
     }
 
+    pub fn is_only_selected(&self, id: ItemId) -> bool {
+        !self.all_selected
+            && self.excluded_ids.is_empty()
+            && self.selected_ids.as_slice() == [id]
+            && self.anchor_id == Some(id)
+            && self.active_id == Some(id)
+    }
+
     pub fn clear(&mut self) {
         self.selected_ids.clear();
         self.excluded_ids.clear();
@@ -625,6 +633,9 @@ impl PaneController {
         else {
             return false;
         };
+        if pane.selection.is_only_selected(entry_id) {
+            return false;
+        }
         pane.selection.select_only(entry_id);
         true
     }
@@ -1218,6 +1229,25 @@ mod tests {
 
         assert!(controller.is_selected(first, &path));
         assert!(!controller.is_selected(second, &path));
+    }
+
+    #[test]
+    fn selecting_already_single_selected_item_is_noop() {
+        let mut controller = PaneController::new(PathBuf::from("/tmp/a"));
+        let pane_id = controller.focused().unwrap();
+        let path = PathBuf::from("/tmp/a/file.txt");
+        controller.pane_mut(pane_id).unwrap().model.replace_listing(
+            PathBuf::from("/tmp/a"),
+            listing(vec![test_entry_with_path(path.clone())]),
+        );
+
+        assert!(controller.select_only(pane_id, path.clone()));
+        let revision = controller.pane(pane_id).unwrap().selection.revision();
+        assert!(!controller.select_only(pane_id, path));
+        assert_eq!(
+            controller.pane(pane_id).unwrap().selection.revision(),
+            revision
+        );
     }
 
     #[test]

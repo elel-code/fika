@@ -14,8 +14,8 @@ pub(crate) use projection::{
 };
 pub(crate) use slots::VisibleItemSlotPool;
 pub(crate) use snapshot::{
-    RawFileGridSnapshotInput, VisibleItemSnapshot, deferred_icon_candidates_for_model,
-    deferred_thumbnail_candidates_for_model, raw_file_grid_snapshot,
+    RawFileGridSnapshotInput, VisibleItemSnapshot, deferred_thumbnail_candidates_for_model,
+    raw_file_grid_snapshot,
 };
 
 use crate::FikaApp;
@@ -748,7 +748,6 @@ fn details_row(
                     mode,
                     event,
                 ) {
-                    cx.stop_propagation();
                     cx.notify();
                 }
             }),
@@ -1093,7 +1092,6 @@ fn item_tile(
                             mode,
                             event,
                         ) {
-                            cx.stop_propagation();
                             cx.notify();
                         }
                     }),

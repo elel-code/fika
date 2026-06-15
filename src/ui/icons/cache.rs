@@ -20,6 +20,9 @@ enum FileIconKind {
         mime: Arc<str>,
         extension: Option<String>,
     },
+    PreliminaryFile {
+        extension: Option<String>,
+    },
     File {
         extension: Option<String>,
     },
@@ -51,9 +54,10 @@ impl FileIconCache {
         path: &Path,
         is_dir: bool,
         mime_type: Option<Arc<str>>,
+        mime_magic_checked: bool,
         icon_size: f32,
     ) -> FileIconSnapshot {
-        let kind = file_icon_kind(path, is_dir, mime_type);
+        let kind = file_icon_kind(path, is_dir, mime_type, mime_magic_checked);
         let key = FileIconCacheKey {
             kind,
             size_px: icon_cache_size(icon_size),
@@ -227,11 +231,19 @@ impl IconThemeResolver {
     }
 }
 
-fn file_icon_kind(path: &Path, is_dir: bool, mime_type: Option<Arc<str>>) -> FileIconKind {
+fn file_icon_kind(
+    path: &Path,
+    is_dir: bool,
+    mime_type: Option<Arc<str>>,
+    mime_magic_checked: bool,
+) -> FileIconKind {
     if is_dir {
         return FileIconKind::Directory;
     }
     let extension = file_extension(path);
+    if !mime_magic_checked && mime_type.as_deref() == Some(fika_core::GENERIC_BINARY_MIME) {
+        return FileIconKind::PreliminaryFile { extension };
+    }
     match mime_type {
         Some(mime) => FileIconKind::Mime { mime, extension },
         None => FileIconKind::File { extension },
@@ -330,6 +342,17 @@ fn file_icon_profile(kind: &FileIconKind, mime: &fika_core::MimeDatabase) -> Fil
                 bg,
             )
         }
+        FileIconKind::PreliminaryFile { extension } => (
+            vec!["unknown".to_string()],
+            Vec::new(),
+            extension
+                .as_deref()
+                .filter(|extension| extension.len() <= 4)
+                .map(str::to_ascii_uppercase)
+                .unwrap_or_else(|| "FILE".to_string()),
+            0x374151,
+            0xf3f4f6,
+        ),
         FileIconKind::File { extension } => {
             let marker = file_marker("application/octet-stream", extension.as_deref());
             let (fg, bg) = file_fallback_colors("application/octet-stream", extension.as_deref());
@@ -942,18 +965,21 @@ gtk-icon-theme-name=breeze\n"
             Path::new("lib.rs"),
             false,
             Some(Arc::from("text/rust")),
+            true,
             32.0,
         );
         let small_again = cache.icon_for(
             Path::new("main.rs"),
             false,
             Some(Arc::from("text/rust")),
+            true,
             32.0,
         );
         let large = cache.icon_for(
             Path::new("main.rs"),
             false,
             Some(Arc::from("text/rust")),
+            true,
             48.0,
         );
 
@@ -967,6 +993,57 @@ gtk-icon-theme-name=breeze\n"
             Some(root.join("theme/48x48/mimetypes/text-rust.svg").as_path())
         );
         assert_eq!(cache.cached.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pending_generic_binary_uses_preliminary_unknown_icon() {
+        let root = test_dir("pending-generic-binary-icon");
+        std::fs::create_dir_all(root.join("theme/48x48/mimetypes")).unwrap();
+        std::fs::write(root.join("theme/48x48/mimetypes/unknown.svg"), test_svg()).unwrap();
+        std::fs::write(
+            root.join("theme/48x48/mimetypes/application-octet-stream.svg"),
+            test_svg(),
+        )
+        .unwrap();
+        let mut cache = FileIconCache {
+            cached: HashMap::new(),
+            named_cached: HashMap::new(),
+            theme: IconThemeResolver {
+                roots: vec![root.clone()],
+                themes: vec!["theme".to_string()],
+                search_order: None,
+                inherits_cache: HashMap::new(),
+                path_cache: HashMap::new(),
+            },
+            mime: fika_core::MimeDatabase::from_maps(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
+
+        let pending = cache.icon_for(
+            Path::new("payload"),
+            false,
+            Some(Arc::from(GENERIC_BINARY_MIME)),
+            false,
+            48.0,
+        );
+        let resolved_binary = cache.icon_for(
+            Path::new("payload"),
+            false,
+            Some(Arc::from(GENERIC_BINARY_MIME)),
+            true,
+            48.0,
+        );
+
+        assert_eq!(pending.icon_name.as_ref(), "unknown");
+        assert_ne!(pending.icon_name, resolved_binary.icon_name);
+        assert_eq!(
+            resolved_binary.icon_name.as_ref(),
+            "application-octet-stream"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
