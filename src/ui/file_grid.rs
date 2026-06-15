@@ -297,8 +297,12 @@ struct RenameTextLayout {
 
 const RENAME_NAME_HEIGHT: f32 = 20.0;
 pub(crate) const ITEM_NAME_LINE_HEIGHT: f32 = 18.0;
-pub(crate) const ITEM_HELPER_LABEL_HEIGHT: f32 = 20.0;
 const DEFAULT_TILE_TEXT_HEIGHT: f32 = 40.0;
+const DOLPHIN_ITEM_PADDING: f32 = 2.0;
+const DOLPHIN_COMPACT_SIDE_PADDING: f32 = 8.0;
+const DOLPHIN_COMPACT_COLUMN_GAP: f32 = 8.0;
+const DOLPHIN_COMPACT_TEXT_GAP: f32 = DOLPHIN_ITEM_PADDING * 2.0;
+const DOLPHIN_COMPACT_BASE_TEXT_WIDTH: f32 = ITEM_NAME_LINE_HEIGHT * 5.0;
 
 pub(crate) fn file_grid(
     props: FileGridProps,
@@ -1185,7 +1189,6 @@ fn item_tile(
                 .child(text_view(
                     pane_id,
                     &display_name,
-                    &item.detail_label,
                     item.layout,
                     text_alignment,
                     renaming,
@@ -1287,7 +1290,6 @@ fn fallback_icon_element(marker: Arc<str>, fg: u32, bg: u32) -> gpui::AnyElement
 fn text_view(
     pane_id: PaneId,
     display_name: &str,
-    detail_label: &str,
     layout: ItemLayout,
     text_alignment: ItemTileTextAlignment,
     renaming: bool,
@@ -1305,7 +1307,7 @@ fn text_view(
     } else {
         rename_text_layout(text.height)
     };
-    let helper_text = rename_error.or(rename_warning).unwrap_or(detail_label);
+    let helper_text = rename_error.or(rename_warning).unwrap_or_default();
     let helper_color = if rename_error.is_some() {
         rgb(0xdc2626)
     } else if rename_warning.is_some() {
@@ -1544,14 +1546,9 @@ fn display_text_layout(
 
     let required_name_height =
         layout::item_name_text_height_for_name(display_name, text_width).min(text_height);
-    let helper_height = if required_name_height + ITEM_HELPER_LABEL_HEIGHT <= text_height {
-        ITEM_HELPER_LABEL_HEIGHT
-    } else {
-        0.0
-    };
     RenameTextLayout {
         name_height: required_name_height,
-        helper_height,
+        helper_height: 0.0,
     }
 }
 
@@ -1646,9 +1643,9 @@ fn drag_preview_label(name: &str, selected: bool, selection_count: usize) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        FileGridMode, drag_preview_content_origin, drag_preview_label, item_interaction_id,
-        item_mouse_down_opens_directory, measured_viewport_for_scrollbar_axis,
-        normalized_text_range, rename_text_layout,
+        FileGridMode, ItemTileTextAlignment, display_text_layout, drag_preview_content_origin,
+        drag_preview_label, item_interaction_id, item_mouse_down_opens_directory,
+        measured_viewport_for_scrollbar_axis, normalized_text_range, rename_text_layout,
     };
     use crate::ui::item_view::ItemViewScrollbarAxis;
     use fika_core::{CompactLayout, CompactLayoutOptions, ItemId, PaneId};
@@ -1764,6 +1761,14 @@ mod tests {
     }
 
     #[test]
+    fn display_text_layout_keeps_dolphin_default_to_name_only() {
+        let layout = display_text_layout("alpha.txt", 120.0, 40.0, ItemTileTextAlignment::Start);
+
+        assert!(layout.name_height > 0.0);
+        assert_eq!(layout.helper_height, 0.0);
+    }
+
+    #[test]
     fn double_mouse_down_opens_directory_before_click_synthesis() {
         assert!(item_mouse_down_opens_directory(
             true,
@@ -1788,8 +1793,10 @@ pub(crate) fn compact_layout_options(
     reserved_bottom: f32,
 ) -> CompactLayoutOptions {
     let icon_size = view.icon_size();
-    let padding = 8.0;
-    let gap = 8.0;
+    let padding = DOLPHIN_ITEM_PADDING;
+    let side_padding = DOLPHIN_COMPACT_SIDE_PADDING;
+    let gap = DOLPHIN_COMPACT_COLUMN_GAP;
+    let text_gap = DOLPHIN_COMPACT_TEXT_GAP;
     let text_height = DEFAULT_TILE_TEXT_HEIGHT;
     CompactLayoutOptions {
         viewport_width: view.viewport_width.max(1.0),
@@ -1798,9 +1805,11 @@ pub(crate) fn compact_layout_options(
         scroll_x: view.scroll_x,
         scroll_y: view.scroll_y,
         padding,
+        side_padding,
         gap,
-        item_width: icon_size + 120.0,
-        item_height: (icon_size + 32.0).max(text_height + padding * 2.0),
+        text_gap,
+        item_width: icon_size + DOLPHIN_COMPACT_BASE_TEXT_WIDTH + padding * 2.0 + text_gap,
+        item_height: padding * 2.0 + icon_size.max(text_height),
         icon_size,
         text_height,
         ..CompactLayoutOptions::default()

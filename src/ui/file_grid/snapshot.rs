@@ -26,27 +26,6 @@ use fika_core::{
     thumbnail_request_may_have_preview,
 };
 
-pub(crate) fn format_entry_kind_label(entry: &fika_core::ModelEntry) -> String {
-    if let Some(deletion_time) = &entry.trash_deletion_time {
-        return fika_core::format_trash_deletion_time(deletion_time);
-    }
-    if entry.is_dir {
-        "Folder".to_string()
-    } else {
-        fika_core::format_size(entry.effective_size_bytes())
-    }
-}
-
-pub(crate) fn format_entry_detail_label(entry: &fika_core::ModelEntry) -> String {
-    if let Some(original_path) = &entry.trash_original_path {
-        return fika_core::format_trash_original_location(
-            original_path,
-            entry.trash_deletion_time.as_deref(),
-        );
-    }
-    format_entry_kind_label(entry)
-}
-
 pub(crate) fn visible_item_thumbnail_path(entry: &fika_core::ModelEntry) -> Option<PathBuf> {
     if entry.is_dir {
         None
@@ -63,7 +42,6 @@ pub(crate) struct VisibleItemSnapshot {
     pub(crate) path: PathBuf,
     pub(crate) is_dir: bool,
     pub(crate) name: Arc<str>,
-    pub(crate) detail_label: String,
     pub(crate) thumbnail_path: Option<PathBuf>,
     pub(crate) icon: FileIconSnapshot,
     pub(crate) selected: bool,
@@ -84,7 +62,6 @@ pub(crate) struct RawVisibleItemSnapshot {
     pub(crate) path: PathBuf,
     pub(crate) is_dir: bool,
     pub(crate) name: Arc<str>,
-    pub(crate) detail_label: String,
     pub(crate) thumbnail_path: Option<PathBuf>,
     pub(crate) thumbnail_failed: bool,
     pub(crate) modified_secs: Option<u64>,
@@ -448,7 +425,6 @@ impl RawFileGridSnapshot {
                             path: item.path,
                             is_dir: item.is_dir,
                             name: item.name,
-                            detail_label: item.detail_label,
                             thumbnail_path: item.thumbnail_path,
                             icon,
                             selected: item.selected,
@@ -485,7 +461,6 @@ impl RawFileGridSnapshot {
                             path: item.path,
                             is_dir: item.is_dir,
                             name: item.name,
-                            detail_label: item.detail_label,
                             thumbnail_path: item.thumbnail_path,
                             icon,
                             selected: item.selected,
@@ -619,7 +594,6 @@ fn raw_visible_item_snapshot(
         path,
         is_dir: entry.is_dir,
         name: entry.name.clone(),
-        detail_label: format_entry_detail_label(entry),
         thumbnail_path: visible_item_thumbnail_path(entry),
         thumbnail_failed: entry.thumbnail_failed,
         modified_secs: entry.effective_modified_secs(),
@@ -751,17 +725,6 @@ fn visible_thumbnail_candidate(
 mod tests {
     use super::*;
 
-    fn model_entry(data: fika_core::EntryData) -> fika_core::ModelEntry {
-        fika_core::ModelEntry {
-            id: fika_core::ItemId(1),
-            entry: fika_core::Entry::new(data),
-            metadata_role: None,
-            metadata_refresh_pending: false,
-            thumbnail_path: None,
-            thumbnail_failed: false,
-        }
-    }
-
     #[test]
     fn visible_item_thumbnail_path_uses_file_cache_hit_only() {
         let thumbnail = PathBuf::from("/tmp/fika-thumbnail-cache/normal/hash.png");
@@ -809,73 +772,6 @@ mod tests {
     }
 
     #[test]
-    fn entry_detail_label_exposes_trash_original_path_and_deletion_time() {
-        let entry = model_entry(fika_core::EntryData {
-            name: Arc::from("deleted.txt"),
-            name_width_units: 11,
-            size_bytes: 12,
-            modified_secs: Some(42),
-            metadata_complete: true,
-            mime_type: Some(Arc::from("text/plain")),
-            mime_magic_checked: true,
-            trash_original_path: Some(PathBuf::from("/home/user/Documents/deleted.txt")),
-            trash_deletion_time: Some(Arc::from("2026-06-13T12:30:00")),
-            is_dir: false,
-        });
-
-        assert_eq!(
-            format_entry_detail_label(&entry),
-            "Original: /home/user/Documents - Deleted: 2026-06-13 12:30"
-        );
-        assert_eq!(format_entry_kind_label(&entry), "2026-06-13 12:30");
-    }
-
-    #[test]
-    fn incomplete_file_metadata_keeps_stable_size_label() {
-        let entry = model_entry(fika_core::EntryData {
-            name: Arc::from("payload"),
-            name_width_units: 7,
-            size_bytes: 0,
-            modified_secs: None,
-            metadata_complete: false,
-            mime_type: Some(Arc::from("application/octet-stream")),
-            mime_magic_checked: false,
-            trash_original_path: None,
-            trash_deletion_time: None,
-            is_dir: false,
-        });
-
-        assert_eq!(format_entry_kind_label(&entry), "0 B");
-        assert_eq!(format_entry_detail_label(&entry), "0 B");
-    }
-
-    #[test]
-    fn pending_metadata_with_preserved_size_keeps_rendering_last_known_size() {
-        let mut entry = model_entry(fika_core::EntryData {
-            name: Arc::from("payload"),
-            name_width_units: 7,
-            size_bytes: 0,
-            modified_secs: None,
-            metadata_complete: false,
-            mime_type: Some(Arc::from("application/octet-stream")),
-            mime_magic_checked: false,
-            trash_original_path: None,
-            trash_deletion_time: None,
-            is_dir: false,
-        });
-        entry.metadata_role = Some(fika_core::EntryMetadataRole {
-            size_bytes: 1536,
-            modified_secs: Some(42),
-            mime_type: Some(Arc::from("text/plain")),
-            mime_magic_checked: true,
-        });
-        entry.metadata_refresh_pending = true;
-
-        assert_eq!(format_entry_kind_label(&entry), "1.5 KB");
-        assert_eq!(format_entry_detail_label(&entry), "1.5 KB");
-    }
-
-    #[test]
     fn layout_index_range_and_count_uses_visible_indexes_without_collecting_layouts() {
         assert_eq!(
             layout_index_range_and_count([12, 10, 11]),
@@ -913,7 +809,6 @@ mod tests {
                 path: model.path_for_index(0).unwrap(),
                 is_dir: visible_entry.is_dir,
                 name: visible_entry.name.clone(),
-                detail_label: String::new(),
                 thumbnail_path: None,
                 thumbnail_failed: false,
                 modified_secs: visible_entry.effective_modified_secs(),
@@ -1245,7 +1140,6 @@ mod tests {
             path: PathBuf::from("/tmp").join(name),
             is_dir: false,
             name: Arc::from(name),
-            detail_label: String::new(),
             thumbnail_path: None,
             thumbnail_failed: false,
             modified_secs: Some(42),

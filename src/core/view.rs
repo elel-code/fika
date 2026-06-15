@@ -52,7 +52,9 @@ pub struct CompactLayoutOptions {
     pub scroll_x: f32,
     pub scroll_y: f32,
     pub padding: f32,
+    pub side_padding: f32,
     pub gap: f32,
+    pub text_gap: f32,
     pub item_width: f32,
     pub item_height: f32,
     pub icon_size: f32,
@@ -101,7 +103,9 @@ impl Default for CompactLayoutOptions {
             scroll_x: 0.0,
             scroll_y: 0.0,
             padding: 8.0,
+            side_padding: 8.0,
             gap: 8.0,
+            text_gap: 8.0,
             item_width: 168.0,
             item_height: 76.0,
             icon_size: 40.0,
@@ -185,7 +189,7 @@ impl CompactLayout {
         let column_metrics = CompactColumnMetrics::new(
             column_count,
             options.item_width,
-            options.padding,
+            options.side_padding,
             options.gap,
             vec![options.item_width; column_count],
         );
@@ -202,7 +206,7 @@ impl CompactLayout {
         let column_metrics = CompactColumnMetrics::new(
             column_count,
             options.item_width,
-            options.padding,
+            options.side_padding,
             options.gap,
             column_widths,
         );
@@ -222,7 +226,7 @@ impl CompactLayout {
             CompactColumnMetrics::new(
                 column_count,
                 options.item_width,
-                options.padding,
+                options.side_padding,
                 options.gap,
                 vec![options.item_width; column_count],
             )
@@ -232,7 +236,7 @@ impl CompactLayout {
         } else {
             column_metrics.offset(column_count - 1)
                 + column_metrics.width(column_count - 1)
-                + options.padding
+                + options.side_padding
         };
         let visible_rows = item_count.min(rows_per_column);
         let content_height = if item_count == 0 {
@@ -308,7 +312,7 @@ impl CompactLayout {
             width: self.options.icon_size,
             height: self.options.icon_size,
         };
-        let text_x = icon_rect.right() + self.options.gap;
+        let text_x = icon_rect.right() + self.options.text_gap;
         let available_text_width = (item_rect.right() - text_x - self.options.padding).max(0.0);
         let text_width = required_text_width
             .map(|width| width + self.options.padding * 2.0)
@@ -797,6 +801,7 @@ mod tests {
                 item_height: 50.0,
                 gap: 10.0,
                 padding: 4.0,
+                side_padding: 4.0,
                 ..CompactLayoutOptions::default()
             },
         );
@@ -890,6 +895,7 @@ mod tests {
                 item_height: 50.0,
                 gap: 10.0,
                 padding: 4.0,
+                side_padding: 4.0,
                 ..CompactLayoutOptions::default()
             },
             vec![100.0, 180.0, 120.0],

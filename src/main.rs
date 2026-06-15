@@ -10797,8 +10797,12 @@ text/plain=viewer.desktop;\n",
     fn compact_layout_options_derive_size_from_zoom_level() {
         let default_options = ui::file_grid::compact_layout_options(&ViewState::default(), 0.0);
         assert_eq!(default_options.icon_size, 48.0);
-        assert_eq!(default_options.item_width, 168.0);
-        assert_eq!(default_options.item_height, 80.0);
+        assert_eq!(default_options.padding, 2.0);
+        assert_eq!(default_options.side_padding, 8.0);
+        assert_eq!(default_options.gap, 8.0);
+        assert_eq!(default_options.text_gap, 4.0);
+        assert_eq!(default_options.item_width, 146.0);
+        assert_eq!(default_options.item_height, 52.0);
         assert_eq!(default_options.text_height, 40.0);
 
         let zoomed_options = ui::file_grid::compact_layout_options(
@@ -10809,8 +10813,8 @@ text/plain=viewer.desktop;\n",
             0.0,
         );
         assert_eq!(zoomed_options.icon_size, 256.0);
-        assert_eq!(zoomed_options.item_width, 376.0);
-        assert_eq!(zoomed_options.item_height, 288.0);
+        assert_eq!(zoomed_options.item_width, 354.0);
+        assert_eq!(zoomed_options.item_height, 260.0);
         assert_eq!(zoomed_options.text_height, 40.0);
     }
 

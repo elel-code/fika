@@ -13,7 +13,9 @@ struct CompactColumnWidthCacheKey {
     min_item_width: f32,
     icon_size: f32,
     padding: f32,
+    side_padding: f32,
     gap: f32,
+    text_gap: f32,
     text_override_model_index: Option<usize>,
     text_override_width: f32,
 }
@@ -85,7 +87,9 @@ impl CompactColumnWidthCache {
             min_item_width: options.item_width,
             icon_size: options.icon_size,
             padding: options.padding,
+            side_padding: options.side_padding,
             gap: options.gap,
+            text_gap: options.text_gap,
             text_override_model_index: text_override.map(|override_| override_.model_index),
             text_override_width: text_override
                 .map(|override_| override_.text_width.max(0.0))
@@ -133,7 +137,7 @@ impl CompactColumnWidthCacheEntry {
             metrics: CompactColumnMetrics::new(
                 column_count,
                 options.item_width,
-                options.padding,
+                options.side_padding,
                 options.gap,
                 widths,
             ),
@@ -177,7 +181,7 @@ fn required_compact_item_width(
 ) -> f32 {
     let text_width =
         entry_name_text_width(entry).max(text_override_width.unwrap_or_default().max(0.0));
-    options.padding * 4.0 + options.icon_size + text_width
+    options.padding * 2.0 + options.text_gap + options.icon_size + text_width
 }
 
 pub(crate) fn compact_text_width(name_width_units: u16) -> f32 {
@@ -336,27 +340,13 @@ pub(crate) fn icons_layout_options_for_model(
 }
 
 fn compact_layout_options_for_model_view(
-    model: &fika_core::DirectoryModel,
-    filtered: Option<&fika_core::FilteredModel>,
-    item_count: usize,
+    _model: &fika_core::DirectoryModel,
+    _filtered: Option<&fika_core::FilteredModel>,
+    _item_count: usize,
     view: &fika_core::ViewState,
-    text_override: Option<CompactTextWidthOverride>,
+    _text_override: Option<CompactTextWidthOverride>,
 ) -> CompactLayoutOptions {
-    let mut options = super::compact_layout_options(view, 0.0);
-    let available_text_width = compact_base_name_available_width(options);
-    let name_height = max_item_name_text_height_for_model(
-        model,
-        filtered,
-        item_count,
-        text_override,
-        available_text_width,
-    );
-    options.text_height = options
-        .text_height
-        .max(name_height + super::ITEM_HELPER_LABEL_HEIGHT);
-    options.item_height =
-        (options.icon_size + 32.0).max(options.text_height + options.padding * 2.0);
-    options
+    super::compact_layout_options(view, 0.0)
 }
 
 fn max_item_name_text_height_for_model(
@@ -391,10 +381,6 @@ fn max_required_text_width_for_model(
 
 fn icon_name_available_width(options: IconsLayoutOptions) -> f32 {
     (options.item_width - options.padding * 2.0).max(1.0)
-}
-
-fn compact_base_name_available_width(options: CompactLayoutOptions) -> f32 {
-    (options.item_width - options.padding * 2.0 - options.icon_size - options.gap).max(1.0)
 }
 
 #[cfg(test)]
@@ -445,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_layout_expands_text_height_for_wrapped_long_names() {
+    fn compact_layout_keeps_row_height_for_long_names() {
         let long_name = "Very Long Desktop Launcher Name.desktop";
         let mut model = DirectoryModel::for_directory(PathBuf::from("/tmp"));
         model.replace_listing(PathBuf::from("/tmp"), Arc::new(vec![test_entry(long_name)]));
@@ -460,8 +446,9 @@ mod tests {
         let layout = compact_layout_for_model_with_text_override(&mut cache, &model, &view, None);
         let item = layout.item(0).unwrap();
 
-        assert!(item.text_rect.height > base_options.text_height);
-        assert!(item.item_rect.height > base_options.item_height);
+        assert_eq!(item.text_rect.height, base_options.text_height);
+        assert_eq!(item.item_rect.height, base_options.item_height);
+        assert!(item.item_rect.width > base_options.item_width);
     }
 
     #[test]

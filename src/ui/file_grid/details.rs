@@ -9,11 +9,12 @@ use fika_core::{
 use crate::ui::icons::FileIconSnapshot;
 
 pub(crate) const DETAILS_HEADER_HEIGHT: f32 = 28.0;
-pub(crate) const DETAILS_ROW_HEIGHT: f32 = 28.0;
+pub(crate) const DETAILS_ROW_HEIGHT: f32 = 22.0;
 pub(crate) const DETAILS_ICON_SIZE: f32 = 18.0;
 pub(crate) const DETAILS_NAME_COLUMN_MIN_WIDTH: f32 = 260.0;
 pub(crate) const DETAILS_NAME_CELL_HORIZONTAL_PADDING: f32 = 16.0;
 pub(crate) const DETAILS_NAME_CELL_GAP: f32 = 8.0;
+const DETAILS_ROW_VERTICAL_PADDING: f32 = 2.0;
 const DETAILS_ICON_SCALE: f32 = DETAILS_ICON_SIZE / 48.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,7 +30,8 @@ pub(crate) fn details_layout_metrics(view_icon_size: f32) -> DetailsLayoutMetric
         .clamp(16.0, 96.0);
     DetailsLayoutMetrics {
         header_height: DETAILS_HEADER_HEIGHT,
-        row_height: DETAILS_ROW_HEIGHT.max(icon_size + 10.0),
+        row_height: DETAILS_ROW_HEIGHT
+            .max(DETAILS_ROW_VERTICAL_PADDING * 2.0 + icon_size.max(super::ITEM_NAME_LINE_HEIGHT)),
         icon_size,
     }
 }
@@ -222,9 +224,9 @@ mod tests {
     #[test]
     fn details_visible_row_range_uses_vertical_scroll_and_viewport_height() {
         let metrics = details_layout_metrics(48.0);
-        assert_eq!(details_visible_row_range(100, 56.0, 0.0, metrics), 0..2);
-        assert_eq!(details_visible_row_range(100, 56.0, 28.0, metrics), 0..3);
-        assert_eq!(details_visible_row_range(100, 56.0, 84.0, metrics), 2..5);
+        assert_eq!(details_visible_row_range(100, 56.0, 0.0, metrics), 0..3);
+        assert_eq!(details_visible_row_range(100, 56.0, 28.0, metrics), 0..4);
+        assert_eq!(details_visible_row_range(100, 56.0, 84.0, metrics), 2..7);
         assert_eq!(details_visible_row_range(3, 500.0, 0.0, metrics), 0..3);
         assert_eq!(details_visible_row_range(0, 500.0, 0.0, metrics), 0..0);
     }
